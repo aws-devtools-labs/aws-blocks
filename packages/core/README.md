@@ -1,12 +1,24 @@
 # @aws-blocks/core
 
-Core primitives for building full-stack applications with the AWS Blocks.
+Core primitives for building full-stack applications with AWS Blocks.
 
-## Key Exports
+| Entry point | Documented here |
+|---|---|
+| `@aws-blocks/core` | `Scope`, `ApiNamespace`, `RawRoute`, `ApiError`, `isBlocksError`, `hasAuthError` |
+| `@aws-blocks/core/cdk` | `Hosting`, `HostingPresets` |
+| `@aws-blocks/blocks/cdk` | `BlocksStack`, `BlocksBackend`, `BlocksPresets` |
+| `@aws-blocks/core/server` | `withAuth`, `registerCookieProvider` |
+| `@aws-blocks/core/scripts` | `deploy`, `destroy`, `startSandbox`, `destroySandbox`, `startDevServer` |
 
-### Scope
+## Scope
 
-Defines the boundary for your backend resources. The `Scope` class docstring serves as an index to all available Building Blocks.
+`new Scope(id: string, options?: ScopeOptions)` defines the boundary for your backend resources.
+
+| `ScopeOptions` | Type | Description |
+|---|---|---|
+| `parent` | `ScopeParent` (`Scope \| { id: string }`) | The parent scope. Default: the current stack. |
+| `compute` | `{ resolve(): { readonly type: 'serverless' \| 'container' } }` (a `Compute` block) | The compute for everything under the scope; see below. |
+| `bbName`, `bbVersion` | `string` | Building Block metadata, set by a block's own class. |
 
 ```typescript
 import { Scope } from '@aws-blocks/core';
@@ -24,8 +36,8 @@ directory) come from its `fullId`: the scope ids from the root down, joined with
 `'user-service' > 'sessions'` and `'user' > 'service-sessions'`, share those
 resources and overwrite each other's data. Constructing the second one logs a
 warning naming both paths (a `blocks:scope:fullIdCollision` warning at `cdk
-synth`); rename one of the scopes. A future release will reject the collision.
-Constructing the same path again is accepted.
+synth`); rename one of the scopes. Constructing the same path again is
+accepted.
 
 Use lowercase letters, digits and hyphens in scope and block ids. An id is part
 of the name of each resource created under it, unescaped, and every service
@@ -42,22 +54,16 @@ accepts those characters. The rest depends on the resource:
 | Secrets Manager secret | `Secret` | letters, digits, `/`, `_`, `+`, `=`, `.`, `@`, `-` |
 | Bedrock knowledge base and data source | `KnowledgeBase` | letters, digits, `_`, `-` |
 
-An id is not rejected when the scope is constructed, because whether it deploys
-depends on the blocks under it: `new Scope('@acme/shop')` runs locally, and is
-valid with only an `ApiNamespace` under it (which names nothing from the id) or
-a `Secret` (Secrets Manager accepts `@` and `/`). `cdk synth` fails once a block
-under it names a resource that does not accept the id, for example a `KVStore`,
-whose table name cannot contain `@` or `/`. The error names the id, the
-characters and what the service accepts. This covers the DynamoDB, SQS,
-Scheduler, Cognito, Secrets Manager and Bedrock names above when they are
-literal strings at synth; `FileBucket` checks its bucket name itself, and
-`aws-cdk-lib` checks the parameter name of an `AppSetting` that is not a
-secret. Renaming an id renames every resource under it, which replaces those
-already deployed.
+An id is checked at `cdk synth`, not when the scope is constructed:
 
-### ApiNamespace
+- Locally any id runs, for example `new Scope('@acme/shop')`.
+- `cdk synth` fails once a block under the scope names a resource that does not accept the id, for example a `KVStore`, whose table name cannot contain `@` or `/`. The error names the id, the characters and what the service accepts. The same id is valid with only an `ApiNamespace` under it (which names nothing from the id) or a `Secret` (Secrets Manager accepts `@` and `/`).
+- The check covers the DynamoDB, SQS, Scheduler, Cognito, Secrets Manager and Bedrock names above when they are literal strings at synth. `FileBucket` checks its bucket name itself, and `aws-cdk-lib` checks the parameter name of an `AppSetting` that is not a secret.
+- Renaming an id renames every resource under it, which replaces those already deployed.
 
-Define type-safe APIs with automatic frontend/backend integration.
+## ApiNamespace
+
+`new ApiNamespace<T>(scope: ScopeParent, label: string, handler: ApiHandler<T>, options?: ApiNamespaceOptions): AsyncAPI<T>`, where `handler` is `(context: BlocksContext) => T`. Each method of the returned object becomes an RPC endpoint and a method of the typed client. Clients call the namespace by the name it is exported under, not by `label`.
 
 ```typescript
 import { ApiNamespace } from '@aws-blocks/core';
@@ -77,7 +83,14 @@ import { api } from 'aws-blocks';
 const result = await api.greet('World');
 ```
 
-#### Authentication — every method is a public endpoint
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `compute` | `{ resolve(): { readonly type: 'serverless' \| 'container' } }` (a `Compute` block) | the app's default compute | The compute the namespace's methods run on. See [API front door](#api-front-door) for the paths and time limits, and the `@aws-blocks/bb-compute` README for what it changes. |
+| `httpErrorStatus` | `boolean` | `false` | Answer a call that throws an `ApiError` with a `4xx` status with that HTTP status instead of `200`. See [`httpErrorStatus`](#httperrorstatus). |
+
+### Authentication — every method is a public endpoint
 
 Each method you define becomes a public, internet-reachable RPC endpoint. There is **no authentication by default** — a method is callable by anyone until you gate it. Auth is opt-in, per method, by calling the `Auth` Building Block at the top of the handler:
 
@@ -98,25 +111,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See the `Auth` README (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
 
-Only the methods your handler's object defines are callable — its own properties (including any spread in from another object), or methods its class defines. Members every object inherits (`constructor`, `toString`, `hasOwnProperty`, `__proto__`, …), properties hidden with `Object.defineProperty`, and the methods of a Building Block (exported, e.g. `export const notes = new KVStore(...)`, or returned by a handler) are never endpoints; calling one returns the same "Method not found" error as an unknown name.
+### What the RPC endpoint can reach
 
-#### What the RPC endpoint can reach
+The RPC endpoint dispatches `<exportName>.<method>` against your backend module's exports. Export `ApiNamespace` values for anything the client should call, and keep Building Block instances unexported (or reach them only through a gated method):
 
-The RPC endpoint dispatches `<exportName>.<method>` against your backend module's exports. Export **`ApiNamespace` values** for anything the client should call — and keep Building Block instances unexported (or reach them only through a gated method):
+- Callable: the methods your handler's object defines, as its own properties (including any spread in from another object) or as methods its class defines.
+- Not callable: members every object inherits (`constructor`, `toString`, `hasOwnProperty`, `__proto__`, …) and properties hidden with `Object.defineProperty`.
+- Not callable: the methods of a Building Block, whether it is exported (e.g. `export const todos = new KVStore(scope, 'todos')`) or returned by a handler. Its data is reachable only through the `ApiNamespace` methods you write, where your `requireAuth` gates run.
+- `_`-prefixed exports are private: they get no client proxy and are not dispatched.
+- `secret()` / `config()` markers are deferred values, not APIs: they get no client proxy and are not dispatched.
 
-- An exported **Building Block instance** (e.g. `export const todos = new KVStore(scope, 'todos')`) is **not** callable over RPC — calling `todos.put` returns *method not found*. Its data plane is only reachable through the `ApiNamespace` methods you write, where your `requireAuth` gates run.
-- **`_`-prefixed exports** are private: they get no client proxy and are not dispatched.
-- **`secret()` / `config()` markers** are deferred values, not APIs: they get no client proxy and are not dispatched.
-- Only **callable methods** are dispatched; members inherited from `Object.prototype` (`toString`, `constructor`, `hasOwnProperty`, …) are never reachable.
+Calling a member that is not callable, such as `todos.put`, returns the same "Method not found" error as an unknown name.
 
-#### Calling the API over HTTP (JSON-RPC 2.0)
+### Calling the API over HTTP (JSON-RPC 2.0)
 
 The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP form below is for manual verification (curl/Postman) and non-JS clients.
 
-`POST` to the RPC path `/aws-blocks/api`:
+`POST` to one of two RPC paths, on either `apiFrontDoor` tier:
 
-- Local dev: `http://localhost:3000/aws-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
-- Deployed: the API Gateway stage URL + `/aws-blocks/api`
+- `/aws-blocks/api/{namespace}`: the path the typed client and the Swift, Kotlin and Dart clients use. `{namespace}` must be the namespace that the body's `method` names, with nothing after it, or the call fails with a JSON-RPC `-32600` Invalid Request.
+- `/aws-blocks/api`: runs the namespace that the body's `method` names on the default compute. With `defaults.strictNamespacePlacement`, a deployed app answers "Method not found" there for a namespace placed on another compute.
+
+The URL of `/aws-blocks/api`:
+
+- Local dev: `http://localhost:3000/aws-blocks/api`. `blocks.dev.port` in `package.json` sets the port: 3000 by default, where one dev server serves the backend and the frontend; 3001 in the templates without a frontend (`api-only`, `backend`, `cron`, `observability`, `sql`) and in the `amplify` overlay.
+- Deployed: `publicApiUrl`, which for a `BlocksStack` is the `ApiUrl` stack output.
 
 The body is JSON-RPC 2.0:
 
@@ -124,11 +143,26 @@ The body is JSON-RPC 2.0:
 { "jsonrpc": "2.0", "method": "<namespace>.<methodName>", "params": [...], "id": 1 }
 ```
 
-- `method` is `<namespace>.<methodName>`, where `<namespace>` is the **export variable name** from `aws-blocks/index.ts` (e.g., `export const api = ...` → `api`).
-- `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
-- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status — unless the namespace opts in to `httpErrorStatus` (below).
+- `method` is `<namespace>.<methodName>`, where `<namespace>` is the export variable name from `aws-blocks/index.ts` (e.g., `export const api = ...` → `api`).
+- `params` is a positional array of the method's arguments; see [How the server reads `params`](#how-the-server-reads-params-and-what-it-rejects).
+- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status, unless the namespace sets [`httpErrorStatus`](#httperrorstatus).
 
-To let status-code-only tooling (API Gateway and CloudFront metrics, access logs, WAF rate rules, a 4xx alarm) see rejected calls, create the namespace with `httpErrorStatus: true`. A call that throws an `ApiError` with a `4xx` status is then answered with that HTTP status; the body is the same JSON-RPC error, and the typed client decodes it the same way, so `isBlocksError()` is unaffected. `5xx` and other failures stay HTTP `200`. It applies locally and on AWS:
+Error responses use these JSON-RPC codes:
+
+| Code | Meaning | When Blocks uses it |
+|------|---------|---------------------|
+| `-32700` | Parse error | Request body is not valid JSON. |
+| `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
+| `-32601` | Method not found | The requested namespace is not exported by the backend, or the method is not one the API defines (inherited members such as `toString` don't count). |
+| `-32602` | Invalid params | `params` is present and is neither an array nor an object (a string, a number, a boolean or `null`). Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
+| `-32603` | Internal error | Not used. An unhandled (non-`ApiError`) throw returns code `500`. |
+| the `ApiError`'s `status` (`401`, `404`, `409`, …) | | A method threw an `ApiError`; see [ApiError](#apierror--isblockserror--hasautherror). |
+
+`curl` examples and a table of common symptoms are in `npm run docs troubleshooting`.
+
+### `httpErrorStatus`
+
+With `httpErrorStatus: true`, a call that throws an `ApiError` with a `4xx` status is answered with that HTTP status, so status-code-only tooling (API Gateway and CloudFront metrics, access logs, WAF rate rules, a 4xx alarm) sees rejected calls. The body is the same JSON-RPC error, and the typed client decodes it the same way, so `isBlocksError()` is unaffected. `5xx` and other failures stay HTTP `200`. It applies locally and on AWS:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -141,35 +175,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 Turn it on only when every client of the namespace reads the body of a non-2xx response (a hand-written `fetch` that throws on `!response.ok` would not). Two more things to check:
 
-- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/aws-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. CloudFront cannot scope error responses away from `/aws-blocks/*`, so `Hosting` fails synth for that combination (`HttpErrorStatusErrorPagesError`): remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
+- **Hosting error pages.** `Hosting` fails synth (`HttpErrorStatusErrorPagesError`) when its CloudFront distribution maps 403 or 404 to a page: `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site. CloudFront custom error responses apply to the whole distribution, `/aws-blocks/*` included, so a 403 / 404 from such a namespace would reach the browser as that HTML page. Remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
 - **Dart clients with bearer tokens.** With an `authProvider`, the Dart client treats any HTTP 401 as an expired token: it refreshes and runs the method once more, so a method that throws 401 after a side effect runs twice. Put the guard first — `requireAuth()` as the first statement, or `auth.protect`, which runs it before any of the method's code — and keep any method that can still fail with 401 later idempotent. The Swift and Kotlin clients decode the error the same way on any status, and do not retry.
 
-Error responses use these JSON-RPC codes:
+### Closed connections and the single resend (Node clients)
 
-| Code | Meaning | When Blocks uses it |
-|------|---------|---------------------|
-| `-32700` | Parse error | Request body is not valid JSON. |
-| `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
-| `-32601` | Method not found | The requested namespace is not exported by the backend, or the method is not one the API defines (inherited members such as `toString` don't count). |
-| `-32602` | Invalid params | Reserved for JSON-RPC parameter validation failures. Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
-| `-32603` | Internal error | Reserved for generic JSON-RPC internal errors. Unhandled application errors currently use code `500`. |
+A deployed API (API Gateway, a load balancer) can close an idle connection at any moment. If that close crosses your next call, Node's `fetch` fails it with `TypeError: fetch failed` (cause `SocketError: other side closed`, `ECONNRESET` or `EPIPE`) and does not resend it. This shows up in CLIs, SSR servers and scripts after a few idle seconds. The typed client handles it:
 
-Errors thrown with `ApiError` use the positive HTTP status as the JSON-RPC `error.code` (for example, `401`, `404`, or `409`) and include `error.data.name` when an error name is available. The typed client converts JSON-RPC errors back into `ApiError`.
-
-Working example:
-
-```bash
-curl -X POST http://localhost:3000/aws-blocks/api \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
-# → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
-```
-
-#### Closed connections and the single resend (Node clients)
-
-Node's `fetch` keeps idle connections open for reuse. A deployed API (API Gateway, a load balancer) can close an idle connection at any moment without warning, and if that close crosses your next call, Node's `fetch` fails it with `TypeError: fetch failed` (cause `SocketError: other side closed`, `ECONNRESET` or `EPIPE`) and does not resend it, even for a `GET`. This shows up in CLIs, SSR servers and scripts after a few idle seconds.
-
-The typed client handles it: when `fetch` fails with `TypeError: fetch failed` whose cause is an undici socket error (`UND_ERR_SOCKET`, for example `other side closed`), `ECONNRESET` or `EPIPE`, **before the response headers arrived**, it resends the identical request **once** on a new connection. A partial status line followed by a close counts too, since the headers never arrived. In the idle-close race the first copy never reached the server. Node's `fetch` doesn't say whether the failed connection was a reused one, so the client matches on the error alone: the same failure on a fresh connection, such as a server that read the request and crashed before answering, is resent too, and in that rare case a method runs twice. Delivery is therefore **at-least-once**. The server can't tell a resend from a new call. Behind API Gateway or CloudFront a crashed backend answers with a `5xx` instead, which is never retried. Keep state-changing methods idempotent where a duplicate would matter. Nothing else is retried: not a second connection failure, not a timeout or abort, not a failure after the response headers arrived (while reading the body), not an HTTP or JSON-RPC error. Browsers already do this resend themselves, so frontend behaviour is unchanged.
+- It resends the identical request once on a new connection when `fetch` fails, before the response headers arrived, with `TypeError: fetch failed` whose cause is an undici socket error (`UND_ERR_SOCKET`, for example `other side closed`), `ECONNRESET` or `EPIPE`. A partial status line followed by a close counts too.
+- Delivery is at-least-once. The client matches on the error alone, so the same failure on a fresh connection, such as a server that read the request and crashed before answering, is resent too, and the method runs twice. The server can't tell a resend from a new call. Keep state-changing methods idempotent where a duplicate would matter.
+- Behind API Gateway or CloudFront a crashed backend answers with a `5xx`, which is not retried.
+- Nothing else is retried: not a second connection failure, not a timeout or abort, not a failure after the response headers arrived (while reading the body), not an HTTP or JSON-RPC error.
+- Browsers do this resend themselves, so frontend behaviour is the same with and without it.
 
 To turn the resend off (at-most-once delivery; the failure reaches your code instead), pass `retryStaleConnection: false`:
 
@@ -185,58 +202,58 @@ The generated client's `generateClient` takes the same options: `generateClient(
 
 Your own `fetch` calls (to a `RawRoute`, or the JSON-RPC endpoint called by hand) don't get this. In Node, resend a request yourself when it fails with one of those causes and is safe to repeat.
 
-#### How the server reads `params` (and what it rejects)
+### How the server reads `params` (and what it rejects)
 
-The request body is parsed by `parseRpcRequest`, which turns `params` into the positional argument list your method is called with:
+`params` becomes the positional argument list your method is called with:
 
 | Body `params` | Arguments the method receives |
 |---|---|
 | `["World", 42]` (array) | `('World', 42)`, used as-is |
 | `{"name":"World","times":42}` (object) | `('World', 42)` via `Object.values()`, so **key insertion order decides argument order** |
-| omitted or `null` | `()`, no arguments |
+| omitted | `()`, no arguments |
+| any other value, `null` included | none: the call fails with `-32602` |
 
-A named object is convenient for `curl`, but it is only safe when the keys are written in the same order as the method signature. Prefer the array form in anything automated.
+Prefer the array form: a named object is only safe when its keys are written in the same order as the method signature.
 
-One shape that looks reasonable and is **not** supported: a top-level JSON **array** as the whole body (a JSON-RPC batch). The parser reads `jsonrpc` and `method` off the body object, so an array body fails validation instead of running anything:
+A JSON-RPC batch (a top-level JSON array as the whole body) is not supported: it returns `-32600` with `id: null` and HTTP `200`. Send one call per request.
 
-```bash
-curl -X POST http://localhost:3000/aws-blocks/api \
-  -H 'Content-Type: application/json' \
-  -d '[{"jsonrpc":"2.0","method":"api.greet","params":["a"],"id":1}]'
-# → HTTP 200
-# {"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid Request: expected JSON-RPC 2.0 — ...",
-#    "data":{"name":"InvalidRequest"}},"id":null}
-```
-
-`id` is `null` in that response because an array body has no `id` to echo. Send one call per request. Body that isn't valid JSON at all returns `-32700 Parse error`, also with HTTP `200`.
-
-#### Runtime config (`/.cdk-blocks-sandbox/config.json`)
+### Runtime config (`/.cdk-blocks-sandbox/config.json`)
 
 The generated client does not hardcode the API URL; it resolves one at first call, in this order:
 
 1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute, and by `npm run dev` on the frontend command it runs).
 2. `BLOCKS_CONFIG` env var (the whole config as JSON).
-3. Node.js 22.3 or later only: the file `.cdk-blocks-sandbox/config.json`, read from the **process working directory**. Only a dev server writes it, with its own local URL. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
+3. Node.js 22.3 or later only: the file `.cdk-blocks-sandbox/config.json`, read from the process working directory. Only a dev server writes it, with its own local URL. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
 4. Browser only: `fetch('/.cdk-blocks-sandbox/config.json')`.
 
-Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and the dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
+Who sets the env vars:
 
-A deploy never rewrites `.cdk-blocks-sandbox/config.json`, so it never changes where local tooling points while `npm run dev` runs. It records its API URL in a file of its own, which only code that means to target that stage reads: `.cdk-blocks-sandbox/config.sandbox.json` for a sandbox deploy, `.cdk-blocks-sandbox/config.production.json` for `npm run deploy`. The template e2e tests call the dev server on `blocks.dev.port`, or the deployed app you name with `TEST_URL`.
+- `Hosting` injects both into every SSR compute function at synth.
+- The dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too.
+- Set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container.
+- Don't hand-write `BLOCKS_CONFIG`: it is Hosting's serialized `backendConfig`.
 
-An app deployed with an older version still has the deploy's URL in `config.json`. The client refuses that file, with an error, and never calls the stack it names: start the dev server, which rewrites it, or set `BLOCKS_API_URL` to call that stack on purpose. The next deploy or destroy moves it to `config.<stage>.json`.
+Each target records its API URL in a file of its own, which only code that means to target that stage reads:
 
-Two things about that path burn time when debugging:
+| File | Written by |
+|---|---|
+| `.cdk-blocks-sandbox/config.json` | a dev server only |
+| `.cdk-blocks-sandbox/config.sandbox.json` | a sandbox deploy |
+| `.cdk-blocks-sandbox/config.production.json` | `npm run deploy` |
 
-- The directory is **dotted**: `/.cdk-blocks-sandbox/config.json`. `/config.json` is not a route: locally the dev server only answers `GET /.cdk-blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.cdk-blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
-- `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.cdk-blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
+- A deploy never rewrites `.cdk-blocks-sandbox/config.json`, so it never changes where local tooling points while `npm run dev` runs.
+- The template e2e tests call the dev server on `blocks.dev.port`, or the deployed app you name with `TEST_URL`.
+- The client refuses, with an error, a `config.json` that holds a deploy's URL (an app deployed with an older version has one), and never calls the stack it names. Start the dev server, which rewrites the file, or set `BLOCKS_API_URL` to call that stack on purpose. The next deploy or destroy moves it to `config.<stage>.json`.
 
-What you should see instead, per environment:
+When the URL is wrong or missing:
+
+- Over HTTP the config is at the dotted path `/.cdk-blocks-sandbox/config.json`. `/config.json` is not a route, locally or deployed, so a `404` there says nothing about your config.
+- `{"_placeholder":true}` is the expected body in the frontend build output (`dist/.cdk-blocks-sandbox/config.json`) and on the origin between synth and deploy: the deploy uploads the resolved config over it. A deployed origin that keeps serving it after a successful deploy is a bug: the config upload or the CloudFront invalidation did not land.
+- A missing config makes the client throw `Blocks API URL not configured` (or `... is not configured (source: ...)`).
+- Under `apiFrontDoor: 'cloudfront'`, `config.production.json` holds the CloudFront domain + `/aws-blocks/api`, not the `execute-api` URL.
+- `npm run docs troubleshooting` has the commands that print each target's config.
 
 ```bash
-# Local dev / sandbox: served by the dev server itself, Cache-Control: no-store
-curl http://localhost:3000/.cdk-blocks-sandbox/config.json
-# → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
-
 # After a deploy: the URL the deploy recorded (never config.json), and the config uploaded to the origin
 cat .cdk-blocks-sandbox/config.production.json
 # → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
@@ -253,48 +270,113 @@ The deployed file is public on purpose, in every stage, production included: a b
 
 Hosting adds nothing else: no account, stack name or ARN. A region shows up only inside an `execute-api` URL that a `frontDoor: 'none'` page calls directly, which is visible in its network requests anyway. The `config.<stage>.json` files a deploy records locally (`.cdk-blocks-sandbox/config.production.json` above) are separate: they stay on your machine and are never uploaded.
 
-So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
+## BlocksStack and BlocksBackend
+
+`await BlocksStack.create(scope: Construct, id: string, props: BlocksStackProps)` creates the app's stack. `await BlocksBackend.create(scope: Construct, id: string, props: BlocksBackendProps)` embeds the same backend as a construct in a stack you own. Import both, and `BlocksPresets`, from `@aws-blocks/blocks/cdk`.
+
+```typescript
+// aws-blocks/index.cdk.ts
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: BlocksPresets.production,
+});
+```
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `backendHandlerPath` | `string` | required | Path of the backend handler file. |
+| `backendCDKPath` | `string` | required | Path of the backend module (`aws-blocks/index.ts`). |
+| `defaults` | `BlocksDefaults` | required | Infrastructure defaults for every Building Block; a per-block option overrides the matching default. `create()` throws without it. See [`BlocksPresets` and `defaults`](#blockspresets-and-defaults). |
+| `apiFrontDoor` | `ApiFrontDoorTier` (`'apigateway' \| 'cloudfront'`) | `'apigateway'` | How clients reach the API. See [API front door](#api-front-door). |
+| `apiWaf` | `ApiWafOptions` (`{ enabled?: boolean; rateLimit?: number; webAclArn?: string }`) | off | AWS WAF in front of the API. See [API WAF](#api-waf-apiwaf). |
+
+`BlocksStackProps` extends the CDK `StackProps`.
+
+| Property | Value |
+|---|---|
+| `publicApiUrl` | The URL clients send RPC calls to. The `ApiUrl` stack output of a `BlocksStack` is this value. |
+| `apiUrl` | The shared gateway's own RPC URL (its `execute-api` address), on either `apiFrontDoor` tier. |
+| `gateway` | The shared API Gateway REST API. |
+| `executionRole` | The IAM role every Blocks compute runs as. |
+| `defaults` | The `defaults` passed to `create()`. |
+
+### `BlocksPresets` and `defaults`
+
+Start `defaults` from `BlocksPresets.sandbox` or `BlocksPresets.production` and override fields with a spread: `defaults: { ...BlocksPresets.production, deletionProtection: false }`.
+
+| Option | Type | `sandbox` | `production` | Description |
+|---|---|---|---|---|
+| `removalPolicy` | `RemovalPolicy` | `RemovalPolicy.DESTROY` | `RemovalPolicy.RETAIN` | What CloudFormation does with a stateful resource (table, bucket, user pool) when the stack is deleted. |
+| `deletionProtection` | `boolean` | `false` | `true` | Blocks deletion of a stateful resource through any path (CloudFormation, CLI, API, console). |
+| `allowedOrigins` | `string[]` | `['^https?://(localhost\|127\\.0\\.0\\.1)(:\\d+)?$']` | `[]` | CORS origins the API accepts. See [CORS Configuration](#cors-configuration). |
+| `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | `false` | `true` | Continuous backups on stateful resources that support them (DynamoDB point-in-time recovery: 1–35 days). |
+| `logRetention` | `RetentionDays` | `RetentionDays.ONE_WEEK` | `RetentionDays.ONE_YEAR` | Retention of the CloudWatch log groups AWS Blocks manages. |
+| `throttling` | `BlocksThrottling` (`{ rateLimit: number; burstLimit: number }`) | `{ rateLimit: 200, burstLimit: 400 }` | `{ rateLimit: 1000, burstLimit: 2000 }` | Requests per second and burst on the shared REST API stage; messages per second on the `Realtime` WebSocket stage. |
+| `accessLogging` | `boolean` | `false` | `false` | Structured JSON access logs from every API Gateway stage AWS Blocks manages; also `FileBucket`'s S3 server access logs while `storageAccessLogging` is unset. It sets the account-level API Gateway CloudWatch Logs role, so turn it on in one Blocks stack per account and region. While it is off and `removalPolicy` is not `DESTROY`, synth warns `blocks:apigateway:access-logging-disabled`. |
+| `storageAccessLogging` | `boolean` | unset | unset | S3 server access logs for every `FileBucket`. Unset falls back to `accessLogging`. |
+| `secretsStore` | `BlocksSecretsStore` (`'ssm' \| 'secrets-manager'`) | `'ssm'` | `'secrets-manager'` | Where AWS Blocks stores the secrets it generates (the `Auth` session secret, the `Realtime` connection token key). Changing it on a deployed stack creates new keys, which signs every `Auth` user out once. |
+| `vpc` | `BlocksVpcOptions` | unset | unset | A VPC for the app's compute and VPC-resident resources. |
+| `permissionsBoundary` | `string \| IManagedPolicy` | unset | unset | See [Cap every role](#cap-every-role-defaultspermissionsboundary). |
+| `strictNamespacePlacement` | `boolean` | `false` | `false` | Each deployed compute serves only the namespaces placed on it, on any RPC path. The dev server serves every namespace on every RPC path. While it is off and a namespace has its own compute, synth warns `blocks:apigateway:bare-endpoint-serves-placed-namespaces`. |
+| `appIdentity` | `BlocksAppIdentity` (`{ id: string; reportOnly?: boolean }`) | unset | unset | See [Running many apps in one AWS account](#running-many-apps-in-one-aws-account-a-shared-platform). |
+
+`storageAccessLogging`, `vpc`, `permissionsBoundary`, `strictNamespacePlacement` and `appIdentity` are optional in `BlocksDefaults`; the other options are required, and both presets set them.
 
 ### Shared API gateway
 
-A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed). It is the stack's `gateway`, and its RPC URL is the `ApiUrl` stack output.
+A deployed `BlocksStack` / `BlocksBackend` puts one shared API Gateway REST API in front of the whole backend (see [API front door](#api-front-door) for how it is exposed).
 
-- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-blocks/bb-compute`) is routed there without changing the app's endpoint.
-- **Container computes.** A namespace on a `container` compute is integrated through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC; the load balancer forwards each namespace's path to its container's tasks. Namespaces without a compute, `RawRoute`s and the auth routes stay on the default compute. On the `cloudfront` tier, CloudFront reaches a container namespace straight from the distribution instead (see [API front door](#api-front-door)), so the gateway's throttling, access logs and limits don't apply to it.
-- **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched route (`resourcePath`) — the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource rather than the path called.
+- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-blocks/bb-compute`) is routed there without changing the app's endpoint.
+- **Container computes.** The gateway reaches a namespace on a `container` compute through a VPC link and an internal Application Load Balancer that the compute provisions in the app's VPC. Namespaces without a compute, `RawRoute`s and the auth routes stay on the default compute. On the `cloudfront` tier, CloudFront reaches a container namespace straight from the distribution instead (see [API front door](#api-front-door)), so the gateway's throttling, access logs and limits don't apply to it.
+- **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000).
+- **Access logs** are opt-in via `defaults.accessLogging`. Each entry's `resourcePath` is the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource, not the path called.
 - **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
-- **WAF** is off by default. Turn it on with `apiWaf` on `BlocksStack` / `BlocksBackend`: `apiWaf: { enabled: true, rateLimit? }` creates a web ACL with the AWS managed Common rule set and Known Bad Inputs rule set, plus a per-IP rate limit (default 1000 requests per 5 minutes). The Common rule set's body rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`) only count, so normal RPC payloads, including user-written HTML or Markdown, pass. `apiWaf: { webAclArn }` attaches a web ACL you already have instead; its scope and region are checked at synth. It's attached as-is, so behind a `Hosting` door its IP rate rules count CloudFront edge or proxy IPs for browser traffic. The web ACL goes on whichever front door clients use:
-  - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. If a `Hosting` door also forwards browser traffic to it, the rate rule adjusts so browser users aren't counted as one client: a CloudFront `Hosting` that claims the API sends a marker header the rate rule exempts, and behind any other door (ALB, API Gateway, your own, or a CloudFront edge over a router) the rate rule is left off and synth warns (`blocks:api-waf:no-rate-limit-behind-door`), so rate-limit on the door's own WAF. In both cases browser requests arriving through Hosting aren't rate-limited by `apiWaf`; turn on the door's own WAF (`frontDoor: { features: { waf: { enabled: true } } }`) to rate-limit them.
-  - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution, which also covers the container namespaces it routes straight to their load balancer. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth). Without one, synth warns that those container namespaces have no rate limit (`blocks:api:direct-routes-without-waf`).
-  - `apiFrontDoor: 'cloudfront'` with a CloudFront-backed `Hosting` fronting the API: the API is served from Hosting's distribution, so set the WAF on Hosting (`frontDoor: { features: { waf: { enabled: true } } }`); `apiWaf` then creates nothing and synth warns (`blocks:api-waf:deferred-to-hosting`).
-  - Not covered: the gateway's `execute-api` endpoint under `'cloudfront'` (callable directly, and reached by browser traffic that a non-CloudFront `Hosting` door forwards), and `bb-realtime`'s WebSocket API (AWS WAF can't attach to API Gateway WebSocket APIs).
+
+### API WAF (`apiWaf`)
+
+WAF is off by default. Turn it on with `apiWaf` on `BlocksStack` / `BlocksBackend`:
+
+| `apiWaf` | Effect |
+|---|---|
+| `{ enabled: true, rateLimit? }` | Creates a web ACL with the AWS managed Common rule set and Known Bad Inputs rule set, plus a per-IP rate limit of `rateLimit` requests per 5 minutes (default 1000, minimum 100). The Common rule set's body rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`) only count, so normal RPC payloads, including user-written HTML or Markdown, pass. |
+| `{ webAclArn }` | Attaches a web ACL you already have, as-is; its scope and region are checked at synth. Behind a `Hosting` door its IP rate rules count CloudFront edge or proxy IPs for browser traffic. |
+
+The web ACL goes on whichever front door clients use:
+
+- `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. Browser requests that arrive through a `Hosting` door aren't rate-limited by `apiWaf`; turn on the door's own WAF (`frontDoor: { features: { waf: { enabled: true } } }`) to rate-limit them:
+  - a CloudFront `Hosting` that claims the API sends a marker header the rate rule exempts;
+  - behind any other door (ALB, API Gateway, your own, or a CloudFront edge over a router) the rate rule is left off and synth warns (`blocks:api-waf:no-rate-limit-behind-door`).
+- `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution, which also covers the container namespaces it routes straight to their load balancer. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth). Without one, synth warns that those container namespaces have no rate limit (`blocks:api:direct-routes-without-waf`).
+- `apiFrontDoor: 'cloudfront'` with a CloudFront-backed `Hosting` fronting the API: the API is served from Hosting's distribution, so set the WAF on Hosting (`frontDoor: { features: { waf: { enabled: true } } }`); `apiWaf` then creates nothing and synth warns (`blocks:api-waf:deferred-to-hosting`).
+- Not covered: the gateway's `execute-api` endpoint under `'cloudfront'` (callable directly, and reached by browser traffic that a non-CloudFront `Hosting` door forwards), and `bb-realtime`'s WebSocket API (AWS WAF can't attach to API Gateway WebSocket APIs).
 
 ### API front door
 
-How the backend's API is exposed to clients is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'apigateway'`):
+The `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` chooses how the backend's API is exposed to clients:
 
 - **`'apigateway'`** (default) — clients call the stack's API Gateway endpoint directly, on its own `execute-api` domain. Nothing extra to deploy.
-- **`'cloudfront'`** — Blocks puts a CloudFront distribution in front of that gateway (and builds the gateway as a regional endpoint, so there is a single CloudFront layer); clients call the distribution's domain instead.
+- **`'cloudfront'`** — Blocks puts a CloudFront distribution in front of that gateway; clients call the distribution's domain instead.
 
 Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/aws-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
 
-The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
+Either tier serves the API at the same paths (see [Calling the API over HTTP](#calling-the-api-over-http-json-rpc-20)). By default every namespace runs on the default compute. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. Where a namespace on a `container` compute is served from:
 
-Either tier serves the API at the same path. The TypeScript client (and any manual caller that addresses a namespace) POSTs JSON-RPC to a per-namespace path:
+- With `'cloudfront'`, its path has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer: calls can run up to 60 seconds. Every other path reaches the gateway.
+- The `stacked` door's edge sends `/aws-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit.
+- A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`.
+- On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
 
-```
-POST /aws-blocks/api/{namespace}
-```
+When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so no CORS configuration is needed. The `'none'` door is the exception: it serves static files only, so the browser calls the API cross-origin. With `'cloudfront'`:
 
-where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat; it runs on the default compute, and with `defaults.strictNamespacePlacement` it refuses a namespace placed on another compute. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/aws-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
-
-**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
+- A CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role, and no second distribution is created.
+- Behind the `alb`, `apiGateway` and `custom` doors the API keeps its own distribution, and `ApiUrl` stays on it for every other client.
 
 Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
 
 > ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` — changes the API's endpoint domain.** Browser auth cookies and sessions are bound to the origin that set them, so the change invalidates every existing cookie/session — users are signed out and must sign in again. Pick a tier, and decide on Hosting, before you have real users, and treat a later change as a breaking migration.
 
-### ApiError / isBlocksError / hasAuthError
+## ApiError / isBlocksError / hasAuthError
 
 Typed error handling across the wire. All three are exported from `@aws-blocks/core`, and re-exported from `@aws-blocks/blocks`.
 
@@ -310,7 +392,7 @@ catch (e) {
 }
 ```
 
-#### `new ApiError(message, status, options?)`
+### `new ApiError(message, status, options?)`
 
 ```typescript
 new ApiError(
@@ -330,7 +412,7 @@ new ApiError(
 
 The instance exposes `message`, `name`, `status` and `retriable` as readable properties, and it is a real `Error`, so `instanceof Error` and stack traces behave normally.
 
-How `status` reaches the client over JSON-RPC: an uncaught error inside an RPC method is encoded as an error response whose **`code` is the `ApiError`'s `status`** (positive numbers can't collide with the reserved `-32xxx` range). `name` and `retriable` ride along in `error.data`. A non-`ApiError` throw becomes code `500` with no `data.name`.
+How `status` reaches the client over JSON-RPC: an uncaught error inside an RPC method is encoded as an error response whose `code` is the `ApiError`'s `status`. `name` and `retriable` ride along in `error.data`. A non-`ApiError` throw becomes code `500` with no `data.name`.
 
 ```jsonc
 // throw new ApiError('Username already taken', 409,
@@ -342,9 +424,17 @@ How `status` reaches the client over JSON-RPC: an uncaught error inside an RPC m
 }}
 ```
 
-The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`. A response that is not a JSON-RPC envelope, such as a gateway's own `429 {"message":"Too Many Requests"}` or an HTML error page, also rejects with an `ApiError`: `status` is the HTTP status (`502` if that status was 2xx) and `message` is the body's `message` when present, else `HTTP <status>`.
+The client rejects with an `ApiError`:
 
-#### `hasAuthError(state, name)`
+- A JSON-RPC error with a positive code decodes to the same `status`, `name` and `retriable`.
+- Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`.
+- A response that is not a JSON-RPC envelope, such as a gateway's own `429 {"message":"Too Many Requests"}` or an HTML error page: `status` is the HTTP status (`502` if that status was 2xx) and `message` is the body's `message` when present, else `HTTP <status>`.
+
+### `isBlocksError(e, name)`
+
+`isBlocksError<N extends string>(e: unknown, name: N): e is Error & { name: N }` is true when `e` is an `Error` whose `name` equals `name`, and narrows the type. The same check works on the server and in the client, because a decoded `ApiError` keeps its `name`.
+
+### `hasAuthError(state, name)`
 
 ```typescript
 import { hasAuthError } from '@aws-blocks/core';
@@ -355,9 +445,9 @@ function hasAuthError<T extends { errorName?: string }, N extends string>(
 ): state is T & { errorName: N }
 ```
 
-`Auth`'s state machine (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
+`Auth`'s state machine (`setAuthState()` / `getAuthState()`) returns a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError(state, name)` is true when `state.errorName === name`, and narrows the type. A `null` / `undefined` state and a state with no `errorName` give `false`.
 
-In browser code, submit the action with `submitAuthAction` from `@aws-blocks/blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct `authApi.setAuthState()` call notifies nothing on the page, so a UI that renders from `onAuthChange` never sees the sign-in.
+In browser code, submit the action with `submitAuthAction` from `@aws-blocks/blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers, which a direct `authApi.setAuthState()` call does not.
 
 ```typescript
 import { hasAuthError } from '@aws-blocks/blocks/client';
@@ -374,9 +464,9 @@ To import `AuthErrors` in browser code, list `@aws-blocks/bb-auth` in your app's
 
 Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
 
-#### Monitoring failed RPC calls
+### Monitoring failed RPC calls
 
-A failed RPC call (a method that throws, or a call to an unknown API namespace or method) reaches the client as a JSON-RPC error inside an HTTP 200 response, and the Lambda invocation itself succeeds. So Lambda's `Errors` metric never counts it. Instead, on Lambda each failed call writes one log line in CloudWatch embedded metric format, which CloudWatch turns into a metric with no SDK call and no extra IAM permission:
+A failed RPC call (a method that throws, or a call to an unknown API namespace or method) reaches the client as a JSON-RPC error inside an HTTP 200 response, and the Lambda invocation itself succeeds, so Lambda's `Errors` metric does not count it. On Lambda each failed call writes one log line in CloudWatch embedded metric format, which emits this metric:
 
 | | |
 |---|---|
@@ -387,9 +477,9 @@ A failed RPC call (a method that throws, or a call to an unknown API namespace o
 
 Alarm on `StatusClass = 5xx` to catch server failures; `4xx` counts include expected rejections such as an unauthenticated call. The error message is never written to the metric line.
 
-API namespaces on a `container` compute don't emit this metric yet: only Lambda functions write it.
+API namespaces on a `container` compute do not emit this metric.
 
-### RawRoute
+## RawRoute
 
 Path-based HTTP routing Building Block for endpoints that need full request/response control: webhooks, health checks, redirects, file downloads, anything a browser or third party has to hit with a plain `GET`. Use `ApiNamespace` (RPC) for typed function calls; use `RawRoute` when you need raw HTTP semantics.
 
@@ -457,26 +547,45 @@ new RawRoute(scope, 'user', {
 // GET /users/42?q=hello → {"id":"42","q":"hello"}
 ```
 
-Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key. `npm run dev` and the deployed Lambda match routes and fill `params` with the same code, so a route behaves the same locally.
+Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
 
 To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which is the same path in every environment) rather than on a full URL.
 
 `path` can be omitted, in which case it is derived from the scope-chain IDs, so `Scope('app') → Scope('v1') → RawRoute('health')` gives `/v1/health`. That means restructuring your construct tree silently changes URLs, so pass an explicit `path` for anything a client depends on.
 
-Registration rules worth knowing before you hit them at runtime:
+Registration rules:
 
 - Routes must be constructed while the backend module is loading (top level of `aws-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
 - `/aws-blocks` itself and `/aws-blocks/api` (plus anything under it) are reserved for RPC dispatch, and `/` is not routable, so use a sub-path.
 - The same `method` + `path` twice throws `RawRouteErrors.DuplicateRoute`; catch it with `isBlocksError(e, RawRouteErrors.DuplicateRoute)`.
-- No extra AWS resources are created. The existing API Gateway proxy already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
 
-### Pipeline
+## withAuth (SSR cookie forwarding)
 
-CDK Pipelines-based CI/CD construct for multi-branch, multi-stage deployments. Creates self-mutating CodePipeline V2 instances with GitHub source via CodeConnections (OAuth).
+`withAuth<T>(fn: () => Promise<T>, cookies?: string | null, options?: WithAuthOptions): Promise<T>`, where `WithAuthOptions` is `{ allowAnonymous?: boolean }`, from the `@aws-blocks/core/server` entry point (also re-exported as `@aws-blocks/blocks/server`), forwards the request's cookies to every AWS Blocks API call made inside `fn`. During SSR (server components / loaders) the browser's cookies aren't attached to those calls otherwise.
 
-📖 **Full Pipeline documentation:** [`@aws-blocks/pipeline` README](../pipeline/README.md)
+- `withAuth` throws a `401` `ApiError` when no cookies are found.
+- For pages that signed-out visitors can see, pass `{ allowAnonymous: true }` as the third argument: `fn` then runs without cookies, as a signed-out browser call would. Public methods work, and methods gated with `auth.requireAuth` still answer `401`. This works whatever the header value is for a request without cookies (`null`, `undefined` or `''`), and with built-in detection: `withAuth(fn, undefined, { allowAnonymous: true })`.
 
-### Hosting
+Where the cookies come from:
+
+| Framework | Cookies |
+|---|---|
+| Next.js | Built in: read through `cookies()` from `next/headers`, so with no second argument `withAuth` works anywhere that call does: server components, route handlers and server actions. |
+| Nuxt | Built in: read from the active Nitro request. Requires `nitro: { experimental: { asyncContext: true } }` in `nuxt.config.ts`. |
+| Any other | Pass the request's `Cookie` header as the second argument, or register a provider once with `registerCookieProvider`. |
+
+```typescript
+import { withAuth } from '@aws-blocks/blocks/server';
+
+// Next.js server component or route handler: cookies come from next/headers' cookies()
+const posts = await withAuth(() => api.listMyPosts());
+
+// Other frameworks: pass cookies explicitly as the 2nd arg…
+const posts = await withAuth(() => api.listMyPosts(), request.headers.get('cookie'));
+// …or register a provider once via registerCookieProvider.
+```
+
+## Hosting
 
 CDK construct (from the `/cdk` entry point) that deploys a frontend on S3 behind a front door — CloudFront by default, or another door (`frontDoor`, below) — with a single-origin API proxy when a backend stack is provided.
 
@@ -490,28 +599,24 @@ new Hosting(stack, 'Web', {
 });
 ```
 
-The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, the framework is auto-detected by reading your app's OWN `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` explicitly to override auto-detection — e.g. when a stray `next` dependency would otherwise trigger an unwanted Next.js/OpenNext build. Full reference lives in the source JSDoc.
+The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, it is detected from your app's own `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` to override the detection, for example when a stray `next` dependency would trigger a Next.js/OpenNext build.
 
 `buildCommand` runs during synth, with `BLOCKS_API_URL` set to the backend the frontend talks to, and then the framework adapter runs its own build (OpenNext, Nitro, Astro, SvelteKit). Two synths skip both:
 
-- **Destroy.** `npm run destroy` and `npm run sandbox:destroy` don't deploy the frontend, so `Hosting` reuses the build output already on disk instead of building. It builds only when there is no output, for example on a fresh clone. Each framework adapter checks the output it deploys: a Next.js destroy reuses the `.open-next/` output of an earlier deploy, and with only `.next/` (after a plain `next build`) OpenNext still builds, because the synth needs its output. An exported `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
-- **A deploy you ask to run on the existing build.** Set `BLOCKS_SKIP_FRONTEND_BUILD=1`, for example `BLOCKS_SKIP_FRONTEND_BUILD=1 npm run deploy`, to deploy what is already in the build output directory. Nothing is built, and a missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with a message naming the variable. The build bakes in `BLOCKS_API_URL`, so only reuse a build made for the same backend; a deploy never reuses one on its own.
+- **Destroy.** `npm run destroy` and `npm run sandbox:destroy` reuse the build output already on disk and build only when there is none, for example on a fresh clone. Each framework adapter checks the output it deploys: a Next.js destroy reuses the `.open-next/` output of an earlier deploy, and with only `.next/` (after a plain `next build`) OpenNext still builds. An exported `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
+- **A deploy with `BLOCKS_SKIP_FRONTEND_BUILD=1`**, for example `BLOCKS_SKIP_FRONTEND_BUILD=1 npm run deploy`, deploys what is already in the build output directory. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with a message naming the variable. The build bakes in `BLOCKS_API_URL`, so only reuse a build made for the same backend; a deploy never reuses one on its own.
 
-Old builds are retained for rollback and expired by an S3 lifecycle rule after `buildRetentionDays` (default **30**). The build currently being served is never expired regardless of deploy cadence — only superseded builds are cleaned up. Only builds superseded by a normal `Update` cutover are auto-tagged (and thus auto-expired): pre-existing/orphaned builds and aborted or rolled-back deploys are never tagged and need manual cleanup (e.g. an S3 inventory / Batch Operations sweep). Raise the window with `buildRetentionDays` (it must be ≥ `skewProtection.maxAge` in days):
+`buildRetentionDays` (default 30) is how many days superseded builds are kept for rollback. It maps to the hosting construct's `storage.buildRetentionDays` and must be ≥ `skewProtection.maxAge` in days. The [`@aws-blocks/hosting` README](../hosting/README.md) has the retention and cleanup rules.
 
-```typescript
-new Hosting(stack, 'Web', {
-  root: join(__dirname, '..'),
-  api: blocksStack,
-  buildRetentionDays: 90,
-});
-```
+### Front door and its settings
 
-Core's top-level `buildRetentionDays` maps to the L3 construct's `storage.buildRetentionDays`.
+`frontDoor` picks the public entry point:
 
-#### Front door and its settings
+- omitted: CloudFront (the default);
+- `{ kind: 'alb' }`, `{ kind: 'apiGateway', api?: 'http' | 'rest' }`, `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` or `{ kind: 'custom', door }`;
+- `'none'`: a public S3 website bucket.
 
-`frontDoor` picks the public entry point: omit it for CloudFront (the default), or pass `{ kind: 'alb' }`, `{ kind: 'apiGateway', api?: 'http' | 'rest' }`, `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }`, `{ kind: 'custom', door }` or `'none'` (a public S3 website bucket). The settings the app asks the door for go in `frontDoor.features`, typed per kind, so a setting the chosen door doesn't implement does not compile. `{ features }` with no `kind` is the CloudFront default with settings:
+The settings the app asks the door for go in `frontDoor.features`, typed per kind, so a setting the chosen door doesn't implement does not compile. `{ features }` with no `kind` is the CloudFront default with settings:
 
 ```typescript
 import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
@@ -532,27 +637,15 @@ new Hosting(stack, 'Web', {
 
 A `config()` domain works in `frontDoor.features.domain` too, through the async `Hosting.create()`, as for the top-level `domain`.
 
-| Setting | CloudFront | ALB | API Gateway | Stacked | Custom |
-|---|---|---|---|---|---|
-| `domain` | ✓ | ✓ (with `certificate`; no `wwwRedirect`) | ✓ (no `wwwRedirect`) | `router.domain` (the name the edge reaches the router at over HTTPS, with `certificate`) | ✓ |
-| `waf` | ✓ | ✓ (REGIONAL) | – | `edge.waf.webAclArn` (CLOUDFRONT), `router.waf` (REGIONAL) | ✓ |
-| `logging` | ✓ | ✓ (off unless set) | – | `router.logging` | ✓ |
-| `monitoring` | ✓ | ✓ (`enabled` only, on unless `enabled: false`) | – | `router.monitoring` (`enabled` only) | ✓ |
-| `skewProtection` | ✓ | – | – | – | ✓ |
-| `geoRestriction` | ✓ | – | – | – | ✓ |
-| `contentSecurityPolicy` | ✓ | – | – | `edge.contentSecurityPolicy` | – |
-| `priceClass`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – | – |
+The [`@aws-blocks/hosting` README](../hosting/README.md) documents each door: the settings each kind takes, the stacked door's settings per layer, and writing your own. The rules that fail a synth or a deploy:
 
-The stacked door's edge → router hop is HTTPS on port 443 with a router `certificate` and `features.router.domain`; without them it is plain HTTP (unencrypted; on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox deploy with `OriginSecretOverPlainHttpError` and warns in one). The standalone `{ kind: 'alb' }` door without a `certificate` and `features.domain` serves plain HTTP too: with an API, a production deploy fails synth (`PlainHttpFrontDoorError`) and a sandbox deploy warns. If the network path is trusted (a private network, or TLS ended upstream), `allowPlainHttp: true` on the door (the `alb`, `custom` or `stacked` door) lets a production deploy synthesize anyway, with an acknowledgeable warning (`@aws-blocks/hosting:PlainHttpAllowedInProduction`); for the `alb` and `custom` doors `Hosting` also registers `BLOCKS_ALLOW_PLAIN_HTTP` so `Auth` issues its session cookie without `Secure` instead of refusing sign-in. See the hosting README's "Running a plain-HTTP door in production". The router admits only the edge through a header whose value Secrets Manager generates once per stack.
+- **Plain HTTP.** A door without a certificate serves plain HTTP: the `{ kind: 'alb' }` door without a `certificate` and `features.domain`, and the stacked door's edge → router hop without a router `certificate` and `features.router.domain`. Outside a sandbox deploy, synth fails for the `alb` door with an API (`PlainHttpFrontDoorError`) and for a stacked door whose router is not `internal: true` (`OriginSecretOverPlainHttpError`); a sandbox deploy warns. If the network path is trusted (a private network, or TLS ended upstream), `allowPlainHttp: true` on the `alb`, `custom` or `stacked` door lets a production deploy synthesize.
+- **Switching `frontDoor` on a deployed app** replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist. Remove it from the old door first.
+- **Top-level props.** The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases of the same names in `frontDoor.features`. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only).
 
-Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-blocks/hosting` README.
+### Preview mode and `HostingPresets`
 
-The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as one that sets them in `frontDoor.features`. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
-
-
-#### Preview mode and `HostingPresets`
-
-`HostingPresets` are the hosting counterpart of `BlocksPresets`: plain bundles of `Hosting` props. `HostingPresets.preview` is a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes); `HostingPresets.production` is the full shape (it sets nothing). Spread one first and override settings after it:
+`HostingPresets` are plain bundles of `Hosting` props, as `BlocksPresets` are for `defaults`. `HostingPresets.preview` is a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes); `HostingPresets.production` sets nothing. Spread one first and override settings after it:
 
 ```typescript
 import { Hosting, HostingPresets } from '@aws-blocks/core/cdk';
@@ -575,11 +668,15 @@ new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, 
 | `imageOptimization` | `false` | No image function; the image endpoints serve the source image (a remote one is redirected only when its host is in the app's image allowlist, else 404) |
 | `incrementalRegeneration` | `false` | Next.js builds without the tag cache and revalidation queue; prerendered pages come from the build's snapshot |
 | `edgeRoutes` | `'regional'` | Next.js `runtime: 'edge'` routes run as regional Lambda functions, not Lambda@Edge |
-| `buildId` | `'fixed'` | A build id keyed on the build's content: an unchanged build keeps it, so a re-deploy skips the asset upload and can hotswap; a changed build gets a new prefix (deleted files stop being served). The door's asset proxy is created alongside the asset uploads, so there is no atomic switch-over |
+| `buildId` | `'fixed'` | A build id keyed on the build's content: an unchanged build keeps it, so a re-deploy skips the asset upload and can hotswap; a changed build gets a new prefix (deleted files stop being served). There is no atomic switch-over |
 
 Each prop also works on its own. `incrementalRegeneration: false` works behind every door. `imageOptimization: false` and `edgeRoutes: 'regional'` need the API Gateway HTTP API door (where `edgeRoutes` defaults to `'regional'`, since that door can't invoke Lambda@Edge), and `buildId: 'fixed'` needs a door without an edge cache (not CloudFront or the stacked door). Any other combination fails synth with `UnsupportedHostingSettingError`.
 
-From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app with `HostingPresets.preview`, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`). On a re-deploy, a backend-only change is hotswapped; a changed frontend build or an infrastructure change does a full deploy. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only. `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy one stack: a plain sandbox deploy removes the preview (it warns first), and running `sandbox:preview` again adds it back at a new URL:
+`npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app with `HostingPresets.preview`, and prints its URL.
+
+- It runs `startSandbox({ preview: true, deployOnly: true })`, which sets the CDK context `previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`). The app decides what the signal does; the templates add `Hosting` for it (below), so a plain `npm run sandbox` stays backend-only.
+- On a re-deploy, a backend-only change is hotswapped; a changed frontend build or an infrastructure change does a full deploy.
+- `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy one stack: a plain sandbox deploy removes the preview (it warns first), and running `sandbox:preview` again adds it back at a new URL.
 
 ```typescript
 const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
@@ -596,62 +693,48 @@ if (!sandboxMode || previewMode) {
 
 Tear a preview sandbox down with `npm run sandbox:destroy`.
 
-
 ## Building Blocks
 
-Import Building Blocks from their specific packages (or from the `@aws-blocks/blocks` umbrella):
-
-- `@aws-blocks/bb-kv-store` — Key-value and document storage, with optional schemas, keys, and indexes
-- `@aws-blocks/auth-common` — Auth interfaces and Authenticator component
-- `@aws-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
-- `@aws-blocks/bb-database` — SQL database
-- `@aws-blocks/bb-realtime` — Real-time pub/sub
-
-### withAuth (SSR cookie forwarding)
-
-Lives in the `@aws-blocks/core/server` entry point (also re-exported as `@aws-blocks/blocks/server`). During SSR (server components / loaders) the browser's cookies aren't automatically attached to AWS Blocks API calls — `withAuth` reads them and forwards them to every AWS Blocks API call made inside the callback.
-
-**Next.js** detection is built in: `withAuth` reads the request's cookies through `cookies()` from `next/headers`, so with no second argument it works anywhere that call does — server components, route handlers and server actions. **Nuxt** is also detected (reads the active Nitro request; requires `nitro: { experimental: { asyncContext: true } }` in `nuxt.config.ts`). Any other framework passes the request's `Cookie` header explicitly, or registers a provider once:
-
-```typescript
-import { withAuth } from '@aws-blocks/blocks/server';
-
-// Next.js server component or route handler: cookies come from next/headers' cookies()
-const posts = await withAuth(() => api.listMyPosts());
-
-// Other frameworks: pass cookies explicitly as the 2nd arg…
-const posts = await withAuth(() => api.listMyPosts(), request.headers.get('cookie'));
-// …or register a provider once via registerCookieProvider.
-```
-
-**Note:** `withAuth` throws a `401` `ApiError` when no cookies are found. For pages that signed-out visitors can see, pass `{ allowAnonymous: true }` as the third argument: the callback then runs without cookies, as a signed-out browser call would. Public methods work, and methods gated with `auth.requireAuth` still answer `401`. This works whatever the header value is for a request without cookies (`null`, `undefined` or `''`), and with built-in detection: `withAuth(fn, undefined, { allowAnonymous: true })`. Full reference lives in the source JSDoc.
+`npm run docs` lists every Building Block, and `npm run docs <Block>` prints one block's README. The `Pipeline` CI/CD construct is documented in the [`@aws-blocks/pipeline` README](../pipeline/README.md).
 
 ## Local Development
 
 In local dev mode, Building Blocks use mock implementations. No AWS resources needed.
 
-The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so nothing on your network can reach it. It serves your whole API against the local mock data, and local auth authenticates nothing. In a container or a remote devbox where you control who can reach the port, opt into a wider interface:
+The dev server (`npm run dev`) listens on `127.0.0.1` (loopback) only, so nothing on your network can reach it. It serves your whole API against the local mock data, and local auth authenticates nothing. In a container or a remote devbox where you control who can reach the port, opt into a wider interface:
 
 ```bash
 BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
 ```
 
-The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/aws-blocks/settings` shortcut opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
+Set the host with `BLOCKS_DEV_HOST`, `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the dev task exports the last two to the dev server as `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in.
 
-The `Host` check doesn't stop a page on another site from sending a request to `http://localhost:3000` itself, so the dev server also checks where state-changing requests come from. Both checks below apply in local mode and in sandbox mode, where the dev server forwards API requests to the deployed sandbox API (`BLOCKS_API_URL`): a refused request is never forwarded.
+- With a wildcard (`BLOCKS_DEV_HOST=0.0.0.0`), open the app by IP address (e.g. `http://192.168.1.10:3000`). Requests and same-origin pages reached by IP are accepted; DNS names are not (the dev server answers them `403`).
+- To open it by hostname (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
+- Behind a reverse proxy or a port-forwarding tunnel that passes its own public hostname in `Host` (a cloud-IDE forwarded-port URL, or nginx with `proxy_set_header Host $host`), configure the proxy to rewrite `Host` to `localhost:<port>`. `BLOCKS_DEV_HOST` is also the address the dev server binds, so setting it to a name that only exists in front of the proxy makes the dev server fail to start.
 
-- A `POST`, `PUT`, `PATCH` or `DELETE` request (JSON-RPC calls and RawRoutes alike) whose `Origin` header names another site gets `403 Forbidden`. Allowed origins are a loopback origin on any port (`http://localhost:5173`, `http://127.0.0.1:3100`, `http://[::1]:4321`, so a frontend dev server calling the backend directly keeps working), the dev server's own address (a page opened by IP address with `BLOCKS_DEV_HOST=0.0.0.0`), and the host set in `BLOCKS_DEV_HOST` (or `startDevServer({ host })`) on any port. A loopback origin includes any other app running on your own machine: the check protects you from other sites, not from other local servers. `Origin: null` is refused. To call the dev server from a page on another hostname, set `BLOCKS_DEV_HOST` to that hostname; there is no separate allowed-origin list for local dev (`defaults.allowedOrigins` applies to the deployed API). A request with no `Origin` header, such as `curl`, server-side rendering or a native client, isn't affected, and neither are `GET`, `HEAD` and `OPTIONS` requests.
-- A JSON-RPC call (`POST /aws-blocks/api`) must send `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine), or it gets `415 Unsupported Media Type` and the method doesn't run. A browser sends `text/plain`, `application/x-www-form-urlencoded` and `multipart/form-data` bodies to another site without asking first, so this refuses them even when no `Origin` is sent. The generated client and the Swift, Kotlin and Dart clients already send `application/json`; with `curl`, pass `-H 'Content-Type: application/json'`. RawRoutes keep accepting any content type.
+### Request checks
 
-You can also set the host with `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the dev task also exports it to the dev server as `BLOCKS_DEV_HOST`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in:
+The dev server refuses requests that another site could trigger:
 
-- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Requests and same-origin pages reached by IP are accepted; DNS names are not (the dev server answers them `403`), because a same-origin check against a name can be defeated by DNS rebinding.
-- To open it by **hostname** (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
-- Behind a **reverse proxy or a port-forwarding tunnel** that passes its own public hostname in `Host` (a cloud-IDE forwarded-port URL, or nginx with `proxy_set_header Host $host`), configure the proxy to rewrite `Host` to `localhost:<port>`. `BLOCKS_DEV_HOST` is also the address the dev server binds, so setting it to a name that only exists in front of the proxy makes the dev server fail to start.
+- **`Host`.** Every request gets `403 Forbidden` unless its `Host` header names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured.
+- **`Origin`.** A `POST`, `PUT`, `PATCH` or `DELETE` request (JSON-RPC calls and RawRoutes alike) whose `Origin` header names another site gets `403 Forbidden`.
+  - Allowed origins: a loopback origin on any port (`http://localhost:5173`, `http://127.0.0.1:3100`, `http://[::1]:4321`), which includes any other app running on your own machine; the dev server's own address (a page opened by IP address with `BLOCKS_DEV_HOST=0.0.0.0`); and the host set in `BLOCKS_DEV_HOST` (or `startDevServer({ host })`) on any port.
+  - `Origin: null` is refused.
+  - Not checked: a request with no `Origin` header, such as `curl`, server-side rendering or a native client, and `GET`, `HEAD` and `OPTIONS` requests.
+  - To call the dev server from a page on another hostname, set `BLOCKS_DEV_HOST` to that hostname; there is no separate allowed-origin list for local dev (`defaults.allowedOrigins` applies to the deployed API).
+- **`Content-Type`.** A JSON-RPC call (`POST /aws-blocks/api`) must send `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine), or it gets `415 Unsupported Media Type` and the method doesn't run, even when no `Origin` is sent. The generated client and the Swift, Kotlin and Dart clients send `application/json`; with `curl`, pass `-H 'Content-Type: application/json'`. RawRoutes accept any content type.
 
-Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
+The `Origin` and `Content-Type` checks apply in local mode and in sandbox mode, where the dev server forwards API requests to the deployed sandbox API (`BLOCKS_API_URL`): a refused request is never forwarded.
 
-At startup the dev server regenerates `aws-blocks/client.js` from your backend. An app that ships its own client turns that off with `"generateClient": false` in `package.json#blocks.dev`, or with `startDevServer({ generateClient: false })`. The Amplify overlay needs this: its `client.js` reads the API URL from `amplify_outputs.json` and adds the Cognito token. For example:
+Two local endpoints have their own rule:
+
+- `/aws-blocks/settings` opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
+- The realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, as in a deployed app.
+
+### Generated client
+
+At startup the dev server regenerates `aws-blocks/client.js` from your backend. An app that ships its own client turns that off with `"generateClient": false` in `package.json#blocks.dev`, or with `startDevServer({ generateClient: false })`, as the `amplify` overlay does:
 
 ```json
 { "blocks": { "dev": { "port": 3001, "frontend": false, "generateClient": false } } }
@@ -675,29 +758,38 @@ BLOCKS_LOG_LEVEL=normal npm run deploy
 
 No level hides the lines other tools read: the deployment-target summary, the `API URL` / `Frontend URL` lines, the early `🌐 Frontend deploying to:` line, the `BLOCKS_DEPLOYED …` line, and error messages.
 
-At `quiet` and `normal` the scripts keep the last 500 lines of the hidden CDK output (`cdk synth`, `cdk deploy`, `cdk destroy`, `cdk watch`). If the deploy or destroy fails, they print those lines to stderr under a `──── cdk deploy output (…) ────` header before the error, so you don't need to run it again to see why it failed. `cdk watch` prints them when a watch deploy fails or `cdk watch` exits with an error.
+At `quiet` and `normal` the scripts keep the last 500 lines of the hidden CDK output (`cdk synth`, `cdk deploy`, `cdk destroy`, `cdk watch`). If the deploy or destroy fails, they print those lines to stderr under a `──── cdk deploy output (…) ────` header before the error. `cdk watch` prints them when a watch deploy fails or `cdk watch` exits with an error.
 
 In the dev server, `quiet` and `normal` hide the per-call `[rpc-in]` / `[rpc-call]` / `[rpc-ok]` lines but keep the `[rpc-err]` and `RawRoute Error:` lines (name, message and `cause`); the stack trace prints when `BLOCKS_LOG_LEVEL` is unset or `debug`. `BLOCKS_DEV_QUIET=1` still hides all of those lines at every level.
 
 ## CORS Configuration
 
-By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (plain origins or regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
+By default the API sends no `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (plain origins or regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the front door's own URL (registered automatically as `CORS_HOSTING_ORIGINS`).
 
 ### `allowedOrigins` entries
 
 Each entry in `defaults.allowedOrigins` is one of:
 
-- **A plain origin** — `scheme://host[:port]`, such as `'https://app.example.com'` or `'http://localhost:3000'`. It is matched exactly and case-insensitively; its dots are literal, so `https://appxexample.com` does not match. A trailing `/` is ignored. An `http`/`https` origin is compared in the form the browser sends: the default port is dropped (`'https://app.example.com:443'` matches `https://app.example.com`) and an internationalized host is converted to punycode (`'https://bücher.example'` matches `https://xn--bcher-kva.example`). User info (`user@`), a path (anything after the host and port other than a single trailing `/`), a query or a fragment is not part of an origin and is rejected, as is a host with characters other than letters, digits, `.` and `-` (or a bracketed IPv6 address).
-- **A regex pattern** — any entry with regex syntax (`^`, `$`, `\`, `(`, `|`, `*`, ...). It is anchored as `^(?:<entry>)$` and matched case-sensitively. Escape every dot (`'https://app\\.example\\.com'`) unless it is followed by a quantifier, as in `'.*'`, and make sure the entry compiles on its own. To allow any subdomain, use a pattern such as `'https://[a-z0-9-]+\\.example\\.com'`; glob wildcards such as `'https://*.example.com'` are not supported. Brace quantifiers are limited to `{n}`: `{n,}` and `{n,m}` contain a comma, and entries are comma-joined into `CORS_ALLOWED_ORIGINS`. A group repeated with `*`, `+` or `{n}` that itself contains a repeating quantifier or an alternation (such as `'(a+)+'`, `'([a-z]+\\.)*'` or `'(a|b)+'`) is not supported, because such patterns can make matching very slow; this check does not rule out every slow pattern. To allow subdomains at any depth, use `'https://[a-z0-9.-]+\\.example\\.com'` instead of `'https://([a-z0-9-]+\\.)*example\\.com'`.
+- **A plain origin** — `scheme://host[:port]`, such as `'https://app.example.com'` or `'http://localhost:3000'`.
+  - It is matched exactly and case-insensitively; its dots are literal, so `https://appxexample.com` does not match.
+  - A trailing `/` is ignored.
+  - An `http`/`https` origin is compared in the form the browser sends: the default port is dropped (`'https://app.example.com:443'` matches `https://app.example.com`) and an internationalized host is converted to punycode (`'https://bücher.example'` matches `https://xn--bcher-kva.example`).
+  - Rejected: user info (`user@`), a path (anything after the host and port other than a single trailing `/`), a query, a fragment, and a host with characters other than letters, digits, `.` and `-` (or a bracketed IPv6 address).
+- **A regex pattern** — any entry with regex syntax (`^`, `$`, `\`, `(`, `|`, `*`, ...).
+  - It is anchored as `^(?:<entry>)$` and matched case-sensitively. The entry must compile on its own.
+  - Escape every dot (`'https://app\\.example\\.com'`) unless it is followed by a quantifier, as in `'.*'`.
+  - Glob wildcards such as `'https://*.example.com'` are not supported. To allow any subdomain, use a pattern such as `'https://[a-z0-9-]+\\.example\\.com'`.
+  - Brace quantifiers are limited to `{n}`: `{n,}` and `{n,m}` contain a comma, and entries are comma-joined into `CORS_ALLOWED_ORIGINS`.
+  - A group repeated with `*`, `+` or `{n}` that itself contains a repeating quantifier or an alternation (such as `'(a+)+'`, `'([a-z]+\\.)*'` or `'(a|b)+'`) is not supported, because such patterns can make matching very slow; this check does not rule out every slow pattern. To allow subdomains at any depth, use `'https://[a-z0-9.-]+\\.example\\.com'` instead of `'https://([a-z0-9-]+\\.)*example\\.com'`.
 
-`BlocksStack.create()` and `BlocksBackend.create()` reject an invalid entry (a plain origin that is not a valid origin; a regex that is a glob, does not compile on its own, has a nested quantifier or an alternation inside a repeated group, or has an unescaped `.`), so `cdk synth` fails with a message naming the entry. If one still reaches the runtime, it is ignored and logged.
+`BlocksStack.create()` and `BlocksBackend.create()` reject an entry that breaks these rules, so `cdk synth` fails with a message naming the entry. If one still reaches the runtime, it is ignored and logged.
 
 ### When using Hosting (recommended)
 
-If you use the `Hosting` construct with your API, CORS is handled automatically:
+With `Hosting` and its `api` prop (a `BlocksStack` or `BlocksBackend`), no CORS configuration is needed:
 
-- **Same-origin requests** (frontend fetches through the front door's proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
-- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the front door's URL (the CloudFront distribution's domain, your custom domain, or another door's address) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
+- Requests through the front door's proxy at `/aws-blocks/api` are same-origin.
+- Direct cross-origin calls from the frontend to the API Gateway URL are allowed too: `Hosting` registers the front door's URL (the CloudFront distribution's domain, your custom domain, or another door's address) as an allowed origin, separately from `defaults.allowedOrigins`.
 
 With the sandbox preset, the localhost pattern from `defaults.allowedOrigins` is also kept, so your local dev frontend still works.
 
@@ -718,18 +810,13 @@ defaults: {
 
 ### Production (frontend hosted separately)
 
-If your frontend is hosted on a different domain (e.g., Vercel, Netlify), list its origins in the stack's `defaults.allowedOrigins` — every Blocks compute gets them as `CORS_ALLOWED_ORIGINS`:
+If your frontend is hosted on a different domain (e.g., Vercel, Netlify), list its origins in the stack's `defaults.allowedOrigins`:
 
 ```typescript
-// aws-blocks/index.cdk.ts
-export const blocksStack = await BlocksStack.create(app, stackName, {
-  backendHandlerPath: join(__dirname, 'index.handler.ts'),
-  backendCDKPath: join(__dirname, 'index.ts'),
-  defaults: {
-    ...BlocksPresets.production,
-    allowedOrigins: ['https://myapp.com', 'https://staging.myapp.com'],
-  },
-});
+defaults: {
+  ...BlocksPresets.production,
+  allowedOrigins: ['https://myapp.com', 'https://staging.myapp.com'],
+},
 ```
 
 Each entry is a plain origin, matched exactly, or a regex pattern, anchored as `^(?:<entry>)$`; [`allowedOrigins` entries](#allowedorigins-entries) has the rules and what fails synth. The two entries above are plain origins. Regex examples:
@@ -739,7 +826,7 @@ Each entry is a plain origin, matched exactly, or a regex pattern, anchored as `
 | `https://myapp\\.com` | Exact match for `https://myapp.com` |
 | `https://.*\\.myapp\\.com` | Any subdomain of `myapp.com` |
 | `^https?://(localhost\|127\\.0\\.0\\.1)(:\\d+)?$` | Localhost/127.0.0.1, any port, http or https (sandbox) |
-| `.*` | All origins (escape hatch — use with caution) |
+| `.*` | All origins: any site can call the API from a browser. Use it only on purpose. |
 
 > **Regex entries.** In a regex entry an unescaped `.` matches *any* character, so synth rejects one that is not followed by a quantifier: write `https://app\\.example\\.com`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
@@ -747,34 +834,39 @@ If an origin doesn't match any pattern, the handler omits the `Access-Control-Al
 
 ## Committed baselines (`aws-blocks/baselines/`)
 
-Some Building Blocks refuse a destructive change at synth by comparing it with a **baseline file** they write into your app: `aws-blocks/baselines/<stack>/<file>.json`, next to the backend handler file the stack was created with. `Auth` is the first: it records the user-pool settings that Cognito cannot change after the pool exists.
+Some Building Blocks refuse a destructive change at synth by comparing it with a baseline file they write into your app: `aws-blocks/baselines/<stack>/<file>.json`, next to the backend handler file the stack was created with. `Auth` writes one: it records the user-pool settings that Cognito cannot change after the pool exists.
 
 - **Commit these files.** The check only protects a synth that sees them; a fresh checkout without them starts a new baseline from whatever the configuration is now.
 - **Renaming or removing a block** whose baseline says it owns a stateful resource fails synth on every `BlocksStack` / `BlocksBackend`, even when the block's package is no longer imported. The message names what CloudFormation would delete and the re-baseline variable to set if the removal is intended.
-- **The format is versioned.** Every file has a top-level `version` (currently `1`; a file without one is read as `1`), a `fullId` naming the block that owns it, and, while that block owns a stateful resource, a `removalGuard`. The rest of the file belongs to the block that wrote it. Every later release keeps reading every earlier version. A file with a higher version than this release knows fails synth with a message to upgrade `@aws-blocks/core` and `@aws-blocks/blocks`; a file whose `version` is not a whole number from 1 fails synth as invalid (restore it from version control). Neither is ever rewritten or deleted.
-
-Building Block authors: the protocol (`claimBaseline`, `baselineDir`, `hasOrphanedBaselines`, `BASELINE_FORMAT_VERSION`) is framework-internal and lives in `@aws-blocks/core/cdk/internal`; see `src/cdk/baselines.ts`.
+- **The format is versioned.** Every file has a top-level `version` (currently `1`; a file without one is read as `1`), a `fullId` naming the block that owns it, and, while that block owns a stateful resource, a `removalGuard`. The rest of the file belongs to the block that wrote it.
+  - A `version` higher than the installed release knows fails synth: upgrade `@aws-blocks/core` and `@aws-blocks/blocks`.
+  - A `version` that is not a whole number from 1 fails synth as invalid: restore the file from version control.
+  - AWS Blocks never rewrites or deletes such a file.
 
 ## IAM: permissions boundary and the composed-policy report
 
-Every Blocks compute (the API handler, raw routes, queue/cron/WebSocket handlers, the agent runtime) runs as **one shared execution role**, and every Building Block grants its permissions onto that role. The role is therefore the union of what all your blocks need.
+Every Blocks compute (the API handler, raw routes, queue/cron/WebSocket handlers, the agent runtime) runs as one shared execution role, and every Building Block grants its permissions onto that role.
 
 ### See what the role holds: `<stack>.blocks-iam.json`
 
-Every synth writes a report of the shared role's composed policy next to the template in `cdk.out/`: `<stackName>.blocks-iam.json` for a `BlocksStack`, or `<stackName>.<backendId>.blocks-iam.json` for each embedded `BlocksBackend`. It lists every statement (actions, resources, conditions), the managed policies and the boundary in force, plus an inventory (`roles`) of every IAM role Blocks created, each with its boundary and tags exactly as the template carries them. Each statement carries a `blocks` field: the `fullId`s of the Building Blocks that own the resources it references. The file is sorted and deterministic, so a CI step can diff it against the previous build and fail when an app's permissions grow unexpectedly:
+Every synth writes a report of the shared role's composed policy next to the template in `cdk.out/`: `<stackName>.blocks-iam.json` for a `BlocksStack`, or `<stackName>.<backendId>.blocks-iam.json` for each embedded `BlocksBackend`. It holds:
+
+- `executionRole.statements`: every statement (`actions`, `resources`, `condition`), each with a `blocks` field: the `fullId`s of the Building Blocks that own the resources it references.
+- The managed policies and the boundary in force.
+- `roles`: every IAM role Blocks created, each with its boundary and tags exactly as the template carries them.
+
+The file is sorted and deterministic, so a CI step can diff it against the previous build and fail when an app's permissions grow unexpectedly:
 
 ```bash
 NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet
 jq '.executionRole.statements[] | {actions, blocks}' cdk.out/my-app.blocks-iam.json
 ```
 
-The report is CDK-only and doesn't change the CloudFormation template.
-
-The file is written on **every** synth, whether or not `permissionsBoundary` is set, so expect it in `cdk.out/` if you check that directory's contents. It's a side file only: it isn't part of any CloudFormation template and isn't listed as a cloud-assembly artifact in `cdk.out/manifest.json`, so it isn't deployed and `cdk diff` (which compares stack templates) doesn't see it. Producing it costs one walk over the stack's constructs per synth, which is small next to bundling.
+The report is a side file, written whether or not `permissionsBoundary` is set. It is not part of any CloudFormation template and is not listed as a cloud-assembly artifact in `cdk.out/manifest.json`, so it is not deployed and `cdk diff` does not show it.
 
 ### Cap every role: `defaults.permissionsBoundary`
 
-A [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) is a ceiling: a role's effective permissions are the intersection of its policies and the boundary. Set `defaults.permissionsBoundary` to attach one to **every** IAM role AWS Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks).
+`defaults.permissionsBoundary` attaches a [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) to every IAM role AWS Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks). A role's effective permissions are the intersection of its policies and the boundary.
 
 ```typescript
 // aws-blocks/index.cdk.ts
@@ -787,17 +879,15 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 Pass the policy's name (resolved in the deploying account), its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. The option is unset in both presets, and unset leaves templates unchanged.
 
-This is the hook a platform needs when many apps deploy through one pipeline: the platform restricts its CloudFormation execution role so that `iam:CreateRole` / `iam:PutRolePolicy` are allowed only with an `iam:PermissionsBoundary` condition naming its boundary, and each app sets `permissionsBoundary` to that policy. A role created without it fails the deploy.
-
 - **Scope.** On a `BlocksStack` the boundary covers every role in the stack. On an embedded `BlocksBackend` it covers the backend's subtree plus the stack-level CDK singleton roles its blocks add; roles your stack already had are left alone. Bound those, and any other stack, yourself with `iam.PermissionsBoundary.of(stack).apply(policy)`.
 - **With CDK's `@aws-cdk/core:permissionsBoundary` context.** The context bounds every role in the app. When both are set, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns. Set the context in `cdk.json` (the `-c '@aws-cdk/core:permissionsBoundary={"name":"…"}'` CLI form passes a string, which CDK ignores). The context doesn't reach the cross-region-reference provider roles CDK adds while preparing the app, such as the ones off-region `Hosting` causes; `defaults.permissionsBoundary` does.
 - **What it doesn't do.** A boundary caps the shared role; it doesn't split it. Every handler still runs as the same role, so a bug in one block can still use another block's grants, up to the boundary. Separately deployed apps that need isolation from each other belong in separate AWS accounts.
 
 ### Running many apps in one AWS account (a shared platform)
 
-Some platforms deploy many independently written apps, often generated by AI (artificial intelligence) coding agents, through one CI (continuous integration) pipeline into **one AWS account**. Each app's CDK (Cloud Development Kit) code decides the permissions of its own roles. Nothing in the app stops it from granting itself another app's resources: a single `AppSetting.fromExisting(scope, 'x', { name: '/appb-db-password', secret: true })` gives App A read access to App B's secret, and the deploy succeeds.
+For platforms that deploy many independently written apps through one pipeline into one AWS account. Each app's CDK code decides the permissions of its own roles, and nothing in the app stops it from granting itself another app's resources: a single `AppSetting.fromExisting(scope, 'x', { name: '/appb-db-password', secret: true })` gives App A read access to App B's secret, and the deploy succeeds.
 
-**The strongest isolation is one AWS account per app** (AWS Organizations with SCPs (service control policies)). When apps must share an account, the platform enforces a per-app ceiling with IAM (Identity and Access Management), outside the apps' code. AWS Blocks provides the app side of it with one option, `defaults.appIdentity`. The platform team writes and owns the IAM policies; this section documents what they contain:
+The strongest isolation is one AWS account per app (AWS Organizations with SCPs). When apps must share an account, the platform enforces a per-app ceiling with IAM, outside the apps' code. AWS Blocks provides the app side of it with one option, `defaults.appIdentity`. The platform team writes and owns the IAM policies; [SHARED-ACCOUNT.md](./SHARED-ACCOUNT.md) documents what they contain:
 
 | Part | Who provides it | How |
 |---|---|---|
@@ -807,8 +897,6 @@ Some platforms deploy many independently written apps, often generated by AI (ar
 | 4. A CloudFormation execution policy, shared by every app, so each app's execution role only creates bounded roles tagged as the app | The platform | [The shared execution policy](./SHARED-ACCOUNT.md#the-shared-execution-policy) |
 | 5. A deploy guard, shared by every app, that keeps each app's deploy role on its own stacks | The platform | [The deploy guard](./SHARED-ACCOUNT.md#the-deploy-guard) |
 | 6. A pipeline step before credentials are issued | The platform | [The pipeline](./SHARED-ACCOUNT.md#the-pipeline): synth, which fails on any violation, and the report's `app.id` |
-
-Parts 1 and 2 live in each app's code. A platform team puts them in its own project template once, so no app has to remember them: see [The app's side: what to put in your project template](./SHARED-ACCOUNT.md#the-apps-side-what-to-put-in-your-project-template).
 
 **1–2. In each app.** Name the stack after the app id, and set the identity and the boundary:
 
@@ -825,26 +913,34 @@ export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
 });
 ```
 
-- **The id** is 1–10 lowercase letters and digits, starting with a letter. No hyphen, so one app's prefix (`appa-`) never matches another app's names (`appab-…`). At most 10 characters because the id is also the app's CDK bootstrap qualifier (CDK's limit is 10): every app has its own bootstrap, and no two apps can share one. **Some ids are reserved**, because the app's `<id>-…` / `<id>/…` names, which the platform's policies give the app, would include names other apps, AWS Blocks, CDK or AWS share:
+- **The id** is 1–10 lowercase letters and digits, starting with a letter, with no hyphen. It is also the app's CDK bootstrap qualifier, so every app has its own bootstrap. Synth rejects a reserved id, saying why; however the platform hands out ids, it should reject them too:
+  - `cdk`, `blocks`, `secrets`, `config`, `amplify`, `cf`, `sagemaker`;
+  - the region prefixes `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`, `me`, `mx`, `sa`, `us`;
+  - any id starting with `aws` or `ssm`.
+- **Names.** Name the stack `<id>` or `<id>-…`: every name then starts with `<id>-`. Every Building Block derives its resource names (tables, queues, buckets, parameters, schedules, user pools) from its `fullId`, which starts with the stack's id, and CloudFormation-generated names (functions, roles, topics, alarms, managed policies) start with the stack name. Developers don't name anything themselves. AWS Blocks also names the Lambda layers (`<id>-<logical id>`) and the CloudFront Functions and KeyValueStores (`<id>-<region>-…`) it creates, unless the app chose a name itself.
+- **Hosting `secret()` and `config()`.** Their values are named `blocks/<stackId>/secrets/…` (Secrets Manager) and `/blocks/<stackId>/config/…` (SSM), where `stackId` comes from `.blocks/config.json`. Under `defaults.appIdentity`, set `stackId` to the app id: the boundary allows `blocks/<id>/…` by name, so the values `npm run secret` / `npm run config` create untagged still work, and the IAM report treats any other `blocks/…` name as outside the app, with a hint to fix `stackId`.
+- **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role AWS Blocks creates, including the CDK custom-resource provider roles. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too. An app can still remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that AWS Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name.
+- **The IAM report** (`cdk.out/<stack>.blocks-iam.json`) gains an `app` section and a `violations` list. Synth fails on any violation. With `reportOnly: true`, synth only writes the report and prints a one-line summary, for example while adopting `appIdentity` in an existing app.
 
-  | Reserved | Why |
-  |---|---|
-  | `cdk` | every app's CDK bootstrap (`cdk-<qualifier>-assets-…` buckets, `cdk-<qualifier>-…-role-…` roles, `/cdk-bootstrap/<qualifier>/…`) and CDK's `/cdk/exports/…` and `/cdk/EdgeFunctionArn/…` parameters |
-  | `blocks` | every app's Hosting `secret()` / `config()` values (`blocks/<id>/…`) |
-  | `secrets`, `config` | Hosting's values for apps without a `stackId` (`blocks/secrets/…`, `/blocks/config/…`); `config` also AWS Config's default bucket (`config-bucket-<account>`) |
-  | `amplify` | AWS Amplify's stacks and the resources in them (`amplify-…`) |
-  | `cf` | the CloudFormation console's template buckets (`cf-templates-…`) |
-  | `sagemaker` | SageMaker's default buckets (`sagemaker-<region>-<account>`) |
-  | `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`, `me`, `mx`, `sa`, `us` | region prefixes: CDK names a CloudFront Function `<region><construct id>` (`us-east-1MyStack…`), so `function/us-*` would match every such function |
-  | any id starting with `aws` | names AWS reserves (`aws-…` buckets, stacks, roles and log groups, `/aws/…` parameters, Elastic Beanstalk's `awseb-…` stacks) |
-  | any id starting with `ssm` | Systems Manager rejects parameter names that start with `ssm`, so the app couldn't create its own |
+| Violation | Details |
+|---|---|
+| A role without the boundary or the app tag | |
+| A grant on a name outside the app's prefix | For example `fromExisting` on another app's parameter, or another app's table, queue, bucket, function, layer, RDS cluster or vector bucket. Only SSM parameters may also be named `<id>` or `<id>/…`. |
+| A name-fenced resource the app itself names outside its prefix | A table, queue, bucket, function, layer, parameter, log group, RDS cluster or instance, vector bucket, event rule or bus, schedule, secret or state machine. The execution policy would refuse to create it. |
+| A wildcard grant on a data service | A grant on `*` or on a resource name that starts with `*`. The services: SSM, DynamoDB, SQS, S3, Secrets Manager, Lambda, CloudWatch Logs, Step Functions, Cognito, EventBridge and EventBridge Scheduler, KMS, API Gateway, SNS, SES, RDS and its Data API, Aurora DSQL, Bedrock, Bedrock AgentCore, S3 Vectors, ECS, CloudFront KeyValueStores, and IAM and STS for passing or assuming a role. |
+| An "everything except" grant | `NotAction`, `NotResource`. |
+| A resource the check can't resolve | `Fn::Sub` on a parameter, `Fn::ImportValue`, a template parameter. These fail closed. |
+| A resource policy that opens up another app's resource, or that lets in someone who isn't this app | Everyone, another account, another app's role, `NotPrincipal`, or a public Lambda function URL, in a Lambda or layer permission or a bucket, queue, topic, secret, KMS key or replica key, REST API or EventBridge bus policy, in any of the app's stacks. A policy the check can't read (an intrinsic, a string) fails closed. |
+| A role that trusts anything but an AWS service | |
+| A broad AWS managed policy | `AdministratorAccess`, `*FullAccess`. |
+| The CDK asset bucket of another bootstrap | |
+| `api-outside-app` | A grant on a literal API id, or an API Gateway stage, route or deployment attached to an API that isn't in the app's own template. |
+| A stack or block outside the prefix | |
 
-  Synth (`defaults.appIdentity`) rejects them, saying why. However the platform hands out ids, it should reject them too, before an app gets one.
-- **Names.** Every Building Block derives its resource names (tables, queues, buckets, parameters, schedules, user pools) from its `fullId`, which starts with the stack's id, and CloudFormation-generated names (functions, roles, topics, alarms, managed policies) start with the stack name. So with the stack named `<id>` or `<id>-…`, every name starts with `<id>-`. Developers don't name anything themselves. AWS Blocks also names the Lambda layers (`<id>-<logical id>`) and the CloudFront Functions and KeyValueStores (`<id>-<region>-…`) it creates (CDK's default names don't put a `-` after the id), unless the app chose a name itself.
-- **Hosting `secret()` and `config()`.** Their values are named `blocks/<stackId>/secrets/…` (Secrets Manager) and `/blocks/<stackId>/config/…` (SSM (AWS Systems Manager)), where `stackId` comes from `.blocks/config.json`. Under `defaults.appIdentity`, set `stackId` to the app id: the boundary allows `blocks/<id>/…` by name, so the values `npm run secret` / `npm run config` create untagged still work, and the IAM report treats any other `blocks/…` name as outside the app, with a hint to fix `stackId`.
-- **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role AWS Blocks creates, including the CDK custom-resource provider roles that `Tags.of()` doesn't reach, at a priority above the default `Tags.of(...).add()`. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too, which CloudFormation propagates to what a tag aspect can't reach. An app can still raise its own priority or remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that AWS Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name, so that's no gap.
-- **The boundary** goes on every role AWS Blocks creates, including the CDK helper roles and the roles CDK adds while preparing the app, which CDK's own `@aws-cdk/core:permissionsBoundary` context misses.
-- **The IAM report** (`cdk.out/<stack>.blocks-iam.json`) gains an `app` section and a `violations` list: a role without the boundary or the app tag; a grant on a name outside the app's prefix (for example `fromExisting` on another app's parameter, or another app's table, queue, bucket, function, layer, RDS cluster or vector bucket; only SSM parameters may also be named `<id>` or `<id>/…`); a name-fenced resource the app itself names outside its prefix (a table, queue, bucket, function, layer, parameter, log group, RDS cluster or instance, vector bucket, event rule or bus, schedule, secret or state machine), which the execution policy would refuse to create; a wildcard grant on a data service (SSM, DynamoDB, SQS (Simple Queue Service), S3, Secrets Manager, Lambda, CloudWatch Logs, Step Functions, Cognito, EventBridge and EventBridge Scheduler, KMS, API Gateway, SNS (Simple Notification Service), SES (Simple Email Service), RDS (Relational Database Service) and its Data API, Aurora DSQL, Bedrock, Bedrock AgentCore, S3 Vectors, ECS (Elastic Container Service), CloudFront KeyValueStores, and IAM and STS (Security Token Service) for passing or assuming a role), on `*` or on a resource name that starts with `*`, except three grants Building Blocks make: model invocation on AWS-owned Bedrock foundation models and system-defined inference profiles (no app's data), an Agent invoking AgentCore runtimes (the boundary caps it to runtimes tagged as the app), and SES sending (an exception listed under Limits); an "everything except" grant (`NotAction`, `NotResource`); a resource the check can't resolve (`Fn::Sub` on a parameter, `Fn::ImportValue`, a template parameter) — these fail closed; a resource policy that opens up another app's resource, or that lets in someone who isn't this app (everyone, another account, another app's role, `NotPrincipal`, or a public Lambda function URL) in a Lambda or layer permission or a bucket, queue, topic, secret, KMS key or replica key, REST API or EventBridge bus policy, in any of the app's stacks — a service, the app's own roles and the account's root are fine, and everyone only when a condition pins it to the app's own ARNs in this account (`aws:SourceArn`, `aws:PrincipalArn`) or to `aws:PrincipalTag/app` together with `aws:PrincipalAccount` (the caller's own account sets its tags, so the tag alone isn't enough), or on a public REST API; a policy the check can't read (an intrinsic, a string) fails closed; a role that trusts anything but an AWS service; a broad AWS managed policy (`AdministratorAccess`, `*FullAccess`); the CDK asset bucket of another bootstrap; a grant on a literal API id, or an API Gateway stage, route or deployment attached to an API that isn't in the app's own template (`api-outside-app`); or a stack or block outside the prefix. Synth fails on any violation. With `reportOnly: true`, synth only writes the report and prints a one-line summary, for example while adopting `appIdentity` in an existing app.
+Not violations:
+
+- Three wildcard grants Building Blocks make: model invocation on AWS-owned Bedrock foundation models and system-defined inference profiles (no app's data), an Agent invoking AgentCore runtimes (the boundary caps it to runtimes tagged as the app), and SES sending (an exception listed under Limits in [SHARED-ACCOUNT.md](./SHARED-ACCOUNT.md)).
+- In a resource policy: a service, the app's own roles and the account's root. Everyone is accepted only on a public REST API, or when a condition pins it to the app's own ARNs in this account (`aws:SourceArn`, `aws:PrincipalArn`) or to `aws:PrincipalTag/app` together with `aws:PrincipalAccount` (the caller's own account sets its tags, so the tag alone isn't enough).
 
 The report reads grants on the services listed above (and an IAM role's name, for `iam:PassRole` and `sts:AssumeRole`); it doesn't read grants on other services, such as Kinesis, Firehose, ECR, OpenSearch or Glue, so a clean report isn't full coverage. A service the boundary doesn't list is still denied at runtime. The report and the synth failure are fast feedback for developers and their agents. They aren't the boundary: the app's own code runs at synth, so a determined app could get around them. The boundary is IAM, in parts 3–5.
 
@@ -854,31 +950,26 @@ The report reads grants on the services listed above (and an IAM role's name, fo
 
 Every IAM role AWS Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
 
-- **Roles AWS Blocks creates** — under an AWS Blocks Building Block or a compute, the backend's own roles, and the stack-level roles a block creates on its behalf (custom-resource providers, `Hosting`'s). A trust without either condition **fails synth**, naming the role's construct path and the principal.
-- **Roles your app creates** — your own constructs in the backend module (on the `BlocksStack` or embedded `BlocksBackend`, at stack scope, or under a `Scope` namespace), roles you add to a `BlocksStack` after `BlocksStack.create()`, roles inside a custom Building Block you write (a `Scope` subclass, see [Pattern 3: Custom BB](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md#pattern-3-custom-bb)), and the roles CDK creates inside any of these (for example the `EventsRole` of an `events.Rule` that targets a state machine). A trust without either condition gets a **synth warning** instead, and the deploy goes ahead.
+- **Roles AWS Blocks creates** — under an AWS Blocks Building Block or a compute, the backend's own roles, and the stack-level roles a block creates on its behalf (custom-resource providers, `Hosting`'s). A trust without either condition fails synth, naming the role's construct path and the principal.
+- **Roles your app creates** — every other covered role: your own constructs in the backend module (on the `BlocksStack` or embedded `BlocksBackend`, at stack scope, or under a `Scope` namespace), roles you add to a `BlocksStack` after `BlocksStack.create()`, roles inside a custom Building Block you write (a `Scope` subclass, see [Pattern 3: Custom BB](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md#pattern-3-custom-bb)), and the roles CDK creates inside any of these (for example the `EventsRole` of an `events.Rule` that targets a state machine). A trust without either condition gets a synth warning, and the deploy goes ahead.
 
-Ownership follows who created the role, not where it sits in the construct tree: AWS Blocks marks the constructs its own blocks, computes and stack-level helpers create, and every other covered role is your app's.
+A condition counts only under an operator that requires the key and with a value that names an account. The KMS key-policy check below uses the same rules.
 
-A condition only counts under an operator that requires the key and with a value that names an account. The operator must be `StringEquals`, `StringEqualsIgnoreCase`, `StringLike`, `ArnEquals` or `ArnLike`, or one of their `ForAnyValue:` forms. An `…IfExists` operator, a negated operator (`StringNotEquals`, `ArnNotLike`, …), `Null` or a `ForAllValues:` operator doesn't count. Neither does a value of `*` alone, an `aws:SourceAccount` with a wildcard, or an `aws:SourceArn` whose account segment is empty or a wildcard. A value built from tokens is read by its literal parts, so `arn:${stack.partition}:cloudwatch:*:*:alarm:*` is still caught, while a value that starts with a token and has no literal account segment (such as `${topic.topicArn}/*`) counts. The KMS key-policy check below uses the same rules.
+- Operators that count: `StringEquals`, `StringEqualsIgnoreCase`, `StringLike`, `ArnEquals`, `ArnLike`, and their `ForAnyValue:` forms.
+- Operators that do not count: an `…IfExists` operator, a negated operator (`StringNotEquals`, `ArnNotLike`, …), `Null`, a `ForAllValues:` operator.
+- Values that do not count: `*` alone, an `aws:SourceAccount` with a wildcard, an `aws:SourceArn` whose account segment is empty or a wildcard.
+- A value built from tokens is read by its literal parts: `arn:${stack.partition}:cloudwatch:*:*:alarm:*` does not count, while a value that starts with a token and has no literal account segment (such as `${topic.topicArn}/*`) counts.
 
-Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are. So is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role, meaning any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` AWS Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
+Not checked:
 
-**Resolving the warning.** Add both conditions to the trust statement (but don't condition an API Gateway CloudWatch Logs role: API Gateway doesn't send these keys when it delivers logs, so logs stop arriving. Name it as the `cloudWatchRoleArn` of an `apigateway.CfnAccount`, which the check already accepts, or acknowledge the warning). For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`):
+- Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`).
+- The `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` AWS Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
+
+**Resolving the warning.** Add both conditions to the trust statement. For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`). Do not condition an API Gateway CloudWatch Logs role: name it as the `cloudWatchRoleArn` of an `apigateway.CfnAccount`, which the check accepts, or acknowledge the warning.
 
 ```ts
-import * as cdk from 'aws-cdk-lib';
-import * as events from 'aws-cdk-lib/aws-events';
-import * as targets from 'aws-cdk-lib/aws-events-targets';
-import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
-
-const machine = new sfn.StateMachine(stack, 'Machine', {
-  definitionBody: sfn.DefinitionBody.fromChainable(new sfn.Pass(stack, 'Start')),
-});
-new events.Rule(stack, 'Every5', {
-  schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
-  targets: [new targets.SfnStateMachine(machine)],
-});
-// The EventsRole the target created trusts events.amazonaws.com in statement 0.
+// `machine` is an sfn.StateMachine that an events.Rule targets. The EventsRole the target
+// created trusts events.amazonaws.com in statement 0.
 // (A pattern, not rule.ruleArn: the rule already references this role.)
 const eventsRole = machine.node.findChild('EventsRole').node.defaultChild as cdk.CfnResource;
 eventsRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition', {
@@ -893,12 +984,12 @@ eventsRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition',
 cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition');
 ```
 
-**KMS (Key Management Service) key policies.** The same check reads the key policy of every `AWS::KMS::Key` in the same set of scopes. An `Allow` statement that names an AWS service principal must carry one of:
+**KMS key policies.** The same check reads the key policy of every `AWS::KMS::Key` in the same set of scopes. An `Allow` statement that names an AWS service principal must carry one of:
 
 - `aws:SourceAccount` or `aws:SourceArn` ([AWS global condition keys in AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-aws.html)); either one is enough;
 - for CloudWatch Logs (`logs.<region>.amazonaws.com`, or `.amazonaws.com.cn`), `kms:EncryptionContext:aws:logs:arn` ([Encrypt log data in CloudWatch Logs using AWS KMS](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/encrypt-log-data-kms.html)).
 
-A key counts under the same operators and values as for roles (above), so an `…IfExists`, negated, `Null` or `ForAllValues:` operator doesn't scope the statement, and neither does a value that leaves the account open. `aws:SourceOrgID` and `aws:SourceOrgPaths` don't count, because they admit every account in the organization. `kms:ViaService` doesn't count either: it applies when an IAM principal calls through a service, and a service principal's own requests don't carry it.
+The operators and values that count are the same as for roles. `aws:SourceOrgID` and `aws:SourceOrgPaths` don't count, because they admit every account in the organization. `kms:ViaService` doesn't count either: it applies when an IAM principal calls through a service, and a service principal's own requests don't carry it.
 
 One principal is exempt: `events.amazonaws.com`, in a statement that grants only `kms:GenerateDataKey*` and `kms:Decrypt`. Amazon SNS documents that `aws:SourceAccount`, `aws:SourceArn` and `aws:SourceOrgID` in a key policy aren't supported for EventBridge publishing to an encrypted topic ([Enable compatibility between event sources from AWS services and encrypted topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services)), so either condition stops delivery.
 
@@ -908,4 +999,4 @@ As with roles, a key AWS Blocks creates fails synth, naming the key's construct 
 cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition');
 ```
 
-The key `Hosting` creates for its alarm topic grants `cloudwatch.amazonaws.com` with `aws:SourceAccount` and `aws:SourceArn` (this account's alarms in the Region), as [Amazon SNS documents for encrypted topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services). Other resource policies and KMS grants aren't checked.
+Other resource policies and KMS grants aren't checked.
