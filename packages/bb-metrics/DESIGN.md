@@ -124,6 +124,8 @@ This is unique among Building Blocks. Most BBs need a mock because their AWS run
 
 All validation matches CloudWatch constraints:
 - **Metric name:** Non-empty, max 1024 characters
+- **Metric value:** Finite number between -2^360 and 2^360, inclusive
+- **Timestamp:** Valid `Date` when provided
 - **Dimensions:** Max 30 key-value pairs, non-empty keys and values, max 1024 chars each
 - **Batch size:** Max 100 metrics per `emitBatch` call (EMF document limit)
 

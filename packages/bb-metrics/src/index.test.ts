@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Scope } from '@aws-blocks/core';
+import { Scope, isWireSafeError } from '@aws-blocks/core';
 import { Metrics, MetricsErrors } from './index.mock.js';
 import { Metrics as AwsMetrics } from './index.aws.js';
 import type { MetricsEmitter } from './types.js';
@@ -397,6 +397,81 @@ describe('validation', () => {
 			(err: Error) => err.name === MetricsErrors.InvalidDimensions,
 		);
 	});
+
+	test('emit rejects non-finite and out-of-range metric values without writing EMF', () => {
+		const m = new Metrics(fakeScope, 'app');
+		for (const value of [NaN, Infinity, -Infinity, 2 ** 361, -(2 ** 361)]) {
+			assert.throws(
+				() => m.emit('Count', value),
+				(err: Error) => err.name === MetricsErrors.InvalidMetricValue,
+			);
+		}
+		assert.strictEqual(stdoutLines.length, 0);
+	});
+
+	test('invalid value and timestamp errors retain their wire-safe names', () => {
+		const m = new Metrics(fakeScope, 'app');
+		for (const [emit, name] of [
+			[() => m.emit('Count', NaN), MetricsErrors.InvalidMetricValue],
+			[() => m.emit('Count', 1, { timestamp: new Date('invalid') }), MetricsErrors.InvalidTimestamp],
+		] as const) {
+			assert.throws(emit, (error: unknown) => {
+				assert.ok(isWireSafeError(error));
+				assert.strictEqual(error.name, name);
+				return true;
+			});
+		}
+		assert.strictEqual(stdoutLines.length, 0);
+	});
+
+	test('emit accepts metric values at the CloudWatch range boundaries', () => {
+		const m = new Metrics(fakeScope, 'app');
+		m.emit('Maximum', 2 ** 360);
+		m.emit('Minimum', -(2 ** 360));
+		assert.strictEqual(stdoutLines.length, 2);
+		assert.strictEqual(getEmfDoc(0).Maximum, 2 ** 360);
+		assert.strictEqual(getEmfDoc(1).Minimum, -(2 ** 360));
+	});
+
+	test('emit rejects an invalid timestamp without writing EMF', () => {
+		const m = new Metrics(fakeScope, 'app');
+		assert.throws(
+			() => m.emit('Count', 1, { timestamp: new Date('invalid') }),
+			(err: Error) => err.name === MetricsErrors.InvalidTimestamp,
+		);
+		assert.strictEqual(stdoutLines.length, 0);
+	});
+
+	test('emitBatch validates all values and timestamps before writing EMF', () => {
+		const m = new Metrics(fakeScope, 'app');
+		assert.throws(
+			() => m.emitBatch([
+				{ name: 'Count', value: 1 },
+				{ name: 'Invalid', value: NaN },
+			]),
+			(err: Error) => err.name === MetricsErrors.InvalidMetricValue,
+		);
+		assert.strictEqual(stdoutLines.length, 0);
+
+		assert.throws(
+			() => m.emitBatch([{ name: 'Count', value: 1, timestamp: new Date('invalid') }]),
+			(err: Error) => err.name === MetricsErrors.InvalidTimestamp,
+		);
+		assert.strictEqual(stdoutLines.length, 0);
+	});
+
+	test('child emitters validate metric values and timestamps', () => {
+		const child = new Metrics(fakeScope, 'app').child({ service: 'api' });
+		assert.throws(
+			() => child.emit('Count', Infinity),
+			(err: Error) => err.name === MetricsErrors.InvalidMetricValue,
+		);
+		assert.throws(
+			() => child.emitBatch([{ name: 'Count', value: 1, timestamp: new Date('invalid') }]),
+			(err: Error) => err.name === MetricsErrors.InvalidTimestamp,
+		);
+		assert.strictEqual(stdoutLines.length, 0);
+	});
 });
 
 // ── Namespace ───────────────────────────────────────────────────────────────
@@ -560,6 +635,8 @@ describe('flush', () => {
 describe('error constants', () => {
 	test('MetricsErrors has expected constants', () => {
 		assert.strictEqual(MetricsErrors.InvalidMetricName, 'InvalidMetricNameException');
+		assert.strictEqual(MetricsErrors.InvalidMetricValue, 'InvalidMetricValueException');
+		assert.strictEqual(MetricsErrors.InvalidTimestamp, 'InvalidTimestampException');
 		assert.strictEqual(MetricsErrors.InvalidDimensions, 'InvalidDimensionsException');
 		assert.strictEqual(MetricsErrors.BatchTooLarge, 'BatchTooLargeException');
 	});
