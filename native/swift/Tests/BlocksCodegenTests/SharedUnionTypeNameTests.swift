@@ -134,7 +134,11 @@ final class SharedUnionTypeNameTests: XCTestCase {
             let output = try generate(methods)
 
             // alphaAuth's shape keeps the name, wherever it is in the spec.
-            assertContains(output.models, "    public struct SignIn: Codable, Sendable {\n        public let password: String\n        public let username: String\n")
+            assertContains(
+                output.models,
+                "    public struct SignIn: Codable, Sendable {\n"
+                    + "        public let password: String\n        public let username: String\n"
+            )
             XCTAssertEqual(count("public func setAuthState(input: AuthActionInput) async throws -> String {", in: output.api), 1)
             XCTAssertEqual(output.warnings, [
                 "swift: parameter 'input' of zetaAuth.setAuthState keeps its own nested type, not AuthActionInput:"
