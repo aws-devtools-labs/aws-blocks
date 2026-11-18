@@ -321,25 +321,33 @@ void main() {
     expect(source, isNot(contains('TypedOidcClient<')));
   });
 
-  test('a client parameter gets no enum and takes any client', () {
-    final (:source, warnings: _) = _generate([
-      {
-        'name': 'auth.use',
-        'params': [
-          {
-            'name': 'client',
-            'required': true,
-            'schema': _oidc(['google']),
+  test('a client parameter is refused', () {
+    expect(
+      () => _generate([
+        {
+          'name': 'auth.use',
+          'params': [
+            {
+              'name': 'client',
+              'required': true,
+              'schema': _oidc(['google']),
+            },
+          ],
+          'result': {
+            'name': 'UseResult',
+            'schema': {'type': 'string'},
           },
-        ],
-        'result': {
-          'name': 'UseResult',
-          'schema': {'type': 'string'},
         },
-      },
-    ]);
-    expect(source, isNot(contains('implements OidcProvider')));
-    expect(source, contains('use({required OidcClient client})'));
+      ]),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          'Transferable types (oidc/client) cannot be serialized: they are '
+              "read-only. Method 'auth.use', parameter 'client'.",
+        ),
+      ),
+    );
   });
 
   Map<String, dynamic> runtimeNamedSchemas() => {

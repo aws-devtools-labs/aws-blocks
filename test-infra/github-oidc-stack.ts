@@ -26,7 +26,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 
-export const GITHUB_REPO = 'aws-devtools-labs/aws-blocks';
+export const GITHUB_REPO = 'aws/cdk-blocks';
 export const GITHUB_ENVIRONMENT = 'e2e';
 // The agent bench gets its own environment, so a token minted inside a bench
 // job (where an agent runs shell commands) can't assume the E2E role, and E2E

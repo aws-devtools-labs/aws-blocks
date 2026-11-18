@@ -169,8 +169,8 @@ describe('users CLI: local pool', () => {
 	test('refuses while the dev server runs: it would write its copy of the pool back', async () => {
 		const auth = makeAuth();
 		await register(auth, 'owner', 'you@example.com');
-		mkdirSync('.blocks-sandbox', { recursive: true });
-		const pidfile = join('.blocks-sandbox', 'dev-server.3000.pid');
+		mkdirSync('.cdk-blocks-sandbox', { recursive: true });
+		const pidfile = join('.cdk-blocks-sandbox', 'dev-server.3000.pid');
 		writeFileSync(pidfile, JSON.stringify({ pid: 4242, ppid: 4241, port: 3000 }));
 		try {
 			const r = await cli(['add-to-group', 'owner', 'admin'], { isPidAlive: (pid) => pid === 4242 });
@@ -180,7 +180,7 @@ describe('users CLI: local pool', () => {
 			// Reading is fine.
 			assert.strictEqual((await cli(['list-groups'], { isPidAlive: () => true })).code, 0);
 		} finally {
-			rmSync('.blocks-sandbox', { recursive: true, force: true });
+			rmSync('.cdk-blocks-sandbox', { recursive: true, force: true });
 		}
 	});
 
@@ -515,8 +515,8 @@ describe('users CLI: deployed pool', () => {
 		const missing = await cli(['list-groups', '--stage', 'sandbox', '--block', 'my-app-auth'], deps);
 		assert.strictEqual(missing.code, 1);
 		assert.match(missing.err, /No sandbox for this checkout/);
-		mkdirSync(join(project, '.blocks-sandbox'));
-		writeFileSync(join(project, '.blocks-sandbox', 'sandbox-id.txt'), 'dev-abc123');
+		mkdirSync(join(project, '.cdk-blocks-sandbox'));
+		writeFileSync(join(project, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'dev-abc123');
 		const ok = await cli(['list-groups', '--stage', 'sandbox', '--block', 'my-app-auth'], deps);
 		assert.strictEqual(ok.code, 0, ok.err);
 		assert.deepStrictEqual(input(fake.sent, 'GetTemplateCommand'), { StackName: 'my-app-dev-abc123' });

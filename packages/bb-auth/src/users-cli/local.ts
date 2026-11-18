@@ -34,7 +34,7 @@ import {
 	usernameShadowsContact,
 } from './target.js';
 
-/** Where the dev server records its process (`@aws-blocks/core`'s singleton guard): `.blocks-sandbox/dev-server.<port>.pid`. */
+/** Where the dev server records its process (`@aws-blocks/core`'s singleton guard): `.cdk-blocks-sandbox/dev-server.<port>.pid`. */
 const PIDFILE = /^dev-server\.\d+\.pid$/;
 
 /** True when a signal can be delivered to `pid`. `EPERM` (exists, not ours) counts as alive. */
@@ -50,7 +50,7 @@ export function isPidAlive(pid: number): boolean {
 
 /** The pids of the dev servers running from `cwd`, per their pidfiles. */
 export function runningDevServers(cwd: string, alive: (pid: number) => boolean = isPidAlive): number[] {
-	const dir = join(resolve(cwd), '.blocks-sandbox');
+	const dir = join(resolve(cwd), '.cdk-blocks-sandbox');
 	let names: string[];
 	try {
 		names = readdirSync(dir).filter((n) => PIDFILE.test(n));

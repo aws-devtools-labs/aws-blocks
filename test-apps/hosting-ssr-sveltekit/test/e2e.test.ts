@@ -18,7 +18,7 @@ test.beforeAll(async () => {
     // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
     const outputs = JSON.parse(
-      readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'),
+      readFileSync(join(projectRoot, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8'),
     );
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const hostingKey = Object.keys(stackOutputs).find((k) =>

@@ -163,7 +163,7 @@ function readStackId(projectRoot: string): string | undefined {
 /** Read (never create) the sandbox id. Never throws. */
 function readSandboxId(projectRoot: string): string | undefined {
 	try {
-		const id = readFileSync(join(projectRoot, '.blocks-sandbox', 'sandbox-id.txt'), 'utf-8').trim();
+		const id = readFileSync(join(projectRoot, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'utf-8').trim();
 		return id === '' ? undefined : id;
 	} catch {
 		return undefined;

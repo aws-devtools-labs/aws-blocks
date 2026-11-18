@@ -13,7 +13,7 @@ dist/
 *.tsbuildinfo
 
 # Blocks
-/.blocks-sandbox/
+/.cdk-blocks-sandbox/
 cdk.out/
 .bb-data/
 

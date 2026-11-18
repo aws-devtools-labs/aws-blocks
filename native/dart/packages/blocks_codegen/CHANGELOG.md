@@ -1,29 +1,22 @@
 ## Unreleased
 
-- **Breaking:** generated clients no longer send a realtime channel, a file
-  handle or an OIDC client back to the server, which 0.2.0 added. One passed as
-  a parameter, or inside a model, list, map, tuple or union variant a call
-  sends, fails again when the call is encoded (`JsonUnsupportedObjectError`), as
-  before 0.2.0, because `blocks_runtime`'s transferables no longer have
-  `toJson()`. The server never turns such a value back into a live object, so
-  pass the plain values the method needs instead. Decoding transferables,
-  including inside models, lists, maps and realtime messages, is unchanged.
-  Requires `blocks_runtime` with the matching change.
-- **Breaking for apps whose spec names an OIDC client's providers:** a method
+### Breaking
+
+- For a spec that names an OIDC client's providers: a method
   whose direct or optional result is an `oidc/client` with a string enum in
   `x-blocks-type-args[0]` now generates an enum of those providers,
   `<Api class><Method>Provider` (`AuthApiGetClientProvider` for
   `auth.getClient`; a method name with separators is PascalCased, so
   `auth.get_client` gives the same), implementing `OidcProvider`, and
   returns `TypedOidcClient<AuthApiGetClientProvider>` instead of
-  `OidcClient`, so its `signIn`, `signInRelay` and `exchange` take only that
+  `OidcClient`, so its `signInDirect`, `signIn` and `exchange` take only that
   method's own providers and a typo doesn't compile. This matches the Kotlin
   and Swift clients. An `Auth` block's `createOidcApi().getClient()` names
   its providers, so this reaches every app that calls `createOidcApi()`.
   Two things that compiled before no longer do:
   - Passing a provider name to the result:
-    `final oidc = await blocks.auth.getClient(); oidc.signInRelay('google', …)`.
-    Pass the generated value, `oidc.signInRelay(AuthApiGetClientProvider.google, …)`,
+    `final oidc = await blocks.auth.getClient(); oidc.signIn('google', …)`.
+    Pass the generated value, `oidc.signIn(AuthApiGetClientProvider.google, …)`,
     or `AuthApiGetClientProvider.fromProviderName(name)` for a name known
     only at runtime.
   - Overriding the generated method with its old return type, as a test
@@ -45,18 +38,17 @@
   one identifier are told apart with a warning. When the library already
   declares the enum's name, it is `<Api class><Method>ResultProvider` and the
   codegen warns.
-- A spec that names no providers, and an OIDC client inside a model, list,
-  map or parameter, are still a plain `OidcClient`, unchanged.
-- A generated client with a typed OIDC result also re-exports
-  `TypedOidcClient` and `OidcProvider`, and escapes a spec type or member
-  named like one of them (`OidcProvider$`). Any other client, including one
-  whose OIDC clients are all untyped, re-exports and reserves neither.
-- A declared native binding whose export is named `TypedOidcClient` or
-  `OidcProvider` is a generation error, as for every other public
-  `blocks_runtime` type, because the generated library imports the runtime
-  wholesale and the name would be ambiguous.
-
-### Breaking
+- Generated clients no longer send a realtime channel, a file
+  handle or an OIDC client back to the server, which 0.2.0 added. A method
+  with a transferable parameter (direct, optional, nullable, in a list, map
+  or tuple, or held by a model at any depth) is a generation error naming the
+  method and parameter, as in Kotlin, because `blocks_runtime`'s
+  transferables no longer have `toJson()` and the server never turns such a
+  value back into a live object. Pass the plain values the method needs
+  instead. Decoding transferables, including inside models, lists, maps and
+  realtime messages, is unchanged.
+- A transferable model field is passed through again instead of being
+  encoded with the `toJson()` that `blocks_runtime` removes.
 
 - A namespace whose export name already ends in `Api` no longer gets a second
   `Api` on its generated class, matching the Kotlin and Swift clients. The
@@ -67,6 +59,20 @@
   are unchanged. Two exports that would now share a class, such as `oidcAuth`
   and `oidcAuthApi` (both `OidcAuthApi`), are a generation error naming both;
   rename one of them.
+
+### Other changes
+
+- **Requires the `blocks_runtime` release with this change.**
+- A spec that names no providers, and an OIDC client inside a model, list,
+  map or parameter, are still a plain `OidcClient`, unchanged.
+- A generated client with a typed OIDC result also re-exports
+  `TypedOidcClient` and `OidcProvider`, and escapes a spec type or member
+  named like one of them (`OidcProvider$`). Any other client, including one
+  whose OIDC clients are all untyped, re-exports and reserves neither.
+- A declared native binding whose export is named `TypedOidcClient` or
+  `OidcProvider` is a generation error, as for every other public
+  `blocks_runtime` type, because the generated library imports the runtime
+  wholesale and the name would be ambiguous.
 
 ## 0.2.0
 

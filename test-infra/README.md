@@ -200,6 +200,11 @@ includes it, no cleanup leg sweeps it.
 CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep every
 pool account limited to E2E test stacks.
 
-`npm test` checks that each trust policy stays pinned to its own environment of
-this repo (`e2e` or `agent-bench`) with `StringEquals` and no wildcards, that
-the two roles never share one, and that the bench is only added on request.
+`npm test` checks that each trust policy stays pinned to this repo
+(`aws/cdk-blocks`) and its own environment (`e2e` or `agent-bench`) with
+`StringEquals` and no wildcards, that the two roles never share one, and that
+the bench is only added on request.
+
+Renaming or moving the repo invalidates both trust policies: the `sub`
+condition carries the repo slug, so every job fails at "Configure AWS
+credentials" until this stack is redeployed in each E2E account.

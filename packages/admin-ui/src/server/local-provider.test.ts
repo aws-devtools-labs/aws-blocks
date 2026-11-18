@@ -14,7 +14,7 @@ describe('LocalDataProvider', () => {
 	function makeProject(files: Record<string, string>): string {
 		tmpDir = join(tmpdir(), `admin-ui-provider-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
-		mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks-sandbox'), { recursive: true });
 		for (const [rel, content] of Object.entries(files)) {
 			writeFileSync(join(tmpDir, rel), content);
 		}
@@ -266,7 +266,7 @@ describe('LocalDataProvider', () => {
 			const provider = providerWith({
 				files: {
 					'.blocks/deploy-history.jsonl': record,
-					'.blocks-sandbox/outputs.json': JSON.stringify({
+					'.cdk-blocks-sandbox/outputs.json': JSON.stringify({
 						'recorded-sandbox-stack': {
 							ApiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/',
 						},
@@ -461,7 +461,7 @@ describe('LocalDataProvider', () => {
 			}),
 			// Production's own outputs document is what now supplies its region.
 			// The sandbox deliberately has none, so it exercises tier 4.
-			'.blocks-sandbox/outputs.production.json': JSON.stringify({
+			'.cdk-blocks-sandbox/outputs.production.json': JSON.stringify({
 				'my-app-prod': { ApiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/' },
 			}),
 		};
@@ -766,8 +766,8 @@ describe('LocalDataProvider', () => {
 				'.blocks/deploy-history.jsonl': record,
 				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
-			mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-			writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'my-abc123\n');
+			mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
+			writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'my-abc123\n');
 			let requestedStack: string | undefined;
 			const provider = new LocalDataProvider(root, async (stackName) => {
 				requestedStack = stackName;
@@ -829,7 +829,7 @@ describe('LocalDataProvider', () => {
 			const root = makeProject({
 				'.blocks/deploy-history.jsonl': record,
 				'.blocks/config.json': JSON.stringify({ stackId: 'other-app' }),
-				'.blocks-sandbox/outputs.production.json': JSON.stringify({
+				'.cdk-blocks-sandbox/outputs.production.json': JSON.stringify({
 					'recorded-stack-prod': {
 						ApiUrl: 'https://abc.execute-api.eu-central-1.amazonaws.com/prod/',
 					},
@@ -860,7 +860,7 @@ describe('LocalDataProvider', () => {
 				region: 'eu-central-1',
 			}),
 			// The region now comes from production's own outputs document.
-			'.blocks-sandbox/outputs.production.json': JSON.stringify({
+			'.cdk-blocks-sandbox/outputs.production.json': JSON.stringify({
 				'my-app-prod': { ApiUrl: 'https://abc.execute-api.eu-central-1.amazonaws.com/prod/' },
 			}),
 		};
@@ -1100,7 +1100,7 @@ describe('LocalDataProvider', () => {
 				region: 'eu-central-1',
 			}),
 			// The region now comes from production's own outputs document.
-			'.blocks-sandbox/outputs.production.json': JSON.stringify({
+			'.cdk-blocks-sandbox/outputs.production.json': JSON.stringify({
 				'my-app-prod': { ApiUrl: 'https://abc.execute-api.eu-central-1.amazonaws.com/prod/' },
 			}),
 		};

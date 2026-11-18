@@ -2,7 +2,63 @@
 
 These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` removal and the sign-out below.
 
-- **Breaking:** remove `toJson()` from `RealtimeChannel`, `FileDownloadHandle`,
+### Breaking
+
+- `OidcClient.signIn` is now the relay sign-in that was `signInRelay`, the
+  flow the client a block's `getClient()` returns is for, as in Kotlin and
+  Swift. The direct custom-scheme flow that was `signIn` is now
+  `signInDirect`. `TypedOidcClient` renames both the same way. Rename
+  `signIn` calls to `signInDirect`, then `signInRelay` calls to `signIn`.
+- An `OidcClient` from a block's `getClient()` (or `OidcClient.fromJson`) stores
+  its tokens and sign-in state under keys prefixed with the directory of the
+  block's `exchangePath`, such as `/aws-blocks/auth/access_token`, so the
+  clients of several `Auth` blocks can share one token store. They used to share
+  the unprefixed keys and overwrite each other's tokens. A client built with the
+  constructor keeps the unprefixed keys.
+- An `OidcClient` from `fromJson` moves the tokens version 0.2.0 or earlier
+  stored under the unprefixed keys to its own keys the first time it reads or
+  writes them, so upgrading doesn't sign a bearer session out. Only the client
+  of the default block (`exchangePath` `/aws-blocks/auth/exchange`, the one
+  0.2.0 signed in against) takes them, and only when it has no tokens of its
+  own, whatever other blocks share the store and in whatever order they are
+  used.
+- `OidcClient.signOut()` returns `Future<Uri?>`, the identity provider's logout
+  URL, or null when it has none. Open it with the app's launcher to end the
+  provider's own session; the client doesn't open it. It POSTs
+  `{signOutPath}?format=json` with an empty JSON body; it no longer sends the
+  stored refresh token, which the server ignores. On a 2xx it clears the stored
+  tokens and emits `OidcSignedOut`. It doesn't clear the session store, which
+  may hold other `Auth` blocks' cookies; the server's `Set-Cookie` removes this
+  block's cookie. On a 503 `SignOutIncompleteException` (the cookie was cleared
+  but the server-side session was not removed) it does the same, then throws an
+  `OidcRequestException` with that `errorName`. Any other status, a transport
+  error or a cancelled request does the same: it clears this block's tokens,
+  removes this block's session cookie (the descriptor's `sessionCookieName`,
+  new `OidcClient.sessionCookieName`, or with an older backend the cookie its
+  sign-in set) and emits `OidcSignedOut`, then throws. It used to ignore the response and drop the
+  logout URL.
+- `OidcClient.restore()` returns `Future<OidcUser?>` and reads the backend's
+  session route (`GET <exchangePath's directory>/session`, new
+  `OidcClient.sessionPath`) with the session cookie, plus the stored access
+  token as a bearer token when there is one and it hasn't expired. A client from
+  a custom block's `getClient()` now needs that route on the block. On 200 it
+  emits `OidcSignedIn` with the server's user and returns it; on 401 it clears
+  the stored tokens, emits `OidcSignedOut` and returns null; any other status
+  throws an `OidcRequestException` without changing the state (a 404 means the
+  block serves no session route), as does a 200 whose body has no readable
+  `user`. It no longer builds the user from the access token's JWT claims, so
+  the user id is the server's, and it no longer emits `OidcLoading` first. It
+  used to report signed out for a valid cookie session, because a cookie session
+  stores no tokens.
+- For exhaustive `switch` statements over `OidcException`: add
+  `OidcRequestException`, thrown when an auth route answers with a status the
+  client doesn't accept. It carries the `statusCode` and, as `errorName`, the
+  error name the server sent.
+- `OidcClient.authStateChanges` gives each new listener the current `authState`
+  first, then each change, as Kotlin's `authState` flow does. It used to emit
+  only the changes after the listener subscribed, so a listener added after
+  `restore()` saw nothing until the next sign-in or sign-out.
+- Remove `toJson()` from `RealtimeChannel`, `FileDownloadHandle`,
   `FileUploadHandle`, `OidcClient` and `UnknownTransferable`, which 0.2.0
   added. Transferables are read-only again: the server sends them, but never
   turns a `{"__blocks": …}` value it receives back into a live object, so an
@@ -22,27 +78,109 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- On mobile and the web, a `signIn` call that leaves out the `launcher` now
+  compiles and throws a `StateError` at run time, because no loopback sign-in
+  exists there. It used to be a compile error.
+- A class that implements `OidcClient` and overrides `signIn` with a
+  required `launcher` no longer compiles.
+
+### Other changes
+
+- A token refresh that a sign-in or sign-out overtakes, even while it is
+  still reading the stored refresh token, sends nothing or ignores its
+  response. Callers that join a refresh already in flight now get its error
+  when it fails; they used to see it succeed and go on with the expired
+  token.
+- A `restore()` still in flight when a sign-in or sign-out finishes ignores
+  its response and returns the current user, or null. A late 401 used to sign
+  out, and clear the tokens of, a sign-in that had just finished, and a late
+  200 used to sign back in after a sign-out.
+- The `OidcClient` docs say to hold one client per block for the app's
+  lifetime instead of calling `getClient()` again.
+- `OidcClient.signIn`'s `launcher` is optional. Without one, on macOS,
+  Linux and Windows, it signs in through a loopback listener on `127.0.0.1` and
+  relays to `http://127.0.0.1:<port>/oidc/callback`, as the Kotlin JVM client
+  does; `relayTo` is not used then, and is now optional; with a launcher, a
+  missing `relayTo` throws a `StateError` before any request. A `launcher`, when
+  passed, always wins. Add `OidcClient.openBrowser`, which opens the browser for
+  that sign-in, `OidcClient.signInTimeout`, after which it throws
+  `OidcCancelledException`, and a `cancel` future that stops the wait with
+  `OidcCancelledException` when it completes. `OidcCancelledException` takes an
+  optional message.
+- `OidcClient.signInDirect` throws `OidcCallbackException` for a callback that carries
+  an IdP `error` or no `code`. It threw a `TypeError` from a null check. It also
+  deletes the attempt's stored PKCE values whatever happens, where a launcher
+  error or a state mismatch left them in the token store.
+- `OidcClient.fromJson` reads the descriptor's `sessionPath` and `refreshPath`
+  when it sends them, and otherwise derives them, and a missing `signOutPath`,
+  `callbackPath` or `authorizeParamsBasePath`, from the directory of
+  `exchangePath`, as `Auth` mounts them. The last two used to fall back to the
+  default block's routes, so a block mounted elsewhere signed in against the
+  wrong ones. A descriptor
+  without `providers` or `providerConfigs`, or with a provider config that has
+  no `kind`, now hydrates instead of throwing a `TypeError`. One without
+  `exchangePath`, which every route is found from, throws a `FormatException`
+  naming the field.
+- The README gains a "Using Auth" section: the state machine through
+  `getAuthState()` and `setAuthState` for everything but federated sign-in,
+  one sign-in button per provider in the `providers` of the client
+  `getClient()` returns, calling `signIn`, `signOut()` for a federated
+  sign-out, and `getAuthState()` on launch.
+- Add `OidcClient.authState`, the current sign-in state: the state most recently
+  added to `authStateChanges`, or `OidcLoading` before the first one. An app can
+  read it once, such as on launch after `restore()`, without subscribing to the
+  stream. This matches Kotlin's `authState.value`.
+- `OidcClient.signIn` checks the callback's `state` and the CSRF value in
+  its envelope before it reads an IdP `error`. A redirect to the app's scheme
+  that didn't come from this sign-in now fails the state check instead of
+  reporting an IdP error.
+- **Behaviour change:** with an `authProvider`, `BlocksClient` sends the session
+  cookie on every call that has one, and adds `Authorization: Bearer` only when
+  the provider returns a token. It used to drop the cookie whenever an
+  `authProvider` was set, so an app that set an `OidcClient` signed in with the
+  session cookie as its `authProvider` sent neither.
+- `OidcClient.exchange` sends `tokens: false`, so a backend with bearer tokens
+  enabled doesn't mint tokens for a client that signs in with the session
+  cookie.
+- `OidcUser` gains the optional fields the backend sends: `displayName`,
+  `userSub`, `signInProvider` and `attributes`. Each is null when the server
+  doesn't send it.
+- `OidcClient.refresh` stores the new token's expiry from `expiresIn` seconds,
+  which the auth block sends, keeping `expiresAt` as a fallback. It read only
+  `expiresAt`, so every refreshed token looked expired and every
+  `getAccessToken()` refreshed again. Refresh now also sends the provider the
+  exchange signed in with (stored under `provider`), which a backend with
+  several providers requires, and stores the rotated refresh token only when the
+  response carries one.
+- `OidcClient.refresh` and `onAuthFailure` sign out only when the refresh route
+  answers 400 or 401. Any other status throws an `OidcRequestException`, and a
+  transport error is rethrown, keeping the tokens and the state; both used to
+  sign out. A refresh still in flight when a sign-in or sign-out finishes
+  ignores its response, so it no longer stores tokens after a sign-out.
+- `OidcClient` resolves the auth routes against its base URL cut at the first
+  path segment that is `aws-blocks`, keeping any API Gateway stage. It used to
+  strip one trailing `/aws-blocks/api`, so a base URL that repeated it
+  (`…/aws-blocks/api/aws-blocks/api`) sent auth requests under the RPC path.
 - Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
-  `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider
-  of type `P` (and send its `providerName`) instead of a name, so a typo or
-  a provider the client doesn't have is a compile error. Generated clients
-  return one for a method whose spec names its providers. It is the same
-  object as the `OidcClient` it wraps, with no cost at runtime: every other
-  member is the client's, and it can be passed wherever an `OidcClient` is
-  expected, where it takes names again. `OidcClient` itself is unchanged.
-- Add `OidcProvider`, the interface a provider type implements:
-  `providerName` is the name the backend knows the provider by.
-- `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider
-  its descriptor doesn't list or has no config for, as `signInRelay` does.
-  It used to fail a null check. A client whose `providerConfigs` has the
-  provider but whose `providers` doesn't, such as
-  `OidcClient(providers: const [], providerConfigs: {'google': …})`, used
-  to sign in and now throws.
-- `OidcClient.exchange` throws `OidcUnknownProviderException` for a
-  provider its descriptor doesn't list, before sending anything, as Kotlin's
-  does. It used to post the name to the backend, which rejected it with an
-  `OidcExchangeException`, so an app that calls `exchange` directly and
-  catches only `on OidcExchangeException` no longer catches it. Both extend
+  `OidcClient` whose `signInDirect`, `signIn` and `exchange` take a provider of
+  type `P` (and send its `providerName`) instead of a name, so a typo or a
+  provider the client doesn't have is a compile error. Generated clients return
+  one for a method whose spec names its providers. It is the same object as the
+  `OidcClient` it wraps, with no cost at runtime: every other member is the
+  client's, and it can be passed wherever an `OidcClient` is expected, where it
+  takes names again. `OidcClient` itself is unchanged.
+- Add `OidcProvider`, the interface a provider type implements: `providerName`
+  is the name the backend knows the provider by.
+- `OidcClient.signInDirect` throws `OidcUnknownProviderException` for a provider
+  its descriptor doesn't list or has no config for, as `signIn` does. It used to
+  fail a null check. A client whose `providerConfigs` has the provider but whose
+  `providers` doesn't, such as `OidcClient(providers: const [], providerConfigs:
+  {'google': …})`, used to sign in and now throws.
+- `OidcClient.exchange` throws `OidcUnknownProviderException` for a provider its
+  descriptor doesn't list, before sending anything, as Kotlin's does. It used to
+  post the name to the backend, which rejected it with an
+  `OidcExchangeException`, so an app that calls `exchange` directly and catches
+  only `on OidcExchangeException` no longer catches it. Both extend
   `OidcException`.
 
 ## 0.2.0

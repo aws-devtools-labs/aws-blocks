@@ -357,6 +357,14 @@ function findWrappers(root: string): Wrapper[] {
 }
 
 /**
+ * The state directory's name before the `cdk-blocks` rename (D-030). An app this
+ * command is migrating predates the rename, so it still holds its state — and a CDK
+ * cloud assembly — under this name. Mirrors `LEGACY_SANDBOX_DIR` in
+ * `@aws-blocks/core`, which is internal to that package.
+ */
+const LEGACY_SANDBOX_DIR = '.blocks-sandbox';
+
+/**
  * Outside git: directories that hold no app source (dependencies, version
  * control, build output, tool state and caches), skipped at any depth.
  */
@@ -370,7 +378,8 @@ const SKIPPED_DIRS: ReadonlySet<string> = new Set([
 	'build-temp',
 	'coverage',
 	'cdk.out',
-	'.blocks-sandbox',
+	'.cdk-blocks-sandbox',
+	LEGACY_SANDBOX_DIR,
 	'.amplify',
 	'.next',
 	'.nuxt',

@@ -44,8 +44,8 @@ function cookiesOf(resp: Response): string[] {
 // production run must not read the sandbox's.
 const OUTPUTS_FILE =
   process.env.BLOCKS_TEST_ENV === 'production'
-    ? '.blocks-sandbox/outputs.production.json'
-    : '.blocks-sandbox/outputs.json';
+    ? '.cdk-blocks-sandbox/outputs.production.json'
+    : '.cdk-blocks-sandbox/outputs.json';
 
 /** A stack output of the deployed e2e build (the stage's `OUTPUTS_FILE`). */
 function stackOutput(prefix: string): string {
