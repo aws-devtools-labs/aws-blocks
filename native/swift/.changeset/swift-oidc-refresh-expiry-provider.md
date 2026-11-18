@@ -11,7 +11,9 @@ large for epoch milliseconds is stored as already expired. Refresh still reads `
 a response has no `expiresIn`. The client also stores the provider it signed in with and sends it on
 refresh, which a backend with two or more providers requires, and keeps the rotated refresh token.
 
-A refresh now ends the session only when the refresh route refuses it (an `ApiError` with status
+With no refresh token stored, as after a cookie-session sign-in, `refresh()` and `onAuthFailure()`
+send no request and leave the state alone; they used to emit `.signedOut` while the session cookie
+still worked. A refresh now ends the session only when the refresh route refuses it (an `ApiError` with status
 400 or 401): it clears the stored tokens and emits `.signedOut`. Any other failure is thrown and keeps
 the tokens and the state, so a later refresh can retry: no network or a response without an access
 token (a `TransportError`), a server error (an `ApiError` with another status), a cancellation or a

@@ -406,7 +406,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Token refresh
 
-    /// Refreshes the bearer tokens. Concurrent callers share one in-flight refresh. A caller whose task is
+    /// Refreshes the bearer tokens. With no refresh token stored, as after a cookie-session sign-in, it sends no
+    /// request and leaves the state alone: the cookie session is ``restore()``'s to read. Concurrent callers
+    /// share one in-flight refresh. A caller whose task is
     /// cancelled throws `CancellationError` at once and leaves the shared refresh running, so other callers
     /// still get its result and whatever it stores is kept.
     public func refresh() async throws {
@@ -440,17 +442,17 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         }
     }
 
-    /// Refreshes the bearer tokens. Only a refusal from the refresh route (an `ApiError` with status 400 or 401)
+    /// Refreshes the bearer tokens. With no refresh token stored, as for a cookie session, it sends no request
+    /// and changes nothing. Only a refusal from the refresh route (an `ApiError` with status 400 or 401)
     /// ends the session: it clears the stored tokens and emits `.signedOut`. Any other failure (a
     /// `TransportError` when offline or for a response without an access token, another `ApiError`, a
     /// `CancellationError`, a `ClientClosedError`) is thrown and leaves the tokens and the state as they were.
     /// A result that a sign-in or sign-out on this client overtook while it was in flight is ignored.
     private func performRefresh() async throws {
         let generation = sessionGeneration
-        guard let refreshToken = await storedToken("refresh_token") else {
-            if generation == sessionGeneration { emit(.signedOut) }
-            return
-        }
+        // A cookie session stores no refresh token (the exchange asks for none): nothing to refresh, and
+        // the cookie may still be valid, so the state stays as it is. `restore()` reads the cookie session.
+        guard let refreshToken = await storedToken("refresh_token") else { return }
 
         let json: [String: Any]
         do {

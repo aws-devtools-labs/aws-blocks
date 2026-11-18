@@ -690,22 +690,26 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(state, .signedOut)
     }
 
-    func testRefreshWithoutTokenEmitsSignedOut() async throws {
+    /// A cookie session stores no refresh token (the exchange asks for none), so `refresh()` and
+    /// `onAuthFailure()` have nothing to refresh: they send no request and leave the signed-in state
+    /// alone. The cookie session is `restore()`'s to read.
+    func testRefreshWithoutARefreshTokenLeavesACookieSessionSignedIn() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
         let client = makeClient(session: makeMockSession())
+        let user = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n")
 
-        let stream = await client.authStateChanges().dropFirst()
-        let collector = Task<[OIDCAuthState], Never> {
-            var events: [OIDCAuthState] = []
-            for await event in stream {
-                events.append(event)
-                if events.count == 1 { break }
-            }
-            return events
+        let events = try await states(of: client) {
+            try await client.refresh()
+            await client.onAuthFailure()
         }
 
-        try await client.refresh()
-        let events = await collector.value
-        XCTAssertEqual(events, [.signedOut])
+        XCTAssertEqual(events, [])
+        let state = await client.authState
+        XCTAssertEqual(state, .signedIn(user))
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "only the exchange: no refresh request")
     }
 
     // MARK: - getAccessToken
