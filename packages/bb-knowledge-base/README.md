@@ -4,11 +4,11 @@ Semantic document retrieval backed by Amazon Bedrock Knowledge Bases.
 
 **When to use:** Search over your own documents — FAQs, product guides, support articles, internal wikis. Point it at a folder and query with natural language.
 
-**When NOT to use:** If you need structured key-value lookups, use `KVStore`. If you need relational queries, use `Database`. If you need full-text keyword search only (no semantic understanding), roll your own with `KVStore` indexes.
+**When NOT to use:** Structured key-value lookups (`KVStore`), relational queries (`Database`), or keyword-only full-text search: `KnowledgeBase` ranks by meaning, not by exact terms.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
-## Quick Start
+## Quick start
 
 ```typescript
 import { Scope, ApiNamespace } from '@aws-cdk-blocks/core';
@@ -66,6 +66,9 @@ new KnowledgeBase(scope, 'docs', { source: 's3://my-bucket/docs/prefix/' });
 
 **S3 URI source:** When using an `s3://` URI, the CDK construct imports the existing bucket instead of creating a new one. An optional path prefix narrows which objects Bedrock ingests. No `BucketDeployment` is created — your documents must already be in the bucket. In local development, S3 URI sources are not supported (use a local folder path instead).
 
+- **Supported formats:** .md, .txt, .html, .htm, .csv, .json (plus binary formats parsed on AWS: .pdf, .doc, .docx, .xls, .xlsx)
+- **Max document size:** 50 MB per file
+
 ### Chunking Strategies
 
 | Strategy | Description |
@@ -83,7 +86,7 @@ new KnowledgeBase(scope, 'docs', { source: 's3://my-bucket/docs/prefix/' });
 |--------|------|---------|------------|-------------|
 | `strategy` | `'semantic' \| 'fixed' \| 'hierarchical' \| 'none'` | `'semantic'` | all | Chunking strategy. |
 | `chunkSize` | `number` | `300` | `'fixed'` | Max tokens per chunk. |
-| `chunkOverlap` | `number` | `20` | `'fixed'` | Overlap percentage between consecutive chunks (0–100). |
+| `chunkOverlap` | `number` | `20` | `'fixed'` | Overlap between consecutive chunks, as a percentage of `chunkSize`. 1–99 on AWS (Bedrock's `overlapPercentage`); the mock also accepts 0. |
 | `breakpointPercentile` | `number` | `95` | `'semantic'` | Breakpoint percentile for topic-boundary detection (0–100). |
 
 ```typescript
@@ -94,7 +97,7 @@ chunking: { strategy: 'fixed', chunkSize: 500, chunkOverlap: 10 }
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `maxResults` | `number` | `10` | Maximum results to return. Range: 1–100. |
+| `maxResults` | `number` | `10` | Maximum results to return. An integer; a value outside 1–100 is clamped to that range. |
 | `filter` | `MetadataFilter` | — | Metadata filter with AND semantics across all key-value pairs. |
 
 ### Retrieve Result
@@ -108,7 +111,7 @@ chunking: { strategy: 'fixed', chunkSize: 500, chunkOverlap: 10 }
 
 ### Sync
 
-Bedrock ingestion runs asynchronously after deploy, so immediately after `cdk deploy` the knowledge base is not yet synced with your latest data — during that initial pre-sync window `retrieve()` returns an empty array even for queries that will later match. (Once at least one ingestion job has completed, `retrieve()` always serves the most recent synced snapshot, even while a later re-ingestion is in flight.) Use `isSynced()` / `waitUntilSynced()` to gate on ingestion completion:
+`cdk deploy` starts Bedrock ingestion and does not wait for it. Until the first ingestion job completes, `retrieve()` returns an empty array, even for queries that match later. Gate on `isSynced()` or `waitUntilSynced()`:
 
 ```typescript
 // Block until the KB is synced with your latest data (e.g. right after deploy), then query
@@ -124,11 +127,49 @@ if (await kb.isSynced()) {
 await kb.waitUntilSynced({ signal: AbortSignal.timeout(120_000) });
 ```
 
-`waitUntilSynced(options?)` accepts `timeoutMs` (default `300_000`), `pollIntervalMs` (default `5_000`, clamped to a 1ms minimum), `maxConsecutiveTransientErrors` (default `3`, minimum `0`), and an optional `signal` (`AbortSignal`). The poll interval carries a small amount of random jitter (±20%) so that many knowledge bases polling after a shared deploy don't fall into lockstep — the jitter only varies the delay *between* polls and never pushes a sleep past `timeoutMs`.
+`waitUntilSynced(options?)` polls `isSynced()`:
 
-`maxConsecutiveTransientErrors` is the number of *consecutive* transient control-plane errors tolerated before giving up; the counter resets on any clean poll. Two conditions are treated as transient and ridden out: throttling / transient network failures, **and** a *not-yet-visible* knowledge base — in the post-deploy window the control plane can briefly return `ResourceNotFoundException` (the freshly-created KB or data source hasn't propagated yet), which `waitUntilSynced()` absorbs rather than giving up on. Terminal errors always short-circuit immediately regardless of the limit: a `FAILED` ingestion job, and a *missing-KB config* error (the `KB_ID` env var is unset — distinct from the transient not-yet-visible case). When `signal` is provided, the wait is cancelled promptly (checked before each poll and during the inter-poll delay), rejecting with the signal's abort reason (by default a `DOMException` named `'AbortError'`).
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `timeoutMs` | `number` | `300_000` | Maximum wait in milliseconds. Throws `Timeout` when it elapses. |
+| `pollIntervalMs` | `number` | `5_000` | Delay between polls in milliseconds, with ±20% random jitter. Minimum 1. |
+| `maxConsecutiveTransientErrors` | `number` | `3` | Transient errors tolerated in a row; the next one is thrown. A poll without an error resets the count. Minimum 0. |
+| `signal` | `AbortSignal` | — | Cancels the wait: `waitUntilSynced()` rejects with the signal's abort reason (by default a `DOMException` named `'AbortError'`). |
 
-Both local-folder and imported `s3://` sources register a BB-managed data source, so sync state reflects that data source's ingestion job in either case. (If the handler's config carries no data source id, `isSynced()` returns `true` immediately — there is nothing to track.) That is the **only** case where `isSynced()` returns `true` without consulting an actual ingestion job — a deploy always injects `DATA_SOURCE_ID`, so a freshly deployed KB reflects a real job status (don't mistake the "nothing to track" shortcut for "ingestion confirmed complete" when gating live traffic). In local development the mock is always synced. Note that a local `isSynced()` of `true` does **not** imply `retrieve()` works for an `s3://` source — the mock rejects `s3://` with `InvalidSourceConfigException` (the inverse of the production contract), so validate `s3://` sources in sandbox/production where sync state genuinely reflects queryability.
+| A poll fails with | `waitUntilSynced()` |
+|---|---|
+| Throttling, a network failure or another unrecognized SDK error (`RetrievalFailed`) | Retries, up to `maxConsecutiveTransientErrors` times in a row. |
+| `ResourceNotFoundException` right after deploy, while the knowledge base or data source is not visible yet (`NotReady`) | Retries, with the same limit. |
+| A `FAILED` ingestion job (`IngestionFailed`) | Throws at once. |
+| An unset `KB_ID` env var (`NotReady`) | Throws at once. |
+
+On AWS, `isSynced()` reports the latest ingestion job of the data source, for local-folder and `s3://` sources alike. In local development the mock is always synced, also for an `s3://` source, which the mock's `retrieve()` rejects with `InvalidSourceConfigException`: validate `s3://` sources in a sandbox or production deployment.
+
+## Errors
+
+Match an error by name with `isBlocksError(e, KnowledgeBaseErrors.<Name>)`:
+
+```typescript
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { KnowledgeBaseErrors } from '@aws-cdk-blocks/bb-knowledge-base';
+```
+
+| Constant | `error.name` | Thrown when |
+|---|---|---|
+| `KnowledgeBaseErrors.RetrievalFailed` | `RetrievalFailedException` | Bedrock retrieval call failed |
+| `KnowledgeBaseErrors.NotReady` | `KnowledgeBaseNotReadyException` | KB not deployed or env vars missing |
+| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed. Thrown by `isSynced()` and `waitUntilSynced()` |
+| `KnowledgeBaseErrors.Timeout` | `KnowledgeBaseTimeoutException` | `waitUntilSynced()` exceeded its timeout before ingestion completed |
+| `KnowledgeBaseErrors.InvalidSource` | `InvalidSourceConfigException` | Source folder not found or invalid config |
+| `KnowledgeBaseErrors.InvalidFilter` | `InvalidFilterException` | Invalid filter keys in Bedrock query |
+| `KnowledgeBaseErrors.ValidationError` | `KnowledgeBaseValidationError` | Empty or invalid query, or a non-integer `maxResults` |
+| `KnowledgeBaseErrors.BrowserNotSupported` | `BrowserNotSupportedException` | Used in a browser context — KnowledgeBase is server-side only |
+
+An `IngestionFailed` error keeps Bedrock's failure reasons on the server:
+
+- Its message is the same for every failure and is safe to return to clients.
+- Bedrock's `failureReasons` are raw text that can name buckets, object keys or ARNs. They are in the server log and on the non-enumerable `err.cause` (type `IngestionFailureCause`).
+- `cause` is absent when Bedrock reported no reasons, so read `err.cause?.failureReasons ?? []`.
 
 ## Metadata Filtering
 
@@ -153,10 +194,7 @@ Subfolder paths automatically populate the `folder` metadata key. For example, a
 
 ## Use as an Agent tool
 
-`asAgentTool()` returns a tool definition you pass to the `tool()` factory of an `Agent` (`@aws-cdk-blocks/bb-agent`). It encodes the two rules in [Trust Boundary](#trust-boundary) so you don't have to remember them:
-
-- **The filter comes from your server code.** The tool's only input is `query`. The required `filter` callback derives the metadata filter from the per-call tool context, which you set from the authenticated session when you call `agent.stream()`. The model can't see or change it.
-- **Results are untrusted.** The tool is marked `untrustedOutput: true`, so the agent wraps the retrieved text in an untrusted-data block and tells the model to treat it as data.
+`asAgentTool()` returns a tool definition you pass to the `tool()` factory of an `Agent` (`@aws-cdk-blocks/bb-agent`). Fill the tool context from the authenticated session when you call `agent.stream()`:
 
 ```typescript
 import { Scope, ApiNamespace } from '@aws-cdk-blocks/core';
@@ -195,11 +233,23 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `filter` | `(context) => MetadataFilter \| undefined` (may be async) | (required) | Derives the filter for every search from the tool context. Return `undefined` to search everything: write `filter: () => undefined` only when every caller may read every document. Throw to fail the call instead of running an unscoped search. Any other result must narrow the search: `null`, `{}` or a missing or empty `equals` fails the call with `ValidationError`. |
+| `filter` | `(context) => MetadataFilter \| undefined` (may be async) | (required) | Derives the metadata filter for every search from the tool context. |
 | `description` | `string` | generic, includes the KB `description` | Tool description shown to the model. |
 | `maxResults` | `number` | `5` | Results per search (same rules as `retrieve()`). A non-integer throws from `asAgentTool()`. |
 
-The tool returns plain JSON hits (`text`, `score`, `source`, `metadata`). Retrieval is read-only, so the tool doesn't ask for approval; set `needsApproval: true` on the agent's tools that have side effects. Spread the definition to add agent-side fields: `tool({ ...kb.asAgentTool({ filter }), cannedExamples: { query: 'refund policy' } })`. `asAgentTool()` can be called at module top level (it's synth-safe); the search runs only when the agent calls the tool.
+What the `filter` callback returns decides the search:
+
+- A filter narrows the search to the documents that match it.
+- `undefined` searches the whole knowledge base. Write `filter: () => undefined` only when every caller may read every document.
+- `null`, `{}`, or a key whose `equals` is missing or empty fails the tool call with `ValidationError`.
+- Throw to fail the tool call instead of running an unscoped search.
+
+The tool:
+
+- Returns plain JSON hits (`text`, `score`, `source`, `metadata`).
+- Doesn't ask for approval, because retrieval is read-only. Set `needsApproval: true` on the agent's tools that have side effects.
+- Takes agent-side fields when you spread the definition: `tool({ ...kb.asAgentTool({ filter }), cannedExamples: { query: 'refund policy' } })`.
+- Can be defined at module top level: `asAgentTool()` is synth-safe, and the search runs only when the agent calls the tool.
 
 ## Trust Boundary
 
@@ -208,67 +258,25 @@ A knowledge base is one index, not one per user or tenant, and `retrieve()` retu
 - **A filter is a query scope, not an access control.** If you keep several users' or tenants' documents in one knowledge base, set the filter in your server code from the authenticated caller (for example `filter: { tenant: { equals: tenantId } }` with a tenant id you look up for the authenticated user). Never take it from the request body or from an agent tool's input, or a caller can read other tenants' documents by changing it.
 - **Indexed text is untrusted.** If a source can receive content you don't write yourself, for example an `s3://` source that is a `FileBucket` your users upload to, that content reaches anyone who retrieves it. When results go to an agent, they can carry instructions that try to make it misuse its tools (indirect prompt injection). Use [`asAgentTool()`](#use-as-an-agent-tool), or mark the agent tool that calls `retrieve()` with `untrustedOutput: true`, and see [Retrieved content is untrusted](../bb-agent/README.md#retrieved-content-is-untrusted) in the Agent docs.
 
-## Error Handling
-
-```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { KnowledgeBaseErrors } from '@aws-cdk-blocks/bb-knowledge-base';
-
-try {
-  const results = await kb.retrieve('query');
-} catch (e: unknown) {
-  if (isBlocksError(e, KnowledgeBaseErrors.NotReady)) {
-    // KB not yet deployed or ingested
-  }
-  if (isBlocksError(e, KnowledgeBaseErrors.ValidationError)) {
-    // Empty query
-  }
-  throw e;
-}
-```
-
-| Error Constant | Name | When |
-|---|---|---|
-| `KnowledgeBaseErrors.RetrievalFailed` | `RetrievalFailedException` | Bedrock retrieval call failed |
-| `KnowledgeBaseErrors.NotReady` | `KnowledgeBaseNotReadyException` | KB not deployed or env vars missing |
-| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed — thrown by `isSynced()` / `waitUntilSynced()`. The message is stable and safe to return to clients; when Bedrock reported `failureReasons` (raw text that can name buckets, object keys or ARNs), they stay server-side on the non-enumerable `err.cause` (type `IngestionFailureCause`; absent when none were reported, so read `cause?.failureReasons ?? []`) and in the server log |
-| `KnowledgeBaseErrors.Timeout` | `KnowledgeBaseTimeoutException` | `waitUntilSynced()` exceeded its timeout before ingestion completed |
-| `KnowledgeBaseErrors.InvalidSource` | `InvalidSourceConfigException` | Source folder not found or invalid config |
-| `KnowledgeBaseErrors.InvalidFilter` | `InvalidFilterException` | Invalid filter keys in Bedrock query |
-| `KnowledgeBaseErrors.ValidationError` | `KnowledgeBaseValidationError` | Empty or invalid query |
-| `KnowledgeBaseErrors.BrowserNotSupported` | `BrowserNotSupportedException` | Used in a browser context — KnowledgeBase is server-side only |
-
-## Deploy Behavior
-
-`cdk deploy` automatically triggers document ingestion (fire-and-forget). Ingestion runs asynchronously after the deploy completes. Check the AWS console to monitor ingestion progress, or call [`isSynced()` / `waitUntilSynced()`](#sync) from your code to gate queries on ingestion completion.
-
-## Scaling & Cost (AWS)
+## Scaling and cost (AWS)
 
 - **Embedding model:** Amazon Titan Text Embeddings V2
 - **Vector store:** S3 Vectors (serverless, no provisioning)
 - **Embedding cost:** ~$0.00002 per 1,000 tokens (ingestion)
 - **Retrieval cost:** ~$0.00002 per 1,000 tokens (query embedding) + S3 Vectors query cost
 - **Storage:** S3 standard pricing for source documents + S3 Vectors for embeddings
-- **Max document size:** 50 MB per file
-- **Supported formats:** .md, .txt, .html, .htm, .csv, .json (plus binary formats parsed on AWS: .pdf, .doc, .docx, .xls, .xlsx)
 
-## Local Development
+## Local development
 
-In local dev mode, KnowledgeBase reads documents from the source folder, splits them into chunks according to the configured `chunking` strategy, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts; the cache is keyed on the source folder's contents and the chunking configuration, and is rebuilt automatically when documents are added, edited, or removed, or the chunking settings change.
+In local development, `KnowledgeBase` reads documents from the source folder, splits them into chunks according to the `chunking` strategy, and scores them with TF-IDF. The index is cached in `.bb-data/{fullId}/chunks.json` and rebuilt when the documents or the chunking settings change.
 
 **Parity notes:**
 - Scoring uses TF-IDF (keyword-based) rather than real embeddings. Scores are relative within the mock and won't match production Bedrock scores exactly.
 - The TF-IDF tokenizer is Unicode-aware: accents are normalized (so `resume` matches `résumé`) and CJK text is matched via character bigrams.
-- Chunking is approximated locally: `'fixed'` uses word-count windows (`chunkSize`/`chunkOverlap`), `'none'` keeps each document whole, and `'semantic'` (and `'hierarchical'`) split on paragraph boundaries.
-- `chunkOverlap` is a **percentage** of `chunkSize` in both environments: locally the mock overlaps by `chunkSize × chunkOverlap / 100` words, and the CDK layer maps it to Bedrock's `overlapPercentage` (1–99). The value is directly transferable between local dev and production.
-- The API contract (method signatures, error types, result shape) is identical to AWS.
-- `maxResults` works identically. Metadata filtering uses the same `equals`/AND semantics, with one asymmetry: in production an unknown or invalid filter key is *typically* rejected server-side by Bedrock (surfaced as `InvalidFilterException` when the service flags the filter), whereas locally the mock silently matches nothing and returns an empty result set.
-- `source` must be a relative path inside the project directory — absolute paths and paths that escape the project (via `..`) are rejected with `InvalidSourceConfigException`. S3 URI sources are not supported in local development — use a local folder path.
+- Chunking is approximated locally: `'fixed'` uses word-count windows of `chunkSize` words that overlap by `chunkSize × chunkOverlap / 100` words, `'none'` keeps each document whole, and `'semantic'` (and `'hierarchical'`) split on paragraph boundaries.
+- `maxResults` and metadata filtering (`equals`, AND) behave as on AWS, except for an unknown filter key: Bedrock can reject it with `InvalidFilterException`; the mock matches nothing and returns `[]`.
+- `source` must be a relative path inside the project directory — absolute paths and paths that escape the project (via `..`) are rejected with `InvalidSourceConfigException`.
 
-Wipe cached data with `rm -rf .bb-data`.
-
-
-
-## See Also
+## See also
 
 - [Amazon Bedrock Knowledge Bases docs](https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html)
