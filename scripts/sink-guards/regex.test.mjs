@@ -62,7 +62,7 @@ const ALLOWLIST = [
 		reason: 'Joins the keys of the NETWORK_ERRORS object literal (Node error codes such as ECONNREFUSED) declared in this file.',
 	},
 	{
-		at: 'packages/hosting/src/adapters/nextjs.ts:1042',
+		at: 'packages/hosting/src/adapters/nextjs.ts:1045',
 		reason: '`key` is one of the literal OpenNext option names passed by the callers in this file; `value` goes through escapeRegex().',
 	},
 	{
