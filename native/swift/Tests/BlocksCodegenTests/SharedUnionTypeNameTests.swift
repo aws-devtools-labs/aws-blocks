@@ -212,6 +212,35 @@ final class SharedUnionTypeNameTests: XCTestCase {
         assertContains(output.api, "public func place(input: Figure) async throws -> Place.Result {")
     }
 
+    /// A sibling parameter named after the hint (`figure: { label }`) declares `Place.Figure`, which would hide the
+    /// shared `Figure` from the operation's aliases, so the hinted parameter keeps its nested type.
+    private var siblingNamedAfterTheHint: String {
+        let union = #"{ "oneOf": [\#(figureArms.joined(separator: ", "))], "x-blocks-type-name": "Figure" }"#
+        let label = #"{ "type": "object", "properties": { "label": { "type": "string" } }, "required": ["label"] }"#
+        let params = #"[{ "name": "input", "required": true, "schema": \#(union) }, { "name": "figure", "required": true, "schema": \#(label) }]"#
+        return #"{ "name": "api.place", "params": \#(params), "result": { "name": "R", "schema": { "type": "string" } } }"#
+    }
+
+    func testASiblingParameterNamedAfterTheHintKeepsTheNestedType() throws {
+        let output = try generate([siblingNamedAfterTheHint])
+
+        assertContains(output.api, "public func place(input: Place.Input, figure: Place.Figure) async throws -> String {")
+        assertNotContains(output.models, "enum Figure")
+        #if os(macOS)
+        try typecheckConsumer(
+            models: output.models, api: output.api,
+            consumer: """
+            import Generated
+
+            func call(_ api: Api) async throws {
+                _ = try await api.place(input: .circle(Api.Place.Circle(r: 1)), figure: Api.Place.Figure(label: "a"))
+            }
+            """,
+            moduleFlags: ["-swift-version", "6", "-warnings-as-errors"]
+        )
+        #endif
+    }
+
     /// A union without a discriminator names its cases after the union (`input_Variant0`), so sharing it would rename
     /// them under the old names; it keeps its nested type.
     func testAUnionWithoutADiscriminatorIsNotShared() throws {
