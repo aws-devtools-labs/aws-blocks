@@ -12,6 +12,7 @@
 import { migrate } from './commands/migrate.js';
 import * as commands from './commands.js';
 import type { Context } from './context.js';
+import { docs, docsForms } from './docs.js';
 
 export type FlagType = 'boolean' | 'string' | 'optional-string';
 
@@ -27,6 +28,17 @@ export interface FlagSpec {
 	description: string;
 	/** Collect every occurrence into an array. */
 	multiple?: boolean;
+	/**
+	 * A string option that people type as they would grep: grep's own flags or `--` right after it (`--search -i
+	 * term`, `--search -- term`) are dropped, and the next argument is its value.
+	 */
+	grepHabits?: boolean;
+	/**
+	 * A string option given with no value at the end of the line (`ApiError --section`) means this boolean flag
+	 * instead of an error: there is nothing it could have meant to take. The flag need not be one the command
+	 * declares (docs' `--section` sets `toc`, the headings, which has no option of its own).
+	 */
+	bare?: string;
 }
 
 export interface ArgSpec {
@@ -89,8 +101,18 @@ export interface CommandSpec {
 	 * which prints that verb's usage without side effects.
 	 */
 	verbs?: readonly string[];
+	/**
+	 * Arguments after `--` are more positional arguments, as `--` means in POSIX (`cdk-blocks docs --exports --
+	 * schema`), rather than an error. Only for a command whose positionals are names, never flags it forwards.
+	 */
+	operandsAfterDashDash?: boolean;
 	/** The shape of the `--output json` result; absent when the command has no JSON output. */
 	json?: JsonObjectShape;
+	/**
+	 * The JSON result prints only when the run asks for it (`--output json`, `--query`), never as a default format of
+	 * the command: its text is the answer that people and coding agents read (`docs` prints Markdown on a pipe too).
+	 */
+	jsonOnRequest?: boolean;
 	/**
 	 * The command calls AWS or deploys to it, so an inherited AWS_REGION must be a
 	 * Region code. An explicit `--region` is checked for every command.
@@ -163,6 +185,54 @@ const STAGE_HELP =
 /** The deploy result: `{apiUrl, url, stack, account, region}`. */
 const DEPLOY_RESULT: JsonObjectShape = { apiUrl: null, url: null, stack: null, account: null, region: null };
 
+/** A doc, or the part of one, in a `docs` answer, and a `--search` hit. */
+const DOC_PART: JsonObjectShape = {
+	doc: null,
+	section: null,
+	lines: [null],
+	note: null,
+	text: null,
+	headings: [{ level: null, title: null, slug: null, lines: [null] }],
+};
+const DOCS_HIT: JsonObjectShape = { doc: null, line: null, section: null, text: null };
+const DOCS_EXPORT: JsonObjectShape = {
+	name: null,
+	kind: null,
+	package: null,
+	entry: null,
+	import: null,
+	also: [null],
+	original: null,
+};
+/** What `docs` answers for one name: a block's docs, a name's card, or an entry's names. */
+const DOCS_ANSWER: JsonObjectShape = {
+	docs: [DOC_PART],
+	name: null,
+	kind: null,
+	of: [null],
+	package: null,
+	import: null,
+	declaration: null,
+	summary: null,
+	mentions: [DOCS_HIT],
+	also: [null],
+	notes: [null],
+	names: [DOCS_EXPORT],
+};
+/** Every form of the `docs` answer: the listing, `--exports`, `--search`, one name, or several (`answers`). */
+const DOCS_RESULT: JsonObjectShape = {
+	...DOCS_ANSWER,
+	version: null,
+	blocks: [{ name: null, classes: [null], summary: null, doc: null, files: [null] }],
+	framework: [{ name: null, summary: null, doc: null }],
+	term: null,
+	hits: [DOCS_HIT],
+	total: null,
+	files: null,
+	lookup: DOCS_ANSWER,
+	answers: [DOCS_ANSWER],
+};
+
 export const COMMANDS: readonly CommandSpec[] = [
 	// ── Develop ──────────────────────────────────────────────────────────────
 	{
@@ -171,7 +241,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Run the app locally, with reload; no AWS',
 		description:
 			'Run the app locally against local mocks, with reload on save. No AWS account is needed.\n' +
-			'The frontend command comes from package.json "blocks.dev", or is detected from vite or next.',
+			'The frontend command comes from package.json "blocks.dev", or is detected from next, nuxt, astro or vite.',
 		flags: [
 			{
 				name: 'port',
@@ -300,6 +370,80 @@ export const COMMANDS: readonly CommandSpec[] = [
 		aws: true,
 		handler: commands.sandboxConsole,
 	},
+	{
+		path: ['docs'],
+		group: 'Develop',
+		summary: 'Read the AWS Blocks docs: a block, an export or option, one section, or a search',
+		description: [
+			'Print the docs that ship in @aws-blocks/blocks, looked up by name.',
+			'',
+			...docsForms('cdk-blocks docs'),
+			'',
+			'Every printed doc starts with "# <folder>/<file>" (# bb-kv-store/README.md, # README.md), and that doc',
+			'path prints the file again (cdk-blocks docs bb-cron-job/DESIGN.md). guide is the package README and',
+			'troubleshooting its TROUBLESHOOTING.md.',
+			'',
+			'The answer is Markdown text, piped or not. --output json prints it as one JSON document instead,',
+			'each doc in it named by "doc": "<folder>/<file>":',
+			'  no name     {version, blocks: [{name, classes, summary, doc, files}], framework: [{name, summary, doc}]}',
+			'  a block     {docs: [{doc, lines, text}]}; with --section, each part also has its section',
+			'  a name      {name, kind, package, import, declaration, summary, docs: [{doc, section, lines, text}]}',
+			'  --exports   {names: [{name, kind, package, entry, import, also}]}',
+			'  --search    {term, hits: [{doc, line, section, text}], total, files}',
+			'Several names print {answers: [...]}, one per name. Errors stay text on stderr.',
+		].join('\n'),
+		args: [
+			{
+				name: 'name',
+				description: 'A block, an export, an option, Owner.member, a doc path, guide or troubleshooting',
+				variadic: true,
+			},
+		],
+		flags: [
+			{
+				name: 'api',
+				type: 'boolean',
+				description: "The block's API report (exact signatures) instead of its README",
+			},
+			{
+				name: 'section',
+				type: 'string',
+				value: 'topic',
+				multiple: true,
+				bare: 'toc',
+				description: 'The part of the docs about a topic; repeatable; with no topic, the headings',
+			},
+			{
+				name: 'exports',
+				type: 'boolean',
+				description:
+					'The names @aws-blocks/blocks and its entries export, and which entry to use; names after it filter the list',
+			},
+			{
+				name: 'search',
+				type: 'string',
+				value: 'term',
+				grepHabits: true,
+				description: 'Matching lines in every doc, or in the named blocks, with their section',
+			},
+		],
+		examples: [
+			{ command: 'cdk-blocks docs', description: 'The blocks, their classes and what each does' },
+			{ command: 'cdk-blocks docs KVStore core', description: 'Two READMEs in one call' },
+			{ command: 'cdk-blocks docs KVStore --api', description: 'Its exact signatures' },
+			{ command: 'cdk-blocks docs ifFieldEquals', description: 'Where an option is declared and documented' },
+			{ command: 'cdk-blocks docs Secret.get', description: 'A member of an export' },
+			{ command: 'cdk-blocks docs KVStore --section query', description: 'The part about queries' },
+			{ command: 'cdk-blocks docs KVStore --section local', description: 'How it behaves locally' },
+			{ command: 'cdk-blocks docs --exports Error', description: 'Importable names containing "Error"' },
+			{ command: 'cdk-blocks docs --search ConditionalCheckFailed', description: 'Search every doc' },
+			{ command: 'cdk-blocks docs ApiError --output json', description: 'The same answer as JSON' },
+		],
+		json: DOCS_RESULT,
+		jsonOnRequest: true,
+		operandsAfterDashDash: true,
+		handler: docs,
+	},
 	// ── Deploy ───────────────────────────────────────────────────────────────
 	{
 		path: ['deploy'],
@@ -325,7 +469,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 		json: { ...DEPLOY_RESULT, live: null },
 		examples: [
 			{ command: 'cdk-blocks deploy', description: 'Deploy to production' },
-			{ command: 'cdk-blocks deploy --wait-live=300', description: 'Deploy, then wait up to 300s for the new build' },
+			{
+				command: 'cdk-blocks deploy --wait-live=300',
+				description: 'Deploy, then wait up to 300s for the new build',
+			},
 			{ command: 'cdk-blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region}' },
 			{ command: 'API_URL=$(cdk-blocks deploy --query apiUrl)', description: 'Print only the API URL, raw' },
 		],
@@ -456,7 +603,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{
 				name: 'force',
 				type: 'boolean',
-				description: 'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
+				description:
+					'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
 			},
 		],
 		examples: [{ command: 'cdk-blocks generate client', description: 'Write aws-blocks/client.js' }],
@@ -542,7 +690,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'options', description: '--force overwrites an existing copy', variadic: true },
 		],
 		passthrough: true,
-		examples: [{ command: 'cdk-blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' }],
+		examples: [
+			{ command: 'cdk-blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' },
+		],
 		handler: commands.vendorize,
 	},
 	{
@@ -607,7 +757,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Project',
 		summary: 'Show help for a command',
 		args: [{ name: 'command', description: 'For example "sandbox destroy"', variadic: true }],
-		examples: [{ command: 'cdk-blocks help sandbox destroy', description: 'Help for "cdk-blocks sandbox destroy"' }],
+		examples: [
+			{ command: 'cdk-blocks help sandbox destroy', description: 'Help for "cdk-blocks sandbox destroy"' },
+		],
 		handler: commands.help,
 	},
 ];

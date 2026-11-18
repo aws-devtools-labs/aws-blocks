@@ -159,6 +159,13 @@ export type ScopeParent = Scope | { id: string };
  * - Scope IDs are joined with '-' into each block's `fullId`, which names its resources. Two scope paths that
  *   join to the same string (`'user-service' > 'sessions'` and `'user' > 'service-sessions'`) share those
  *   resources: constructing the second logs a warning naming both, and a future release will reject it.
+ * - Use lowercase letters, digits and hyphens in scope and block IDs. An ID is part of the name of each
+ *   resource under it, unescaped, and every service accepts those characters. The rest depends on the
+ *   resource: a DynamoDB table name (`KVStore`, `DistributedTable`) also allows uppercase letters, `_` and
+ *   `.`; an SQS queue name (`AsyncJob`) uppercase letters and `_`; an S3 bucket name (`FileBucket`) only `.`.
+ *   An ID such as a scoped package name (`'@acme/shop'`) runs locally, but `cdk synth` fails once a block under
+ *   it names a resource that does not accept `@` or `/`, with an error naming the ID, the characters and what
+ *   the service accepts.
  * - Nest scopes for complex applications using the `parent` option
  * - Always use Building Blocks for storage - never create your own in-memory Maps or custom storage
  */
@@ -213,7 +220,14 @@ export class Scope {
    * would share their resources. A future release will reject this.
    * Constructing the same path again is accepted.
    *
-   * @param id - This scope's id, unique among its siblings.
+   * The characters of `id` are not checked here: which ones deploy depends on
+   * the resources the blocks under the scope create, which only the CDK layer
+   * knows. `cdk synth` fails when a resource name built from the id would be
+   * rejected by its service (see the class documentation).
+   *
+   * @param id - This scope's id, unique among its siblings. Use lowercase
+   *   letters, digits and hyphens: every resource name the id becomes part of
+   *   accepts them.
    * @param options - Parent scope and Building Block metadata.
    */
   constructor(id: string, options?: ScopeOptions) {

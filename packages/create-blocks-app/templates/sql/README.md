@@ -8,12 +8,12 @@ transactions, and version-controlled SQL migrations. No frontend included.
 
 ## For Coding Agents
 
-**CRITICAL: Always read documentation from `node_modules/@aws-blocks/blocks/README.md` to understand the Building Block system and available APIs.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more). `AGENTS.md` explains the rest.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
 The `Database` API and migration model are documented in
-`node_modules/@aws-blocks/bb-database/README.md`.
+`npx --no -- cdk-blocks docs Database`.
 
 ## What ships
 
@@ -63,7 +63,7 @@ PostgreSQL cluster instead:
 The query code stays the same; the migration files become plain PostgreSQL
 (`CREATE INDEX` without `ASYNC`). Choose before the first deploy that holds real
 data: the block does not move rows between clusters. See "Which cluster" and
-"Migrations" in `node_modules/@aws-blocks/bb-database/README.md`.
+"Migrations" in `npx --no -- cdk-blocks docs Database`.
 
 ## Commands
 
@@ -109,4 +109,4 @@ Your CloudFormation stack names derive from the `stackId` in
 This template is backend-only. The `backend` template's README documents adding a
 Vite/React frontend and `Hosting` — the same steps apply here.
 
-**Read `node_modules/@aws-blocks/blocks/README.md` for complete documentation.**
+**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).**

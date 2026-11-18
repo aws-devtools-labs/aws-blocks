@@ -569,6 +569,21 @@ void describe('nitroAdapter — preset + feature validation', () => {
     );
   });
 
+  void it('reports whether the aws-lambda server streams: awsLambda.streaming, or the aws-lambda-streaming preset', () => {
+    // The door integrates the server by this flag, so it must match the handler built.
+    const streaming = (nitroJson: Record<string, unknown>): boolean | undefined => {
+      writeMinimalNitroOutput(tmpDir, { nitroJson });
+      writePackageJson(tmpDir);
+      return nitroAdapter({ projectDir: tmpDir, skipBuild: true }).compute.default?.streaming;
+    };
+    assert.strictEqual(streaming({ preset: 'aws-lambda' }), false);
+    assert.strictEqual(streaming({ preset: 'aws-lambda', config: { awsLambda: { streaming: false } } }), false);
+    assert.strictEqual(streaming({ preset: 'aws-lambda', config: { awsLambda: { streaming: true } } }), true);
+    // Nitro has no `aws-lambda-streaming` preset (streaming is `awsLambda.streaming`);
+    // the adapter accepts the name, so a manifest that reports it must not say buffered.
+    assert.strictEqual(streaming({ preset: 'aws-lambda-streaming' }), true);
+  });
+
   void it('builds with the node-server preset when targeting Lambda Web Functions', () => {
     writePackageJson(tmpDir);
     let presetSeen: string | undefined;
@@ -624,6 +639,25 @@ void describe('nitroAdapter — preset + feature validation', () => {
     });
     withBuildProfile({ serverInvoke: 'http-api' }, () => nitroAdapter({ projectDir: tmpDir, preset: 'aws-lambda' }));
     assert.strictEqual(presetSeen, 'aws-lambda');
+  });
+
+  void it('runs the app build without the cdk condition a synth sets in NODE_OPTIONS', () => {
+    writePackageJson(tmpDir);
+    let buildEnv: Record<string, string> | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      buildEnv = opts?.env;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: opts?.env?.NITRO_PRESET } });
+    });
+    const saved = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--conditions=cdk --max-old-space-size=4096';
+    try {
+      nitroAdapter({ projectDir: tmpDir });
+    } finally {
+      if (saved === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = saved;
+    }
+    assert.strictEqual(buildEnv?.NODE_OPTIONS, '--max-old-space-size=4096');
+    assert.strictEqual(buildEnv?.NITRO_PRESET, 'aws-lambda');
   });
 
   void it('Web Functions start node-server from index.mjs (no run.sh)', () => {

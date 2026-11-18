@@ -429,6 +429,18 @@ test.describe('SSR origin regression coverage', () => {
     expect(body.sha256).toBe(expectedSha);
   });
 
+  test('Binary response (image/png from a server route) arrives byte for byte', async ({ request }) => {
+    // The same 1×1 PNG that server/api/probe/image.get.ts returns.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const resp = await request.get(`${hostingUrl}/api/probe/image`);
+    expect(resp.status()).toBe(200);
+    expect(resp.headers()['content-type']).toBe('image/png');
+    expect(Buffer.compare(await resp.body(), png)).toBe(0);
+  });
+
   test('Streaming handler paces chunk generation server-side (200ms × 4 gaps ≈ 800ms span)', async ({
     request,
   }) => {

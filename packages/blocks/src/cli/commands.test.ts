@@ -429,7 +429,7 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
 			backendPath: join(root, 'aws-blocks', 'index.ts'),
 			port: 4000,
-			frontendCommand: 'npx vite --port 3100 --strictPort',
+			frontendCommand: 'npx vite --host 127.0.0.1 --port 3100 --strictPort',
 			frontendPort: 3100,
 		});
 		assert.strictEqual(spec.env.BLOCKS_LOG_LEVEL, 'normal');

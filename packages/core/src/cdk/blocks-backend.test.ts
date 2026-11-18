@@ -650,7 +650,7 @@ describe('gateway is not available during the backend import (BlocksBackend)', (
 });
 
 describe('AWSBlocks template metadata (BlocksBackend.create)', () => {
-	before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+	before(() => delete process.env.CDK_BLOCKS_DISABLE_TEMPLATE_METADATA);
 
 	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
 
