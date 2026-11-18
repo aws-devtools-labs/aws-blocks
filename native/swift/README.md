@@ -44,20 +44,20 @@ import BlocksRuntime
 let blocks = Blocks()
 
 // Sign in
-let state = try await blocks.authApi.setAuthState(input: .signIn(AuthActionInput.SignIn(
+let state = try await blocks.authApi.setAuthState(input: .signIn(.init(
     password: "P@ss1",
     username: "alice"
 )))
 
 // Open-shape sign-up with custom attributes, sent flat beside username and password
-_ = try await blocks.authApi.setAuthState(input: .signUp(AuthActionInput.SignUp(
+_ = try await blocks.authApi.setAuthState(input: .signUp(.init(
     password: "P@ss1",
     username: "alice",
     attributes: ["email": "alice@example.com", "custom:department": "platform"]
 )))
 ```
 
-`AuthActionInput` needs a backend whose spec names the input type (the `x-blocks-type-name` hint from #1599). Against an older backend the input is `AuthApi.SetAuthState.Input`; `.signIn(.init(password: "P@ss1", username: "alice"))` compiles with either.
+The input is the shared `AuthActionInput` (`AuthActionInput.SignIn`) when the backend's spec names the input type (the `x-blocks-type-name` hint from #1599), and `AuthApi.SetAuthState.Input` against an older backend; `.signIn(.init(…))` compiles with either.
 
 `Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `tokenStore:` your own `TokenStore` to keep OIDC tokens across launches (each OIDC block keeps its own keys there), or `session:` a `URLSession` you own.
 
