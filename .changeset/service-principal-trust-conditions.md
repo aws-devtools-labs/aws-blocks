@@ -9,7 +9,6 @@
 "@aws-blocks/bb-agent": patch
 "@aws-blocks/bb-cron-job": patch
 "@aws-blocks/bb-app-setting": patch
-"@aws-blocks/bb-distributed-data": patch
 "@aws-blocks/blocks": minor
 ---
 

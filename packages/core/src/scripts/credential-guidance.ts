@@ -460,7 +460,7 @@ export interface CredentialFailureMessageOptions {
 	/** The npm script name, used in the message (for example `sandbox` or `deploy`). */
 	command: string;
 	/**
-	 * How the user runs the command, when it is not an npm script (for example `cdk-blocks whoami`).
+	 * How the user runs the command, including any forwarded arguments.
 	 * Default: `npm run <command>`.
 	 */
 	invocation?: string;

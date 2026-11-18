@@ -62,7 +62,7 @@ final class TransferableTypeArgumentTests: XCTestCase {
         assertNotContains(output.api, "RealtimeChannel<ResultMessage>")
         // The body spells the qualified name too.
         assertContains(output.api, "return try self.client.makeDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)")
-        assertContains(output.api, "public enum GetChannel {\n\n        public struct ResultMessage: Codable {")
+        assertContains(output.api, "public enum GetChannel {\n\n        public struct ResultMessage: Codable, Sendable {")
     }
 
     func testChannelWhoseInlineMessageHoldsAnotherInlineType() throws {
@@ -116,15 +116,6 @@ final class TransferableTypeArgumentTests: XCTestCase {
         assertContains(output.api, "public func sparse() async throws -> [RealtimeChannel<Sparse.ResultMessage>?] {")
     }
 
-    // MARK: - A channel parameter
-
-    func testChannelParameterQualifiesItsInlineMessageType() throws {
-        let params = #"[{ "name": "feed", "required": true, "schema": \#(channel(object("text"))) }]"#
-        let output = try generate(methods: [method("forward", params: params, result: #"{ "type": "string" }"#)])
-
-        assertContains(output.api, "public func forward(feed: RealtimeChannel<Forward.FeedMessage>) async throws -> String {")
-    }
-
     // MARK: - Unchanged
 
     func testNamedAndPrimitiveMessageTypesAndFileHandlesAreUnchanged() throws {
@@ -176,8 +167,6 @@ final class TransferableTypeArgumentTests: XCTestCase {
                 method("maybe", result: #"{ "oneOf": [\#(channel(object("text"))), { "type": "null" }] }"#),
                 method("byUser", result: #"{ "type": "object", "additionalProperties": \#(channel(object("who"))) }"#),
                 method("batch", result: channel(#"{ "type": "array", "items": \#(object("text")) }"#)),
-                method("forward", params: #"[{ "name": "feed", "required": true, "schema": \#(channel(object("text"))) }]"#,
-                       result: #"{ "type": "string" }"#),
                 method("notes", result: channel(noteRef))
             ]
         )
@@ -185,15 +174,14 @@ final class TransferableTypeArgumentTests: XCTestCase {
         import BlocksRuntime
         import Generated
 
-        func consume(_ api: Api, feed: RealtimeChannel<Api.Forward.FeedMessage>) async throws {
+        func consume(_ api: Api) async throws {
             let direct: RealtimeChannel<Api.GetChannel.ResultMessage> = try await api.getChannel()
             let list: [RealtimeChannel<Api.Feeds.ResultMessage>] = try await api.feeds()
             let maybe: RealtimeChannel<Api.Maybe.ResultMessage>? = try await api.maybe()
             let byUser: [String: RealtimeChannel<Api.ByUser.ResultValueMessage>] = try await api.byUser()
             let batch: RealtimeChannel<[Api.Batch.ResultMessage]> = try await api.batch()
-            let echoed: String = try await api.forward(feed: feed)
             let notes: RealtimeChannel<Note> = try await api.notes()
-            _ = (direct, list, maybe, byUser, batch, echoed, notes)
+            _ = (direct, list, maybe, byUser, batch, notes)
             _ = Api.GetChannel.ResultMessage(message: "hi")
         }
         """

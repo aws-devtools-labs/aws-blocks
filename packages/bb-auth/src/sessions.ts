@@ -34,7 +34,7 @@
  *   record and no Cognito tokens) carries the discriminator `kind: 'direct'`.
  *   Its identity is `` `${issuer}:${subject}` ``.
  * - Every write stamps the row with a DynamoDB TTL of `now + session ttl`
- *   (default 400 days, `AuthCognito`'s), recomputed per write so a refresh
+ *   (default 30 days), recomputed per write so a refresh
  *   slides it forward — the same semantics as `AuthCognito`'s `SessionStore`.
  *
  * Anything else in the table — an `AuthOIDC` row (`{ userId, refreshToken,
@@ -55,8 +55,8 @@ import { SESSION_STORE_ID } from './session-store-id.js';
 import { type SignInMode, sameSignInName, signsInWithAttribute } from './sign-in-mode.js';
 import type { JWT } from './types.js';
 
-/** `AuthCognito`'s default session lifetime: 400 days. */
-export const DEFAULT_SESSION_TTL_SECONDS = 400 * 86400;
+/** The default session lifetime: 30 days (`AuthCognito`'s was 400). */
+export const DEFAULT_SESSION_TTL_SECONDS = 30 * 86400;
 
 /**
  * A pool session row — **byte-compatible with `AuthCognito`'s `SessionRecord`**.

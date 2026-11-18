@@ -145,13 +145,14 @@ test('sql: notebook and note round-trip', async () => {
   assert.strictEqual(notes.length, 1);
   assert.strictEqual(notes[0].body, 'First entry');
 
-  // Deleting the notebook cascades to its notes.
+  // Deleting the notebook deletes its notes in the same transaction.
   await api.deleteNotebook(notebook.id);
   const afterDelete = await api.listNotebooks();
   assert.ok(
     !afterDelete.some((n) => n.id === notebook.id),
     'deleted notebook should be gone',
   );
+  assert.deepStrictEqual(await api.listNotes(notebook.id), [], 'its notes should be gone too');
 });
 
 // Notebooks and notes are private: every method reads and writes only the

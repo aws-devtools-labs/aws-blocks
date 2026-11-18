@@ -121,7 +121,7 @@ const PATHS: Path[] = [
 	},
 	{
 		label: 'session refresh',
-		command: 'InitiateAuthCommand',
+		command: 'GetTokensFromRefreshTokenCommand',
 		run: (h, b) => b.request((c) => h.auth.requireAuth(c)),
 		setup: async (h, b) => {
 			await signInAs(h, b, 'alice', h.idp.authResult('alice', { accessExpIn: -60 }));

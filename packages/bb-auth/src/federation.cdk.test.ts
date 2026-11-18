@@ -338,7 +338,7 @@ describe('Auth federation — coexists with the immutability guard', () => {
 // ── The hosted-UI client ─────────────────────────────────────────────────────
 
 describe('Auth federation — the hosted-UI app client', () => {
-	test('a separate client: public (no secret), authorization-code grant, OIDC scopes, refresh-only SDK flows', () => {
+	test('a separate client: public (no secret), authorization-code grant, OIDC scopes, no SDK flows (rotation removes the refresh flow)', () => {
 		const [id, resource] = hostedUiClient(synth(CONFIGS.socialOnly).template);
 		assert.notStrictEqual(id, 'authclientB98ED767');
 		assert.strictEqual(id, 'authhosteduiclient8CF4B242', 'the hosted-UI client id is stable once deployed');
@@ -347,7 +347,7 @@ describe('Auth federation — the hosted-UI app client', () => {
 		assert.strictEqual(p.AllowedOAuthFlowsUserPoolClient, true);
 		assert.deepStrictEqual(p.AllowedOAuthFlows, ['code']);
 		assert.deepStrictEqual(p.AllowedOAuthScopes, ['openid', 'email', 'profile']);
-		assert.deepStrictEqual(p.ExplicitAuthFlows, ['ALLOW_REFRESH_TOKEN_AUTH']);
+		assert.deepStrictEqual(p.ExplicitAuthFlows, []);
 		assert.strictEqual(p.PreventUserExistenceErrors, 'ENABLED');
 	});
 
@@ -877,33 +877,30 @@ describe('Auth federation — the hosted-UI domain prefix', () => {
 describe('Auth federation — emailPassword: false leaves no password flow on `client`', () => {
 	const clientOf = (construct: string) => mustByPath(synth(construct).template, 'client/Resource');
 
-	test('default: USER_PASSWORD_AUTH + refresh (unchanged from AuthCognito)', () => {
-		assert.deepStrictEqual(props(clientOf(CONFIGS.default)).ExplicitAuthFlows, [
-			'ALLOW_USER_PASSWORD_AUTH',
-			'ALLOW_REFRESH_TOKEN_AUTH',
-		]);
+	test('default: USER_PASSWORD_AUTH only (rotation removes the refresh flow)', () => {
+		assert.deepStrictEqual(props(clientOf(CONFIGS.default)).ExplicitAuthFlows, ['ALLOW_USER_PASSWORD_AUTH']);
 	});
 
 	for (const name of ['socialOnly', 'samlOnly', 'cognitoOidcOnly'] as const) {
-		test(`${name}: refresh-token only, same logical id, every other property unchanged`, () => {
+		test(`${name}: no flow, same logical id, every other property unchanged`, () => {
 			const off = clientOf(CONFIGS[name]);
 			const on = clientOf(CONFIGS.default);
 			assert.strictEqual(off[0], 'authclientB98ED767');
 			assert.strictEqual(off[0], on[0]);
-			assert.deepStrictEqual(props(off).ExplicitAuthFlows, ['ALLOW_REFRESH_TOKEN_AUTH']);
+			assert.deepStrictEqual(props(off).ExplicitAuthFlows, []);
 			const { ExplicitAuthFlows: _a, ...restOff } = props(off);
 			const { ExplicitAuthFlows: _b, ...restOn } = props(on);
 			assert.deepStrictEqual(restOff, restOn);
 		});
 	}
 
-	test("with users.authFlow: 'USER_AUTH' too: refresh-token only (no ALLOW_USER_AUTH)", () => {
+	test("with users.authFlow: 'USER_AUTH' too: no flow (no ALLOW_USER_AUTH)", () => {
 		const p = props(
 			clientOf(
 				`new Auth(stack, 'auth', { emailPassword: false, users: { authFlow: 'USER_AUTH' }, providers: { ${P.google} } })`,
 			),
 		);
-		assert.deepStrictEqual(p.ExplicitAuthFlows, ['ALLOW_REFRESH_TOKEN_AUTH']);
+		assert.deepStrictEqual(p.ExplicitAuthFlows, []);
 	});
 });
 
@@ -1125,6 +1122,68 @@ describe('Auth federation — two blocks with providers on one backend cannot sh
 				}),
 			/its sign-in routes \(\/aws-blocks\/auth\/sso\/…\) are already mounted by Auth '[^']*sso'/,
 		);
+	});
+
+	test("a sign-out path on another block's sign-in route (its session) collides, in either order", () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta } });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/session` },
+				}),
+			/Auth '[^']*staff': its sign-out route \(\/aws-blocks\/auth\/session\) is already mounted by Auth '[^']*sso'/,
+		);
+		const reversed = newStack();
+		new Auth(reversed, 'staff', {
+			store: 'builtin',
+			providers: { okta },
+			redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/session` },
+		});
+		assert.throws(
+			() => new Auth(reversed, 'sso', { store: 'builtin', providers: { okta } }),
+			/Auth '[^']*sso': its sign-in routes \(\/aws-blocks\/auth\/…\) are already mounted by Auth '[^']*staff'/,
+		);
+	});
+
+	test("bearer refresh routes are claimed: a sign-out path on another block's refresh route collides", () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, allowBearerAuth: true });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/refresh` },
+				}),
+			/its sign-out route \(\/aws-blocks\/auth\/refresh\) is already mounted by Auth '[^']*sso'/,
+		);
+		// Without bearer the refresh routes are not mounted, so the same path is free.
+		const plain = newStack();
+		new Auth(plain, 'sso', { store: 'builtin', providers: { okta } });
+		new Auth(plain, 'staff', {
+			store: 'builtin',
+			providers: { okta },
+			redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/refresh` },
+		});
+	});
+
+	test('one block whose signOutPath lands on one of its own sign-in routes fails synth', () => {
+		for (const route of ['exchange', 'session', 'callback']) {
+			assert.throws(
+				() =>
+					new Auth(newStack(), 'auth', {
+						store: 'builtin',
+						providers: { okta },
+						redirects: { signOutPath: `${AUTH_ROUTE_PREFIX}/${route}` },
+					}),
+				new RegExp(
+					`Auth '[^']*auth': it would mount (GET|POST) /aws-blocks/auth/${route} twice\\. Its redirects\\.callbackPath`,
+				),
+			);
+		}
 	});
 
 	test('own redirects on each block, and the same paths on another backend, synthesize', () => {

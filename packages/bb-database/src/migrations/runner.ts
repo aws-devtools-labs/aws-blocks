@@ -3,11 +3,13 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common/core';
+import type { DatabaseEngine, TransactionHandle } from '../common/engine.js';
 import {
 	AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS,
 	DEFAULT_MIGRATIONS_ROOT,
 	DEFAULT_SCHEMA,
+	EXTERNAL_MIGRATION_IDLE_TIMEOUT_MS,
+	LEDGER_TABLE_NAMES,
 	MIGRATION_LAMBDA_TIMEOUT_MINUTES,
 	quoteIdent,
 } from '../constants.js';
@@ -20,7 +22,15 @@ import {
 	type ResolvedTarget,
 } from '../dialect/async-ddl.js';
 import { withTransaction } from '../engines/handle.js';
-import { brandedError, configError, MIGRATION_FAILED_ERROR_NAME, pgErrorCode } from '../errors.js';
+import {
+	brandedError,
+	causeChain,
+	configError,
+	MIGRATION_FAILED_ERROR_NAME,
+	PG_UNIQUE_VIOLATION,
+	pgErrorCode,
+	sqlStateOf,
+} from '../errors.js';
 import type { FilePlan, MigrationPlan, StatementStep, WaitJobStep } from './plan.js';
 
 interface RunPlanOptions {
@@ -37,6 +47,68 @@ interface RunPlanOptions {
 
 // PostgreSQL 17 reports a cancelled transaction (`transaction_timeout`) with this SQLSTATE.
 const PG_TRANSACTION_TIMEOUT = '25P04';
+// A statement cancelled by `statement_timeout`, the limit an existing database below PostgreSQL 17 gets.
+const PG_QUERY_CANCELED = '57014';
+// `transaction_timeout` exists from PostgreSQL 17.
+const PG_17 = 170000;
+
+// pg_dump 17 and later writes this line into every dump; a server below 17 refuses it and the dump's own
+// transaction with it. It only lifts a limit that such a server does not have.
+const SETS_TRANSACTION_TIMEOUT = /^\s*SET\s+(?:SESSION\s+)?transaction_timeout\b/i;
+// `SET name ...`, `SET SESSION name ...` or `SET LOCAL name ...`: the parameter a statement of a file sets.
+const SETS_PARAMETER = /^\s*SET\s+(?:SESSION\s+|LOCAL\s+)?([a-z_]+)\s*(?:=|\bTO\b)/i;
+
+/** What the kind of cluster adds to each transaction of a file. */
+interface TransactionRules {
+	/** One query sent after BEGIN, before the file's first statement. */
+	settings?: string;
+	/** Why a statement of the file is not sent, for a statement that is not: the text that follows "skipped". */
+	skips(sql: string): string | undefined;
+	/** The file is recorded in its own transaction, not in one after it. */
+	recordsInFile: boolean;
+}
+
+const NO_RULES: TransactionRules = { skips: () => undefined, recordsInFile: false };
+
+async function transactionRules(
+	engine: DatabaseEngine,
+	plan: MigrationPlan,
+	options: RunPlanOptions,
+): Promise<TransactionRules> {
+	if (plan.kind === 'aurora' && options.boundToInvocation) {
+		return { ...NO_RULES, settings: `SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}` };
+	}
+	if (plan.kind !== 'external') return NO_RULES;
+	const rows = await engine.query<{ server_version_num: string }>('SHOW server_version_num');
+	const serverVersion = Number(rows[0]?.server_version_num ?? 0);
+	// The limits this run applies. A file's own SET of one of them (every pg_dump file has them, set to 0)
+	// would replace the limit for the rest of the transaction, so the runner does not send it.
+	const limits = ['idle_in_transaction_session_timeout'];
+	const settings = [`SET LOCAL idle_in_transaction_session_timeout = ${EXTERNAL_MIGRATION_IDLE_TIMEOUT_MS}`];
+	// Transaction-local, so it also holds through a transaction pooler; the ledger is schema-qualified.
+	if (options.schemaName !== DEFAULT_SCHEMA) {
+		settings.push(`SET LOCAL search_path TO ${quoteIdent(options.schemaName)}, ${quoteIdent(DEFAULT_SCHEMA)}`);
+	}
+	if (options.boundToInvocation) {
+		limits.push('statement_timeout');
+		settings.push(`SET LOCAL statement_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`);
+		if (serverVersion >= PG_17) {
+			limits.push('transaction_timeout');
+			settings.push(`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`);
+		}
+	}
+	return {
+		// One query: the settings are a round trip each otherwise, on every file.
+		settings: settings.join('; '),
+		skips: (sql) => {
+			if (serverVersion < PG_17 && SETS_TRANSACTION_TIMEOUT.test(sql))
+				return 'the server is older than PostgreSQL 17';
+			const limit = SETS_PARAMETER.exec(sql)?.[1].toLowerCase();
+			return limit !== undefined && limits.includes(limit) ? 'the migration run sets this limit' : undefined;
+		},
+		recordsInFile: true,
+	};
+}
 
 /** An `aurora` file: every step in one transaction, so nothing of it persists until the whole file has run. */
 const isOneTransaction = (file: FilePlan): boolean =>
@@ -59,9 +131,9 @@ interface Ledger {
 	progress: string;
 }
 
-const ledgerTables = (schemaName: string): Ledger => ({
-	migrations: `${quoteIdent(schemaName)}.${quoteIdent('_migrations')}`,
-	progress: `${quoteIdent(schemaName)}.${quoteIdent('_migration_progress')}`,
+export const ledgerTables = (schemaName: string): Ledger => ({
+	migrations: `${quoteIdent(schemaName)}.${quoteIdent(LEDGER_TABLE_NAMES[0])}`,
+	progress: `${quoteIdent(schemaName)}.${quoteIdent(LEDGER_TABLE_NAMES[1])}`,
 });
 
 export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: string): Promise<void> {
@@ -79,6 +151,47 @@ export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: 
 async function appliedMigrations(engine: DatabaseEngine, ledger: Ledger): Promise<Set<string>> {
 	const rows = await engine.query<{ name: string }>(`SELECT name FROM ${ledger.migrations} ORDER BY name`);
 	return new Set(rows.map((r) => r.name));
+}
+
+/** A statement runner: an engine's `query`, or a bare PostgreSQL client's. */
+type Query = <T>(sql: string, params?: unknown[]) => Promise<T[]>;
+
+/** Which of `files` the ledger of `schemaName` has. It creates nothing: a database with no ledger has none. */
+export async function ledgerStatus(
+	query: Query,
+	schemaName: string,
+	files: string[],
+): Promise<{ applied: string[]; pending: string[] }> {
+	const { migrations } = ledgerTables(schemaName);
+	const [table] = await query<{ present: boolean }>('SELECT to_regclass($1) IS NOT NULL AS present', [migrations]);
+	const names = new Set(
+		table?.present ? (await query<{ name: string }>(`SELECT name FROM ${migrations}`)).map((r) => r.name) : [],
+	);
+	return { applied: files.filter((f) => names.has(f)), pending: files.filter((f) => !names.has(f)) };
+}
+
+/** Records `files` as applied without running them. Returns the ones that were not recorded before. */
+export async function markFilesApplied(engine: DatabaseEngine, schemaName: string, files: string[]): Promise<string[]> {
+	await ensureMigrationTables(engine, schemaName);
+	const { migrations } = ledgerTables(schemaName);
+	const marked: string[] = [];
+	for (const file of files) {
+		const rows = await engine.query<{ name: string }>(
+			`INSERT INTO ${migrations} (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING name`,
+			[file],
+		);
+		if (rows.length > 0) marked.push(file);
+	}
+	return marked;
+}
+
+function recordApplied(
+	engine: DatabaseEngine,
+	ledger: Ledger,
+	file: FilePlan,
+	handle: TransactionHandle,
+): Promise<unknown> {
+	return engine.executeInTransaction(handle, `INSERT INTO ${ledger.migrations} (name) VALUES ($1)`, [file.file]);
 }
 
 /** The resume state of a partly applied file. */
@@ -164,11 +277,16 @@ function failed(file: FilePlan, index: number, cause: unknown): Error {
 	const step = file.steps[index];
 	const statement = step.kind === 'statement' ? step : step.statement;
 	const { k, n } = statementPosition(file, index);
-	const detail = cause instanceof Error ? cause.message : String(cause);
-	// The engine re-tags a server error and keeps the SQLSTATE on its cause.
-	const code = pgErrorCode(cause) ?? (cause instanceof Error ? pgErrorCode(cause.cause) : undefined);
+	// The engine re-tags a server error and keeps the SQLSTATE and the server's own message on its cause. This
+	// report goes to the person who deploys, not to a client, so it carries both.
+	const root = causeChain(cause).at(-1);
+	const code = pgErrorCode(cause) ?? pgErrorCode(root);
+	const reason = root instanceof Error && root !== cause ? root.message : undefined;
+	const detail =
+		(cause instanceof Error ? cause.message : String(cause)) +
+		(code || reason ? ` (${[code && `SQLSTATE ${code}`, reason].filter(Boolean).join(': ')})` : '');
 	const wayForward = isOneTransaction(file)
-		? code === PG_TRANSACTION_TIMEOUT
+		? code === PG_TRANSACTION_TIMEOUT || code === PG_QUERY_CANCELED
 			? `The file is one transaction and it ran longer than the migration function's invocation allows ` +
 				`(${MIGRATION_LAMBDA_TIMEOUT_MINUTES} minutes). Nothing from the file was applied. ` +
 				'Split the file into smaller files, or move a long backfill out of the migrations.'
@@ -296,6 +414,7 @@ export async function runMigrationPlan(
 	const applied = await appliedMigrations(engine, ledger);
 	const progress = await readProgress(engine, ledger);
 	const results: string[] = [];
+	const rules = await transactionRules(engine, plan, options);
 
 	for (const file of plan.files) {
 		if (applied.has(file.file)) continue;
@@ -325,18 +444,35 @@ export async function runMigrationPlan(
 				if (step.transactional) {
 					if (!handle) {
 						handle = await engine.beginTransaction();
-						if (plan.kind === 'aurora' && options.boundToInvocation) {
-							await engine.executeInTransaction(
-								handle,
-								`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`,
-							);
-						}
+						if (rules.settings) await engine.executeInTransaction(handle, rules.settings);
 					}
-					await engine.executeInTransaction(handle, step.sql);
+					const skipped = rules.skips(step.sql);
+					if (skipped) {
+						log(`[bb-database] ${file.file}: skipped "${step.sql.trim()}" (${skipped})`);
+					} else {
+						await engine.executeInTransaction(handle, step.sql);
+					}
 					// Progress is written once per batch, with the COMMIT that makes it visible.
 					const next = file.steps[i + 1];
 					if (!next?.transactional) {
-						await run.save({ step: i + 1 }, handle);
+						if (rules.recordsInFile) {
+							// A file may set session parameters (a pg_dump file sets a dozen); through a transaction
+							// pooler they would stay on a connection that other clients get next.
+							await engine.executeInTransaction(handle, 'RESET ALL');
+							// In this transaction, not after it: of two runs at once, one commits and the other fails
+							// here and is rolled back (below) with everything its copy of the file did.
+							await recordApplied(engine, ledger, file, handle).catch((e) => {
+								if (sqlStateOf(e) !== PG_UNIQUE_VIOLATION) throw e;
+								throw brandedError(
+									MIGRATION_FAILED_ERROR_NAME,
+									`Migration ${file.file} was applied by another run at the same time. Nothing from this run's ` +
+										'copy of the file was applied. Run again: the file is then skipped.',
+									e,
+								);
+							});
+						} else {
+							await run.save({ step: i + 1 }, handle);
+						}
 						await engine.commitTransaction(handle);
 						handle = null;
 					}
@@ -384,24 +520,29 @@ export async function runMigrationPlan(
 			}
 		}
 
-		await withTransaction(engine, async (record) => {
-			await engine.executeInTransaction(record, `INSERT INTO ${ledger.migrations} (name) VALUES ($1)`, [
-				file.file,
-			]);
-			await deleteProgress(engine, ledger, file, record);
-		});
+		// A file that records itself has done so with its last statement; one with no statement has nothing to commit.
+		if (!rules.recordsInFile || total === 0) {
+			await withTransaction(engine, async (record) => {
+				await recordApplied(engine, ledger, file, record);
+				await deleteProgress(engine, ledger, file, record);
+			});
+		}
 		results.push(file.file);
 		log(`[bb-database] Applied: ${file.file}`);
 	}
 	return { applied: results };
 }
 
-export function loadMigrationFiles(dir: string): Record<string, string> {
-	const files = readdirSync(dir)
+/** The names of the migration files of `dir`, in the order they run. */
+export function listMigrationFiles(dir: string): string[] {
+	return readdirSync(dir)
 		.filter((f) => f.endsWith('.sql'))
 		.sort();
+}
+
+export function loadMigrationFiles(dir: string): Record<string, string> {
 	const migrations: Record<string, string> = {};
-	for (const file of files) migrations[file] = readFileSync(join(dir, file), 'utf-8');
+	for (const file of listMigrationFiles(dir)) migrations[file] = readFileSync(join(dir, file), 'utf-8');
 	return migrations;
 }
 
