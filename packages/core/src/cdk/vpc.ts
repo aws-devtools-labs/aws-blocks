@@ -418,13 +418,18 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
  * the logical id and makes CloudFormation replace the endpoint.
  *
  * Interface services carry `shortName`. Gateway services don't, so the short
- * name is the last dot-separated segment of `name` once its tokens are removed.
+ * name is the last dot-separated segment of `name` after its last token (a
+ * token's own text contains dots, e.g. `AWS.Region.13`). Plain string scanning,
+ * not a regex, so a hostile service name can't make it slow.
  */
 function endpointServiceKey(service: ec2.GatewayVpcEndpointAwsService | ec2.InterfaceVpcEndpointAwsService): string {
 	const shortName =
 		'shortName' in service
 			? service.shortName
-			: (service.name.replace(/\$\{Token\[[^\]]*\]\}/g, '').split('.').pop() ?? '');
+			: (service.name
+					.slice(service.name.lastIndexOf('}') + 1)
+					.split('.')
+					.pop() ?? '');
 	const key = shortName.replace(/[^a-zA-Z0-9]/g, '');
 	if (!key) throw new Error(`Cannot derive a stable construct id for VPC endpoint service '${service.name}'.`);
 	return key;

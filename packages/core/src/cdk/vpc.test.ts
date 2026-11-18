@@ -718,4 +718,23 @@ describe('finalizeVpc — endpoint logical ids', () => {
 			'VpcIfssm',
 		]);
 	});
+
+	it('with stableEndpointIds, derives a gateway id quickly from a name full of token-like text', () => {
+		const hostilePrefix = `${'${Token['.repeat(50_000)}]x`;
+		const started = Date.now();
+		const ids = endpointIds(
+			synthWith(
+				(scope) =>
+					new FakeBB(scope, 'Kv', {
+						gatewayEndpoints: [new ec2.GatewayVpcEndpointAwsService('dynamodb', hostilePrefix)],
+					}),
+				{ stableEndpointIds: true },
+			),
+		);
+		assert.ok(
+			ids.some((id) => id.startsWith('VpcGwdynamodb')),
+			`dynamodb gateway id: ${ids}`,
+		);
+		assert.ok(Date.now() - started < 5_000, 'id derivation stays linear in the name length');
+	});
 });
