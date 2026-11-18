@@ -1,6 +1,5 @@
 ---
 '@aws-blocks/bb-auth': patch
-'@aws-blocks/bb-data': patch
 '@aws-blocks/blocks': patch
 ---
 

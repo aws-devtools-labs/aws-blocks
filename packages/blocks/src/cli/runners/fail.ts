@@ -10,7 +10,7 @@ import { DEV_FAILURE_FILE_ENV, DEV_STATE, devCrashState } from './launch.js';
 /** The exit code of an operation that the operator stopped, by core's `operatorSignal`: 128 + the signal number. */
 const OPERATOR_EXIT_CODES: Readonly<Record<string, number>> = { SIGINT: 130, SIGTERM: 143 };
 
-/** The dev server session that {@link trackDevSession} records for `cdk-blocks dev`. */
+/** The dev server session that {@link trackDevSession} records for `npm run dev`. */
 let devSession: { file: string; firstRun: boolean; starting: boolean } | undefined;
 
 function readState(file: string): string | undefined {
@@ -25,13 +25,13 @@ function writeState(file: string, state: string): void {
 	try {
 		writeFileSync(file, state);
 	} catch {
-		// Best effort: without the file, `cdk-blocks dev` reports the exit code of `tsx watch`.
+		// Best effort: without the file, `npm run dev` reports the exit code of `tsx watch`.
 	}
 }
 
 /**
  * SIGTERM the `tsx watch` that runs this dev server runner: its parent process, as
- * `cdk-blocks dev` and the sandbox start it (`tsx watch <runner>`). A ppid of 1 means
+ * `npm run dev` and the sandbox start it (`tsx watch <runner>`). A ppid of 1 means
  * the watcher has gone and the runner was reparented, so there is nothing to signal.
  */
 function stopWatcher(): void {
@@ -44,7 +44,7 @@ function stopWatcher(): void {
 }
 
 /**
- * End the `cdk-blocks dev` session on a failure of the first dev server start: record
+ * End the `npm run dev` session on a failure of the first dev server start: record
  * `reason` for the CLI, and SIGTERM the `tsx watch` parent, which would otherwise
  * wait for a file change forever, or exit 0 when it watches nothing (the runner is
  * in node_modules, which it ignores). A failure after a start, or of a reload, leaves
@@ -63,7 +63,7 @@ const STOP_EXIT_CODES = new Set([129, 130, 143]);
 /**
  * End the `tsx watch` session of a dev server that crashed after it started (an
  * uncaught exception outside any request, a `process.exit(1)` in the backend):
- * record the crash for `cdk-blocks dev`, which starts a new session after a short
+ * record the crash for `npm run dev`, which starts a new session after a short
  * backoff, and SIGTERM the `tsx watch` parent, which would otherwise keep the
  * backend down until the next file change. Synchronous: it runs in an `exit` listener.
  */
@@ -73,11 +73,11 @@ function endCrashedSession(file: string, code: number): void {
 }
 
 /**
- * For the dev server runner of `cdk-blocks dev` (when `BLOCKS_DEV_FAILURE_FILE` is set):
- * record the runner's state in that file (see `DEV_STATE`), so that `cdk-blocks dev`
+ * For the dev server runner of `npm run dev` (when `BLOCKS_DEV_FAILURE_FILE` is set):
+ * record the runner's state in that file (see `DEV_STATE`), so that `npm run dev`
  * tells a failed start from a requested stop, whatever `tsx watch` exits with.
  * A failing exit before {@link started} on the first start ends the session. A
- * failing exit after it is a crash, which `cdk-blocks dev` restarts.
+ * failing exit after it is a crash, which `npm run dev` restarts.
  */
 export function trackDevSession(): { started(): void } {
 	const file = process.env[DEV_FAILURE_FILE_ENV];
@@ -109,7 +109,7 @@ export function trackDevSession(): { started(): void } {
  *
  * An operation that the operator stopped (core's `operatorSignal`: a deploy
  * aborted by a second SIGTERM or a SIGINT) exits 143 or 130 instead. A failed
- * first start of the dev server ends `cdk-blocks dev` (see {@link trackDevSession}).
+ * first start of the dev server ends `npm run dev` (see {@link trackDevSession}).
  */
 export function exitWithError(error: unknown): never {
 	const message = error instanceof Error ? error.message : String(error);

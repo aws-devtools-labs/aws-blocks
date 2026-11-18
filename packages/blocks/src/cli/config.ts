@@ -7,10 +7,11 @@
  *     "blocks": { "dev": { "port": 3000, "frontendPort": 3100 } }
  *
  * Without `blocks.dev.frontendCommand`, the frontend is detected from the app's
- * dependencies: `next` runs the Next.js dev server, `vite` runs Vite, and
- * neither runs the backend only. A detected dev server listens on
- * `frontendPort` (default 3100). `"frontend": false` runs the backend only, as
- * `--no-frontend` does. Command-line flags override all of these.
+ * dependencies: `next` runs the Next.js dev server, `nuxt` runs Nuxt, `astro`
+ * runs Astro, `vite` runs Vite, and none of them runs the backend only. A
+ * detected dev server listens on `frontendPort` (default 3100).
+ * `"frontend": false` runs the backend only, as `--no-frontend` does.
+ * Command-line flags override all of these.
  */
 
 import { readFileSync } from 'node:fs';
@@ -38,7 +39,7 @@ export interface DevPackageConfig extends DevConfig {
 
 export interface ResolvedDevConfig extends DevConfig {
 	/** Where the frontend setting came from. */
-	source: 'flags' | 'package.json' | 'vite' | 'next' | 'none';
+	source: 'flags' | 'package.json' | (typeof FRONTENDS)[number]['dependency'] | 'none';
 }
 
 interface AppPackageJson {
@@ -49,10 +50,23 @@ interface AppPackageJson {
 
 const DEFAULT_FRONTEND_PORT = 3100;
 
-/** The frontend dev servers that auto-detection knows, by dependency name, in priority order. */
+/**
+ * The frontend dev servers that auto-detection knows, by dependency name, in priority order: the order in
+ * which Hosting picks the adapter that builds the app, with `vite` last, because Nuxt and Astro apps can
+ * list `vite` too and `npx vite` does not serve their pages. A SvelteKit app lists `vite` and runs it.
+ *
+ * Every command binds `127.0.0.1` explicitly, so neither a `HOST` variable in the environment nor a
+ * `host` setting in the framework's config exposes the frontend to the network: the dev server's own
+ * `host` is the only opt-in. Each command also takes the port the dev server proxies to. `vite` and Nuxt 4
+ * exit when the port is taken (`--strictPort`; the Nuxt 3 CLI accepts the flag and ignores it). Nuxt 3
+ * and `astro dev` move to another port, so the app answers 502 until the frontend port is free; the dev
+ * server frees a port that an earlier run left bound before it starts the frontend.
+ */
 const FRONTENDS = [
 	{ dependency: 'next', command: (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}` },
-	{ dependency: 'vite', command: (port: number) => `npx vite --port ${port} --strictPort` },
+	{ dependency: 'nuxt', command: (port: number) => `npx nuxt dev --host 127.0.0.1 --port ${port} --strictPort` },
+	{ dependency: 'astro', command: (port: number) => `npx astro dev --host 127.0.0.1 --port ${port}` },
+	{ dependency: 'vite', command: (port: number) => `npx vite --host 127.0.0.1 --port ${port} --strictPort` },
 ] as const;
 
 /**
@@ -91,7 +105,7 @@ function parseText(value: unknown, where: string): string | undefined {
 	return value;
 }
 
-/** The `blocks.dev` keys that `cdk-blocks dev` reads, named in the unknown-key warning. */
+/** The `blocks.dev` keys that `npm run dev` reads, named in the unknown-key warning. */
 const DEV_CONFIG_KEYS = ['port', 'host', 'frontendCommand', 'frontendPort', 'frontend'];
 /** `blocks.dev` keys that core reads (the Amplify overlay's client-generation opt-out): accepted silently. */
 const CORE_DEV_CONFIG_KEYS = ['generateClient'];
@@ -129,7 +143,7 @@ export function unknownDevConfigWarnings(root: string): string[] {
 
 /**
  * The port of the app's dev server: `--port`, then `package.json#blocks.dev.port`, then 3000. Only the
- * port is read, so `cdk-blocks dev stop` works while another `blocks.dev` setting is invalid.
+ * port is read, so `npm run dev:stop` works while another `blocks.dev` setting is invalid.
  */
 export function resolveDevPort(root: string, flags: FlagValues = {}): number {
 	return (
@@ -229,6 +243,6 @@ export function frontendPortWarning(config: ResolvedDevConfig): string | undefin
 	return (
 		`the frontend command ${JSON.stringify(config.frontendCommand)} does not contain the frontend port ${port}, ` +
 		'which the dev server proxies to; if the frontend listens on another port, the app answers 502. ' +
-		'Put the port in the command, or drop "frontendCommand" so cdk-blocks dev detects next or vite and starts it on that port.'
+		'Put the port in the command, or drop "frontendCommand" so npm run dev detects next, nuxt, astro or vite and starts it on that port.'
 	);
 }

@@ -93,7 +93,7 @@ public final nonisolated class Api: Sendable {
 
     public enum ConnectDevice {
 
-        public struct ResultMessage: Codable {
+        public struct ResultMessage: Codable, Sendable {
             public let humidity: Double
             public let temperature: Double
 

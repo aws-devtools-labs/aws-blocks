@@ -227,3 +227,44 @@ extension SwiftCodeGenerator {
         }
     }
 }
+
+// MARK: - Transferable parameters
+
+extension SwiftCodeGenerator {
+    /// Throws `CodegenError.transferableParameter` for the first operation parameter that is a transferable:
+    /// directly, optional or nullable, in an array or a dictionary, or through a `$ref` to one. A transferable is
+    /// read-only (the server hands it out and never re-hydrates one sent back), so a method taking one could only
+    /// fail at call time. This refuses exactly what the Kotlin generator refuses, with its message: a model, an
+    /// inline object or a union that holds a transferable still generates, as it does in Kotlin. Namespaces are
+    /// walked in the order the spec first names them, each one's operations in spec order, as Kotlin generates
+    /// them, so both name the same tag.
+    func rejectTransferableParameters(_ model: CodegenModel) throws {
+        let byName = Dictionary(uniqueKeysWithValues: model.apiNamespaces.map { ($0.name, $0) })
+        for namespace in model.namespaceSpecOrder.compactMap({ byName[$0] }) {
+            for operation in namespace.operations {
+                for parameter in operation.parameters {
+                    var visited: Set<String> = []
+                    if let tag = transferableTag(parameter.type, visited: &visited) {
+                        throw CodegenError.transferableParameter(tag: tag)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The tag of the transferable `type` is, through nullables, arrays, dictionaries and references, or nil.
+    /// Records and unions are not entered. Each reference is followed once, so an alias of itself terminates.
+    private func transferableTag(_ type: ResolvedType, visited: inout Set<String>) -> String? {
+        switch type {
+        case .transferable(let blocksType, _):
+            return blocksType
+        case .nullable(let inner), .list(let inner, _), .map(let inner):
+            return transferableTag(inner, visited: &visited)
+        case .typeReference(let name):
+            guard let referenced = typesByName[name], visited.insert(name).inserted else { return nil }
+            return transferableTag(referenced, visited: &visited)
+        case .record, .union, .primitive, .formattedType, .enum:
+            return nil
+        }
+    }
+}

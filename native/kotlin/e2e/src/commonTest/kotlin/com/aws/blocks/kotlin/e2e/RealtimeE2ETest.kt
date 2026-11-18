@@ -63,6 +63,23 @@ class RealtimeE2ETest {
     }
 
     @Test
+    fun closeCompletesTheFlowNormally() = runTest {
+        val ch = api.realtimeGetChannel("kotlin-close")
+
+        val ended = withContext(Dispatchers.Default) {
+            val collection = async {
+                ch.subscribe().collect {}
+                true
+            }
+            // Let the subscription reach the server before closing.
+            delay(500)
+            ch.close()
+            withTimeout(10.seconds) { collection.await() }
+        }
+        ended.shouldBeTrue()
+    }
+
+    @Test
     fun multiplePublishes() = runTest {
         for (i in 0 until 5) {
             val r = api.realtimePublish(

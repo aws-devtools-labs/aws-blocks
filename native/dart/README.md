@@ -220,7 +220,7 @@ Future<void> run(AuthAction action, Map<String, String> values) async {
 | Platform | How `signIn` gets the redirect | What to pass |
 |---|---|---|
 | iOS, Android | The app's custom scheme | `launcher: FlutterBrowserLauncher()` and a `relayTo` in the block's `redirects.allowedRelayOrigins` |
-| macOS, Linux, Windows | A loopback listener on `127.0.0.1` | Nothing: `oidc.signIn('google')` |
+| macOS, Linux, Windows | A loopback listener on `127.0.0.1` | Nothing: `oidc.signIn(OidcApiGetClientProvider.google)` |
 | Web | Not supported: a browser app signs in on its own origin | |
 
 A sign-in that ends without a redirect throws `OidcCancelledException`, on every platform:

@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum SetTags {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let tags: [String]
 
             public init(tags: [String]) throws {
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

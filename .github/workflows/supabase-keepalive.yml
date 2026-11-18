@@ -15,7 +15,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions/e2e-aws-credentials
-            packages/bb-data/test/fixtures/supabase-ca.crt
+            test-infra/supabase-ca.crt
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -27,8 +27,8 @@ jobs:
 
       - name: Ping Supabase
         env:
-          # Same pinned Supabase Root 2021 CA as the E2E Supabase job.
-          PGSSLROOTCERT: packages/bb-data/test/fixtures/supabase-ca.crt
+          # The pinned Supabase Root 2021 CA (public certificate, committed).
+          PGSSLROOTCERT: test-infra/supabase-ca.crt
           PGSSLMODE: verify-full
         run: |
           DB_URL=$(aws secretsmanager get-secret-value \

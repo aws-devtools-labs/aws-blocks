@@ -12,7 +12,7 @@ situation:
 | # | Pattern | One-liner |
 |---|---|---|
 | 1 | **CDK in Blocks** | Bring your own CDK resource (or whole stack) and wire it to the Blocks runtime via `executionRole` (IAM) and `registerConfig` (config) |
-| 2 | **`fromExisting` on a BB** | Point a Blocks BB at a pre-deployed AWS resource (DynamoDB table, S3 bucket, RDS, Cognito) — keeps mocks, skips provisioning |
+| 2 | **`fromExisting` on a BB** | Point a Blocks BB at a pre-deployed AWS resource (DynamoDB table, S3 bucket, Cognito) — keeps mocks, skips provisioning |
 | 3 | **Custom BB** | Author your own Building Block inside your monorepo (or publish to npm) when no first-party BB exists |
 | 4 | **Vendorize** | Eject a first-party BB's source into `vendor/` and own it outright |
 
@@ -40,7 +40,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 - You want mockable tests without stubbing AWS SDK calls — *unless* local mocking isn't required for this resource, or you're comfortable detecting local dev mode and writing your own mocks
 
 **✅ Use Pattern 2 (`fromExisting`) when:**
-- The resource type already has a Blocks BB (`KVStore`, `FileBucket`, `Database`, `Auth`)
+- The resource type already has a Blocks BB with a `fromExisting` factory (`KVStore`, `FileBucket`, `Auth`)
 - You want to apply the runtime logic from an existing Blocks BB to a resource created outside of Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
 
 **❌ Don't use Pattern 2 (`fromExisting`) when:**
@@ -234,7 +234,6 @@ Today this is supported by:
 |---|---|---|
 | `KVStore` | `KVStore.fromExisting(tableName)` with a matching `key` option | Existing DynamoDB table (skips GSI provisioning — customer owns indexes and TTL) |
 | `FileBucket` | `FileBucket.fromExisting(bucketName)` | Existing S3 bucket |
-| `Database` | `fromExisting({ ... })` (from `@aws-blocks/bb-data`) | Existing RDS instance |
 | `Auth` | `Auth.fromExisting(userPoolId, clientId?)`, passed as the `userPool` option | Existing Cognito User Pool |
 
 ### Example: KVStore over a legacy DynamoDB table
@@ -648,7 +647,7 @@ Edit `vendor/bb-kv-store/src/index.cdk.ts` and your changes apply on the next
 Some blocks also deploy helper Lambdas of their own: `Auth` (the user-pool
 immutability guard, and the identity-provider registration for
 Cognito-federated sign-in), `KVStore` (the GSI manager, for a store
-with indexes), and `Database` / `DistributedDatabase` (the migration runner).
+with indexes), and `Database` (the migration runner).
 In a vendored copy these are bundled from `vendor/<package>/src/` at synth with
 your app's `esbuild`, so edits to those handlers deploy too.
 

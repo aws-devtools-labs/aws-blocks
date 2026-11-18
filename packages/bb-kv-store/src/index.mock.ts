@@ -6,8 +6,12 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {
+	assertNoDuplicateKeys,
+	BATCH_GET_MAX_KEYS,
+	BATCH_WRITE_MAX_REQUESTS,
 	compareByBaseKey,
 	compareKeyValues,
 	createReader,
@@ -16,6 +20,7 @@ import {
 	type Item,
 	type KeyModel,
 	type KeyValue,
+	MARSHALL_OPTIONS,
 	matchesSort,
 	normalizeKey,
 	normalizeLimit,
@@ -29,6 +34,7 @@ import {
 	serializeKey,
 	valueCheckHolds,
 } from './item.js';
+import { dynamoItemSize } from './item-size.js';
 import { loadMockFile, saveMockFile } from './mock-file.js';
 import { nowEpochSeconds } from './ttl.js';
 import type {
@@ -64,44 +70,62 @@ export type * from './types.js';
 
 const MAX_ITEM_BYTES = 400 * 1024; // DynamoDB 400 KB limit
 
+/**
+ * Round-trip an item through the DocumentClient's marshaller, with the options the
+ * AWS runtime uses. The result shares nothing with the caller's value, and a value
+ * the marshaller rejects (an empty Set, `Date`, `NaN`, a class instance, an unsafe
+ * integer) fails here as it does on AWS.
+ */
+function marshalledCopy(item: Item): Item {
+	return unmarshall(marshall(item, MARSHALL_OPTIONS));
+}
+
+/** A copy of a stored item to hand to a reader, so a caller changing what it read cannot change the store. */
+function readCopy(item: Item | undefined): Item | undefined {
+	return item === undefined ? undefined : structuredClone(item);
+}
+
 // ── KVStore (mock) ──────────────────────────────────────────────────────────
 
 /**
  * Key-value and document storage backed by DynamoDB, with optional secondary
  * indexes.
  *
- * **When to use:** Any data that you read by key. With no options, `KVStore`
- * is a string-keyed store for caches, sessions, feature flags, and config
- * values — fast, single-key lookups with simple get/put/delete semantics. With
- * a `schema` and a `key`, it holds app records that you list or query as a
- * collection, such as todos, orders, or messages: entities with composite
- * keys, time-series data, and sort-key-based range queries. Add `indexes` to
- * read the same records by other fields, for access patterns that require
- * multiple indexes.
+ * **When to use:** Any data that you read by key. With no options, `KVStore` is
+ * a string-keyed store for caches, sessions, feature flags, and config values:
+ * fast, single-key lookups with simple get, put, and delete semantics. With a
+ * `schema` and a `key`, it holds app records that you list or query as a
+ * collection, such as todos, orders, or messages. That covers entities with
+ * composite keys, time-series data, and sort-key-based range queries. Add
+ * `indexes` to read the same records by other fields, for access patterns that
+ * require multiple indexes.
  *
- * **Declare a key for anything you list.** A store fixes its key when you
- * create it. A store with a string key reads one item for each key, and it
- * cannot list its keys in order or by prefix.
+ * **Declare a key for anything you list.** A store fixes its key when you create
+ * it. A store with a string key reads one item for each key, and it cannot list
+ * its keys in order or by prefix.
  *
  * **When NOT to use:** If you need full SQL (joins, aggregations, or a
  * transaction across tables), use `Database`.
  *
  * **Best practices:**
- * - Keep string keys short and descriptive (e.g., `user:{id}`, `session:{token}`);
- *   a prefix in a string key does not give a list by prefix
- * - Design partition keys for even data distribution (e.g., `userId`, `tenantId`)
- * - Use sort keys for range queries (e.g., timestamps, alphabetical ordering)
- * - Define indexes upfront for known access patterns — DynamoDB fills a new
- *   index from the items that exist, and leaves out each item whose indexed
- *   field is absent, empty, or of the wrong type
- * - Store one logical entity per KVStore instance
- * - Use `{ ifNotExists: true }` for idempotent creates
+ * - Keep string keys short and descriptive, such as `user:{id}` or
+ *   `session:{token}`. A prefix in a string key does not give a list by prefix.
+ * - Design partition keys for even data distribution, such as `userId` or
+ *   `tenantId`.
+ * - Use sort keys for range queries, such as timestamps or alphabetical
+ *   ordering.
+ * - Define indexes upfront for known access patterns. DynamoDB fills a new index
+ *   from the items that exist, and leaves out each item whose indexed field is
+ *   absent, empty, or of the wrong type.
+ * - Store one logical entity per KVStore instance.
+ * - Use `{ ifNotExists: true }` for idempotent creates.
  * - Use `{ ifFieldEquals }` with a version field for optimistic locking
- *   (compare-and-swap) on an object value, and `{ ifValueEquals }` on any other value
+ *   (compare-and-swap) on an object value, and `{ ifValueEquals }` on any other
+ *   value.
  *
- * **Scaling:** PAY_PER_REQUEST billing. Single-digit ms reads/writes.
- * Throughput scales automatically. Items limited to 400 KB.
- * Indexes have separate throughput and may throttle independently.
+ * **Scaling:** PAY_PER_REQUEST billing. Single-digit ms reads and writes.
+ * Throughput scales automatically. Items limited to 400 KB. Indexes have
+ * separate throughput and may throttle independently.
  */
 export class KVStore<
 	In = string,
@@ -140,41 +164,82 @@ export class KVStore<
 	/**
 	 * Retrieve a value by key.
 	 *
-	 * Items whose expiry has passed are treated as absent, mirroring DynamoDB TTL
-	 * (whose reaper is asynchronous, so reads must filter regardless). The
-	 * in-memory store is always strongly consistent, so `options.consistentRead`
-	 * needs no handling.
+	 * On AWS, `get` is a strongly consistent read by default, so it returns a value
+	 * that a `put` wrote a moment before. Pass `{ consistentRead: false }` where a
+	 * stale value is acceptable at half the read cost.
 	 *
-	 * @param key - The key to retrieve: a string, or the key object of a store with a declared `key`.
-	 * @param options - `consistentRead` (default `true`); accepted and ignored by the mock.
+	 * Items whose expiry has passed are treated as absent, as with DynamoDB TTL.
+	 * DynamoDB deletes an expired item asynchronously, so reads must filter
+	 * regardless. The in-memory store is always strongly consistent, so
+	 * `options.consistentRead` needs no handling.
+	 *
+	 * @param key - The key to retrieve: a string, or the key object of a store with
+	 *   a declared `key`.
+	 * @param options - `consistentRead` (default `true`). The mock accepts and
+	 *   ignores it.
 	 * @returns The value, or `null` if the key does not exist or has expired.
-	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape for this store.
+	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape for this
+	 *   store.
+	 *
+	 * @example
+	 * ```typescript
+	 * // A string key, and the key object of a store with a declared `key`.
+	 * const theme = await cache.get('config:theme');
+	 * const todo = await todos.get({ userId: 'alice', todoId: '001' });
+	 * ```
 	 */
 	async get(key: KeyOf<Out, K>, _options?: GetOptions): Promise<Out | null> {
-		return this.reader.value(this.data.get(serializeKey(this.model, normalizeKey(this.model, key))));
+		return this.reader.value(readCopy(this.data.get(serializeKey(this.model, normalizeKey(this.model, key)))));
 	}
 
 	/**
 	 * Store a value at the given key. Overwrites any existing value unless
 	 * conditions are specified.
 	 *
-	 * On a store with a declared `key`, `put` writes the key fields from the key,
-	 * so the value may leave them out; a value whose key field disagrees with the
-	 * key is rejected.
+	 * On a store with a declared `key`, `put` writes the key fields from the key, so
+	 * the value may leave them out. A value whose key field disagrees with the key
+	 * is rejected.
 	 *
 	 * @param key - The key to store.
-	 * @param value - The value to store. An object is stored as one attribute per top-level field.
-	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
-	 * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema, disagrees with its key, has a
-	 *   top-level field that starts with `_bkv_`, has a field named `__proto__` at any depth (DynamoDB cannot
-	 *   store that field name), or has an empty string in a key field or an indexed field.
-	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized item exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.InvalidQuery} If `ifValueEquals` is given an object, or `ifFieldEquals` is empty.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone) and the key already exists.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a value check (`ifFieldEquals` / `ifValueEquals`) is set (alone) and the current value does not match.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If BOTH `ifNotExists` and a value check are set (they compose with OR), only when the key exists AND its current value does not match.
-	 *   All three ConditionalCheckFailed cases serialize to HTTP 409 (Conflict). `retriable` is true whenever a value check participated (a stale-value optimistic-lock conflict; under OR composition the combined failure means the key exists but its value differs, so re-read and retry) and false for a pure `ifNotExists` existence assertion (a blind retry fails identically).
-	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
+	 * @param value - The value to store. An object is stored as one attribute per
+	 *   top-level field.
+	 * @param options - Optional write conditions and expiry (`ttlSeconds` or
+	 *   `expiresAt`).
+	 * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema,
+	 *   disagrees with its key, has a top-level field that starts with `_bkv_`, has
+	 *   a field named `__proto__` at any depth (DynamoDB cannot store that field
+	 *   name), or has an empty string in a key field or an indexed field.
+	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized item exceeds the 400 KB
+	 *   DynamoDB per-item size limit.
+	 * @throws {KVStoreErrors.InvalidQuery} If `ifValueEquals` is given an object, or
+	 *   `ifFieldEquals` is empty.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone)
+	 *   and the key already exists.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a value check
+	 *   (`ifFieldEquals` or `ifValueEquals`) is set (alone) and the current value
+	 *   does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If BOTH `ifNotExists` and a
+	 *   value check are set (they compose with OR), only when the key exists AND its
+	 *   current value does not match. All three ConditionalCheckFailed cases
+	 *   serialize to HTTP 409 (Conflict). `retriable` is true whenever a value check
+	 *   took part. That is a stale-value optimistic-lock conflict: under OR
+	 *   composition the combined failure means the key exists but its value differs,
+	 *   so re-read and retry. `retriable` is false for a pure `ifNotExists`
+	 *   existence assertion, where the same call fails again in the same way.
+	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt`
+	 *   are set, or either is not a usable time.
+	 *
+	 * @example
+	 * ```typescript
+	 * await cache.put('otp:alice', '123456', { ttlSeconds: 300 });
+	 *
+	 * // Create only. Throws `ConditionalCheckFailedException` if the key exists.
+	 * await todos.put(
+	 *   { userId: 'alice', todoId: '001' },
+	 *   { title: 'Ship', done: false, version: 1 },
+	 *   { ifNotExists: true },
+	 * );
+	 * ```
 	 */
 	async put(key: KeyOf<Out, K>, value: ValueOf<In, K>, options?: PutOptions<Out>): Promise<void> {
 		const present = presentOptions(options);
@@ -203,10 +268,25 @@ export class KVStore<
 	 * Delete a value by key.
 	 *
 	 * @param key - The key to delete.
-	 * @param conditions - Optional delete conditions. `ifExists` and a value check compose with AND.
-	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape, `ifValueEquals` is given an object, or `ifFieldEquals` is empty.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the key does not exist. Serializes to HTTP 409 (Conflict), not retriable (a blind retry fails identically).
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a value check is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable (optimistic-lock conflict — re-read and retry) unless `ifExists` is also set.
+	 * @param conditions - Optional delete conditions. `ifExists` and a value check
+	 *   compose with AND.
+	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape,
+	 *   `ifValueEquals` is given an object, or `ifFieldEquals` is empty.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the
+	 *   key does not exist. Serializes to HTTP 409 (Conflict). Not retriable,
+	 *   because the same call fails again in the same way.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If a value check is set and the
+	 *   current value does not match. Serializes to HTTP 409 (Conflict). Retriable
+	 *   unless `ifExists` is also set: this is an optimistic-lock conflict, so
+	 *   re-read and retry.
+	 *
+	 * @example
+	 * ```typescript
+	 * await todos.delete({ userId: 'alice', todoId: '001' });
+	 *
+	 * // Delete only if the value still matches.
+	 * await cache.delete('lock:report', { ifValueEquals: 'worker-2' });
+	 * ```
 	 */
 	async delete(key: KeyOf<Out, K>, conditions?: ConditionalDeleteOptions<Out>): Promise<void> {
 		const keyStr = serializeKey(this.model, normalizeKey(this.model, key));
@@ -223,15 +303,16 @@ export class KVStore<
 	}
 
 	/**
-	 * Read the items of one partition — of the declared key, or of an index —
-	 * in sort order. The `where` clause names the partition field with
-	 * `{ equals }` and at most one condition on the sort field: `equals`,
-	 * `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`,
-	 * `between`, or `beginsWith` (strings only).
+	 * Read the items of one partition, of the declared key or of an index, in sort
+	 * order. The `where` clause names the partition field with `{ equals }` and at
+	 * most one condition on the sort field: `equals`, `greaterThan`,
+	 * `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `between`, or
+	 * `beginsWith` (strings only).
 	 *
 	 * Returns a `Results` object: an async iterable of `{ key, value, expiresAt }`
-	 * entries with a `cursor` property. Pass `limit` and the `cursor` of an
-	 * earlier call to read the next page. Expired items are hidden.
+	 * entries with a `cursor` property. Pass `limit` and the `cursor` of an earlier
+	 * call to read the next page. Expired items are hidden. On AWS, a query is
+	 * eventually consistent, and a query on an index always is.
 	 *
 	 * @example
 	 * ```typescript
@@ -249,14 +330,16 @@ export class KVStore<
 	 * const next = page.cursor; // undefined at the end
 	 * ```
 	 *
-	 * @throws {KVStoreErrors.InvalidQuery} If `options.index` does not exist, the store has no
-	 *   declared key and no `index` is given, the `where` clause is missing, the partition key is
-	 *   not given as `{ equals: value }`, more than one sort-key condition is supplied (DynamoDB
-	 *   allows only one per query — use `between` for ranges), or the cursor does not belong to
-	 *   this store, index, and partition, or `limit` is not a positive integer. Also if the
-	 *   partition value or a sort value does not have the type of its field, or if the sort
-	 *   condition is not one of the conditions above.
-	 * @throws {KVStoreErrors.ValidationFailed} If the partition value or a sort value is an empty string.
+	 * @throws {KVStoreErrors.InvalidQuery} If `options.index` does not exist, the
+	 *   store has no declared key and no `index` is given, the `where` clause is
+	 *   missing, the partition key is not given as `{ equals: value }`, more than
+	 *   one sort-key condition is supplied (DynamoDB allows only one per query, so
+	 *   use `between` for ranges), or the cursor does not belong to this store,
+	 *   index, and partition, or `limit` is not a positive integer. Also if the
+	 *   partition value or a sort value does not have the type of its field, or if
+	 *   the sort condition is not one of the conditions above.
+	 * @throws {KVStoreErrors.ValidationFailed} If the partition value or a sort
+	 *   value is an empty string.
 	 */
 	query(options: QueryOptions<Out, K, I>): Results<Out, K> {
 		const plan = planQuery(this.model, presentOptions(options));
@@ -290,12 +373,23 @@ export class KVStore<
 	}
 
 	/**
-	 * Enumerate every item in the store. Reads every item — use sparingly on
-	 * large datasets; prefer `get` or `query`. Expired items are skipped unless
+	 * Enumerate every item in the store. Reads every item, so use it sparingly on
+	 * large datasets and prefer `get` or `query`. Expired items are skipped unless
 	 * `includeExpired` is set. Returns a `Results` object with a `cursor` for the
 	 * next page.
 	 *
-	 * @throws {KVStoreErrors.InvalidQuery} If the cursor does not belong to this store, or `limit` is not a positive integer.
+	 * @throws {KVStoreErrors.InvalidQuery} If the cursor does not belong to this
+	 *   store, or `limit` is not a positive integer.
+	 *
+	 * @example
+	 * ```typescript
+	 * // One page. Pass `page.cursor` to the next call, until it is undefined.
+	 * const page = cache.scan({ limit: 100, cursor });
+	 * for await (const { key, value } of page) {
+	 *   console.log(key, value);
+	 * }
+	 * const next = page.cursor;
+	 * ```
 	 */
 	scan(options?: ScanOptions): Results<Out, K> {
 		// Deterministic order by the base key, so a cursor resumes at the same
@@ -313,20 +407,31 @@ export class KVStore<
 	}
 
 	/**
-	 * Fetch multiple values by key. Returns results positionally — `null` for a
-	 * key with no matching item or an expired one. Eventually consistent on AWS.
+	 * Fetch multiple values by key. Returns results in the order of the keys, with
+	 * `null` for a key with no matching item or an expired one. Eventually
+	 * consistent on AWS.
 	 *
-	 * @throws {KVStoreErrors.InvalidQuery} If a key has the wrong shape for this store.
-	 * @throws {KVStoreErrors.BatchIncomplete} (AWS runtime only) If DynamoDB
-	 *   leaves keys unprocessed after the retry budget is exhausted, typically under
-	 *   sustained throttling. The local mock never throttles, so it does not throw this.
+	 * @throws {KVStoreErrors.InvalidQuery} If a key has the wrong shape for this
+	 *   store.
+	 * @throws {KVStoreErrors.BatchIncomplete} (AWS runtime only) If DynamoDB leaves
+	 *   keys unprocessed after the retry budget is exhausted, typically under
+	 *   sustained throttling. The local mock never throttles, so it does not throw
+	 *   this.
+	 *
+	 * @example
+	 * ```typescript
+	 * const [first, second] = await todos.getBatch([
+	 *   { userId: 'alice', todoId: '001' },
+	 *   { userId: 'alice', todoId: '002' },
+	 * ]);
+	 * ```
 	 */
 	async getBatch(keys: KeyOf<Out, K>[]): Promise<(Out | null)[]> {
+		const keyAttrs = keys.map((key) => normalizeKey(this.model, key));
+		assertNoDuplicateKeys(this.model, 'getBatch', keyAttrs, BATCH_GET_MAX_KEYS);
 		const now = nowEpochSeconds();
 		return Promise.all(
-			keys.map((key) =>
-				this.reader.value(this.data.get(serializeKey(this.model, normalizeKey(this.model, key))), now),
-			),
+			keyAttrs.map((attrs) => this.reader.value(readCopy(this.data.get(serializeKey(this.model, attrs))), now)),
 		);
 	}
 
@@ -340,12 +445,25 @@ export class KVStore<
 	 * @throws {KVStoreErrors.BatchIncomplete} (AWS runtime only) If DynamoDB
 	 *   leaves writes unprocessed after the retry budget is exhausted, typically under
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
+	 *
+	 * @example
+	 * ```typescript
+	 * await todos.putBatch([
+	 *   { key: { userId: 'alice', todoId: '003' }, value: { title: 'Ship', done: false, version: 1 } },
+	 * ]);
+	 * ```
 	 */
 	async putBatch(entries: PutBatchEntry<In, Out, K>[]): Promise<void> {
-		const prepared: { keyStr: string; item: Item }[] = [];
+		const prepared: { keyAttrs: Record<string, KeyValue>; keyStr: string; item: Item }[] = [];
 		for (const entry of entries) {
 			prepared.push(await this.prepareWrite(entry.key, entry.value, presentOptions(entry)));
 		}
+		assertNoDuplicateKeys(
+			this.model,
+			'putBatch',
+			prepared.map((p) => p.keyAttrs),
+			BATCH_WRITE_MAX_REQUESTS,
+		);
 		for (const { keyStr, item } of prepared) this.data.set(keyStr, item);
 		this.flushToDisk();
 	}
@@ -357,11 +475,17 @@ export class KVStore<
 	 * @throws {KVStoreErrors.BatchIncomplete} (AWS runtime only) If DynamoDB
 	 *   leaves deletes unprocessed after the retry budget is exhausted, typically under
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
+	 *
+	 * @example
+	 * ```typescript
+	 * await todos.deleteBatch([{ userId: 'alice', todoId: '003' }]);
+	 * ```
 	 */
 	async deleteBatch(keys: KeyOf<Out, K>[]): Promise<void> {
 		// Check every key first, so that one bad key does not leave the batch half applied.
-		const keyStrs = keys.map((key) => serializeKey(this.model, normalizeKey(this.model, key)));
-		for (const keyStr of keyStrs) this.data.delete(keyStr);
+		const keyAttrs = keys.map((key) => normalizeKey(this.model, key));
+		assertNoDuplicateKeys(this.model, 'deleteBatch', keyAttrs, BATCH_WRITE_MAX_REQUESTS);
+		for (const attrs of keyAttrs) this.data.delete(serializeKey(this.model, attrs));
 		this.flushToDisk();
 	}
 
@@ -371,6 +495,15 @@ export class KVStore<
 	 * table's key schema.
 	 *
 	 * @param tableName - The name of the existing DynamoDB table.
+	 *
+	 * @example
+	 * ```typescript
+	 * const orders = new KVStore(scope, 'orders', {
+	 *   schema: z.object({ customerId: z.string(), orderId: z.string(), total: z.number() }),
+	 *   key: { partitionKey: 'customerId', sortKey: 'orderId' },
+	 *   table: KVStore.fromExisting('my-existing-table'),
+	 * });
+	 * ```
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
@@ -379,6 +512,14 @@ export class KVStore<
 	/**
 	 * Reference an existing customer-managed KMS key to encrypt the table. Pass
 	 * the result as the `encryption` option so several stores can share one key.
+	 *
+	 * @example
+	 * ```typescript
+	 * // Share one key across several stores
+	 * const key = KVStore.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
+	 * new KVStore(scope, 'sessions', { encryption: key });
+	 * new KVStore(scope, 'cache', { encryption: key });
+	 * ```
 	 */
 	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
 		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
@@ -395,19 +536,20 @@ export class KVStore<
 		key: KeyOf<Out, K>,
 		value: unknown,
 		expiry: Expiry | undefined,
-	): Promise<{ keyStr: string; item: Item }> {
+	): Promise<{ keyAttrs: Record<string, KeyValue>; keyStr: string; item: Item }> {
 		const { keyAttrs, item } = await prepareItem(this.model, key, value, expiry);
-		const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+		const stored = marshalledCopy(item);
+		const bytes = dynamoItemSize(stored);
 		if (bytes > MAX_ITEM_BYTES) {
 			throw blocksError(KVStoreErrors.ItemTooLarge, KVStoreMessages.itemTooLarge(bytes));
 		}
-		return { keyStr: serializeKey(this.model, keyAttrs), item };
+		return { keyAttrs, keyStr: serializeKey(this.model, keyAttrs), item: stored };
 	}
 
 	/**
-	 * The `Results` of a read. `ordered` gives the matching items in read order;
-	 * the result hides expired items, starts after the cursor position, and
-	 * stops at `limit`. One page holds every item: the mock has no page size.
+	 * The `Results` of a read. `ordered` gives the matching items in read order. The
+	 * result hides expired items, starts after the cursor position, and stops at
+	 * `limit`. One page holds every item: the mock has no page size.
 	 */
 	private results(
 		ordered: () => Item[],
@@ -419,7 +561,7 @@ export class KVStore<
 	): Results<Out, K> {
 		return orderedResults<Entry<Out, K>>(
 			this.model,
-			this.reader.entry,
+			(item) => this.reader.entry(structuredClone(item)),
 			{ limit, startKey: startAfter, indexName, includeExpired },
 			ordered,
 			compare,

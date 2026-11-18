@@ -76,18 +76,18 @@ export function coreMismatchError(error: unknown): CliError | undefined {
 /** Load `@aws-blocks/core/scripts`; a core that does not match fails with {@link coreMismatchError}. */
 export async function loadCoreScripts(): Promise<typeof CoreScriptsModule> {
 	try {
-		// Loaded on demand, not imported: `cdk-blocks --help` and usage errors never load core (about 0.6 s).
+		// Loaded on demand, not imported: `npm run help` and usage errors never load core (about 0.6 s).
 		return await import('@aws-blocks/core/scripts');
 	} catch (error) {
 		throw coreMismatchError(error) ?? error;
 	}
 }
 
-/** Load `@aws-blocks/core/scripts/dev-pidfile` (what `cdk-blocks dev` needs of core); a core that does not match fails with {@link coreMismatchError}. */
+/** Load `@aws-blocks/core/scripts/dev-pidfile` (what `npm run dev` needs of core); a core that does not match fails with {@link coreMismatchError}. */
 export async function loadDevPidfile(): Promise<typeof DevPidfileModule> {
 	try {
 		// Loaded on demand, not imported: a static import would fail every command, `--version` and `--help` too,
-		// on an installed core that lacks this entry; this way only `cdk-blocks dev` fails, with the reinstall message.
+		// on an installed core that lacks this entry; this way only `npm run dev` fails, with the reinstall message.
 		return await import('@aws-blocks/core/scripts/dev-pidfile');
 	} catch (error) {
 		throw coreMismatchError(error) ?? error;

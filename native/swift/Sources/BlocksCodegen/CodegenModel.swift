@@ -546,14 +546,31 @@ struct Operation {
     let result: OperationResult
     let description: String?
     let nestedTypes: [NestedTypeNode]
+    /// Parameter types the operation's enum declared before they became shared top-level types (see
+    /// `CodegenModel.sharedTypes`). The enum keeps each old name as a deprecated typealias.
+    let sharedTypeAliases: [SharedTypeAlias]
 
-    init(name: String, parameters: [OperationParameter], result: OperationResult, description: String? = nil, nestedTypes: [NestedTypeNode] = []) {
+    init(
+        name: String, parameters: [OperationParameter], result: OperationResult, description: String? = nil,
+        nestedTypes: [NestedTypeNode] = [], sharedTypeAliases: [SharedTypeAlias] = []
+    ) {
         self.name = name
         self.parameters = parameters
         self.result = result
         self.description = description
         self.nestedTypes = nestedTypes
+        self.sharedTypeAliases = sharedTypeAliases
     }
+
+    /// Whether the operation's API class declares an enum for it: it has nested types or old names to keep.
+    var declaresNestedTypes: Bool { !nestedTypes.isEmpty || !sharedTypeAliases.isEmpty }
+}
+
+/// A parameter type an operation's enum used to declare (`old`, `SetAuthState.Input` and the structs beside it),
+/// and the shared top-level type that replaced it (`target`, `AuthActionInput`).
+struct SharedTypeAlias {
+    let old: NestedTypeNode
+    let target: String
 }
 
 struct NestedTypeNode {
@@ -600,4 +617,30 @@ public struct CodegenModel {
     let declaredTransferableBindings: [String: DeclaredTransferableBinding]
     let unboundTransferableCauses: [String: String]
     let nativeCatalogWarnings: [String]
+    /// Union parameter types the spec names (`x-blocks-type-name`), declared once at the top level of Models.swift
+    /// with their variants nested inside (`AuthActionInput`, `AuthActionInput.SignIn`), and shared by every
+    /// operation that takes one, in every namespace.
+    let sharedTypes: [NestedTypeNode]
+    /// One `swift:` line per named union parameter that keeps its operation's nested type instead.
+    let namingWarnings: [String]
+    /// Each namespace's name, in the order the spec first names it (`apiNamespaces` is sorted by name), so a
+    /// diagnostic picks the first case in the order the Kotlin generator walks.
+    let namespaceSpecOrder: [String]
+
+    init(
+        apiNamespaces: [APINamespace], typeDefinitions: [TypeDefinition], servers: [ServerDefinition],
+        declaredTransferableBindings: [String: DeclaredTransferableBinding], unboundTransferableCauses: [String: String],
+        nativeCatalogWarnings: [String], sharedTypes: [NestedTypeNode] = [], namingWarnings: [String] = [],
+        namespaceSpecOrder: [String] = []
+    ) {
+        self.sharedTypes = sharedTypes
+        self.namingWarnings = namingWarnings
+        self.namespaceSpecOrder = namespaceSpecOrder
+        self.apiNamespaces = apiNamespaces
+        self.typeDefinitions = typeDefinitions
+        self.servers = servers
+        self.declaredTransferableBindings = declaredTransferableBindings
+        self.unboundTransferableCauses = unboundTransferableCauses
+        self.nativeCatalogWarnings = nativeCatalogWarnings
+    }
 }

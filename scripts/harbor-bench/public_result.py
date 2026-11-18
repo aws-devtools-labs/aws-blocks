@@ -16,7 +16,7 @@ SKILL_USE = ('skill_tool', 'file_read', 'none')
 USAGE = ('input_tokens', 'cache_read_tokens', 'cache_write_tokens', 'output_tokens', 'input_processed_tokens',
          'cost_usd', 'cache_neutral_cost_usd')
 STORAGE_CLASSES = {'KVStore': 'kv_store', 'DistributedTable': 'distributed_table', 'Database': 'database',
-                   'DistributedDatabase': 'distributed_database', 'FileBucket': 'file_bucket'}
+                   'FileBucket': 'file_bucket'}
 STORAGE = (*STORAGE_CLASSES.values(), 'multiple', 'none', 'unknown')
 CONSTRUCTED = re.compile(r'\bnew\s+(' + '|'.join(STORAGE_CLASSES) + r')\b')
 

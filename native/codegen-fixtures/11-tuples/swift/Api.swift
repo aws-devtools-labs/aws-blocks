@@ -49,7 +49,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetCoords {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let item0: Double
             public let item1: Double
             public let item2: String
@@ -78,7 +78,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetPair {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let item0: String
             public let item1: Int
 
@@ -103,7 +103,7 @@ public final nonisolated class Api: Sendable {
 
     public enum QueryRange {
 
-        public struct Range: Codable {
+        public struct Range: Codable, Sendable {
             public let item0: Double
             public let item1: Double
 
@@ -125,7 +125,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Cursor: Codable {
+        public struct Cursor: Codable, Sendable {
             public let item0: String
             public let item1: Int?
 
@@ -147,7 +147,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let pairs: [Pair]
             public let `where`: Where
 
@@ -161,7 +161,7 @@ public final nonisolated class Api: Sendable {
                 self.`where` = `where`
             }
 
-            public struct Pair: Codable {
+            public struct Pair: Codable, Sendable {
                 public let item0: String
                 public let item1: Int
 
@@ -183,14 +183,14 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct Where: Codable {
+            public struct Where: Codable, Sendable {
                 public let between: Between
 
                 public init(between: Between) {
                     self.between = between
                 }
 
-                public struct Between: Codable {
+                public struct Between: Codable, Sendable {
                     public let item0: String
                     public let item1: String
 
@@ -217,7 +217,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetShortTuples {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let one: [Double]
             public let short: Short
 
@@ -226,7 +226,7 @@ public final nonisolated class Api: Sendable {
                 self.short = short
             }
 
-            public struct Short: Codable {
+            public struct Short: Codable, Sendable {
                 public let item0: String
                 public let item1: Int?
 

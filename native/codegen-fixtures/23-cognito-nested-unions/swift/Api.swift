@@ -31,14 +31,14 @@ public final nonisolated class Api: Sendable {
 
     public enum CognitoConfirmSignIn {
 
-        public struct ContinueSignIn: Codable {
+        public struct ContinueSignIn: Codable, Sendable {
             public let nextStep: NextStep
 
             public init(nextStep: NextStep) {
                 self.nextStep = nextStep
             }
 
-            public struct ConfirmSignInWithSmsCode: Codable {
+            public struct ConfirmSignInWithSmsCode: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -48,7 +48,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithTotpCode: Codable {
+            public struct ConfirmSignInWithTotpCode: Codable, Sendable {
                 public let session: String
 
                 public init(session: String) {
@@ -56,7 +56,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithEmailCode: Codable {
+            public struct ConfirmSignInWithEmailCode: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -66,7 +66,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ContinueSignInWithMfaSelection: Codable {
+            public struct ContinueSignInWithMfaSelection: Codable, Sendable {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
 
@@ -75,14 +75,14 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
+                public enum AllowedMFAType: String, Codable, Sendable {
                     case sms = "SMS"
                     case totp = "TOTP"
                     case email = "EMAIL"
                 }
             }
 
-            public struct ContinueSignInWithMfaSetupSelection: Codable {
+            public struct ContinueSignInWithMfaSetupSelection: Codable, Sendable {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
 
@@ -91,13 +91,13 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
+                public enum AllowedMFAType: String, Codable, Sendable {
                     case totp = "TOTP"
                     case email = "EMAIL"
                 }
             }
 
-            public struct ContinueSignInWithTotpSetup: Codable {
+            public struct ContinueSignInWithTotpSetup: Codable, Sendable {
                 public let session: String
                 public let sharedSecret: String
 
@@ -107,7 +107,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ContinueSignInWithEmailSetup: Codable {
+            public struct ContinueSignInWithEmailSetup: Codable, Sendable {
                 public let session: String
 
                 public init(session: String) {
@@ -115,7 +115,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithNewPasswordRequired: Codable {
+            public struct ConfirmSignInWithNewPasswordRequired: Codable, Sendable {
                 public let requiredAttributes: [String]?
                 public let session: String
 
@@ -136,7 +136,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ContinueSignInWithFirstFactorSelection: Codable {
+            public struct ContinueSignInWithFirstFactorSelection: Codable, Sendable {
                 public let availableChallenges: [AvailableChallenge]
                 public let session: String
 
@@ -145,7 +145,7 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AvailableChallenge: String, Codable {
+                public enum AvailableChallenge: String, Codable, Sendable {
                     case password = "PASSWORD"
                     case emailOtp = "EMAIL_OTP"
                     case smsOtp = "SMS_OTP"
@@ -153,7 +153,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithPassword: Codable {
+            public struct ConfirmSignInWithPassword: Codable, Sendable {
                 public let session: String
 
                 public init(session: String) {
@@ -161,7 +161,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithFirstFactorEmailOtp: Codable {
+            public struct ConfirmSignInWithFirstFactorEmailOtp: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -171,7 +171,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithFirstFactorSmsOtp: Codable {
+            public struct ConfirmSignInWithFirstFactorSmsOtp: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -181,7 +181,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithWebAuthn: Codable {
+            public struct ConfirmSignInWithWebAuthn: Codable, Sendable {
                 public let credentialRequestOptions: String
                 public let session: String
 
@@ -191,7 +191,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignUp: Codable {
+            public struct ConfirmSignUp: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails?
 
                 enum CodingKeys: String, CodingKey {
@@ -208,7 +208,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public enum NextStep: Codable {
+            public enum NextStep: Codable, Sendable {
                 case confirmSignInWithSmsCode(ConfirmSignInWithSmsCode)
                 case confirmSignInWithTotpCode(ConfirmSignInWithTotpCode)
                 case confirmSignInWithEmailCode(ConfirmSignInWithEmailCode)
@@ -305,7 +305,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct SignedIn: Codable {
+        public struct SignedIn: Codable, Sendable {
             public let user: AuthenticatedUser
 
             public init(user: AuthenticatedUser) {
@@ -313,7 +313,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Result: Codable {
+        public enum Result: Codable, Sendable {
             case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
 
@@ -348,14 +348,14 @@ public final nonisolated class Api: Sendable {
 
     public enum CognitoSignIn {
 
-        public struct ContinueSignIn: Codable {
+        public struct ContinueSignIn: Codable, Sendable {
             public let nextStep: NextStep
 
             public init(nextStep: NextStep) {
                 self.nextStep = nextStep
             }
 
-            public struct ConfirmSignInWithSmsCode: Codable {
+            public struct ConfirmSignInWithSmsCode: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -365,7 +365,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithTotpCode: Codable {
+            public struct ConfirmSignInWithTotpCode: Codable, Sendable {
                 public let session: String
 
                 public init(session: String) {
@@ -373,7 +373,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithEmailCode: Codable {
+            public struct ConfirmSignInWithEmailCode: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -383,7 +383,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ContinueSignInWithMfaSelection: Codable {
+            public struct ContinueSignInWithMfaSelection: Codable, Sendable {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
 
@@ -392,14 +392,14 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
+                public enum AllowedMFAType: String, Codable, Sendable {
                     case sms = "SMS"
                     case totp = "TOTP"
                     case email = "EMAIL"
                 }
             }
 
-            public struct ContinueSignInWithMfaSetupSelection: Codable {
+            public struct ContinueSignInWithMfaSetupSelection: Codable, Sendable {
                 public let allowedMFATypes: [AllowedMFAType]
                 public let session: String
 
@@ -408,13 +408,13 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable {
+                public enum AllowedMFAType: String, Codable, Sendable {
                     case totp = "TOTP"
                     case email = "EMAIL"
                 }
             }
 
-            public struct ContinueSignInWithTotpSetup: Codable {
+            public struct ContinueSignInWithTotpSetup: Codable, Sendable {
                 public let session: String
                 public let sharedSecret: String
 
@@ -424,7 +424,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ContinueSignInWithEmailSetup: Codable {
+            public struct ContinueSignInWithEmailSetup: Codable, Sendable {
                 public let session: String
 
                 public init(session: String) {
@@ -432,7 +432,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithNewPasswordRequired: Codable {
+            public struct ConfirmSignInWithNewPasswordRequired: Codable, Sendable {
                 public let requiredAttributes: [String]?
                 public let session: String
 
@@ -453,7 +453,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ContinueSignInWithFirstFactorSelection: Codable {
+            public struct ContinueSignInWithFirstFactorSelection: Codable, Sendable {
                 public let availableChallenges: [AvailableChallenge]
                 public let session: String
 
@@ -462,7 +462,7 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AvailableChallenge: String, Codable {
+                public enum AvailableChallenge: String, Codable, Sendable {
                     case password = "PASSWORD"
                     case emailOtp = "EMAIL_OTP"
                     case smsOtp = "SMS_OTP"
@@ -470,7 +470,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithPassword: Codable {
+            public struct ConfirmSignInWithPassword: Codable, Sendable {
                 public let session: String
 
                 public init(session: String) {
@@ -478,7 +478,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithFirstFactorEmailOtp: Codable {
+            public struct ConfirmSignInWithFirstFactorEmailOtp: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -488,7 +488,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithFirstFactorSmsOtp: Codable {
+            public struct ConfirmSignInWithFirstFactorSmsOtp: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails
                 public let session: String
 
@@ -498,7 +498,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignInWithWebAuthn: Codable {
+            public struct ConfirmSignInWithWebAuthn: Codable, Sendable {
                 public let credentialRequestOptions: String
                 public let session: String
 
@@ -508,7 +508,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct ConfirmSignUp: Codable {
+            public struct ConfirmSignUp: Codable, Sendable {
                 public let codeDeliveryDetails: CodeDeliveryDetails?
 
                 enum CodingKeys: String, CodingKey {
@@ -525,7 +525,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public enum NextStep: Codable {
+            public enum NextStep: Codable, Sendable {
                 case confirmSignInWithSmsCode(ConfirmSignInWithSmsCode)
                 case confirmSignInWithTotpCode(ConfirmSignInWithTotpCode)
                 case confirmSignInWithEmailCode(ConfirmSignInWithEmailCode)
@@ -622,7 +622,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct SignedIn: Codable {
+        public struct SignedIn: Codable, Sendable {
             public let user: AuthenticatedUser
 
             public init(user: AuthenticatedUser) {
@@ -630,7 +630,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Result: Codable {
+        public enum Result: Codable, Sendable {
             case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
 

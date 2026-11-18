@@ -38,8 +38,6 @@ done
 
 echo "📦 Step 1: Generate OpenRPC spec from test-apps/native-bindings"
 cd "$BACKEND"
-# `npm run spec` (aws-blocks/scripts/generate-spec.ts) rather than the
-# `blocks-generate-spec` bin, which npm does not link for a workspace package.
 npm run spec
 SPEC_PATH="$BACKEND/aws-blocks/blocks.spec.json"
 echo "   ✅ Spec: $SPEC_PATH"

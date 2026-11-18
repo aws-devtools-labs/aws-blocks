@@ -2,7 +2,7 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated struct Entry: Codable {
+public nonisolated struct Entry: Codable, Sendable {
     public let claims: [String: JSONValue]?
     public let metadata: [String: JSONValue]
     public let nullablePayload: JSONValue?

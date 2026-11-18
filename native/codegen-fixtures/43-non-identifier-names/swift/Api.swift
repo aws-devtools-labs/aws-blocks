@@ -46,7 +46,7 @@ public final nonisolated class Ns: Sendable {
 
     public enum Do_Action {
 
-        public struct Ty_PeCre_Ate: Codable {
+        public struct Ty_PeCre_Ate: Codable, Sendable {
             public let ti_tle: String
 
             enum CodingKeys: String, CodingKey {
@@ -58,7 +58,7 @@ public final nonisolated class Ns: Sendable {
             }
         }
 
-        public struct Ty_PeRe_Move: Codable {
+        public struct Ty_PeRe_Move: Codable, Sendable {
             public let __id_: String
 
             enum CodingKeys: String, CodingKey {
@@ -70,7 +70,7 @@ public final nonisolated class Ns: Sendable {
             }
         }
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case ty_PeCre_Ate(Ty_PeCre_Ate)
             case ty_PeRe_Move(Ty_PeRe_Move)
 
@@ -102,7 +102,7 @@ public final nonisolated class Ns: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok_: Bool
 
             enum CodingKeys: String, CodingKey {

@@ -30,7 +30,7 @@ export interface DestroyOptions {
    * treats a missing stack as a successful no-op.
    */
   stackName?: string;
-  /** How the user runs the destroy, in the guidance (for example `cdk-blocks destroy`). Default: `npm run destroy`. */
+  /** How the user runs the destroy, in the guidance. Default: `npm run destroy`. */
   invocation?: string;
 }
 
