@@ -39,7 +39,7 @@ public nonisolated struct Board: Codable {
     }
 }
 
-public nonisolated struct Layout: Codable {
+public nonisolated struct Layout: Codable, Sendable {
     public let grid: [[Note]]
     public let levels: [Level]
     public let levelsByUser: [String: [Level]]?
@@ -92,12 +92,12 @@ public nonisolated struct Layout: Codable {
     }
 }
 
-public nonisolated enum Level: String, Codable {
+public nonisolated enum Level: String, Codable, Sendable {
     case low
     case high
 }
 
-public nonisolated struct LoginMenu: Codable {
+public nonisolated struct LoginMenu: Codable, Sendable {
     public let fallback: OIDCClient<String>?
     public let options: [SignInOption]
     public let primary: SignInOption
@@ -122,7 +122,7 @@ public nonisolated struct LoginMenu: Codable {
     }
 }
 
-public nonisolated struct Note: Codable {
+public nonisolated struct Note: Codable, Sendable {
     public let body: String
     public let id: String
 
@@ -132,7 +132,7 @@ public nonisolated struct Note: Codable {
     }
 }
 
-public nonisolated struct SignInOption: Codable {
+public nonisolated struct SignInOption: Codable, Sendable {
     public let client: OIDCClient<String>
     public let label: String
 

@@ -32,8 +32,8 @@
  * `TypeError`.
  */
 
-import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { KVStore } from '@aws-blocks/bb-kv-store';
+import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import {
 	ApiNamespace,
@@ -84,6 +84,7 @@ import {
 } from './cdk/mappers.js';
 import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { scopeSmsRoleTrust } from './cdk/sms-role.js';
+import { clientLifetimes, setsClientLifetimes } from './cdk/token-settings.js';
 import { stubIssuerPath } from './engines/stub-idp-routes.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
@@ -220,6 +221,12 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			);
 		}
 
+		if (opts.userPool && setsClientLifetimes(opts)) {
+			throw new Error(
+				"Auth: session.accessTokenValiditySeconds, idTokenValiditySeconds, refreshTokenValiditySeconds and refreshTokenRotation configure the app clients this block creates; with `userPool`, set them on your own pool's app client.",
+			);
+		}
+
 		if (needsPool) {
 			// Email MFA on a BB-created pool needs an SES sender (`email`).
 			// Only trips when EMAIL would actually be advertised.
@@ -348,6 +355,8 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 				// Only what end users may set (no `*_verified` flag, no `userWritable: false`
 				// attribute); Cognito's default is every standard and custom attribute. Updates in place.
 				writeAttributes: endUserWriteAttributes(opts.users?.attributes),
+				// Explicit lifetimes and refresh rotation (`session.*`). Updates in place.
+				...clientLifetimes(opts),
 			});
 
 			// ── Hosted-UI federation ────────────────────────────────────────
@@ -504,6 +513,11 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	 */
 	createApi() {
 		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
+	}
+
+	/** Synth-time stand-in for the runtime `createOidcApi()`, like {@link createApi}. */
+	createOidcApi() {
+		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'oidc' });
 	}
 
 	/**

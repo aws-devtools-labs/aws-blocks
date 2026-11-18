@@ -16,8 +16,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * Called from amplify/blocks.ts with the stack Amplify provides.
  */
 export async function createBlocksBackend(stack: Stack, sandboxMode: boolean) {
-  // Propagate sandbox mode via CDK context so Building Blocks (e.g. DistributedDatabase)
-  // can detect it and disable deletion protection / set DESTROY removal policy.
+  // Propagate sandbox mode via CDK context: it sets the stack's deployment type
+  // (the `blocks:deployment-type` tag and `getDeploymentType()` at runtime).
+  // Removal policy and deletion protection (e.g. the `Database` cluster's) come
+  // from `defaults` below.
   if (sandboxMode) {
     stack.node.setContext('sandboxMode', 'true');
   }

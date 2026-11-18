@@ -61,7 +61,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         """)
 
         assertContains(output, """
-        public nonisolated struct Invoice: Codable {
+        public nonisolated struct Invoice: Codable, Sendable {
             public let id: String
             public let meta: Meta
 
@@ -70,7 +70,7 @@ final class InlineObjectPropertyTests: XCTestCase {
                 self.meta = meta
             }
 
-            public nonisolated struct Meta: Codable {
+            public nonisolated struct Meta: Codable, Sendable {
                 public let value: Int
 
                 public init(value: Int) {
@@ -80,7 +80,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         }
         """)
         assertContains(output, """
-        public nonisolated struct Receipt: Codable {
+        public nonisolated struct Receipt: Codable, Sendable {
             public let id: String
             public let meta: Meta
 
@@ -89,7 +89,7 @@ final class InlineObjectPropertyTests: XCTestCase {
                 self.meta = meta
             }
 
-            public nonisolated struct Meta: Codable {
+            public nonisolated struct Meta: Codable, Sendable {
                 public let value: String
 
                 public init(value: String) {
@@ -111,14 +111,14 @@ final class InlineObjectPropertyTests: XCTestCase {
         """)
 
         assertContains(output, """
-        public nonisolated struct Holder: Codable {
+        public nonisolated struct Holder: Codable, Sendable {
             public let payload: Payload
 
             public init(payload: Payload) {
                 self.payload = payload
             }
 
-            public nonisolated struct Payload: Codable {
+            public nonisolated struct Payload: Codable, Sendable {
                 public let label: String
 
                 public init(label: String) {
@@ -142,28 +142,28 @@ final class InlineObjectPropertyTests: XCTestCase {
         """)
 
         assertContains(output, """
-        public nonisolated struct Holder: Codable {
+        public nonisolated struct Holder: Codable, Sendable {
             public let outer: Outer
 
             public init(outer: Outer) {
                 self.outer = outer
             }
 
-            public nonisolated struct Outer: Codable {
+            public nonisolated struct Outer: Codable, Sendable {
                 public let middle: Middle
 
                 public init(middle: Middle) {
                     self.middle = middle
                 }
 
-                public nonisolated struct Middle: Codable {
+                public nonisolated struct Middle: Codable, Sendable {
                     public let inner: Inner
 
                     public init(inner: Inner) {
                         self.inner = inner
                     }
 
-                    public nonisolated struct Inner: Codable {
+                    public nonisolated struct Inner: Codable, Sendable {
                         public let n: Double
 
                         public init(n: Double) {
@@ -192,7 +192,7 @@ final class InlineObjectPropertyTests: XCTestCase {
 
         assertContains(output, "    public let maybe: Maybe?\n    public let orNull: OrNull?\n")
         assertContains(output, "\n" + """
-            public nonisolated struct Maybe: Codable {
+            public nonisolated struct Maybe: Codable, Sendable {
                 public let a: String
 
                 public init(a: String) {
@@ -202,7 +202,7 @@ final class InlineObjectPropertyTests: XCTestCase {
 
         """)
         assertContains(output, "\n" + """
-            public nonisolated struct OrNull: Codable {
+            public nonisolated struct OrNull: Codable, Sendable {
                 public let b: String
 
                 public init(b: String) {
@@ -227,7 +227,7 @@ final class InlineObjectPropertyTests: XCTestCase {
 
         assertContains(output, "    public let customs: [String: CustomsValue]\n    public let parcels: [Parcel]\n")
         assertContains(output, "\n" + """
-            public nonisolated struct CustomsValue: Codable {
+            public nonisolated struct CustomsValue: Codable, Sendable {
                 public let code: String
 
                 public init(code: String) {
@@ -237,7 +237,7 @@ final class InlineObjectPropertyTests: XCTestCase {
 
         """)
         assertContains(output, "\n" + """
-            public nonisolated struct Parcel: Codable {
+            public nonisolated struct Parcel: Codable, Sendable {
                 public let sku: String
 
                 public init(sku: String) {
@@ -260,16 +260,16 @@ final class InlineObjectPropertyTests: XCTestCase {
         }, "required": ["status", "geo"] } }
         """)
 
-        assertContains(output, "\npublic nonisolated enum Status: String, Codable {\n    case open\n    case closed\n}\n")
+        assertContains(output, "\npublic nonisolated enum HolderStatus: String, Codable, Sendable {\n    case open\n    case closed\n}\n")
         assertContains(output, """
-            public nonisolated struct Geo: Codable {
+            public nonisolated struct Geo: Codable, Sendable {
                 public let source: Source
 
                 public init(source: Source) {
                     self.source = source
                 }
 
-                public enum Source: String, Codable {
+                public enum Source: String, Codable, Sendable {
                     case gps
                     case cell
                 }
@@ -292,8 +292,8 @@ final class InlineObjectPropertyTests: XCTestCase {
         }
         """)
 
-        assertContains(output, "public enum Kind: String, Codable {\n            case a\n            case b\n")
-        assertContains(output, "public enum Kind: String, Codable {\n            case x\n            case y\n")
+        assertContains(output, "public enum Kind: String, Codable, Sendable {\n            case a\n            case b\n")
+        assertContains(output, "public enum Kind: String, Codable, Sendable {\n            case x\n            case y\n")
         assertNoTopLevel(output, "Kind")
     }
 
@@ -313,10 +313,10 @@ final class InlineObjectPropertyTests: XCTestCase {
         }, "required": ["meta"] } }
         """)
 
-        assertContains(output, "\n    public nonisolated struct Meta: Codable {\n        public let figure: Figure\n")
-        assertContains(output, "\n        public enum Figure: Codable {\n            case circle(Circle)\n            case square(Square)\n")
+        assertContains(output, "\n    public nonisolated struct Meta: Codable, Sendable {\n        public let figure: Figure\n")
+        assertContains(output, "\n        public enum Figure: Codable, Sendable {\n            case circle(Circle)\n            case square(Square)\n")
         assertContains(output, "\n" + """
-                public nonisolated struct Circle: Codable {
+                public nonisolated struct Circle: Codable, Sendable {
                     public let radius: Double
 
                     public init(radius: Double) {
@@ -348,14 +348,14 @@ final class InlineObjectPropertyTests: XCTestCase {
         """)
 
         assertContains(output, """
-        public nonisolated struct Click: Codable {
+        public nonisolated struct Click: Codable, Sendable {
             public let meta: Meta
 
             public init(meta: Meta) {
                 self.meta = meta
             }
 
-            public nonisolated struct Meta: Codable {
+            public nonisolated struct Meta: Codable, Sendable {
                 public let x: Int
 
                 public init(x: Int) {
@@ -365,14 +365,14 @@ final class InlineObjectPropertyTests: XCTestCase {
         }
         """)
         assertContains(output, """
-        public nonisolated struct Key: Codable {
+        public nonisolated struct Key: Codable, Sendable {
             public let meta: Meta
 
             public init(meta: Meta) {
                 self.meta = meta
             }
 
-            public nonisolated struct Meta: Codable {
+            public nonisolated struct Meta: Codable, Sendable {
                 public let code: String
 
                 public init(code: String) {
@@ -402,7 +402,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         """)
 
         assertContains(output, """
-        public nonisolated struct Order: Codable {
+        public nonisolated struct Order: Codable, Sendable {
             public let address: OrderAddress
             public let billing: Address
 
@@ -411,7 +411,7 @@ final class InlineObjectPropertyTests: XCTestCase {
                 self.billing = billing
             }
 
-            public nonisolated struct OrderAddress: Codable {
+            public nonisolated struct OrderAddress: Codable, Sendable {
                 public let zip: String
 
                 public init(zip: String) {
@@ -421,7 +421,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         }
         """)
         assertContains(output, "\n" + """
-        public nonisolated struct Address: Codable {
+        public nonisolated struct Address: Codable, Sendable {
             public let street: String
 
             public init(street: String) {
@@ -442,8 +442,8 @@ final class InlineObjectPropertyTests: XCTestCase {
         """)
 
         assertContains(output, "    public let createdAt: Date\n    public let date: HolderDate\n    public let `type`: HolderType\n")
-        assertContains(output, "\n    public nonisolated struct HolderDate: Codable {\n")
-        assertContains(output, "\n    public nonisolated struct HolderType: Codable {\n")
+        assertContains(output, "\n    public nonisolated struct HolderDate: Codable, Sendable {\n")
+        assertContains(output, "\n    public nonisolated struct HolderType: Codable, Sendable {\n")
     }
 
     // MARK: - Unaffected
@@ -477,7 +477,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         let output = try SwiftCodeGenerator().generate(from: CodegenModelBuilder().build(from: rpcModel))
 
         XCTAssertTrue(output.api.contains("public func save(input: Save.Input) async throws -> Bool"))
-        XCTAssertTrue(output.api.contains("            public struct Meta: Codable {\n                public let x: Int\n"))
+        XCTAssertTrue(output.api.contains("            public struct Meta: Codable, Sendable {\n                public let x: Int\n"))
         XCTAssertEqual(output.models, "")
     }
 }

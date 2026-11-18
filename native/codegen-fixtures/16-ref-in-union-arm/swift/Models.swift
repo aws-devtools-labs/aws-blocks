@@ -1,11 +1,11 @@
 import Foundation
 
 
-public nonisolated enum MfaChallengeAction: String, Codable {
+public nonisolated enum MfaChallengeAction: String, Codable, Sendable {
     case mfa
 }
 
-public nonisolated struct MfaChallenge: Codable {
+public nonisolated struct MfaChallenge: Codable, Sendable {
     public let action: MfaChallengeAction
     public let code: String
     public let session: String

@@ -3,9 +3,8 @@
 
 import { readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
+import { loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
-import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
@@ -279,18 +278,6 @@ async function runDeploy(options: DeployOptions) {
       checkBootstrap: true,
     });
 
-    // Provision secrets for production. projectRoot must match the root cdk
-    // synth uses (passed as --context below) so the written parameter name
-    // equals the one the app resolves at synth.
-    const secrets = await ensureSecrets('production', options.projectRoot);
-    if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      log.progress(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
-    }
-
-    // Apply external-database migrations to the production database before
-    // deploying. No-op unless this app uses an external DB and has ./migrations.
-    await applyExternalMigrations({ stage: 'production' });
-    
     // Generate client code FIRST (before cdk deploy triggers the Vite build).
     // This also populates the BB registry for telemetry — from a child process,
     // never by importing the backend here: an in-process import loads the local

@@ -27,6 +27,34 @@ warning naming both paths (a `blocks:scope:fullIdCollision` warning at `cdk
 synth`); rename one of the scopes. A future release will reject the collision.
 Constructing the same path again is accepted.
 
+Use lowercase letters, digits and hyphens in scope and block ids. An id is part
+of the name of each resource created under it, unescaped, and every service
+accepts those characters. The rest depends on the resource:
+
+| Named from the id | Block | Characters its name accepts |
+|---|---|---|
+| DynamoDB table | `KVStore`, `DistributedTable` | letters, digits, `_`, `.`, `-` |
+| SQS queue | `AsyncJob` | letters, digits, `_`, `-` |
+| EventBridge Scheduler schedule | `CronJob` | letters, digits, `_`, `.`, `-` |
+| S3 bucket | `FileBucket` | lowercase letters, digits, `.`, `-` |
+| Cognito user pool | `Auth` | letters, digits, spaces, `_`, `+`, `=`, `,`, `.`, `@`, `-` |
+| Systems Manager parameter | `AppSetting` | letters, digits, `_`, `.`, `-`, `/` |
+| Secrets Manager secret | `Secret` | letters, digits, `/`, `_`, `+`, `=`, `.`, `@`, `-` |
+| Bedrock knowledge base and data source | `KnowledgeBase` | letters, digits, `_`, `-` |
+
+An id is not rejected when the scope is constructed, because whether it deploys
+depends on the blocks under it: `new Scope('@acme/shop')` runs locally, and is
+valid with only an `ApiNamespace` under it (which names nothing from the id) or
+a `Secret` (Secrets Manager accepts `@` and `/`). `cdk synth` fails once a block
+under it names a resource that does not accept the id, for example a `KVStore`,
+whose table name cannot contain `@` or `/`. The error names the id, the
+characters and what the service accepts. This covers the DynamoDB, SQS,
+Scheduler, Cognito, Secrets Manager and Bedrock names above when they are
+literal strings at synth; `FileBucket` checks its bucket name itself, and
+`aws-cdk-lib` checks the parameter name of an `AppSetting` that is not a
+secret. Renaming an id renames every resource under it, which replaces those
+already deployed.
+
 ### ApiNamespace
 
 Define type-safe APIs with automatic frontend/backend integration.
@@ -199,7 +227,7 @@ An app deployed with an older version still has the deploy's URL in `config.json
 
 Two things about that path burn time when debugging:
 
-- The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route and never was: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
+- The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
 - `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
 
 What you should see instead, per environment:
@@ -420,7 +448,7 @@ new RawRoute(scope, 'user', {
 // GET /users/42?q=hello → {"id":"42","q":"hello"}
 ```
 
-Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
+Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key. `npm run dev` and the deployed Lambda match routes and fill `params` with the same code, so a route behaves the same locally.
 
 To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which is the same path in every environment) rather than on a full URL.
 
@@ -510,7 +538,7 @@ The stacked door's edge → router hop is HTTPS on port 443 with a router `certi
 
 Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-blocks/hosting` README.
 
-The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
+The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as one that sets them in `frontDoor.features`. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
 
 
 #### Preview mode and `HostingPresets`
@@ -567,17 +595,19 @@ Import Building Blocks from their specific packages (or from the `@aws-blocks/bl
 - `@aws-blocks/bb-kv-store` — Key-value and document storage, with optional schemas, keys, and indexes
 - `@aws-blocks/auth-common` — Auth interfaces and Authenticator component
 - `@aws-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
-- `@aws-blocks/bb-data` — SQL database
+- `@aws-blocks/bb-database` — SQL database
 - `@aws-blocks/bb-realtime` — Real-time pub/sub
 
 ### withAuth (SSR cookie forwarding)
 
 Lives in the `@aws-blocks/core/server` entry point (also re-exported as `@aws-blocks/blocks/server`). During SSR (server components / loaders) the browser's cookies aren't automatically attached to AWS Blocks API calls — `withAuth` reads them and forwards them to every AWS Blocks API call made inside the callback.
 
+**Next.js** detection is built in: `withAuth` reads the request's cookies through `cookies()` from `next/headers`, so with no second argument it works anywhere that call does — server components, route handlers and server actions. **Nuxt** is also detected (reads the active Nitro request; requires `nitro: { experimental: { asyncContext: true } }` in `nuxt.config.ts`). Any other framework passes the request's `Cookie` header explicitly, or registers a provider once:
+
 ```typescript
 import { withAuth } from '@aws-blocks/blocks/server';
 
-// Auto-detects cookies (Next.js detection is built in)
+// Next.js server component or route handler: cookies come from next/headers' cookies()
 const posts = await withAuth(() => api.listMyPosts());
 
 // Other frameworks: pass cookies explicitly as the 2nd arg…
@@ -624,7 +654,7 @@ The lifecycle scripts in `@aws-blocks/core/scripts` (`deploy`, `destroy`, `start
 
 | `BLOCKS_LOG_LEVEL` | What prints |
 |---|---|
-| unset (or any other value) | Everything, exactly as before this variable existed. |
+| unset (or any other value) | Everything: every progress step and the raw CDK output, as at `verbose`, plus the dev server's RPC error stack traces. |
 | `quiet` | Errors and final results only. CDK output is hidden while it runs. |
 | `normal` | Short progress steps and results. CDK output is condensed into a few lines (`Synthesizing app...`, a resource count); failure and rollback lines still print as they happen. |
 | `verbose` | The same lines as unset: every progress step plus the raw CDK output (the dev server leaves out RPC error stack traces, see below). |
@@ -825,7 +855,7 @@ export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
 - **Hosting `secret()` and `config()`.** Their values are named `blocks/<stackId>/secrets/…` (Secrets Manager) and `/blocks/<stackId>/config/…` (SSM (AWS Systems Manager)), where `stackId` comes from `.blocks/config.json`. Under `defaults.appIdentity`, set `stackId` to the app id: the boundary allows `blocks/<id>/…` by name, so the values `npm run secret` / `npm run config` create untagged still work, and the IAM report treats any other `blocks/…` name as outside the app, with a hint to fix `stackId`.
 - **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role AWS Blocks creates, including the CDK custom-resource provider roles that `Tags.of()` doesn't reach, at a priority above the default `Tags.of(...).add()`. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too, which CloudFormation propagates to what a tag aspect can't reach. An app can still raise its own priority or remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that AWS Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name, so that's no gap.
 - **The boundary** goes on every role AWS Blocks creates, including the CDK helper roles and the roles CDK adds while preparing the app, which CDK's own `@aws-cdk/core:permissionsBoundary` context misses.
-- **The IAM report** (`cdk.out/<stack>.blocks-iam.json`) gains an `app` section and a `violations` list: a role without the boundary or the app tag; a grant on a name outside the app's prefix (for example `fromExisting` on another app's parameter); a wildcard grant on a data service (SSM, DynamoDB, SQS (Simple Queue Service), S3, Secrets Manager, Lambda, CloudWatch Logs, Step Functions, Cognito, EventBridge and EventBridge Scheduler, KMS, API Gateway, SNS (Simple Notification Service), SES (Simple Email Service), RDS (Relational Database Service) and its Data API, Aurora DSQL, Bedrock, Bedrock AgentCore, S3 Vectors, ECS (Elastic Container Service), CloudFront KeyValueStores, and IAM and STS (Security Token Service) for passing or assuming a role), on `*` or on a resource name that starts with `*`, except three grants Building Blocks make: model invocation on AWS-owned Bedrock foundation models and system-defined inference profiles (no app's data), an Agent invoking AgentCore runtimes (the boundary caps it to runtimes tagged as the app), and SES sending (an exception listed under Limits); an "everything except" grant (`NotAction`, `NotResource`); a resource the check can't resolve (`Fn::Sub` on a parameter, `Fn::ImportValue`, a template parameter) — these fail closed; a resource policy that opens up another app's resource; a role that trusts anything but an AWS service; a broad AWS managed policy (`AdministratorAccess`, `*FullAccess`); the CDK asset bucket of another bootstrap; a grant on a literal API id, or an API Gateway stage, route or deployment attached to an API that isn't in the app's own template (`api-outside-app`); or a stack or block outside the prefix. Synth fails on any violation. With `reportOnly: true`, synth only writes the report and prints a one-line summary, for example while adopting `appIdentity` in an existing app.
+- **The IAM report** (`cdk.out/<stack>.blocks-iam.json`) gains an `app` section and a `violations` list: a role without the boundary or the app tag; a grant on a name outside the app's prefix (for example `fromExisting` on another app's parameter, or another app's table, queue, bucket, function, layer, RDS cluster or vector bucket; only SSM parameters may also be named `<id>` or `<id>/…`); a name-fenced resource the app itself names outside its prefix (a table, queue, bucket, function, layer, parameter, log group, RDS cluster or instance, vector bucket, event rule or bus, schedule, secret or state machine), which the execution policy would refuse to create; a wildcard grant on a data service (SSM, DynamoDB, SQS (Simple Queue Service), S3, Secrets Manager, Lambda, CloudWatch Logs, Step Functions, Cognito, EventBridge and EventBridge Scheduler, KMS, API Gateway, SNS (Simple Notification Service), SES (Simple Email Service), RDS (Relational Database Service) and its Data API, Aurora DSQL, Bedrock, Bedrock AgentCore, S3 Vectors, ECS (Elastic Container Service), CloudFront KeyValueStores, and IAM and STS (Security Token Service) for passing or assuming a role), on `*` or on a resource name that starts with `*`, except three grants Building Blocks make: model invocation on AWS-owned Bedrock foundation models and system-defined inference profiles (no app's data), an Agent invoking AgentCore runtimes (the boundary caps it to runtimes tagged as the app), and SES sending (an exception listed under Limits); an "everything except" grant (`NotAction`, `NotResource`); a resource the check can't resolve (`Fn::Sub` on a parameter, `Fn::ImportValue`, a template parameter) — these fail closed; a resource policy that opens up another app's resource, or that lets in someone who isn't this app (everyone, another account, another app's role, `NotPrincipal`, or a public Lambda function URL) in a Lambda or layer permission or a bucket, queue, topic, secret, KMS key or replica key, REST API or EventBridge bus policy, in any of the app's stacks — a service, the app's own roles and the account's root are fine, and everyone only when a condition pins it to the app's own ARNs in this account (`aws:SourceArn`, `aws:PrincipalArn`) or to `aws:PrincipalTag/app` together with `aws:PrincipalAccount` (the caller's own account sets its tags, so the tag alone isn't enough), or on a public REST API; a policy the check can't read (an intrinsic, a string) fails closed; a role that trusts anything but an AWS service; a broad AWS managed policy (`AdministratorAccess`, `*FullAccess`); the CDK asset bucket of another bootstrap; a grant on a literal API id, or an API Gateway stage, route or deployment attached to an API that isn't in the app's own template (`api-outside-app`); or a stack or block outside the prefix. Synth fails on any violation. With `reportOnly: true`, synth only writes the report and prints a one-line summary, for example while adopting `appIdentity` in an existing app.
 
 The report reads grants on the services listed above (and an IAM role's name, for `iam:PassRole` and `sts:AssumeRole`); it doesn't read grants on other services, such as Kinesis, Firehose, ECR, OpenSearch or Glue, so a clean report isn't full coverage. A service the boundary doesn't list is still denied at runtime. The report and the synth failure are fast feedback for developers and their agents. They aren't the boundary: the app's own code runs at synth, so a determined app could get around them. The boundary is IAM, in parts 3–5.
 
@@ -1663,11 +1693,11 @@ CDK's default bootstrap deploy role may change or delete *any* stack, and CloudF
 
 #### The pipeline
 
-Synthesize (without `reportOnly`, as in the project template below), which fails synth on any violation in the IAM report, and confirm that every report names the id the platform gave this app:
+Synthesize (without `reportOnly`, as in the project template below), which fails synth on any violation in the IAM report, and confirm that every report names the id the platform gave this app and wasn't written with `reportOnly`, which the app's own code sets:
 
 ```bash
 APP_ID=appa NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet   # fails on any violation
-jq -e -s --arg id "$APP_ID" 'length > 0 and all(.[]; .app.id == $id and (.violations | length) == 0)' cdk.out/*.blocks-iam.json
+jq -e -s --arg id "$APP_ID" 'length > 0 and all(.[]; .app.id == $id and .app.reportOnly != true and (.violations | length) == 0)' cdk.out/*.blocks-iam.json
 ```
 
 `APP_ID` comes from the platform, however it manages ids (a registry, picked by hand, generated): to AWS Blocks it's just a string. It never comes from the app's own repository or code. Fail the pipeline on a non-zero exit from either command.

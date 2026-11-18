@@ -5,22 +5,28 @@ import { join } from 'node:path';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
-import type { SqlQuery } from '@aws-blocks/data-common/core';
-import { DEFAULT_SCHEMA, quoteIdent } from './constants.js';
+import type { SqlQuery } from './common/sql.js';
 import { RulesEngine } from './dialect/rules-engine.js';
-import { type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
+import type { RowCountingEngine } from './engines/handle.js';
+import { PGLITE_SUBDIR, type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
 import { configError } from './errors.js';
-import { buildMigrationPlan, lintMigrationFiles } from './migrations/plan.js';
-import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
-import { registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
+import { localConnectionLabel, sourceConnectionLabel } from './external/connection.js';
+import { prepareLocalSchema } from './migrations/local.js';
+import { lintMigrationFiles } from './migrations/plan.js';
+import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
+import { existingCluster, registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
+import { roleDatabase, scopedDatabase } from './runtime/scoped.js';
 import type {
 	ClusterRef,
 	ClusterType,
 	DatabaseClusterOptions,
 	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
 	QueryOptions,
+	ScopedDatabase,
 	Transaction,
 	TransactionOptions,
 } from './types.js';
@@ -29,7 +35,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 assertNotMockInDeployedEnv('bb-database');
 
 function pgliteEngine(dataDir: string, kind: ClusterType, schemaName: string): SchemaEngine {
-	return sharedPgliteCluster(join(dataDir, 'pglite'), kind).forSchema(schemaName);
+	return sharedPgliteCluster(join(dataDir, PGLITE_SUBDIR), kind).forSchema(schemaName);
 }
 
 /**
@@ -54,6 +60,34 @@ export class DatabaseCluster extends Scope {
 		this.type = resolveClusterOptions(options, this.fullId).type;
 		registerUniqueId('DatabaseCluster', this, id, this.fullId);
 		registerSdkIdentifiers(this.fullId, { clusterEndpoint: `mock-endpoint-${this.fullId}` });
+	}
+
+	/**
+	 * Refer to a PostgreSQL database that already exists (Supabase is the tested provider) instead of
+	 * provisioning a cluster. Returns a reference object; pass it as a `Database`'s `cluster`. The block
+	 * creates nothing in that database and connects with the role of its connection string, so that role's
+	 * privileges are the block's: a role that owns the tables is not filtered by Row Level Security policies.
+	 *
+	 * The connection string is never written in code. With `name`, the block reads the SSM SecureString
+	 * `/<stackName>-<name>` on AWS and the value under `.bb-data/` locally; `cdk-blocks db connect --name <name>`
+	 * checks the database and stores both. With `connectionString`, the block reads your own `AppSetting`
+	 * or `Secret`.
+	 *
+	 * The server certificate is always verified: against `ca` when given, against Node's trust store
+	 * otherwise. Local mode connects to the same kind of database; it does not run migration files.
+	 *
+	 * @param options - `name` or `connectionString` (exactly one), and optionally `ca` (PEM text)
+	 * @returns A reference object for the `cluster` option of `Database`
+	 * @throws {DatabaseConfigurationError} If both or neither of `name` and `connectionString` are given,
+	 *   or `ca` is not PEM text
+	 * @example
+	 * import { DATABASE_CA } from './database.ca.js';
+	 * const db = new Database(scope, 'db', {
+	 *   cluster: DatabaseCluster.fromExisting({ name: 'db-url', ca: DATABASE_CA }),
+	 * });
+	 */
+	static fromExisting(options: ExistingClusterOptions): ExistingClusterRef {
+		return existingCluster(options);
 	}
 
 	/** @internal */
@@ -102,69 +136,90 @@ export class Database extends Scope {
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
 
-		const dataDir = getMockDataDir(this);
-		const kind = resolved.ref.kind;
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
-		// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
-		// (a cache hit) in case a file changed after startup.
-		if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), kind);
 
-		const buildEngine = async (): Promise<RulesEngine> => {
-			let inner: SchemaEngine;
-			if (!resolved.shared) {
-				inner = pgliteEngine(dataDir, kind, this.schemaName);
-			} else if (resolved.shared instanceof DatabaseCluster) {
-				inner = resolved.shared.engineFor(this.schemaName);
-			} else {
-				throw configError(
-					`Database '${this.fullId}': 'cluster' must be a DatabaseCluster from the same entry point.`,
+		let engine: () => Promise<RowCountingEngine>;
+		let simulateConflict: () => void;
+		if (resolved.external) {
+			const external = resolved.external;
+			// An existing database is the real one locally too: its schema, roles and data cannot be rebuilt
+			// from files. Migration files are not run from here; a deploy or `cdk-blocks db migrate` runs them.
+			// The driver and the settings store are loaded here, so an app without one never loads them.
+			engine = async () => {
+				const [{ externalEngineFrom }, { localConnectionSetting }] = await Promise.all([
+					import('./external/engine.js'),
+					import('./external/local-store.js'),
+				]);
+				return externalEngineFrom(
+					external.connectionString ?? localConnectionSetting(external.name ?? ''),
+					external.name ? localConnectionLabel(external.name) : sourceConnectionLabel(this.fullId),
+					{ ca: external.ca, schemaName: this.schemaName },
 				);
-			}
-			// A first statement inside another block's transaction() callback nests this migration run in that
-			// transaction (DESIGN §4.1); if it rolls back, the schema goes with it and the engine is built again. A
-			// simulateConflict() between the rollback and the rebuild must arm the rebuilt engine, not this one.
-			inner.cluster.enclosingTransaction()?.onRollback(() => {
-				this.mock = null;
-				this.core.invalidateEngine();
-			});
-			const mock = new RulesEngine(inner, kind);
-			await mock.withDdl(async () => {
-				if (this.migrationsPath) {
-					const files = loadMigrationFiles(this.migrationsPath);
-					lintMigrationFiles(files, kind);
-					const plan = buildMigrationPlan(files, kind);
-					const { applied } = await runMigrationPlan(mock, plan, {
-						schemaName: this.schemaName,
-						log: (m) => this.log.info(m),
-					}).finally(() => inner.cluster.forgetSchema()); // a file may have changed the session's search_path
-					// Visible in `npm run dev` without a logger: which files ran, into which schema, and where the data is.
-					if (applied.length > 0) {
-						console.log(
-							`[bb-database] ${this.fullId}: applied ${applied.join(', ')} to schema "${this.schemaName}" (${dataDir})`,
-						);
-					}
-				} else if (this.schemaName !== DEFAULT_SCHEMA) {
-					await mock.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(this.schemaName)}`);
-				}
-			});
-			// Armed only now: a simulateConflict() called before the first statement is for the app's next
-			// transaction, not for the migration run's own commits, which would consume it and fail the build.
-			this.mock = mock;
-			if (this.pendingConflict) {
-				this.pendingConflict = false;
-				mock.simulateConflict();
-			}
-			return mock;
-		};
+			};
+			simulateConflict = () => {
+				throw configError(
+					'simulateConflict() needs the local PGlite database; an existing database is the real one.',
+				);
+			};
+		} else {
+			const kind = resolved.ref.kind;
+			const shared = resolved.shared;
+			const dataDir = getMockDataDir(this);
+			// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
+			// (a cache hit) in case a file changed after startup.
+			if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), kind);
 
-		this.core = new DatabaseCore({ engine: buildEngine });
+			engine = async () => {
+				let inner: SchemaEngine;
+				if (!shared) {
+					inner = pgliteEngine(dataDir, kind, this.schemaName);
+				} else if (shared instanceof DatabaseCluster) {
+					inner = shared.engineFor(this.schemaName);
+				} else {
+					throw configError(
+						`Database '${this.fullId}': 'cluster' must be a DatabaseCluster from the same entry point.`,
+					);
+				}
+				// A first statement inside another block's transaction() callback nests this migration run in that
+				// transaction (DESIGN §4.1); if it rolls back, the schema goes with it and the engine is built again. A
+				// simulateConflict() between the rollback and the rebuild must arm the rebuilt engine, not this one.
+				inner.cluster.enclosingTransaction()?.onRollback(() => {
+					this.mock = null;
+					this.core.invalidateEngine();
+				});
+				const mock = new RulesEngine(inner, kind);
+				const applied = await prepareLocalSchema(mock, inner, {
+					kind,
+					schemaName: this.schemaName,
+					migrationsPath: this.migrationsPath,
+					log: (m) => this.log.info(m),
+				});
+				// Visible in `npm run dev` without a logger: which files ran, into which schema, and where the data is.
+				if (applied.length > 0) {
+					console.log(
+						`[bb-database] ${this.fullId}: applied ${applied.join(', ')} to schema "${this.schemaName}" (${dataDir})`,
+					);
+				}
+				// Armed only now: a simulateConflict() called before the first statement is for the app's next
+				// transaction, not for the migration run's own commits, which would consume it and fail the build.
+				this.mock = mock;
+				if (this.pendingConflict) {
+					this.pendingConflict = false;
+					mock.simulateConflict();
+				}
+				return mock;
+			};
+			simulateConflict = () => {
+				if (this.mock) this.mock.simulateConflict();
+				else this.pendingConflict = true;
+			};
+		}
+
+		this.core = new DatabaseCore({ engine });
 		registerInternalAccess(this, {
 			engine: () => this.core.getEngine(),
 			session: () => this.core.session(),
-			simulateConflict: () => {
-				if (this.mock) this.mock.simulateConflict();
-				else this.pendingConflict = true;
-			},
+			simulateConflict,
 			migrationsPath: this.migrationsPath,
 		});
 		registerSdkIdentifiers(this.fullId, { clusterId: resolved.clusterFullId, schemaName: this.schemaName });
@@ -243,6 +298,56 @@ export class Database extends Scope {
 	 */
 	transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		return this.core.transaction(fn, options);
+	}
+
+	/**
+	 * This block with every statement run as `user`, for tables with Row Level
+	 * Security on an `aurora` cluster. Each transaction on the result starts by
+	 * setting `request.jwt.claims` to `{ ...claims, sub: user.userId }`, for that
+	 * transaction only; a policy reads it with
+	 * `current_setting('request.jwt.claims', true)::jsonb`. A single statement
+	 * runs in a transaction of its own.
+	 *
+	 * The call does not turn Row Level Security on: a table without
+	 * `ENABLE ROW LEVEL SECURITY` and a policy returns every row to every user. A
+	 * statement on the block itself carries no user, so a policy that compares a
+	 * column with `sub` gives it no rows.
+	 *
+	 * @param user - The signed-in user: pass the result of `auth.requireAuth(context)`. Only `userId` is read
+	 * @param claims - More claims for policies to read, such as `{ org_id }`. `sub` is always the user id
+	 * @returns A `ScopedDatabase` with `query`, `queryOne`, `execute` and `transaction`; pass it to `DatabaseDialect` for Kysely
+	 * @throws {DatabaseConfigurationError} On a `dsql` cluster, which has no Row Level Security
+	 * @throws {DatabaseErrors.PermissionDenied} From a statement that a policy refuses (HTTP 403)
+	 * @example
+	 * const user = await auth.requireAuth(context);
+	 * const notes = await db.asUser(user).query<Note>(sql`SELECT id, body FROM notes`);
+	 */
+	asUser(user: { userId: string }, claims?: Record<string, unknown>): ScopedDatabase {
+		return scopedDatabase(this, user, claims);
+	}
+
+	/**
+	 * The block with every statement run as a database role, for Row Level Security policies that are
+	 * written for a role (`CREATE POLICY … TO authenticated`). Each transaction on the returned object
+	 * starts with `SET LOCAL ROLE` to `role` and sets `request.jwt.claims` to `claims`, both for that
+	 * transaction only; a single statement gets a transaction of its own. Nothing stays on the connection.
+	 *
+	 * Use it when the connection role owns the tables, as on an existing database: PostgreSQL does not
+	 * apply policies to a table's owner, so `asUser()` alone does not filter there. The connection role
+	 * must be a member of `role`. The claims are yours, unchanged: pass the `sub` and any other value your
+	 * policies read. Only your server code sets them, so take them from a verified session.
+	 *
+	 * @param role - The database role to run as, such as `'authenticated'` or `'anon'`
+	 * @param claims - The value of `request.jwt.claims` for the transaction. Default `{}`
+	 * @returns A `ScopedDatabase` with `query`, `queryOne`, `execute` and `transaction`; pass it to `DatabaseDialect` for Kysely
+	 * @throws {DatabaseConfigurationError} On a `dsql` cluster, or when the connection role cannot switch to `role`
+	 * @throws {DatabaseErrors.PermissionDenied} From a statement that a policy refuses (HTTP 403)
+	 * @example
+	 * const user = await auth.requireAuth(context);
+	 * const todos = await db.asRole('authenticated', { sub: user.userId }).query<Todo>(sql`SELECT id, title FROM todos`);
+	 */
+	asRole(role: string, claims?: Record<string, unknown>): ScopedDatabase {
+		return roleDatabase(this, role, claims);
 	}
 }
 

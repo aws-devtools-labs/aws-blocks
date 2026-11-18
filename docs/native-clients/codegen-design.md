@@ -156,6 +156,8 @@ Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't 
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
 
+A tag maps to one runtime type, and the generated facade returns that type with the spec's type arguments applied (`RealtimeChannel<Cursor>`). One exception, on Dart only: an `oidc/client` whose spec names its providers returns `TypedOidcClient<P>`, an extension type over the runtime `OidcClient` that narrows `signIn`, `signInRelay` and `exchange` to the generated provider enum `P`. It adds no runtime type and no logic, only a compile-time view. Swift and Kotlin make `OidcClient` itself generic. Dart doesn't, for two reasons: a generic `OidcClient<P>` would break every caller that passes a provider's name, and, because Dart's generics are covariant and `P` only appears in parameters, an upcast client would fail on a wrong provider with a `TypeError` (and in a dart2js `-O4` build not at all). The view is covariant too (`TypedOidcClient<OidcProvider>` takes any provider), but it is erased, so a wrong provider always reaches `OidcClient`'s own check and fails on its name with `OidcUnknownProviderException`. See [`schema-generation-guide-for-devs.md`](./schema-generation-guide-for-devs.md#x-blocks-type-args-on-a-methods-resultschema).
+
 #### Declared native packages and bindings
 
 Two top-level extension objects let a block declare its own native package instead of relying on a generator's hard-coded tag switch.
@@ -309,7 +311,6 @@ The spec is a build input with the same trust as the backend source it is genera
 
 ```mermaid
 flowchart LR
-  DB[(Postgres<br/>information_schema)] -. "npx bb-data pull" .-> TS
   App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
   TS -- "npx blocks-generate-spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
   Sandbox[.blocks-sandbox/config.json<br/>or config.&lt;stage&gt;.json] -- servers URL --> Spec
@@ -321,21 +322,11 @@ flowchart LR
 - **Generated locally.** `generate-spec-cli.ts` (`blocks-generate-spec`, the `spec` script in scaffolded apps) imports the backend entry and writes `aws-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
 - **Gitignored in apps.** Every `create-blocks-app` template, and the entries `create-blocks-app` adds when initializing an existing directory, ignore `aws-blocks/blocks.spec.json`. (This repo commits a few specs as Swift test fixtures under `native/swift/Tests/`.)
 - **Not served by the deployed API.** No runtime or CDK code reads or bundles the spec, and the JSON-RPC handler has no discovery method that returns it.
-- **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `awsBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
-
-### `db pull`: spec values from database schema
-
-`npx bb-data pull` (`packages/bb-data/src/db-pull/`) connects to a Postgres database, reads the `public` schema from `information_schema` and `pg_catalog`, and writes TypeScript into `aws-blocks/`:
-
-- `database.types.ts` — one interface per table; column names become property keys.
-- `database.meta.ts` — per-table metadata, including singular/plural names derived from table names.
-- `supabase.ts` — spreads `db.crud<TableMeta>()` into an `ApiNamespace`. The `CrudMethods` type derives method names (`list<Plural>`, `get<Singular>`, `create…`, `update…`, `delete…`) from that metadata.
-
-When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping and identifier sanitizing above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator. That generator accepts only table and column names that are TypeScript identifiers (`^[\p{ID_Start}_$][\p{ID_Continue}$\u200C\u200D]*$`, no Unicode escapes), stops with an error naming any other, and quotes every name it writes into string literals and property keys.
+- **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `cdkBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
 
 ### Sharing a spec
 
-The escaping and identifier sanitizing above apply to any spec the native generators accept. A spec that does not come from your own backend source is a different input, though: when one team generates the spec and another generates clients from it (a backend team handing a spec to a mobile team, for example), or when the spec is derived from `db pull` against a database that others can change, treat the spec as untrusted input. Review changes to it as you would review code, and version the generated client code as you would any other generated artifact.
+The escaping and identifier sanitizing above apply to any spec the native generators accept. A spec that does not come from your own backend source is a different input, though: when one team generates the spec and another generates clients from it (a backend team handing a spec to a mobile team, for example), treat the spec as untrusted input. Review changes to it as you would review code, and version the generated client code as you would any other generated artifact.
 
 ---
 

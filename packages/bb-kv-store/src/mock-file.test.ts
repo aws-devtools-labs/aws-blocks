@@ -151,7 +151,7 @@ describe('a file of an earlier format is converted', () => {
 		assert.equal(entries.find((entry) => entry.key === 'session')?.expiresAt, future);
 		assert.deepEqual(warnings, []);
 
-		// The file is in the current format now, and no file was set aside.
+		// The file is in the current format now. The file of the release is kept as a copy.
 		assert.deepEqual(readJson(dir), {
 			version: 2,
 			items: [
@@ -161,7 +161,8 @@ describe('a file of an earlier format is converted', () => {
 				{ _bkv_pk: 'session', _bkv_value: 'live', _bkv_ttl: future },
 			],
 		});
-		assert.deepEqual(readdirSync(dir), ['store.json']);
+		assert.deepEqual(readdirSync(dir).sort(), ['store.json', 'store.json.bak']);
+		assert.equal(readJson(dir, 'store.json.bak').greeting, JSON.stringify('hello'));
 	});
 
 	test('the data.json of DistributedTable, when the directory has no store.json', async () => {

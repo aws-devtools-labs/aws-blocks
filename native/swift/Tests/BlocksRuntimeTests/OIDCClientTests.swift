@@ -255,7 +255,9 @@ final class OIDCClientTests: XCTestCase {
             )
             XCTFail("Expected malformedExchangeResponse")
         } catch let error as OIDCError {
-            XCTAssertEqual(error, .malformedExchangeResponse)
+            guard case .malformedExchangeResponse = error else {
+                return XCTFail("Expected malformedExchangeResponse, got \(error)")
+            }
         } catch {
             XCTFail("Expected OIDCError, got \(error)")
         }
@@ -277,19 +279,20 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.exchange(
                 code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
             )
-            XCTFail("Expected RawRouteError")
-        } catch let error as RawRouteError {
-            XCTAssertEqual(error.statusCode, 400)
-            XCTAssertEqual(error.errorName, "IdpErrorException")
-            XCTAssertTrue(error.message.contains("HTTP 400"), error.message)
-            XCTAssertTrue(error.message.contains("IdpErrorException"), error.message)
-            XCTAssertTrue(error.message.contains("refused the sign-in"), error.message)
+            XCTFail("Expected ApiError")
+        } catch let outer as OIDCError {
+            guard let error = outer.underlyingError as? ApiError else {
+                return XCTFail("Expected ApiError cause, got \(outer)")
+            }
+            XCTAssertEqual(error.status, 400)
+            XCTAssertEqual(error.name, "IdpErrorException")
+            XCTAssertEqual(error.message, "The sign-in provider refused the sign-in.")
         } catch {
-            XCTFail("Expected RawRouteError, got \(error)")
+            XCTFail("Expected ApiError, got \(error)")
         }
     }
 
-    func testRawRouteErrorReadsAPlainOAuthErrorBody() async {
+    func testRawRouteReadsAPlainOAuthErrorBody() async {
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["error": "invalid_grant", "error_description": "unknown or expired code"]
             let data = try JSONSerialization.data(withJSONObject: body)
@@ -302,16 +305,41 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.exchange(
                 code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
             )
-            XCTFail("Expected RawRouteError")
-        } catch let error as RawRouteError {
-            XCTAssertEqual(error.errorName, "invalid_grant")
-            XCTAssertTrue(error.message.contains("unknown or expired code"), error.message)
+            XCTFail("Expected ApiError")
+        } catch let outer as OIDCError {
+            guard let error = outer.underlyingError as? ApiError else {
+                return XCTFail("Expected ApiError cause, got \(outer)")
+            }
+            XCTAssertEqual(error.name, "invalid_grant")
+            XCTAssertEqual(error.message, "invalid_grant")
         } catch {
-            XCTFail("Expected RawRouteError, got \(error)")
+            XCTFail("Expected ApiError, got \(error)")
         }
     }
 
-    func testRawRouteErrorKeepsADescriptionWithoutAnErrorCode() async {
+    func testRawRouteWrapsAConnectionFailureInATransportError() async {
+        OIDCMockURLProtocol.handler = { _ in throw URLError(.cannotConnectToHost) }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
+            )
+            XCTFail("Expected TransportError")
+        } catch let outer as OIDCError {
+            guard let error = outer.underlyingError as? TransportError else {
+                return XCTFail("Expected TransportError cause, got \(outer)")
+            }
+            XCTAssertNil(error.statusCode)
+            XCTAssertNotNil(error.underlyingError)
+            XCTAssertEqual((error.underlyingError as? URLError)?.code, .cannotConnectToHost)
+        } catch {
+            XCTFail("Expected TransportError, got \(error)")
+        }
+    }
+
+    func testRawRouteKeepsADescriptionWithoutAnErrorCode() async {
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["error_description": "unknown or expired code"]
             let data = try JSONSerialization.data(withJSONObject: body)
@@ -324,16 +352,19 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.exchange(
                 code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
             )
-            XCTFail("Expected RawRouteError")
-        } catch let error as RawRouteError {
-            XCTAssertNil(error.errorName)
-            XCTAssertTrue(error.message.hasSuffix("HTTP 400 (unknown or expired code)"), error.message)
+            XCTFail("Expected ApiError")
+        } catch let outer as OIDCError {
+            guard let error = outer.underlyingError as? ApiError else {
+                return XCTFail("Expected ApiError cause, got \(outer)")
+            }
+            XCTAssertNil(error.name)
+            XCTAssertEqual(error.message, "unknown or expired code")
         } catch {
-            XCTFail("Expected RawRouteError, got \(error)")
+            XCTFail("Expected ApiError, got \(error)")
         }
     }
 
-    func testRawRouteErrorKeepsANamelessMessageOutOfErrorName() async {
+    func testRawRouteKeepsANamelessMessageOutOfErrorName() async {
         // A Blocks route that answers with a message and no `name`
         // (`{ error: 'Missing required fields' }`): the message is detail, not a name.
         OIDCMockURLProtocol.handler = { request in
@@ -348,16 +379,19 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.exchange(
                 code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
             )
-            XCTFail("Expected RawRouteError")
-        } catch let error as RawRouteError {
-            XCTAssertNil(error.errorName)
-            XCTAssertTrue(error.message.contains("(Missing required fields)"), error.message)
+            XCTFail("Expected ApiError")
+        } catch let outer as OIDCError {
+            guard let error = outer.underlyingError as? ApiError else {
+                return XCTFail("Expected ApiError cause, got \(outer)")
+            }
+            XCTAssertNil(error.name)
+            XCTAssertEqual(error.message, "Missing required fields")
         } catch {
-            XCTFail("Expected RawRouteError, got \(error)")
+            XCTFail("Expected ApiError, got \(error)")
         }
     }
 
-    func testRawRouteErrorReadsABareErrorCodeAsTheName() async {
+    func testRawRouteReadsABareErrorCodeAsTheName() async {
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["error": "invalid_grant"]
             let data = try JSONSerialization.data(withJSONObject: body)
@@ -370,15 +404,18 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.exchange(
                 code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
             )
-            XCTFail("Expected RawRouteError")
-        } catch let error as RawRouteError {
-            XCTAssertEqual(error.errorName, "invalid_grant")
+            XCTFail("Expected ApiError")
+        } catch let outer as OIDCError {
+            guard let error = outer.underlyingError as? ApiError else {
+                return XCTFail("Expected ApiError cause, got \(outer)")
+            }
+            XCTAssertEqual(error.name, "invalid_grant")
         } catch {
-            XCTFail("Expected RawRouteError, got \(error)")
+            XCTFail("Expected ApiError, got \(error)")
         }
     }
 
-    func testExchangeSurfacesAnHTTPErrorWithANonJSONBody() async {
+    func testExchangeSurfacesANonJSONErrorBodyAsATransportError() async {
         OIDCMockURLProtocol.handler = { request in
             (errorResponse(for: request.url!, status: 502), Data("<html>Bad Gateway</html>".utf8))
         }
@@ -389,12 +426,14 @@ final class OIDCClientTests: XCTestCase {
             _ = try await client.exchange(
                 code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
             )
-            XCTFail("Expected RawRouteError")
-        } catch let error as RawRouteError {
+            XCTFail("Expected TransportError")
+        } catch let outer as OIDCError {
+            guard let error = outer.underlyingError as? TransportError else {
+                return XCTFail("Expected TransportError cause, got \(outer)")
+            }
             XCTAssertEqual(error.statusCode, 502)
-            XCTAssertNil(error.errorName)
         } catch {
-            XCTFail("Expected RawRouteError, got \(error)")
+            XCTFail("Expected ApiError, got \(error)")
         }
     }
 
@@ -750,8 +789,72 @@ final class OIDCClientTests: XCTestCase {
     func testFromJSONThrowsOnMissingExchangePath() {
         let descriptor: [String: Any] = ["signOutPath": "/auth/signout"]
         XCTAssertThrowsError(try OIDCClient<String>.fromJSON(descriptor, baseUrl: "x", client: BlocksClient(url: "x"))) { error in
-            guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
-            XCTAssertEqual(oidc, .malformedDescriptor("exchangePath"))
+            guard case .invalidDescriptor(let blocksType, let missingField)? = error as? TransferableError else {
+                return XCTFail("Expected TransferableError.invalidDescriptor, got \(error)")
+            }
+            XCTAssertEqual(blocksType, "oidc")
+            XCTAssertEqual(missingField, "exchangePath")
+        }
+    }
+
+    // MARK: - Error taxonomy
+
+    func testCancelledCarriesAMessage() {
+        XCTAssertEqual(OIDCError.cancelled.message, "Sign-in cancelled")
+        XCTAssertNil(OIDCError.cancelled.underlyingError)
+    }
+
+    func testRejectedExchangeIsWrappedInAnOIDCError() async {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = ["error": "invalid_grant", "error_description": "unknown or expired code"]
+            let data = try JSONSerialization.data(withJSONObject: body)
+            return (errorResponse(for: request.url!, status: 400), data)
+        }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
+            )
+            XCTFail("Expected OIDCError.exchangeFailed")
+        } catch let error as OIDCError {
+            guard case .exchangeFailed = error else {
+                return XCTFail("Expected exchangeFailed, got \(error)")
+            }
+            XCTAssertTrue(error.underlyingError is ApiError, "\(String(describing: error.underlyingError))")
+        } catch {
+            XCTFail("Expected OIDCError, got \(error)")
+        }
+    }
+
+    func testAuthorizeParamsFailureSurfacesAsOIDCCallbackError() async {
+        OIDCMockURLProtocol.handler = { request in
+            let data = try JSONSerialization.data(withJSONObject: ["error": "nope"])
+            return (errorResponse(for: request.url!, status: 500), data)
+        }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: CapturingRelayLauncher(relay: "nativebindings://auth?code=c&state=s"))
+            XCTFail("Expected OIDCError.callbackError")
+        } catch let error as OIDCError {
+            guard case .callbackError(let detail, let cause) = error else {
+                return XCTFail("Expected callbackError, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("Failed to fetch authorize params"), detail)
+            XCTAssertEqual((cause as? ApiError)?.status, 500)
+            XCTAssertTrue(error.underlyingError is ApiError)
+        } catch {
+            XCTFail("Expected OIDCError, got \(error)")
+        }
+    }
+
+    func testDescriptorMissingARequiredFieldThrowsTransferableError() {
+        let descriptor: [String: Any] = ["exchangePath": "/auth/exchange"]
+        XCTAssertThrowsError(try OIDCClient<String>.fromJSON(descriptor, baseUrl: "x", client: BlocksClient(url: "x"))) { error in
+            XCTAssertTrue(error is TransferableError, "\(error)")
         }
     }
 
@@ -759,15 +862,21 @@ final class OIDCClientTests: XCTestCase {
 
     func testOIDCUserFromJSONThrowsOnMissingFields() {
         XCTAssertThrowsError(try OIDCUser.fromJSON([:])) { error in
-            guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
-            XCTAssertEqual(oidc, .malformedDescriptor("userId"))
+            guard case .invalidDescriptor(let blocksType, let missingField)? = error as? TransferableError else {
+                return XCTFail("Expected TransferableError.invalidDescriptor, got \(error)")
+            }
+            XCTAssertEqual(blocksType, "oidc")
+            XCTAssertEqual(missingField, "userId")
         }
     }
 
     func testOIDCProviderConfigFromJSONThrowsOnMissingFields() {
         XCTAssertThrowsError(try OIDCProviderConfig.fromJSON(["authorizeUrl": "x", "clientId": "y", "scopes": [String]()])) { error in
-            guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
-            XCTAssertEqual(oidc, .malformedDescriptor("kind"))
+            guard case .invalidDescriptor(let blocksType, let missingField)? = error as? TransferableError else {
+                return XCTFail("Expected TransferableError.invalidDescriptor, got \(error)")
+            }
+            XCTAssertEqual(blocksType, "oidc")
+            XCTAssertEqual(missingField, "kind")
         }
     }
 }

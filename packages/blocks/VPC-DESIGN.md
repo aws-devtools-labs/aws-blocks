@@ -1,6 +1,6 @@
 # VPC Support — Design
 
-> **Status:** Implemented (PR #286, branch `feat/vpc-pull-pattern`)
+> **Status:** Implemented
 
 ---
 
@@ -120,7 +120,6 @@ type itself. Registrations accumulate, so the second call adds to the first.
 |----------------|--------------------------------|
 | bb-kv-store | `{ gatewayEndpoints: [DYNAMODB] }` |
 | bb-file-bucket | `{ gatewayEndpoints: [S3] }` |
-| bb-data | `{ interfaceEndpoints: [SECRETS_MANAGER, RDS_DATA] }`, plus the client fields for rotation |
 | bb-async-job | `{ interfaceEndpoints: [SQS] }` |
 | bb-agent | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |
 | bb-knowledge-base | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |
@@ -128,11 +127,11 @@ type itself. Registrations accumulate, so the second call adds to the first.
 | bb-app-setting | `{ interfaceEndpoints: [SSM] }` |
 | bb-realtime | `{ interfaceEndpoints: [APIGATEWAY] }` |
 | bb-auth | `{ interfaceEndpoints: [SSM] }` |
-| bb-distributed-data | `{ requiresEgress: true }` (DSQL over public HTTPS needs Lambda egress) |
+| bb-database | `{ requiresEgress: true }` on a `DatabaseCluster` and on a `Database` that owns its cluster (the cluster is reached over its public endpoint, so the Lambda needs egress); `{}` on a `Database` attached to a shared `DatabaseCluster` |
 
 > CloudWatch Logs is always provisioned by `finalizeVpc` regardless of BB
 > declarations (Lambda needs it for log delivery from within a VPC). The SSM
-> interface endpoint is no longer always-on — it flows from BB requirements
+> interface endpoint is not always-on: it flows from BB requirements
 > (AppSetting and `Auth`), so an app that uses neither gets no SSM
 > endpoint.
 
@@ -162,7 +161,7 @@ interface VpcContext {
 }
 ```
 
-Set on the scope during `initializeVpc()`. BBs like `bb-data` read this via `getVpcContext(scope)` to discover the shared VPC and place Aurora in the correct subnets.
+Set on the scope during `initializeVpc()`. Blocks that place their own resources in the VPC, such as `bb-lambda-compute` and `bb-container-compute`, read this via `getVpcContext(scope)` to discover the shared VPC and select subnets.
 
 ---
 
@@ -180,15 +179,6 @@ No pre-provisioned endpoints. No Aurora cluster. No security groups beyond defau
 
 The test app provisions its own endpoints via `provisionEndpoints: true`, testing the real auto-detection path end-to-end.
 
-### Per-Test Aurora
-
-The `vpc-smoke` test app instantiates `new Database(scope, 'db')` with **no** `connection` option. The Database BB detects the VPC context and creates its own Aurora Serverless v2 cluster in the shared VPC's isolated subnets. The test runs `SELECT 1` and insert/read operations against this self-provisioned Aurora.
-
-This avoids:
-- A persistent Aurora cluster ($50+/month idle costs)
-- External secret ARN management
-- Cross-stack coupling between test infra and test app
-
 ### Test App Structure
 
 ```
@@ -204,14 +194,13 @@ test-apps/vpc-smoke/
 
 ## Phased Implementation
 
-### Phase 1: CDK-level VPC (this PR)
+### Phase 1: CDK-level VPC (implemented)
 
 - `vpc` prop on `BlocksStack` / `BlocksBackend`
 - `VpcRequirements` passed into the `BuildingBlockScope` constructor, collected in a per-stack registry
 - Per-BB endpoint declarations in each BB's CDK constructor
 - Finalization: collect + deduplicate + provision endpoints
 - Lambda placement in private subnets + security group
-- `bb-data` refactor: use shared VPC when available
 - `BlocksVpcOptions`: `{ vpc, subnets?, provisionEndpoints? }`
 
 ### Phase 2: Per-handler VPC (after configurable compute)

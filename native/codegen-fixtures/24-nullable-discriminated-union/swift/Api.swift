@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func updateAttributes(attributes: [String: String]) async throws -> [String: UpdateAttributes.ResultValue?] {
         let request = BlocksRequest(method: "api.updateAttributes", params: [attributes], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.updateAttributes") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.updateAttributes") }
         return try JSONDecoder().decode([String: UpdateAttributes.ResultValue?].self, from: result)
     }
 
@@ -31,14 +31,14 @@ public final nonisolated class Api: Sendable {
 
     public enum UpdateAttributes {
 
-        public struct IsUpdatedFalse: Codable {
+        public struct IsUpdatedFalse: Codable, Sendable {
             public let nextStep: NextStep
 
             public init(nextStep: NextStep) {
                 self.nextStep = nextStep
             }
 
-            public struct NextStep: Codable {
+            public struct NextStep: Codable, Sendable {
                 public let destination: String
                 public let name: String
 
@@ -49,7 +49,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum ResultValue: Codable {
+        public enum ResultValue: Codable, Sendable {
             case isUpdatedTrue
             case isUpdatedFalse(IsUpdatedFalse)
 
@@ -81,7 +81,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetNotification {
 
-        public struct Email: Codable {
+        public struct Email: Codable, Sendable {
             public let body: String
             public let subject: String
 
@@ -91,7 +91,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Sms: Codable {
+        public struct Sms: Codable, Sendable {
             public let message: String
 
             public init(message: String) {
@@ -99,7 +99,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Result: Codable {
+        public enum Result: Codable, Sendable {
             case email(Email)
             case sms(Sms)
 

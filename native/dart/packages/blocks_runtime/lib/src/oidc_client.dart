@@ -13,9 +13,14 @@ import 'oidc_types.dart';
 import 'response_url.dart';
 import 'session_store.dart';
 import 'token_store.dart';
-import 'transferable_descriptor.dart';
 
 /// OIDC client implementing PKCE-based auth with token management.
+///
+/// [signIn], [signInRelay] and [exchange] take a provider by the name the
+/// backend knows it by. A generated client whose spec names a method's
+/// providers returns a `TypedOidcClient` instead, the same client with those
+/// methods narrowed to an enum of that method's providers, so a provider the
+/// client doesn't have is a compile error.
 class OidcClient implements AuthProvider {
   final String exchangePath;
   final String refreshPath;
@@ -55,10 +60,6 @@ class OidcClient implements AuthProvider {
   final SessionStore sessionStore;
 
   final http.Client _httpClient;
-
-  /// The descriptor [fromJson] hydrated this client from, unchanged, as
-  /// [toJson] returns it. Null for a client built with the constructor.
-  Map<String, dynamic>? _wireDescriptor;
 
   final _controller = StreamController<OidcAuthState>.broadcast();
   Completer<void>? _refreshCompleter;
@@ -129,11 +130,22 @@ class OidcClient implements AuthProvider {
 
   // --- Sign in (requires BrowserLauncher) ---
 
+  /// Signs in with [provider] through the direct custom-scheme flow, with
+  /// [redirectUri] as the IdP `redirect_uri`. Most IdPs reject a custom-scheme
+  /// `redirect_uri`; [signInRelay] is the flow that works with them.
+  ///
+  /// Throws [OidcUnknownProviderException] when [providers] doesn't list
+  /// [provider], or [providerConfigs] has no entry for it.
   Future<OidcUser> signIn(
     String provider, {
     required BrowserLauncher launcher,
     required String redirectUri,
   }) async {
+    final config = providerConfigs[provider];
+    if (!providers.contains(provider) || config == null) {
+      throw OidcUnknownProviderException(provider);
+    }
+
     final verifier = generateVerifier();
     final challenge = generateChallenge(verifier);
     final state = generateVerifier();
@@ -143,7 +155,6 @@ class OidcClient implements AuthProvider {
     await tokenStore.set('oidc_state', state);
     await tokenStore.set('oidc_nonce', nonce);
 
-    final config = providerConfigs[provider]!;
     final authorizeUri = Uri.parse(config.authorizeUrl).replace(
       queryParameters: {
         'client_id': config.clientId,
@@ -204,6 +215,9 @@ class OidcClient implements AuthProvider {
   ///
   /// [relayTo] must be the custom-scheme URI registered in the backend's
   /// `allowedRelayOrigins` (e.g. `myappscheme://oidcRedirect`).
+  ///
+  /// Throws [OidcUnknownProviderException] when [providers] doesn't list
+  /// [provider].
   Future<OidcUser> signInRelay(
     String provider, {
     required BrowserLauncher launcher,
@@ -332,6 +346,12 @@ class OidcClient implements AuthProvider {
 
   // --- Token exchange ---
 
+  /// Exchanges an authorization [code] from [provider] for the signed-in
+  /// user, at [exchangePath]. [signIn] and [signInRelay] call it; call it
+  /// directly only when the app ran the authorize step itself.
+  ///
+  /// Throws [OidcUnknownProviderException] when [providers] doesn't list
+  /// [provider], before anything is sent.
   Future<OidcUser> exchange({
     required String code,
     required String verifier,
@@ -341,6 +361,9 @@ class OidcClient implements AuthProvider {
     required String nonce,
     String? iss,
   }) async {
+    if (!providers.contains(provider)) {
+      throw OidcUnknownProviderException(provider);
+    }
     final url = Uri.parse('$_authBaseUrl$exchangePath');
     final (:response, url: responseUrl) = await postWithResponseUrl(
       _httpClient,
@@ -569,39 +592,8 @@ class OidcClient implements AuthProvider {
       tokenStore: tokenStore,
       sessionStore: sessionStore,
       httpClient: httpClient,
-    ).._wireDescriptor = descriptor;
+    );
   }
-
-  /// This client's `{"__blocks": "oidc/client", …}` descriptor: the one
-  /// [fromJson] hydrated it from, unchanged (keys this runtime doesn't read
-  /// included), or, for a client built with the constructor, its providers
-  /// and paths, in the shape [fromJson] reads. A generated client sends an
-  /// OIDC client parameter, or one inside a model it sends, this way;
-  /// `jsonEncode` calls it too. The base URL and the token and session stores
-  /// are this app's, not the server's, so they aren't part of it.
-  ///
-  /// Returns a copy, so changing it doesn't change this client.
-  Map<String, dynamic> toJson() => transferableDescriptor(
-    'oidc/client',
-    _wireDescriptor ??
-        {
-          'providers': providers,
-          'providerConfigs': {
-            for (final e in providerConfigs.entries)
-              e.key: {
-                'authorizeUrl': e.value.authorizeUrl,
-                'clientId': e.value.clientId,
-                'scopes': e.value.scopes,
-                'kind': e.value.kind,
-              },
-          },
-          'exchangePath': exchangePath,
-          'refreshPath': refreshPath,
-          'signOutPath': signOutPath,
-          'authorizeParamsBasePath': authorizeParamsBasePath,
-          'callbackPath': callbackPath,
-        },
-  );
 
   // --- Private helpers ---
 

@@ -412,7 +412,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
 
   it("closes the app's local data engines before it exits on a stop", async () => {
     // process.exit() skips the beforeExit hook that closes PGlite, which then left postmaster.pid on every
-    // stop, so a leftover one could not mean a crash. A stand-in engine registers its closer as bb-data does;
+    // stop, so a leftover one could not mean a crash. A stand-in engine registers its closer as bb-database does;
     // its close takes a real 200 ms, as PGlite's shutdown does, so the test shows the dev server waits for it.
     const dir = makeApp();
     writeFileSync(

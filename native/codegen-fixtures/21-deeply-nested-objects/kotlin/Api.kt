@@ -3,10 +3,12 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.String
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -17,18 +19,21 @@ public class Api(
   public suspend fun getOrganization(id: String): GetOrganization.Result {
     val request = BlocksRequest(method = "api.getOrganization", params = listOf(JsonPrimitive(id)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getOrganization")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun createOrganization(input: CreateOrganization.Input): CreateOrganization.Result {
     val request = BlocksRequest(method = "api.createOrganization", params = listOf(BlocksJson.encodeToJsonElement(input)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.createOrganization")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun updateOrganization(input: UpdateOrganization.Input): UpdateOrganization.Result {
     val request = BlocksRequest(method = "api.updateOrganization", params = listOf(BlocksJson.encodeToJsonElement(input)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.updateOrganization")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

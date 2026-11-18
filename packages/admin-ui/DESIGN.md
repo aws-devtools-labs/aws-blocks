@@ -552,9 +552,9 @@ classes real copy means a per-class blurb in core's own docs, not a table of das
 **D48 — The generated description is not truncated.** It is stored as the full first sentence, and every
 consumer clamps it for display (CSS `line-clamp`, full text in a `title`). Truncating in the generator
 would bake one layout's constraint into shared data and destroy the text a tooltip needs, irreversibly.
-The generator instead *warns* above 200 characters — above the longest real blurb (`bb-data` at 162), so it
+The generator instead *warns* above 200 characters — above the longest real blurb (`bb-auth` at 159), so it
 fires only when a README's opening sentence is prose rather than a blurb. Markdown is stripped on the way
-in, because a nav card renders plain text and `bb-data`'s blurb genuinely ends in `` `fromExisting()` ``.
+in, because a nav card renders plain text and `bb-auth`'s blurb genuinely starts with `` `Auth` ``.
 Single-underscore emphasis is left alone: `_foo_` and `some_field_name` are indistinguishable by regex, and
 mangling an identifier is the worse failure.
 

@@ -36,12 +36,15 @@ import { BlocksAuth } from '@aws-blocks/auth-common';
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { ChunkingConfig } from '@aws-blocks/bb-knowledge-base';
 import { ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
+import { ClusterKind } from '@aws-blocks/bb-database';
+import { ClusterType } from '@aws-blocks/bb-database';
 import { Compute } from '@aws-blocks/bb-compute';
 import { ComputeOptions } from '@aws-blocks/core';
 import { ComputeProps } from '@aws-blocks/bb-compute';
 import { ComputeType } from '@aws-blocks/core';
 import { ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import { ConditionalWriteOptions } from '@aws-blocks/bb-kv-store';
+import { ConnectionStringSource } from '@aws-blocks/bb-database';
 import { ContainerComputeOptions } from '@aws-blocks/core';
 import { ContainerScaling } from '@aws-blocks/core';
 import { ContainerSize } from '@aws-blocks/core';
@@ -54,21 +57,21 @@ import { customOauth2 } from '@aws-blocks/bb-auth';
 import { Dashboard } from '@aws-blocks/bb-dashboard';
 import { DashboardErrors } from '@aws-blocks/bb-dashboard';
 import { DashboardOptions } from '@aws-blocks/bb-dashboard';
-import { Database } from '@aws-blocks/bb-data';
-import { DatabaseErrors } from '@aws-blocks/bb-data';
-import { DatabaseOptions } from '@aws-blocks/bb-data';
+import { Database } from '@aws-blocks/bb-database';
+import { DatabaseCluster } from '@aws-blocks/bb-database';
+import { DatabaseClusterOptions } from '@aws-blocks/bb-database';
+import { DatabaseErrors } from '@aws-blocks/bb-database';
+import { DatabaseOptions } from '@aws-blocks/bb-database';
 import { DefaultToolContext } from '@aws-blocks/bb-agent';
 import { DisconnectReason } from '@aws-blocks/bb-realtime';
-import { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
-import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-import { DistributedDatabaseOptions } from '@aws-blocks/bb-distributed-data';
 import { EmailClient } from '@aws-blocks/bb-email-client';
 import { EmailErrors } from '@aws-blocks/bb-email-client';
 import { EmailMessage } from '@aws-blocks/bb-email-client';
 import { EmailOptions } from '@aws-blocks/bb-email-client';
 import { EmitOptions } from '@aws-blocks/bb-metrics';
 import { Entry } from '@aws-blocks/bb-kv-store';
-import { ExternalDatabaseRef } from '@aws-blocks/bb-data';
+import { ExistingClusterOptions } from '@aws-blocks/bb-database';
+import { ExistingClusterRef } from '@aws-blocks/bb-database';
 import { ExternalKmsKeyRef } from '@aws-blocks/bb-kv-store';
 import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
@@ -81,7 +84,6 @@ import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 import { FileBucketOptions } from '@aws-blocks/bb-file-bucket';
 import { FileContent } from '@aws-blocks/bb-file-bucket';
 import { FileInfo } from '@aws-blocks/bb-file-bucket';
-import { fromExisting } from '@aws-blocks/bb-data';
 import { GetChannelOptions } from '@aws-blocks/bb-realtime';
 import { GetOptions } from '@aws-blocks/bb-kv-store';
 import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
@@ -101,6 +103,10 @@ import { ScanOptions as KVScanOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStore } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStoreDeleteOptions } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStoreOptions } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStorePutOptions } from '@aws-blocks/bb-kv-store';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
 import { LogEntry } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -133,6 +139,7 @@ import { Results } from '@aws-blocks/bb-kv-store';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { ScalingSignal } from '@aws-blocks/core';
+import { ScopedDatabase } from '@aws-blocks/bb-database';
 import { Secret } from '@aws-blocks/bb-secret';
 import { SecretErrors } from '@aws-blocks/bb-secret';
 import { SecretOptions } from '@aws-blocks/bb-secret';
@@ -145,8 +152,8 @@ import { SendResult } from '@aws-blocks/bb-email-client';
 import { ServerlessComputeOptions } from '@aws-blocks/core';
 import { SortCondition } from '@aws-blocks/bb-kv-store';
 import { SourceConfig } from '@aws-blocks/bb-knowledge-base';
-import { sql } from '@aws-blocks/bb-data';
-import { SqlQuery } from '@aws-blocks/bb-data';
+import { sql } from '@aws-blocks/bb-database';
+import { SqlQuery } from '@aws-blocks/bb-database';
 import { StreamOptions } from '@aws-blocks/bb-agent';
 import { stubIdp } from '@aws-blocks/bb-auth';
 import { SubmitOptions } from '@aws-blocks/bb-async-job';
@@ -159,8 +166,8 @@ import { ToolHandlerArgs } from '@aws-blocks/bb-agent';
 import { ToolsConfig } from '@aws-blocks/bb-agent';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { TracerOptions } from '@aws-blocks/bb-tracer';
-import { Transaction } from '@aws-blocks/bb-data';
-import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
+import { Transaction } from '@aws-blocks/bb-database';
+import { TransactionOptions } from '@aws-blocks/bb-database';
 import { ValueOf } from '@aws-blocks/bb-kv-store';
 import { WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
@@ -230,6 +237,10 @@ export { ChunkingConfig }
 
 export { ChunkingStrategy }
 
+export { ClusterKind }
+
+export { ClusterType }
+
 export { Compute }
 
 export { ComputeOptions }
@@ -241,6 +252,8 @@ export { ComputeType }
 export { ConditionalDeleteOptions }
 
 export { ConditionalWriteOptions }
+
+export { ConnectionStringSource }
 
 export { ContainerComputeOptions }
 
@@ -268,6 +281,10 @@ export { DashboardOptions }
 
 export { Database }
 
+export { DatabaseCluster }
+
+export { DatabaseClusterOptions }
+
 export { DatabaseErrors }
 
 export { DatabaseOptions }
@@ -275,12 +292,6 @@ export { DatabaseOptions }
 export { DefaultToolContext }
 
 export { DisconnectReason }
-
-export { DistributedDatabase }
-
-export { DistributedDatabaseErrors }
-
-export { DistributedDatabaseOptions }
 
 export { EmailClient }
 
@@ -294,7 +305,9 @@ export { EmitOptions }
 
 export { Entry }
 
-export { ExternalDatabaseRef }
+export { ExistingClusterOptions }
+
+export { ExistingClusterRef }
 
 export { ExternalKmsKeyRef }
 
@@ -319,8 +332,6 @@ export { FileBucketOptions }
 export { FileContent }
 
 export { FileInfo }
-
-export { fromExisting }
 
 export { GetChannelOptions }
 
@@ -362,14 +373,16 @@ export function getSdkIdentifiers(bb: Auth<any>): {
 
 // @public (undocumented)
 export function getSdkIdentifiers(bb: Database): {
-    clusterArn: string;
-    secretArn: string;
-    databaseName: string;
+    clusterId: string;
+    schemaName: string;
+    clusterEndpoint?: string;
+    region?: string;
 };
 
 // @public (undocumented)
-export function getSdkIdentifiers(bb: DistributedDatabase): {
+export function getSdkIdentifiers(bb: DatabaseCluster): {
     clusterEndpoint: string;
+    region?: string;
 };
 
 // @public (undocumented)
@@ -441,6 +454,14 @@ export { KVStoreErrors }
 
 export { KVStoreOptions }
 
+export { LegacyKVStore }
+
+export { LegacyKVStoreDeleteOptions }
+
+export { LegacyKVStoreOptions }
+
+export { LegacyKVStorePutOptions }
+
 export { LifecycleRule }
 
 export { LogEntry }
@@ -504,6 +525,8 @@ export { RetrieveOptions }
 export { RetrieveResult }
 
 export { ScalingSignal }
+
+export { ScopedDatabase }
 
 export { Secret }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Bag: Codable {
+public nonisolated struct Bag: Codable, Sendable {
     public let attributes: String
     public let attributes_2: [String: String]
 
@@ -40,12 +40,12 @@ public nonisolated struct Bag: Codable {
     }
 }
 
-public nonisolated enum ProfileState: String, Codable {
+public nonisolated enum ProfileState: String, Codable, Sendable {
     case inProgress = "in-progress"
     case in_Progress = "in_progress"
 }
 
-public nonisolated struct Profile: Codable {
+public nonisolated struct Profile: Codable, Sendable {
     public let Meta: Meta
     public let state: ProfileState
     public let userName: UserName
@@ -58,7 +58,7 @@ public nonisolated struct Profile: Codable {
         self.user_name = user_name
     }
 
-    public nonisolated struct Meta: Codable {
+    public nonisolated struct Meta: Codable, Sendable {
         public let x: String
 
         public init(x: String) {
@@ -66,7 +66,7 @@ public nonisolated struct Profile: Codable {
         }
     }
 
-    public nonisolated struct UserName: Codable {
+    public nonisolated struct UserName: Codable, Sendable {
         public let last: String
 
         public init(last: String) {
@@ -74,7 +74,7 @@ public nonisolated struct Profile: Codable {
         }
     }
 
-    public nonisolated struct User_Name: Codable {
+    public nonisolated struct User_Name: Codable, Sendable {
         public let first: String
 
         public init(first: String) {
@@ -83,7 +83,7 @@ public nonisolated struct Profile: Codable {
     }
 }
 
-public nonisolated struct Weird: Codable {
+public nonisolated struct Weird: Codable, Sendable {
     public let back_slash: String
 
     enum CodingKeys: String, CodingKey {

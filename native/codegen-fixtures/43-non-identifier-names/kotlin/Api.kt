@@ -3,11 +3,13 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Int
 import kotlin.String
 import kotlin.collections.List
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -26,6 +28,7 @@ public class Api(
     val args: List<JsonElement> = if (optIonal != null) listOf(JsonPrimitive(`run { error("xParam") } || p`), BlocksJson.encodeToJsonElement(item), JsonPrimitive(optIonal)) else listOf(JsonPrimitive(`run { error("xParam") } || p`), BlocksJson.encodeToJsonElement(item))
     val request = BlocksRequest(method = "api.get\"Sample`;x", params = args, id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.get\"Sample`;x")
     return BlocksJson.decodeFromJsonElement(result)
   }
 }

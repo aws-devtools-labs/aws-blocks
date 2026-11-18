@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
+// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
@@ -30,8 +30,8 @@ const auth = new Auth(scope, 'auth', {
       clientSecret: googleClientSecret,
     },
   },
-  // Lets native clients authenticate with `Authorization: Bearer <access token>`
-  // (the Swift and Dart SDKs do). The Kotlin apps use the session cookie.
+  // Lets a client that holds an access token authenticate with
+  // `Authorization: Bearer <access token>`. The Kotlin apps use the session cookie.
   allowBearerAuth: true,
   redirects: {
     allowedRelayOrigins: [relayOrigin('blocks.testapp://oidcRedirect')],
@@ -112,6 +112,8 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 }));
 
 export const authApi = auth.createApi();
+// The native OIDC client (`getClient()`), typed by the providers above in the generated Kotlin client.
+export const oidcAuthApi = auth.createOidcApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getCursorChannel(): Promise<RealtimeChannel<Cursor>> {

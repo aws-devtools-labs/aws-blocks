@@ -1,7 +1,14 @@
 ## Unreleased
 
-These changes ship in 0.3.0, not a 0.2.x patch, because of the sign-out below.
+These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` removal and the sign-out below.
 
+- **Breaking:** remove `toJson()` from `RealtimeChannel`, `FileDownloadHandle`,
+  `FileUploadHandle`, `OidcClient` and `UnknownTransferable`, which 0.2.0
+  added. Transferables are read-only again: the server sends them, but never
+  turns a `{"__blocks": …}` value it receives back into a live object, so an
+  app shouldn't send a transferable to the server. Code that calls `toJson()`
+  on one of these types no longer compiles, and `jsonEncode` of one throws
+  `JsonUnsupportedObjectError`. Send the plain values the method needs instead.
 - **Signs out users whose cookies are still in the format written before
   0.2.0:** `PersistentSessionStore` no longer reads the name → value map:
   `load()` deletes it and the cookies it held are not used. This applies to
@@ -9,6 +16,34 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the sign-out below.
   been replaced by a `Set-Cookie` since; those users are signed out once and
   sign in again. A stored cookie record without a `secure` field is read as
   `Secure`.
+- `BlocksClient` now sends `x-blocks-user-agent` on web too, so a browser
+  app's RPC calls appear in client traffic metrics. The web build dropped the
+  header because the Blocks server's CORS preflight did not allow it, which
+  `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
+  (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
+  download and the WebSocket upgrade are unchanged.
+- Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
+  `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider
+  of type `P` (and send its `providerName`) instead of a name, so a typo or
+  a provider the client doesn't have is a compile error. Generated clients
+  return one for a method whose spec names its providers. It is the same
+  object as the `OidcClient` it wraps, with no cost at runtime: every other
+  member is the client's, and it can be passed wherever an `OidcClient` is
+  expected, where it takes names again. `OidcClient` itself is unchanged.
+- Add `OidcProvider`, the interface a provider type implements:
+  `providerName` is the name the backend knows the provider by.
+- `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider
+  its descriptor doesn't list or has no config for, as `signInRelay` does.
+  It used to fail a null check. A client whose `providerConfigs` has the
+  provider but whose `providers` doesn't, such as
+  `OidcClient(providers: const [], providerConfigs: {'google': …})`, used
+  to sign in and now throws.
+- `OidcClient.exchange` throws `OidcUnknownProviderException` for a
+  provider its descriptor doesn't list, before sending anything, as Kotlin's
+  does. It used to post the name to the backend, which rejected it with an
+  `OidcExchangeException`, so an app that calls `exchange` directly and
+  catches only `on OidcExchangeException` no longer catches it. Both extend
+  `OidcException`.
 
 ## 0.2.0
 

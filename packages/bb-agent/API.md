@@ -12,8 +12,6 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { SnapshotStorage } from '@strands-agents/sdk';
 import type { z } from 'zod';
 
-// Warning: (ae-forgotten-export) The symbol "AgentBase" needs to be exported by the entry point index.aws.d.ts
-//
 // @public (undocumented)
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
     constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>);
@@ -21,12 +19,48 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
     protected dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void>;
 }
 
+// @public
+export class AgentBase<TContext = DefaultToolContext> extends Scope {
+    constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket, log: ChildLogger) => SnapshotStorage);
+    createConversationId(userId: string): Promise<string>;
+    deleteConversation(id: string, userId: string): Promise<void>;
+    // @internal
+    protected dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void>;
+    getChannel(channelId: string, options: {
+        userId: string;
+    }): Promise<RealtimeChannel<any>>;
+    getConversation(id: string, options: {
+        userId: string;
+        limit?: number;
+    }): Promise<Message[]>;
+    getPendingInterrupts(conversationId: string, options: {
+        userId: string;
+    }): Promise<Array<{
+        id: string;
+        name: string;
+        reason?: any;
+    }>>;
+    // @internal
+    invokeTurn(payload: Omit<AgentTurnPayload<TContext>, 'userId'> & {
+        userId?: string;
+    }): Promise<void>;
+    listConversations(userId: string): Promise<Conversation[]>;
+    // @internal
+    protected log: ChildLogger;
+    resume(channelId: string, responses: Array<InterruptResponse>, options?: {
+        conversationId?: string;
+        userId?: string;
+        context?: TContext;
+    }): Promise<void>;
+    // @internal
+    protected sessionIdFor(conversationId: string, userId: string): string;
+    stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult>;
+}
+
 // @public (undocumented)
 export interface AgentConfig<TContext = DefaultToolContext> {
     // @internal
     agentcoreAssetPath?: string;
-    // Warning: (ae-forgotten-export) The symbol "ConversationManagerConfig" needs to be exported by the entry point index.aws.d.ts
-    //
     // (undocumented)
     conversation?: ConversationManagerConfig;
     // (undocumented)
@@ -174,7 +208,39 @@ export interface Conversation {
 }
 
 // @public
+export type ConversationManagerConfig = {
+    strategy?: 'sliding-window'; /** Number of messages to keep */
+    windowSize?: number;
+} | {
+    strategy: 'summarizing'; /** Fraction of messages to summarize */
+    summaryRatio?: number; /** Recent messages to always preserve */
+    preserveRecentMessages?: number;
+};
+
+// @public
 export type DefaultToolContext = Record<string, any>;
+
+// @public (undocumented)
+export interface GuardrailsConfig {
+    // (undocumented)
+    blockedTopics?: string[];
+    // (undocumented)
+    contentFilters?: Record<string, string>;
+    // (undocumented)
+    pii?: Record<string, string>;
+}
+
+// @public (undocumented)
+export interface InferenceConfig {
+    // (undocumented)
+    maxTokens?: number;
+    // (undocumented)
+    stopSequences?: string[];
+    // (undocumented)
+    temperature?: number;
+    // (undocumented)
+    topP?: number;
+}
 
 // @public (undocumented)
 export class InterruptError extends Error {
@@ -216,12 +282,26 @@ export interface Message {
     createdAt: number;
     // (undocumented)
     messageId: string;
-    // Warning: (ae-forgotten-export) The symbol "MessageMetadata" needs to be exported by the entry point index.aws.d.ts
-    //
     // (undocumented)
     metadata: MessageMetadata;
     // (undocumented)
     role: 'user' | 'assistant' | 'tool-call' | 'tool-result' | 'approval' | 'interrupt';
+}
+
+// @public (undocumented)
+export interface MessageMetadata {
+    error?: string;
+    errorName?: string;
+    // (undocumented)
+    latencyMs?: number;
+    // (undocumented)
+    toolInput?: JSONValue;
+    // (undocumented)
+    toolName?: string;
+    // (undocumented)
+    toolOutput?: JSONValue;
+    // (undocumented)
+    usage?: TokenUsage;
 }
 
 // @public (undocumented)
@@ -230,12 +310,8 @@ export interface ModelConfig {
     cannedResponses?: Record<string, string> | string;
     endpoint?: string;
     guardrail?: BedrockGuardrail;
-    // Warning: (ae-forgotten-export) The symbol "GuardrailsConfig" needs to be exported by the entry point index.aws.d.ts
-    //
     // @deprecated (undocumented)
     guardrails?: GuardrailsConfig;
-    // Warning: (ae-forgotten-export) The symbol "InferenceConfig" needs to be exported by the entry point index.aws.d.ts
-    //
     // (undocumented)
     inferenceConfig?: InferenceConfig;
     // (undocumented)

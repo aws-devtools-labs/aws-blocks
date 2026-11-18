@@ -17,13 +17,13 @@ public final nonisolated class Api: Sendable {
     public func setTags(input: SetTags.Input) async throws -> SetTags.Result {
         let request = BlocksRequest(method: "api.setTags", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.setTags") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.setTags") }
         return try JSONDecoder().decode(SetTags.Result.self, from: result)
     }
 
     public enum SetTags {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let tags: [String]
 
             public init(tags: [String]) throws {
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
