@@ -19,8 +19,8 @@
     "@aws-blocks/blocks": "*",
     "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/core": "*",
-    "@aws-sdk/client-cloudformation": "^3.1156.0",
-    "@aws-sdk/client-sqs": "^3.1156.0",
+    "@aws-sdk/client-cloudformation": "^3.1169.0",
+    "@aws-sdk/client-sqs": "^3.1169.0",
     "@guide/bb-queue": "*",
     "zod": "^4.6.7"
   },
