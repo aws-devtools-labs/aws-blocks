@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Todo: Codable {
+public nonisolated struct Todo: Codable, Sendable {
     public let done: Bool
     public let id: String
     public let priority: Int
