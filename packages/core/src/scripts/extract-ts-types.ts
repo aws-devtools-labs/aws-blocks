@@ -372,7 +372,8 @@ export const DECLARATION_MARKER = 'x-blocks-declaration';
  * Set on an inline union schema (`oneOf`) to the name of the type alias it is
  * declared as (`type AuthActionInput = ...`), so native codegen can name the
  * union's generated type after it. Written to the spec; a generator that does
- * not read it names the union as before.
+ * not read it names the union as before. Only a non-generic alias is named: an
+ * instantiation of a generic one (`Result<string>`, `Partial<Action>`) is not.
  */
 export const TYPE_NAME_HINT = 'x-blocks-type-name';
 
@@ -1584,10 +1585,13 @@ function unionTypeToJsonSchema(type: ts.UnionType, checker: ts.TypeChecker, dept
 	}
 
 	// General union → oneOf. A union declared as a type alias stays inline, but
-	// carries the alias name so native codegen can name it after the alias.
+	// carries the alias name so native codegen can name it after the alias. An
+	// instantiation of a generic alias (`Result<string>`, `Partial<Action>`,
+	// `NonNullable<Action | null>`) carries none: its alias symbol is the
+	// generic, so every instantiation would get one name.
 	if (nonNullish.length > 1) {
 		const allMembers = nullish.length > 0 ? [...nonNullish, { type: 'null' }] : nonNullish;
-		const name = type.aliasSymbol?.getName();
+		const name = type.aliasTypeArguments?.length ? undefined : type.aliasSymbol?.getName();
 		return name && !name.startsWith('__') ? { oneOf: allMembers, [TYPE_NAME_HINT]: name } : { oneOf: allMembers };
 	}
 
