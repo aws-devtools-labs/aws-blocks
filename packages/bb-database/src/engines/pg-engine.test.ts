@@ -123,12 +123,40 @@ describe('DSQL transaction handle lifecycle', () => {
 
 	test('a BEGIN that fails hands the client back to the pool with the error, so the pool discards it', async () => {
 		const { engine, client } = stubbedEngine();
-		client.failOn.set('BEGIN', new Error('Connection terminated unexpectedly'));
+		client.failOn.set('BEGIN', serverError('53300', 'too many connections'));
+		// 53300 is a connection the server did not accept: ConnectionFailed, and not one to try again.
 		await assert.rejects(engine.beginTransaction(), (e: unknown) =>
 			isBlocksError(e, DatabaseErrors.ConnectionFailed),
 		);
+		assert.deepStrictEqual(client.statements, ['BEGIN'], 'a server error is not tried again');
 		assert.strictEqual(client.releases.length, 1);
 		assert.ok(client.releases[0] instanceof Error);
+	});
+
+	test('a BEGIN on a connection that died while idle is tried once more, on another', async () => {
+		const { engine, client } = stubbedEngine();
+		client.failOn.set('BEGIN', new Error('Connection terminated unexpectedly'));
+		const handle = await engine.beginTransaction();
+		assert.deepStrictEqual(client.statements, ['BEGIN', 'BEGIN']);
+		assert.ok(client.releases[0] instanceof Error, 'the dead client went back with its error');
+		await engine.commitTransaction(handle);
+		assert.strictEqual(client.releases.length, 2);
+	});
+
+	test('transaction modes are the first statement after BEGIN; a refused mode rolls back and frees the client', async () => {
+		const { engine, client } = stubbedEngine();
+		const handle = await engine.beginTransaction({ isolationLevel: 'serializable', accessMode: 'read only' });
+		const settings = 'set transaction isolation level serializable read only';
+		assert.deepStrictEqual(client.statements, ['BEGIN', settings]);
+		await engine.rollbackTransaction(handle);
+
+		client.failOn.set(settings, serverError('0A000', 'not supported'));
+		await assert.rejects(
+			engine.beginTransaction({ isolationLevel: 'serializable', accessMode: 'read only' }),
+			(e: unknown) => isBlocksError(e, DatabaseErrors.QueryFailed),
+		);
+		assert.deepStrictEqual(client.statements.slice(3), ['BEGIN', settings, 'ROLLBACK']);
+		assert.strictEqual(client.releases.length, 2);
 	});
 
 	test('a COMMIT that fails with a lost connection discards the client', async () => {

@@ -8,6 +8,7 @@ import {
 	AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS,
 	DEFAULT_MIGRATIONS_ROOT,
 	DEFAULT_SCHEMA,
+	EXTERNAL_MIGRATION_IDLE_TIMEOUT_MS,
 	MIGRATION_LAMBDA_TIMEOUT_MINUTES,
 	quoteIdent,
 } from '../constants.js';
@@ -37,6 +38,46 @@ interface RunPlanOptions {
 
 // PostgreSQL 17 reports a cancelled transaction (`transaction_timeout`) with this SQLSTATE.
 const PG_TRANSACTION_TIMEOUT = '25P04';
+// A statement cancelled by `statement_timeout`, the limit an existing database below PostgreSQL 17 gets.
+const PG_QUERY_CANCELED = '57014';
+const PG_UNIQUE_VIOLATION = '23505';
+// `transaction_timeout` exists from PostgreSQL 17.
+const PG_17 = 170000;
+
+// pg_dump 17 and later writes this line into every dump; a server below 17 refuses it and the dump's own
+// transaction with it. It only lifts a limit that such a server does not have.
+const SETS_TRANSACTION_TIMEOUT = /^\s*SET\s+(?:SESSION\s+)?transaction_timeout\b/i;
+
+/** What a run on an existing database adds to each file's transaction (`plan.kind === 'external'`). */
+interface ExternalRun {
+	/** Sent after BEGIN, before the file's first statement. */
+	settings: string[];
+	serverVersion: number;
+}
+
+async function externalRun(engine: DatabaseEngine, options: RunPlanOptions): Promise<ExternalRun> {
+	const rows = await engine.query<{ server_version_num: string }>('SHOW server_version_num');
+	const serverVersion = Number(rows[0]?.server_version_num ?? 0);
+	const settings = [`SET LOCAL idle_in_transaction_session_timeout = ${EXTERNAL_MIGRATION_IDLE_TIMEOUT_MS}`];
+	// Transaction-local, so it also holds through a transaction pooler; the ledger is schema-qualified.
+	if (options.schemaName !== DEFAULT_SCHEMA) {
+		settings.push(`SET LOCAL search_path TO ${quoteIdent(options.schemaName)}, ${quoteIdent(DEFAULT_SCHEMA)}`);
+	}
+	if (options.boundToInvocation) {
+		settings.push(`SET LOCAL statement_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`);
+		if (serverVersion >= PG_17) {
+			settings.push(`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`);
+		}
+	}
+	return { settings, serverVersion };
+}
+
+// The innermost error of a chain: the engine re-tags a driver error under a fixed message and keeps it as `cause`.
+function rootCause(e: unknown): unknown {
+	let root = e;
+	for (let depth = 0; root instanceof Error && root.cause !== undefined && depth < 5; depth++) root = root.cause;
+	return root;
+}
 
 /** An `aurora` file: every step in one transaction, so nothing of it persists until the whole file has run. */
 const isOneTransaction = (file: FilePlan): boolean =>
@@ -164,11 +205,16 @@ function failed(file: FilePlan, index: number, cause: unknown): Error {
 	const step = file.steps[index];
 	const statement = step.kind === 'statement' ? step : step.statement;
 	const { k, n } = statementPosition(file, index);
-	const detail = cause instanceof Error ? cause.message : String(cause);
-	// The engine re-tags a server error and keeps the SQLSTATE on its cause.
-	const code = pgErrorCode(cause) ?? (cause instanceof Error ? pgErrorCode(cause.cause) : undefined);
+	// The engine re-tags a server error and keeps the SQLSTATE and the server's own message on its cause. This
+	// report goes to the person who deploys, not to a client, so it carries both.
+	const root = rootCause(cause);
+	const code = pgErrorCode(cause) ?? pgErrorCode(root);
+	const reason = root instanceof Error && root !== cause ? root.message : undefined;
+	const detail =
+		(cause instanceof Error ? cause.message : String(cause)) +
+		(code || reason ? ` (${[code && `SQLSTATE ${code}`, reason].filter(Boolean).join(': ')})` : '');
 	const wayForward = isOneTransaction(file)
-		? code === PG_TRANSACTION_TIMEOUT
+		? code === PG_TRANSACTION_TIMEOUT || code === PG_QUERY_CANCELED
 			? `The file is one transaction and it ran longer than the migration function's invocation allows ` +
 				`(${MIGRATION_LAMBDA_TIMEOUT_MINUTES} minutes). Nothing from the file was applied. ` +
 				'Split the file into smaller files, or move a long backfill out of the migrations.'
@@ -296,6 +342,7 @@ export async function runMigrationPlan(
 	const applied = await appliedMigrations(engine, ledger);
 	const progress = await readProgress(engine, ledger);
 	const results: string[] = [];
+	const external = plan.kind === 'external' ? await externalRun(engine, options) : undefined;
 
 	for (const file of plan.files) {
 		if (applied.has(file.file)) continue;
@@ -319,6 +366,8 @@ export async function runMigrationPlan(
 		}
 
 		let handle: TransactionHandle | null = null;
+		// On an existing database the file is recorded in its own transaction (below), not after it.
+		let recorded = false;
 		for (let i = startAt; i < total; i++) {
 			const step = file.steps[i];
 			try {
@@ -331,12 +380,51 @@ export async function runMigrationPlan(
 								`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`,
 							);
 						}
+						for (const setting of external?.settings ?? [])
+							await engine.executeInTransaction(handle, setting);
 					}
-					await engine.executeInTransaction(handle, step.sql);
+					if (external && external.serverVersion < PG_17 && SETS_TRANSACTION_TIMEOUT.test(step.sql)) {
+						log(
+							`[bb-database] ${file.file}: skipped "${step.sql.trim()}" (the server is older than PostgreSQL 17)`,
+						);
+					} else {
+						await engine.executeInTransaction(handle, step.sql);
+					}
 					// Progress is written once per batch, with the COMMIT that makes it visible.
 					const next = file.steps[i + 1];
 					if (!next?.transactional) {
-						await run.save({ step: i + 1 }, handle);
+						if (external) {
+							// A file may set session parameters (a pg_dump file sets a dozen); through a transaction
+							// pooler they would stay on a connection that other clients get next.
+							await engine.executeInTransaction(handle, 'RESET ALL');
+							// In this transaction, not after it: of two runs at once, one commits and the other fails
+							// here and is rolled back with everything its copy of the file did.
+							try {
+								await engine.executeInTransaction(
+									handle,
+									`INSERT INTO ${ledger.migrations} (name) VALUES ($1)`,
+									[file.file],
+								);
+							} catch (e) {
+								if (
+									pgErrorCode(e) !== PG_UNIQUE_VIOLATION &&
+									pgErrorCode(rootCause(e)) !== PG_UNIQUE_VIOLATION
+								)
+									throw e;
+								await engine.rollbackTransaction(handle).catch(() => {});
+								handle = null;
+								throw brandedError(
+									MIGRATION_FAILED_ERROR_NAME,
+									`Migration ${file.file} was applied by another run at the same time. Nothing from this run's ` +
+										'copy of the file was applied. Run again: the file is then skipped.',
+									e,
+								);
+							}
+							await deleteProgress(engine, ledger, file, handle);
+							recorded = true;
+						} else {
+							await run.save({ step: i + 1 }, handle);
+						}
 						await engine.commitTransaction(handle);
 						handle = null;
 					}
@@ -384,12 +472,14 @@ export async function runMigrationPlan(
 			}
 		}
 
-		await withTransaction(engine, async (record) => {
-			await engine.executeInTransaction(record, `INSERT INTO ${ledger.migrations} (name) VALUES ($1)`, [
-				file.file,
-			]);
-			await deleteProgress(engine, ledger, file, record);
-		});
+		if (!recorded) {
+			await withTransaction(engine, async (record) => {
+				await engine.executeInTransaction(record, `INSERT INTO ${ledger.migrations} (name) VALUES ($1)`, [
+					file.file,
+				]);
+				await deleteProgress(engine, ledger, file, record);
+			});
+		}
 		results.push(file.file);
 		log(`[bb-database] Applied: ${file.file}`);
 	}

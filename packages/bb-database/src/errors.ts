@@ -10,6 +10,10 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
  * the RPC wire. See the README's Errors table for when each
  * is raised and how it is retried. `ResultValidationFailed` is this block's
  * own: a row did not match the `schema` passed to `query()` or `queryOne()`.
+ * `PermissionDenied` (HTTP 403) comes only from a statement on a database
+ * from `asUser()`: a Row Level Security policy refused the row.
+ * `CheckViolation` and `NotNullViolation` (HTTP 400) and `ForeignKeyViolation`
+ * (HTTP 409) are the constraint the statement broke; none is retried.
  */
 export const DatabaseErrors = {
 	QueryFailed: 'QueryFailedException',
@@ -19,11 +23,11 @@ export const DatabaseErrors = {
 	SerializationFailure: 'SerializationFailureException',
 	TransactionRowLimitExceeded: 'TransactionRowLimitExceededException',
 	ResultValidationFailed: 'ResultValidationFailedException',
+	PermissionDenied: 'PermissionDeniedException',
+	CheckViolation: 'CheckViolationException',
+	NotNullViolation: 'NotNullViolationException',
+	ForeignKeyViolation: 'ForeignKeyViolationException',
 } as const;
-
-// Local mock only: a deployed cluster raises SQLSTATE 42501 (→ QueryFailed) for DDL on the app role, so this
-// name is not on the public DatabaseErrors.
-export const PERMISSION_ERROR_NAME = 'DatabasePermissionException';
 
 export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 
@@ -39,8 +43,27 @@ const PG_UNIQUE_VIOLATION = '23505';
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
 const PG_ADMIN_SHUTDOWN = '57P01';
 // A socket that died surfaces from pg with no SQLSTATE; a connect that timed out likewise.
-const PG_SOCKET_ERROR_MESSAGE = /Connection terminated|ECONNRESET|EPIPE|ECONNREFUSED|ENOTFOUND|socket hang up/i;
-const PG_CONNECT_TIMEOUT_MESSAGE = /timeout exceeded when trying to connect/i;
+// The last form is pg's answer to a statement on a client whose connection has already failed.
+const PG_SOCKET_ERROR_MESSAGE =
+	/Connection terminated|ECONNRESET|EPIPE|ECONNREFUSED|ENOTFOUND|socket hang up|is not queryable/i;
+// pg-pool's wait for a connection, and pg's own connect timer.
+const PG_CONNECT_TIMEOUT_MESSAGE =
+	/timeout exceeded when trying to connect|Connection terminated due to connection timeout/i;
+// A connection the server never accepted. Node reports the socket and TLS failures with these codes; PostgreSQL
+// reports a refused login (class 28), a missing database, too many clients and a server that is starting up.
+const NODE_SOCKET_LOST_CODES = new Set(['ECONNRESET', 'EPIPE']);
+const NODE_CONNECT_REFUSED_CODES = new Set([
+	'ECONNREFUSED',
+	'ENOTFOUND',
+	'EAI_AGAIN',
+	'ETIMEDOUT',
+	'EHOSTUNREACH',
+	'ENETUNREACH',
+	'EADDRNOTAVAIL',
+]);
+const TLS_ERROR_CODE = /^(?:ERR_TLS_|ERR_SSL_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_|CERT_|HOSTNAME_MISMATCH)/;
+const PG_INVALID_AUTHORIZATION_CLASS = '28';
+const PG_REFUSED_CODES = new Set(['3D000', '53300', '57P03']);
 const PG_PROGRAM_LIMIT_EXCEEDED = '54000';
 const DSQL_STALE_SCHEMA_CACHE = 'OC001';
 const DSQL_STALE_SCHEMA_CACHE_MESSAGE = /\bOC001\b/;
@@ -58,12 +81,40 @@ export function serializationConflict(cause: Error): ApiError {
 	});
 }
 
+export const PG_INSUFFICIENT_PRIVILEGE = '42501';
+
+// Only for a statement of a user-scoped database (DESIGN §4.5). Anywhere else 42501 is the application's own
+// mistake, such as DDL in a handler, and stays a QueryFailed.
+export function permissionDenied(cause: Error): ApiError {
+	return new ApiError('The statement was refused by a Row Level Security policy or a missing privilege', 403, {
+		name: DatabaseErrors.PermissionDenied,
+		cause,
+	});
+}
+
 // Not retriable: a duplicate key is deterministic.
 function uniqueConstraintConflict(cause: Error): ApiError {
 	return new ApiError('The item violates a unique constraint', 409, {
 		name: DatabaseErrors.UniqueConstraintViolation,
 		cause,
 	});
+}
+
+// Not retriable: the same statement on the same rows breaks the same constraint. The messages are fixed, because
+// the server's own text names the row's values; that text stays on the non-enumerable `cause`.
+const CONSTRAINT_VIOLATIONS: Record<string, { status: number; name: string; text: string }> = {
+	'23514': { status: 400, name: DatabaseErrors.CheckViolation, text: 'A value violates a check constraint' },
+	'23502': { status: 400, name: DatabaseErrors.NotNullViolation, text: 'A required value is missing' },
+	'23503': {
+		status: 409,
+		name: DatabaseErrors.ForeignKeyViolation,
+		text: 'The item violates a foreign key constraint',
+	},
+};
+
+function constraintViolation(code: string | undefined, cause: Error): ApiError | undefined {
+	const violation = code === undefined ? undefined : CONSTRAINT_VIOLATIONS[code];
+	return violation && new ApiError(violation.text, violation.status, { name: violation.name, cause });
 }
 
 /** A named error whose name survives the RPC serializer; `cause` is non-enumerable, for server-side logs. */
@@ -144,11 +195,19 @@ export function translatePgError(raw: unknown, engineName: string): never {
 	const code = pgErrorCode(e);
 	if (code === PG_SERIALIZATION_FAILURE) throw serializationConflict(e);
 	if (code === PG_UNIQUE_VIOLATION) throw uniqueConstraintConflict(e);
+	const violation = constraintViolation(code, e);
+	if (violation) throw violation;
 	if (isKnownDatabaseErrorName(e.name)) throw e;
 	if (isDsqlTransactionLimit(e)) throw reTagged(DatabaseErrors.TransactionRowLimitExceeded, e);
+	const refused = isConnectionRefused(e);
 	const name =
-		isConnectionLost(e) || isConnectTimeout(e) ? DatabaseErrors.ConnectionFailed : DatabaseErrors.QueryFailed;
-	console.debug(`[${engineName}] ${name}`, { code });
+		isConnectionLost(e) || isConnectTimeout(e) || refused
+			? DatabaseErrors.ConnectionFailed
+			: DatabaseErrors.QueryFailed;
+	// A refused connection is a setup problem (trust, address, login); its driver text names the host or the
+	// role, never the password, and is what the operator needs in the function's log.
+	if (refused) console.error(`[${engineName}] ${name}`, { code, reason: e.message });
+	else console.debug(`[${engineName}] ${name}`, { code });
 	throw reTagged(name, e);
 }
 
@@ -171,9 +230,31 @@ export function isStaleSchemaCache(e: unknown): boolean {
  * the pool replaces it on the next checkout. A connect that timed out is not a lost connection (`isConnectTimeout`).
  */
 export function isConnectionLost(e: unknown): boolean {
+	if (isConnectTimeout(e)) return false;
 	const code = pgErrorCode(e);
-	if (code !== undefined) return code === PG_ADMIN_SHUTDOWN || code.startsWith(PG_CONNECTION_EXCEPTION_CLASS);
+	if (code !== undefined) {
+		return (
+			code === PG_ADMIN_SHUTDOWN ||
+			code.startsWith(PG_CONNECTION_EXCEPTION_CLASS) ||
+			NODE_SOCKET_LOST_CODES.has(code)
+		);
+	}
 	return e instanceof Error && PG_SOCKET_ERROR_MESSAGE.test(e.message);
+}
+
+/**
+ * The connection was never made: the address did not resolve or did not answer, the server certificate was not
+ * accepted, or the server refused the login. Trying again gives the same answer, so nothing retries it.
+ */
+export function isConnectionRefused(e: unknown): boolean {
+	const code = pgErrorCode(e);
+	if (code === undefined) return false;
+	return (
+		NODE_CONNECT_REFUSED_CODES.has(code) ||
+		TLS_ERROR_CODE.test(code) ||
+		code.startsWith(PG_INVALID_AUTHORIZATION_CLASS) ||
+		PG_REFUSED_CODES.has(code)
+	);
 }
 
 /** pg gave up waiting for a connection (`connectionTimeoutMillis`): the cluster is resuming or unreachable. */

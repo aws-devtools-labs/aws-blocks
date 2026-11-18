@@ -18,9 +18,20 @@ export class Database {
 	transaction(): never {
 		return serverOnly('Database.transaction()');
 	}
+	asUser(): never {
+		return serverOnly('Database.asUser()');
+	}
+	asRole(): never {
+		return serverOnly('Database.asRole()');
+	}
 }
 
-export class DatabaseCluster {}
+// biome-ignore lint/complexity/noStaticOnlyClass: the stub mirrors the class the other entry points export
+export class DatabaseCluster {
+	static fromExisting(): never {
+		return serverOnly('DatabaseCluster.fromExisting()');
+	}
+}
 
 export function sql(): never {
 	return serverOnly('sql');
@@ -29,15 +40,21 @@ export function sql(): never {
 export { DatabaseErrors } from './errors.js';
 export type {
 	AuroraClusterOptions,
+	ClusterKind,
 	ClusterRef,
 	ClusterType,
+	ConnectionStringSource,
 	DatabaseBlockOptions,
 	DatabaseClusterLike,
 	DatabaseClusterOptions,
 	DatabaseOptions,
 	DsqlClusterOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+	ExistingDatabaseOptions,
 	OwnedDatabaseOptions,
 	QueryOptions,
+	ScopedDatabase,
 	SharedDatabaseOptions,
 	Transaction,
 	TransactionOptions,

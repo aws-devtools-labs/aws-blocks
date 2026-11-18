@@ -1,37 +1,37 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { blocksError } from '@aws-blocks/core';
 import type { TransactionHandle } from '../common/engine.js';
-import { type CountedRows, EngineTransaction, type RowCountingEngine, withTransaction } from '../engines/handle.js';
-import { PERMISSION_ERROR_NAME, serializationConflict } from '../errors.js';
+import {
+	type CountedRows,
+	EngineTransaction,
+	firstStatement,
+	type RowCountingEngine,
+	setTransactionStatement,
+	type TransactionModes,
+	withTransaction,
+} from '../engines/handle.js';
+import type { SchemaEngine } from '../engines/pglite-cluster.js';
+import { serializationConflict } from '../errors.js';
 import type { ClusterType } from '../types.js';
 import { inspectStatement, type StatementInfo, TransactionTracker, validateStatement } from './validation.js';
-
-const ddlNotAllowed = (kind: ClusterType): string =>
-	`DDL statements (CREATE, ALTER, DROP) and TRUNCATE are not allowed in the app runtime of a ${kind} cluster: the ` +
-	'app role has SELECT, INSERT, UPDATE and DELETE only. Put DDL in a migration file; the migration Lambda runs it as ' +
-	'the cluster admin.';
-
-// TRUNCATE needs its own privilege, which the deployed app role is never granted; locally PGlite would allow it.
-const TRUNCATE = /^\s*TRUNCATE\b/i;
 
 const DELETE_TARGET = /^\s*DELETE\s+FROM\s+(?:ONLY\s+)?((?:"[^"]+"|[\w.])+)/i;
 
 /**
  * The local stand-in for a deployed cluster's rules, over a PGlite schema engine. Every kind gets
- * `simulateConflict()` and the DDL guard that matches the deployed app role's DML-only grants. A `dsql`
- * cluster also gets dsql-lint on each statement and the per-transaction row and size limits; an `aurora`
- * cluster is PostgreSQL and needs neither.
+ * `simulateConflict()`. A `dsql` cluster also gets dsql-lint on each statement and the per-transaction row
+ * and size limits; an `aurora` cluster is PostgreSQL and needs neither. The app role's DML-only rule is
+ * PostgreSQL's own: the schema engine runs app statements as a role with those grants.
  */
 export class RulesEngine implements RowCountingEngine {
 	private shouldConflict = false;
-	private allowDdl = false;
+	private admin = false;
 	/** The per-transaction limit tracker, keyed by the inner engine's handle. */
 	private readonly trackers = new WeakMap<EngineTransaction, TransactionTracker>();
 
 	constructor(
-		private readonly inner: RowCountingEngine,
+		private readonly inner: SchemaEngine,
 		readonly kind: ClusterType,
 	) {}
 
@@ -43,25 +43,21 @@ export class RulesEngine implements RowCountingEngine {
 		this.shouldConflict = true;
 	}
 
-	async withDdl<T>(fn: () => Promise<T>): Promise<T> {
-		const previous = this.allowDdl;
-		this.allowDdl = true;
+	/** Runs `fn` as the cluster admin: a migration run, or a test's setup. */
+	async asAdmin<T>(fn: () => Promise<T>): Promise<T> {
+		const previous = this.admin;
+		this.admin = true;
 		try {
-			return await fn();
+			return await this.inner.asAdmin(fn);
 		} finally {
-			this.allowDdl = previous;
+			this.admin = previous;
 		}
 	}
 
 	// A migration's statements were linted as files at plan time; only app-runtime SQL is linted here.
-	// Parity with the deployed grant: the app role has DML only, so DDL is refused outside a migration.
 	private guard(sql: string): StatementInfo {
 		const info = inspectStatement(sql);
-		if (!this.allowDdl) {
-			if (this.limited) validateStatement(sql, info.cleaned);
-			if (info.kind === 'ddl' || TRUNCATE.test(info.cleaned))
-				throw blocksError(PERMISSION_ERROR_NAME, ddlNotAllowed(this.kind));
-		}
+		if (this.limited && !this.admin) validateStatement(sql, info.cleaned);
 		return info;
 	}
 
@@ -95,9 +91,12 @@ export class RulesEngine implements RowCountingEngine {
 		});
 	}
 
-	async beginTransaction(): Promise<TransactionHandle> {
+	async beginTransaction(modes?: TransactionModes): Promise<TransactionHandle> {
+		const settings = setTransactionStatement(modes);
 		const handle = await this.inner.beginTransaction();
 		this.track(handle);
+		// Through this engine, so a `dsql` cluster lints it like any statement of the application's.
+		if (settings) await firstStatement(this, handle, settings);
 		return handle;
 	}
 

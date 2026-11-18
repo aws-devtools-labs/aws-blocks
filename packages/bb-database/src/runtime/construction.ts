@@ -5,20 +5,25 @@ import type { ScopeParent } from '@aws-blocks/core';
 import {
 	AURORA_BACKUP_DAYS_MAX,
 	AURORA_MAX_ACU,
+	CONNECTION_NAME_PATTERN,
 	DEFAULT_AURORA_MAX_CAPACITY,
 	DEFAULT_AURORA_MIN_CAPACITY,
 	DEFAULT_CLUSTER_ID,
 	DEFAULT_SCHEMA,
+	EXTERNAL_CLUSTER_ID,
 	isClusterType,
 	sanitizeSchemaName,
 } from '../constants.js';
 import { configError } from '../errors.js';
+import { assertCaPem } from '../external/connection.js';
 import type {
 	AuroraClusterOptions,
 	ClusterRef,
 	DatabaseClusterLike,
 	DatabaseClusterOptions,
 	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
 } from '../types.js';
 
 /** `AuroraClusterOptions` with the capacity defaults filled in and every value checked. */
@@ -77,11 +82,70 @@ function isDatabaseClusterLike(value: unknown): value is DatabaseClusterLike {
 	);
 }
 
+const OWNER = 'DatabaseCluster.fromExisting()';
+
+/**
+ * `DatabaseCluster.fromExisting()` in every entry point: checks the options and returns the reference. Nothing
+ * is read or connected here; the reference only says where the connection string is.
+ */
+export function existingCluster(options: ExistingClusterOptions): ExistingClusterRef {
+	const { name, connectionString, ca } = options ?? {};
+	if ((name === undefined) === (connectionString === undefined)) {
+		throw configError(`${OWNER}: give exactly one of 'name' and 'connectionString'.`);
+	}
+	if (name !== undefined && (typeof name !== 'string' || !CONNECTION_NAME_PATTERN.test(name))) {
+		throw configError(
+			`${OWNER}: 'name' must start with a letter or a digit and contain only letters, digits, '.', '_' and '-'.`,
+		);
+	}
+	if (connectionString !== undefined && typeof connectionString?.get !== 'function') {
+		throw configError(
+			`${OWNER}: 'connectionString' must be an AppSetting, a Secret, or an object with get(). ` +
+				'A connection string is never written in code.',
+		);
+	}
+	assertCaPem(ca, OWNER);
+	return {
+		__brand: 'ExistingClusterRef',
+		type: 'external',
+		...(name !== undefined ? { name } : {}),
+		...(connectionString !== undefined ? { connectionString } : {}),
+		...(ca !== undefined ? { ca } : {}),
+	};
+}
+
+export function isExistingClusterRef(value: unknown): value is ExistingClusterRef {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		(value as { __brand?: unknown }).__brand === 'ExistingClusterRef' &&
+		(value as { type?: unknown }).type === 'external'
+	);
+}
+
+// Two blocks may use one existing database (each its own schema) or two databases (both `public`). A database is
+// told apart by its `name`, or by the identity of its own connection string source.
+const sourceIds = new WeakMap<object, number>();
+let nextSourceId = 0;
+
+function existingClusterKey(ref: ExistingClusterRef): string {
+	if (ref.name !== undefined) return `${EXTERNAL_CLUSTER_ID}:${ref.name}`;
+	const source = ref.connectionString as object;
+	let id = sourceIds.get(source);
+	if (id === undefined) {
+		id = nextSourceId++;
+		sourceIds.set(source, id);
+	}
+	return `${EXTERNAL_CLUSTER_ID}#${id}`;
+}
+
 interface ResolvedCluster {
 	ref: ClusterRef;
 	schemaName: string;
 	/** The `DatabaseCluster` the block runs on; absent when the block owns its cluster. */
 	shared?: DatabaseClusterLike;
+	/** The existing database the block runs on (`DatabaseCluster.fromExisting()`). */
+	external?: ExistingClusterRef;
 }
 
 function resolveCluster(blockId: string, blockFullId: string, options: DatabaseOptions | undefined): ResolvedCluster {
@@ -90,6 +154,14 @@ function resolveCluster(blockId: string, blockFullId: string, options: DatabaseO
 	if (cluster === undefined || cluster === null) {
 		return { ref: { kind: 'dsql', id: DEFAULT_CLUSTER_ID }, schemaName: explicitSchema ?? DEFAULT_SCHEMA };
 	}
+	if (isExistingClusterRef(cluster)) {
+		// The tables that already exist are in `public`, so that is the block's schema unless it names another.
+		return {
+			ref: { kind: 'external', id: EXTERNAL_CLUSTER_ID },
+			schemaName: explicitSchema ?? DEFAULT_SCHEMA,
+			external: cluster,
+		};
+	}
 	if (isDatabaseClusterLike(cluster)) {
 		return {
 			ref: { kind: cluster.type, id: cluster.fullId },
@@ -97,7 +169,9 @@ function resolveCluster(blockId: string, blockFullId: string, options: DatabaseO
 			shared: cluster,
 		};
 	}
-	throw configError(`Database '${blockFullId}': 'cluster' must be a DatabaseCluster.`);
+	throw configError(
+		`Database '${blockFullId}': 'cluster' must be a DatabaseCluster or the result of DatabaseCluster.fromExisting().`,
+	);
 }
 
 export interface DatabaseRegistration extends ResolvedCluster {
@@ -118,7 +192,11 @@ export function registerDatabase(
 	const s = state(block);
 	claimUniqueId(s, 'Database', id, fullId);
 	const resolved = resolveCluster(id, fullId, options);
-	const clusterFullId = resolved.shared ? resolved.shared.fullId : fullId;
+	const clusterFullId = resolved.external
+		? existingClusterKey(resolved.external)
+		: resolved.shared
+			? resolved.shared.fullId
+			: fullId;
 	claimSchema(s, clusterFullId, resolved.schemaName, fullId);
 	return { ...resolved, clusterFullId };
 }

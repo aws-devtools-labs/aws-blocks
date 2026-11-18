@@ -1,12 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DatabaseEngine } from '../common/engine.js';
+import type { RowCountingEngine } from '../engines/handle.js';
 import { configError } from '../errors.js';
 import type { Session } from './session.js';
 
 interface InternalAccess {
-	engine(): Promise<DatabaseEngine>;
+	engine(): Promise<RowCountingEngine>;
 	/** One connection for the Kysely dialect (`src/kysely.ts`). */
 	session(): Session;
 	simulateConflict(): void;

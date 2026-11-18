@@ -23,6 +23,63 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 export type ClusterType = 'dsql' | 'aurora';
 
 /**
+ * Every kind of cluster a `Database` can run on: the two a {@link DatabaseCluster}
+ * provisions, and `external`, an existing PostgreSQL database that
+ * `DatabaseCluster.fromExisting()` refers to. The block provisions nothing for
+ * `external` and connects with the role of its connection string.
+ */
+export type ClusterKind = ClusterType | 'external';
+
+/**
+ * Where the connection string of an existing database comes from: an
+ * `AppSetting` with `secret: true`, a `Secret`, or any object with the same
+ * `get()`. The value is a `postgres://` or `postgresql://` URL.
+ */
+export interface ConnectionStringSource {
+	get(): Promise<string | null>;
+}
+
+/**
+ * Options for `DatabaseCluster.fromExisting()`. Give exactly one of `name` and
+ * `connectionString`.
+ */
+export interface ExistingClusterOptions {
+	/**
+	 * A short name for the connection string. On AWS the block reads the SSM
+	 * SecureString `/<stackName>-<name>`, so each stage has its own value;
+	 * `cdk-blocks db connect --name <name> --stage <stage>` stores it. In local
+	 * mode the block reads the value that `cdk-blocks db connect --name <name>`
+	 * stored under `.bb-data/`.
+	 */
+	name?: string;
+	/**
+	 * Your own store for the connection string, for an app that manages the
+	 * value itself: an `AppSetting` with `secret: true` or a `Secret`. The block
+	 * calls `get()` when it opens its first connection.
+	 */
+	connectionString?: ConnectionStringSource;
+	/**
+	 * The certificate authority that signed the server certificate, as PEM
+	 * text. Needed when the provider uses its own authority (Supabase). Without
+	 * it Node's trust store applies. The server certificate is always verified;
+	 * there is no option that turns verification off.
+	 */
+	ca?: string;
+}
+
+/**
+ * The reference `DatabaseCluster.fromExisting()` returns: a plain value that
+ * names an existing PostgreSQL database. Pass it as a `Database`'s `cluster`.
+ */
+export interface ExistingClusterRef {
+	readonly __brand: 'ExistingClusterRef';
+	readonly type: 'external';
+	readonly name?: string;
+	readonly connectionString?: ConnectionStringSource;
+	readonly ca?: string;
+}
+
+/**
  * The structural shape of a `DatabaseCluster<T>` as a `Database` constructor
  * sees it. Lets `types.ts` stay free of class imports while still narrowing the
  * `cluster` option by cluster type.
@@ -41,8 +98,11 @@ export interface DatabaseClusterLike {
  */
 export interface ClusterRef {
 	/** Which kind of cluster the block runs on. */
-	readonly kind: ClusterType;
-	/** `'default'` when the block owns its cluster, otherwise the `DatabaseCluster`'s full id. */
+	readonly kind: ClusterKind;
+	/**
+	 * `'default'` when the block owns its cluster, `'external'` for an existing database,
+	 * otherwise the `DatabaseCluster`'s full id.
+	 */
 	readonly id: string;
 }
 
@@ -124,8 +184,16 @@ export interface SharedDatabaseOptions extends DatabaseBlockOptions {
 	cluster: DatabaseClusterLike;
 }
 
+/**
+ * Options for a `Database` on an existing PostgreSQL database. The block's schema is `public`
+ * unless `schemaName` names another one.
+ */
+export interface ExistingDatabaseOptions extends DatabaseBlockOptions {
+	cluster: ExistingClusterRef;
+}
+
 /** Every options shape a `Database` constructor accepts. */
-export type DatabaseOptions = OwnedDatabaseOptions | SharedDatabaseOptions;
+export type DatabaseOptions = OwnedDatabaseOptions | SharedDatabaseOptions | ExistingDatabaseOptions;
 
 /**
  * Options for `query()` and `queryOne()`, on a `Database` and on the `tx` a
@@ -194,4 +262,28 @@ export interface TransactionOptions {
 	 * caller received a timeout.
 	 */
 	signal?: AbortSignal;
+}
+
+/**
+ * A `Database` whose statements all run as one user, for tables protected by
+ * Row Level Security. Returned by `Database.asUser()`. `query`, `queryOne`,
+ * `execute` and `transaction` behave as on the block. Each transaction starts
+ * by setting `request.jwt.claims` to the user's claims, which a policy reads
+ * with `current_setting('request.jwt.claims', true)::jsonb`. Pass it to
+ * `DatabaseDialect` to run Kysely statements as the same user. It has no
+ * `asUser()`: a scoped database cannot be scoped again.
+ */
+export interface ScopedDatabase {
+	/** Which cluster the block runs on. */
+	readonly cluster: ClusterRef;
+	/** The schema the block's tables live in. */
+	readonly schemaName: string;
+	/** `Database.query()`, as the user. */
+	query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]>;
+	/** `Database.queryOne()`, as the user. */
+	queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null>;
+	/** `Database.execute()`, as the user. */
+	execute(query: SqlQuery): Promise<{ rowCount: number }>;
+	/** `Database.transaction()`, as the user: the claims are set once, for the whole transaction. */
+	transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
 }

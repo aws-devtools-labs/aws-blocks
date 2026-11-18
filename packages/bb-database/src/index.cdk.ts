@@ -4,17 +4,28 @@
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
+import * as cdk from 'aws-cdk-lib';
+import { connectionParameterName } from './constants.js';
 import { ClusterInfra } from './deploy/cluster-infra.js';
+import { type ConnectionStore, connectionReadStatements, ExternalMigrations } from './deploy/external-infra.js';
 import { configError } from './errors.js';
 import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
 import {
+	existingCluster,
 	type ResolvedClusterOptions,
 	registerDatabase,
 	registerUniqueId,
 	resolveClusterOptions,
 } from './runtime/construction.js';
-import type { ClusterRef, ClusterType, DatabaseClusterOptions, DatabaseOptions } from './types.js';
+import type {
+	ClusterRef,
+	ClusterType,
+	DatabaseClusterOptions,
+	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+} from './types.js';
 import { BB_NAME } from './version.js';
 
 // DSQL is reached over its public endpoint, so an app in a VPC needs egress.
@@ -57,6 +68,20 @@ export class DatabaseCluster extends BuildingBlockScope {
 		registerUniqueId('DatabaseCluster', this, id, this.fullId);
 		this.infra = clusterInfra(this, resolved);
 	}
+
+	/** Refer to an existing PostgreSQL database; see the local entry for the full description. */
+	static fromExisting(options: ExistingClusterOptions): ExistingClusterRef {
+		return existingCluster(options);
+	}
+}
+
+// An `AppSetting` exposes its parameter name at synth, a `Secret` its ARN; that is how the migration function
+// can be granted the read. Any other object with `get()` works at run time but tells synth nothing.
+function connectionStoreOf(source: object): ConnectionStore | undefined {
+	const { parameterName, secretArn } = source as { parameterName?: unknown; secretArn?: unknown };
+	if (typeof parameterName === 'string') return { ssmParameterName: parameterName };
+	if (typeof secretArn === 'string') return { secretArn };
+	return undefined;
 }
 
 /**
@@ -74,7 +99,13 @@ export class Database extends BuildingBlockScope {
 	 * `DatabaseCluster`, whose own options then apply.
 	 */
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
-		super(id, { parent: scope, bbName: BB_NAME, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
+		// An owned cluster and an existing database are both reached over a public endpoint from the app's
+		// functions; a shared `DatabaseCluster` declares that need itself.
+		super(id, {
+			parent: scope,
+			bbName: BB_NAME,
+			vpc: !options.cluster || options.cluster.type === 'external' ? VPC_REQUIREMENTS : {},
+		});
 		const resolved = registerDatabase(this, id, this.fullId, options);
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
@@ -83,6 +114,11 @@ export class Database extends BuildingBlockScope {
 		// deployed with it.
 		const migrations = this.migrationsPath ? loadMigrationFiles(this.migrationsPath) : undefined;
 		if (migrations) lintMigrationFiles(migrations, resolved.ref.kind);
+
+		if (resolved.external) {
+			this.existingDatabase(resolved.external, migrations);
+			return;
+		}
 
 		let infra: ClusterInfra;
 		if (!options.cluster) {
@@ -109,6 +145,42 @@ export class Database extends BuildingBlockScope {
 	}
 	transaction(..._a: unknown[]): never {
 		return synthGuard('Database', 'transaction');
+	}
+	asUser(..._a: unknown[]): never {
+		return synthGuard('Database', 'asUser');
+	}
+	asRole(..._a: unknown[]): never {
+		return synthGuard('Database', 'asRole');
+	}
+
+	// No cluster to provision. With `name`, the app's role is granted the read of the one SSM SecureString that
+	// `cdk-blocks db connect --stage` writes, under the name the Lambda entry derives the same way. With the app's
+	// own store, that block has made the grant already.
+	private existingDatabase(external: ExistingClusterRef, migrations: Record<string, string> | undefined): void {
+		let store: ConnectionStore | undefined;
+		if (external.name !== undefined) {
+			store = { ssmParameterName: connectionParameterName(this.backendStackName, external.name) };
+			for (const statement of connectionReadStatements(cdk.Stack.of(this), store)) {
+				this.executionRole.addToPrincipalPolicy(statement);
+			}
+		} else if (external.connectionString) {
+			store = connectionStoreOf(external.connectionString);
+		}
+		if (!migrations || Object.keys(migrations).length === 0) return;
+		if (!store) {
+			throw configError(
+				`Database '${this.fullId}': migrations on an existing database need a connection string that the ` +
+					"deploy can read: use DatabaseCluster.fromExisting({ name }), an AppSetting or a Secret as 'connectionString'.",
+			);
+		}
+		new ExternalMigrations({
+			owner: this,
+			fullId: this.fullId,
+			schemaName: this.schemaName,
+			migrations,
+			ca: external.ca,
+			store,
+		});
 	}
 }
 

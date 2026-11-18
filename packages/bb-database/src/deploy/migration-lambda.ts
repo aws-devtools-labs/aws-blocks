@@ -3,6 +3,8 @@
 
 import type { DatabaseEngine } from '../common/engine.js';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
 import {
 	AURORA_MASTER_USER,
@@ -13,7 +15,16 @@ import {
 	searchPathFor,
 } from '../constants.js';
 import { iamAuthToken, PgEngine } from '../engines/pg-engine.js';
-import { DatabaseErrors, isConnectionLost, isConnectTimeout, isSerializationConflict, pgErrorCode } from '../errors.js';
+import {
+	DatabaseErrors,
+	isConnectionLost,
+	isConnectionRefused,
+	isConnectTimeout,
+	isSerializationConflict,
+	pgErrorCode,
+} from '../errors.js';
+import { externalEngine } from '../external/engine.js';
+import { grantSchemaAccess } from '../migrations/grants.js';
 import { buildMigrationPlan } from '../migrations/plan.js';
 import { ensureMigrationTables, runMigrationPlan } from '../migrations/runner.js';
 import type { ClusterType } from '../types.js';
@@ -29,11 +40,14 @@ export function isRetryableMigrationError(e: unknown): boolean {
 		isSerializationConflict(err) ||
 		isConnectionLost(err) ||
 		isConnectTimeout(err);
-	// The runner wraps the engine's error, which wraps the driver's: walk the chain.
+	// The runner wraps the engine's error, which wraps the driver's: walk the chain. A connection the server
+	// refused (trust, address, login) gets the same answer on every attempt, so it is reported at once.
+	let retryable = false;
 	for (let err: unknown = e, depth = 0; err instanceof Error && depth < 5; err = err.cause, depth++) {
-		if (matches(err)) return true;
+		if (isConnectionRefused(err)) return false;
+		if (matches(err)) retryable = true;
 	}
-	return false;
+	return retryable;
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -83,43 +97,9 @@ export async function provisionAppRole(
 	if (kind === 'dsql')
 		await engine.execute(`AWS IAM GRANT ${quoteIdent(dbRoleName)} TO '${escapeString(appRoleArn)}'`);
 	else await engine.execute(`GRANT rds_iam TO ${quoteIdent(dbRoleName)}`);
-	// `public` is a DSQL system entity: a schema-level grant on it is rejected, and custom roles can use it without
-	// one. PostgreSQL grants PUBLIC usage on it, so the skip holds for Aurora too.
-	if (schemaName !== DEFAULT_SCHEMA)
-		await engine.execute(`GRANT USAGE ON SCHEMA ${quoteIdent(schemaName)} TO ${quoteIdent(dbRoleName)}`);
-	const tables = await engine.query<{ tablename: string }>(
-		`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename NOT IN ('_migrations', '_migration_progress')`,
-		[schemaName],
-	);
-	if (tables.length > 0) {
-		const list = tables.map((t) => `${quoteIdent(schemaName)}.${quoteIdent(t.tablename)}`).join(', ');
-		await engine.execute(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${list} TO ${quoteIdent(dbRoleName)}`);
-	}
-	const views = await engine.query<{ viewname: string }>('SELECT viewname FROM pg_views WHERE schemaname = $1', [
-		schemaName,
-	]);
-	if (views.length > 0) {
-		const list = views.map((v) => `${quoteIdent(schemaName)}.${quoteIdent(v.viewname)}`).join(', ');
-		await engine.execute(`GRANT SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
-	}
-	const matviews = await engine.query<{ matviewname: string }>(
-		'SELECT matviewname FROM pg_matviews WHERE schemaname = $1',
-		[schemaName],
-	);
-	if (matviews.length > 0) {
-		const list = matviews.map((v) => `${quoteIdent(schemaName)}.${quoteIdent(v.matviewname)}`).join(', ');
-		await engine.execute(`GRANT SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
-	}
-	const sequences = await engine.query<{ sequencename: string }>(
-		'SELECT sequencename FROM pg_sequences WHERE schemaname = $1',
-		[schemaName],
-	);
-	if (sequences.length > 0) {
-		const list = sequences.map((s) => `${quoteIdent(schemaName)}.${quoteIdent(s.sequencename)}`).join(', ');
-		await engine.execute(`GRANT USAGE, SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
-	}
+	const granted = await grantSchemaAccess(engine, dbRoleName, schemaName);
 	console.log(
-		`[bb-database] Role '${dbRoleName}' granted DML on ${tables.length} table(s), ${views.length} view(s), ${matviews.length} materialized view(s), ${sequences.length} sequence(s) in schema '${schemaName}'`,
+		`[bb-database] Role '${dbRoleName}' granted DML on ${granted.tables} table(s), ${granted.views} view(s), ${granted.matviews} materialized view(s), ${granted.sequences} sequence(s) in schema '${schemaName}'`,
 	);
 }
 
@@ -131,6 +111,10 @@ interface MigrationProperties {
 	migrationsHash?: string;
 	migrationsBucket?: string;
 	migrationsKey?: string;
+	/** An existing database: the SSM SecureString that holds the connection string. The name, never the value. */
+	connectionParameter?: string;
+	/** An existing database: the Secrets Manager secret that holds the connection string. */
+	connectionSecretArn?: string;
 }
 
 type IsCompleteEvent = CloudFormationCustomResourceEvent & {
@@ -177,7 +161,59 @@ function buildEngine(cluster: ClusterEnv, schemaName: string): DatabaseEngine {
 	});
 }
 
+// The connection string of an existing database, read where `cdk-blocks db connect --stage` (or the app) put it.
+// It is held in memory for this invocation and never logged.
+async function readConnectionString(props: MigrationProperties): Promise<{ value: string | null; label: string }> {
+	if (props.connectionParameter) {
+		const result = await new SSMClient({}).send(
+			new GetParameterCommand({ Name: props.connectionParameter, WithDecryption: true }),
+		);
+		return { value: result.Parameter?.Value ?? null, label: `The SSM parameter ${props.connectionParameter}` };
+	}
+	if (props.connectionSecretArn) {
+		const result = await new SecretsManagerClient({}).send(
+			new GetSecretValueCommand({ SecretId: props.connectionSecretArn }),
+		);
+		return { value: result.SecretString ?? null, label: 'The secret that holds the connection string' };
+	}
+	throw new Error('connectionParameter or connectionSecretArn is required for an existing database');
+}
+
+interface ExternalAsset {
+	files: Record<string, string>;
+	ca?: string;
+}
+
+// An existing database: no cluster admin and no app role to provision. The function connects with the stored
+// connection string, as the app does, and runs each pending file in one transaction.
+async function migrateExternal(props: MigrationProperties): Promise<boolean> {
+	if (!props.migrationsBucket || !props.migrationsKey)
+		throw new Error('migrationsBucket and migrationsKey are required');
+	const schemaName = props.schemaName || DEFAULT_SCHEMA;
+	const object = await new S3Client({}).send(
+		new GetObjectCommand({ Bucket: props.migrationsBucket, Key: props.migrationsKey }),
+	);
+	const asset = JSON.parse((await object.Body?.transformToString()) ?? '{"files":{}}') as ExternalAsset;
+	const { value, label } = await readConnectionString(props);
+	const engine = await externalEngine({
+		source: { get: async () => value },
+		label,
+		ca: asset.ca,
+		schemaName,
+		poolSize: 1,
+	});
+	try {
+		const plan = buildMigrationPlan(asset.files, 'external');
+		const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName, boundToInvocation: true }));
+		console.log('[bb-database] Applied:', result.applied.length ? result.applied : '(none pending)');
+		return true;
+	} finally {
+		await engine.destroy().catch((e) => console.error('[bb-database] engine cleanup failed', e));
+	}
+}
+
 async function migrateBlock(props: MigrationProperties): Promise<boolean> {
+	if (process.env[CLUSTER_ENV.kind] === 'external') return migrateExternal(props);
 	const schemaName = props.schemaName || DEFAULT_SCHEMA;
 	const cluster = readClusterEnv();
 	const engine = buildEngine(cluster, schemaName);

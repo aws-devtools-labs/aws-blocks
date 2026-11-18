@@ -67,11 +67,45 @@ export const TRANSACTION_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 
 export const DEFAULT_CLUSTER_ID = 'default';
 
+/** `db.cluster.id` of a block on an existing database (`DatabaseCluster.fromExisting()`). */
+export const EXTERNAL_CLUSTER_ID = 'external';
+
+/** How long a pooled connection to an existing database may sit idle: a pooler counts every open client. */
+export const EXTERNAL_IDLE_TIMEOUT_MS = 10 * 1000;
+
+/** How long a connect to an existing database may take before the statement fails as `ConnectionFailed`. */
+export const EXTERNAL_CONNECT_TIMEOUT_MS = 10 * 1000;
+
+/** The id of the `AppSetting` a block on an existing database reads its connection string through. */
+export const CONNECTION_SETTING_ID = 'connection';
+
+/** The scope of that `AppSetting` in local mode, where the CLI must reach the same entry without the app's scopes. */
+export const LOCAL_CONNECTION_SCOPE = 'bb-database';
+
+/**
+ * The SSM SecureString that holds the connection string of `DatabaseCluster.fromExisting({ name })`. The stack name
+ * makes it one parameter per stage; the CDK layer, the Lambda runtime and the CLI all derive it here.
+ */
+export const connectionParameterName = (stackName: string, name: string): string => `/${stackName}-${name}`;
+
+/**
+ * On an existing database, how long a migration transaction may sit idle before the server ends it. A function
+ * or a laptop that stops in the middle of a file leaves its transaction open, and its locks with it, until the
+ * server notices; this is the limit the server applies itself.
+ */
+export const EXTERNAL_MIGRATION_IDLE_TIMEOUT_MS = 60 * 1000;
+
+/** What a connection `name` may contain: it becomes part of an SSM parameter name. */
+export const CONNECTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
 export const DEFAULT_SCHEMA = 'public';
 
 export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
 
 const DB_ROLE_PREFIX = 'blocks_app_';
+
+/** Local mode: the role a block's statements run as in PGlite, with the grants the deployed app role gets. */
+export const LOCAL_APP_ROLE = `${DB_ROLE_PREFIX}local`;
 
 // PostgreSQL identifiers and RDS cluster identifiers share the 63-character limit.
 const PG_NAME_MAX = 63;
@@ -114,6 +148,15 @@ export const sanitizeSchemaName = (id: string): string => {
 	if (name.startsWith('pg_')) name = `blocks_${name}`;
 	return hashSuffixed(name, id, '_');
 };
+
+/**
+ * The setting a user-scoped database carries the user's claims in, as JSON, for the length of a transaction
+ * (DESIGN §4.5). The name is PostgREST's, so a policy written for it reads the same value here.
+ */
+export const CLAIMS_SETTING = 'request.jwt.claims';
+
+/** The setting's value for a statement with no user: an object with no `sub`, which a policy can still cast. */
+export const NO_CLAIMS = '{}';
 
 export const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 

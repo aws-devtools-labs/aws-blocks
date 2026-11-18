@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { DatabaseEngine, TransactionHandle } from '../common/engine.js';
-import { foreignTransactionHandle, transactionEnded } from '../errors.js';
+import { configError, foreignTransactionHandle, transactionEnded } from '../errors.js';
 
 // The handle an engine's `beginTransaction()` returns. `settled` is set by the first of commitTransaction()
 // and rollbackTransaction(), so the connection (or mutex) is freed exactly once and a later call sees it
@@ -14,6 +14,42 @@ export abstract class EngineTransaction {
 	 * transaction scope, so no other statement can join this transaction.
 	 */
 	fromSession = false;
+}
+
+export interface TransactionModes {
+	readonly isolationLevel?: string;
+	readonly accessMode?: string;
+}
+
+// The modes go into the text of SET TRANSACTION, so only PostgreSQL's own values pass.
+const ISOLATION_LEVELS = new Set(['read uncommitted', 'read committed', 'repeatable read', 'serializable']);
+const ACCESS_MODES = new Set(['read only', 'read write']);
+
+/** The `SET TRANSACTION` statement for `modes`; `undefined` when there are none. */
+export function setTransactionStatement({ isolationLevel, accessMode }: TransactionModes = {}): string | undefined {
+	if (isolationLevel !== undefined && !ISOLATION_LEVELS.has(isolationLevel)) {
+		throw configError(`'${isolationLevel}' is not a PostgreSQL isolation level.`);
+	}
+	if (accessMode !== undefined && !ACCESS_MODES.has(accessMode)) {
+		throw configError(`'${accessMode}' is not a PostgreSQL transaction access mode.`);
+	}
+	const modes = [isolationLevel && `isolation level ${isolationLevel}`, accessMode].filter(Boolean).join(' ');
+	return modes ? `set transaction ${modes}` : undefined;
+}
+
+/** Runs `sql` in the transaction a `beginTransaction()` has just opened; a failure rolls the transaction back. */
+export async function firstStatement(
+	engine: DatabaseEngine,
+	handle: TransactionHandle,
+	sql: string,
+	params?: unknown[],
+): Promise<void> {
+	try {
+		await engine.executeInTransaction(handle, sql, params);
+	} catch (e) {
+		await engine.rollbackTransaction(handle).catch(() => {});
+		throw e;
+	}
 }
 
 export interface CountedRows<T> {
@@ -28,6 +64,12 @@ export interface CountedRows<T> {
  * the Kysely dialect both read it.
  */
 export interface RowCountingEngine extends DatabaseEngine {
+	/**
+	 * `modes` become `SET TRANSACTION`, the transaction's first statement. The engine issues it, so an engine
+	 * that wraps this one can run its own first statement after it: PostgreSQL takes no isolation level once a
+	 * query has run.
+	 */
+	beginTransaction(modes?: TransactionModes): Promise<TransactionHandle>;
 	queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>>;
 	queryCountedInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<CountedRows<T>>;
 }

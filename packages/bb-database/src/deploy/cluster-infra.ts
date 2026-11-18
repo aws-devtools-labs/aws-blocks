@@ -35,7 +35,7 @@ const REMOVAL_POLICY_MAP = {
 	snapshot: cdk.RemovalPolicy.SNAPSHOT,
 } as const;
 
-function hashMigrations(files: Record<string, string>): string {
+export function hashMigrations(files: Record<string, string>): string {
 	const hash = createHash('sha256');
 	for (const file of Object.keys(files).sort()) {
 		hash.update(file);
@@ -60,7 +60,7 @@ interface AttachedBlock {
 // Every function on the app's execution role waits for the cluster's migrations, so new code never runs
 // against the old schema. An aspect, because those functions (default compute, job handlers) may be
 // constructed later; the per-block resources are chained, so the last one implies all of them.
-class FunctionsWaitForMigrations implements cdk.IAspect {
+export class FunctionsWaitForMigrations implements cdk.IAspect {
 	private readonly roleArn: string;
 
 	constructor(

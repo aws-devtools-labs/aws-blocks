@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
+import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
@@ -109,7 +110,11 @@ describe('Database (CDK)', () => {
 								'aws:SourceArn': {
 									'Fn::Join': [
 										'',
-										['arn:', { Ref: 'AWS::Partition' }, ':states:us-east-1:123456789012:stateMachine:*'],
+										[
+											'arn:',
+											{ Ref: 'AWS::Partition' },
+											':states:us-east-1:123456789012:stateMachine:*',
+										],
 									],
 								},
 							},
@@ -382,5 +387,133 @@ describe('DatabaseCluster type aurora (CDK)', () => {
 			}),
 		});
 		Template.fromStack(stack).resourceCountIs('AWS::RDS::DBCluster', 1);
+	});
+});
+
+describe('Database on an existing database (CDK)', () => {
+	const CA = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
+	const files = { '001_items.sql': 'CREATE TABLE items (id int);' };
+	const statementsOf = (template: Template): { Action: unknown; Resource: unknown; Condition?: unknown }[] =>
+		Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+			(policy) => policy.Properties.PolicyDocument.Statement,
+		);
+
+	test('provisions no cluster, and with no migrations no migration resource either', () => {
+		const { stack, parent } = setup();
+		const db = new Database(parent, 'db', { cluster: DatabaseCluster.fromExisting({ name: 'db-url', ca: CA }) });
+		assert.deepStrictEqual(db.cluster, { kind: 'external', id: 'external' });
+		assert.strictEqual(db.schemaName, 'public');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::DSQL::Cluster', 0);
+		template.resourceCountIs('AWS::RDS::DBCluster', 0);
+		assert.strictEqual(Object.keys(migrationResources(template)).length, 0);
+	});
+
+	test('with a name, the app role may read the SSM parameter /<stackName>-<name> and nothing holds a value', () => {
+		const { stack, parent } = setup();
+		new Database(parent, 'db', { cluster: DatabaseCluster.fromExisting({ name: 'db-url' }) });
+		const template = Template.fromStack(stack);
+		const read = statementsOf(template).filter((s) => JSON.stringify(s.Action).includes('ssm:GetParameter'));
+		assert.ok(read.length > 0, 'a statement grants ssm:GetParameter');
+		assert.ok(
+			read.some((s) => JSON.stringify(s.Resource).includes(`parameter/${stack.id}-db-url`)),
+			'on the parameter named after the stack and the short name',
+		);
+		assert.ok(
+			!JSON.stringify(template.toJSON()).includes('postgres'),
+			'the template names the place, never a value',
+		);
+	});
+
+	test('with migrations: one custom resource that names the parameter, and two functions outside any VPC', () => {
+		const { stack, parent } = setup();
+		const db = new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ name: 'db-url', ca: CA }),
+			migrationsPath: migrations(files),
+		});
+		const template = Template.fromStack(stack);
+		const resources = Object.values(migrationResources(template));
+		assert.strictEqual(resources.length, 1);
+		const properties = resources[0].Properties;
+		assert.strictEqual(properties.connectionParameter, `/${stack.id}-db-url`);
+		assert.strictEqual(properties.schemaName, 'public');
+		assert.strictEqual(properties.blockFullId, db.fullId);
+		assert.ok(properties.migrationsBucket && properties.migrationsKey, 'the files travel as an asset');
+		assert.strictEqual(properties.connectionSecretArn, undefined);
+		for (const handler of ['index.handler', 'index.isComplete']) {
+			const functions = Object.values(functionsByHandler(template, handler)).filter(
+				(fn) => fn.Properties.Environment?.Variables?.CLUSTER_KIND === 'external',
+			);
+			assert.strictEqual(functions.length, 1, handler);
+			assert.strictEqual(functions[0].Properties.VpcConfig, undefined);
+			assert.strictEqual(functions[0].Properties.Timeout, 600);
+		}
+		const statements = statementsOf(template);
+		assert.ok(
+			statements.some(
+				(s) =>
+					s.Action === 'ssm:GetParameter' &&
+					JSON.stringify(s.Resource).includes(`parameter/${stack.id}-db-url`),
+			),
+			'the migration functions may read the parameter',
+		);
+		assert.ok(
+			statements.some(
+				(s) =>
+					s.Action === 'kms:Decrypt' && JSON.stringify(s.Condition).includes('ssm.us-east-1.amazonaws.com'),
+			),
+			'and decrypt it through SSM only',
+		);
+	});
+
+	test('a changed certificate authority re-runs the migration resource', () => {
+		const hashWith = (ca: string) => {
+			const { stack, parent } = setup();
+			new Database(parent, 'db', {
+				cluster: DatabaseCluster.fromExisting({ name: 'db-url', ca }),
+				migrationsPath: migrations(files),
+			});
+			return Object.values(migrationResources(Template.fromStack(stack)))[0].Properties.migrationsHash;
+		};
+		assert.notStrictEqual(hashWith(CA), hashWith(CA.replace('MIIB', 'MIIC')));
+	});
+
+	test('every function on the app role waits for the migrations of the block', () => {
+		const { stack, parent } = setup();
+		new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ name: 'db-url' }),
+			migrationsPath: migrations(files),
+		});
+		const template = Template.fromStack(stack);
+		const [migrationId] = Object.keys(migrationResources(template));
+		const handlers = template.findResources('AWS::Lambda::Function', { Properties: { Handler: 'index.handler' } });
+		const app = Object.values(handlers).find(
+			(fn) => fn.Properties.Environment?.Variables?.CLUSTER_KIND === undefined,
+		);
+		assert.ok(app, 'the stub app function');
+		assert.ok([app.DependsOn].flat().includes(migrationId));
+	});
+
+	test("the app's own AppSetting is read by its parameter name", () => {
+		const { stack, parent } = setup();
+		const own = AppSetting.fromExisting<string>(parent, 'own-url', { name: '/custom/db-url', secret: true });
+		new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ connectionString: own }),
+			migrationsPath: migrations(files),
+		});
+		const properties = Object.values(migrationResources(Template.fromStack(stack)))[0].Properties;
+		assert.strictEqual(properties.connectionParameter, '/custom/db-url');
+	});
+
+	test('migrations with a source that the deploy cannot read fail synth', () => {
+		const { parent } = setup();
+		assert.throws(
+			() =>
+				new Database(parent, 'db', {
+					cluster: DatabaseCluster.fromExisting({ connectionString: { get: async () => null } }),
+					migrationsPath: migrations(files),
+				}),
+			/need a connection string that the\s+deploy can read/,
+		);
 	});
 });

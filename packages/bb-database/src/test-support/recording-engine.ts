@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { TransactionHandle } from '../common/engine.js';
-import type { CountedRows, RowCountingEngine } from '../engines/handle.js';
+import {
+	type CountedRows,
+	type RowCountingEngine,
+	setTransactionStatement,
+	type TransactionModes,
+} from '../engines/handle.js';
 
 export interface RecordedCall {
 	method: string;
@@ -54,9 +59,11 @@ export class RecordingEngine implements RowCountingEngine {
 		return { rowCount: 1 };
 	}
 
-	async beginTransaction(): Promise<TransactionHandle> {
+	async beginTransaction(modes?: TransactionModes): Promise<TransactionHandle> {
+		const settings = setTransactionStatement(modes);
 		const handle = { id: ++this.nextHandle };
 		this.calls.push({ method: 'begin', sql: 'BEGIN', params: [], handle });
+		if (settings) await this.executeInTransaction(handle, settings);
 		return handle;
 	}
 
