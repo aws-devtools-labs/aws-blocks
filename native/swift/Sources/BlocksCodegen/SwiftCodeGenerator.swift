@@ -418,7 +418,8 @@ public struct SwiftCodeGenerator {
     ) {
         let memberIndent = sharedTopLevel ? indent + "    " : indent
         var memberLines: [String] = []
-        // Variant structs. Without a discriminator the arms are tried in turn, so their types are closed.
+        // Variant structs, and a value arm's own types (the element of `[{…}]`, an enum arm) beside them. Without a
+        // discriminator the arms are tried in turn, so their types are closed.
         openEnums.with(open: openEnums.isOpen && discriminator != nil) {
             for variant in variants where declaresVariantStruct(variant) {
                 emitNestedRecordStruct(
@@ -429,13 +430,10 @@ public struct SwiftCodeGenerator {
                     indent: memberIndent, lines: &memberLines
                 )
             }
-        }
-
-        // A value arm's own types (the element of `[{…}]`, an enum arm) are declared beside the enum, like the
-        // variant structs.
-        for variant in variants where variant.valueType != nil {
-            for node in valueArmTypes(variant) {
-                emitValueArmType(node) { emitNestedTypeNode(node, indent: memberIndent, lines: &memberLines) }
+            for variant in variants where variant.valueType != nil {
+                for node in valueArmTypes(variant) {
+                    emitValueArmType(node) { emitNestedTypeNode(node, indent: memberIndent, lines: &memberLines) }
+                }
             }
         }
         if !sharedTopLevel { lines.append(contentsOf: memberLines) }
@@ -1653,12 +1651,12 @@ private extension SwiftCodeGenerator {
                         indent: indent, lines: &lines
                     )
                 }
-            }
-            // A value arm's own types (the element of `[{…}]`, an enum arm's enum) are declared beside the enum,
-            // like the variant structs.
-            for variant in variants where variant.valueType != nil {
-                for node in valueArmTypes(variant) {
-                    emitValueArmType(node) { emitSchemaNestedType(node, indent: indent, lines: &lines) }
+                // A value arm's own types (the element of `[{…}]`, an enum arm's enum) are declared beside the enum,
+                // like the variant structs.
+                for variant in variants where variant.valueType != nil {
+                    for node in valueArmTypes(variant) {
+                        emitValueArmType(node) { emitSchemaNestedType(node, indent: indent, lines: &lines) }
+                    }
                 }
             }
             lines.append("")

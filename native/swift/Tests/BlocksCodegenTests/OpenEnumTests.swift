@@ -87,6 +87,35 @@ final class OpenEnumTests: XCTestCase {
         XCTAssertTrue(fixture.models.contains("public nonisolated enum FailedState: String, Codable, Sendable {"))
     }
 
+    /// `[{ state: 'idle' | 'loading' }] | [{ state: 'error'; message: string }]`, as an inline result and inside a
+    /// component's nested object.
+    private let listArmsSpec = #"""
+    { "openrpc": "1.3.2", "info": { "title": "t", "version": "1" },
+      "methods": [
+        { "name": "api.getProgress", "params": [], "result": { "name": "R", "schema": { "oneOf": [
+          { "type": "array", "items": { "type": "object", "properties": { "state": { "type": "string", "enum": ["idle", "loading"] } },
+            "required": ["state"] } },
+          { "type": "array", "items": { "type": "object", "properties": { "state": { "type": "string", "enum": ["error"] },
+            "message": { "type": "string" } }, "required": ["state", "message"] } } ] } } },
+        { "name": "api.getSteps", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Steps" } } }
+      ],
+      "components": { "schemas": { "Steps": { "type": "object", "properties": { "detail": { "type": "object",
+        "properties": { "progress": { "oneOf": [
+        { "type": "array", "items": { "type": "object", "properties": { "state": { "type": "string", "enum": ["idle", "loading"] } },
+          "required": ["state"] } },
+        { "type": "array", "items": { "type": "object", "properties": { "state": { "type": "string", "enum": ["error"] },
+          "message": { "type": "string" } }, "required": ["state", "message"] } } ] } }, "required": ["progress"] } },
+        "required": ["detail"] } } } }
+    """#
+
+    func testEnumsInsideListArmsOfAUnionWithoutDiscriminatorStayClosed() throws {
+        let output = try SwiftCodeGenerator().generate(
+            from: CodegenModelBuilder().build(from: OpenRPCParser().parse(data: Data(listArmsSpec.utf8)))
+        )
+        XCTAssertFalse(output.api.contains("RawRepresentable"), output.api)
+        XCTAssertFalse(output.models.contains("RawRepresentable"), output.models)
+    }
+
     #if os(macOS)
     func testUnknownValuesDecodeAndRoundTrip() throws {
         let output = try generate(fixture: "45-open-enums")
@@ -178,6 +207,40 @@ final class OpenEnumTests: XCTestCase {
         """#
         guard let authRun = try runConsumer(models: auth.models, api: auth.api, main: authMain) else { return }
         XCTAssertEqual(authRun.output.trimmingCharacters(in: .whitespacesAndNewlines), "ok", authRun.output)
+    }
+
+    func testListArmsOfAUnionWithoutDiscriminatorDecodeTheRightArm() throws {
+        let output = try SwiftCodeGenerator().generate(
+            from: CodegenModelBuilder().build(from: OpenRPCParser().parse(data: Data(listArmsSpec.utf8)))
+        )
+        let main = #"""
+        import Foundation
+        import Generated
+
+        func check(_ ok: Bool, _ what: String) { if !ok { print("failed: \(what)"); exit(1) } }
+
+        let wire = #"[{"message":"boom","state":"error"}]"#
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let progress = try JSONDecoder().decode(Api.GetProgress.Result.self, from: Data(wire.utf8))
+        if case .result_Variant1(let items) = progress {
+            check(items.first?.message == "boom", "inline message")
+        } else {
+            check(false, "inline arm")
+        }
+        check(String(decoding: try encoder.encode(progress), as: UTF8.self) == wire, "inline round trip")
+        let nested = #"{"detail":{"progress":[{"message":"boom","state":"error"}]}}"#
+        let steps = try JSONDecoder().decode(Steps.self, from: Data(nested.utf8))
+        if case .progress_Variant1(let items) = steps.detail.progress {
+            check(items.first?.message == "boom", "component message")
+        } else {
+            check(false, "component arm")
+        }
+        check(String(decoding: try encoder.encode(steps), as: UTF8.self) == nested, "component round trip")
+        print("ok")
+        """#
+        guard let run = try runConsumer(models: output.models, api: output.api, main: main) else { return }
+        XCTAssertEqual(run.output.trimmingCharacters(in: .whitespacesAndNewlines), "ok", run.output)
     }
     #endif
 }
