@@ -116,7 +116,7 @@ final class PublicInitTests: XCTestCase {
     func testInlineObjectPropertyGetsAPublicInit() throws {
         let output = try generate(schemas: schemas, methods: methods)
         assertContains(output.models, """
-            public nonisolated struct Meta: Codable {
+            public nonisolated struct Meta: Codable, Sendable {
                 public let color: String?
                 public let pinned: Bool
         """)
@@ -133,7 +133,7 @@ final class PublicInitTests: XCTestCase {
     func testEmptyStructGetsAPublicInit() throws {
         let output = try generate(schemas: schemas, methods: methods)
         assertContains(output.models, """
-        public nonisolated struct Marker: Codable {
+        public nonisolated struct Marker: Codable, Sendable {
 
             public init() {
             }

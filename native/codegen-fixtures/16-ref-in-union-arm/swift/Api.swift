@@ -23,7 +23,7 @@ public final nonisolated class Api: Sendable {
 
     public enum DoAction {
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case signOut
             case mfaChallenge(MfaChallenge)
 
@@ -54,7 +54,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

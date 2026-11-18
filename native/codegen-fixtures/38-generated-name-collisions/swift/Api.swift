@@ -95,7 +95,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Send {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let sent: String
 
             public init(sent: String) {
@@ -106,7 +106,7 @@ public final nonisolated class Api: Sendable {
 
     public enum One {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let a: String
 
             public init(a: String) {
@@ -117,7 +117,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Two {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let b: Double
 
             public init(b: Double) {

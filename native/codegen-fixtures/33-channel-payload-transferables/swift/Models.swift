@@ -2,7 +2,7 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated struct Attachment: Codable {
+public nonisolated struct Attachment: Codable, Sendable {
     public let file: FileDownloadHandle
     public let name: String
     public let previews: [FileDownloadHandle]
@@ -26,7 +26,7 @@ public nonisolated struct Lobby: Codable {
     }
 }
 
-public nonisolated struct Note: Codable {
+public nonisolated struct Note: Codable, Sendable {
     public let id: String
     public let text: String
 
@@ -36,7 +36,7 @@ public nonisolated struct Note: Codable {
     }
 }
 
-public nonisolated struct ProviderDirectory: Codable {
+public nonisolated struct ProviderDirectory: Codable, Sendable {
     public let title: String
     public let attributes: [String: OIDCClient<String>]
 
@@ -85,7 +85,7 @@ public nonisolated struct SignInBoard: Codable {
     }
 }
 
-public nonisolated struct SignInOption: Codable {
+public nonisolated struct SignInOption: Codable, Sendable {
     public let client: OIDCClient<String>
     public let label: String
 
