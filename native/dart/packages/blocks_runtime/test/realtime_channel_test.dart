@@ -1,10 +1,12 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:blocks_runtime/blocks_runtime.dart';
+import 'package:blocks_runtime/src/web_socket_pool.dart';
 import 'package:test/test.dart';
 
 /// A local WebSocket server that answers each `subscribe` with one `message`
@@ -161,6 +163,44 @@ void main() {
             contains('1001'),
           ),
         ]);
+      },
+    );
+
+    test(
+      'a server that never answers the upgrade times out and is released',
+      () async {
+        // Accepts TCP and reads the upgrade request, but never replies.
+        final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(server.close);
+        final released = Completer<void>();
+        server.listen((socket) {
+          addTearDown(socket.destroy);
+          socket.listen(
+            (_) {},
+            onDone: () => released.complete(),
+            onError: (Object _) => released.complete(),
+          );
+        });
+        final previous = WebSocketPool.shared;
+        WebSocketPool.shared = WebSocketPool(
+          handshakeTimeout: const Duration(milliseconds: 300),
+        );
+        addTearDown(() => WebSocketPool.shared = previous);
+        final channel = RealtimeChannel.fromJsonValue(
+          _descriptor('ws://127.0.0.1:${server.port}/'),
+          (payload) => payload,
+        );
+        addTearDown(channel.close);
+
+        final errors = <Object>[];
+        await channel
+            .subscribe()
+            .handleError(errors.add)
+            .drain<void>()
+            .timeout(const Duration(seconds: 5));
+        expect(errors, [isA<RealtimeConnectionException>()]);
+        // The client dropped the pending connection.
+        await released.future.timeout(const Duration(seconds: 5));
       },
     );
 

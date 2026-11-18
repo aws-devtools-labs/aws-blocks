@@ -10,7 +10,11 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// A WebSocket the test plays the server side of.
 class FakeSocket with StreamChannelMixin<dynamic> implements WebSocketChannel {
-  FakeSocket(this.uri);
+  FakeSocket(this.uri, {this.handshakeDone = true});
+
+  /// Whether `ready` completes. A socket whose server never answers the
+  /// upgrade leaves it pending.
+  final bool handshakeDone;
 
   final Uri uri;
   final _incoming = StreamController<dynamic>();
@@ -31,7 +35,8 @@ class FakeSocket with StreamChannelMixin<dynamic> implements WebSocketChannel {
   @override
   String? get protocol => null;
   @override
-  Future<void> get ready => Future.value();
+  Future<void> get ready =>
+      handshakeDone ? Future.value() : Completer<void>().future;
 
   void send(Map<String, Object?> frame) => _incoming.add(jsonEncode(frame));
   void sendRaw(Object data) => _incoming.add(data);
@@ -126,13 +131,16 @@ Map<String, Object?> _message(String channel, String text) => {
 void main() {
   late List<FakeSocket> sockets;
   late WebSocketPool previous;
+  // Whether the next sockets the pool opens finish their handshake.
+  var handshakes = true;
 
   setUp(() {
     sockets = [];
+    handshakes = true;
     previous = WebSocketPool.shared;
     WebSocketPool.shared = WebSocketPool(
       connect: (uri) {
-        final socket = FakeSocket(uri);
+        final socket = FakeSocket(uri, handshakeDone: handshakes);
         sockets.add(socket);
         return socket;
       },
@@ -518,6 +526,76 @@ void main() {
       b.close();
 
       expect(socket.unsubscribes, isEmpty);
+    });
+  });
+
+  group('handshake timeout', () {
+    test('ends the subscription when the upgrade never finishes', () {
+      fakeAsync((async) {
+        handshakes = false;
+        final channel = _channel('room');
+        final events = _record(channel.subscribe());
+        final socket = sockets.single;
+
+        async.elapse(
+          realtimeHandshakeTimeout - const Duration(milliseconds: 1),
+        );
+        expect(events, isEmpty);
+        async.elapse(const Duration(milliseconds: 1));
+
+        expect(events, hasLength(2));
+        expect(
+          (events[0] as _Error).error,
+          isA<RealtimeConnectionException>().having(
+            (e) => e.message,
+            'message',
+            contains('30 s'),
+          ),
+        );
+        expect(events[1], isA<_Done>());
+        expect(socket.clientClosed, isTrue);
+
+        // The socket left the pool: the next subscribe opens a new one.
+        handshakes = true;
+        channel.subscribe().listen(null);
+        expect(sockets, hasLength(2));
+        channel.close();
+      });
+    });
+
+    test('does not fire once the handshake finished', () {
+      fakeAsync((async) {
+        final channel = _channel('room');
+        final events = _record(channel.subscribe());
+
+        async.elapse(realtimeHandshakeTimeout * 3);
+        expect(events, isEmpty);
+        expect(sockets.single.clientClosed, isFalse);
+        channel.close();
+      });
+    });
+
+    test('close() while connecting ends the stream and empties the pool', () {
+      fakeAsync((async) {
+        handshakes = false;
+        final channel = _channel('room');
+        final events = _record(channel.subscribe());
+        final socket = sockets.single;
+        async.elapse(const Duration(seconds: 5));
+
+        channel.close();
+        async.flushMicrotasks();
+        expect(events, [isA<_Done>()]);
+        expect(socket.clientClosed, isTrue);
+
+        // Nothing left in the pool, and the timer no longer fires.
+        async.elapse(realtimeHandshakeTimeout * 2);
+        expect(events, [isA<_Done>()]);
+        final other = _channel('room');
+        other.subscribe().listen(null);
+        expect(sockets, hasLength(2));
+        other.close();
+      });
     });
   });
 

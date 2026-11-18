@@ -185,6 +185,11 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 - When a channel's last subscription on a socket ends and the socket stays
   open for other channels, the client sends `{"action":"unsubscribe"}` for
   that channel, so the server stops delivering it.
+- A new realtime socket that hasn't finished the WebSocket handshake after 30
+  seconds is closed, and its subscriptions end with a
+  `RealtimeConnectionException`. A server that accepted the connection and
+  never answered the upgrade used to leave the subscription waiting forever.
+  An open socket still has no idle timeout.
 - A `restore()` still in flight when a sign-in or sign-out finishes ignores
   its response and returns the current user, or null. A late 401 used to sign
   out, and clear the tokens of, a sign-in that had just finished, and a late

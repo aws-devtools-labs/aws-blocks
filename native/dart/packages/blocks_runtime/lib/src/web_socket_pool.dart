@@ -18,6 +18,14 @@ typedef WebSocketConnector = WebSocketChannel Function(Uri uri);
 /// no traffic. Nine minutes matches the web client.
 const realtimeKeepAliveInterval = Duration(minutes: 9);
 
+/// How long a new socket may take to finish the WebSocket handshake.
+///
+/// A server that accepts the TCP connection and never answers the upgrade
+/// would otherwise leave a subscription waiting forever. Thirty seconds
+/// matches the Kotlin and Swift clients. It bounds only the handshake: an
+/// open socket has no idle timeout.
+const realtimeHandshakeTimeout = Duration(seconds: 30);
+
 /// Receives the frames of one channel on a pooled socket, and learns when the
 /// subscription ends.
 ///
@@ -59,6 +67,19 @@ class PooledConnection {
       _pool.keepAliveInterval,
       (_) => socket.sink.add(jsonEncode({'action': 'ping'})),
     );
+    final timeout = _pool.handshakeTimeout;
+    _handshake = Timer(
+      timeout,
+      () => _fail(
+        RealtimeConnectionException(
+          'Realtime connection timed out: no WebSocket handshake after '
+          '${timeout.inSeconds} s',
+        ),
+      ),
+    );
+    // A failed handshake also errors the stream, which ends the
+    // subscriptions; here it only needs to stop the timer.
+    socket.ready.then((_) => _handshake.cancel(), onError: (_) {}).ignore();
   }
 
   final WebSocketPool _pool;
@@ -67,6 +88,7 @@ class PooledConnection {
   final List<RealtimeSubscriber> _subscribers = [];
   late final StreamSubscription<dynamic> _frames;
   late final Timer _keepAlive;
+  late final Timer _handshake;
   bool _dead = false;
 
   /// Adds [subscriber] and sends its `subscribe` frame with [token].
@@ -174,6 +196,7 @@ class PooledConnection {
     if (_dead) return;
     _dead = true;
     _keepAlive.cancel();
+    _handshake.cancel();
     _frames.cancel().ignore();
     socket.sink.close().ignore();
     _pool._forget(this);
@@ -189,7 +212,8 @@ class WebSocketPool {
   WebSocketPool({
     WebSocketConnector? connect,
     this.keepAliveInterval = realtimeKeepAliveInterval,
-  }) : _connect = connect ?? _defaultConnect;
+    this.handshakeTimeout = realtimeHandshakeTimeout,
+  }) : _connect = connect ?? ((uri) => _defaultConnect(uri, handshakeTimeout));
 
   /// The pool every `RealtimeChannel` shares.
   static WebSocketPool shared = WebSocketPool();
@@ -199,12 +223,18 @@ class WebSocketPool {
   /// How often each socket sends `{"action":"ping"}`.
   final Duration keepAliveInterval;
 
+  /// How long a new socket may take to finish the WebSocket handshake before
+  /// its subscriptions end with a `RealtimeConnectionException`.
+  final Duration handshakeTimeout;
+
   final Map<String, PooledConnection> _pool = {};
 
-  static WebSocketChannel _defaultConnect(Uri uri) =>
+  static WebSocketChannel _defaultConnect(Uri uri, Duration handshake) =>
       // WebSocket upgrades bypass http.Client; connectWebSocket attaches this
       // header where the platform permits custom upgrade headers.
-      connectWebSocket(uri, {'User-Agent': blocksUserAgentToken});
+      connectWebSocket(uri, {
+        'User-Agent': blocksUserAgentToken,
+      }, handshakeTimeout: handshake);
 
   /// Returns the live connection for [url], opening one when there is none.
   PooledConnection acquire(String url) =>
