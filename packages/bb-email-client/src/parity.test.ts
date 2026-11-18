@@ -45,7 +45,8 @@ async function outcomeOf(fn: () => Promise<unknown>): Promise<Outcome> {
 interface SesInput {
 	FromEmailAddress?: string;
 	Destination?: { ToAddresses?: string[]; CcAddresses?: string[]; BccAddresses?: string[] };
-	BulkEmailEntries?: unknown[];
+	Content?: { Simple?: { Subject?: { Data?: string } } };
+	BulkEmailEntries?: Array<{ ReplacementEmailContent?: { ReplacementTemplate?: { ReplacementTemplateData?: string } } }>;
 }
 
 /** Run `fn` against an AWS EmailClient whose SES client is stubbed; returns what reached SES. */
@@ -89,6 +90,16 @@ const sendCases: SendCase[] = [
 	{ label: 'a malformed BCC address', message: msg({ bcc: ['bad address@example.com'] }), error: EmailErrors.InvalidInput },
 	{ label: 'a malformed sender address', options: { fromAddress: 'sender@' }, message: msg(), error: EmailErrors.InvalidInput },
 	{ label: 'a malformed reply-to address', options: { replyTo: ['reply@'] }, message: msg(), error: EmailErrors.InvalidInput },
+	{ label: 'a non-ASCII subject', message: msg({ subject: 'Grüße, Zoë — order #42 🎉' }), error: null },
+	{ label: 'a subject with a CRLF', message: msg({ subject: 'Hello\r\nWorld' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject ending in CRLF', message: msg({ subject: 'Hello\r\n' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject with a bare LF', message: msg({ subject: 'Hello\nBcc: x@evil.test' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject with a bare CR', message: msg({ subject: 'Hello\rWorld' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject with a NUL', message: msg({ subject: 'Hello\u0000World' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject with a DEL', message: msg({ subject: 'Hello\u007fWorld' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject with a NEL (C1)', message: msg({ subject: 'Hello\u0085World' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject with a U+2028 line separator', message: msg({ subject: 'Hello\u2028World' }), error: EmailErrors.InvalidInput },
+	{ label: 'a subject with a U+2029 paragraph separator', message: msg({ subject: 'Hello\u2029World' }), error: EmailErrors.InvalidInput },
 	{
 		// Order: addresses are checked before the recipient count, on both paths.
 		label: 'too many recipients and a malformed one (address error wins)',
@@ -111,6 +122,7 @@ describe('EmailClient.send() validates the same input the same way on mock and A
 				const to = Array.isArray(c.message.to) ? c.message.to : [c.message.to];
 				assert.deepStrictEqual(sent[0].Destination?.ToAddresses, to);
 				assert.strictEqual(sent[0].FromEmailAddress, options.fromAddress);
+				assert.strictEqual(sent[0].Content?.Simple?.Subject?.Data, c.message.subject);
 			} else {
 				assert.strictEqual(mockOutcome.ok, false);
 				assert.strictEqual(mockOutcome.ok === false && mockOutcome.name, c.error);
@@ -123,6 +135,13 @@ describe('EmailClient.send() validates the same input the same way on mock and A
 		const message = msg({ to: [...addresses(60), 'bad@'] });
 		const outcome = await outcomeOf(() => new MockEmailClient(new Scope('app'), uniqueId(), { fromAddress: FROM }).send(message));
 		assert.ok(outcome.ok === false && outcome.message.includes('Invalid email address'), JSON.stringify(outcome));
+	});
+
+	test('a rejected subject is not echoed in the error message', async () => {
+		const message = msg({ subject: 'secret-token\r\nBcc: x@evil.test' });
+		const outcome = await outcomeOf(() => new MockEmailClient(new Scope('app'), uniqueId(), { fromAddress: FROM }).send(message));
+		assert.ok(outcome.ok === false && outcome.name === EmailErrors.InvalidInput, JSON.stringify(outcome));
+		assert.ok(outcome.ok === false && !outcome.message.includes('secret-token'), JSON.stringify(outcome));
 	});
 });
 
@@ -149,5 +168,27 @@ describe('EmailClient.sendBatch() validates the same input the same way on mock 
 		assert.deepStrictEqual(shape(mockResult).map((e) => e.status), ['success', 'failed', 'failed', 'success']);
 		assert.strictEqual(sent.length, 1, 'the two valid entries go out in one SendBulkEmail call');
 		assert.strictEqual(sent[0].BulkEmailEntries?.length, 2);
+	});
+
+	test('an entry with a control character in its subject is marked failed, and only valid entries reach SES', async () => {
+		const options: EmailOptions = { fromAddress: FROM };
+		const batch = [
+			msg({ to: 'a@example.com', subject: 'Order from Zoë' }),
+			msg({ to: 'b@example.com', subject: 'Hello\r\nWorld' }),
+			msg({ to: 'c@example.com', subject: 'Hello\u2028World' }),
+			msg({ to: 'd@example.com', subject: 'Second order' }),
+		];
+		const mockResult = await new MockEmailClient(new Scope('app'), uniqueId(), options).sendBatch(batch);
+		const { result: awsResult, sent } = await withAws(options, (client) => client.sendBatch(batch));
+
+		const shape = (r: typeof mockResult) => r.results.map((e) => ({ status: e.status, error: e.error }));
+		assert.deepStrictEqual(shape(awsResult), shape(mockResult));
+		assert.deepStrictEqual(shape(mockResult).map((e) => e.status), ['success', 'failed', 'failed', 'success']);
+		assert.ok(mockResult.results[1].error?.includes('Subject'), JSON.stringify(mockResult.results[1]));
+		assert.strictEqual(sent.length, 1);
+		const subjects = sent[0].BulkEmailEntries?.map(
+			(e) => JSON.parse(e.ReplacementEmailContent?.ReplacementTemplate?.ReplacementTemplateData ?? '{}').subject,
+		);
+		assert.deepStrictEqual(subjects, ['Order from Zoë', 'Second order']);
 	});
 });

@@ -46,6 +46,7 @@ The mock and the AWS entry point run the same checks from `src/validation.ts` be
 
 - every address (To, CC, BCC, the sender and any reply-to) is a basic RFC 5322 addr-spec, or a name-addr, which SES also accepts. The display name must be a phrase of atoms separated by spaces (`Jane Doe <jane@example.com>`) or a single quoted-string (`"Doe, Jane" <jane@example.com>`), so a comma or semicolon outside quotes can't make one entry a list of addresses. The raw string is checked as given (no trimming). C0 and C1 control characters (CR, LF and NEL included), DEL, U+2028 and U+2029 are rejected, and the address is shown in the error message with control characters escaped;
 - at most 50 recipients per message (To + CC + BCC) → `InvalidInputException`;
+- the subject contains no C0 or C1 control characters (CR, LF and NEL included), DEL, U+2028 or U+2029 → `InvalidInputException`. A subject is one header line and SES rejects one with a line break; the subject is rejected rather than stripped, and is not echoed in the error message. SES documents no subject length limit, so none is checked;
 - at most 40 MB per message → `EmailSendFailedException`. This is an approximate early check: it measures the message as JSON, without MIME headers or transfer-encoding overhead (base64 or quoted-printable adds about a third), so a message somewhat under 40 MB can still be rejected by SES once encoded, with an SES error instead.
 
 `send()` throws; within `sendBatch()` an invalid message is marked `failed` in the per-entry results and not sent.
