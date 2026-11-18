@@ -26,6 +26,7 @@ import {
 	type KeyValue,
 	keyCondition,
 	keyOfItem,
+	MARSHALL_OPTIONS,
 	normalizeKey,
 	normalizeLimit,
 	planQuery,
@@ -154,7 +155,7 @@ export class KVStore<
 		installClientUserAgent(client);
 		// Drop undefined attributes on marshalling, as JSON does, so an optional
 		// field left undefined does not fail the write.
-		this.docClient = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
+		this.docClient = DynamoDBDocumentClient.from(client, { marshallOptions: MARSHALL_OPTIONS });
 	}
 
 	/**

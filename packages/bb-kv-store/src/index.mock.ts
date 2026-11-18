@@ -6,6 +6,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {
 	compareByBaseKey,
@@ -16,6 +17,7 @@ import {
 	type Item,
 	type KeyModel,
 	type KeyValue,
+	MARSHALL_OPTIONS,
 	matchesSort,
 	normalizeKey,
 	normalizeLimit,
@@ -63,6 +65,29 @@ export type * from './types.js';
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_ITEM_BYTES = 400 * 1024; // DynamoDB 400 KB limit
+
+/**
+ * Round-trip an item through the DocumentClient's marshaller, with the options the
+ * AWS runtime uses. The result shares nothing with the caller's value, and a value
+ * the marshaller rejects (an empty Set, `Date`, `NaN`, a class instance, an unsafe
+ * integer) fails here as it does on AWS.
+ */
+function marshalledCopy(item: Item): Item {
+	return unmarshall(marshall(item, MARSHALL_OPTIONS));
+}
+
+/** The JSON size of an item, counting a Set by its elements (`JSON.stringify` writes a Set as `{}`). */
+function itemBytes(item: Item): number {
+	return Buffer.byteLength(
+		JSON.stringify(item, (_field, value) => (value instanceof Set ? [...value] : value)),
+		'utf8',
+	);
+}
+
+/** A copy of a stored item to hand to a reader, so a caller changing what it read cannot change the store. */
+function readCopy(item: Item | undefined): Item | undefined {
+	return item === undefined ? undefined : structuredClone(item);
+}
 
 // ── KVStore (mock) ──────────────────────────────────────────────────────────
 
@@ -168,7 +193,7 @@ export class KVStore<
 	 * ```
 	 */
 	async get(key: KeyOf<Out, K>, _options?: GetOptions): Promise<Out | null> {
-		return this.reader.value(this.data.get(serializeKey(this.model, normalizeKey(this.model, key))));
+		return this.reader.value(readCopy(this.data.get(serializeKey(this.model, normalizeKey(this.model, key)))));
 	}
 
 	/**
@@ -409,7 +434,10 @@ export class KVStore<
 		const now = nowEpochSeconds();
 		return Promise.all(
 			keys.map((key) =>
-				this.reader.value(this.data.get(serializeKey(this.model, normalizeKey(this.model, key))), now),
+				this.reader.value(
+					readCopy(this.data.get(serializeKey(this.model, normalizeKey(this.model, key)))),
+					now,
+				),
 			),
 		);
 	}
@@ -510,11 +538,12 @@ export class KVStore<
 		expiry: Expiry | undefined,
 	): Promise<{ keyStr: string; item: Item }> {
 		const { keyAttrs, item } = await prepareItem(this.model, key, value, expiry);
-		const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+		const stored = marshalledCopy(item);
+		const bytes = itemBytes(stored);
 		if (bytes > MAX_ITEM_BYTES) {
 			throw blocksError(KVStoreErrors.ItemTooLarge, KVStoreMessages.itemTooLarge(bytes));
 		}
-		return { keyStr: serializeKey(this.model, keyAttrs), item };
+		return { keyStr: serializeKey(this.model, keyAttrs), item: stored };
 	}
 
 	/**
@@ -532,7 +561,7 @@ export class KVStore<
 	): Results<Out, K> {
 		return orderedResults<Entry<Out, K>>(
 			this.model,
-			this.reader.entry,
+			(item) => this.reader.entry(structuredClone(item)),
 			{ limit, startKey: startAfter, indexName, includeExpired },
 			ordered,
 			compare,

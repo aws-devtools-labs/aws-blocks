@@ -40,6 +40,13 @@ import type { Expiry, ReadValidationMode, TableOptions } from './types.js';
 /** A stored item: one DynamoDB attribute per top-level field, plus the block's `_bkv_` attributes. */
 export type Item = Record<string, unknown>;
 
+/**
+ * The DocumentClient's marshalling options. The AWS runtime passes them to its
+ * client and the mock marshals every write with them, so both store a value the
+ * same way.
+ */
+export const MARSHALL_OPTIONS = { removeUndefinedValues: true } as const;
+
 /** A key attribute value: a DynamoDB string key or number key. */
 export type KeyValue = string | number;
 

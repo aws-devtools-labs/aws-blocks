@@ -772,3 +772,98 @@ describe('a bad order, an unknown index and a bad indexes option fail the same w
 		}
 	});
 });
+
+describe('the mock stores and returns copies that went through the DocumentClient marshaller', () => {
+	const options = { key: { partitionKey: 'pk', sortKey: 'sk' } };
+	const key = { pk: 'a', sk: '1' };
+
+	test('changing a value after put() does not change the stored item', async () => {
+		const store = mockStore('copy-put', options);
+		const value = { ...key, tags: ['x'] };
+		await store.put(key, value);
+		value.tags.push('changed-after-put');
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('changing an item returned by get(), getBatch(), query() or scan() does not change the stored item', async () => {
+		const store = mockStore('copy-read', options);
+		await store.put(key, { ...key, tags: ['x'] });
+		(await store.get(key)).tags.push('1');
+		(await store.getBatch([key]))[0].tags.push('2');
+		const [queried]: any[] = await Array.fromAsync(store.query({ where: { pk: { equals: 'a' } } }));
+		queried.value.tags.push('3');
+		const [scanned]: any[] = await Array.fromAsync(store.scan());
+		scanned.value.tags.push('4');
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('putBatch() stores a copy too', async () => {
+		const store = mockStore('copy-batch', options);
+		const value = { ...key, tags: ['x'] };
+		await store.putBatch([{ key, value }]);
+		value.tags.push('changed-after-put');
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('values the marshaller rejects fail on put() and putBatch(), and nothing is written', async () => {
+		const store = mockStore('reject', options);
+		class Point {
+			x = 1;
+		}
+		const rejected: unknown[] = [
+			new Set(),
+			new Date(0),
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			new Point(),
+			/re/,
+			Number.MAX_SAFE_INTEGER + 1,
+		];
+		for (const data of rejected) {
+			await assert.rejects(store.put(key, { ...key, data }), `put ${String(data)}`);
+			await assert.rejects(store.putBatch([{ key, value: { ...key, data } }]), `putBatch ${String(data)}`);
+		}
+		assert.equal(await store.get(key), null);
+	});
+
+	test('undefined is dropped at any depth, as by the AWS client', async () => {
+		const store = mockStore('undefined', options);
+		await store.put(key, { ...key, data: { a: undefined, b: 1 }, list: [1, undefined, 2] });
+		assert.deepEqual(await store.get(key), { ...key, data: { b: 1 }, list: [1, 2] });
+	});
+
+	test('a rejected put() leaves the existing item unchanged', async () => {
+		const store = mockStore('reject-keeps', options);
+		await store.put(key, { ...key, tags: ['x'] });
+		await assert.rejects(store.put(key, { ...key, data: new Set() }));
+		assert.deepEqual((await store.get(key)).tags, ['x']);
+	});
+
+	test('values the marshaller converts read back converted: Map as an object, -0 as 0, bigint as a number', async () => {
+		const store = mockStore('converted', options);
+		await store.put(key, { ...key, data: { m: new Map([['a', 1]]), z: -0, n: 1n } });
+		const back = (await store.get(key)).data;
+		assert.deepEqual(back, { m: { a: 1 }, z: 0, n: 1 });
+		assert.ok(Object.is(back.z, 0));
+	});
+
+	test('a non-empty Set reads back as a Set, as on AWS', async () => {
+		const store = mockStore('set', options);
+		await store.put(key, { ...key, data: new Set(['a', 'b']) });
+		assert.deepEqual((await store.get(key)).data, new Set(['a', 'b']));
+	});
+
+	test('the 400 KB check counts the elements of a Set', async () => {
+		const store = mockStore('set-size', options);
+		const big = new Set(Array.from({ length: 50 }, (_, i) => `${i}`.padEnd(10_000, 'x')));
+		await assert.rejects(store.put(key, { ...key, data: big }), (e: unknown) =>
+			isBlocksError(e, KVStoreErrors.ItemTooLarge),
+		);
+	});
+
+	test('a plain string value still round-trips', async () => {
+		const store = mockStore('string');
+		await store.put('k', 'v');
+		assert.equal(await store.get('k'), 'v');
+	});
+});
