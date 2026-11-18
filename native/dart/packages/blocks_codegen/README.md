@@ -18,6 +18,12 @@ Add to `build.yaml` and place your `.spec.json` in `lib/`. Run:
 dart run build_runner build
 ```
 
+Generated clients are formatted at width 80 and start with
+`// dart format width=80`, so checked-in output passes `dart format` without a
+separate formatting step. The CLI and build_runner use the target package's
+Dart language version when available; direct generator calls default to Dart
+3.11 unless they pass `languageVersion`.
+
 ## Generated names
 
 Dart declares a union's arm classes at the top level, named `<Value><Suffix>`

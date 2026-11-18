@@ -6,7 +6,9 @@ import 'dart:convert';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // A generated model's `==` and `hashCode` used to compare list and map fields
 // with `==` and `hashCode`, which Dart's `List` and `Map` implement by

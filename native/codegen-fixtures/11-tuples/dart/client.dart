@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,20 +6,30 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
 class QueryRangeResultWhere {
   final (String, String) between;
 
-  const QueryRangeResultWhere({
-    required this.between,
-  });
+  const QueryRangeResultWhere({required this.between});
 
   factory QueryRangeResultWhere.fromJson(Map<String, dynamic> json) {
     return QueryRangeResultWhere(
-      between: ((json['between'] as List<dynamic>)[0] as String, (json['between'] as List<dynamic>)[1] as String),
+      between: (
+        (json['between'] as List<dynamic>)[0] as String,
+        (json['between'] as List<dynamic>)[1] as String,
+      ),
     );
   }
 
@@ -31,8 +42,7 @@ class QueryRangeResultWhere {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is QueryRangeResultWhere &&
-          between == other.between;
+      other is QueryRangeResultWhere && between == other.between;
 
   @override
   int get hashCode => between.hashCode;
@@ -41,22 +51,27 @@ class QueryRangeResultWhere {
   String toString() => 'QueryRangeResultWhere(between: $between)';
 }
 
-
 // --- API Namespaces ---
 
 class QueryRangeResult {
   final QueryRangeResultWhere where;
   final List<(String, int)> pairs;
 
-  const QueryRangeResult({
-    required this.where,
-    required this.pairs,
-  });
+  const QueryRangeResult({required this.where, required this.pairs});
 
   factory QueryRangeResult.fromJson(Map<String, dynamic> json) {
     return QueryRangeResult(
-      where: QueryRangeResultWhere.fromJson(json['where'] as Map<String, dynamic>),
-      pairs: (json['pairs'] as List<dynamic>).map((e) => ((e as List<dynamic>)[0] as String, ((e as List<dynamic>)[1] as num).toInt())).toList(),
+      where: QueryRangeResultWhere.fromJson(
+        json['where'] as Map<String, dynamic>,
+      ),
+      pairs: (json['pairs'] as List<dynamic>)
+          .map(
+            (e) => (
+              (e as List<dynamic>)[0] as String,
+              ((e as List<dynamic>)[1] as num).toInt(),
+            ),
+          )
+          .toList(),
     );
   }
 
@@ -81,23 +96,27 @@ class QueryRangeResult {
   String toString() => 'QueryRangeResult(where: $where, pairs: $pairs)';
 }
 
-
 class GetShortTuplesResult {
   final List<num> one;
   final (String, int?) short;
 
-  GetShortTuplesResult({
-    required this.one,
-    required this.short,
-  }) {
-    if (!(one.length >= 1)) throw ArgumentError('one must have at least 1 items');
-    if (!(one.length <= 1)) throw ArgumentError('one must have at most 1 items');
+  GetShortTuplesResult({required this.one, required this.short}) {
+    if (!(one.length >= 1))
+      throw ArgumentError('one must have at least 1 items');
+    if (!(one.length <= 1))
+      throw ArgumentError('one must have at most 1 items');
   }
 
   factory GetShortTuplesResult.fromJson(Map<String, dynamic> json) {
     return GetShortTuplesResult(
       one: (json['one'] as List<dynamic>).cast<num>(),
-      short: ((json['short'] as List<dynamic>)[0] as String, ((json['short'] as List<dynamic>).length > 1 ? (json['short'] as List<dynamic>)[1] : null) as int?),
+      short: (
+        (json['short'] as List<dynamic>)[0] as String,
+        ((json['short'] as List<dynamic>).length > 1
+                ? (json['short'] as List<dynamic>)[1]
+                : null)
+            as int?,
+      ),
     );
   }
 
@@ -122,22 +141,31 @@ class GetShortTuplesResult {
   String toString() => 'GetShortTuplesResult(one: $one, short: $short)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<(num, num, String)> getCoords() async {
     final result = await _client.call('api.getCoords', const <dynamic>[]);
-    return ((result as List<dynamic>)[0] as num, (result as List<dynamic>)[1] as num, (result as List<dynamic>)[2] as String);
+    return (
+      (result as List<dynamic>)[0] as num,
+      (result as List<dynamic>)[1] as num,
+      (result as List<dynamic>)[2] as String,
+    );
   }
 
   Future<(String, int)> getPair() async {
     final result = await _client.call('api.getPair', const <dynamic>[]);
-    return ((result as List<dynamic>)[0] as String, ((result as List<dynamic>)[1] as num).toInt());
+    return (
+      (result as List<dynamic>)[0] as String,
+      ((result as List<dynamic>)[1] as num).toInt(),
+    );
   }
 
-  Future<QueryRangeResult> queryRange({required (num, num) range, (String, int?)? cursor}) async {
+  Future<QueryRangeResult> queryRange({
+    required (num, num) range,
+    (String, int?)? cursor,
+  }) async {
     final params = <dynamic>[
       [range.$1, range.$2],
       if (cursor != null) [cursor.$1, cursor.$2],
@@ -146,15 +174,14 @@ class Api {
     return QueryRangeResult.fromJson(result as Map<String, dynamic>);
   }
 
-  Future<GetShortTuplesResult> getShortTuples({required List<String> one}) async {
-    final params = <dynamic>[
-      one,
-    ];
+  Future<GetShortTuplesResult> getShortTuples({
+    required List<String> one,
+  }) async {
+    final params = <dynamic>[one];
     final result = await _client.call('api.getShortTuples', params);
     return GetShortTuplesResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -173,4 +200,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

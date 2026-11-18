@@ -6,7 +6,9 @@ import 'dart:convert';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // A component schema that isn't a model, an enum or a discriminated union —
 // a string, an array, a map, a nullable, or a union the generator types as
@@ -168,7 +170,7 @@ void main() {
         "      one: json['one'] as dynamic,\n"
         "      many: (json['many'] as List<dynamic>).cast<dynamic>(),\n"
         "      kind: Kind.fromJson(json['kind'] as Map<String, dynamic>),\n"
-        "      loop: json['loop'] as dynamic,\n",
+        "      loop: json['loop'] as dynamic\n",
       ),
     );
   });

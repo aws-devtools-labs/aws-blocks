@@ -4,6 +4,8 @@
 import 'dart:io';
 
 import 'package:blocks_codegen/blocks_codegen.dart';
+import 'package:dart_style/dart_style.dart';
+import 'package:pub_semver/pub_semver.dart';
 import 'package:test/test.dart';
 
 /// The golden of a fixture whose spec the generator refuses: its message.
@@ -66,6 +68,11 @@ void main() {
         }
         return;
       }
+      expect(
+        DartFormatter(languageVersion: Version(3, 11, 0)).format(output),
+        output,
+        reason: '$name output must already be formatted',
+      );
 
       if (regenerate) {
         goldenDir.createSync(recursive: true);

@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -14,17 +24,18 @@ sealed class SetStatusResultStatus {
   static const inactive = SetStatusResultStatusKnown.inactive;
   static const pending = SetStatusResultStatusKnown.pending;
   static const values = SetStatusResultStatusKnown.values;
-  static final Map<String, SetStatusResultStatusKnown> _byJson = SetStatusResultStatusKnown.values.asNameMap();
+  static final Map<String, SetStatusResultStatusKnown> _byJson =
+      SetStatusResultStatusKnown.values.asNameMap();
 
   String toJson();
-  static SetStatusResultStatus fromJson(String json) => _byJson[json] ?? SetStatusResultStatusUnknown(json);
+  static SetStatusResultStatus fromJson(String json) =>
+      _byJson[json] ?? SetStatusResultStatusUnknown(json);
 }
 
 enum SetStatusResultStatusKnown implements SetStatusResultStatus {
   active,
   inactive,
-  pending
-;
+  pending;
 
   @override
   String toJson() => name;
@@ -46,31 +57,27 @@ final class SetStatusResultStatusUnknown implements SetStatusResultStatus {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'SetStatusResultStatusUnknown' '($value)';
+  String toString() =>
+      'SetStatusResultStatusUnknown'
+      '($value)';
 }
-
 
 // --- API Namespaces ---
 
 enum ApiSetStatusStatus {
   active,
   inactive,
-  pending
-;
+  pending;
 
   String toJson() => name;
   static ApiSetStatusStatus fromJson(String json) => values.byName(json);
 }
 
-
 class SetStatusResult {
   final SetStatusResultStatus status;
   final String updatedAt;
 
-  const SetStatusResult({
-    required this.status,
-    required this.updatedAt,
-  });
+  const SetStatusResult({required this.status, required this.updatedAt});
 
   factory SetStatusResult.fromJson(Map<String, dynamic> json) {
     return SetStatusResult(
@@ -80,10 +87,7 @@ class SetStatusResult {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'status': status.toJson(),
-      'updatedAt': updatedAt,
-    };
+    return {'status': status.toJson(), 'updatedAt': updatedAt};
   }
 
   @override
@@ -97,23 +101,22 @@ class SetStatusResult {
   int get hashCode => Object.hash(status, updatedAt);
 
   @override
-  String toString() => 'SetStatusResult(status: $status, updatedAt: $updatedAt)';
+  String toString() =>
+      'SetStatusResult(status: $status, updatedAt: $updatedAt)';
 }
-
 
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
-  Future<SetStatusResult> setStatus({required ApiSetStatusStatus status}) async {
-    final params = <dynamic>[
-      status.toJson(),
-    ];
+  Future<SetStatusResult> setStatus({
+    required ApiSetStatusStatus status,
+  }) async {
+    final params = <dynamic>[status.toJson()];
     final result = await _client.call('api.setStatus', params);
     return SetStatusResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -132,4 +135,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

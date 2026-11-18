@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -15,10 +25,7 @@ class ListItemsResult {
   final String id;
   final String name;
 
-  const ListItemsResult({
-    required this.id,
-    required this.name,
-  });
+  const ListItemsResult({required this.id, required this.name});
 
   factory ListItemsResult.fromJson(Map<String, dynamic> json) {
     return ListItemsResult(
@@ -28,18 +35,13 @@ class ListItemsResult {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'name': name,
-    };
+    return {'id': id, 'name': name};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ListItemsResult &&
-          id == other.id &&
-          name == other.name;
+      other is ListItemsResult && id == other.id && name == other.name;
 
   @override
   int get hashCode => Object.hash(id, name);
@@ -47,7 +49,6 @@ class ListItemsResult {
   @override
   String toString() => 'ListItemsResult(id: $id, name: $name)';
 }
-
 
 class Api {
   final BlocksClient _client;
@@ -60,10 +61,11 @@ class Api {
 
   Future<List<ListItemsResult>> listItems() async {
     final result = await _client.call('api.listItems', const <dynamic>[]);
-    return (result as List<dynamic>).map((e) => ListItemsResult.fromJson(e as Map<String, dynamic>)).toList();
+    return (result as List<dynamic>)
+        .map((e) => ListItemsResult.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -82,4 +84,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

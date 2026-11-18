@@ -6,7 +6,9 @@ import 'dart:io';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // A string enum a response carries is generated open: a value the client was
 // generated without decodes to `XUnknown` holding the string, instead of
@@ -138,11 +140,13 @@ void main() {
   // Runs generated code: decodes payloads carrying values the client doesn't
   // know, then encodes them back. Needs the in-repo blocks_runtime, so it
   // builds a scratch package with a path dependency on it.
-  test('unknown enum values decode and round-trip', () async {
-    final work = Directory.systemTemp.createTempSync('open_enum_test');
-    addTearDown(() => work.deleteSync(recursive: true));
-    final runtime = Directory('../blocks_runtime').absolute.path;
-    File('${work.path}/pubspec.yaml').writeAsStringSync('''
+  test(
+    'unknown enum values decode and round-trip',
+    () async {
+      final work = Directory.systemTemp.createTempSync('open_enum_test');
+      addTearDown(() => work.deleteSync(recursive: true));
+      final runtime = Directory('../blocks_runtime').absolute.path;
+      File('${work.path}/pubspec.yaml').writeAsStringSync('''
 name: open_enum_check
 publish_to: none
 environment:
@@ -151,32 +155,34 @@ dependencies:
   blocks_runtime:
     path: $runtime
 ''');
-    Directory('${work.path}/bin').createSync();
-    final tasksFile = File('${work.path}/bin/tasks.dart');
-    tasksFile.writeAsStringSync(_generate('45-open-enums'));
-    final authFile = File('${work.path}/bin/auth.dart');
-    authFile.writeAsStringSync(_generate('18-hybrid-arm'));
-    File('${work.path}/bin/collide.dart').writeAsStringSync(
-      const DartCodeGenerator().generate(
-        CodegenModelBuilder().build(
-          const OpenRpcParser().parse(_collisionSpec),
+      Directory('${work.path}/bin').createSync();
+      final tasksFile = File('${work.path}/bin/tasks.dart');
+      tasksFile.writeAsStringSync(_generate('45-open-enums'));
+      final authFile = File('${work.path}/bin/auth.dart');
+      authFile.writeAsStringSync(_generate('18-hybrid-arm'));
+      File('${work.path}/bin/collide.dart').writeAsStringSync(
+        const DartCodeGenerator().generate(
+          CodegenModelBuilder().build(
+            const OpenRpcParser().parse(_collisionSpec),
+          ),
         ),
-      ),
-    );
-    File('${work.path}/bin/main.dart').writeAsStringSync(_check);
+      );
+      File('${work.path}/bin/main.dart').writeAsStringSync(_check);
 
-    final get = await Process.run(Platform.resolvedExecutable, [
-      'pub',
-      'get',
-    ], workingDirectory: work.path);
-    expect(get.exitCode, 0, reason: '${get.stdout}\n${get.stderr}');
-    final run = await Process.run(Platform.resolvedExecutable, [
-      'run',
-      'bin/main.dart',
-    ], workingDirectory: work.path);
-    expect(run.exitCode, 0, reason: '${run.stdout}\n${run.stderr}');
-    expect(run.stdout, contains('ok'));
-  }, timeout: const Timeout(Duration(minutes: 3)));
+      final get = await Process.run(Platform.resolvedExecutable, [
+        'pub',
+        'get',
+      ], workingDirectory: work.path);
+      expect(get.exitCode, 0, reason: '${get.stdout}\n${get.stderr}');
+      final run = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'bin/main.dart',
+      ], workingDirectory: work.path);
+      expect(run.exitCode, 0, reason: '${run.stdout}\n${run.stderr}');
+      expect(run.stdout, contains('ok'));
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
 
 const _check = r'''

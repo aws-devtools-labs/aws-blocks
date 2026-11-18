@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -14,11 +24,11 @@ export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksCli
 class ApiSetTagsInput {
   final List<String> tags;
 
-  ApiSetTagsInput({
-    required this.tags,
-  }) {
-    if (!(tags.length >= 1)) throw ArgumentError('tags must have at least 1 items');
-    if (!(tags.length <= 10)) throw ArgumentError('tags must have at most 10 items');
+  ApiSetTagsInput({required this.tags}) {
+    if (!(tags.length >= 1))
+      throw ArgumentError('tags must have at least 1 items');
+    if (!(tags.length <= 10))
+      throw ArgumentError('tags must have at most 10 items');
   }
 
   factory ApiSetTagsInput.fromJson(Map<String, dynamic> json) {
@@ -28,16 +38,13 @@ class ApiSetTagsInput {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'tags': tags,
-    };
+    return {'tags': tags};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ApiSetTagsInput &&
-          blocksDeepEquals(tags, other.tags);
+      other is ApiSetTagsInput && blocksDeepEquals(tags, other.tags);
 
   @override
   int get hashCode => blocksDeepHash(tags);
@@ -46,31 +53,22 @@ class ApiSetTagsInput {
   String toString() => 'ApiSetTagsInput(tags: $tags)';
 }
 
-
 class SetTagsResult {
   final bool ok;
 
-  const SetTagsResult({
-    required this.ok,
-  });
+  const SetTagsResult({required this.ok});
 
   factory SetTagsResult.fromJson(Map<String, dynamic> json) {
-    return SetTagsResult(
-      ok: json['ok'] as bool,
-    );
+    return SetTagsResult(ok: json['ok'] as bool);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'ok': ok,
-    };
+    return {'ok': ok};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SetTagsResult &&
-          ok == other.ok;
+      identical(this, other) || other is SetTagsResult && ok == other.ok;
 
   @override
   int get hashCode => ok.hashCode;
@@ -79,20 +77,16 @@ class SetTagsResult {
   String toString() => 'SetTagsResult(ok: $ok)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<SetTagsResult> setTags({required ApiSetTagsInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('api.setTags', params);
     return SetTagsResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -111,4 +105,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -65,23 +75,20 @@ class GetEventResult {
   int get hashCode => Object.hash(id, createdAt, date, time, url, email);
 
   @override
-  String toString() => 'GetEventResult(id: $id, createdAt: $createdAt, date: $date, time: $time, url: $url, email: $email)';
+  String toString() =>
+      'GetEventResult(id: $id, createdAt: $createdAt, date: $date, time: $time, url: $url, email: $email)';
 }
-
 
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<GetEventResult> getEvent({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('api.getEvent', params);
     return GetEventResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -100,4 +107,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

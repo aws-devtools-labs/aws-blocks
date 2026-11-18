@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -31,11 +41,7 @@ class CreateItemResult {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'role': role,
-      'active': active,
-      'retries': retries,
-    };
+    return {'role': role, 'active': active, 'retries': retries};
   }
 
   @override
@@ -50,9 +56,9 @@ class CreateItemResult {
   int get hashCode => Object.hash(role, active, retries);
 
   @override
-  String toString() => 'CreateItemResult(role: $role, active: $active, retries: $retries)';
+  String toString() =>
+      'CreateItemResult(role: $role, active: $active, retries: $retries)';
 }
-
 
 class Api {
   final BlocksClient _client;
@@ -63,7 +69,6 @@ class Api {
     return CreateItemResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -82,4 +87,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

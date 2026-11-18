@@ -6,7 +6,9 @@ import 'dart:io';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // A union with a string discriminator that a response carries is generated
 // open: an object whose discriminator names no arm decodes to `XUnknown`,
@@ -53,11 +55,13 @@ void main() {
     expect(output, isNot(contains('UpdateAttributesResultUnknown')));
   });
 
-  test('unknown arms decode and round-trip', () async {
-    final work = Directory.systemTemp.createTempSync('open_union_test');
-    addTearDown(() => work.deleteSync(recursive: true));
-    final runtime = Directory('../blocks_runtime').absolute.path;
-    File('${work.path}/pubspec.yaml').writeAsStringSync('''
+  test(
+    'unknown arms decode and round-trip',
+    () async {
+      final work = Directory.systemTemp.createTempSync('open_union_test');
+      addTearDown(() => work.deleteSync(recursive: true));
+      final runtime = Directory('../blocks_runtime').absolute.path;
+      File('${work.path}/pubspec.yaml').writeAsStringSync('''
 name: open_union_check
 publish_to: none
 environment:
@@ -66,30 +70,32 @@ dependencies:
   blocks_runtime:
     path: $runtime
 ''');
-    Directory('${work.path}/bin').createSync();
-    final tasksFile = File('${work.path}/bin/tasks.dart');
-    tasksFile.writeAsStringSync(_generate('45-open-enums'));
-    File('${work.path}/bin/collide.dart').writeAsStringSync(
-      const DartCodeGenerator().generate(
-        CodegenModelBuilder().build(
-          const OpenRpcParser().parse(_collisionSpec),
+      Directory('${work.path}/bin').createSync();
+      final tasksFile = File('${work.path}/bin/tasks.dart');
+      tasksFile.writeAsStringSync(_generate('45-open-enums'));
+      File('${work.path}/bin/collide.dart').writeAsStringSync(
+        const DartCodeGenerator().generate(
+          CodegenModelBuilder().build(
+            const OpenRpcParser().parse(_collisionSpec),
+          ),
         ),
-      ),
-    );
-    File('${work.path}/bin/main.dart').writeAsStringSync(_check);
+      );
+      File('${work.path}/bin/main.dart').writeAsStringSync(_check);
 
-    final get = await Process.run(Platform.resolvedExecutable, [
-      'pub',
-      'get',
-    ], workingDirectory: work.path);
-    expect(get.exitCode, 0, reason: '${get.stdout}\n${get.stderr}');
-    final run = await Process.run(Platform.resolvedExecutable, [
-      'run',
-      'bin/main.dart',
-    ], workingDirectory: work.path);
-    expect(run.exitCode, 0, reason: '${run.stdout}\n${run.stderr}');
-    expect(run.stdout, contains('ok'));
-  }, timeout: const Timeout(Duration(minutes: 3)));
+      final get = await Process.run(Platform.resolvedExecutable, [
+        'pub',
+        'get',
+      ], workingDirectory: work.path);
+      expect(get.exitCode, 0, reason: '${get.stdout}\n${get.stderr}');
+      final run = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'bin/main.dart',
+      ], workingDirectory: work.path);
+      expect(run.exitCode, 0, reason: '${run.stdout}\n${run.stderr}');
+      expect(run.stdout, contains('ok'));
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
 
 const _check = r'''
