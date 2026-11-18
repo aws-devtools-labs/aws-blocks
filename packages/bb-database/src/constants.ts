@@ -3,6 +3,7 @@
 
 import { createHash } from 'node:crypto';
 import { escapeRegExp, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { DEFAULT_DB_CONNECTION_NAME, dbConnectionParameterName } from '@aws-blocks/core/db-naming';
 import type { ClusterType } from './types.js';
 
 export const MIGRATION_LAMBDA_TIMEOUT_MINUTES = 10;
@@ -86,7 +87,9 @@ export const LOCAL_CONNECTION_SCOPE = 'bb-database';
  * The SSM SecureString that holds the connection string of `DatabaseCluster.fromExisting({ name })`. The stack name
  * makes it one parameter per stage; the CDK layer, the Lambda runtime and the CLI all derive it here.
  */
-export const connectionParameterName = (stackName: string, name: string): string => `/${stackName}-${name}`;
+export const connectionParameterName: (stackName: string, name: string) => string = dbConnectionParameterName;
+/** The connection name the command line uses when `--name` is not given. */
+export const DEFAULT_CONNECTION_NAME = DEFAULT_DB_CONNECTION_NAME;
 
 /**
  * On an existing database, how long a migration transaction may sit idle before the server ends it. A function
@@ -95,8 +98,14 @@ export const connectionParameterName = (stackName: string, name: string): string
  */
 export const EXTERNAL_MIGRATION_IDLE_TIMEOUT_MS = 60 * 1000;
 
+/** The two bookkeeping tables of the migration runner, which are not tables of the application. */
+export const LEDGER_TABLE_NAMES: readonly string[] = ['_migrations', '_migration_progress'];
+
 /** What a connection `name` may contain: it becomes part of an SSM parameter name. */
 export const CONNECTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+/** The rule of {@link CONNECTION_NAME_PATTERN} in words, for the messages that refuse a name. */
+export const CONNECTION_NAME_RULE =
+	"must start with a letter or a digit and contain only letters, digits, '.', '_' and '-'";
 
 export const DEFAULT_SCHEMA = 'public';
 

@@ -14,7 +14,8 @@ import {
 } from './constants.js';
 import { iamAuthToken, PgEngine } from './engines/pg-engine.js';
 import { configError } from './errors.js';
-import { externalEngine } from './external/engine.js';
+import { sourceConnectionLabel, ssmConnectionLabel } from './external/connection.js';
+import { externalEngineFrom } from './external/engine.js';
 import { existingCluster, registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
@@ -80,43 +81,44 @@ export class Database extends Scope {
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });
-		const { ref, schemaName, clusterFullId, external } = registerDatabase(this, id, this.fullId, options);
-		this.cluster = ref;
-		this.schemaName = schemaName;
-		const kind = ref.kind;
+		const resolved = registerDatabase(this, id, this.fullId, options);
+		const { clusterFullId } = resolved;
+		this.cluster = resolved.ref;
+		this.schemaName = resolved.schemaName;
 
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: clusterFullId,
 			schemaName: this.schemaName,
-			...(external ? {} : readClusterConfig(clusterFullId)),
+			...(resolved.external ? {} : readClusterConfig(clusterFullId)),
 		});
 
-		// The connection string of an existing database: the app's own store, or the SSM SecureString that the
-		// CDK layer granted and `cdk-blocks db connect --stage` wrote. The child setting is built here, in the
-		// constructor, with the id and the name the CDK layer used; the value is read with the first statement.
-		const connection = external ? this.connectionSource(external) : undefined;
-
-		const buildEngine = async (): Promise<PgEngine> => {
-			if (connection) {
-				return externalEngine({ ...connection, ca: external?.ca, schemaName: this.schemaName });
-			}
-			if (kind === 'external')
-				throw configError(`Database '${this.fullId}': 'cluster' is not a usable reference.`);
-			const { clusterEndpoint, region } = getSdkIdentifiers(this);
-			if (!clusterEndpoint || !region) {
-				throw configError(
-					`Database '${this.fullId}' is not configured: missing ${clusterConfigKey(clusterFullId, 'ENDPOINT')} / _REGION. Ensure the cluster is provisioned.`,
-				);
-			}
-			const role = sanitizeDbRoleName(clusterFullId);
-			return new PgEngine({
-				kind,
-				endpoint: clusterEndpoint,
-				role,
-				getAuthToken: iamAuthToken({ kind, endpoint: clusterEndpoint, region, role }),
-				searchPath: searchPathFor(this.schemaName),
-			});
-		};
+		let buildEngine: () => Promise<PgEngine>;
+		if (resolved.external) {
+			// The connection string of an existing database: the app's own store, or the SSM SecureString that
+			// `cdk-blocks db connect --stage` wrote and the CDK layer lets the app role read. The child setting
+			// is built here, in the constructor; the value is read with the first statement.
+			const { ca } = resolved.external;
+			const { source, label } = this.connectionSource(resolved.external);
+			buildEngine = () => externalEngineFrom(source, label, { ca, schemaName: this.schemaName });
+		} else {
+			const kind = resolved.ref.kind;
+			buildEngine = async () => {
+				const { clusterEndpoint, region } = getSdkIdentifiers(this);
+				if (!clusterEndpoint || !region) {
+					throw configError(
+						`Database '${this.fullId}' is not configured: missing ${clusterConfigKey(clusterFullId, 'ENDPOINT')} / _REGION. Ensure the cluster is provisioned.`,
+					);
+				}
+				const role = sanitizeDbRoleName(clusterFullId);
+				return new PgEngine({
+					kind,
+					endpoint: clusterEndpoint,
+					role,
+					getAuthToken: iamAuthToken({ kind, endpoint: clusterEndpoint, region, role }),
+					searchPath: searchPathFor(this.schemaName),
+				});
+			};
+		}
 
 		this.core = new DatabaseCore({ engine: buildEngine });
 		registerInternalAccess(this, {
@@ -155,10 +157,7 @@ export class Database extends Scope {
 
 	private connectionSource(external: ExistingClusterRef): { source: ConnectionStringSource; label: string } {
 		if (external.connectionString) {
-			return {
-				source: external.connectionString,
-				label: `The connection string source of Database '${this.fullId}'`,
-			};
+			return { source: external.connectionString, label: sourceConnectionLabel(this.fullId) };
 		}
 		// Tools load this entry outside a function (client generation does), where there is no stack name. The
 		// constructor must not fail there, so a missing name stops the first statement instead.
@@ -179,7 +178,7 @@ export class Database extends Scope {
 					return setting.get();
 				},
 			},
-			label: `The SSM parameter ${parameterName}`,
+			label: ssmConnectionLabel(parameterName),
 		};
 	}
 }

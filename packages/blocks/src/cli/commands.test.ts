@@ -175,17 +175,18 @@ describe('passthrough commands', () => {
 		assert.strictEqual(spec.cwd, root);
 	});
 
-	it('resolves the relative paths of db and generate types from the directory the command runs in', async () => {
+	it('gives db the directory the command runs in, and resolves the relative paths of generate types', async () => {
 		const root = fixtureApp();
 		const sub = join(root, 'aws-blocks');
-		// These runs have no terminal, so each one ends with --no-input.
+		// bb-database runs from the project root and resolves the paths of its own options, so it gets the
+		// tokens as typed and the directory they were typed in. These runs have no terminal: each ends with --no-input.
 		const db = await runCli(['db', 'status', './migrations', '--stage', 'sandbox', '--name', 'main'], {
 			cwd: sub,
 		});
 		assert.strictEqual(db.code, 0, db.stderr);
 		assert.deepStrictEqual(db.spawned[0].args.slice(1), [
 			'status',
-			join(sub, 'migrations'),
+			'./migrations',
 			'--stage',
 			'sandbox',
 			'--name',
@@ -193,40 +194,13 @@ describe('passthrough commands', () => {
 			'--no-input',
 		]);
 		assert.strictEqual(db.spawned[0].cwd, root);
-		const types = await runCli(['db', 'types', '--out', 'gen/types.ts'], { cwd: sub });
-		assert.deepStrictEqual(types.spawned[0].args.slice(1), [
-			'types',
-			'--out',
-			join(sub, 'gen', 'types.ts'),
-			'--no-input',
-		]);
-		// Ids are not paths either.
-		const block = await runCli(['db', 'status', '--block', 'main', '--cluster', 'shared', '--type', 'aurora'], {
-			cwd: sub,
-		});
-		assert.deepStrictEqual(block.spawned[0].args.slice(1), [
-			'status',
-			'--block',
-			'main',
-			'--cluster',
-			'shared',
-			'--type',
-			'aurora',
-			'--no-input',
-		]);
-		// The value of --mark-applied is a file name in the migrations directory, not a path: it is not resolved.
-		const mark = await runCli(['db', 'migrate', './migrations', '--mark-applied', '000_baseline.sql'], { cwd: sub });
-		assert.deepStrictEqual(mark.spawned[0].args.slice(1), [
-			'migrate',
-			join(sub, 'migrations'),
-			'--mark-applied',
-			'000_baseline.sql',
-			'--no-input',
-		]);
-		const connect = await runCli(['db', 'connect', '--ca=certs/ca.crt'], { cwd: sub });
+		assert.strictEqual(db.spawned[0].env.BB_DATABASE_START_DIR, sub);
+		const connect = await runCli(['db', 'connect', '--ca=certs/ca.crt', '--block', 'main'], { cwd: sub });
 		assert.deepStrictEqual(connect.spawned[0].args.slice(1), [
 			'connect',
-			`--ca=${join(sub, 'certs', 'ca.crt')}`,
+			'--ca=certs/ca.crt',
+			'--block',
+			'main',
 			'--no-input',
 		]);
 		// bb-database reads no `--`; the CLI drops the one that ends its own options.

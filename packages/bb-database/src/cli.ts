@@ -14,14 +14,20 @@
  * The connection string is read from a hidden prompt or from stdin. It is never an argument and never printed.
  */
 
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { connect, linesToPaste, markApplied, migrate, type Stage, status, types } from './cli/commands.js';
+import type { Stage, StatusResult, TypesResult } from './cli/commands.js';
 import { isUsageError, note, routeLogsToStderr, scrub, usageError } from './cli/io.js';
-import { type BlockFlags, blockStatus, blockTypes } from './cli/owned.js';
-import { DEFAULT_SCHEMA } from './constants.js';
+import type { BlockFlags } from './cli/owned.js';
+import { DEFAULT_CONNECTION_NAME, DEFAULT_SCHEMA } from './constants.js';
+import { causeChain } from './errors.js';
 
 // The name in the usage text: `bb-database`, or the command of a wrapper that runs this file (`cdk-blocks db`).
 const COMMAND = process.env.BB_DATABASE_COMMAND || 'bb-database';
+// A wrapper runs this file from the project root; a path the user typed is relative to their own directory.
+const START_DIR = process.env.BB_DATABASE_START_DIR;
+const fromCaller = (path: string | undefined): string | undefined =>
+	path === undefined || !START_DIR ? path : resolve(START_DIR, path);
 
 const HELP = `Usage: ${COMMAND} <command> [options]
 
@@ -72,27 +78,32 @@ async function run(argv: string[]): Promise<{ json: unknown; text: string }> {
 		throw usageError(e instanceof Error ? e.message : String(e));
 	}
 	const { values, positionals } = parsed;
-	const [command, dir] = positionals;
+	const command = positionals[0];
+	const dir = fromCaller(positionals[1]);
 	if (values.help || !command) return { json: { ok: true, help: HELP }, text: HELP };
 	const common = {
-		name: values.name ?? 'db-url',
+		name: values.name ?? DEFAULT_CONNECTION_NAME,
 		schema: values.schema ?? DEFAULT_SCHEMA,
 		noInput: values['no-input'] ?? false,
 		yes: values.yes ?? false,
 	};
-	const block = blockFlags(values, dir);
-	if (block && (command === 'connect' || command === 'migrate')) {
-		throw usageError(
-			`${command} is for an existing database. A block that provisions its cluster applies its files itself: ` +
-				'at its first statement locally, and during the deploy.',
-		);
+	const block = blockFlags(values, command, dir);
+	if (!COMMANDS.includes(command)) throw usageError(`Unknown command '${command}'.\n\n${HELP}`);
+	if (block) {
+		// Loaded here: only these two commands need the local database engine.
+		const { blockStatus, blockTypes } = await import('./cli/owned.js');
+		return command === 'types'
+			? typesOutput(await blockTypes({ ...block, out: fromCaller(values.out) }))
+			: statusOutput(await blockStatus(block));
 	}
+	// Loaded after the checks above, so help and a usage error do not load the database driver.
+	const { connect, linesToPaste, markApplied, migrate, status, types } = await import('./cli/commands.js');
 	switch (command) {
 		case 'connect': {
 			const result = await connect({
 				...common,
 				stage: stage(values.stage),
-				ca: values.ca,
+				ca: fromCaller(values.ca),
 				valueStdin: values['value-stdin'] ?? false,
 				checkOnly: values['check-only'] ?? false,
 			});
@@ -136,7 +147,7 @@ async function run(argv: string[]): Promise<{ json: unknown; text: string }> {
 			const result = await migrate({
 				...common,
 				dir,
-				types: values['no-types'] ? false : (values.types ?? ''),
+				types: values['no-types'] ? false : (fromCaller(values.types) ?? ''),
 			});
 			const text =
 				(result.applied.length
@@ -144,33 +155,31 @@ async function run(argv: string[]): Promise<{ json: unknown; text: string }> {
 					: 'No pending files.') + (result.types ? `\nWrote ${result.types}.` : '');
 			return { json: result, text };
 		}
-		case 'types': {
-			const result = block
-				? await blockTypes({ ...block, out: values.out ?? 'aws-blocks/database.types.ts' })
-				: await types({ ...common, out: values.out });
-			return { json: result, text: `Wrote ${result.out} (${result.tables.length} table(s)).` };
-		}
-		case 'status': {
-			if (block && values.stage !== undefined) {
-				throw usageError('status --block reads the local database; it does not take --stage.');
-			}
-			const result = block
-				? await blockStatus(block)
-				: await status({ ...common, dir, stage: stage(values.stage) });
-			const text =
-				`Applied: ${result.applied.length}   Pending: ${result.pending.length}` +
-				result.pending.map((f) => `\n  ${f}`).join('') +
-				('note' in result && result.note ? `\n${result.note}` : '');
-			return { json: result, text };
-		}
+		case 'types':
+			return typesOutput(await types({ ...common, out: fromCaller(values.out) }));
 		default:
-			throw usageError(`Unknown command '${command}'.\n\n${HELP}`);
+			return statusOutput(await status({ ...common, dir, stage: stage(values.stage) }));
 	}
+}
+
+const COMMANDS = ['connect', 'migrate', 'types', 'status'];
+
+function typesOutput(result: TypesResult): { json: unknown; text: string } {
+	return { json: result, text: `Wrote ${result.out} (${result.tables.length} table(s)).` };
+}
+
+function statusOutput(result: StatusResult): { json: unknown; text: string } {
+	const text =
+		`Applied: ${result.applied.length}   Pending: ${result.pending.length}` +
+		result.pending.map((f) => `\n  ${f}`).join('') +
+		(result.note ? `\n${result.note}` : '');
+	return { json: result, text };
 }
 
 /** The flags of a block that provisions its cluster, when `--block` names one. */
 function blockFlags(
-	values: { block?: string; cluster?: string; type?: string; schema?: string; name?: string },
+	values: { block?: string; cluster?: string; type?: string; schema?: string; name?: string; stage?: string },
+	command: string,
 	dir: string | undefined,
 ): BlockFlags | undefined {
 	if (values.block === undefined) {
@@ -180,10 +189,21 @@ function blockFlags(
 		return undefined;
 	}
 	if (values.name !== undefined) {
-		throw usageError('--name is the connection of an existing database; --block is a block that provisions its cluster.');
+		throw usageError(
+			'--name is the connection of an existing database; --block is a block that provisions its cluster.',
+		);
 	}
 	const type = values.type ?? 'dsql';
 	if (type !== 'dsql' && type !== 'aurora') throw usageError("--type must be 'dsql' or 'aurora'.");
+	if (command === 'connect' || command === 'migrate') {
+		throw usageError(
+			`${command} is for an existing database. A block that provisions its cluster applies its files itself: ` +
+				'at its first statement locally, and during the deploy.',
+		);
+	}
+	if (command === 'status' && values.stage !== undefined) {
+		throw usageError('status --block reads the local database; it does not take --stage.');
+	}
 	return { block: values.block, cluster: values.cluster, type, schema: values.schema, dir };
 }
 
@@ -217,7 +237,7 @@ function parse(argv: string[]) {
 // The driver error under the block's fixed message says why a connection was refused (trust, address, login).
 function reason(e: unknown): string {
 	const parts: string[] = [];
-	for (let err: unknown = e, depth = 0; err instanceof Error && depth < 5; err = err.cause, depth++) {
+	for (const err of causeChain(e)) {
 		// The block's errors repeat their name at the start of the message; the name is reported separately.
 		const message = err.message.startsWith(`${err.name}: `) ? err.message.slice(err.name.length + 2) : err.message;
 		if (message && !parts.includes(message)) parts.push(message);

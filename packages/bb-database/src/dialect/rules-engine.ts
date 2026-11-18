@@ -3,6 +3,7 @@
 
 import type { TransactionHandle } from '../common/engine.js';
 import {
+	CountedEngine,
 	type CountedRows,
 	EngineTransaction,
 	firstStatement,
@@ -24,16 +25,17 @@ const DELETE_TARGET = /^\s*DELETE\s+FROM\s+(?:ONLY\s+)?((?:"[^"]+"|[\w.])+)/i;
  * and size limits; an `aurora` cluster is PostgreSQL and needs neither. The app role's DML-only rule is
  * PostgreSQL's own: the schema engine runs app statements as a role with those grants.
  */
-export class RulesEngine implements RowCountingEngine {
+export class RulesEngine extends CountedEngine implements RowCountingEngine {
 	private shouldConflict = false;
-	private admin = false;
 	/** The per-transaction limit tracker, keyed by the inner engine's handle. */
 	private readonly trackers = new WeakMap<EngineTransaction, TransactionTracker>();
 
 	constructor(
 		private readonly inner: SchemaEngine,
 		readonly kind: ClusterType,
-	) {}
+	) {
+		super();
+	}
 
 	private get limited(): boolean {
 		return this.kind === 'dsql';
@@ -44,36 +46,22 @@ export class RulesEngine implements RowCountingEngine {
 	}
 
 	/** Runs `fn` as the cluster admin: a migration run, or a test's setup. */
-	async asAdmin<T>(fn: () => Promise<T>): Promise<T> {
-		const previous = this.admin;
-		this.admin = true;
-		try {
-			return await this.inner.asAdmin(fn);
-		} finally {
-			this.admin = previous;
-		}
+	asAdmin<T>(fn: () => Promise<T>): Promise<T> {
+		return this.inner.asAdmin(fn);
 	}
 
 	// A migration's statements were linted as files at plan time; only app-runtime SQL is linted here.
 	private guard(sql: string): StatementInfo {
 		const info = inspectStatement(sql);
-		if (this.limited && !this.admin) validateStatement(sql, info.cleaned);
+		if (this.limited && !this.inner.isAdmin) validateStatement(sql, info.cleaned);
 		return info;
 	}
 
-	// Every statement takes one of the two counted methods; the others return a part of their result.
+	// Every statement takes one of the two counted methods; the others (CountedEngine) return a part of their result.
 	async queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>> {
 		const info = this.guard(sql);
 		if (info.kind !== 'dml' || !this.limited) return this.inner.queryCounted<T>(sql, params);
 		return this.dml(info, sql, params, (handle) => this.inner.queryCountedInTransaction<T>(handle, sql, params));
-	}
-
-	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCounted<T>(sql, params)).rows;
-	}
-
-	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCounted(sql, params)).rowCount };
 	}
 
 	// A DML statement reaching the engine directly is one transaction on DSQL (a statement inside a
@@ -122,18 +110,6 @@ export class RulesEngine implements RowCountingEngine {
 		const run = () => this.inner.queryCountedInTransaction<T>(handle, sql, params);
 		if (info.kind !== 'dml' || !this.limited) return run();
 		return this.trackedInTransaction(handle, info, sql, params, run);
-	}
-
-	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCountedInTransaction<T>(handle, sql, params)).rows;
-	}
-
-	async executeInTransaction(
-		handle: TransactionHandle,
-		sql: string,
-		params?: unknown[],
-	): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCountedInTransaction(handle, sql, params)).rowCount };
 	}
 
 	private track(handle: TransactionHandle): void {

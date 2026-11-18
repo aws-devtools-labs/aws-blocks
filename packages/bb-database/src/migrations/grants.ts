@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { DatabaseEngine } from '../common/engine.js';
-import { DEFAULT_SCHEMA, quoteIdent } from '../constants.js';
+import { DEFAULT_SCHEMA, LEDGER_TABLE_NAMES, quoteIdent } from '../constants.js';
 
 export interface SchemaGrants {
 	tables: number;
@@ -26,7 +26,7 @@ export async function grantSchemaAccess(
 	if (schemaName !== DEFAULT_SCHEMA)
 		await engine.execute(`GRANT USAGE ON SCHEMA ${quoteIdent(schemaName)} TO ${quoteIdent(role)}`);
 	const tables = await engine.query<{ tablename: string }>(
-		`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename NOT IN ('_migrations', '_migration_progress')`,
+		`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename NOT IN (${LEDGER_TABLE_NAMES.map((name) => `'${name}'`).join(', ')})`,
 		[schemaName],
 	);
 	if (tables.length > 0) {

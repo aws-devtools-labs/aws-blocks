@@ -74,6 +74,39 @@ export interface RowCountingEngine extends DatabaseEngine {
 	queryCountedInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<CountedRows<T>>;
 }
 
+/**
+ * The four methods of a {@link RowCountingEngine} that return a part of what its two counted methods return.
+ * Every statement of such an engine takes one of the counted methods.
+ */
+export abstract class CountedEngine {
+	abstract queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>>;
+	abstract queryCountedInTransaction<T>(
+		handle: TransactionHandle,
+		sql: string,
+		params?: unknown[],
+	): Promise<CountedRows<T>>;
+
+	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+		return (await this.queryCounted<T>(sql, params)).rows;
+	}
+
+	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
+		return { rowCount: (await this.queryCounted(sql, params)).rowCount };
+	}
+
+	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
+		return (await this.queryCountedInTransaction<T>(handle, sql, params)).rows;
+	}
+
+	async executeInTransaction(
+		handle: TransactionHandle,
+		sql: string,
+		params?: unknown[],
+	): Promise<{ rowCount: number }> {
+		return { rowCount: (await this.queryCountedInTransaction(handle, sql, params)).rowCount };
+	}
+}
+
 /** The engine's own, still-open handle; anything else is refused with `TransactionFailed`. */
 export function openTransaction<H extends EngineTransaction>(
 	handle: TransactionHandle,

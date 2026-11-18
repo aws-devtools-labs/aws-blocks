@@ -6,6 +6,7 @@ import {
 	AURORA_BACKUP_DAYS_MAX,
 	AURORA_MAX_ACU,
 	CONNECTION_NAME_PATTERN,
+	CONNECTION_NAME_RULE,
 	DEFAULT_AURORA_MAX_CAPACITY,
 	DEFAULT_AURORA_MIN_CAPACITY,
 	DEFAULT_CLUSTER_ID,
@@ -19,6 +20,7 @@ import { assertCaPem } from '../external/connection.js';
 import type {
 	AuroraClusterOptions,
 	ClusterRef,
+	ClusterType,
 	DatabaseClusterLike,
 	DatabaseClusterOptions,
 	DatabaseOptions,
@@ -94,9 +96,7 @@ export function existingCluster(options: ExistingClusterOptions): ExistingCluste
 		throw configError(`${OWNER}: give exactly one of 'name' and 'connectionString'.`);
 	}
 	if (name !== undefined && (typeof name !== 'string' || !CONNECTION_NAME_PATTERN.test(name))) {
-		throw configError(
-			`${OWNER}: 'name' must start with a letter or a digit and contain only letters, digits, '.', '_' and '-'.`,
-		);
+		throw configError(`${OWNER}: 'name' ${CONNECTION_NAME_RULE}.`);
 	}
 	if (connectionString !== undefined && typeof connectionString?.get !== 'function') {
 		throw configError(
@@ -139,33 +139,51 @@ function existingClusterKey(ref: ExistingClusterRef): string {
 	return `${EXTERNAL_CLUSTER_ID}#${id}`;
 }
 
-interface ResolvedCluster {
-	ref: ClusterRef;
-	schemaName: string;
-	/** The `DatabaseCluster` the block runs on; absent when the block owns its cluster. */
-	shared?: DatabaseClusterLike;
-	/** The existing database the block runs on (`DatabaseCluster.fromExisting()`). */
-	external?: ExistingClusterRef;
-}
+/** A block on an existing database, or on a cluster that a block or a `DatabaseCluster` provisions. */
+type ResolvedCluster =
+	| {
+			ref: ClusterRef & { kind: 'external' };
+			schemaName: string;
+			/** The existing database the block runs on (`DatabaseCluster.fromExisting()`). */
+			external: ExistingClusterRef;
+			shared?: undefined;
+	  }
+	| {
+			ref: ClusterRef & { kind: ClusterType };
+			schemaName: string;
+			external?: undefined;
+			/** The `DatabaseCluster` the block runs on; absent when the block owns its cluster. */
+			shared?: DatabaseClusterLike;
+	  };
+
+/**
+ * The schema of a block that names none: `public` on its own cluster and on an existing database, a schema
+ * named after the block on a `DatabaseCluster` that several blocks share.
+ */
+export const defaultSchemaName = (blockId: string, shared: boolean): string =>
+	shared ? sanitizeSchemaName(blockId) : DEFAULT_SCHEMA;
 
 function resolveCluster(blockId: string, blockFullId: string, options: DatabaseOptions | undefined): ResolvedCluster {
 	const cluster = options?.cluster;
 	const explicitSchema = options?.schemaName;
 	if (cluster === undefined || cluster === null) {
-		return { ref: { kind: 'dsql', id: DEFAULT_CLUSTER_ID }, schemaName: explicitSchema ?? DEFAULT_SCHEMA };
+		return {
+			ref: { kind: 'dsql', id: DEFAULT_CLUSTER_ID },
+			schemaName: explicitSchema ?? defaultSchemaName(blockId, false),
+		};
 	}
 	if (isExistingClusterRef(cluster)) {
 		// The tables that already exist are in `public`, so that is the block's schema unless it names another.
 		return {
 			ref: { kind: 'external', id: EXTERNAL_CLUSTER_ID },
-			schemaName: explicitSchema ?? DEFAULT_SCHEMA,
+			schemaName: explicitSchema ?? defaultSchemaName(blockId, false),
 			external: cluster,
 		};
 	}
 	if (isDatabaseClusterLike(cluster)) {
 		return {
 			ref: { kind: cluster.type, id: cluster.fullId },
-			schemaName: explicitSchema ?? sanitizeSchemaName(blockId),
+			schemaName: explicitSchema ?? defaultSchemaName(blockId, true),
 			shared: cluster,
 		};
 	}
@@ -174,10 +192,10 @@ function resolveCluster(blockId: string, blockFullId: string, options: DatabaseO
 	);
 }
 
-export interface DatabaseRegistration extends ResolvedCluster {
+export type DatabaseRegistration = ResolvedCluster & {
 	/** The fullId the cluster's resources are named after: the block's own, or the shared cluster's. */
 	clusterFullId: string;
-}
+};
 
 /**
  * The construction sequence every entry point runs: unique id, cluster, then a schema claim on that cluster.

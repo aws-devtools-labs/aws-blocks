@@ -7,7 +7,7 @@ import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { connectionParameterName } from './constants.js';
 import { ClusterInfra } from './deploy/cluster-infra.js';
-import { type ConnectionStore, connectionReadStatements, ExternalMigrations } from './deploy/external-infra.js';
+import { type ConnectionStore, connectionReadStatements, externalMigrations } from './deploy/external-infra.js';
 import { configError } from './errors.js';
 import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
@@ -173,7 +173,7 @@ export class Database extends BuildingBlockScope {
 					"deploy can read: use DatabaseCluster.fromExisting({ name }), an AppSetting or a Secret as 'connectionString'.",
 			);
 		}
-		new ExternalMigrations({
+		externalMigrations({
 			owner: this,
 			fullId: this.fullId,
 			schemaName: this.schemaName,

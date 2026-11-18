@@ -6,6 +6,7 @@ import type { TransactionHandle } from '../common/engine.js';
 import type { SqlQuery } from '../common/sql.js';
 import { CLAIMS_SETTING } from '../constants.js';
 import {
+	CountedEngine,
 	type CountedRows,
 	firstStatement,
 	type RowCountingEngine,
@@ -18,7 +19,7 @@ import {
 	DatabaseErrors,
 	PG_INSUFFICIENT_PRIVILEGE,
 	permissionDenied,
-	pgErrorCode,
+	sqlStateOf,
 } from '../errors.js';
 import type { ClusterRef, QueryOptions, ScopedDatabase, Transaction, TransactionOptions } from '../types.js';
 import { DatabaseCore } from './index.js';
@@ -43,7 +44,7 @@ const PG_INVALID_PARAMETER_VALUE = '22023';
 
 function roleRefused(fullId: string, role: string): (e: unknown) => unknown {
 	return (e) => {
-		const code = e instanceof Error ? pgErrorCode(e.cause) : undefined;
+		const code = sqlStateOf(e);
 		if (code !== PG_INSUFFICIENT_PRIVILEGE && code !== PG_INVALID_PARAMETER_VALUE) return e;
 		console.error(
 			`[Database] ${fullId}: asRole('${role}') was refused by PostgreSQL (SQLSTATE ${code}). The role must ` +
@@ -58,11 +59,7 @@ function roleRefused(fullId: string, role: string): (e: unknown) => unknown {
 
 // SQLSTATE 42501 from the user's statement: a policy's WITH CHECK refused the row, or the role has no grant.
 function refused(e: unknown): never {
-	if (
-		e instanceof Error &&
-		e.name === DatabaseErrors.QueryFailed &&
-		pgErrorCode(e.cause) === PG_INSUFFICIENT_PRIVILEGE
-	) {
+	if (e instanceof Error && e.name === DatabaseErrors.QueryFailed && sqlStateOf(e) === PG_INSUFFICIENT_PRIVILEGE) {
 		throw permissionDenied(asError(e.cause));
 	}
 	throw e;
@@ -73,11 +70,13 @@ function refused(e: unknown): never {
  * DatabaseCore's only engine, so every exit (a statement, `transaction()`, a Kysely connection) begins here.
  * The setting is transaction-local, so a single statement gets a transaction of its own.
  */
-class ScopedEngine implements RowCountingEngine {
+class ScopedEngine extends CountedEngine implements RowCountingEngine {
 	constructor(
 		private readonly inner: () => Promise<RowCountingEngine>,
 		private readonly identity: Identity,
-	) {}
+	) {
+		super();
+	}
 
 	async beginTransaction(modes?: TransactionModes): Promise<TransactionHandle> {
 		const engine = await this.inner();
@@ -107,28 +106,8 @@ class ScopedEngine implements RowCountingEngine {
 		return engine.queryCountedInTransaction<T>(handle, sql, params).catch(refused);
 	}
 
-	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCountedInTransaction<T>(handle, sql, params)).rows;
-	}
-
-	async executeInTransaction(
-		handle: TransactionHandle,
-		sql: string,
-		params?: unknown[],
-	): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCountedInTransaction(handle, sql, params)).rowCount };
-	}
-
 	queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>> {
 		return withTransaction(this, (handle) => this.queryCountedInTransaction<T>(handle, sql, params));
-	}
-
-	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCounted<T>(sql, params)).rows;
-	}
-
-	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCounted(sql, params)).rowCount };
 	}
 
 	// The block owns the engine.

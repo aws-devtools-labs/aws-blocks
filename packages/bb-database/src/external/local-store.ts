@@ -20,7 +20,3 @@ export function localConnectionSetting(name: string): AppSetting<string> {
 	}
 	return setting;
 }
-
-/** What an error calls the local value of connection `name`. */
-export const localConnectionLabel = (name: string): string =>
-	`The local value of connection '${name}' (.bb-data/settings.json)`;

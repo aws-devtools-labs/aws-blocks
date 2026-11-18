@@ -26,9 +26,10 @@ interface Run {
 	stderr: string;
 }
 
-function run(args: string[], stdin?: string): Promise<Run> {
+function run(args: string[], stdin?: string, env?: Record<string, string>): Promise<Run> {
 	return new Promise((resolve) => {
-		const child = execFile(process.execPath, [CLI, ...args], { cwd }, (error, stdout, stderr) => {
+		const options = { cwd, env: { ...process.env, ...env } };
+		const child = execFile(process.execPath, [CLI, ...args], options, (error, stdout, stderr) => {
 			resolve({ code: error && typeof error.code === 'number' ? error.code : error ? 1 : 0, stdout, stderr });
 		});
 		child.stdin?.end(stdin ?? '');
@@ -105,7 +106,10 @@ describe('bb-database command line', () => {
 		const result = await run(['types', '--name', 'never-stored', '--output', 'json']);
 		assert.strictEqual(result.code, 1);
 		assert.strictEqual(json(result).error?.name, 'DatabaseConfigurationError');
-		assert.match(json(result).error?.message ?? '', /'never-stored' .* is not set, or is not a PostgreSQL connection string/);
+		assert.match(
+			json(result).error?.message ?? '',
+			/'never-stored' .* is not set, or is not a PostgreSQL connection string/,
+		);
 	});
 
 	test('a missing migrations directory is a usage error', async () => {
@@ -130,19 +134,61 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 		assert.strictEqual(result.code, 0, result.stdout + result.stderr);
 		assert.deepStrictEqual(JSON.parse(result.stdout), { ok: true, out: 'gen/main.types.ts', tables: ['notes'] });
 		const written = readFileSync(join(cwd, 'gen', 'main.types.ts'), 'utf8');
-		assert.match(written, /notes: \{\n\t\tid: Generated<string>;\n\t\tbody: string;\n\t\tpinned: boolean \| null;\n\t\};/);
+		assert.match(
+			written,
+			/notes: \{\n\t\tid: Generated<string>;\n\t\tbody: string;\n\t\tpinned: boolean \| null;\n\t\};/,
+		);
 		assert.ok(!existsSync(join(cwd, '.bb-data', 'types-main')), 'no local database is made in the project');
+	});
+
+	test('under a wrapper, the paths of the options are resolved from the directory the user is in', async () => {
+		// `cdk-blocks db` runs this bin from the project root and names the user's directory.
+		const elsewhere = join(cwd, 'elsewhere');
+		mkdirSync(elsewhere, { recursive: true });
+		const result = await run(
+			[
+				'types',
+				'../aws-blocks/migrations/main',
+				'--block',
+				'main',
+				'--out',
+				'out/main.types.ts',
+				'--output',
+				'json',
+			],
+			undefined,
+			{ BB_DATABASE_START_DIR: elsewhere },
+		);
+		assert.strictEqual(result.code, 0, result.stdout + result.stderr);
+		assert.strictEqual(JSON.parse(result.stdout).out, join(elsewhere, 'out', 'main.types.ts'));
+		assert.ok(existsSync(join(elsewhere, 'out', 'main.types.ts')));
+		// A value that is not a path stays as typed.
+		const status = await run(['status', '--block', 'main', '--output', 'json'], undefined, {
+			BB_DATABASE_START_DIR: elsewhere,
+		});
+		assert.strictEqual(status.code, 0, status.stdout + status.stderr);
 	});
 
 	test('a file the cluster type cannot run names the option for the other type', async () => {
 		const aurora = join(cwd, 'aws-blocks', 'migrations', 'tasks');
 		mkdirSync(aurora, { recursive: true });
-		writeFileSync(join(aurora, '001_tasks.sql'), 'CREATE TABLE tasks (id SERIAL PRIMARY KEY, title TEXT NOT NULL);');
+		writeFileSync(
+			join(aurora, '001_tasks.sql'),
+			'CREATE TABLE tasks (id SERIAL PRIMARY KEY, title TEXT NOT NULL);',
+		);
 		const asDsql = await run(['types', '--block', 'tasks', '--out', 'gen/tasks.types.ts', '--output', 'json']);
 		assert.strictEqual(asDsql.code, 1);
 		assert.match(json(asDsql).error?.message ?? '', /pass --type aurora/);
 		const asAurora = await run([
-			'types', '--block', 'tasks', '--type', 'aurora', '--out', 'gen/tasks.types.ts', '--output', 'json',
+			'types',
+			'--block',
+			'tasks',
+			'--type',
+			'aurora',
+			'--out',
+			'gen/tasks.types.ts',
+			'--output',
+			'json',
 		]);
 		assert.strictEqual(asAurora.code, 0, asAurora.stdout + asAurora.stderr);
 		assert.match(readFileSync(join(cwd, 'gen', 'tasks.types.ts'), 'utf8'), /id: Generated<number>;/);

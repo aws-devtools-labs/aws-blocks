@@ -4,16 +4,17 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { initializePgliteWithRetry } from '../common/pglite-init.js';
-import type { TransactionHandle } from '../common/engine.js';
-import { closeOnProcessExit, pgliteUnrefTimersExtension } from '../common/pglite-process.js';
 import { PGlite } from '@electric-sql/pglite';
+import type { TransactionHandle } from '../common/engine.js';
+import { initializePgliteWithRetry } from '../common/pglite-init.js';
+import { closeOnProcessExit, pgliteUnrefTimersExtension } from '../common/pglite-process.js';
 import { CLAIMS_SETTING, LOCAL_APP_ROLE, NO_CLAIMS, quoteIdent, SESSION_TRANSACTION_WAIT_MS } from '../constants.js';
 import { ASYNC_DDL } from '../dialect/validation.js';
 import { sessionTransactionOpen, translated, translatePgError } from '../errors.js';
 import { currentTransactionHandle } from '../runtime/tx-scope.js';
 import type { ClusterType } from '../types.js';
 import {
+	CountedEngine,
 	type CountedRows,
 	EngineTransaction,
 	isSettled,
@@ -342,13 +343,20 @@ class PgliteCluster {
 
 const translate = translated('PgliteCluster');
 
-export class SchemaEngine implements RowCountingEngine {
+export class SchemaEngine extends CountedEngine implements RowCountingEngine {
 	private admin = false;
 
 	constructor(
 		readonly cluster: PgliteCluster,
 		readonly schema: string,
-	) {}
+	) {
+		super();
+	}
+
+	/** Inside {@link asAdmin}: the statements are a migration's or a test's setup, not the application's. */
+	get isAdmin(): boolean {
+		return this.admin;
+	}
 
 	private get role(): string {
 		return this.admin ? ADMIN_ROLE : LOCAL_APP_ROLE;
@@ -387,14 +395,6 @@ export class SchemaEngine implements RowCountingEngine {
 
 	queryCounted<T>(sql: string, params?: unknown[]): Promise<CountedRows<T>> {
 		return translate(() => this.exclusive(() => this.counted<T>(sql, params)));
-	}
-
-	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCounted<T>(sql, params)).rows;
-	}
-
-	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCounted(sql, params)).rowCount };
 	}
 
 	async beginTransaction(): Promise<TransactionHandle> {
@@ -494,20 +494,11 @@ export class SchemaEngine implements RowCountingEngine {
 		return translate(() => this.counted<T>(sql, params));
 	}
 
-	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCountedInTransaction<T>(handle, sql, params)).rows;
-	}
-
-	async executeInTransaction(
-		handle: TransactionHandle,
-		sql: string,
-		params?: unknown[],
-	): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCountedInTransaction(handle, sql, params)).rowCount };
-	}
-
 	async destroy(): Promise<void> {}
 }
+
+/** The directory of a local cluster's PGlite database, under the data directory of the block or the cluster. */
+export const PGLITE_SUBDIR = 'pglite';
 
 const clusters = new Map<string, PgliteCluster>();
 

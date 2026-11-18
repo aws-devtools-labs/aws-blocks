@@ -1,7 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import type { DatabaseEngine } from '../common/engine.js';
+import { LEDGER_TABLE_NAMES } from '../constants.js';
 
 interface ColumnRow {
 	table_name: string;
@@ -13,8 +16,6 @@ interface ColumnRow {
 	identity_generation: string | null;
 	is_generated: string;
 }
-
-const LEDGER_TABLES = ['_migrations', '_migration_progress'];
 
 // What the block's engines return for each PostgreSQL type (README, "Kysely"): `bigint` is a number, `numeric`
 // stays a string, the timestamp types are a `Date`. Anything not listed is `unknown`: a wrong guess would type-check.
@@ -84,7 +85,7 @@ export async function generateTypes(engine: DatabaseEngine, schemaName: string):
 	);
 	const byTable = new Map<string, ColumnRow[]>();
 	for (const row of rows) {
-		if (LEDGER_TABLES.includes(row.table_name)) continue;
+		if (LEDGER_TABLE_NAMES.includes(row.table_name)) continue;
 		const columns = byTable.get(row.table_name) ?? [];
 		columns.push(row);
 		byTable.set(row.table_name, columns);
@@ -109,4 +110,19 @@ export async function generateTypes(engine: DatabaseEngine, schemaName: string):
 	}
 	lines.push('}', '');
 	return { text: lines.join('\n'), tables };
+}
+
+/** Where `types` and `migrate` write the `Tables` interface when no file is named. */
+export const TYPES_FILE = 'aws-blocks/database.types.ts';
+
+/** Writes the `Tables` interface of `schema`, as the database reports it, to `out`. */
+export async function writeTypes(
+	engine: DatabaseEngine,
+	schema: string,
+	out: string,
+): Promise<{ out: string; tables: string[] }> {
+	const file = await generateTypes(engine, schema);
+	mkdirSync(dirname(resolve(out)), { recursive: true });
+	writeFileSync(out, file.text);
+	return { out, tables: file.tables };
 }

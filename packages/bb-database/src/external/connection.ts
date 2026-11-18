@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { PG_DEFAULT_DATABASE, PG_PORT } from '../constants.js';
 import { configError } from '../errors.js';
 
 /** A connection string split into the fields the driver takes, so nothing in the URL can change how TLS is done. */
@@ -55,12 +56,22 @@ export function parseConnectionString(value: unknown, source: string): Connectio
 	if (!host) throw configError(`${source} has no host.`);
 	return {
 		host,
-		port: url.port ? Number(url.port) : 5432,
+		port: url.port ? Number(url.port) : PG_PORT,
 		user: decodeURIComponent(url.username),
 		password: decodeURIComponent(url.password),
-		database: decodeURIComponent(url.pathname.replace(/^\//, '')) || 'postgres',
+		database: decodeURIComponent(url.pathname.replace(/^\//, '')) || PG_DEFAULT_DATABASE,
 	};
 }
+
+// What an error calls the place a connection string is read from. The value itself is never in a message.
+/** The local value of connection `name`. */
+export const localConnectionLabel = (name: string): string =>
+	`The local value of connection '${name}' (.bb-data/settings.json)`;
+/** The SSM parameter of a stage. */
+export const ssmConnectionLabel = (parameterName: string): string => `The SSM parameter ${parameterName}`;
+/** An `AppSetting`, a `Secret` or another source that the application passed as `connectionString`. */
+export const sourceConnectionLabel = (blockFullId: string): string =>
+	`The connection string source of Database '${blockFullId}'`;
 
 const PEM_CERTIFICATE = '-----BEGIN CERTIFICATE-----';
 

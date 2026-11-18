@@ -6,14 +6,31 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isIP, isIPv4 } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import type { DatabaseEngine } from '../common/engine.js';
-import { CONNECTION_NAME_PATTERN, connectionParameterName, DEFAULT_SCHEMA, quoteIdent } from '../constants.js';
-import { assertCaPem, type ConnectionFields, parseConnectionString } from '../external/connection.js';
+import {
+	CONNECTION_NAME_PATTERN,
+	CONNECTION_NAME_RULE,
+	connectionParameterName,
+	DEFAULT_SCHEMA,
+} from '../constants.js';
+import {
+	assertCaPem,
+	type ConnectionFields,
+	localConnectionLabel,
+	parseConnectionString,
+} from '../external/connection.js';
 import { externalEngine } from '../external/engine.js';
-import { localConnectionLabel, localConnectionSetting } from '../external/local-store.js';
+import { localConnectionSetting } from '../external/local-store.js';
+import { readSsmConnectionString } from '../external/ssm-store.js';
 import { buildMigrationPlan } from '../migrations/plan.js';
-import { ensureMigrationTables, loadMigrationFiles, runMigrationPlan } from '../migrations/runner.js';
+import {
+	ledgerStatus,
+	listMigrationFiles,
+	loadMigrationFiles,
+	markFilesApplied,
+	runMigrationPlan,
+} from '../migrations/runner.js';
 import { confirm, note, readHidden, readStdin, remember, usageError } from './io.js';
-import { generateTypes } from './types-file.js';
+import { TYPES_FILE, writeTypes } from './types-file.js';
 
 export type Stage = 'sandbox' | 'production';
 
@@ -25,15 +42,12 @@ export interface CommonFlags {
 }
 
 const CA_MODULE = 'aws-blocks/database.ca.ts';
-const TYPES_FILE = 'aws-blocks/database.types.ts';
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 const PG_16 = 160000;
 
 function checkName(name: string): void {
 	if (!CONNECTION_NAME_PATTERN.test(name)) {
-		throw usageError(
-			"--name must start with a letter or a digit and contain only letters, digits, '.', '_' and '-'.",
-		);
+		throw usageError(`--name ${CONNECTION_NAME_RULE}.`);
 	}
 }
 
@@ -84,12 +98,7 @@ async function ssmClient() {
 /** The stored connection string of `name`: the stage's SSM parameter, or the local value. */
 async function storedValue(name: string, stage: Stage | undefined): Promise<{ value: string | null; label: string }> {
 	if (!stage) return { value: await localConnectionSetting(name).get(), label: localConnectionLabel(name) };
-	const parameterName = connectionParameterName(await stackNameFor(stage), name);
-	const { GetParameterCommand } = await import('@aws-sdk/client-ssm');
-	const result = await (await ssmClient()).send(
-		new GetParameterCommand({ Name: parameterName, WithDecryption: true }),
-	);
-	return { value: result.Parameter?.Value ?? null, label: `The SSM parameter ${parameterName}` };
+	return readSsmConnectionString(connectionParameterName(await stackNameFor(stage), name), await ssmClient());
 }
 
 interface Opened {
@@ -97,17 +106,25 @@ interface Opened {
 	connection: ConnectionFields;
 }
 
-async function open(value: string | null, label: string, ca: string | undefined, schema: string): Promise<Opened> {
+function open(value: string | null, label: string, ca: string | undefined, schema: string): Opened {
 	const connection = parseConnectionString(value, label);
 	remember(connection.password, typeof value === 'string' ? value.trim() : undefined);
-	const engine = await externalEngine({
-		source: { get: async () => value },
-		label,
-		ca,
-		schemaName: schema,
-		poolSize: 1,
-	});
-	return { engine, connection };
+	return { engine: externalEngine(connection, { ca, schemaName: schema, poolSize: 1 }), connection };
+}
+
+/** Runs `fn` on the database of the stored connection `flags.name` (a stage's, or the local one), then closes it. */
+async function withStored<T>(
+	flags: CommonFlags,
+	stage: Stage | undefined,
+	fn: (opened: Opened) => Promise<T>,
+): Promise<T> {
+	const stored = await storedValue(flags.name, stage);
+	const opened = open(stored.value, stored.label, storedCa(), flags.schema);
+	try {
+		return await fn(opened);
+	} finally {
+		await opened.engine.destroy().catch(() => {});
+	}
 }
 
 // ── connect ──────────────────────────────────────────────────────────────────
@@ -169,7 +186,7 @@ export async function connect(flags: ConnectFlags): Promise<ConnectResult> {
 	remember(value);
 
 	const label = 'The connection string';
-	const { engine, connection } = await open(value, label, ca, flags.schema);
+	const { engine, connection } = open(value, label, ca, flags.schema);
 	const warnings: string[] = [];
 	try {
 		const ipv4 = await hasIpv4(connection.host);
@@ -280,17 +297,6 @@ function migrationsDir(dir: string | undefined): string {
 	return path;
 }
 
-async function writeTypes(
-	engine: DatabaseEngine,
-	schema: string,
-	out: string,
-): Promise<{ out: string; tables: string[] }> {
-	const file = await generateTypes(engine, schema);
-	mkdirSync(dirname(resolve(out)), { recursive: true });
-	writeFileSync(out, file.text);
-	return { out, tables: file.tables };
-}
-
 export interface MigrateFlags extends CommonFlags {
 	dir?: string;
 	/** `false` for `--no-types`. */
@@ -307,12 +313,11 @@ export interface MigrateResult {
 export async function migrate(flags: MigrateFlags): Promise<MigrateResult> {
 	checkName(flags.name);
 	const dir = migrationsDir(flags.dir);
-	const stored = await storedValue(flags.name, undefined);
-	const { engine, connection } = await open(stored.value, stored.label, storedCa(), flags.schema);
-	try {
+	return withStored(flags, undefined, async ({ engine, connection }) => {
+		const files = loadMigrationFiles(dir);
 		if (!flags.yes) {
 			if (flags.noInput) throw usageError('With --no-input, pass --yes to apply the files without the question.');
-			const pending = (await status({ ...flags, engine })).pending;
+			const { pending } = await ledgerStatus(engine.query.bind(engine), flags.schema, Object.keys(files));
 			if (pending.length === 0) return { ok: true, host: connection.host, applied: [] };
 			if (
 				!(await confirm(
@@ -322,15 +327,13 @@ export async function migrate(flags: MigrateFlags): Promise<MigrateResult> {
 				throw usageError('Nothing was applied.');
 			}
 		}
-		const plan = buildMigrationPlan(loadMigrationFiles(dir), 'external');
+		const plan = buildMigrationPlan(files, 'external');
 		const { applied } = await runMigrationPlan(engine, plan, { schemaName: flags.schema, log: note });
 		const result: MigrateResult = { ok: true, host: connection.host, applied };
 		if (flags.types !== false)
 			result.types = (await writeTypes(engine, flags.schema, flags.types || TYPES_FILE)).out;
 		return result;
-	} finally {
-		await engine.destroy().catch(() => {});
-	}
+	});
 }
 
 export interface MarkAppliedFlags extends CommonFlags {
@@ -353,7 +356,7 @@ export interface MarkAppliedResult {
  */
 export async function markApplied(flags: MarkAppliedFlags): Promise<MarkAppliedResult> {
 	checkName(flags.name);
-	const known = Object.keys(loadMigrationFiles(migrationsDir(flags.dir)));
+	const known = listMigrationFiles(migrationsDir(flags.dir));
 	const files = [...new Set(flags.files)].sort();
 	const unknown = files.filter((file) => !known.includes(file));
 	if (unknown.length > 0) {
@@ -365,9 +368,7 @@ export async function markApplied(flags: MarkAppliedFlags): Promise<MarkAppliedR
 	if (!flags.yes && flags.noInput) {
 		throw usageError('With --no-input, pass --yes to record the files without the question.');
 	}
-	const stored = await storedValue(flags.name, flags.stage);
-	const { engine, connection } = await open(stored.value, stored.label, storedCa(), flags.schema);
-	try {
+	return withStored(flags, flags.stage, async ({ engine, connection }) => {
 		if (
 			!flags.yes &&
 			!(await confirm(
@@ -377,71 +378,52 @@ export async function markApplied(flags: MarkAppliedFlags): Promise<MarkAppliedR
 		) {
 			throw usageError('Nothing was recorded.');
 		}
-		await ensureMigrationTables(engine, flags.schema);
-		const ledger = `${quoteIdent(flags.schema)}.${quoteIdent('_migrations')}`;
-		const marked: string[] = [];
-		for (const file of files) {
-			const rows = await engine.query<{ name: string }>(
-				`INSERT INTO ${ledger} (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING name`,
-				[file],
-			);
-			if (rows.length > 0) marked.push(file);
-		}
+		const marked = await markFilesApplied(engine, flags.schema, files);
 		return {
 			ok: true,
 			host: connection.host,
 			marked,
 			alreadyApplied: files.filter((file) => !marked.includes(file)),
 		};
-	} finally {
-		await engine.destroy().catch(() => {});
-	}
+	});
 }
 
 export interface TypesFlags extends CommonFlags {
 	out?: string;
 }
 
-export async function types(flags: TypesFlags): Promise<{ ok: true; out: string; tables: string[] }> {
+export interface TypesResult {
+	ok: true;
+	out: string;
+	tables: string[];
+}
+
+export async function types(flags: TypesFlags): Promise<TypesResult> {
 	checkName(flags.name);
-	const stored = await storedValue(flags.name, undefined);
-	const { engine } = await open(stored.value, stored.label, storedCa(), flags.schema);
-	try {
-		return { ok: true, ...(await writeTypes(engine, flags.schema, flags.out ?? TYPES_FILE)) };
-	} finally {
-		await engine.destroy().catch(() => {});
-	}
+	return withStored(flags, undefined, async ({ engine }) => ({
+		ok: true,
+		...(await writeTypes(engine, flags.schema, flags.out ?? TYPES_FILE)),
+	}));
 }
 
 export interface StatusFlags extends CommonFlags {
 	dir?: string;
 	stage?: Stage;
-	/** @internal An engine that is already open (`migrate` asks before it runs). */
-	engine?: DatabaseEngine;
 }
 
-export async function status(flags: StatusFlags): Promise<{ ok: true; applied: string[]; pending: string[] }> {
+export interface StatusResult {
+	ok: true;
+	applied: string[];
+	pending: string[];
+	/** Why the lists may differ from what a running process has. */
+	note?: string;
+}
+
+export async function status(flags: StatusFlags): Promise<StatusResult> {
 	checkName(flags.name);
-	const files = Object.keys(loadMigrationFiles(migrationsDir(flags.dir))).sort();
-	let engine = flags.engine;
-	let opened: Opened | undefined;
-	if (!engine) {
-		const stored = await storedValue(flags.name, flags.stage);
-		opened = await open(stored.value, stored.label, storedCa(), flags.schema);
-		engine = opened.engine;
-	}
-	try {
-		const ledger = `${quoteIdent(flags.schema)}.${quoteIdent('_migrations')}`;
-		const [{ present }] = await engine.query<{ present: boolean }>(
-			'SELECT to_regclass($1) IS NOT NULL AS present',
-			[ledger],
-		);
-		const names = present
-			? (await engine.query<{ name: string }>(`SELECT name FROM ${ledger}`)).map((r) => r.name)
-			: [];
-		const applied = files.filter((f) => names.includes(f));
-		return { ok: true, applied, pending: files.filter((f) => !names.includes(f)) };
-	} finally {
-		await opened?.engine.destroy().catch(() => {});
-	}
+	const files = listMigrationFiles(migrationsDir(flags.dir));
+	return withStored(flags, flags.stage, async ({ engine }) => ({
+		ok: true,
+		...(await ledgerStatus(engine.query.bind(engine), flags.schema, files)),
+	}));
 }

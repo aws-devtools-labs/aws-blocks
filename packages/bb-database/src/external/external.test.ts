@@ -346,7 +346,7 @@ describe('migrations on an existing database', () => {
 		);
 	});
 
-	test('one transaction per file: limits, the statements, RESET ALL, then the ledger row, then COMMIT', async () => {
+	test('one transaction per file: the limits in one query, the statements, RESET ALL, the ledger row, COMMIT', async () => {
 		const engine = new ExternalEngine(170006);
 		const { applied } = await runMigrationPlan(engine, buildMigrationPlan(files, 'external'), {
 			schemaName: 'public',
@@ -361,7 +361,6 @@ describe('migrations on an existing database', () => {
 			'INSERT INTO items VALUES (1)',
 			'RESET ALL',
 			'INSERT INTO "public"."_migrations" (name) VALUES ($1)',
-			'DELETE FROM "public"."_migration_progress" WHERE name = $1',
 			'COMMIT',
 		]);
 		const handles = new Set(engine.calls.filter((c) => c.handle !== undefined).map((c) => c.handle));
@@ -378,21 +377,23 @@ describe('migrations on an existing database', () => {
 			});
 			return inFileTransaction(engine).filter((s) => s.startsWith('SET LOCAL'));
 		};
+		// One query, so the limits cost one round trip per file whatever their number.
 		assert.deepStrictEqual(await settings(160004), [
-			'SET LOCAL idle_in_transaction_session_timeout = 60000',
-			'SET LOCAL statement_timeout = 540000',
+			'SET LOCAL idle_in_transaction_session_timeout = 60000; SET LOCAL statement_timeout = 540000',
 		]);
 		assert.deepStrictEqual(await settings(170006), [
-			'SET LOCAL idle_in_transaction_session_timeout = 60000',
-			'SET LOCAL statement_timeout = 540000',
-			'SET LOCAL transaction_timeout = 540000',
+			'SET LOCAL idle_in_transaction_session_timeout = 60000; SET LOCAL statement_timeout = 540000; ' +
+				'SET LOCAL transaction_timeout = 540000',
 		]);
 	});
 
 	test('a schema other than public is set for the transaction only', async () => {
 		const engine = new ExternalEngine(170006);
 		await runMigrationPlan(engine, buildMigrationPlan(files, 'external'), { schemaName: 'reports', log: () => {} });
-		assert.ok(inFileTransaction(engine).includes('SET LOCAL search_path TO "reports", "public"'));
+		assert.deepStrictEqual(
+			inFileTransaction(engine).filter((s) => s.startsWith('SET LOCAL')),
+			['SET LOCAL idle_in_transaction_session_timeout = 60000; SET LOCAL search_path TO "reports", "public"'],
+		);
 	});
 
 	test("a pg_dump file's SET transaction_timeout is skipped below PostgreSQL 17 and sent from 17", async () => {

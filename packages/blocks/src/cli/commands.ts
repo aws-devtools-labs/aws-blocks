@@ -1225,17 +1225,15 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const dashes = input.passthrough.indexOf('--');
 	const passthrough = input.passthrough.filter((_, i) => i !== dashes);
 	const [verb] = passthrough;
+	const oneOf = `${verbs.slice(0, -1).join(', ')} or ${verbs.at(-1)}`;
 	if (verb === undefined) {
-		throw new UsageError('"cdk-blocks db" needs a verb: connect, migrate, types or status.', {
-			hint: blocksCommand('db', '--help'),
-		});
+		throw new UsageError(`"cdk-blocks db" needs a verb: ${oneOf}.`, { hint: blocksCommand('db', '--help') });
 	}
 	if (!verbs.includes(verb)) {
 		const hint = suggest(verb, verbs);
-		throw new UsageError(
-			`unknown db verb "${verb}"; expected connect, migrate, types or status.${hint ? ` Did you mean "${hint}"?` : ''}`,
-			{ hint: blocksCommand('db', '--help') },
-		);
+		throw new UsageError(`unknown db verb "${verb}"; expected ${oneOf}.${hint ? ` Did you mean "${hint}"?` : ''}`, {
+			hint: blocksCommand('db', '--help'),
+		});
 	}
 	const help = input.flags.help === true;
 	// A verb's help works outside an app too, when @aws-blocks/bb-database is installed next to @aws-blocks/blocks.
@@ -1253,53 +1251,12 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 		operation: `cdk-blocks db ${verb}`,
 		tool: 'bb-database',
 		command: process.execPath,
-		args: [cli, ...(ctx.startDir === root ? passthrough : dbArgsFrom(ctx.startDir, passthrough)), ...answers],
+		args: [cli, ...passthrough, ...answers],
 		cwd: root,
-		// bb-database's help names the command that runs it.
-		env: { BB_DATABASE_COMMAND: 'cdk-blocks db' },
+		// bb-database's help names the command that runs it. It runs from the project root and resolves the
+		// paths in its own options from the directory the user is in.
+		env: { BB_DATABASE_COMMAND: 'cdk-blocks db', BB_DATABASE_START_DIR: ctx.startDir },
 	});
-}
-
-// The bb-database options whose value is a file, and the ones whose value is not.
-const DB_PATH_OPTIONS = new Set(['--ca', '--types', '--out']);
-const DB_VALUE_OPTIONS = new Set([
-	'--name',
-	'--schema',
-	'--stage',
-	'--output',
-	'--mark-applied',
-	'--block',
-	'--cluster',
-	'--type',
-]);
-
-/**
- * The bb-database arguments, with each path made absolute from `startDir`: bb-database
- * runs from the project root, and a path such as `./migrations` names the
- * user's own directory. The values of `--name`, `--schema`, `--stage` and `--output` are not paths.
- */
-function dbArgsFrom(startDir: string, passthrough: readonly string[]): string[] {
-	const [verb, ...rest] = passthrough;
-	const args = [verb];
-	for (let i = 0; i < rest.length; i++) {
-		const token = rest[i];
-		const [name, inline] = token.startsWith('--') && token.includes('=') ? token.split(/=(.*)/s) : [token, undefined];
-		if (DB_PATH_OPTIONS.has(name)) {
-			if (inline !== undefined) args.push(`${name}=${resolve(startDir, inline)}`);
-			else {
-				args.push(token);
-				if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) args.push(resolve(startDir, rest[++i]));
-			}
-		} else if (DB_VALUE_OPTIONS.has(name)) {
-			args.push(token);
-			if (inline === undefined && rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) args.push(rest[++i]);
-		} else if (token.startsWith('-')) {
-			args.push(token);
-		} else {
-			args.push(resolve(startDir, token));
-		}
-	}
-	return args;
 }
 
 // ── Project ──────────────────────────────────────────────────────────────────

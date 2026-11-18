@@ -4,24 +4,16 @@
 import { searchPathFor } from '../constants.js';
 import { PgEngine } from '../engines/pg-engine.js';
 import type { ConnectionStringSource } from '../types.js';
-import { parseConnectionString } from './connection.js';
+import { type ConnectionFields, parseConnectionString } from './connection.js';
 
 export interface ExternalEngineOptions {
-	/** Where the connection string is read from. */
-	source: ConnectionStringSource;
-	/** What an error calls that place; never the value. */
-	label: string;
 	ca?: string;
 	schemaName: string;
 	poolSize?: number;
 }
 
-/**
- * The engine of a block on an existing database, for the local entry, the Lambda entry, the migration function
- * and the CLI: read the stored value once, split it into fields, and open a verified pool.
- */
-export async function externalEngine(options: ExternalEngineOptions): Promise<PgEngine> {
-	const connection = parseConnectionString(await options.source.get(), options.label);
+/** The engine of a block on an existing database, from a connection string that is already split into fields. */
+export function externalEngine(connection: ConnectionFields, options: ExternalEngineOptions): PgEngine {
 	return new PgEngine({
 		kind: 'external',
 		connection,
@@ -29,4 +21,16 @@ export async function externalEngine(options: ExternalEngineOptions): Promise<Pg
 		searchPath: searchPathFor(options.schemaName),
 		poolSize: options.poolSize,
 	});
+}
+
+/**
+ * The same engine for the local entry and the Lambda entry: read the stored value once and split it. `label` is
+ * what an error calls the place the value is read from; never the value.
+ */
+export async function externalEngineFrom(
+	source: ConnectionStringSource,
+	label: string,
+	options: ExternalEngineOptions,
+): Promise<PgEngine> {
+	return externalEngine(parseConnectionString(await source.get(), label), options);
 }

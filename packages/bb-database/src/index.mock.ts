@@ -6,15 +6,14 @@ import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { SqlQuery } from './common/sql.js';
-import { DEFAULT_SCHEMA, LOCAL_APP_ROLE, quoteIdent } from './constants.js';
 import { RulesEngine } from './dialect/rules-engine.js';
-import { type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
+import type { RowCountingEngine } from './engines/handle.js';
+import { PGLITE_SUBDIR, type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
 import { configError } from './errors.js';
-import { externalEngine } from './external/engine.js';
-import { localConnectionLabel, localConnectionSetting } from './external/local-store.js';
-import { grantSchemaAccess } from './migrations/grants.js';
-import { buildMigrationPlan, lintMigrationFiles } from './migrations/plan.js';
-import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
+import { localConnectionLabel, sourceConnectionLabel } from './external/connection.js';
+import { prepareLocalSchema } from './migrations/local.js';
+import { lintMigrationFiles } from './migrations/plan.js';
+import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
 import { existingCluster, registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
@@ -36,7 +35,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 assertNotMockInDeployedEnv('bb-database');
 
 function pgliteEngine(dataDir: string, kind: ClusterType, schemaName: string): SchemaEngine {
-	return sharedPgliteCluster(join(dataDir, 'pglite'), kind).forSchema(schemaName);
+	return sharedPgliteCluster(join(dataDir, PGLITE_SUBDIR), kind).forSchema(schemaName);
 }
 
 /**
@@ -139,100 +138,88 @@ export class Database extends Scope {
 
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
 
-		const external = resolved.external;
-		const kind = resolved.ref.kind;
-		if (external || kind === 'external') {
-			if (!external) throw configError(`Database '${this.fullId}': 'cluster' is not a usable reference.`);
+		let engine: () => Promise<RowCountingEngine>;
+		let simulateConflict: () => void;
+		if (resolved.external) {
+			const external = resolved.external;
 			// An existing database is the real one locally too: its schema, roles and data cannot be rebuilt
 			// from files. Migration files are not run from here; a deploy or `cdk-blocks db migrate` runs them.
-			this.core = new DatabaseCore({
-				engine: () =>
-					externalEngine({
-						source: external.connectionString ?? localConnectionSetting(external.name ?? ''),
-						label: external.name
-							? localConnectionLabel(external.name)
-							: `The connection string source of Database '${this.fullId}'`,
-						ca: external.ca,
-						schemaName: this.schemaName,
-					}),
-			});
-			registerInternalAccess(this, {
-				engine: () => this.core.getEngine(),
-				session: () => this.core.session(),
-				simulateConflict: () => {
+			// The driver and the settings store are loaded here, so an app without one never loads them.
+			engine = async () => {
+				const [{ externalEngineFrom }, { localConnectionSetting }] = await Promise.all([
+					import('./external/engine.js'),
+					import('./external/local-store.js'),
+				]);
+				return externalEngineFrom(
+					external.connectionString ?? localConnectionSetting(external.name ?? ''),
+					external.name ? localConnectionLabel(external.name) : sourceConnectionLabel(this.fullId),
+					{ ca: external.ca, schemaName: this.schemaName },
+				);
+			};
+			simulateConflict = () => {
+				throw configError(
+					'simulateConflict() needs the local PGlite database; an existing database is the real one.',
+				);
+			};
+		} else {
+			const kind = resolved.ref.kind;
+			const shared = resolved.shared;
+			const dataDir = getMockDataDir(this);
+			// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
+			// (a cache hit) in case a file changed after startup.
+			if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), kind);
+
+			engine = async () => {
+				let inner: SchemaEngine;
+				if (!shared) {
+					inner = pgliteEngine(dataDir, kind, this.schemaName);
+				} else if (shared instanceof DatabaseCluster) {
+					inner = shared.engineFor(this.schemaName);
+				} else {
 					throw configError(
-						'simulateConflict() needs the local PGlite database; an existing database is the real one.',
+						`Database '${this.fullId}': 'cluster' must be a DatabaseCluster from the same entry point.`,
 					);
-				},
-				migrationsPath: this.migrationsPath,
-			});
-			registerSdkIdentifiers(this.fullId, { clusterId: resolved.clusterFullId, schemaName: this.schemaName });
-			return;
+				}
+				// A first statement inside another block's transaction() callback nests this migration run in that
+				// transaction (DESIGN §4.1); if it rolls back, the schema goes with it and the engine is built again. A
+				// simulateConflict() between the rollback and the rebuild must arm the rebuilt engine, not this one.
+				inner.cluster.enclosingTransaction()?.onRollback(() => {
+					this.mock = null;
+					this.core.invalidateEngine();
+				});
+				const mock = new RulesEngine(inner, kind);
+				const applied = await prepareLocalSchema(mock, inner, {
+					kind,
+					schemaName: this.schemaName,
+					migrationsPath: this.migrationsPath,
+					log: (m) => this.log.info(m),
+				});
+				// Visible in `npm run dev` without a logger: which files ran, into which schema, and where the data is.
+				if (applied.length > 0) {
+					console.log(
+						`[bb-database] ${this.fullId}: applied ${applied.join(', ')} to schema "${this.schemaName}" (${dataDir})`,
+					);
+				}
+				// Armed only now: a simulateConflict() called before the first statement is for the app's next
+				// transaction, not for the migration run's own commits, which would consume it and fail the build.
+				this.mock = mock;
+				if (this.pendingConflict) {
+					this.pendingConflict = false;
+					mock.simulateConflict();
+				}
+				return mock;
+			};
+			simulateConflict = () => {
+				if (this.mock) this.mock.simulateConflict();
+				else this.pendingConflict = true;
+			};
 		}
 
-		const dataDir = getMockDataDir(this);
-		// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
-		// (a cache hit) in case a file changed after startup.
-		if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), kind);
-
-		const buildEngine = async (): Promise<RulesEngine> => {
-			let inner: SchemaEngine;
-			if (!resolved.shared) {
-				inner = pgliteEngine(dataDir, kind, this.schemaName);
-			} else if (resolved.shared instanceof DatabaseCluster) {
-				inner = resolved.shared.engineFor(this.schemaName);
-			} else {
-				throw configError(
-					`Database '${this.fullId}': 'cluster' must be a DatabaseCluster from the same entry point.`,
-				);
-			}
-			// A first statement inside another block's transaction() callback nests this migration run in that
-			// transaction (DESIGN §4.1); if it rolls back, the schema goes with it and the engine is built again. A
-			// simulateConflict() between the rollback and the rebuild must arm the rebuilt engine, not this one.
-			inner.cluster.enclosingTransaction()?.onRollback(() => {
-				this.mock = null;
-				this.core.invalidateEngine();
-			});
-			const mock = new RulesEngine(inner, kind);
-			await mock.asAdmin(async () => {
-				if (this.migrationsPath) {
-					const files = loadMigrationFiles(this.migrationsPath);
-					lintMigrationFiles(files, kind);
-					const plan = buildMigrationPlan(files, kind);
-					const { applied } = await runMigrationPlan(mock, plan, {
-						schemaName: this.schemaName,
-						log: (m) => this.log.info(m),
-					}).finally(() => inner.cluster.forgetSession()); // a file may have changed the session's search_path or role
-					// Visible in `npm run dev` without a logger: which files ran, into which schema, and where the data is.
-					if (applied.length > 0) {
-						console.log(
-							`[bb-database] ${this.fullId}: applied ${applied.join(', ')} to schema "${this.schemaName}" (${dataDir})`,
-						);
-					}
-				} else if (this.schemaName !== DEFAULT_SCHEMA) {
-					await mock.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(this.schemaName)}`);
-				}
-				// What the migration Lambda grants the deployed app role; the block's statements run as this one.
-				await grantSchemaAccess(mock, LOCAL_APP_ROLE, this.schemaName);
-			});
-			// Armed only now: a simulateConflict() called before the first statement is for the app's next
-			// transaction, not for the migration run's own commits, which would consume it and fail the build.
-			this.mock = mock;
-			if (this.pendingConflict) {
-				this.pendingConflict = false;
-				mock.simulateConflict();
-			}
-			return mock;
-		};
-
-		this.core = new DatabaseCore({ engine: buildEngine });
+		this.core = new DatabaseCore({ engine });
 		registerInternalAccess(this, {
 			engine: () => this.core.getEngine(),
 			session: () => this.core.session(),
-			simulateConflict: () => {
-				if (this.mock) this.mock.simulateConflict();
-				else this.pendingConflict = true;
-			},
+			simulateConflict,
 			migrationsPath: this.migrationsPath,
 		});
 		registerSdkIdentifiers(this.fullId, { clusterId: resolved.clusterFullId, schemaName: this.schemaName });

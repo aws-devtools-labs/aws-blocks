@@ -1,11 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DatabaseEngine } from '../common/engine.js';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
+import type { DatabaseEngine } from '../common/engine.js';
 import {
 	AURORA_MASTER_USER,
 	CLUSTER_ENV,
@@ -16,14 +14,17 @@ import {
 } from '../constants.js';
 import { iamAuthToken, PgEngine } from '../engines/pg-engine.js';
 import {
+	causeChain,
 	DatabaseErrors,
 	isConnectionLost,
 	isConnectionRefused,
 	isConnectTimeout,
 	isSerializationConflict,
-	pgErrorCode,
+	sqlStateOf,
 } from '../errors.js';
+import { parseConnectionString } from '../external/connection.js';
 import { externalEngine } from '../external/engine.js';
+import { readSsmConnectionString } from '../external/ssm-store.js';
 import { grantSchemaAccess } from '../migrations/grants.js';
 import { buildMigrationPlan } from '../migrations/plan.js';
 import { ensureMigrationTables, runMigrationPlan } from '../migrations/runner.js';
@@ -42,12 +43,8 @@ export function isRetryableMigrationError(e: unknown): boolean {
 		isConnectTimeout(err);
 	// The runner wraps the engine's error, which wraps the driver's: walk the chain. A connection the server
 	// refused (trust, address, login) gets the same answer on every attempt, so it is reported at once.
-	let retryable = false;
-	for (let err: unknown = e, depth = 0; err instanceof Error && depth < 5; err = err.cause, depth++) {
-		if (isConnectionRefused(err)) return false;
-		if (matches(err)) retryable = true;
-	}
-	return retryable;
+	const chain = causeChain(e);
+	return !chain.some((err) => isConnectionRefused(err)) && chain.some(matches);
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -91,7 +88,7 @@ export async function provisionAppRole(
 			await engine.execute(`CREATE ROLE ${quoteIdent(dbRoleName)} WITH LOGIN`);
 		} catch (e) {
 			// Another block's resource may have created it between the check and the create.
-			if (pgErrorCode(e instanceof Error && e.cause instanceof Error ? e.cause : e) !== '42710') throw e;
+			if (sqlStateOf(e) !== '42710') throw e;
 		}
 	}
 	if (kind === 'dsql')
@@ -162,15 +159,12 @@ function buildEngine(cluster: ClusterEnv, schemaName: string): DatabaseEngine {
 }
 
 // The connection string of an existing database, read where `cdk-blocks db connect --stage` (or the app) put it.
-// It is held in memory for this invocation and never logged.
+// It is held in memory for this invocation and never logged. The SDK clients are loaded here: a migration
+// function of a cluster the block provisions never reads one.
 async function readConnectionString(props: MigrationProperties): Promise<{ value: string | null; label: string }> {
-	if (props.connectionParameter) {
-		const result = await new SSMClient({}).send(
-			new GetParameterCommand({ Name: props.connectionParameter, WithDecryption: true }),
-		);
-		return { value: result.Parameter?.Value ?? null, label: `The SSM parameter ${props.connectionParameter}` };
-	}
+	if (props.connectionParameter) return readSsmConnectionString(props.connectionParameter);
 	if (props.connectionSecretArn) {
+		const { GetSecretValueCommand, SecretsManagerClient } = await import('@aws-sdk/client-secrets-manager');
 		const result = await new SecretsManagerClient({}).send(
 			new GetSecretValueCommand({ SecretId: props.connectionSecretArn }),
 		);
@@ -190,14 +184,12 @@ async function migrateExternal(props: MigrationProperties): Promise<boolean> {
 	if (!props.migrationsBucket || !props.migrationsKey)
 		throw new Error('migrationsBucket and migrationsKey are required');
 	const schemaName = props.schemaName || DEFAULT_SCHEMA;
-	const object = await new S3Client({}).send(
-		new GetObjectCommand({ Bucket: props.migrationsBucket, Key: props.migrationsKey }),
-	);
+	const [object, stored] = await Promise.all([
+		new S3Client({}).send(new GetObjectCommand({ Bucket: props.migrationsBucket, Key: props.migrationsKey })),
+		readConnectionString(props),
+	]);
 	const asset = JSON.parse((await object.Body?.transformToString()) ?? '{"files":{}}') as ExternalAsset;
-	const { value, label } = await readConnectionString(props);
-	const engine = await externalEngine({
-		source: { get: async () => value },
-		label,
+	const engine = externalEngine(parseConnectionString(stored.value, stored.label), {
 		ca: asset.ca,
 		schemaName,
 		poolSize: 1,

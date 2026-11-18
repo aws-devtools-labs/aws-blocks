@@ -42,13 +42,21 @@ export function extractDbRef(connectionString: string): string {
   throw new Error('Cannot extract database identifier from connection string.');
 }
 
+/** The connection name that `DatabaseCluster.fromExisting()` and `cdk-blocks db` use when none is given. */
+export const DEFAULT_DB_CONNECTION_NAME = 'db-url';
+
 /**
  * SSM SecureString parameter name for a deployment's external database
  * connection string.
  *
  * Pure string transform: `/<stackName>-db-url`. The caller is responsible for
  * computing the stack name via `getStackName({ sandbox, projectRoot })`.
+ *
+ * `name` is the connection's short name; a `Database` on an existing database
+ * derives its parameter with the same function, so the name that
+ * `cdk-blocks db connect --stage` writes and the name the sandbox cleanup
+ * deletes cannot differ.
  */
-export function dbConnectionParameterName(stackName: string): string {
-  return `/${stackName}-db-url`;
+export function dbConnectionParameterName(stackName: string, name: string = DEFAULT_DB_CONNECTION_NAME): string {
+  return `/${stackName}-${name}`;
 }

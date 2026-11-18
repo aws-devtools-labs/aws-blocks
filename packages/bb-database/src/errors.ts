@@ -39,7 +39,7 @@ export const MIGRATION_VALIDATION_ERROR_NAME = 'MigrationValidationError';
 export const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';
 
 export const PG_SERIALIZATION_FAILURE = '40001';
-const PG_UNIQUE_VIOLATION = '23505';
+export const PG_UNIQUE_VIOLATION = '23505';
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
 const PG_ADMIN_SHUTDOWN = '57P01';
 // A socket that died surfaces from pg with no SQLSTATE; a connect that timed out likewise.
@@ -92,30 +92,36 @@ export function permissionDenied(cause: Error): ApiError {
 	});
 }
 
-// Not retriable: a duplicate key is deterministic.
-function uniqueConstraintConflict(cause: Error): ApiError {
-	return new ApiError('The item violates a unique constraint', 409, {
-		name: DatabaseErrors.UniqueConstraintViolation,
-		cause,
-	});
-}
-
-// Not retriable: the same statement on the same rows breaks the same constraint. The messages are fixed, because
-// the server's own text names the row's values; that text stays on the non-enumerable `cause`.
-const CONSTRAINT_VIOLATIONS: Record<string, { status: number; name: string; text: string }> = {
-	'23514': { status: 400, name: DatabaseErrors.CheckViolation, text: 'A value violates a check constraint' },
-	'23502': { status: 400, name: DatabaseErrors.NotNullViolation, text: 'A required value is missing' },
-	'23503': {
-		status: 409,
-		name: DatabaseErrors.ForeignKeyViolation,
-		text: 'The item violates a foreign key constraint',
-	},
-};
-
-function constraintViolation(code: string | undefined, cause: Error): ApiError | undefined {
-	const violation = code === undefined ? undefined : CONSTRAINT_VIOLATIONS[code];
-	return violation && new ApiError(violation.text, violation.status, { name: violation.name, cause });
-}
+// A statement that breaks a constraint. Not retriable: the same statement on the same rows breaks it again.
+// The messages are fixed, because the server's own text names the row's values; that text stays on the
+// non-enumerable `cause`.
+const CONSTRAINT_VIOLATIONS = new Map<string, (cause: Error) => ApiError>([
+	[
+		PG_UNIQUE_VIOLATION,
+		(cause) =>
+			new ApiError('The item violates a unique constraint', 409, {
+				name: DatabaseErrors.UniqueConstraintViolation,
+				cause,
+			}),
+	],
+	[
+		'23514',
+		(cause) =>
+			new ApiError('A value violates a check constraint', 400, { name: DatabaseErrors.CheckViolation, cause }),
+	],
+	[
+		'23502',
+		(cause) => new ApiError('A required value is missing', 400, { name: DatabaseErrors.NotNullViolation, cause }),
+	],
+	[
+		'23503',
+		(cause) =>
+			new ApiError('The item violates a foreign key constraint', 409, {
+				name: DatabaseErrors.ForeignKeyViolation,
+				cause,
+			}),
+	],
+]);
 
 /** A named error whose name survives the RPC serializer; `cause` is non-enumerable, for server-side logs. */
 export function brandedError(name: string, message: string, cause?: unknown): Error {
@@ -186,6 +192,22 @@ export function pgErrorCode(e: unknown): string | undefined {
 	return typeof e === 'object' && e !== null && 'code' in e && typeof e.code === 'string' ? e.code : undefined;
 }
 
+/** `e` and the errors under it, outermost first: each layer re-tags the error below and keeps it as `cause`. */
+export function causeChain(e: unknown): Error[] {
+	const chain: Error[] = [];
+	for (let err = e; err instanceof Error && chain.length < 6; err = err.cause) chain.push(err);
+	return chain;
+}
+
+/** The SQLSTATE of `e`, or of the first error under it that has one. */
+export function sqlStateOf(e: unknown): string | undefined {
+	for (const err of causeChain(e)) {
+		const code = pgErrorCode(err);
+		if (code !== undefined) return code;
+	}
+	return pgErrorCode(e);
+}
+
 function isDsqlTransactionLimit(e: Error): boolean {
 	return pgErrorCode(e) === PG_PROGRAM_LIMIT_EXCEEDED && DSQL_TRANSACTION_LIMIT_MESSAGE.test(e.message);
 }
@@ -194,9 +216,8 @@ export function translatePgError(raw: unknown, engineName: string): never {
 	const e = asError(raw);
 	const code = pgErrorCode(e);
 	if (code === PG_SERIALIZATION_FAILURE) throw serializationConflict(e);
-	if (code === PG_UNIQUE_VIOLATION) throw uniqueConstraintConflict(e);
-	const violation = constraintViolation(code, e);
-	if (violation) throw violation;
+	const violation = code === undefined ? undefined : CONSTRAINT_VIOLATIONS.get(code);
+	if (violation) throw violation(e);
 	if (isKnownDatabaseErrorName(e.name)) throw e;
 	if (isDsqlTransactionLimit(e)) throw reTagged(DatabaseErrors.TransactionRowLimitExceeded, e);
 	const refused = isConnectionRefused(e);
