@@ -35,8 +35,11 @@ export const KVStoreErrors = {
 	 * A value fails the schema, disagrees with its key, has a top-level field
 	 * that starts with the reserved prefix `_bkv_`, has a field named
 	 * `__proto__` at any depth (a field name that DynamoDB cannot store), or has
-	 * an empty string in a key field or an indexed field. Also a bad expiry
-	 * (`ttlSeconds` together with `expiresAt`, or a time that is not usable).
+	 * an empty string in a key field or an indexed field. Also a key field or an
+	 * indexed field over DynamoDB's size limit (2,048 bytes for a partition key,
+	 * 1,024 bytes for a sort key), lists or maps nested more than 32 levels deep,
+	 * and a bad expiry (`ttlSeconds` together with `expiresAt`, or a time that is
+	 * not usable).
 	 */
 	ValidationFailed: 'ValidationFailedException',
 	/**
@@ -53,6 +56,9 @@ export const KVStoreErrors = {
 	 * - a `limit` that is not a positive integer
 	 * - more than one sort-key condition
 	 * - a sort condition that does not exist
+	 * - a `between` whose lower bound is greater than its upper bound
+	 * - a batch that repeats a key within one DynamoDB request (25 writes or 100
+	 *   reads)
 	 * - an empty `ifFieldEquals`
 	 * - `ifValueEquals` with an object value
 	 * - a cursor that does not decode or belongs to another store, index, or
@@ -79,8 +85,8 @@ export const KVStoreErrors = {
 	 * `ValidationException` causes (malformed expressions, type mismatches,
 	 * reserved-word conflicts) propagate unchanged.
 	 *
-	 * In the mock layer, a client-side byte-length check produces this error
-	 * deterministically before any I/O.
+	 * In the mock layer, a size check that follows DynamoDB's sizing rules produces
+	 * this error deterministically before any I/O.
 	 */
 	ItemTooLarge: 'ItemTooLargeException',
 	/**
@@ -169,6 +175,8 @@ export const KVStoreMessages = {
 	unknownSortCondition: (condition: string) =>
 		`'${condition}' is not a sort condition; use equals, greaterThan, greaterThanOrEqual, lessThan, lessThanOrEqual, between, or beginsWith`,
 	betweenNeedsTwoValues: (field: string) => `'between' on '${field}' takes an array of two values: [low, high]`,
+	betweenBoundsReversed: (field: string) =>
+		`'between' on '${field}' takes the lower bound first; the first value is greater than the second`,
 	beginsWithOnNumberField: (field: string) => `'beginsWith' needs a string field; '${field}' holds a number`,
 	queryNeedsKeyOrIndex:
 		'query() without `index` needs a store with a declared `key`; pass `index` or declare a `key`',
@@ -182,8 +190,16 @@ export const KVStoreMessages = {
 	keyFieldType: (field: string, type: 'S' | 'N', received: string) =>
 		`key field '${field}' must be a ${type === 'N' ? 'number' : 'string'} (received ${received})`,
 	emptyKeyField: (field: string) => `key field '${field}' cannot be an empty string`,
+	keyFieldTooLong: (field: string, bytes: number, maxBytes: number) =>
+		`key field '${field}' is ${bytes} bytes; DynamoDB allows at most ${maxBytes} bytes`,
 	emptyIndexField: (field: string, index: string) =>
 		`indexed field '${field}' (index '${index}') cannot be an empty string`,
+	indexFieldTooLong: (field: string, index: string, bytes: number, maxBytes: number) =>
+		`indexed field '${field}' (index '${index}') is ${bytes} bytes; DynamoDB allows at most ${maxBytes} bytes`,
+	nestedTooDeep: (maxLevels: number) =>
+		`a value nests lists or maps more than ${maxLevels} levels deep, which DynamoDB cannot store`,
+	duplicateBatchKey: (operation: string, first: number, second: number) =>
+		`${operation} was given the same key at index ${first} and index ${second}, which fall in the same DynamoDB request; DynamoDB rejects a request that repeats a key`,
 	reservedField: (field: string) => `value field '${field}' uses the reserved prefix '_bkv_'`,
 	unstorableField: (field: string) =>
 		`a value cannot have a field named '${field}', at any depth: DynamoDB cannot store that field name`,
