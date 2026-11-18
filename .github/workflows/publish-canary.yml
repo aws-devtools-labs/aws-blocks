@@ -8,14 +8,16 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  id-token: write
   contents: read
 
+# Two jobs: `test` installs with dependency install scripts (the e2e suite
+# needs them) and holds no id-token. `publish` alone gets id-token: write for
+# the canary role, so it installs with --ignore-scripts and rebuilds, as the
+# release job in publish-packages.yml does.
 jobs:
-  canary:
-    name: Publish Canary
+  test:
+    name: Build & E2E Test
     runs-on: ubuntu-latest
-    environment: publish
     env:
       NODE_OPTIONS: '--test-reporter=spec'
     steps:
@@ -38,6 +40,30 @@ jobs:
 
       - name: E2E Test Local
         run: npm run test:e2e:local
+
+  publish:
+    name: Publish Canary
+    needs: test
+    runs-on: ubuntu-latest
+    environment: publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # --ignore-scripts: the build and `npx tsx` don't need dependencies'
+      # install scripts (esbuild/sharp binaries ship as optional deps).
+      # `npm pack` in publish.ts still runs our own prepack.
+      - run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
