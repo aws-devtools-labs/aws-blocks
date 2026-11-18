@@ -19,8 +19,10 @@ import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { simulateConflict } from '@aws-blocks/bb-database/testing';
 import { z } from 'zod';
-import { type Generated, Kysely, sql as kyselySql } from 'kysely';
+import { Kysely, sql as kyselySql } from 'kysely';
 import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
+import type { Tables as DbxTables } from './dbx.types.js';
+import type { Tables as DbxcTables } from './dbxc.types.js';
 
 
 const scope = new Scope('test-app');
@@ -620,9 +622,7 @@ const dbx = new Database(scope, 'dbx');
 // A result schema: the row type derives from this value, and every row is validated against it.
 const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
 // Kysely on `dbx` through the block's dialect: the same typed builder on a `dsql` cluster.
-interface DbxTables {
-  dbx_items: { id: string; name: string; value: Generated<number>; category: Generated<string | null> };
-}
+// `DbxTables` is written by `cdk-blocks db types --block dbx --out aws-blocks/dbx.types.ts`.
 const dbxKysely = new Kysely<DbxTables>({ dialect: new DatabaseDialect(dbx) });
 // `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
 // Both migrations create a table named `items`; dbxb's adds a foreign key, a
@@ -636,9 +636,7 @@ const dbxb = new Database(scope, 'dbxb', { cluster: sharedDsql });
 const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
 const dbxc = new Database(scope, 'dbxc', { cluster: sharedAurora });
 // Kysely on `dbxc` through the block's dialect: the app installs and configures Kysely.
-interface DbxcTables {
-  tasks: { id: Generated<number>; title: string; done: Generated<boolean>; updated_at: Generated<Date> };
-}
+// `DbxcTables` is written by `cdk-blocks db types --block dbxc --type aurora --out aws-blocks/dbxc.types.ts`.
 const dbxcKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(dbxc) });
 const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 
@@ -2159,7 +2157,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { rowCount };
   },
 
-  // A foreign key PostgreSQL enforces: an unknown task is SQLSTATE 23503, which reaches the client as QueryFailed.
+  // A foreign key PostgreSQL enforces: an unknown task is SQLSTATE 23503, which reaches the client as ForeignKeyViolation.
   async dbxcAddComment(taskId: number, body: string) {
     try {
       const row = await dbxc.queryOne<{ id: number }>(
@@ -2292,8 +2290,46 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return row ? { big: kind(row.big), num: kind(row.num), at: kind(row.at), n: kind(row.n) } : null;
   },
 
-  // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
-  // missing privilege (42501, QueryFailed) when deployed.
+  // Row Level Security through asUser(): `owner` writes a note, then both users and a statement with no user
+  // read it, through SQL and through Kysely. An app passes the result of auth.requireAuth(context) to
+  // asUser(); the test names its two users.
+  async dbxcUserNotes(owner: string, other: string, body: string) {
+    const asOwner = dbxc.asUser({ userId: owner });
+    const asOther = dbxc.asUser({ userId: other });
+    await asOwner.execute(sql`INSERT INTO user_notes (owner_id, body) VALUES (${owner}, ${body})`);
+    const find = sql`SELECT id FROM user_notes WHERE body = ${body}`;
+    const seenByOwner = await asOwner.query<{ id: number }>(find);
+    const seenByOther = await asOther.query<{ id: number }>(find);
+    const seenWithNoUser = await dbxc.query<{ id: number }>(find);
+    const ownerKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(asOwner) });
+    const otherKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(asOther) });
+    const seenByOwnerKysely = await ownerKysely.selectFrom('user_notes').select('id').where('body', '=', body).execute();
+    const seenByOtherInTransaction = await otherKysely
+      .transaction()
+      .execute((trx) => trx.selectFrom('user_notes').select('id').where('body', '=', body).execute());
+    // A row for another user fails the policy's check.
+    let refused: string | null = null;
+    try {
+      await asOther.execute(sql`INSERT INTO user_notes (owner_id, body) VALUES (${owner}, ${body})`);
+    } catch (e) {
+      refused = e instanceof Error ? e.name : String(e);
+    }
+    const deletedByOther = await asOther.execute(sql`DELETE FROM user_notes WHERE body = ${body}`);
+    const deletedByOwner = await asOwner.execute(sql`DELETE FROM user_notes WHERE body = ${body}`);
+    return {
+      owner: seenByOwner.length,
+      other: seenByOther.length,
+      noUser: seenWithNoUser.length,
+      kysely: seenByOwnerKysely.length,
+      kyselyOtherInTransaction: seenByOtherInTransaction.length,
+      refused,
+      deletedByOther: deletedByOther.rowCount,
+      deletedByOwner: deletedByOwner.rowCount,
+    };
+  },
+
+  // DDL and TRUNCATE on the app connection of an aurora cluster: the role's missing privilege (42501,
+  // QueryFailed), locally and when deployed.
   async dbxcRejectDdl() {
     try {
       await dbxc.execute(sql`CREATE TABLE dbxc_should_not_exist (id INT PRIMARY KEY)`);
@@ -2371,7 +2407,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // A constraint the caller's statement violates, thrown out of the handler uncaught: it must reach the
-  // client as a named QueryFailed whose message carries no row values, not as a nameless 500.
+  // client as a named NotNullViolation whose message carries no row values, not as a nameless 500.
   async dbxNotNullViolation(id: string) {
     await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${null}, ${1})`);
   },
@@ -2488,8 +2524,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
-  // DDL on the app connection of a distributed cluster: the mock's guard
-  // locally, DSQL's own 42501 (→ QueryFailed) when deployed.
+  // DDL on the app connection of a distributed cluster: the app role's missing
+  // privilege (42501 → QueryFailed), locally and when deployed.
   async dbxRejectDdl() {
     try {
       await dbx.execute(sql`CREATE TABLE dbx_should_not_exist (id TEXT PRIMARY KEY)`);

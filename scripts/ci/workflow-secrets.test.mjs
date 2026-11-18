@@ -289,8 +289,8 @@ describe('workflow secrets', () => {
 
 	it('finds the steps that fetch a secret', () => {
 		assert.ok(
-			fetchers.some(({ file }) => file === 'supabase-keepalive.yml'),
-			'expected the Supabase secret fetch in supabase-keepalive.yml',
+			fetchers.some(({ file }) => file === 'pr-checks.yml'),
+			'expected the Supabase secret fetch in pr-checks.yml',
 		);
 	});
 

@@ -406,7 +406,7 @@ describe('create-blocks-app template metadata', () => {
     // The Database block reads aws-blocks/migrations/<block id>/; the sql template's block id is 'main'.
     assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations', 'main')), 'the sql template keeps aws-blocks/migrations/main');
     assert.match(guide, /`aws-blocks\/migrations\/<block id>\/`/);
-    assert.doesNotMatch(guide, /cdk-blocks db /, 'cdk-blocks has no db command');
+    assert.doesNotMatch(guide, /cdk-blocks db /, 'cdk-blocks db is for an existing database, which the templates do not have');
     assert.match(guide, /`npm run vendorize -- @aws-blocks\/[\w-]+`/);
   });
 

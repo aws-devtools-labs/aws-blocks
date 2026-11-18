@@ -466,6 +466,7 @@ describe('pr-checks.yml', () => {
 
 	// Jobs that hold AWS credentials but deploy no stack of their own.
 	const NO_STACK = {
+		'e2e-supabase': 'reads a secret; the database is external',
 		'e2e-sandbox-vpc': 'deploys only the persistent shared VPC, which must survive; its suite is a skip today',
 		'teardown-verify': 'deploys nothing; waits for the deletes the E2E jobs started',
 	};

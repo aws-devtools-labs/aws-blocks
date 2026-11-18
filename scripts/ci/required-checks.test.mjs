@@ -30,6 +30,7 @@ const E2E = [
 	'production',
 	'sandbox',
 	'sandbox-vpc',
+	'supabase',
 	'telemetry',
 	'templates',
 	'templates-windows',

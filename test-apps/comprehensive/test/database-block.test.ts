@@ -2,20 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { ApiError, isBlocksError } from '@aws-blocks/core';
-import { type ClusterType, DatabaseErrors } from '@aws-blocks/bb-database';
+import { type ClusterKind, DatabaseErrors } from '@aws-blocks/bb-database';
 import type { api as apiType } from 'aws-blocks';
 
 // Compile-time assertions. `Equal` is the standard invariant type-equality check;
 // `Expect` only accepts `true`, so an inexact type makes the harness `tsc --noEmit`
 // (run before deploy) fail. The cluster descriptor's `kind` must survive the RPC
-// boundary as the block's `ClusterType`.
+// boundary as the block's `ClusterKind`.
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
 type Info = Awaited<ReturnType<typeof apiType.dbxInfo>>;
-type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], ClusterType>>;
-type _DbxcKind = Expect<Equal<Info['dbxc']['cluster']['kind'], ClusterType>>;
+type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], ClusterKind>>;
+type _DbxcKind = Expect<Equal<Info['dbxc']['cluster']['kind'], ClusterKind>>;
 type Task = NonNullable<Awaited<ReturnType<typeof apiType.dbxcAdd>>>;
 type _Task = Expect<Equal<Task, { id: number; title: string; done: boolean }>>;
 // The result schema, not a type argument, types the validated read on the aurora path too.
@@ -35,8 +39,49 @@ type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
 type DbxKyselyRow = Awaited<ReturnType<typeof apiType.dbxKyselySelect>>[number];
 type _DbxKyselyRow = Expect<Equal<DbxKyselyRow, { id: string; name: string; value: number }>>;
 
+/** One `cdk-blocks db` run in the app directory; returns the JSON object the tool prints. */
+function cdkBlocksDb(...args: string[]): unknown {
+  const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const stdout = execFileSync(npx, ['--no', '--', 'cdk-blocks', 'db', ...args, '--', '--output', 'json'], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    shell: process.platform === 'win32',
+  });
+  return JSON.parse(stdout);
+}
+
 export function databaseBlockTests(getApi: () => typeof apiType) {
   describe('bb-database (Database + DatabaseCluster)', () => {
+    // The Kysely table types the backend imports are generated from the migration files. Generating them
+    // again must give the committed files, while the dev server holds the local databases.
+    test('cdk-blocks db types --block writes the Tables files the backend imports', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'bb-comprehensive-types-'));
+      try {
+        for (const [block, ...options] of [['dbx'], ['dbxc', '--type', 'aurora']]) {
+          const out = join(dir, `${block}.types.ts`);
+          cdkBlocksDb('types', '--block', block, ...options, '--out', out);
+          assert.strictEqual(
+            readFileSync(out, 'utf-8'),
+            readFileSync(join('aws-blocks', `${block}.types.ts`), 'utf-8'),
+            `aws-blocks/${block}.types.ts is stale: run cdk-blocks db types --block ${block} ${options.join(' ')}`,
+          );
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test('cdk-blocks db status --block lists the files of a block in its local database', { skip: (process.env.BLOCKS_TEST_ENV || 'local') !== 'local' }, async () => {
+      // A statement first, so the block has applied its files.
+      await getApi().dbxcCommentCount(0);
+      assert.deepStrictEqual(cdkBlocksDb('status', '--block', 'dbxc', '--cluster', 'sharedaurora'), {
+        ok: true,
+        applied: ['001_tasks.sql', '002_comments.sql', '003_user_notes.sql'],
+        pending: [],
+        note: 'A process has the local database open. The lists show what it had written to disk.',
+      });
+    });
+
     test('descriptors: dbx owns its DSQL cluster, dbxa/dbxb share one, dbxc runs on an aurora cluster', async () => {
       const info = await getApi().dbxInfo();
       assert.strictEqual(info.dbxc.cluster.kind, 'aurora');
@@ -159,14 +204,15 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
 
     // A statement the cluster rejects for something the caller did, thrown out of the handler uncaught:
     // the client must be able to branch on the name, and the message must not carry the row's values.
-    test('dbx - a not-null violation reaches the client as a named QueryFailed without row values', async () => {
+    test('dbx - a not-null violation reaches the client as NotNullViolation (HTTP 400) without row values', async () => {
       const api = getApi();
       const id = `x-nn-${Date.now().toString(36)}`;
       await assert.rejects(
         () => api.dbxNotNullViolation(id),
         (e: unknown) => {
           assert.ok(e instanceof ApiError, `expected ApiError, got ${e}`);
-          assert.ok(isBlocksError(e, DatabaseErrors.QueryFailed), `expected QueryFailed, got ${e.name}`);
+          assert.ok(isBlocksError(e, DatabaseErrors.NotNullViolation), `expected NotNullViolation, got ${e.name}`);
+          assert.strictEqual(e.status, 400);
           assert.ok(!e.message.includes(id), `the message must not quote the row: ${e.message}`);
           return true;
         },
@@ -219,10 +265,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
     test('dbx - DDL and TRUNCATE are refused on a DSQL cluster', async () => {
       const api = getApi();
       const ddl = await api.dbxRejectDdl();
-      assert.ok(
-        ddl.error === 'DatabasePermissionException' || ddl.error === DatabaseErrors.QueryFailed,
-        `expected the mock's DDL guard or DSQL's rejection, got ${ddl.error}`,
-      );
+      assert.strictEqual(ddl.error, DatabaseErrors.QueryFailed);
       const truncate = await api.dbxRejectTruncate();
       assert.ok(truncate.error === 'DsqlValidationError' || truncate.error === DatabaseErrors.QueryFailed, `got ${truncate.error}`);
     });
@@ -277,7 +320,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       const task = await api.dbxcAdd(`fk-${Date.now().toString(36)}`);
       assert.ok(task);
       const orphan = await api.dbxcAddComment(task.id + 1_000_000, 'no such task');
-      assert.strictEqual(orphan.error, DatabaseErrors.QueryFailed, 'SQLSTATE 23503 reaches the client as QueryFailed');
+      assert.strictEqual(orphan.error, DatabaseErrors.ForeignKeyViolation, 'SQLSTATE 23503 reaches the client by name');
       const first = await api.dbxcAddComment(task.id, 'first');
       const second = await api.dbxcAddComment(task.id, 'second');
       assert.ok(first.id !== null && second.id !== null && second.id > first.id, 'SERIAL ids on the child table');
@@ -329,13 +372,25 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       assert.deepStrictEqual(types, { big: 'number', num: 'string', at: 'Date', n: 'number' });
     });
 
+    test('aurora cluster - asUser(): a Row Level Security policy gives each user their own rows, through SQL and Kysely', async () => {
+      const stamp = Date.now().toString(36);
+      const result = await getApi().dbxcUserNotes(`owner-${stamp}`, `other-${stamp}`, `note-${stamp}`);
+      assert.deepStrictEqual(result, {
+        owner: 1,
+        other: 0,
+        noUser: 0,
+        kysely: 1,
+        kyselyOtherInTransaction: 0,
+        refused: DatabaseErrors.PermissionDenied,
+        deletedByOther: 0,
+        deletedByOwner: 1,
+      });
+    });
+
     test('aurora cluster - DDL and TRUNCATE are refused: the app role has DML only', async () => {
       const api = getApi();
       for (const result of [await api.dbxcRejectDdl(), await api.dbxcRejectTruncate()]) {
-        assert.ok(
-          result.error === 'DatabasePermissionException' || result.error === DatabaseErrors.QueryFailed,
-          `expected the mock's guard or the role's missing privilege, got ${result.error}`,
-        );
+        assert.strictEqual(result.error, DatabaseErrors.QueryFailed);
       }
     });
 
@@ -370,9 +425,9 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       const api = getApi();
       const account = `orphan-${Date.now().toString(36)}`;
       const result = await api.dbxbRejectOrphan(account);
-      assert.strictEqual(result.orphan, DatabaseErrors.QueryFailed, 'no such account');
+      assert.strictEqual(result.orphan, DatabaseErrors.ForeignKeyViolation, 'no such account');
       assert.ok(
-        result.negative === DatabaseErrors.QueryFailed || result.negative === DatabaseErrors.TransactionFailed,
+        result.negative === DatabaseErrors.CheckViolation || result.negative === DatabaseErrors.TransactionFailed,
         `check constraint: ${result.negative}`,
       );
       await api.dbxbDeleteAccount(account);
