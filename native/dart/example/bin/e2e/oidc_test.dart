@@ -37,7 +37,8 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:http/http.dart' as http;
 import 'harness.dart';
 
-const _provider = 'google';
+// The generated enum of the providers `oidcAuthApi.getClient()` names.
+const _provider = OidcAuthApiApiGetClientProvider.google;
 const _relayTo = 'nativebindings://auth';
 
 /// HTTP-driven [BrowserLauncher] standing in for a real browser.
@@ -126,7 +127,7 @@ void main() async {
   print('=== OIDC relay validation (headless) — native-bindings ===');
   print('RPC base   : $rpcUrl');
   print('OIDC base  : $oidcBase');
-  print('provider   : $_provider');
+  print('provider   : ${_provider.providerName}');
   print('relayTo    : $_relayTo');
 
   if (!isLocalEndpoint() && Platform.environment['RUN_OIDC'] != '1') {
@@ -163,7 +164,9 @@ void main() async {
   try {
     final csrf = OidcClient.generateRandom();
     final resp = await httpClient.post(
-      Uri.parse('$oidcBase${oidc.authorizeParamsBasePath}/$_provider'),
+      Uri.parse(
+        '$oidcBase${oidc.authorizeParamsBasePath}/${_provider.providerName}',
+      ),
       headers: const {'content-type': 'application/json'},
       body: jsonEncode({'csrf': csrf, 'relayTo': _relayTo}),
     );
