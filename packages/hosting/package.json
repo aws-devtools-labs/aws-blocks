@@ -73,7 +73,7 @@
     "jiti": "^2.7.0",
     "local-pkg": "^0.5.1",
     "parse-cache-control": "^1.0.1",
-    "semver": "^7.8.5",
+    "semver": "^7.8.6",
     "zod": "^4.6.7",
     "@standard-schema/spec": "^1.1.0",
     "@aws-sdk/client-lambda-web": "^3.1156.0"
