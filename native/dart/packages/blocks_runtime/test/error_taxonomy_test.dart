@@ -499,7 +499,35 @@ void main() {
       );
       expect(
         const TransportException('HTTP 503', statusCode: 503).toString(),
-        'TransportException: HTTP 503',
+        'TransportException(503): HTTP 503',
+      );
+      // A gateway body's message keeps the status beside it.
+      expect(
+        const TransportException('Forbidden', statusCode: 403).toString(),
+        'TransportException(403): Forbidden',
+      );
+      expect(
+        const TransportException('Connection refused').toString(),
+        'TransportException: Connection refused',
+      );
+      expect(
+        TransportException(
+          'offline',
+          cause: http.ClientException('offline'),
+        ).toString(),
+        'TransportException: offline (cause: ClientException: offline)',
+      );
+      // An OIDC error names its own type, not the sealed base's.
+      expect(
+        OidcCancelledException('timed out').toString(),
+        'OidcCancelledException: timed out',
+      );
+      expect(
+        OidcExchangeException(
+          'Exchange failed',
+          const ApiException('no', status: 400),
+        ).toString(),
+        'OidcExchangeException: Exchange failed (cause: ApiException(400): no)',
       );
       expect(
         const ClientClosedException().toString(),

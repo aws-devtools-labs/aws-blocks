@@ -119,10 +119,7 @@ class RealtimeChannel<T> {
       onError: (Object error, StackTrace stackTrace) => controller.addError(
         error is RealtimeException
             ? error
-            : RealtimeConnectionException(
-                'Realtime connection failed: $error',
-                error,
-              ),
+            : RealtimeConnectionException('Realtime connection failed', error),
         stackTrace,
       ),
       onDone: () => controller.close(),

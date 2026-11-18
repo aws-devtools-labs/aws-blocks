@@ -92,6 +92,14 @@ final class TransportException extends BlocksException {
 
   const TransportException(String message, {this.statusCode, Object? cause})
     : super(message, cause);
+
+  @override
+  String toString() {
+    final head = statusCode == null
+        ? 'TransportException: $message'
+        : 'TransportException($statusCode): $message';
+    return cause == null ? head : '$head (cause: $cause)';
+  }
 }
 
 /// Thrown by a call through a `BlocksClient` that has been closed.

@@ -37,7 +37,8 @@ Future<T> guardRequest<T>(Future<T> Function() send) => guardTransport(
   (e) => TransportException(transportFailureMessage(e), cause: e),
 );
 
-/// The message of the HTTP client's [error], without its type name.
+/// The message of the HTTP client's [error], without its type name where the
+/// type is known.
 String transportFailureMessage(Exception error) => switch (error) {
   http.ClientException(:final message) when message.isNotEmpty => message,
   TimeoutException(:final message?) when message.isNotEmpty => message,

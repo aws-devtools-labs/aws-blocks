@@ -73,11 +73,9 @@ void main() {
       final errors = <Object>[];
       await channel.subscribe().handleError(errors.add).drain<void>();
       expect(errors, [
-        isA<RealtimeConnectionException>().having(
-          (e) => e.cause,
-          'cause',
-          isNotNull,
-        ),
+        isA<RealtimeConnectionException>()
+            .having((e) => e.cause, 'cause', isNotNull)
+            .having((e) => e.message, 'message', 'Realtime connection failed'),
       ]);
     },
   );

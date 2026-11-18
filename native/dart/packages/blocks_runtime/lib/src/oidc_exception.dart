@@ -12,11 +12,6 @@ import 'blocks_exception.dart';
 /// call does.
 sealed class OidcException extends BlocksException {
   const OidcException(super.message, [super.cause]);
-
-  @override
-  String toString() => cause == null
-      ? 'OidcException: $message'
-      : 'OidcException: $message (cause: $cause)';
 }
 
 /// The requested provider name is not configured in the spec.
