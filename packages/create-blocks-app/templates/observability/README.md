@@ -8,8 +8,6 @@ trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.
 needs a signed-in user. Sign-up confirms the email with a 6-digit code, which
 `npm run dev` prints in its terminal locally. No frontend included.
 
-> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template observability`
-
 ## Getting Started
 
 ```bash
@@ -29,42 +27,20 @@ What each one does locally and deployed:
 `test:e2e` reads the log and metric lines from the dev server it starts. If a
 dev server is already running, it skips those two checks and runs the rest.
 
-## For Coding Agents
+## Project Structure
 
-**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.**
-
-**After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
-
-## Documentation Location
-
-**All Blocks documentation comes from `npm run docs`:**
-
-The Blocks package handles infrastructure, backend logic, APIs, storage, authentication, and more through Building Blocks. Run `npm run docs` to list the Building Blocks, and `npm run docs <Block>...` to print their docs (`npm run docs -- --help` for more).
-
-## For Humans
-
-**Hover in IDE:** Import a Building Block and hover over it to see comprehensive docstrings with usage, best practices, and performance characteristics.
+| Path | Purpose |
+|------|---------|
+| `aws-blocks/index.ts` | Backend: Logger, Metrics, Tracer, Dashboard, Auth, the `api` namespace (`placeOrder`) |
+| `test/e2e.test.ts` | Tests: call the API through the typed client |
 
 ## Commands
 
-```bash
-npm run typecheck   # Check TypeScript types (run after code changes)
-npm run dev         # Local dev server (long-running - use background job)
-npm run dev:stop    # Stop the dev server this app started
-npm run sandbox     # Deploy to AWS sandbox
-npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
-npm run deploy      # Deploy to production
-npm run test:e2e    # Run end-to-end tests against dev server
-npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
-npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
-npm run secret set KEY # Set a secret (also list, remove KEY)
-npm run config set KEY value # Set a config value (also list, remove KEY)
-npm run typegen          # Regenerate secret/config key types; run once and commit .cdk-blocks/hosting-values.d.ts before gating CI on -- --check
-```
+`npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
-The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
-`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
+
+After code changes, run `npm run typecheck`: `npm run test:e2e` does not type-check.
 
 ## Local dev vs Sandbox vs Deploy (process model)
 
@@ -76,6 +52,8 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 | `npm run deploy` | Deployed to AWS | Deployed API Gateway URL |
 
 ### RPC endpoint (local dev)
+
+Tests and TypeScript callers import the typed client (`import { api } from 'aws-blocks'`). Call the endpoint directly only to try `placeOrder` by hand or to troubleshoot connectivity; `AGENTS.md` describes the request format and the error responses.
 
 ```bash
 # The dev server's RPC endpoint is JSON-RPC 2.0 at POST /cdk-blocks/api:
@@ -94,22 +72,11 @@ curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localh
 curl -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.placeOrder","params":["coffee"],"id":4}'
-# method = "<namespace>.<methodName>" (namespace = the exported variable name in cdk-blocks/index.ts: `export const api = …` → api); params = positional array.
-# Errors return HTTP 200 with an {"error":{...}} body (JSON-RPC), not a non-2xx status.
 ```
-
-## Architecture
-
-- **Backend:** `cdk-blocks/index.ts` — Define APIs and Building Blocks
-- **Infrastructure:** Inferred from code, works locally and on AWS
-
-**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more).**
 
 ## Stack naming
 
-Your CloudFormation stack names are derived from the `stackId` in `.cdk-blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
-
-To change the stack name, edit `stackId` in `.cdk-blocks/config.json`. For dynamic naming logic, modify `cdk-blocks/index.cdk.ts` directly.
+A sandbox stack's name ends in an identifier that is per machine, stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). `AGENTS.md` describes the stack names and how to rename them.
 
 ## Adding a Frontend Later
 
@@ -121,7 +88,7 @@ This template is backend-only. To add a frontend:
    ```
    Then add a build script and the frontend dev server to `package.json`. Replace
    `"blocks": { "dev": { "port": 3001, "frontend": false } }` with the frontend settings, so `npm run dev`
-   (`npm run dev`) starts Vite behind the dev server and serves both on http://localhost:3000:
+   starts Vite behind the dev server and serves both on http://localhost:3000:
    ```json
    {
      "scripts": {
@@ -131,12 +98,12 @@ This template is backend-only. To add a frontend:
        "dev": { "frontendPort": 3100 }
      },
      "dependencies": {
-       "react": "^19.0.0",
-       "react-dom": "^19.0.0"
+       "react": "^19.3.1",
+       "react-dom": "^19.3.1"
      },
      "devDependencies": {
-       "@vitejs/plugin-react": "^4.3.0",
-       "vite": "^5.0.0"
+       "@vitejs/plugin-react": "^4.7.0",
+       "vite": "^6.4.5"
      }
    }
    ```
@@ -161,4 +128,6 @@ This template is backend-only. To add a frontend:
    }
    ```
 
-The `cdk-blocks` workspace package re-exports a type-safe client that works in both Node.js and browser environments.
+## For Agents
+
+Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.
