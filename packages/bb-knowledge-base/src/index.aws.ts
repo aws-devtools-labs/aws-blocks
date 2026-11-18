@@ -17,6 +17,7 @@ import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgen
 import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type {
 	KnowledgeBaseOptions,
+	SourceFormat,
 	RetrieveOptions,
 	RetrieveResult,
 	MetadataFilter,
@@ -28,7 +29,7 @@ import type {
 } from './types.js';
 import { blocksError, KnowledgeBaseErrors } from './errors.js';
 import { createAgentTool } from './agent-tool.js';
-import { normalizeMaxResults } from './normalize.js';
+import { normalizeMaxResults, normalizeSourceFormat, relativeSourceKey } from './normalize.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-cdk-blocks/bb-logger';
 import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
@@ -36,6 +37,7 @@ import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 export type {
 	KnowledgeBaseOptions,
 	SourceConfig,
+	SourceFormat,
 	ChunkingConfig,
 	ChunkingStrategy,
 	RetrieveOptions,
@@ -275,6 +277,8 @@ export class KnowledgeBase extends Scope {
 	// ever retrieve() (or never check sync state) don't allocate it.
 	private agentClient?: BedrockAgentClient;
 	private readonly kbDescription?: string;
+	private readonly source: string;
+	private readonly sourceFormat: SourceFormat;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -284,6 +288,8 @@ export class KnowledgeBase extends Scope {
 		this.log = _options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.fullIdCached = this.fullId;
 		this.kbDescription = _options?.description;
+		this.source = _options?.source ?? '';
+		this.sourceFormat = normalizeSourceFormat(_options?.sourceFormat);
 		this.runtimeClient = new BedrockAgentRuntimeClient({
 			maxAttempts: 3,
 			retryMode: 'adaptive',
@@ -368,7 +374,9 @@ export class KnowledgeBase extends Scope {
 
 			const results: RetrieveResult[] = [];
 			for (const item of response.retrievalResults ?? []) {
-				results.push(mapResultItem(item));
+				const result = mapResultItem(item);
+				if (this.sourceFormat === 'relative') result.source = relativeSourceKey(result.source, this.source);
+				results.push(result);
 			}
 
 			return results;

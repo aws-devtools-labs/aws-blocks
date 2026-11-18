@@ -28,6 +28,26 @@ import type { z } from 'zod';
  */
 export type SourceConfig = string;
 
+/**
+ * How `RetrieveResult.source` names the matched document.
+ *
+ * - `'uri'` — (Default) On AWS, the raw Bedrock location: `s3://<bucket>/<key>`. This includes
+ *   the data bucket's name, which can identify your AWS account or naming scheme.
+ * - `'relative'` — The object key relative to the knowledge base's source root, for example
+ *   `faq/returns.md`: the bucket name is dropped, and for an `s3://bucket/prefix/` source so is
+ *   the prefix. This is the same path local development returns.
+ *
+ * Local development always returns the path relative to the source folder, whichever value is set.
+ *
+ * @example
+ * ```typescript
+ * const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge', sourceFormat: 'relative' });
+ * const [hit] = await kb.retrieve('refund policy');
+ * hit?.source; // 'faq/returns.md' on AWS and locally
+ * ```
+ */
+export type SourceFormat = 'uri' | 'relative';
+
 // ── Chunking Configuration ─────────────────────────────────────────────────
 
 /**
@@ -99,6 +119,13 @@ export interface KnowledgeBaseOptions {
 	 * can empty the bucket before deletion. Pass `'retain'` to keep it.
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * How `retrieve()` (and `asAgentTool()`) report each result's `source`. Default: `'uri'`.
+	 *
+	 * Set `'relative'` when results reach a browser or a model, so they carry the document path
+	 * (`faq/returns.md`) rather than the `s3://` URI that names the data bucket. See {@link SourceFormat}.
+	 */
+	sourceFormat?: SourceFormat;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -150,7 +177,12 @@ export interface RetrieveResult {
 	text: string;
 	/** Relevance score normalized to 0.0–1.0, where 1.0 is a perfect match. */
 	score: number;
-	/** Source document path (relative to source root) or URL. */
+	/**
+	 * The document the chunk came from. Locally, its path relative to the source folder
+	 * (`faq/returns.md`). On AWS, the `s3://<bucket>/<key>` URI by default, or the key relative
+	 * to the source root when the knowledge base sets `sourceFormat: 'relative'`. Empty when
+	 * Bedrock reports no S3 location.
+	 */
 	source: string;
 	/** Document metadata key-value pairs. Includes auto-populated `folder` key derived from subfolder structure. */
 	metadata: Record<string, string>;

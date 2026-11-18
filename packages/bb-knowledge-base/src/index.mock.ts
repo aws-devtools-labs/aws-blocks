@@ -11,7 +11,7 @@ import { registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { createAgentTool } from './agent-tool.js';
 import { blocksError, KnowledgeBaseErrors } from './errors.js';
-import { normalizeMaxResults } from './normalize.js';
+import { normalizeMaxResults, normalizeSourceFormat } from './normalize.js';
 import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
 import type {
 	ChunkingStrategy,
@@ -41,6 +41,7 @@ export type {
 	RetrieveOptions,
 	RetrieveResult,
 	SourceConfig,
+	SourceFormat,
 	WaitUntilSyncedOptions,
 } from './types.js';
 
@@ -193,6 +194,9 @@ export class KnowledgeBase extends Scope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// Validated for parity with AWS. The mock's sources are already relative to the
+		// source folder, so both formats return the same path locally.
+		normalizeSourceFormat(options?.sourceFormat);
 		this.options = options;
 		this.kbDescription = options?.description;
 		this.dataDir = getMockDataDir(this);

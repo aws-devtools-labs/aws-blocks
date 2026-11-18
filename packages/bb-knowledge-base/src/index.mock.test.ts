@@ -63,6 +63,28 @@ beforeEach(() => {
 	setupTestFixtures();
 });
 
+// ── sourceFormat ───────────────────────────────────────────────────────────
+
+describe('sourceFormat', () => {
+	test("'relative' returns the same document path the default does (the mock never has a bucket)", async () => {
+		const plain = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
+		const relative = new KnowledgeBase({ id: 'test' }, 'kbrel', { source: 'test-knowledge-tmp', sourceFormat: 'relative' });
+		const a = (await plain.retrieve('password reset')).map((r) => r.source);
+		const b = (await relative.retrieve('password reset')).map((r) => r.source);
+		assert.ok(b.length > 0);
+		assert.deepStrictEqual(b, a);
+		for (const s of b) assert.ok(!s.startsWith('s3://') && !s.startsWith('/'), `expected a relative path, got ${s}`);
+	});
+
+	test('an unknown sourceFormat is rejected at construction, as on AWS', () => {
+		assert.throws(
+			// @ts-expect-error -- exercising a value outside the declared union
+			() => new KnowledgeBase({ id: 'test' }, 'kbbad', { source: 'test-knowledge-tmp', sourceFormat: 'key' }),
+			(err: unknown) => isBlocksError(err, KnowledgeBaseErrors.ValidationError),
+		);
+	});
+});
+
 // ── Basic retrieve ─────────────────────────────────────────────────────────
 
 test('retrieve returns results matching query terms', async () => {

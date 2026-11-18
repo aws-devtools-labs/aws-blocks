@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import { isBlocksError } from '@aws-cdk-blocks/core';
 import { KnowledgeBaseErrors } from './errors.js';
-import { normalizeMaxResults } from './normalize.js';
+import { normalizeMaxResults, normalizeSourceFormat, relativeSourceKey } from './normalize.js';
 
 describe('normalizeMaxResults', () => {
 	it('defaults to 10 when undefined', () => {
@@ -38,4 +38,54 @@ describe('normalizeMaxResults', () => {
 			);
 		});
 	}
+});
+
+describe('normalizeSourceFormat', () => {
+	it("defaults to 'uri' when unset", () => {
+		assert.strictEqual(normalizeSourceFormat(undefined), 'uri');
+		assert.strictEqual(normalizeSourceFormat(null), 'uri');
+	});
+
+	it('passes the two supported values through', () => {
+		assert.strictEqual(normalizeSourceFormat('uri'), 'uri');
+		assert.strictEqual(normalizeSourceFormat('relative'), 'relative');
+	});
+
+	it('rejects any other value with ValidationError', () => {
+		for (const value of ['key', 'URI', '', 1, {}]) {
+			assert.throws(
+				() => normalizeSourceFormat(value),
+				(err: unknown) => isBlocksError(err, KnowledgeBaseErrors.ValidationError),
+				`expected ${JSON.stringify(value)} to be rejected`,
+			);
+		}
+	});
+});
+
+describe('relativeSourceKey', () => {
+	it('drops the bucket for a folder source (documents sit at the bucket root)', () => {
+		assert.strictEqual(relativeSourceKey('s3://stack-kbdata-1a2b3c/faq/returns.md', './knowledge'), 'faq/returns.md');
+	});
+
+	it('drops the bucket and the configured prefix for an s3:// source', () => {
+		assert.strictEqual(relativeSourceKey('s3://acme-prod-docs/team/docs/a/b.md', 's3://acme-prod-docs/team/docs/'), 'a/b.md');
+	});
+
+	it('treats a prefix without a trailing slash the same way the data source does', () => {
+		assert.strictEqual(relativeSourceKey('s3://bucket/docs/guide.md', 's3://bucket/docs'), 'guide.md');
+	});
+
+	it('keeps the full key for a bucket-root s3:// source', () => {
+		assert.strictEqual(relativeSourceKey('s3://bucket/guides/start.md', 's3://bucket'), 'guides/start.md');
+	});
+
+	it('keeps the key when it is outside the configured prefix, still without the bucket', () => {
+		assert.strictEqual(relativeSourceKey('s3://bucket/other/x.md', 's3://bucket/docs/'), 'other/x.md');
+	});
+
+	it('returns an empty string for an empty or non-S3 location, never the raw value', () => {
+		assert.strictEqual(relativeSourceKey('', './knowledge'), '');
+		assert.strictEqual(relativeSourceKey('https://example.com/a', './knowledge'), '');
+		assert.strictEqual(relativeSourceKey('s3://bucket-only', './knowledge'), '');
+	});
 });

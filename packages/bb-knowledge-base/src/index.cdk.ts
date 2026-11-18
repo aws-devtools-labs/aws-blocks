@@ -14,12 +14,13 @@ import { sourceScopedConditions } from '@aws-cdk-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { KnowledgeBaseOptions, ChunkingConfig, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
 import { createAgentTool } from './agent-tool.js';
+import { normalizeSourceFormat } from './normalize.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 
 export type {
-	KnowledgeBaseOptions, SourceConfig,
+	KnowledgeBaseOptions, SourceConfig, SourceFormat,
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
 	MetadataFilter, WaitUntilSyncedOptions,
@@ -198,6 +199,8 @@ export class KnowledgeBase extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 		this.kbDescription = options.description;
+		// Runtime-only option; validated here so an unsupported value fails at synth.
+		normalizeSourceFormat(options.sourceFormat);
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 
