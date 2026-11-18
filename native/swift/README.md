@@ -75,7 +75,7 @@ export const oidcAuthApi = auth.createOidcApi();
 
 Build the sign-in screen from two sources:
 
-- **Federated sign-in buttons come from the client.** Render one button per provider in `oidc.providers`, typed with the generated `Provider` enum, and have it call `oidc.signIn(provider:relayTo:launcher:)`, then `getAuthState()`. Don't render the state's `signIn:<id>` actions as buttons: their `url` signs the system browser in, not the app.
+- **Federated sign-in buttons come from the client.** Render one button per provider in `oidc.providers`, typed with the generated `Provider` enum, and have it call `oidc.signIn(provider:relayTo:)`, which opens the system's sign-in sheet (see [OIDC sign-in](#oidc-sign-in)), then `getAuthState()`. Don't render the state's `signIn:<id>` actions as buttons: their `url` signs the system browser in, not the app.
 - **Everything else comes from the state machine:** whether the user is signed in, password sign-in, sign-up, MFA steps, and which actions are `unavailable`. Run those actions through `setAuthState(input:)`.
 
 One action carries a `url` the app still handles itself: `signOut` with a `url`, a federated user's sign-out. Call `oidc.signOut()`, then `getAuthState()`. Never submit this one through `setAuthState`: that ends the session but drops the provider's logout URL. A `signOut` without a `url` goes through `setAuthState` like any other action.
@@ -83,7 +83,7 @@ One action carries a `url` the app still handles itself: `signOut` with a `url`,
 ```swift
 let blocks = Blocks()
 let oidc = try await blocks.oidcAuthApi.getClient()
-// Your app's Universal Link or custom scheme, listed in the backend's `redirects.allowedRelayOrigins`.
+// Your app's custom URL scheme, listed in the backend's `redirects.allowedRelayOrigins`.
 let relayTo = "myapp://auth"
 
 // On launch: the state reflects the session the Keychain cookie still holds.
@@ -93,7 +93,7 @@ var state = try await blocks.authApi.getAuthState()
 let providers = oidc.providers.compactMap(OidcAuthApi.GetClient.Provider.init(rawValue:))
 
 func signIn(with provider: OidcAuthApi.GetClient.Provider) async throws -> AuthState {
-    _ = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+    _ = try await oidc.signIn(provider: provider, relayTo: relayTo)
     return try await blocks.authApi.getAuthState()
 }
 
@@ -113,9 +113,7 @@ func run(_ action: AuthAction, _ input: AuthApi.SetAuthState.Input?) async throw
 }
 ```
 
-`launcher` is a `BrowserLauncher`, usually one that wraps `ASWebAuthenticationSession` with `relayTo`'s scheme as the callback scheme. Have it throw `OIDCError.cancelled` when the user closes the sheet, so the app can tell a dismissal from a failed sign-in.
-
-Prefer a verified Universal Link (an `https` URL on a domain your app has an associated domain for) as `relayTo` over a bare custom scheme such as `myapp://auth`. Any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE is what keeps that case safe: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A Universal Link opens only your app, so the code doesn't reach another app at all. Its launcher must accept an `https` callback, for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
+[OIDC sign-in](#oidc-sign-in) covers `relayTo`, the sheet's options, its errors, and passing a launcher of your own.
 
 - **On launch.** Call `getAuthState()`: it works for every `Auth` block and its `user` is the signed-in user. `oidc.restore()` returns the same user and also sets the client's `authState` and emits `.signedIn` or `.signedOut` on `authStateChanges()`, but only a block with federated providers serves its session route; on any other block it throws an `ApiError` with `status` 404.
 - **Unavailable actions.** An action that carries `unavailable` can't run in the current state. Show it disabled, with that text as the reason.
@@ -157,6 +155,7 @@ let user = try await oidc.signIn(provider: .google, relayTo: "myapp://auth")
 - **The window, and a private session.** By default the sheet opens over a key window of one of the app's scenes, preferring a foreground one (on macOS, the key window), and it shares the browser's cookies, so a user already signed in to the provider can skip the password; the system asks for consent first. To choose either, pass a launcher: `signIn(provider: .google, relayTo: "myapp://auth", launcher: WebAuthenticationSessionLauncher(prefersEphemeralWebBrowserSession: true, presentationAnchor: { window }))`. An app that can show more than one window, such as on iPad, should pass `presentationAnchor`, and an app extension must. A private session has no consent prompt and asks the browser to share no cookies; Safari always does, but on macOS another default browser might not.
 - **Errors.** Closing the sheet throws `OIDCError.cancelled`. Cancelling the task that called `signIn` dismisses the sheet and throws `CancellationError`. A sheet the system won't show, for example while the app is in the background, throws `OIDCError.callbackError` with the system's error as `underlyingError`. One sign-in opens at a time: a second one while a sheet is open throws `OIDCError.callbackError`, and so does signing in on iOS while the app shows no window, both before anything opens.
 - **Your own browser.** To drive the browser yourself, implement `BrowserLauncher` and pass it as `launcher:`. Return the first redirect to `callbackScheme`, throw `OIDCError.cancelled` when the user backs out without one, throw `CancellationError` when the task is cancelled, and throw `OIDCError.callbackError` with the original error as its cause for any other failure.
+- **A Universal Link as `relayTo`.** Any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE is what keeps that case safe: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A verified Universal Link (an `https` URL on a domain your app has an associated domain for) opens only your app, so the code doesn't reach another app at all. `WebAuthenticationSessionLauncher` accepts only a custom scheme, so a Universal Link needs your own launcher, for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
 
 ## Configuration
 

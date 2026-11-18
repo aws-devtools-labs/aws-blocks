@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-import AuthenticationServices
 import BlocksRuntime
 import SwiftUI
 
@@ -77,7 +76,8 @@ final class AppState: ObservableObject {
     /// A provider's sign-in button: sign in through the backend's relay, then read the new state.
     func federatedSignIn(provider: String) async {
         do {
-            _ = try await oidc().signIn(provider: provider, relayTo: Self.relayTo, launcher: WebAuthenticationLauncher())
+            // Opens the system sign-in sheet (`WebAuthenticationSessionLauncher` at its defaults).
+            _ = try await oidc().signIn(provider: provider, relayTo: Self.relayTo)
             await refreshAuth()
         } catch OIDCError.cancelled {
             // The user closed the sign-in sheet: nothing to report.
@@ -105,46 +105,6 @@ final class AppState: ObservableObject {
         } catch {
             self.error = error.localizedDescription
         }
-    }
-}
-
-// MARK: - Browser launcher
-
-/// Opens the identity provider in `ASWebAuthenticationSession` and returns the relayed callback URL.
-final class WebAuthenticationLauncher: NSObject, BrowserLauncher, ASWebAuthenticationPresentationContextProviding,
-    @unchecked Sendable {
-    /// Held while the sheet is open.
-    private var session: ASWebAuthenticationSession?
-
-    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
-        try await present(authorizeURL, callbackScheme: callbackScheme)
-    }
-
-    @MainActor
-    private func present(_ authorizeURL: URL, callbackScheme: String) async throws -> URL {
-        defer { session = nil }
-        return try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(url: authorizeURL, callbackURLScheme: callbackScheme) { url, error in
-                if let url {
-                    continuation.resume(returning: url)
-                } else if let error, (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
-                    continuation.resume(throwing: error)
-                } else {
-                    // The user closed the sheet: the client's catch site tells this from a failure.
-                    continuation.resume(throwing: OIDCError.cancelled)
-                }
-            }
-            session.presentationContextProvider = self
-            self.session = session
-            session.start()
-        }
-    }
-
-    @MainActor
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
-        return scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first ?? ASPresentationAnchor()
     }
 }
 
