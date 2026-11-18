@@ -36,6 +36,15 @@ interface BlocksVpcOptions {
    * @default true
    */
   provisionEndpoints?: boolean;
+
+  /**
+   * Derive the endpoint logical ids from each service's short name, so they
+   * change only when the set of endpoints changes. Recommended for new apps;
+   * leave it off on a stack that already has Blocks-provisioned endpoints
+   * (see VPC.md, "Stable Endpoint IDs").
+   * @default false
+   */
+  stableEndpointIds?: boolean;
 }
 ```
 
@@ -146,7 +155,7 @@ SSM is *not* in this list — it is provisioned only when a BB in scope declares
 
 ### Collection and Provisioning
 
-After all BBs are constructed, `finalizeVpc` walks the construct tree, collects all registered gateway and interface endpoints, deduplicates by service name, and provisions them on the VPC. Gateway endpoints are free; interface endpoints cost ~$7.20/month/AZ.
+After all BBs are constructed, `finalizeVpc` walks the construct tree, collects all registered gateway and interface endpoints, deduplicates by service name, and provisions them on the VPC. Each endpoint's construct id is `VpcGw`/`VpcIf` plus the alphanumerics of the service's full name by default; that name embeds CDK token sequence numbers, so the id can shift between synths. With `stableEndpointIds: true` the dedup key and id come from the service short name instead (`VpcGws3`, `VpcIflogs`). It is opt-in because switching an existing stack replaces its endpoints, and that update fails (see VPC.md). Gateway endpoints are free; interface endpoints cost ~$7.20/month/AZ.
 
 ---
 
