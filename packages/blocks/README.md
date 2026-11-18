@@ -163,17 +163,11 @@ First pick where the users live: in a Cognito user pool (the default store), or 
 
 Free tiers and rates are from [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) as read on 4 October 2026.
 
-MFA and passkeys apply only to email + password users; federated users get MFA from their identity provider. Only `store: 'builtin'` supports PKCE-only (public) clients. For the full comparison and how to choose, read *Which option and why* in the `Auth` README (`docs/bb-auth/README.md`).
+MFA and passkeys apply only to email + password users; federated users get MFA from their identity provider. Only `store: 'builtin'` supports PKCE-only (public) clients. For the full comparison and how to choose, read *Which option and why* in the `Auth` README (`npx --no -- cdk-blocks docs Auth --section "which option"`).
 
 ## Building Block documentation
 
-Every Building Block ships its docs inside the `@aws-blocks/blocks` package under `docs/<block>/`: each `docs/<block>/` folder contains that block's `README.md`, plus `API.md`, `DESIGN.md`, and `CHANGELOG.md` where present. To read them, locate the bundled folder:
-
-```bash
-node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"
-```
-
-If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That folder holds this guide (`README.md`), the framework's own `API.md`, `TROUBLESHOOTING.md`, and `CHANGELOG.md` (version history — read when troubleshooting), plus one subfolder per block; the catalog below lists every block.
+Every Building Block ships its docs inside the `@aws-blocks/blocks` package, and `cdk-blocks docs` prints them by name for the version this app has installed: `npx --no -- cdk-blocks docs` lists the blocks, `npx --no -- cdk-blocks docs <block>` prints a block's README (add `--api` for its API report), and a name such as `ApiError` or `ifFieldEquals` prints its import line, declaration and the docs about it. `npx --no -- cdk-blocks docs --help` lists the rest. The catalog below lists every block.
 
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |
@@ -411,8 +405,8 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 
 ## Reference
 
-- **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference), `docs/<block>/DESIGN.md` (architecture & rationale) and `docs/<block>/PRODUCTION.md` (production settings, scaling & cost) where present — e.g. `docs/bb-kv-store/README.md`. The catalog + decision tree live in `docs/README.md`.
-- **What to import from where:** [IMPORTS.md](./IMPORTS.md) (`docs/IMPORTS.md`) lists every app-facing entry (`@aws-blocks/blocks`, `/client`, `/ui`, `/theme`, `/server`, `/utils`, and `/cdk`, `/lambda-handler`, `/scripts`, which the generated `aws-blocks/index.cdk.ts` and `index.handler.ts` import), where it runs, and every name it exports. Code run under the `browser` condition (browser bundles, and the templates' `tsx -C browser` e2e tests) imports no values from the root entry, the only one with that condition: it uses `/client`, `/ui` and `/theme` (the e2e tests also `/utils`), and takes a block's error constants from its own package (`KVStoreErrors` from `@aws-blocks/bb-kv-store`).
+- **Per-block documentation:** `npx --no -- cdk-blocks docs <block>` prints a block's README (overview) and `--api` its API report (full API reference). A doc path prints its other docs where present: `DESIGN.md` (architecture & rationale) and `PRODUCTION.md` (production settings, scaling & cost), e.g. `npx --no -- cdk-blocks docs bb-file-bucket/PRODUCTION.md`. `npx --no -- cdk-blocks docs` lists the blocks with their docs; the catalog and decision tree are in this README (`npx --no -- cdk-blocks docs guide`).
+- **What to import from where:** [IMPORTS.md](./IMPORTS.md) (`npx --no -- cdk-blocks docs IMPORTS.md`) lists every app-facing entry (`@aws-blocks/blocks`, `/client`, `/ui`, `/theme`, `/server`, `/utils`, and `/cdk`, `/lambda-handler`, `/scripts`, which the generated `aws-blocks/index.cdk.ts` and `index.handler.ts` import), where it runs, and every name it exports. Code run under the `browser` condition (browser bundles, and the templates' `tsx -C browser` e2e tests) imports no values from the root entry, the only one with that condition: it uses `/client`, `/ui` and `/theme` (the e2e tests also `/utils`), and takes a block's error constants from its own package (`KVStoreErrors` from `@aws-blocks/bb-kv-store`).
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. For custom auth forms, `submitAuthAction` submits an action and notifies every component and tab; `subscribeAuthState` / `getAuthStateSnapshot` expose the auth state as a store (React's `useSyncExternalStore`). See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
 - **Test helpers** (`@aws-blocks/blocks/utils`, Node only: tests and scripts, including the templates' `tsx -C browser` e2e tests, since the entry has no `browser` condition; not browser bundles): `installCookieJar(): () => void` keeps `Set-Cookie` across `fetch` calls, so a signed-in session persists between API calls; call it once before `await import('aws-blocks')` (it returns a function that restores `fetch`). `createTestClient(clients)` returns the same typed clients bound to a cookie jar of their own, for several signed-in users in one test. `getLastAuthCode(username, options?): Promise<string>` reads the verification code the local `Auth` pool last sent (local only). `totpCodeFor(sharedSecret, time?): string` computes an authenticator-app (TOTP) code. `isServerRunning(port = 3000): Promise<boolean>` checks whether a dev server is already listening, so test setup can skip starting one.

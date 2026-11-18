@@ -200,7 +200,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 3. Root `README.md` — how conditional exports work
 
 ### Discovering Building Block Documentation
-When working in an AWS Blocks application (not this monorepo), Building Block documentation lives in `node_modules`. Start from `node_modules/@aws-blocks/blocks/README.md` — it lists all Building Blocks with their package names and has instructions for locating each package's full README.
+When working in an AWS Blocks application (not this monorepo), Building Block documentation ships in `@aws-blocks/blocks`, and `cdk-blocks docs` prints it for the installed version: `npx --no -- cdk-blocks docs` lists all Building Blocks with their package names, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).
 
 ---
 
