@@ -18,6 +18,7 @@ import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
 import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
+import { legacyKvStoreTests, seedLegacyStore } from './legacy-kv-store.test.js';
 import { kvStoreDocumentsTests } from './kv-store-documents.test.js';
 import { kvStoreSecureDefaultsTests } from './kv-store-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
@@ -55,6 +56,7 @@ import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
 import { httpErrorStatusTests } from './http-error-status.test.js';
+import { voidResultTests } from './void-result.test.js';
 import { apiUrlStageTests } from './api-url-stage.test.js';
 import { authSocialLocalTests } from './auth-social-local.test.js';
 import { testApiUrl } from './api-url.js';
@@ -104,6 +106,8 @@ test.before(async () => {
   }
   
   if (ENV === 'local') {
+    // The data file of a store of a KVStore release up to 0.4.0, for the LegacyKVStore tests.
+    seedLegacyStore();
     console.log('🚀 Starting local dev server...');
     
     server = spawn('npm', ['run', 'dev:server'], {
@@ -269,6 +273,8 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 // Before any suite signs into `auth`: the signed-out call must stay signed out.
 httpErrorStatusTests(() => ({ api, strictStatusApi }));
 
+voidResultTests(() => api);
+
 // Local only: the `auth-social` block exists only in `npm run dev`.
 if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
 
@@ -335,6 +341,9 @@ test('Background suites - start Agent, AsyncJob, AsyncJob status', () => backgro
 
 // KVStore tests (separate file)
 kvStoreTests(() => api);
+
+// LegacyKVStore tests (separate file)
+legacyKvStoreTests(() => api);
 
 // KVStore with a declared key (documents) tests (separate file)
 kvStoreDocumentsTests(() => api);

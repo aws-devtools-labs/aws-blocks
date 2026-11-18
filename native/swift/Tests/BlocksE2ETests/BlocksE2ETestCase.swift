@@ -101,23 +101,23 @@ class BlocksE2ETestCase: XCTestCase {
         return user
     }
 
-    /// Assert that `body` throws an `RPCError` whose server error name is `name`; `inspect` gets
+    /// Assert that `body` throws an `ApiError` whose server error name is `name`; `inspect` gets
     /// the error for further assertions.
     func assertThrowsBlocksError(
         _ name: String,
         file: StaticString = #filePath,
         line: UInt = #line,
         _ body: () async throws -> Void,
-        inspect: ((RPCError) -> Void)? = nil
+        inspect: ((ApiError) -> Void)? = nil
     ) async {
         do {
             try await body()
             XCTFail("Expected \(name), but no error was thrown", file: file, line: line)
-        } catch let error as RPCError {
+        } catch let error as ApiError {
             XCTAssertEqual(error.name, name, "error: \(error.message)", file: file, line: line)
             inspect?(error)
         } catch {
-            XCTFail("Expected RPCError \(name), got \(error)", file: file, line: line)
+            XCTFail("Expected ApiError \(name), got \(error)", file: file, line: line)
         }
     }
 }

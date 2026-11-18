@@ -3,6 +3,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.kotlin.realtime.RealtimeChannel
@@ -11,6 +12,7 @@ import kotlin.collections.List
 import kotlin.collections.Map
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -24,12 +26,14 @@ public class Api(
   public suspend fun getBoard(): Board {
     val request = BlocksRequest(method = "api.getBoard", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getBoard")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun saveLayout(layout: Layout): Layout {
     val request = BlocksRequest(method = "api.saveLayout", params = listOf(BlocksJson.encodeToJsonElement(layout)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.saveLayout")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
@@ -37,18 +41,21 @@ public class Api(
     val args: List<JsonElement> = if (levels != null) listOf(buildJsonObject { groups.forEach { put(it.key, buildJsonArray { it.value.forEach { add(BlocksJson.encodeToJsonElement(it)) } }) } }, buildJsonArray { levels.forEach { add(BlocksJson.encodeToJsonElement(it)) } }) else listOf(buildJsonObject { groups.forEach { put(it.key, buildJsonArray { it.value.forEach { add(BlocksJson.encodeToJsonElement(it)) } }) } })
     val request = BlocksRequest(method = "api.groupNotes", params = args, id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.groupNotes")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun listFeeds(): List<RealtimeChannel<Note>> {
     val request = BlocksRequest(method = "api.listFeeds", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.listFeeds")
     return BlocksJson.decodeFromJsonElement(ListSerializer(RealtimeChannelNoteSerializer), result)
   }
 
   public suspend fun getLoginMenu(): LoginMenu {
     val request = BlocksRequest(method = "api.getLoginMenu", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getLoginMenu")
     return OidcClient.json(client, "blocks-fixture://auth").decodeFromJsonElement(result)
   }
 }

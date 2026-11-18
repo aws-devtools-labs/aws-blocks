@@ -3,6 +3,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.String
 import kotlin.collections.List
@@ -28,6 +29,7 @@ public class Api(
   public suspend fun store(entry: Entry): Entry {
     val request = BlocksRequest(method = "api.store", params = listOf(BlocksJson.encodeToJsonElement(entry)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.store")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
@@ -42,6 +44,7 @@ public class Api(
     val args: List<JsonElement> = if (extra != null) listOf(buildJsonArray { items.forEach { add(it) } }, buildJsonObject { metadata.forEach { put(it.key, it.value) } }, maybe ?: JsonNull, buildJsonArray { holes.forEach { add(it ?: JsonNull) } }, buildJsonObject { sparse.forEach { put(it.key, it.value ?: JsonNull) } }, extra) else listOf(buildJsonArray { items.forEach { add(it) } }, buildJsonObject { metadata.forEach { put(it.key, it.value) } }, maybe ?: JsonNull, buildJsonArray { holes.forEach { add(it ?: JsonNull) } }, buildJsonObject { sparse.forEach { put(it.key, it.value ?: JsonNull) } })
     val request = BlocksRequest(method = "api.collect", params = args, id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.collect")
     return BlocksJson.decodeFromJsonElement(result)
   }
 }

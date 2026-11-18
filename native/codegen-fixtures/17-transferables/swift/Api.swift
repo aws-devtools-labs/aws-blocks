@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getChannel() async throws -> RealtimeChannel<GetChannel.ResultMessage> {
         let request = BlocksRequest(method: "api.getChannel", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getChannel") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getChannel") }
         return try self.client.makeDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)
     }
 
@@ -25,9 +25,9 @@ public final nonisolated class Api: Sendable {
     public func getFile(path: String) async throws -> FileDownloadHandle {
         let request = BlocksRequest(method: "api.getFile", params: [path], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getFile") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getFile") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw RPCError(message: "Invalid file descriptor for api.getFile")
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/download", missingField: "__blocks")
         }
         return try FileDownloadHandle.fromJSON(descriptor)
     }
@@ -36,16 +36,16 @@ public final nonisolated class Api: Sendable {
     public func getUpload(path: String) async throws -> FileUploadHandle {
         let request = BlocksRequest(method: "api.getUpload", params: [path], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getUpload") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getUpload") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw RPCError(message: "Invalid file descriptor for api.getUpload")
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/upload", missingField: "__blocks")
         }
         return try FileUploadHandle.fromJSON(descriptor)
     }
 
     public enum GetChannel {
 
-        public struct ResultMessage: Codable {
+        public struct ResultMessage: Codable, Sendable {
             public let message: String
             public let timestamp: Double
 

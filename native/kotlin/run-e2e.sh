@@ -2,7 +2,12 @@
 set -e
 
 # Native SDK E2E — runs the full pipeline locally or in CI.
-# Usage: ./run-e2e.sh [--blocks-url URL] [--target jvm|ios]
+# Usage: ./run-e2e.sh [--blocks-url URL] [--target jvm|ios|android]
+#
+# The android target needs a running emulator or a connected device; it does not
+# start one. Boot one first, e.g.
+#   "$ANDROID_HOME/emulator/emulator" -avd "$(
+#     "$ANDROID_HOME/emulator/emulator" -list-avds | head -1)" &
 #
 # From the monorepo root, this script:
 # 1. Generates the OpenRPC spec from test-apps/native-bindings
@@ -38,6 +43,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Fail before the spec, codegen and server steps rather than after them.
+ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
+if [ "$TARGET" = "android" ] && ! "$ADB" devices | grep -q "device$"; then
+  echo "No Android device or emulator is attached. Boot one, then re-run."
+  exit 1
+fi
+
 echo "Step 1: Generate OpenRPC spec from test-apps/native-bindings"
 cd "$BACKEND"
 npm run spec
@@ -52,7 +64,7 @@ echo "   Copied to: $E2E_DIR/blocks.spec.json"
 echo ""
 echo "Step 3: Run Kotlin codegen"
 cd "$E2E_DIR"
-./gradlew awsBlocksCodegen --quiet
+./gradlew blocksCodegen --quiet
 echo "   Codegen complete"
 
 if [ -z "$BLOCKS_URL" ]; then
@@ -94,8 +106,15 @@ case $TARGET in
   ios)
     ./gradlew iosSimulatorArm64Test -DBLOCKS_URL="$BLOCKS_URL"
     ;;
+  android)
+    # The suite runs on the device, where localhost is the device itself. Forward
+    # the device's port 3001 to this machine's so BLOCKS_URL resolves the same on
+    # every target. Harmless when BLOCKS_URL points at a deployed backend.
+    "$ADB" reverse tcp:3001 tcp:3001 > /dev/null
+    ./gradlew connectedAndroidDeviceTest -DBLOCKS_URL="$BLOCKS_URL"
+    ;;
   *)
-    echo "Unknown target: $TARGET (expected: jvm, ios)"
+    echo "Unknown target: $TARGET (expected: jvm, ios, android)"
     exit 1
     ;;
 esac

@@ -5,7 +5,7 @@
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { ApiNamespace, Compute, Scope, KVStore, getDeploymentType, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, LegacyKVStore, getDeploymentType, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -89,6 +89,12 @@ const numStore = new KVStore<number>(scope, 'num-store');
 // KVStore<object> - Typed object store for generic type testing
 interface Profile { name: string; age: number; tags: string[] }
 const objStore = new KVStore<Profile>(scope, 'obj-store');
+
+// LegacyKVStore - the store of a KVStore release up to 0.4.0, for an upgrade.
+// It has the data methods of that store. The table is declared as that
+// release declares it.
+const legacyStore = new LegacyKVStore<Profile>(scope, 'legacy-store', { ttl: true });
+
 
 // KVStore with schema validation and an index (form 2: a schema, still a string key)
 const profileSchema = z.object({ name: z.string(), age: z.number(), tags: z.array(z.string()) });
@@ -1254,6 +1260,9 @@ export const DbInsertInput = z.object({
 // ============================================================================
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
+
+  /** Returns nothing: the response carries `"result": null` (test/void-result.test.ts). */
+  async voidResult(): Promise<void> {},
   
   // ------------------------------------------------------------------------
   // KVStore Tests
@@ -1294,6 +1303,38 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async kvPutThenGet(key: string, value: string) {
     await store.put(key, value);
     return await store.get(key);
+  },
+
+  // ------------------------------------------------------------------------
+  // LegacyKVStore Tests
+  // ------------------------------------------------------------------------
+
+  async legacyGet(key: string) {
+    return await legacyStore.get(key);
+  },
+
+  async legacyScanPage(limit: number, cursor?: string) {
+    const page = legacyStore.scan({ limit, cursor });
+    const entries = await Array.fromAsync(page);
+    return { entries, cursor: page.cursor };
+  },
+
+  async legacyPut(key: string, value: Profile, options?: { ifNotExists?: boolean; ttlSeconds?: number }) {
+    await legacyStore.put(key, value, options);
+    return { success: true };
+  },
+
+  async legacyDelete(key: string, conditions?: { ifExists?: boolean }) {
+    await legacyStore.delete(key, conditions);
+    return { success: true };
+  },
+
+  // Test support: put items in `legacyStore`, each with the expiry that the suite gives (also one in the past).
+  async legacySeed(entries: { key: string; value: Profile; ttl?: number }[]) {
+    for (const { key, value, ttl } of entries) {
+      await legacyStore.put(key, value, ttl === undefined ? undefined : { expiresAt: ttl });
+    }
+    return { success: true };
   },
 
   // ------------------------------------------------------------------------

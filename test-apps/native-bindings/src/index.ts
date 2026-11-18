@@ -1,4 +1,4 @@
-import { api, authBasicApi, authCognitoApi, oidcAuthApi } from 'aws-blocks';
+import { api, authBasicApi, authCognitoApi, oidcAuthStateApi } from 'aws-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/bb-auth/ui';
 
 function esc(str: string): string {
@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // "Sign in with google" button that starts the redirect flow.
   const oidcContainer = document.getElementById('oidc-auth-container');
   if (oidcContainer) {
-    oidcContainer.appendChild(Authenticator(oidcAuthApi));
+    oidcContainer.appendChild(Authenticator(oidcAuthStateApi));
   }
 });
 

@@ -3,10 +3,12 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.Boolean
 import kotlin.String
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -16,6 +18,7 @@ public class Api(
   public suspend fun createUser(input: CreateUser.Input): CreateUser.Result {
     val request = BlocksRequest(method = "api.createUser", params = listOf(BlocksJson.encodeToJsonElement(input)), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.createUser")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

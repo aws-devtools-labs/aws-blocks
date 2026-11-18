@@ -31,6 +31,10 @@ public struct SwiftCodeGenerator {
     private(set) var nestedTypesByName: [String: [NestedTypeNode]] = [:]
     /// Component schemas by type name, to follow a `typeReference` when walking a type.
     private(set) var typesByName: [String: ResolvedType] = [:]
+    /// The generated types that can't be `Sendable`, by scope (see SwiftCodeGenerator+Sendable.swift).
+    private(set) var sendable = SendableAnalysis()
+    /// The scope declarations are being emitted in, for `sendable`.
+    let emissionScope = EmissionScope()
     let declaredBindings: [String: DeclaredTransferableBinding]
     /// Unconditional once a module is declared: the generator cannot know a
     /// customer package's export list.
@@ -51,11 +55,11 @@ public struct SwiftCodeGenerator {
     /// or `CodegenError` (a component schema with a constraint throws it from its init). `ModelsRuntimeImportTests`
     /// checks the list against the runtime's sources.
     static let blocksRuntimeTypeNames: Set<String> = [
-        "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
-        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileBucketError", "FileDownloadHandle", "FileUploadHandle",
+        "ApiError", "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
+        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileDownloadHandle", "FileTransferError", "FileUploadHandle",
         "InMemoryTokenStore", "JSONValue", "OIDCAuthState", "OIDCClient", "OIDCError", "OIDCProviderConfig", "OIDCProviderName", "OIDCUser",
-        "RawRouteError", "RealtimeChannel", "RealtimeError", "RPCError", "TokenStore", "UnknownTransferable",
-        "WebSocketConnection", "WebSocketDelegate"
+        "RealtimeChannel", "RealtimeError", "TokenStore", "TransferableError", "TransportError", "UnknownTransferable",
+        "WebAuthenticationSessionLauncher", "WebSocketConnection", "WebSocketDelegate"
     ]
 
     public func generate(from model: CodegenModel) throws -> GeneratedSources {
@@ -71,6 +75,7 @@ public struct SwiftCodeGenerator {
             model.typeDefinitions.map { ($0.name, $0.type) },
             uniquingKeysWith: { first, _ in first }
         )
+        generator.sendable = Self.sendableAnalysis(in: model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -106,6 +111,7 @@ public struct SwiftCodeGenerator {
         for typeDef in model.typeDefinitions {
             emitType(typeDef.type, name: typeDef.name, lines: &modelLines, emitted: &emittedTypes)
         }
+        let sharedTypes = emitSharedTypes(model, lines: &modelLines)
 
         // Build per-operation qualified-name lookup from nested types.
         // Types nest inside operation enums inside the class, so the qualified
@@ -121,6 +127,11 @@ public struct SwiftCodeGenerator {
                 // Level by level, and the shallowest type keeps a name: the signature names the operation's
                 // own types (`Swap.Item`), not a same-named type nested deeper (`Swap.Result.Item`).
                 var nameMap: [String: String] = [:]
+                // A shared parameter type (`AuthActionInput`) is named as itself, even beside a deeper nested type
+                // of that name (`Place.Result.Figure`).
+                for alias in operation.sharedTypeAliases {
+                    nameMap[alias.target] = alias.target
+                }
                 var level = operation.nestedTypes.map { (node: $0, path: "\(opName).\($0.name)") }
                 while !level.isEmpty {
                     for entry in level where nameMap[entry.node.name] == nil {
@@ -139,7 +150,7 @@ public struct SwiftCodeGenerator {
 
         // Diagnostics are emitted here (not in the builder) so the model name uses
         // the same `operationQualifiedNames` authority that drives emission.
-        var warnings: [String] = model.nativeCatalogWarnings
+        var warnings: [String] = model.nativeCatalogWarnings + model.namingWarnings
 
         // Default server name for init parameter default
         let serverNames = serverPropertyNames(model.servers)
@@ -152,6 +163,7 @@ public struct SwiftCodeGenerator {
                 topLevelNames.formUnion(variants.map(\.name))
             }
         }
+        topLevelNames.formUnion(model.sharedTypes.map(\.name))
         let classNames = apiClassNames(model.apiNamespaces, topLevelNames: topLevelNames)
         let entryPoint = entryPointNames(for: model.apiNamespaces, classNames: classNames)
         warnings += entryPoint.warnings
@@ -186,11 +198,11 @@ public struct SwiftCodeGenerator {
             }
 
             // Emit nested types as operation enums inside the class
-            for operation in namespace.operations where !operation.nestedTypes.isEmpty || oidcProviderEnum(operation) != nil {
+            for operation in namespace.operations where operation.declaresNestedTypes || oidcProviderEnum(operation) != nil {
                 apiLines.append("")
                 emitOperationEnum(
                     operation: operation, name: memberNames.enums[operation.name] ?? specTypeName(operation.name),
-                    namespace: namespace.name, indent: "    ", lines: &apiLines
+                    namespace: namespace.name, shared: sharedTypes, indent: "    ", lines: &apiLines
                 )
             }
 
@@ -220,7 +232,7 @@ public struct SwiftCodeGenerator {
         }
 
         // Only include models file content if there are actual type definitions
-        let hasTypes = !model.typeDefinitions.isEmpty
+        let hasTypes = !model.typeDefinitions.isEmpty || !model.sharedTypes.isEmpty
         let modelsContent = hasTypes ? modelLines.joined(separator: "\n") : ""
         let apiContent = apiLines.joined(separator: "\n")
         return GeneratedSources(models: modelsContent, api: apiContent, warnings: warnings)
@@ -228,18 +240,7 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Nested Type Emission
 
-    private func emitOperationEnum(
-        operation: Operation, name opName: String, namespace: String, indent: String, lines: inout [String]
-    ) {
-        emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
-        for node in operation.nestedTypes {
-            emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
-        }
-        emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
-        lines.append("\(indent)}")
-    }
-
-    private func emitNestedTypeNode(_ node: NestedTypeNode, indent: String, lines: inout [String]) {
+    func emitNestedTypeNode(_ node: NestedTypeNode, indent: String, lines: inout [String]) {
         switch node.type {
         case .record(_, let fields, let additionalPropertiesType, let embeddedUnion):
             emitNestedRecordStruct(
@@ -250,7 +251,7 @@ public struct SwiftCodeGenerator {
             )
         case .enum(_, let values):
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable {", lines: &lines)
+            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable, \(sendableProtocol) {", lines: &lines)
             lines.append(contentsOf: enumCaseLines(values, indent: indent + "    "))
             lines.append("\(indent)}")
         case .union(_, let variants, let discriminator):
@@ -266,7 +267,8 @@ public struct SwiftCodeGenerator {
     ) {
         let fields = fields.filter { !isVoidType($0.type) }
         lines.append("")
-        emitDeclaration(name, line: "\(indent)public struct \(name): Codable {", lines: &lines)
+        let conformances = valueConformances(recordStored(fields, additionalPropertiesType, embeddedUnion))
+        emitDeclaration(name, line: "\(indent)public struct \(name): \(conformances) {", lines: &lines)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -401,20 +403,22 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)}")
     }
 
-    private func emitNestedUnion(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode], indent: String, lines: inout [String]) {
-        // Emit variant structs before the enum
-        for variant in variants {
-            guard !variant.fields.isEmpty
-                    || variant.additionalPropertiesType != nil
-                    || variant.embeddedUnion != nil
-                    || !variant.nestedTypes.isEmpty else { continue }
-            if variant.payloadTypeName != nil || variant.valueType != nil { continue }
+    /// Emits a union with the types it declares for its variants (their structs, a value arm's own types) beside
+    /// it, or, for a shared top-level union (`sharedTopLevel`), nested inside it (`AuthActionInput.SignIn`).
+    func emitNestedUnion(
+        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode],
+        indent: String, lines: inout [String], sharedTopLevel: Bool = false
+    ) {
+        let memberIndent = sharedTopLevel ? indent + "    " : indent
+        var memberLines: [String] = []
+        // Variant structs
+        for variant in variants where declaresVariantStruct(variant) {
             emitNestedRecordStruct(
                 name: variant.name, fields: variant.fields,
                 additionalPropertiesType: variant.additionalPropertiesType,
                 embeddedUnion: variant.embeddedUnion,
                 children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                indent: indent, lines: &lines
+                indent: memberIndent, lines: &memberLines
             )
         }
 
@@ -422,23 +426,34 @@ public struct SwiftCodeGenerator {
         // variant structs.
         for variant in variants where variant.valueType != nil {
             for node in valueArmTypes(variant) {
-                emitNestedTypeNode(node, indent: indent, lines: &lines)
+                emitNestedTypeNode(node, indent: memberIndent, lines: &memberLines)
             }
         }
+        if !sharedTopLevel { lines.append(contentsOf: memberLines) }
 
         lines.append("")
-        emitDeclaration(name, line: "\(indent)public enum \(name): Codable {", lines: &lines)
+        let declaration = sharedTopLevel ? "public nonisolated enum" : "public enum"
+        let conformances = valueConformances([.union(name: name, variants: variants, discriminator: discriminator)])
+        emitDeclaration(name, line: "\(indent)\(declaration) \(name): \(conformances) {", lines: &lines)
         lines.append(contentsOf: unionCaseLines(variants, indent: indent))
         if let disc = discriminator {
             emitDiscriminatedCoding(name: name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
         } else {
             emitTransparentUnionCoding(name: name, variants: variants, indent: indent, lines: &lines)
         }
+        if sharedTopLevel {
+            lines.append(contentsOf: memberLines)
+            for child in children {
+                emitNestedTypeNode(child, indent: memberIndent, lines: &lines)
+            }
+        }
         lines.append("\(indent)}")
 
         // Emit children
-        for child in children {
-            emitNestedTypeNode(child, indent: indent + "    ", lines: &lines)
+        if !sharedTopLevel {
+            for child in children {
+                emitNestedTypeNode(child, indent: indent + "    ", lines: &lines)
+            }
         }
     }
 
@@ -708,7 +723,7 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable {", lines: &lines)
+            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable, \(sendableProtocol) {", lines: &lines)
             lines.append(contentsOf: enumCaseLines(values, indent: "    "))
             lines.append("}")
 
@@ -757,7 +772,8 @@ public struct SwiftCodeGenerator {
             }
             var body: [String] = []
             body.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): Codable {", lines: &body)
+            let conformances = valueConformances([.union(name: name, variants: variants, discriminator: discriminator)])
+            emitDeclaration(name, line: "public nonisolated enum \(name): \(conformances) {", lines: &body)
             body.append(contentsOf: unionCaseLines(variants, indent: ""))
             // Internal-discriminator union: write the discriminator at JSON
             // top level alongside the payload.
@@ -817,7 +833,8 @@ public struct SwiftCodeGenerator {
         let fields = fields.filter { !isVoidType($0.type) }
         var body: [String] = []
         body.append("")
-        emitDeclaration(name, line: "public nonisolated struct \(name): Codable {", lines: &body)
+        let conformances = valueConformances(recordStored(fields, additionalPropertiesType, embeddedUnion))
+        emitDeclaration(name, line: "public nonisolated struct \(name): \(conformances) {", lines: &body)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -1375,13 +1392,13 @@ public struct SwiftCodeGenerator {
         // An optional (nullable) transferable result returns nil for a null body; every other result throws.
         let nullResult = transferable?.optional == true
             ? "guard let \(result) else { return nil }"
-            : "guard let \(result) else { throw \(runtimePrefix)RPCError(message: \"Unexpected null result for \(methodLiteral)\") }"
+            : "guard let \(result) else { throw \(runtimePrefix)TransportError(message: \"Unexpected null result for \(methodLiteral)\") }"
         if isTransferable {
             // Hydrate transferable from the raw JSON descriptor
             if let transferable {
                 lines.append(contentsOf: transferableResultLines(
                     transferable.type, operation: operation, names: names, messageType: messageType,
-                    nullResult: nullResult, methodLiteral: methodLiteral
+                    nullResult: nullResult
                 ))
             }
         } else if discardsResult {
@@ -1576,7 +1593,8 @@ private extension SwiftCodeGenerator {
                 }
             }
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): Codable {", lines: &lines)
+            let conformances = valueConformances([node.type])
+            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): \(conformances) {", lines: &lines)
             lines.append(contentsOf: unionCaseLines(variants, indent: indent))
             if let disc = discriminator {
                 emitDiscriminatedCoding(name: node.name, variants: variants, discriminator: disc, indent: indent, lines: &lines)

@@ -71,7 +71,7 @@ Local Mock
 - The **mock** constructor fully parses the expression (`parseSchedule`) — it must model the schedule to fire locally — and throws synchronously on anything it can't parse.
 - The **CDK** construct validates at synth (`validateSchedule`) so an invalid expression fails in seconds rather than minutes into an EventBridge-rejected deploy.
 
-**The synth gate is deliberately more lenient than the mock parser**, to avoid the false-negative risk this decision originally guarded against:
+**The synth gate is deliberately more lenient than the mock parser**, so it never rejects a schedule EventBridge would run:
 - `rate(...)` is fully validated (unit ∈ minute/hour/day, plural agreement, value ≥ 1) — this catches `rate(10 seconds)`, `rate(1 minutes)`, etc.
 - `cron(...)` is validated for its **6-field shape only**. Field-level semantics — `L` (last day), `W` (nearest weekday), `#` (nth weekday), named days, and the year field — are **left to EventBridge**, because the mock parser models only a subset and gating the deploy on it would reject advanced-but-valid cron.
 
@@ -90,7 +90,7 @@ Local Mock
 - **Simplicity** — no per-job role management, no cross-references between jobs.
 - **Security** — grants are scoped to each target's ARN: `lambda:InvokeFunction` for Lambda jobs and `sqs:SendMessage` for container jobs. The shared role has the union of those grants, not per-job isolation, and it is not shared across backends.
 - **Trust scoping** — the role's trust policy admits `scheduler.amazonaws.com` only when `aws:SourceAccount` is the stack's account and `aws:SourceArn` matches `arn:<partition>:scheduler:<region>:<account>:schedule-group/*`. Scheduler reports the schedule *group* ARN as the source, so the pattern is group-based rather than per-schedule.
-- **Per-target grants** — each CronJob adds a grant for its own target: `lambda:InvokeFunction` on its compute's function, or `sqs:SendMessage` on its runner queue (D-CJ-7). Jobs on one function share one rendered statement. (Before per-job compute, the role was granted only the first job's function, which was correct while every job shared one function.)
+- **Per-target grants** — each CronJob adds a grant for its own target: `lambda:InvokeFunction` on its compute's function, or `sqs:SendMessage` on its runner queue (D-CJ-7). Jobs on one function share one rendered statement.
 
 ### D-CJ-6: Event routing via `source` + `jobName`
 
@@ -105,12 +105,12 @@ For handler errors, Lambda's [default asynchronous retry policy](https://docs.aw
 
 ### D-CJ-7: Container compute delivers ticks through an internal AsyncJob
 
-**Decision:** `compute` accepts the same `Compute` objects as `AsyncJob`. On a Lambda compute nothing changes: the schedule invokes the function directly (D-CJ-2, D-CJ-6). On a container compute the CronJob constructs a child `AsyncJob` (id `runner`) on the same compute, and the schedule targets that job's SQS queue with `{ jobName, scheduledTime, input }` as the message body. The runner's handler calls the CronJob handler with the same `CronJobEvent<T>`.
+**Decision:** `compute` accepts the same `Compute` objects as `AsyncJob`. On a Lambda compute the schedule invokes the function directly (D-CJ-2, D-CJ-6). On a container compute the CronJob constructs a child `AsyncJob` (id `runner`) on the same compute, and the schedule targets that job's SQS queue with `{ jobName, scheduledTime, input }` as the message body. The runner's handler calls the CronJob handler with the same `CronJobEvent<T>`.
 
 **Rationale:**
 - **No new delivery machinery** — a container AsyncJob already has an owner-matched poller, a worker thread per delivery with a hard-enforced `timeoutSeconds`, a visibility heartbeat for long deliveries, a DLQ, and queue-depth autoscaling. A tick needs exactly that.
 - **Same options, same meaning** — `timeoutSeconds` passes straight to the runner, so it means what it means on `AsyncJob`.
-- **Lambda path is untouched** — existing stacks synthesize the same schedule, target, and role (one invoke statement per target function).
+- **Lambda path needs no runner** — a serverless CronJob synthesizes only the schedule, its function target, and the shared role's invoke grant (one statement per target function).
 
 **Alternative considered: EventBridge Scheduler → ECS `RunTask` per tick.** Starting a one-off Fargate task per tick costs nothing between ticks. This design instead keeps the container's `minInstances` tasks running, or with `minInstances: 0` scales to zero and starts a task when a tick is waiting (usually a few minutes of delay per tick, up to about 20 minutes for a job that runs less often than every six hours). `RunTask` was rejected for now because it is not the same compute object (a one-off task ignores the service's scaling and poller), it needs a new run-one-handler boot mode, and it would rebuild the timeout, retry, and DLQ handling AsyncJob already has. It can be added later as an option if starting each tick promptly without an always-on task matters.
 

@@ -338,7 +338,7 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
 
     func onFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {
         logger.error("WS failure: \(error.localizedDescription)")
-        onError(RealtimeError.websocket("WebSocket failure", error))
+        onError(RealtimeError.connectionFailed("WebSocket failure", error))
     }
 
     func onClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {

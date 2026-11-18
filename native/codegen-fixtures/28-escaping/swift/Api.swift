@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func get_x(id: String) async throws -> Widget {
         let request = BlocksRequest(method: "api.get$x", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.get$x") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.get$x") }
         return try JSONDecoder().decode(Widget.self, from: result)
     }
 
@@ -25,13 +25,13 @@ public final nonisolated class Api: Sendable {
     public func doAction(input: DoAction.Input) async throws -> DoAction.Result {
         let request = BlocksRequest(method: "api.doAction", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.doAction") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.doAction") }
         return try JSONDecoder().decode(DoAction.Result.self, from: result)
     }
 
     public enum DoAction {
 
-        public struct ActionCreate_: Codable {
+        public struct ActionCreate_: Codable, Sendable {
             public let title: String
 
             public init(title: String) {
@@ -39,7 +39,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct ActionRe_Move: Codable {
+        public struct ActionRe_Move: Codable, Sendable {
             public let id: String
 
             public init(id: String) {
@@ -47,7 +47,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case actionCreate_(ActionCreate_)
             case actionRe_Move(ActionRe_Move)
 
@@ -79,7 +79,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

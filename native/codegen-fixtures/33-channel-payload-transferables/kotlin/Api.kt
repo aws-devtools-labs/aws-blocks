@@ -3,6 +3,7 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.filebucket.FileDownloadHandle
 import com.aws.blocks.kotlin.json.BlocksJson
 import com.aws.blocks.kotlin.oidc.OidcClient
@@ -12,6 +13,7 @@ import kotlin.String
 import kotlin.collections.List
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.decodeFromJsonElement
 
 public class Api(
@@ -32,18 +34,21 @@ public class Api(
   public suspend fun getChatFeed(): GetChatFeed.Result {
     val request = BlocksRequest(method = "api.getChatFeed", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getChatFeed")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getCounterFeed(): GetCounterFeed.Result {
     val request = BlocksRequest(method = "api.getCounterFeed", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getCounterFeed")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun getLobby(): Lobby {
     val request = BlocksRequest(method = "api.getLobby", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getLobby")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
@@ -57,12 +62,14 @@ public class Api(
   public suspend fun getSignInBoard(): SignInBoard {
     val request = BlocksRequest(method = "api.getSignInBoard", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getSignInBoard")
     return OidcClient.json(client, "blocks-fixture://auth").decodeFromJsonElement(result)
   }
 
   public suspend fun getProviderDirectory(): ProviderDirectory {
     val request = BlocksRequest(method = "api.getProviderDirectory", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getProviderDirectory")
     return OidcClient.json(client, "blocks-fixture://auth").decodeFromJsonElement(result)
   }
 

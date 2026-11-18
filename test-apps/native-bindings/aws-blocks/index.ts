@@ -243,7 +243,11 @@ function oidcUserInfo(user: AuthenticatedUser): OidcUserInfo {
 
 export const authBasicApi = authBasic.createApi();
 export const authCognitoApi = authCognito.createApi();
-export const oidcAuthApi = oidcAuth.createApi();
+// The native SDKs' OIDC client (`getClient()` → the `oidc/client` transferable),
+// under the export name the native suites have always used.
+export const oidcAuthApi = oidcAuth.createOidcApi();
+// The OIDC block's sign-in state machine, for the web demo's Authenticator.
+export const oidcAuthStateApi = oidcAuth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
@@ -589,6 +593,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async echoArgs(first: string, middle?: string, last?: string) {
     return { first, middle: middle ?? null, last: last ?? null };
   },
+
+  /**
+   * Returns nothing. The server answers `"result": null`; a response with no `result` field
+   * made the Kotlin and Swift clients throw "Missing result field" on every void call
+   * (native e2e: Swift `RpcWireE2ETests`, Kotlin `RpcWireE2ETest`, Dart `rpc_wire_test.dart`).
+   */
+  async voidResult(): Promise<void> {},
 
   /**
    * A rest parameter typed as a tuple, as `...args: Parameters<typeof table.put>` forwards a

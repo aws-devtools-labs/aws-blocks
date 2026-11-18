@@ -72,7 +72,7 @@ How the dashboard resolves each section:
 - **Logs** — shown for every compute (logs are always captured); log group is the compute's own handler log group. Suppress with `logs: false`.
 - **Traces** — shown for a compute when tracing is enabled on it (the app contains a `Tracer`). Suppress with `traces: false`.
 - **Metrics** — app-wide, from the `metrics` option: uses each BB's resolved `namespace` (defaults to its scope `fullId`) and `defaultDimensions` (included in widget queries so they target the correct dimensioned stream).
-- **Compute coverage** — always **every** compute in the app (one today). No compute selector is exposed yet.
+- **Compute coverage** — always **every** compute in the app. No compute selector is exposed yet.
 
 ## API Reference
 
