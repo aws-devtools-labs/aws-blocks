@@ -15,6 +15,7 @@ import {
 import { classifyDenialError, denialGuidance } from './denial-guidance.js';
 import {
 	type DeploymentTargetOptions,
+	deploymentCredentialsEnv,
 	environmentAccessKeys,
 	REGION_CODE,
 	resolveDeploymentTarget,
@@ -366,8 +367,9 @@ export async function assertAwsCredentials({
 					invocation,
 					errorName: label,
 					failure,
-					// The guidance follows the deploy: with environment keys, no profile is used.
-					env: guidanceEnv(env, environmentKeys),
+					// The guidance follows the deploy: with environment keys, no profile is used, and
+					// the keys are passed under the AWS_ names that the guidance reads.
+					env: deploymentCredentialsEnv(env, environmentKeys),
 					profile,
 					readAwsCliVersion,
 					region,
@@ -402,22 +404,6 @@ export async function assertAwsCredentials({
 	console.log(targetSummary(target, region, metadata));
 	const failure = await bootstrapFailure;
 	if (failure) throw new Error(failure);
-}
-
-/**
- * The environment that the failure guidance reads. With environment keys, no
- * profile is used, and the keys are passed under the AWS_ names that the guidance reads.
- */
-function guidanceEnv(env: NodeJS.ProcessEnv, environmentKeys: AwsCredentialIdentity | undefined): NodeJS.ProcessEnv {
-	if (!environmentKeys) return env;
-	return {
-		...env,
-		AWS_PROFILE: undefined,
-		AWS_DEFAULT_PROFILE: undefined,
-		AWS_ACCESS_KEY_ID: environmentKeys.accessKeyId,
-		AWS_SECRET_ACCESS_KEY: environmentKeys.secretAccessKey,
-		AWS_SESSION_TOKEN: environmentKeys.sessionToken,
-	};
 }
 
 /** The AWS identity and Region that the deploy commands use, from {@link readAwsIdentity}. */
@@ -511,7 +497,7 @@ export async function readAwsIdentity({
 				invocation,
 				errorName: label,
 				failure,
-				env: guidanceEnv(env, environmentKeys),
+				env: deploymentCredentialsEnv(env, environmentKeys),
 				profile,
 				readAwsCliVersion,
 			}),
