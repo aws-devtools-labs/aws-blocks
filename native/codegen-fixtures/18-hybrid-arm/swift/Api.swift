@@ -17,15 +17,7 @@ public final nonisolated class AuthApi: Sendable {
     public func setAuthState(input: SetAuthState.Input) async throws -> AuthState {
         let request = BlocksRequest(method: "authApi.setAuthState", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for authApi.setAuthState") }
-        return try JSONDecoder().decode(AuthState.self, from: result)
-    }
-
-    /// Calls `authApi.getAuthState`.
-    public func getAuthState() async throws -> AuthState {
-        let request = BlocksRequest(method: "authApi.getAuthState", params: [], id: BlocksRequest.nextId())
-        let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for authApi.getAuthState") }
+        guard let result else { throw TransportError(message: "Unexpected null result for authApi.setAuthState") }
         return try JSONDecoder().decode(AuthState.self, from: result)
     }
 

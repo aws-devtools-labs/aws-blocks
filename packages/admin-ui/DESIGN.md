@@ -200,6 +200,11 @@ The object-map format qualifies; the pair format does not, because there the key
 key is its key attribute values and a Cognito record's key is a username, both data rather than
 field names, so a user called `auth-admin` must not have their whole record masked.
 
+The string key of a `KVStore` with no declared key qualifies too. It was a property name of the object
+map that the store's file was before it had a version, and it often names the value (`'github-token'`),
+so the masking that applied to that store still applies. The declared key fields of a `KVStore` are
+user data and do not qualify.
+
 **D14 — The key schema travels from discovery to the reader.** A `.bb-data` pair store writes its key
 as `JSON.stringify([pk, sk])`, so the field names exist only in the block's source. Discovery already
 resolves them, so `readData` passes the discovered `keySchema` through and the reader maps
@@ -207,6 +212,16 @@ resolves them, so `readData` passes the discovered `keySchema` through and the r
 `keyValues` is empty — which also blocks Stage 5, since an edit or delete addresses a record by
 exactly those fields. Arity mismatch or a missing schema yields no `keyValues` at all rather than a
 partial one: a half-filled key is worse than none.
+
+The `KVStore` data file (`store.json`, `{ "version": 2, "items": [...] }`) needs the schema for another
+reason. Each item is the stored DynamoDB item, so a declared key is in the item as ordinary fields, and
+only the schema says which fields are the key. A store with no declared key has one string key in
+`_bkv_pk`, reported under the field name `key`. A value that is not an object is in `_bkv_value`. An
+expiry that is not a field of the value is in `_bkv_ttl`, and reaches the browser as
+`DataRecord.expiresAt`. `kv-store-file.ts` owns that layout for the reader and the writer, as
+`pair-key.ts` owns the pair key. A store directory that has both `store.json` and `data.json` is read
+from `store.json`, the order the `KVStore` mock uses. A local write goes to a `store.json` only for a
+store with declared key fields, and keeps the key attributes and the expiry of the item it replaces.
 
 **D15 — The unlock window is absolute, and says so.** The reference documents its unlock as "15 idle
 minutes" while measuring from a timestamp it never refreshes, so the two disagree and the intent is

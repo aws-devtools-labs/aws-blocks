@@ -223,6 +223,12 @@ export interface AuthCommonOptions {
 	 * `BlocksPresets.sandbox` destroys). Set `'retain'` explicitly for any pool
 	 * holding real users.
 	 *
+	 * The session table has one setting for removal and deletion protection
+	 * (`KVStore`'s `protection`). When this option or `deletionProtection` is
+	 * set, the table is retained and protected if deletion protection resolves
+	 * to on, retained if it resolves to off with `'retain'`, and deleted with
+	 * the stack if it resolves to off with `'destroy'`.
+	 *
 	 * @default the stack's `defaults.removalPolicy`
 	 */
 	removalPolicy?: 'destroy' | 'retain';
@@ -235,6 +241,9 @@ export interface AuthCommonOptions {
 	 * ACTIVE`); `false` leaves the property out, which Cognito treats as inactive.
 	 * Changing an already-protected pool to `false` deactivates its protection on
 	 * the next deploy.
+	 *
+	 * On the session table, deletion protection also retains the table when the
+	 * block leaves the stack (see `removalPolicy`).
 	 *
 	 * @default the stack's `defaults.deletionProtection`
 	 */
@@ -1323,8 +1332,8 @@ export interface UserPoolOptions {
 	 * values; anything else is rejected with `InvalidParameterException`, by
 	 * the local runtime as by Cognito.
 	 *
-	 * ⚠️ **Not a profile database.** Keep profile data in `KVStore` or
-	 * `DistributedTable`, keyed on `user.userSub`.
+	 * ⚠️ **Not a profile database.** Keep profile data in a `KVStore`, keyed
+	 * on `user.userSub`.
 	 */
 	attributes?: readonly UserAttribute[];
 
@@ -2043,12 +2052,13 @@ export interface OidcProviderConfig {
 /**
  * The `oidc/client` descriptor `getClient()` sends: the block's sign-in
  * routes and the providers a native client can sign in with. The Swift,
- * Kotlin and Dart SDKs hydrate it into their `OidcClient`, typed by `P`.
+ * Kotlin and Dart SDKs hydrate it into their `OidcClient`; the generated
+ * Swift and Kotlin clients type it by `P` (Dart's is untyped for now).
  */
 export interface OidcClientDescriptor<P extends string = string> {
 	/** The transferable tag the native SDKs hydrate. */
 	__blocks: 'oidc/client';
-	/** The providers a native client can sign in with here, in declaration order. */
+	/** The providers a native client can sign in with here, in the block's provider order. */
 	providers: P[];
 	/** Each listed provider's authorize parameters, keyed by provider id. */
 	providerConfigs: Record<string, OidcProviderConfig>;
@@ -2077,7 +2087,7 @@ export interface OidcClientDescriptor<P extends string = string> {
 /**
  * What `getClient()` returns. On the server it serializes to its
  * {@link OidcClientDescriptor}; a native SDK turns that into a live OIDC
- * client whose `signIn` takes only `P`. A browser receives the plain
+ * client, whose `signIn` takes only `P` on Swift and Kotlin. A browser receives the plain
  * descriptor: for a web frontend use `createAuthClient()` from
  * `@aws-blocks/bb-auth/browser-client` instead.
  */
@@ -3308,7 +3318,8 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	/**
 	 * The native SDKs' OIDC client: one RPC method, `getClient()`, returning
 	 * the `oidc/client` transferable the Swift, Kotlin and Dart SDKs hydrate
-	 * into an `OidcClient` typed by this block's provider ids.
+	 * into an `OidcClient`, typed by this block's provider ids on Swift and
+	 * Kotlin (Dart's is untyped for now).
 	 */
 	createOidcApi(): OidcClientApiOf<O>;
 

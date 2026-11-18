@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func createUser(input: CreateUser.Input) async throws -> CreateUser.Result {
         let request = BlocksRequest(method: "api.createUser", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.createUser") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.createUser") }
         return try JSONDecoder().decode(CreateUser.Result.self, from: result)
     }
 

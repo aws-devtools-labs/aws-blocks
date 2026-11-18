@@ -19,7 +19,7 @@ public final nonisolated class Api: Sendable {
         if let extra { _params.append(extra) }
         let request = BlocksRequest(method: "api.getOptions", params: _params, id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getOptions") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getOptions") }
         return try JSONDecoder().decode(GetOptions.Result.self, from: result)
     }
 
@@ -27,7 +27,7 @@ public final nonisolated class Api: Sendable {
     public func getSettings(settings: Settings) async throws -> Settings {
         let request = BlocksRequest(method: "api.getSettings", params: [settings], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getSettings") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getSettings") }
         return try JSONDecoder().decode(Settings.self, from: result)
     }
 
@@ -35,7 +35,7 @@ public final nonisolated class Api: Sendable {
     public func getEnvelope() async throws -> GetEnvelope.Result {
         let request = BlocksRequest(method: "api.getEnvelope", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getEnvelope") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getEnvelope") }
         return try JSONDecoder().decode(GetEnvelope.Result.self, from: result)
     }
 

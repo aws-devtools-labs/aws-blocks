@@ -6,6 +6,8 @@ import com.aws.blocks.kotlin.json.BlocksJson
 import com.aws.blocks.kotlin.oidc.AnyProvider
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.kotlin.realtime.RealtimeChannel
+import java.lang.UnsupportedOperationException
+import kotlin.Unit
 import kotlin.collections.List
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
@@ -14,7 +16,6 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
-import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.decodeFromJsonElement
 
 public object FileDownloadHandleSerializer : KSerializer<FileDownloadHandle> {
@@ -26,9 +27,7 @@ public object FileDownloadHandleSerializer : KSerializer<FileDownloadHandle> {
     return FileDownloadHandle.fromJson(element)
   }
 
-  override fun serialize(encoder: Encoder, `value`: FileDownloadHandle) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: FileDownloadHandle): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelNoteSerializer : KSerializer<RealtimeChannel<Note>> {
@@ -40,9 +39,7 @@ public object RealtimeChannelNoteSerializer : KSerializer<RealtimeChannel<Note>>
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Note>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Note>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Note>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelListRealtimeChannelNoteSerializer : KSerializer<RealtimeChannel<List<RealtimeChannel<Note>>>> {
@@ -54,9 +51,7 @@ public object RealtimeChannelListRealtimeChannelNoteSerializer : KSerializer<Rea
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement(ListSerializer(RealtimeChannelNoteSerializer), it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<RealtimeChannel<Note>>>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<RealtimeChannel<Note>>>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object FileUploadHandleSerializer : KSerializer<FileUploadHandle> {
@@ -68,9 +63,7 @@ public object FileUploadHandleSerializer : KSerializer<FileUploadHandle> {
     return FileUploadHandle.fromJson(element)
   }
 
-  override fun serialize(encoder: Encoder, `value`: FileUploadHandle) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: FileUploadHandle): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelFileUploadHandleSerializer : KSerializer<RealtimeChannel<FileUploadHandle>> {
@@ -82,9 +75,7 @@ public object RealtimeChannelFileUploadHandleSerializer : KSerializer<RealtimeCh
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement(FileUploadHandleSerializer, it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<FileUploadHandle>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<FileUploadHandle>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelSignInOptionSerializer : KSerializer<RealtimeChannel<SignInOption>> {
@@ -98,9 +89,7 @@ public object RealtimeChannelSignInOptionSerializer : KSerializer<RealtimeChanne
     return RealtimeChannel.fromJson(element) { json.decodeFromJsonElement<SignInOption>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<SignInOption>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<SignInOption>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelListOidcClientAnyProviderSerializer : KSerializer<RealtimeChannel<List<OidcClient<AnyProvider>>>> {
@@ -114,9 +103,7 @@ public object RealtimeChannelListOidcClientAnyProviderSerializer : KSerializer<R
     return RealtimeChannel.fromJson(element) { json.decodeFromJsonElement<List<OidcClient<AnyProvider>>>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<OidcClient<AnyProvider>>>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<OidcClient<AnyProvider>>>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelApiGetChatFeedResultChannelSerializer : KSerializer<RealtimeChannel<Api.GetChatFeed.Result.Channel>> {
@@ -128,9 +115,7 @@ public object RealtimeChannelApiGetChatFeedResultChannelSerializer : KSerializer
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Api.GetChatFeed.Result.Channel>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetChatFeed.Result.Channel>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetChatFeed.Result.Channel>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelApiGetCounterFeedResultChannelSerializer : KSerializer<RealtimeChannel<Api.GetCounterFeed.Result.Channel>> {
@@ -142,7 +127,5 @@ public object RealtimeChannelApiGetCounterFeedResultChannelSerializer : KSeriali
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Api.GetCounterFeed.Result.Channel>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetCounterFeed.Result.Channel>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetCounterFeed.Result.Channel>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }

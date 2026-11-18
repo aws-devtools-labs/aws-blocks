@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
 import 'harness.dart';
 
 /// The JSON-RPC wire contract the generated client relies on, against the
@@ -41,6 +45,27 @@ void main() async {
   check(
     firstTwo.last == null,
     'first two: last is null (got: ${firstTwo.last})',
+  );
+
+  // The server answers a method that returns nothing with `"result": null`;
+  // the Kotlin and Swift clients threw on a response with no `result` field.
+  // The client reads a missing key as null too, so check the raw response.
+  group('RPC wire: a void method answers "result": null');
+  await blocks.api.voidResult();
+  final voidResponse = await http.post(
+    Uri.parse(blocksUrl()),
+    headers: {'Content-Type': 'application/json'},
+    body: jsonEncode({
+      'jsonrpc': '2.0',
+      'method': 'api.voidResult',
+      'params': <dynamic>[],
+      'id': 1,
+    }),
+  );
+  final voidBody = jsonDecode(voidResponse.body) as Map<String, dynamic>;
+  check(
+    voidBody.containsKey('result') && voidBody['result'] == null,
+    'the response carries "result": null (got: ${voidResponse.body})',
   );
 
   // Why the client can't send by name: the server reads an object's values

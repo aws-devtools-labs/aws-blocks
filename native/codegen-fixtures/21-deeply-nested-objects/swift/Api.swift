@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getOrganization(id: String) async throws -> GetOrganization.Result {
         let request = BlocksRequest(method: "api.getOrganization", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getOrganization") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getOrganization") }
         return try JSONDecoder().decode(GetOrganization.Result.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func createOrganization(input: CreateOrganization.Input) async throws -> CreateOrganization.Result {
         let request = BlocksRequest(method: "api.createOrganization", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.createOrganization") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.createOrganization") }
         return try JSONDecoder().decode(CreateOrganization.Result.self, from: result)
     }
 
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
     public func updateOrganization(input: UpdateOrganization.Input) async throws -> UpdateOrganization.Result {
         let request = BlocksRequest(method: "api.updateOrganization", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.updateOrganization") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.updateOrganization") }
         return try JSONDecoder().decode(UpdateOrganization.Result.self, from: result)
     }
 

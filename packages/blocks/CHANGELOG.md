@@ -1,5 +1,7 @@
 # @aws-blocks/blocks
 
+<!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthBasic and AuthOIDC blocks -->
+
 ## 0.9.0
 
 ### Minor Changes

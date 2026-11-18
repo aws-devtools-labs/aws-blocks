@@ -16,9 +16,9 @@
 ///   - RPC (authed):  api.oidcRequireAuth   (bound to the `auth-oidc` block)
 ///   - auth routes:   `Auth`'s fixed routes under /aws-blocks/auth/* at the
 ///                    API **origin** — NOT under the JSON-RPC prefix
-///                    (/aws-blocks/api). The client is built with
-///                    [OidcClient]'s default authorize-params and callback
-///                    paths, which are exactly those routes.
+///                    (/aws-blocks/api). The client is the one the
+///                    backend's `oidcAuthApi.getClient()` returns
+///                    (`Auth.createOidcApi()`), carrying those routes.
 ///
 /// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend
 /// serves the stub only on a sandbox deployment (the native-bindings test app
@@ -54,6 +54,12 @@ class HttpRelayLauncher implements BrowserLauncher {
   /// Human-readable trace of every hop, for diagnostics on failure.
   final List<String> trace = [];
 
+  /// [uri] without its query string or fragment, for the trace and error
+  /// messages. The authorize, callback and relay URLs carry the OAuth `code`,
+  /// `state` and similar values in the query, which are not written to logs.
+  static String _withoutQuery(Uri uri) =>
+      uri.toString().split(RegExp('[?#]')).first;
+
   @override
   Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
     var current = authorizeUrl;
@@ -61,18 +67,19 @@ class HttpRelayLauncher implements BrowserLauncher {
       final req = http.Request('GET', current)..followRedirects = false;
       final streamed = await _client.send(req);
       final resp = await http.Response.fromStream(streamed);
-      trace.add('GET $current -> ${resp.statusCode}');
+      trace.add('GET ${_withoutQuery(current)} -> ${resp.statusCode}');
 
       if (resp.statusCode >= 300 && resp.statusCode < 400) {
         final loc = resp.headers['location'];
         if (loc == null || loc.isEmpty) {
           throw StateError(
-            'Redirect (${resp.statusCode}) without Location at $current',
+            'Redirect (${resp.statusCode}) without Location at '
+            '${_withoutQuery(current)}',
           );
         }
         final next = current.resolve(loc);
         if (next.scheme == callbackScheme) {
-          trace.add('captured relay redirect -> $next');
+          trace.add('captured relay redirect -> ${_withoutQuery(next)}');
           return next;
         }
         current = next;
@@ -81,7 +88,9 @@ class HttpRelayLauncher implements BrowserLauncher {
 
       throw StateError(
         'Expected redirect chain to reach "$callbackScheme://" but got '
-        'HTTP ${resp.statusCode} at $current\nbody: ${resp.body}',
+        'HTTP ${resp.statusCode} at ${_withoutQuery(current)}\n'
+        // The body length only: the response may echo the request's query.
+        'body: ${resp.bodyBytes.length} bytes',
       );
     }
     throw StateError(
@@ -140,21 +149,11 @@ void main() async {
   final session = PersistentSessionStore(store: tokenStore);
   await session.load();
 
-  // The client is built from the `Auth` block's fixed routes
-  // (packages/bb-auth DESIGN.md → Routes), with no server-supplied descriptor.
-  // The authorize-params and callback paths are left to OidcClient's defaults,
-  // which name exactly those routes.
-  final oidc = OidcClient(
-    exchangePath: '/aws-blocks/auth/exchange',
-    refreshPath: '/aws-blocks/auth/exchange/refresh',
-    signOutPath: '/aws-blocks/auth/signout',
-    providers: const [_provider],
-    providerConfigs: const {},
-    baseUrl: oidcBase,
-    tokenStore: tokenStore,
-    sessionStore: session,
-    httpClient: httpClient,
-  );
+  // The client apps get: `oidcAuthApi.getClient()` (`Auth.createOidcApi()`),
+  // hydrated by the generated client, which shares its session store, so the
+  // session cookie the exchange sets lands in [session].
+  final discovery = Blocks(baseUrl: rpcUrl, sessionStore: session);
+  final oidc = await discovery.oidcAuthApi.getClient();
 
   final launcher = HttpRelayLauncher(httpClient);
 

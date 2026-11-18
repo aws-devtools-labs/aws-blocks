@@ -38,7 +38,7 @@ android {
 }
 
 
-awsBlocks {
+cdkBlocks {
     apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {

@@ -54,7 +54,7 @@ app/src/main/java/com/aws/blocks/example/
 The app applies the `com.aws.blocks.kotlin` plugin and configures it in `app/build.gradle.kts`:
 
 ```kotlin
-awsBlocks {
+cdkBlocks {
     apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {

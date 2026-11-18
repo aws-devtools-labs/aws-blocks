@@ -207,7 +207,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			store: 'builtin',
 			providers: { staff: stubIdp() },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/second/callback',
+				// A callback that doesn't end in `/callback`: the descriptor names it as configured.
+				callbackPath: '/aws-blocks/auth/second/return',
 				signOutPath: '/aws-blocks/auth/second/signout',
 			},
 		});
@@ -216,7 +217,7 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		const b = wire(await getClient(second.createOidcApi(), ctx));
 
 		assert.deepStrictEqual(b.providers, ['staff']);
-		assert.strictEqual(b.callbackPath, '/aws-blocks/auth/second/callback');
+		assert.strictEqual(b.callbackPath, '/aws-blocks/auth/second/return');
 		assert.strictEqual(b.exchangePath, '/aws-blocks/auth/second/exchange');
 		assert.strictEqual(b.signOutPath, '/aws-blocks/auth/second/signout');
 		assert.strictEqual(b.authorizeParamsBasePath, '/aws-blocks/auth/second/authorize-params');

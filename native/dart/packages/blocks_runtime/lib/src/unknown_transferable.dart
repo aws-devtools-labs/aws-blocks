@@ -25,10 +25,4 @@ class UnknownTransferable {
     );
     return UnknownTransferable._(tag: expectedTag, descriptor: descriptor);
   }
-
-  /// The raw [descriptor], as the server sent it. A generated client sends
-  /// an unbound transferable this way; `jsonEncode` calls it too.
-  ///
-  /// Returns a copy, so changing it doesn't change [descriptor].
-  Map<String, dynamic> toJson() => transferableDescriptor(tag, descriptor);
 }

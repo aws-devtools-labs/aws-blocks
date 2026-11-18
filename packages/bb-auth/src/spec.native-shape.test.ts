@@ -49,7 +49,7 @@ const BLOCKS = {
 	sms: `{ mfa: { mode: 'optional', types: ['SMS'] } }`,
 	passkey: `{ users: { authFlow: 'USER_AUTH' }, passkeys: ${JSON.stringify(passkeys)}, featurePlan: 'essentials' }`,
 	federated: `{ store: 'builtin', providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)} } } }`,
-	mixed: `{ providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)}, clientSecret: ${oktaSecret} } }, redirects: ${JSON.stringify(mixedRedirects)} }`,
+	mixed: `{ providers: { entra: { type: 'oidc', ...${JSON.stringify(okta)}, clientSecret: ${oktaSecret} } }, redirects: ${JSON.stringify(mixedRedirects)} }`,
 	attributes: `{ users: { groups: ['admins'], attributes: [{ name: 'department' }] } }`,
 } as const;
 type Block = keyof typeof BLOCKS;
@@ -67,7 +67,7 @@ const OPTIONS: Record<Block, AuthOptions> = {
 	passkey: { users: { authFlow: 'USER_AUTH' }, passkeys, featurePlan: 'essentials' },
 	federated: { store: 'builtin', providers: { okta: { type: 'oidc', ...okta } } },
 	mixed: {
-		providers: { okta: { type: 'oidc', ...okta, clientSecret: { fullId: 'okta-secret', get: async () => 's' } } },
+		providers: { entra: { type: 'oidc', ...okta, clientSecret: { fullId: 'okta-secret', get: async () => 's' } } },
 		redirects: mixedRedirects,
 	},
 	attributes: { users: { groups: ['admins'], attributes: [{ name: 'department' }] } },
@@ -175,12 +175,13 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 
 	test("createOidcApi().getClient() is the oidc/client transferable, typed by each block's own provider ids", () => {
 		// What the native generators read: Swift/Kotlin turn the enum into `<Namespace>.GetClient.Provider`.
-		const typed = {
+		const typed = (id: string) => ({
 			'x-blocks-transferable': 'oidc/client',
-			'x-blocks-type-args': [{ type: 'string', enum: ['okta'] }],
-		};
-		assert.deepStrictEqual(method('federatedOidcApi.getClient').result.schema, typed);
-		assert.deepStrictEqual(method('mixedOidcApi.getClient').result.schema, typed);
+			'x-blocks-type-args': [{ type: 'string', enum: [id] }],
+		});
+		// The two blocks configure different provider ids, so each namespace's enum is its own block's.
+		assert.deepStrictEqual(method('federatedOidcApi.getClient').result.schema, typed('okta'));
+		assert.deepStrictEqual(method('mixedOidcApi.getClient').result.schema, typed('entra'));
 		// No provider: no enum, so the native client is the untyped one (`OidcClient<AnyProvider>`, `OIDCClient<String>`).
 		assert.deepStrictEqual(method('passwordOidcApi.getClient').result.schema, {
 			'x-blocks-transferable': 'oidc/client',
@@ -222,7 +223,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		const providers = (b: Block) => [...(user(b).properties?.signInProvider?.enum ?? [])].sort();
 		for (const b of shared) assert.deepStrictEqual(providers(b), ['password'], b);
 		assert.deepStrictEqual(providers('federated'), ['okta'], "a `store: 'builtin'` block has no password users");
-		assert.deepStrictEqual(providers('mixed'), ['okta', 'password']);
+		assert.deepStrictEqual(providers('mixed'), ['entra', 'password']);
 		const groups = user('attributes').properties?.groups as { items?: Schema } | undefined;
 		assert.deepStrictEqual(groups?.items?.enum, ['admins']);
 	});

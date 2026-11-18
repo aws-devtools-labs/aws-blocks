@@ -569,8 +569,8 @@ export const TODOS = {
 	basicSignInResult:
 		'signIn() now returns { status: "signedIn", user } or { status: "continueSignIn", nextStep } instead of the user.',
 	buildApi: 'buildApi() is gone: export auth.createApi() and drive it with the Authenticator UI.',
-	oidcCreateApi:
-		'createApi() is now the sign-in state machine (getAuthState / setAuthState) and has no getClient(). Native apps that called getClient() on this export: also export auth.createOidcApi() and call getClient() on that (MIGRATION.md, "Native apps").',
+	oidcCreateApiNative:
+		'createApi() is now the sign-in state machine (getAuthState / setAuthState) and has no getClient(). If a native app (Swift, Kotlin, Dart) calls getClient() on this export, export auth.createOidcApi() under this name instead, and auth.createApi() under another one (MIGRATION.md, "Native apps").',
 	getClient:
 		'getClient() is gone from the web with AuthOIDC: federated sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Native apps: export auth.createOidcApi() on the backend and keep calling getClient() (MIGRATION.md, "Native apps").',
 	oidcUserField: (field: string): string =>

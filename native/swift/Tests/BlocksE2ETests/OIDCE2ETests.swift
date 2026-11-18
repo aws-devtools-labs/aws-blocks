@@ -32,13 +32,13 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
 
             let (_, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw OIDCError.invalidResponse
+                throw TransportError(message: "Non-HTTP response following authorize redirect")
             }
 
             if (300 ..< 400).contains(httpResponse.statusCode) {
                 guard let location = httpResponse.value(forHTTPHeaderField: "Location"),
                       let next = URL(string: location, relativeTo: current) else {
-                    throw OIDCError.callbackError("Redirect without Location at \(current)")
+                    throw OIDCError.callbackError("Redirect without Location at \(current)", nil)
                 }
                 let resolved = next.absoluteURL
                 if resolved.scheme == callbackScheme {
@@ -49,10 +49,11 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
             }
 
             throw OIDCError.callbackError(
-                "Expected redirect chain to reach \(callbackScheme):// but got HTTP \(httpResponse.statusCode) at \(current)"
+                "Expected redirect chain to reach \(callbackScheme):// but got HTTP \(httpResponse.statusCode) at \(current)",
+                nil
             )
         }
-        throw OIDCError.callbackError("Too many redirects without reaching \(callbackScheme)://")
+        throw OIDCError.callbackError("Too many redirects without reaching \(callbackScheme)://", nil)
     }
 }
 
@@ -70,8 +71,8 @@ private final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
 
 /// OIDC server-relay E2E tests against the `auth-oidc` block: authorize-params, the IdP redirect
 /// chain, the relay to `nativebindings://auth`, the code exchange (which sets the session cookie)
-/// and an authenticated RPC. The client is built from the block's fixed routes, with no
-/// server-supplied descriptor.
+/// and an authenticated RPC. The client comes from the backend's `oidcAuthApi.getClient()`
+/// (`Auth.createOidcApi()`), typed by the block's provider ids.
 ///
 /// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend serves the stub only
 /// on a sandbox deployment (the native-bindings test app always deploys as one), so
@@ -88,32 +89,21 @@ final class OIDCE2ETests: BlocksE2ETestCase {
         isLocalEndpoint || ProcessInfo.processInfo.environment["RUN_OIDC"] == "1"
     }
 
-    private func getOidcClient() throws -> OIDCClient<String> {
+    private func getOidcClient() async throws -> OIDCClient<OidcAuthApi.GetClient.Provider> {
         try XCTSkipUnless(
             Self.hasHeadlessIdp,
             "Auth's stub IdP runs only locally and on sandbox deployments. Against a deployed backend "
                 + "these tests need RUN_OIDC=1 and a headless IdP: that deployed stub, or a real, auto-approving one "
                 + "(NATIVE_E2E_OIDC_ISSUER; see .github/workflows/native-sdk-e2e.yml)"
         )
-        let client = BlocksClient(server: Self.server)
-        // `Auth`'s fixed routes (packages/bb-auth DESIGN.md → Routes). `OIDCClient` derives the
-        // authorize-params and callback paths from `exchangePath`.
-        return OIDCClient<String>(
-            exchangePath: "/aws-blocks/auth/exchange",
-            refreshPath: "/aws-blocks/auth/exchange/refresh",
-            signOutPath: "/aws-blocks/auth/signout",
-            providers: [provider],
-            providerConfigs: [:],
-            baseUrl: client.baseUrl,
-            client: client
-        )
+        return try await blocks.oidcAuthApi.getClient()
     }
 
     func testSignInRelayAndAuthenticatedRPC() async throws {
-        let oidc = try getOidcClient()
+        let oidc = try await getOidcClient()
         let launcher = HttpRelayLauncher()
 
-        let user = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+        let user = try await oidc.signIn(provider: .google, relayTo: relayTo, launcher: launcher)
         XCTAssertFalse(user.userId.isEmpty, "signInRelay returned a user")
 
         let currentUser = try await api.oidcRequireAuth()
@@ -123,10 +113,10 @@ final class OIDCE2ETests: BlocksE2ETestCase {
     }
 
     func testSignOut() async throws {
-        let oidc = try getOidcClient()
+        let oidc = try await getOidcClient()
         let launcher = HttpRelayLauncher()
 
-        _ = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+        _ = try await oidc.signIn(provider: .google, relayTo: relayTo, launcher: launcher)
 
         let result = try await api.oidcSignOut()
         XCTAssertTrue(result.success)

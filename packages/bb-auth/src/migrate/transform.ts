@@ -1870,7 +1870,8 @@ class FileMigrator {
 		if (block === 'oidc') {
 			const gone = own(OIDC_GONE_MEMBERS, method);
 			if (gone) this.todo(node, gone);
-			if (method === 'createApi') this.todo(node, TODOS.oidcCreateApi);
+			// Auth's createApi() has no getClient(), which native apps called on this export.
+			if (method === 'createApi') this.todo(node, TODOS.oidcCreateApiNative);
 		}
 	}
 

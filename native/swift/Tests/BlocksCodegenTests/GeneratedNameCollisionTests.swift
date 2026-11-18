@@ -108,7 +108,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
         assertContains(output.api, "if let request_2 { _params_2.append(request_2) }")
         assertContains(output.api, #"let request_3 = BlocksRequest(method: "api.send", params: _params_2, id: BlocksRequest.nextId())"#)
         assertContains(output.api, "let result_2 = try await client.execute(request_3)")
-        assertContains(output.api, #"guard let result_2 else { throw RPCError(message: "Unexpected null result for api.send") }"#)
+        assertContains(output.api, #"guard let result_2 else { throw TransportError(message: "Unexpected null result for api.send") }"#)
         assertContains(output.api, "return try JSONDecoder().decode(String.self, from: result_2)")
     }
 
@@ -145,7 +145,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
                 if let name { _params.append(name) }
                 let request = BlocksRequest(method: "api.find", params: _params, id: BlocksRequest.nextId())
                 let result = try await client.execute(request)
-                guard let result else { throw RPCError(message: "Unexpected null result for api.find") }
+                guard let result else { throw TransportError(message: "Unexpected null result for api.find") }
                 return try JSONDecoder().decode(String.self, from: result)
             }
         """)
@@ -228,7 +228,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
         ])
         assertContains(output.api, "public func q_uote(in_put: Q_Uote.In_Put) async throws -> String {")
         assertContains(output.api, #"let request = BlocksRequest(method: "api.q\"uote", params: [in_put], id: BlocksRequest.nextId())"#)
-        assertContains(output.api, #"guard let result else { throw RPCError(message: "Unexpected null result for api.q\"uote") }"#)
+        assertContains(output.api, #"guard let result else { throw TransportError(message: "Unexpected null result for api.q\"uote") }"#)
         assertContains(output.api, #"guard q_uote.count >= 1 else { throw CodegenError.validation("q\"uote must be at least 1 characters") }"#)
         assertContains(output.api, #"case q_uote = "q\"uote""#)
     }

@@ -2,6 +2,6 @@
 "@aws-blocks/bb-auth": patch
 ---
 
-docs(bb-auth): correct what `DESIGN.md` says about bearer tokens and the native SDKs
+docs(bb-auth): the native SDKs authenticate with the session cookie, not bearer tokens
 
-The native SDKs (Dart, Swift, Kotlin) sign in through the relay and use the session cookie, and identities federated through the Cognito hosted UI never get tokens from `/exchange`. The native compatibility note now lists the exchange body's `tokens` flag, the JSON sign-out and the session route the SDKs' OIDC clients use. The README's bearer note now says that a hand-written native or CLI client can send bearer tokens, while the AWS Blocks native SDKs use the session cookie.
+`DESIGN.md` and the README say how the native SDKs (Dart, Swift, Kotlin) authenticate: they sign in through the relay and keep the session cookie `/exchange` sets. Their OIDC clients send `tokens: false`, so `/exchange` returns no tokens to them, even with `allowBearerAuth`. `Authorization: Bearer` is for a hand-written native or CLI client. Identities federated through the Cognito hosted UI never get tokens from `/exchange`. `DESIGN.md`'s route table lists the session route, the JSON and `503` sign-out answers, the `redirects.callbackPath` and `redirects.signOutPath` the routes are mounted on, and marks the stub IdP routes as local and sandbox only.

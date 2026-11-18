@@ -136,6 +136,10 @@ export interface FederationRoutePaths {
 	session: string;
 	/** `<exchange>/refresh` — the Swift and Dart SDKs' default refresh path. */
 	refreshCompat: string;
+	/** `<base>/signin`: the server-initiated sign-in routes' directory. */
+	signInBase: string;
+	/** `<base>/authorize-params`: the relay sign-in parameters' directory. */
+	authorizeParamsBase: string;
 	signIn(providerId: string): string;
 	authorizeParams(providerId: string): string;
 	/** `redirects.postSignInPath`, normalised by `safeRedirectPath` — the form emitted as `Location`. */
@@ -189,6 +193,8 @@ export function federationRoutePaths(options: ResolvedAuthOptions): FederationRo
 		refresh: `${base}/refresh`,
 		refreshCompat: `${base}/exchange/refresh`,
 		session: `${base}/session`,
+		signInBase: `${base}/signin`,
+		authorizeParamsBase: `${base}/authorize-params`,
 		signIn: (id) => `${base}/signin/${encodeURIComponent(id)}`,
 		authorizeParams: (id) => `${base}/authorize-params/${encodeURIComponent(id)}`,
 		postSignIn,

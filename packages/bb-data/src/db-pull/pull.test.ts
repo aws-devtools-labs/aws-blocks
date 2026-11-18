@@ -440,6 +440,49 @@ describe('dbPull .env.local handling', () => {
   });
 });
 
+describe('dbPull stops on an unsupported name before the consent prompt', () => {
+  test('a column name that is not a valid identifier fails with no prompt and no files written', () => {
+    const dir = tmpProject();
+    try {
+      const table = stubTable('notes');
+      table.columns.push({ ...table.columns[0], column_name: "it's", ordinal_position: 2 });
+
+      const child = spawnDbPull(dir, SUPA_DEV, [table]);
+
+      assert.notEqual(child.status, 0, `dbPull should fail:\n${child.stdout}`);
+      assert.match(child.stderr, /column "it's" in table "notes": it is not a valid identifier/);
+      assert.doesNotMatch(child.stdout, /Continue\?/, 'the consent prompt is not shown');
+      assert.equal(fs.existsSync(path.join(dir, 'aws-blocks')), false, 'output dir must not be created');
+      assert.equal(fs.existsSync(path.join(dir, '.env.local')), false, '.env.local must not be written');
+      assert.equal(fs.existsSync(path.join(dir, '.bb-data', 'settings.json')), false, 'db-url AppSetting must not be seeded');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a hand-edited singular in database.meta.ts that is not a valid identifier fails before the prompt', () => {
+    const dir = tmpProject();
+    try {
+      const outDir = path.join(dir, 'aws-blocks');
+      fs.mkdirSync(outDir);
+      const metaPath = path.join(outDir, 'database.meta.ts');
+      const meta = `export const tableMeta = {\n  notes: {\n    singular: 'no-te',\n  },\n};\n`;
+      fs.writeFileSync(metaPath, meta);
+
+      const child = spawnDbPull(dir, SUPA_DEV);
+
+      assert.notEqual(child.status, 0, `dbPull should fail:\n${child.stdout}`);
+      assert.match(child.stderr, /singular "no-te"/);
+      assert.doesNotMatch(child.stdout, /Continue\?/, 'the consent prompt is not shown');
+      assert.deepEqual(fs.readdirSync(outDir), ['database.meta.ts'], 'no other files are written');
+      assert.equal(fs.readFileSync(metaPath, 'utf-8'), meta, 'database.meta.ts is unchanged');
+      assert.equal(fs.existsSync(path.join(dir, '.env.local')), false, '.env.local must not be written');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Generated CRUD relies on RLS policies to scope rows per user, so `db pull`
 // must not generate CRUD for a table without RLS.
 describe('dbPull skips tables with row-level security disabled', () => {

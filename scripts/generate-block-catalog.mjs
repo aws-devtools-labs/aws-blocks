@@ -41,7 +41,6 @@ const repoRoot = join(__dirname, '..');
 /** Package name (minus the @aws-blocks/bb- prefix) -> BlockCategory. */
 const CATEGORY_BY_PACKAGE = {
 	'kv-store': 'data',
-	'distributed-table': 'data',
 	data: 'data',
 	'distributed-data': 'data',
 	'file-bucket': 'storage',
