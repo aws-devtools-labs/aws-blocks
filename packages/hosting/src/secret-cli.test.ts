@@ -305,6 +305,8 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 			}
 			return {};
 		});
+		// The CLI prints its result to stdout, where `node --test` reads this file's results: capture it.
+		const log = mock.method(console, 'log', () => {});
 		const input = Object.assign(new PassThrough(), { isTTY: false });
 		const stdin = Object.getOwnPropertyDescriptor(process, 'stdin');
 		Object.defineProperty(process, 'stdin', { configurable: true, get: () => input });
@@ -315,6 +317,7 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 			if (stdin) Object.defineProperty(process, 'stdin', stdin);
 		}
 		assert.deepStrictEqual(calls, ['CreateSecretCommand', 'RestoreSecretCommand', 'PutSecretValueCommand']);
+		assert.match(String(log.mock.calls[0]?.arguments[0]), /'ZZ_DBG' was scheduled for deletion; restored it/);
 	});
 
 	void it('reports a forced remove of a secret that does not exist as not set, and deletes nothing', async () => {

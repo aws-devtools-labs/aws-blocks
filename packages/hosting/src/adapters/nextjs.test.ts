@@ -36,6 +36,21 @@ import { withComputeTarget } from './shared/compute_target.js';
 import { withBuildProfile } from './shared/build_profile.js';
 import type { DeployManifest } from '../manifest/types.js';
 
+/**
+ * Run the synchronous `fn` with stdout muted. The adapter reports what it found
+ * (`🔗 Detected …`, `🚀 Lifted …`) on stdout, which in a `node --test` child
+ * carries this file's results to the runner.
+ */
+const withStdoutMuted = <T>(fn: () => T): T => {
+  const write = process.stdout.write;
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+  try {
+    return fn();
+  } finally {
+    process.stdout.write = write;
+  }
+};
+
 void describe('nextjsAdapter', () => {
   let tmpDir: string;
   let lenientBackup: string | undefined;
@@ -673,7 +688,7 @@ void describe('nextjsAdapter', () => {
       }),
     );
 
-    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nextjsAdapter({ projectDir: tmpDir, skipBuild: true }));
 
     assert.ok(manifest.redirects, 'Should have lifted redirects');
     assert.strictEqual(manifest.redirects!.length, 1);
@@ -721,7 +736,7 @@ void describe('nextjsAdapter', () => {
       }),
     );
 
-    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nextjsAdapter({ projectDir: tmpDir, skipBuild: true }));
 
     assert.strictEqual(manifest.basePath, '/docs');
     assert.strictEqual(manifest.assetPrefix, '/cdn-prefix');
@@ -1751,7 +1766,7 @@ void describe('nextjsAdapter — Pages Router i18n header lift', () => {
         },
       ],
     });
-    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nextjsAdapter({ projectDir: tmpDir, skipBuild: true }));
     assert.ok(manifest.headers, 'headers should be lifted');
     const lifted = manifest.headers!.find(
       (h) => h.source === '/secure-headers',
@@ -1771,7 +1786,7 @@ void describe('nextjsAdapter — Pages Router i18n header lift', () => {
         },
       ],
     });
-    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nextjsAdapter({ projectDir: tmpDir, skipBuild: true }));
     assert.ok(manifest.redirects, 'redirects should be lifted');
     const lifted = manifest.redirects!.find((r) => r.source === '/old');
     assert.ok(lifted);
@@ -1791,7 +1806,7 @@ void describe('nextjsAdapter — Pages Router i18n header lift', () => {
         },
       ],
     });
-    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nextjsAdapter({ projectDir: tmpDir, skipBuild: true }));
     assert.strictEqual(
       manifest.headers,
       undefined,
@@ -1809,7 +1824,7 @@ void describe('nextjsAdapter — Pages Router i18n header lift', () => {
         },
       ],
     });
-    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nextjsAdapter({ projectDir: tmpDir, skipBuild: true }));
     assert.ok(manifest.headers);
     assert.strictEqual(manifest.headers!.length, 1);
     assert.strictEqual(manifest.headers![0].source, '/api/static');

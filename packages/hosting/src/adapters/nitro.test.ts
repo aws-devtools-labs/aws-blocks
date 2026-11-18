@@ -14,6 +14,21 @@ import {
 } from '../constructs/kvs_router.js';
 
 /**
+ * Run the synchronous `fn` with stdout muted. The adapter reports a detected
+ * base path (`🔗 Detected …`) on stdout, which in a `node --test` child carries
+ * this file's results to the runner.
+ */
+const withStdoutMuted = <T>(fn: () => T): T => {
+  const write = process.stdout.write;
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+  try {
+    return fn();
+  } finally {
+    process.stdout.write = write;
+  }
+};
+
+/**
  * Build a minimal `.output/` layout that nitroAdapter accepts. Caller
  * passes any extra files / overrides via `extras`.
  */
@@ -411,7 +426,7 @@ void describe('nitroAdapter — IPX baseURL plumbing', () => {
   void it("passes the app's base path to the IPX Lambda (the regional doors route the full path to it)", () => {
     writeMinimalNitroOutput(tmpDir, { baseURL: '/myapp/' });
     writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
-    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nitroAdapter({ projectDir: tmpDir, skipBuild: true }));
     assert.ok(manifest.imageOptimization);
     assert.deepStrictEqual(manifest.imageOptimization.environment, { IPX_APP_BASE_URL: '/myapp' });
   });
@@ -1041,7 +1056,7 @@ void describe('nitroAdapter — app.baseURL → manifest.basePath (P0.1)', () =>
   void it('extracts a non-root baseURL from the server bundle and normalizes it', () => {
     writeMinimalNitroOutput(tmpDir, { baseURL: '/myapp/' });
     writePackageJson(tmpDir, { nuxt: '^4.0.0' });
-    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nitroAdapter({ projectDir: tmpDir, skipBuild: true }));
     // Normalized: leading slash, no trailing slash.
     assert.strictEqual(manifest.basePath, '/myapp');
   });
@@ -1062,7 +1077,7 @@ void describe('nitroAdapter — app.baseURL → manifest.basePath (P0.1)', () =>
       baseURL: '/myapp/',
     });
     writePackageJson(tmpDir, { nuxt: '^4.0.0' });
-    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    const manifest = withStdoutMuted(() => nitroAdapter({ projectDir: tmpDir, skipBuild: true }));
     assert.strictEqual(manifest.basePath, '/myapp');
   });
 
