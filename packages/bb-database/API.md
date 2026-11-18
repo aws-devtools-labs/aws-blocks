@@ -7,8 +7,6 @@
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import { ScopeParent } from '@aws-blocks/core';
-import { sql } from '@aws-blocks/data-common/core';
-import { SqlQuery } from '@aws-blocks/data-common/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // @public
@@ -24,17 +22,32 @@ export interface AuroraClusterOptions {
 }
 
 // @public
+export type ClusterKind = ClusterType | 'external';
+
+// @public
 export interface ClusterRef {
     readonly id: string;
-    readonly kind: ClusterType;
+    readonly kind: ClusterKind;
 }
 
 // @public
 export type ClusterType = 'dsql' | 'aurora';
 
 // @public
+export interface ConnectionStringSource {
+    // (undocumented)
+    get(): Promise<string | null>;
+}
+
+// @public
 export class Database extends Scope {
     constructor(scope: ScopeParent, id: string, options?: DatabaseOptions);
+    // (undocumented)
+    asRole(role: string, claims?: Record<string, unknown>): ScopedDatabase;
+    // (undocumented)
+    asUser(user: {
+        userId: string;
+    }, claims?: Record<string, unknown>): ScopedDatabase;
     // (undocumented)
     readonly cluster: ClusterRef;
     // (undocumented)
@@ -63,6 +76,7 @@ export interface DatabaseBlockOptions {
 // @public
 export class DatabaseCluster extends Scope {
     constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions);
+    static fromExisting(options: ExistingClusterOptions): ExistingClusterRef;
     readonly type: ClusterType;
 }
 
@@ -84,16 +98,47 @@ export const DatabaseErrors: {
     readonly SerializationFailure: "SerializationFailureException";
     readonly TransactionRowLimitExceeded: "TransactionRowLimitExceededException";
     readonly ResultValidationFailed: "ResultValidationFailedException";
+    readonly PermissionDenied: "PermissionDeniedException";
+    readonly CheckViolation: "CheckViolationException";
+    readonly NotNullViolation: "NotNullViolationException";
+    readonly ForeignKeyViolation: "ForeignKeyViolationException";
 };
 
 // @public
-export type DatabaseOptions = OwnedDatabaseOptions | SharedDatabaseOptions;
+export type DatabaseOptions = OwnedDatabaseOptions | SharedDatabaseOptions | ExistingDatabaseOptions;
 
 // @public
 export interface DsqlClusterOptions {
     removalPolicy?: 'retain' | 'destroy';
     // (undocumented)
     type: 'dsql';
+}
+
+// @public
+export interface ExistingClusterOptions {
+    ca?: string;
+    connectionString?: ConnectionStringSource;
+    name?: string;
+}
+
+// @public
+export interface ExistingClusterRef {
+    // (undocumented)
+    readonly __brand: 'ExistingClusterRef';
+    // (undocumented)
+    readonly ca?: string;
+    // (undocumented)
+    readonly connectionString?: ConnectionStringSource;
+    // (undocumented)
+    readonly name?: string;
+    // (undocumented)
+    readonly type: 'external';
+}
+
+// @public
+export interface ExistingDatabaseOptions extends DatabaseBlockOptions {
+    // (undocumented)
+    cluster: ExistingClusterRef;
 }
 
 // @public
@@ -109,14 +154,35 @@ export interface QueryOptions<T> {
 }
 
 // @public
+export interface ScopedDatabase {
+    readonly cluster: ClusterRef;
+    execute(query: SqlQuery): Promise<{
+        rowCount: number;
+    }>;
+    query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]>;
+    queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null>;
+    readonly schemaName: string;
+    transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
+}
+
+// @public
 export interface SharedDatabaseOptions extends DatabaseBlockOptions {
     // (undocumented)
     cluster: DatabaseClusterLike;
 }
 
-export { sql }
+// @public
+export function sql(strings: TemplateStringsArray, ...values: unknown[]): SqlQuery;
 
-export { SqlQuery }
+// @public
+export interface SqlQuery {
+    // (undocumented)
+    readonly [SQL_BRAND]: true;
+    // (undocumented)
+    readonly params: readonly unknown[];
+    // (undocumented)
+    readonly sql: string;
+}
 
 // @public
 export interface Transaction {

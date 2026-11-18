@@ -4,7 +4,7 @@
 /**
  * Help on a passthrough command must never run the tool with the user's
  * arguments. These tests use the real tools behind `secret`, `config`, `db` and
- * `vendorize` (the real runValueCli, the real bb-data and vendorize bins) and a
+ * `vendorize` (the real runValueCli, the real bb-database and vendorize bins) and a
  * loopback stand-in for SSM and Secrets Manager that records every request, so
  * "no side effect" is observed, not assumed.
  */
@@ -18,7 +18,6 @@ import { join } from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as realCore from '@aws-blocks/core/scripts';
-import { resolvePackageBin } from './commands.js';
 import type { SpawnSpec } from './context.js';
 import { type FakeRun, fixtureApp, runCli } from './test-helpers.js';
 
@@ -130,27 +129,34 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 		});
 	}
 
-	it('cdk-blocks help db pull and cdk-blocks db pull ./out --help: the real bb-data prints pull usage, writes nothing', async () => {
+	it('cdk-blocks help db types and cdk-blocks db types --out ./out.ts --help: the real bb-database prints its usage, writes nothing', async () => {
 		for (const argv of [
-			['help', 'db', 'pull'],
-			['db', 'pull', './out', '--help'],
+			['help', 'db', 'types'],
+			['db', 'types', '--out', './out.ts', '--help'],
 		]) {
 			const root = fixtureApp();
 			const outputs: string[] = [];
 			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn(outputs) });
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}${outputs.join('')}`);
-			assert.deepStrictEqual(run.spawned[0].args.slice(1), ['pull', '--help']);
-			assert.match(outputs.join(''), /Usage: cdk-blocks db pull \[output-dir\]/);
+			assert.deepStrictEqual(run.spawned[0].args.slice(1), ['types', '--help']);
+			// bb-database has one usage text for every verb.
+			assert.match(
+				outputs.join(''),
+				/^Usage: cdk-blocks db <command> \[options\]\n[\s\S]*\n {2}types \[--name <name>\] \[--schema <schema>\] \[--out <file>\]\n/,
+			);
 			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'aws-blocks', 'package.json']);
 		}
 	});
 
-	it('cdk-blocks help db migrate runs the real bb-data, which prints the migrate options', async () => {
+	it('cdk-blocks help db migrate runs the real bb-database, which prints the migrate options', async () => {
 		const root = fixtureApp();
 		const outputs: string[] = [];
 		const run = await runCli(['help', 'db', 'migrate'], { cwd: root, onSpawn: realSpawn(outputs) });
 		assert.strictEqual(run.code, 0, run.stderr + outputs.join(''));
-		assert.match(outputs.join(''), /Usage: cdk-blocks db migrate \[dir\][\s\S]*--url <conn>/);
+		assert.match(
+			outputs.join(''),
+			/^Usage: cdk-blocks db <command> \[options\]\n[\s\S]*\n {2}migrate \[dir\] \[--name <name>\] \[--schema <schema>\] \[--types <file> \| --no-types\]\n/,
+		);
 		assert.ok(!existsSync(join(root, '.bb-data')));
 	});
 
@@ -228,32 +234,10 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 		}
 	});
 
-	it('validates the db verb before spawning, and refuses the interactive pull without input', async () => {
+	it('validates the db verb before spawning', async () => {
 		const unknown = await runCli(['db', 'migrat'], { cwd: fixtureApp() });
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /unknown db verb "migrat".*Did you mean "migrate"\?/);
 		assert.deepStrictEqual(unknown.spawned, []);
-		for (const [argv, env] of [
-			[['--no-input', 'db', 'pull'], {}],
-			[['db', 'pull'], { CI: '1' }],
-		] as const) {
-			const run = await runCli([...argv], { cwd: fixtureApp(), stdinIsTTY: true, env });
-			assert.strictEqual(run.code, 2, argv.join(' '));
-			assert.match(run.stderr, /cannot prompt \(no TTY, --no-input or CI\)/);
-			assert.deepStrictEqual(run.spawned, []);
-		}
-	});
-
-	it('the help of "cdk-blocks db pull" states the exit code that it has without a terminal', async () => {
-		const root = fixtureApp();
-		const cli = resolvePackageBin(root, '@aws-blocks/bb-data', 'bb-data');
-		assert.ok(cli);
-		const help = spawnSync(process.execPath, [cli, 'pull', '--help'], {
-			encoding: 'utf-8',
-			env: { ...process.env, BB_DATA_COMMAND: 'cdk-blocks db' },
-		}).stdout;
-		const stated = Number(/exits (\d) without one/.exec(help)?.[1]);
-		const run = await runCli(['db', 'pull'], { cwd: root });
-		assert.strictEqual(run.code, stated);
 	});
 });

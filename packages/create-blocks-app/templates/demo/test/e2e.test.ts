@@ -382,15 +382,15 @@ test('EmailClient - an invalid recipient is rejected by name', async () => {
   );
 });
 
-// ─── DistributedDatabase (SQL) ───────────────────────────────────────────
+// ─── Database (SQL) ──────────────────────────────────────────────────────
 // A money transfer runs both UPDATEs inside one transaction: the balances move
 // together or not at all. We assert the post-transfer balances AND that the
 // total is conserved — the atomic-multi-row-write capability KVStore
 // cannot express. Runs on the PGlite mock locally (no AWS). OCC-conflict retry
 // (SerializationFailureException / retryOnConflict) is covered by the
-// bb-distributed-data unit suite; forcing a real 40001 race here would be
+// bb-database unit suite; forcing a real 40001 race here would be
 // non-deterministic, so the canary asserts the atomic-commit behavior instead.
-test('DistributedDatabase - a transfer moves both balances atomically', async () => {
+test('Database - a transfer moves both balances atomically', async () => {
   await signUp(`ledger-${uniqueSuffix()}`);
   await api.openAccount('alice', 100);
   await api.openAccount('bob', 0);
@@ -413,7 +413,7 @@ test('DistributedDatabase - a transfer moves both balances atomically', async ()
 // transfer throws an ApiError (wire-safe), so the 'TransferDeclined' name crosses
 // the RPC boundary and the client can match it; the decisive proof is behavioral:
 // the call rejects with that branded error AND neither balance moved.
-test('DistributedDatabase - a declined transfer rolls back atomically', async () => {
+test('Database - a declined transfer rolls back atomically', async () => {
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
 
   await signUp(`ledger-${uniqueSuffix()}`);
@@ -453,7 +453,7 @@ test('DistributedDatabase - a declined transfer rolls back atomically', async ()
 
 // Accounts belong to the user who opened them: another user neither sees them
 // nor can move money into or out of them, even using the same account names.
-test("DistributedDatabase - a user cannot read, debit or credit another user's accounts", async () => {
+test("Database - a user cannot read, debit or credit another user's accounts", async () => {
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
 
   const owner = `ledger-owner-${uniqueSuffix()}`;

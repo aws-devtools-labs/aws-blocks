@@ -8,13 +8,16 @@ import { afterEach, describe, test } from 'node:test';
 import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
-import { MIGRATION_VALIDATION_ERROR_NAME, PERMISSION_ERROR_NAME } from './errors.js';
+import { LOCAL_APP_ROLE } from './constants.js';
+import { _closeAllPgliteClusters } from './engines/pglite-cluster.js';
+import { DSQL_VALIDATION_ERROR_NAME, MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
 import { Database, DatabaseCluster, DatabaseErrors, sql, type Transaction } from './index.mock.js';
 import { resolveMigrationsPath } from './migrations/runner.js';
+import { _resetDatabaseRegistry } from './runtime/construction.js';
 import { internalAccess } from './runtime/internal.js';
 import { migrations, tempDir } from './test-support/fixtures.js';
 import { freshScope, installLocalTestHooks, scopeId } from './test-support/lifecycle.js';
-import { resetMockSchema } from './test-support/mock-schema.js';
+import { queryAsAdmin, resetMockSchema } from './test-support/mock-schema.js';
 import { simulateConflict } from './testing.js';
 
 const DATA_DIR = join(process.cwd(), '.bb-data');
@@ -322,7 +325,7 @@ describe('Database (owned DSQL cluster)', () => {
 			[true, true],
 			'the constraints are validated',
 		);
-		const applied = await db.query<{ name: string }>(sql`SELECT name FROM _migrations ORDER BY name`);
+		const applied = await queryAsAdmin<{ name: string }>(db, 'SELECT name FROM _migrations ORDER BY name');
 		assert.deepStrictEqual(
 			applied.map((r) => r.name),
 			['001_users.sql', '002_items.sql', '003_seed.sql'],
@@ -374,7 +377,7 @@ describe('Database (owned DSQL cluster)', () => {
 		assert.ok(await db.queryOne(sql`SELECT 1 FROM pg_indexes WHERE indexname = 't_n'`), 'the index was built');
 		assert.deepStrictEqual(await db.query(sql`SELECT job_id FROM sys.jobs`), [], 'sys.jobs is empty locally');
 		assert.deepStrictEqual(
-			(await db.query<{ name: string }>(sql`SELECT name FROM _migrations`)).map((r) => r.name),
+			(await queryAsAdmin<{ name: string }>(db, 'SELECT name FROM _migrations')).map((r) => r.name),
 			['001_init.sql'],
 		);
 	});
@@ -482,7 +485,7 @@ describe('DatabaseCluster (shared DSQL)', () => {
 		assert.deepStrictEqual(await b.query(sql`SELECT id FROM t`), [], 'the tables are there again');
 		assert.notStrictEqual(await internalAccess(b, 'test').engine(), built, 'on a rebuilt engine');
 		assert.deepStrictEqual(
-			(await b.query<{ name: string }>(sql`SELECT name FROM _migrations`)).map((r) => r.name),
+			(await queryAsAdmin<{ name: string }>(b, 'SELECT name FROM _migrations')).map((r) => r.name),
 			['001.sql'],
 			'the migrations were applied again',
 		);
@@ -520,10 +523,11 @@ describe('DatabaseCluster (shared DSQL)', () => {
 	test('a shared DSQL cluster keeps the DSQL checks', async () => {
 		const { scope, shared } = sharedCluster();
 		const db = new Database(scope, 'checks', { cluster: shared });
-		await assert.rejects(db.execute(sql`CREATE TABLE t (id TEXT)`), {
-			name: PERMISSION_ERROR_NAME,
-			message: /DDL statements .* not allowed/,
+		// dsql-lint first, on the statement text; then PostgreSQL, which refuses DDL from the app role.
+		await assert.rejects(db.execute(sql`CREATE TABLE t (id SERIAL PRIMARY KEY)`), {
+			name: DSQL_VALIDATION_ERROR_NAME,
 		});
+		await assert.rejects(db.execute(sql`CREATE TABLE t (id TEXT)`), { name: DatabaseErrors.QueryFailed });
 	});
 
 	test('two blocks with the same schemaName on one cluster is an error', () => {
@@ -640,6 +644,43 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 		current = undefined;
 	});
 
+	test('a statement that breaks a constraint is named for the constraint, and nothing is written', async () => {
+		const { scope, shared } = auroraCluster();
+		current = new Database(scope, 'rules', {
+			cluster: shared,
+			migrationsPath: migrations({
+				'001_orders.sql': [
+					'CREATE TABLE customers (id INTEGER PRIMARY KEY);',
+					'CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id),',
+					'  total INTEGER NOT NULL CHECK (total >= 0));',
+				].join('\n'),
+			}),
+		});
+		const db = current;
+		await db.execute(sql`INSERT INTO customers VALUES (1)`);
+		const named = (name: string, status: number) => (e: unknown) =>
+			e instanceof ApiError && isBlocksError(e, name) && e.status === status && !e.message.includes('4242');
+		await assert.rejects(
+			db.execute(sql`INSERT INTO orders VALUES (4242, 1, ${null})`),
+			named(DatabaseErrors.NotNullViolation, 400),
+		);
+		await assert.rejects(
+			db.execute(sql`INSERT INTO orders VALUES (4242, 1, ${-5})`),
+			named(DatabaseErrors.CheckViolation, 400),
+		);
+		await assert.rejects(
+			db.execute(sql`INSERT INTO orders VALUES (4242, 2, 10)`),
+			named(DatabaseErrors.ForeignKeyViolation, 409),
+		);
+		await db.execute(sql`INSERT INTO orders VALUES (4242, 1, 10)`);
+		// A row that others still refer to cannot be deleted: the same name, from the other side.
+		await assert.rejects(
+			db.execute(sql`DELETE FROM customers WHERE id = 1`),
+			named(DatabaseErrors.ForeignKeyViolation, 409),
+		);
+		assert.deepStrictEqual(await db.query(sql`SELECT id FROM orders`), [{ id: 4242 }]);
+	});
+
 	test('PostgreSQL migrations run as written: SERIAL, a plain index, a trigger in PL/pgSQL, one transaction per file', async () => {
 		const { scope, shared } = auroraCluster();
 		current = new Database(scope, 'pg', {
@@ -661,12 +702,12 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 		assert.ok(row?.updated_at, 'the trigger ran');
 		assert.ok(await db.queryOne(sql`SELECT 1 FROM pg_indexes WHERE indexname = 'notes_body'`), 'the index exists');
 		assert.deepStrictEqual(
-			(await db.query<{ name: string }>(sql`SELECT name FROM _migrations`)).map((r) => r.name),
+			(await queryAsAdmin<{ name: string }>(db, 'SELECT name FROM _migrations')).map((r) => r.name),
 			['001_notes.sql'],
 		);
-		assert.strictEqual(
-			await db.queryOne(sql`SELECT 1 FROM _migration_progress`),
-			null,
+		assert.deepStrictEqual(
+			await queryAsAdmin(db, 'SELECT 1 FROM _migration_progress'),
+			[],
 			'nothing is left to resume',
 		);
 	});
@@ -698,7 +739,7 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 		const db = current;
 		assert.strictEqual((await db.execute(sql`INSERT INTO items VALUES (1)`)).rowCount, 1);
 		assert.deepStrictEqual(
-			(await db.query<{ name: string }>(sql`SELECT name FROM _migrations`)).map((r) => r.name),
+			(await queryAsAdmin<{ name: string }>(db, 'SELECT name FROM _migrations')).map((r) => r.name),
 			['001.sql'],
 		);
 	});
@@ -710,12 +751,16 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 			migrationsPath: migrations({ '001.sql': 'CREATE TABLE t (id INT PRIMARY KEY);' }),
 		});
 		const db = current;
-		await assert.rejects(db.execute(sql`CREATE TABLE u (id INT)`), {
-			name: PERMISSION_ERROR_NAME,
-			message: /not allowed in the app runtime of a aurora cluster/,
-		});
-		// The deployed role has no TRUNCATE privilege; PGlite alone would allow it.
-		await assert.rejects(db.execute(sql`TRUNCATE t`), { name: PERMISSION_ERROR_NAME });
+		// Refused by PostgreSQL, as on AWS: the statements run as a role that owns nothing and has DML only.
+		for (const ddl of [
+			sql`CREATE TABLE u (id INT)`,
+			sql`ALTER TABLE t ADD COLUMN n INT`,
+			sql`DROP TABLE t`,
+			sql`TRUNCATE t`,
+		]) {
+			await assert.rejects(db.execute(ddl), { name: DatabaseErrors.QueryFailed });
+		}
+		await assert.rejects(db.query(sql`SELECT name FROM _migrations`), { name: DatabaseErrors.QueryFailed });
 		simulateConflict(db);
 		await assert.rejects(
 			db.transaction(async (tx) => {
@@ -724,6 +769,47 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 			(e: unknown) => isBlocksError(e, DatabaseErrors.SerializationFailure),
 		);
 		assert.strictEqual(await db.queryOne(sql`SELECT 1 FROM t`), null, 'the conflicting transaction rolled back');
+	});
+
+	test('statements run as a plain role, so a Row Level Security policy applies to them', async () => {
+		const { scope, shared } = auroraCluster();
+		current = new Database(scope, 'rls', {
+			cluster: shared,
+			migrationsPath: migrations({
+				'001_docs.sql': [
+					'CREATE TABLE docs (id INT PRIMARY KEY, published BOOLEAN NOT NULL);',
+					'ALTER TABLE docs ENABLE ROW LEVEL SECURITY;',
+					'CREATE POLICY docs_published ON docs USING (published);',
+					// The migration runs as the admin, which owns the table: its policies do not apply to it.
+					'INSERT INTO docs VALUES (1, true), (2, false);',
+				].join('\n'),
+			}),
+		});
+		const db = current;
+		assert.deepStrictEqual(await db.queryOne(sql`SELECT current_user AS role`), { role: LOCAL_APP_ROLE });
+		assert.deepStrictEqual(await db.query(sql`SELECT id FROM docs`), [{ id: 1 }], 'the policy hides the other row');
+		assert.strictEqual((await db.execute(sql`UPDATE docs SET published = true WHERE id = 2`)).rowCount, 0);
+		await assert.rejects(db.execute(sql`INSERT INTO docs VALUES (3, false)`), { name: DatabaseErrors.QueryFailed });
+		await db.transaction(async (tx) => {
+			assert.deepStrictEqual(await tx.query(sql`SELECT id FROM docs`), [{ id: 1 }]);
+		});
+		assert.strictEqual((await queryAsAdmin(db, 'SELECT id FROM docs')).length, 2);
+	});
+
+	test('a sibling’s migration run inside a transaction leaves that transaction on the app role', async () => {
+		const { scope, shared } = auroraCluster();
+		const table = { '001.sql': 'CREATE TABLE t (id INT PRIMARY KEY);' };
+		const a = new Database(scope, 'role_a', { cluster: shared, migrationsPath: migrations(table) });
+		const b = new Database(scope, 'role_b', { cluster: shared, migrationsPath: migrations(table) });
+		await a.transaction(async (tx) => {
+			// b's first statement: its migrations run as the admin, in a savepoint of a's transaction.
+			await b.execute(sql`INSERT INTO t VALUES (1)`);
+			assert.deepStrictEqual(await tx.queryOne(sql`SELECT current_user AS role`), { role: LOCAL_APP_ROLE });
+			await assert.rejects(b.execute(sql`CREATE TABLE u (id INT)`), { name: DatabaseErrors.QueryFailed });
+			await tx.execute(sql`INSERT INTO t VALUES (2)`);
+		});
+		assert.deepStrictEqual(await a.query(sql`SELECT id FROM t`), [{ id: 2 }]);
+		assert.deepStrictEqual(await b.query(sql`SELECT id FROM t`), [{ id: 1 }]);
 	});
 
 	test('an aurora and a dsql cluster can coexist in one app; a made-up type is rejected', () => {
@@ -741,5 +827,24 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 			() => new DatabaseCluster(scope, 'bad', { type: 'aurora', minCapacity: 0.3 }),
 			/minCapacity must be a multiple of 0\.5/,
 		);
+	});
+});
+
+describe('local app role', () => {
+	test('a data directory from before the app role gets the role and its grants on the next start', async () => {
+		const files = migrations({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
+		const start = () => new Database(new Scope(scopeId('bbdb', 'olddir')), 'db', { migrationsPath: files });
+		const before = start();
+		await before.execute(sql`INSERT INTO t VALUES (${'kept'})`);
+		// The directory as an earlier version left it: the tables and the ledger, no role and no grants.
+		await queryAsAdmin(before, `DROP OWNED BY "${LOCAL_APP_ROLE}"`);
+		await queryAsAdmin(before, `DROP ROLE "${LOCAL_APP_ROLE}"`);
+		await _closeAllPgliteClusters();
+		_resetDatabaseRegistry();
+		Scope._resetRegistry();
+
+		const after = start();
+		assert.deepStrictEqual(await after.query(sql`SELECT id FROM t`), [{ id: 'kept' }]);
+		assert.deepStrictEqual(await after.queryOne(sql`SELECT current_user AS role`), { role: LOCAL_APP_ROLE });
 	});
 });

@@ -249,10 +249,8 @@ const replace = async (url, overrides) => {
 };
 await replace(moduleUrl('preflight-credentials'), { assertAwsCredentials: async () => {} });
 await replace(moduleUrl('ensure-secrets'), {
-  ensureSecrets: async () => ({ created: [], updated: [] }),
   loadProductionEnv: () => {},
 });
-await replace(moduleUrl('external-migrations-step'), { applyExternalMigrations: async () => {} });
 await replace(moduleUrl('deploy-client-codegen'), { generateDeployClient: async () => {} });
 await replace(new URL('../telemetry/trackCommand.js', scripts).href, { trackCommand: async (_name, fn) => fn() });
 await replace(moduleUrl('deploy-stream'), {

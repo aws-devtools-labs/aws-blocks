@@ -69,12 +69,6 @@ const EXCEPTIONS: Exception[] = [
 		reason: 're-wraps an existing ApiError with its message scrubbed',
 	},
 	{
-		file: 'bb-data/src/errors.ts',
-		call: 'new ApiError(entry.message, entry.status, { name: entry.name, cause })',
-		// `entry` is a row of the constant REQUEST_ERRORS table, so its message is a stable BB string.
-		reason: 'stable message from a constant table',
-	},
-	{
 		file: 'bb-realtime/src/aws-middleware.ts',
 		call: 'brandBlocksError(err)',
 		// Client-side: re-raises a subscription rejection the realtime server sent; those messages are fixed BB strings.

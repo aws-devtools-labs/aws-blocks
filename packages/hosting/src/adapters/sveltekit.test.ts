@@ -5,11 +5,12 @@
 // adapter-node `build/` tree with skipBuild, so no SvelteKit install or network
 // is required.
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { spawn } from './spawn.js';
 import {
   sveltekitAdapter,
   prerenderedDestRelPath,
@@ -305,6 +306,34 @@ void describe('sveltekitAdapter — manifest from build/ (skipBuild)', () => {
       fs.existsSync(path.join(clientDir, 'font.woff2.br')),
       'standalone font.woff2.br survives',
     );
+  });
+});
+
+void describe('sveltekitAdapter — app build environment', () => {
+  let tmp: string;
+  let savedNodeOptions: string | undefined;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sveltekit-build-env-'));
+    savedNodeOptions = process.env.NODE_OPTIONS;
+  });
+  afterEach(() => {
+    mock.restoreAll();
+    if (savedNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = savedNodeOptions;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  void it('runs the app build without the cdk condition a synth sets in NODE_OPTIONS', () => {
+    // adapter-node is wired in the fixture's config, so the build runs as-is.
+    scaffoldBuild(tmp);
+    let buildEnv: NodeJS.ProcessEnv | undefined;
+    mock.method(spawn, 'sync', (_bin: string, _args: readonly string[], opts: { env?: NodeJS.ProcessEnv }) => {
+      buildEnv = opts.env;
+    });
+    process.env.NODE_OPTIONS = '--conditions=cdk --max-old-space-size=4096';
+    sveltekitAdapter({ projectDir: tmp });
+    assert.equal(buildEnv?.NODE_OPTIONS, '--max-old-space-size=4096');
+    assert.equal(buildEnv?.PATH, process.env.PATH);
   });
 });
 

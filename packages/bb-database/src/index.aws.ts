@@ -1,21 +1,35 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
-import type { SqlQuery } from '@aws-blocks/data-common/core';
-import { clusterConfigKey, sanitizeDbRoleName, searchPathFor } from './constants.js';
+import type { SqlQuery } from './common/sql.js';
+import {
+	CONNECTION_SETTING_ID,
+	clusterConfigKey,
+	connectionParameterName,
+	sanitizeDbRoleName,
+	searchPathFor,
+} from './constants.js';
 import { iamAuthToken, PgEngine } from './engines/pg-engine.js';
 import { configError } from './errors.js';
-import { registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
+import { sourceConnectionLabel, ssmConnectionLabel } from './external/connection.js';
+import { externalEngineFrom } from './external/engine.js';
+import { existingCluster, registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
+import { roleDatabase, scopedDatabase } from './runtime/scoped.js';
 import type {
 	ClusterRef,
 	ClusterType,
+	ConnectionStringSource,
 	DatabaseClusterOptions,
 	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
 	QueryOptions,
+	ScopedDatabase,
 	Transaction,
 	TransactionOptions,
 } from './types.js';
@@ -40,6 +54,11 @@ export class DatabaseCluster extends Scope {
 		registerUniqueId('DatabaseCluster', this, id, this.fullId);
 		registerSdkIdentifiers(this.fullId, readClusterConfig(this.fullId));
 	}
+
+	/** Refer to an existing PostgreSQL database; see the local entry for the full description. */
+	static fromExisting(options: ExistingClusterOptions): ExistingClusterRef {
+		return existingCluster(options);
+	}
 }
 
 /**
@@ -62,32 +81,44 @@ export class Database extends Scope {
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });
-		const { ref, schemaName, clusterFullId } = registerDatabase(this, id, this.fullId, options);
-		this.cluster = ref;
-		this.schemaName = schemaName;
+		const resolved = registerDatabase(this, id, this.fullId, options);
+		const { clusterFullId } = resolved;
+		this.cluster = resolved.ref;
+		this.schemaName = resolved.schemaName;
 
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: clusterFullId,
 			schemaName: this.schemaName,
-			...readClusterConfig(clusterFullId),
+			...(resolved.external ? {} : readClusterConfig(clusterFullId)),
 		});
 
-		const buildEngine = async (): Promise<PgEngine> => {
-			const { clusterEndpoint, region } = getSdkIdentifiers(this);
-			if (!clusterEndpoint || !region) {
-				throw configError(
-					`Database '${this.fullId}' is not configured: missing ${clusterConfigKey(clusterFullId, 'ENDPOINT')} / _REGION. Ensure the cluster is provisioned.`,
-				);
-			}
-			const role = sanitizeDbRoleName(clusterFullId);
-			return new PgEngine({
-				kind: ref.kind,
-				endpoint: clusterEndpoint,
-				role,
-				getAuthToken: iamAuthToken({ kind: ref.kind, endpoint: clusterEndpoint, region, role }),
-				searchPath: searchPathFor(this.schemaName),
-			});
-		};
+		let buildEngine: () => Promise<PgEngine>;
+		if (resolved.external) {
+			// The connection string of an existing database: the app's own store, or the SSM SecureString that
+			// `cdk-blocks db connect --stage` wrote and the CDK layer lets the app role read. The child setting
+			// is built here, in the constructor; the value is read with the first statement.
+			const { ca } = resolved.external;
+			const { source, label } = this.connectionSource(resolved.external);
+			buildEngine = () => externalEngineFrom(source, label, { ca, schemaName: this.schemaName });
+		} else {
+			const kind = resolved.ref.kind;
+			buildEngine = async () => {
+				const { clusterEndpoint, region } = getSdkIdentifiers(this);
+				if (!clusterEndpoint || !region) {
+					throw configError(
+						`Database '${this.fullId}' is not configured: missing ${clusterConfigKey(clusterFullId, 'ENDPOINT')} / _REGION. Ensure the cluster is provisioned.`,
+					);
+				}
+				const role = sanitizeDbRoleName(clusterFullId);
+				return new PgEngine({
+					kind,
+					endpoint: clusterEndpoint,
+					role,
+					getAuthToken: iamAuthToken({ kind, endpoint: clusterEndpoint, region, role }),
+					searchPath: searchPathFor(this.schemaName),
+				});
+			};
+		}
 
 		this.core = new DatabaseCore({ engine: buildEngine });
 		registerInternalAccess(this, {
@@ -114,6 +145,41 @@ export class Database extends Scope {
 
 	transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		return this.core.transaction(fn, options);
+	}
+
+	asUser(user: { userId: string }, claims?: Record<string, unknown>): ScopedDatabase {
+		return scopedDatabase(this, user, claims);
+	}
+
+	asRole(role: string, claims?: Record<string, unknown>): ScopedDatabase {
+		return roleDatabase(this, role, claims);
+	}
+
+	private connectionSource(external: ExistingClusterRef): { source: ConnectionStringSource; label: string } {
+		if (external.connectionString) {
+			return { source: external.connectionString, label: sourceConnectionLabel(this.fullId) };
+		}
+		// Tools load this entry outside a function (client generation does), where there is no stack name. The
+		// constructor must not fail there, so a missing name stops the first statement instead.
+		const stackName = process.env.BLOCKS_STACK_NAME;
+		const parameterName = connectionParameterName(stackName ?? '', external.name ?? '');
+		const setting = AppSetting.fromExisting<string>(this, CONNECTION_SETTING_ID, {
+			name: parameterName,
+			secret: true,
+		});
+		return {
+			source: {
+				get: () => {
+					if (!stackName) {
+						throw configError(
+							`Database '${this.fullId}': BLOCKS_STACK_NAME is not set, so the connection string parameter cannot be named.`,
+						);
+					}
+					return setting.get();
+				},
+			},
+			label: ssmConnectionLabel(parameterName),
+		};
 	}
 }
 
