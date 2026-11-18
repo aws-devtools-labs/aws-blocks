@@ -8,12 +8,12 @@ transactions, and version-controlled SQL migrations. No frontend included.
 
 ## For Coding Agents
 
-**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more). `AGENTS.md` explains the rest.**
+**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
 The `Database` API and migration model are documented in
-`npx --no -- cdk-blocks docs Database`.
+`npm run docs Database`.
 
 ## What ships
 
@@ -63,7 +63,7 @@ PostgreSQL cluster instead:
 The query code stays the same; the migration files become plain PostgreSQL
 (`CREATE INDEX` without `ASYNC`). Choose before the first deploy that holds real
 data: the block does not move rows between clusters. See "Which cluster" and
-"Migrations" in `npx --no -- cdk-blocks docs Database`.
+"Migrations" in `npm run docs Database`.
 
 ## Commands
 
@@ -77,13 +77,12 @@ npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against the dev server
 npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
 npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
-npm run secret -- set KEY # Set a secret (also list, remove KEY)
-npm run config -- set KEY value # Set a config value (also list, remove KEY)
+npm run secret set KEY # Set a secret (also list, remove KEY)
+npm run config set KEY value # Set a config value (also list, remove KEY)
 npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
 ```
 
-Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
-`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
 The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
@@ -109,4 +108,4 @@ Your CloudFormation stack names derive from the `stackId` in
 This template is backend-only. The `backend` template's README documents adding a
 Vite/React frontend and `Hosting` — the same steps apply here.
 
-**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).**
+**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more).**

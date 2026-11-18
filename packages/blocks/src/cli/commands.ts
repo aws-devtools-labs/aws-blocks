@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Command handlers of the `cdk-blocks` CLI. Each lifecycle command runs the same
+ * Command handlers of the CDK Blocks task runner. Each lifecycle command runs the same
  * core function, under the same runtime, as the generated npm-script wrapper
  * it replaces; see `runners/launch.ts`.
  */
@@ -35,7 +35,6 @@ import {
 } from './context.js';
 import { loadDevPidfile } from './core-load.js';
 import {
-	BLOCKS_COMMAND,
 	blocksCommand,
 	CliError,
 	ExitCode,
@@ -89,7 +88,7 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	 * (`BLOCKS_DEV_FAILURE_FILE`, see `DEV_STATE`). A failure reason there fails
 	 * the command (exit 1) with no `Error:` line: the runner printed that reason
 	 * itself. Otherwise a stop that the CLI made, or an exit 143 of `tsx watch`
-	 * (`cdk-blocks dev stop` while the backend is not running), succeeds, and a
+	 * (`npm run dev:stop` while the backend is not running), succeeds, and a
 	 * `tsx watch` that exits 0 by itself, with no runner that stopped cleanly
 	 * under it, fails: it does when its runner dies and it watches no file.
 	 */
@@ -107,7 +106,7 @@ function readDevState(failureFile: string): string | undefined {
 }
 
 /**
- * The exit code of `cdk-blocks dev`, from what its runner recorded in `failureFile`
+ * The exit code of `npm run dev`, from what its runner recorded in `failureFile`
  * (see {@link ChildRun.failureFile}); `undefined` to map `result` as for any child.
  */
 function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): number | undefined {
@@ -124,8 +123,8 @@ function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): n
 	if (result.code !== 0 || state === DEV_STATE.stopped) return undefined;
 	throw new CliError(
 		state === DEV_STATE.running
-			? 'cdk-blocks dev ended: its dev server was killed (by a signal, or out of memory); its output is above.'
-			: 'cdk-blocks dev ended: its dev server did not start; its output is above.',
+			? 'npm run dev ended: its dev server was killed (by a signal, or out of memory); its output is above.'
+			: 'npm run dev ended: its dev server did not start; its output is above.',
 		{ where: run.where ?? [`project: ${run.cwd}`], runner: true },
 	);
 }
@@ -155,7 +154,7 @@ function awsOptions(ctx: Context): string[] {
 }
 
 /**
- * The command line that re-runs `cdk-blocks <words>` against the same target, for
+ * The command line that re-runs the task against the same target, for
  * core's guidance ("Then re-run …"): with the -C, --profile and --region of this run.
  */
 function invocation(ctx: Context, ...words: string[]): string {
@@ -198,8 +197,8 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	}
 
 	// A child that is not long-running and exited 0 finished its work before the
-	// Ctrl-C reached it (`cdk-blocks vendorize` copied the package): report that.
-	// A long-running child (`cdk-blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
+	// Ctrl-C reached it (`npm run vendorize` copied the package): report that.
+	// A long-running child (`npm run dev`) exits 0 when Ctrl-C stops it, which is an interruption.
 	const completed = result.code === 0 && !run.longRunning;
 	const code = result.interrupted && !completed ? ExitCode.Interrupted : exitCodeForChild(result.code, result.signal);
 	if (code === ExitCode.Interrupted) {
@@ -491,7 +490,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 			rmSync(failureFile, { force: true });
 			const code = await runRunner(ctx, {
 				runner: 'dev-server',
-				operation: 'cdk-blocks dev',
+				operation: 'npm run dev',
 				watch: true,
 				env: {
 					...devServerEnv(ctx.env, { backendPath, ...devConfig }),
@@ -508,7 +507,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 			const { maxRestarts, windowMs } = DEV_RESTART_POLICY;
 			if (!decision.restart) {
 				throw new CliError(
-					`cdk-blocks dev ended: its dev server crashed ${maxRestarts + 1} times within ${windowMs / 1000} s, so it was not restarted again. ` +
+					`npm run dev ended: its dev server crashed ${maxRestarts + 1} times within ${windowMs / 1000} s, so it was not restarted again. ` +
 						`Fix the error in its output above, then run ${blocksCommand('dev')} again.`,
 					{ where: [`project: ${root}`], runner: true },
 				);
@@ -530,7 +529,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 			release = session.release;
 			const signal = await waitUnlessStopped(decision.delayMs);
 			if (signal === 'SIGINT') {
-				ctx.out.progress('cdk-blocks dev interrupted.');
+				ctx.out.progress('npm run dev interrupted.');
 				return ExitCode.Interrupted;
 			}
 			if (signal !== undefined) return ExitCode.Ok;
@@ -538,9 +537,9 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	}
 }
 
-/** How `cdk-blocks dev` restarts a dev server that crashed after it started (see {@link decideDevRestart}). */
+/** How `npm run dev` restarts a dev server that crashed after it started (see {@link decideDevRestart}). */
 export interface DevRestartPolicy {
-	/** Restarts allowed within `windowMs`; the next crash ends `cdk-blocks dev`. */
+	/** Restarts allowed within `windowMs`; the next crash ends `npm run dev`. */
 	maxRestarts: number;
 	/** The sliding window (ms) over which restarts are counted. */
 	windowMs: number;
@@ -577,7 +576,7 @@ export function decideDevRestart(
 }
 
 /**
- * Wait `ms`, unless a SIGINT, SIGTERM or SIGHUP arrives first (a Ctrl-C, `cdk-blocks dev stop`,
+ * Wait `ms`, unless a SIGINT, SIGTERM or SIGHUP arrives first (a Ctrl-C, `npm run dev:stop`,
  * a closed terminal): resolves that signal, or `undefined` when the wait ran out.
  */
 function waitUnlessStopped(ms: number): Promise<NodeJS.Signals | undefined> {
@@ -596,7 +595,7 @@ function waitUnlessStopped(ms: number): Promise<NodeJS.Signals | undefined> {
 export async function devStop(ctx: Context, input: CommandInput): Promise<number> {
 	if (input.flags.all === true && input.flags.port !== undefined) {
 		throw new UsageError('--all stops every dev server this app recorded: it cannot be combined with --port.', {
-			hint: `${BLOCKS_COMMAND} dev stop --port <port>, or ${BLOCKS_COMMAND} dev stop --all`,
+			hint: `npm run dev:stop -- --port <port>, or npm run dev:stop -- --all`,
 		});
 	}
 	const root = ctx.enterRoot();
@@ -615,7 +614,7 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 		const port = resolveDevPort(root, input.flags);
 		for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
 		ports = [port];
-		// Without --port, a server started with `cdk-blocks dev --port N` is still the one to stop when it is
+		// Without --port, a server started with `npm run dev -- --port N` is still the one to stop when it is
 		// the only one recorded. With several, the user picks.
 		if (input.flags.port === undefined && !recorded.includes(port)) {
 			if (recorded.length === 1) {
@@ -624,7 +623,7 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 			} else if (recorded.length > 1) {
 				ctx.out.warn(
 					`No dev server is recorded on :${port}, but this app recorded ones on ${recorded.map((p) => `:${p}`).join(', ')}. ` +
-						`Stop one with ${BLOCKS_COMMAND} dev stop --port <port>, or all of them with ${BLOCKS_COMMAND} dev stop --all.`,
+						`Stop one with npm run dev:stop -- --port <port>, or all of them with npm run dev:stop -- --all.`,
 				);
 			}
 		}
@@ -651,12 +650,12 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	return warnings.length > 0 ? ExitCode.Failure : ExitCode.Ok;
 }
 
-/** How `cdk-blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
+/** How `npm run sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
 type SandboxMode = 'watch' | 'deploy' | 'preview';
 
 async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 	const deployOnly = mode !== 'watch';
-	const operation = deployOnly ? `cdk-blocks sandbox ${mode}` : 'cdk-blocks sandbox';
+	const operation = deployOnly ? `npm run sandbox:${mode}` : 'npm run sandbox';
 	const root = ctx.requireRoot();
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const config = resolveDevConfig(root);
@@ -666,7 +665,7 @@ async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 	const { source: _source, ...devConfig } = config;
 	const tsx = resolveTsxCli(root);
 	// startSandbox runs its dev server from one shell string. It is the dev server
-	// runner under `tsx watch`, with the same options as `cdk-blocks dev`.
+	// runner under `tsx watch`, with the same options as `npm run dev`.
 	const devCommand = [process.execPath, tsx, 'watch', runnerPath('dev-server')]
 		.map((word) => shellQuote(word))
 		.join(' ');
@@ -738,7 +737,7 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 	if (declined !== undefined) return declined;
 	const code = await runRunner(ctx, {
 		runner: 'sandbox-destroy',
-		operation: 'cdk-blocks sandbox destroy',
+		operation: 'npm run sandbox:destroy',
 		conditions: 'cdk',
 		options: { backendPath, invocation: invocation(ctx, 'sandbox', 'destroy') },
 		where,
@@ -862,7 +861,7 @@ function waitLiveArgs(flags: CommandInput['flags']): string[] {
 		// Suggest the value only when --wait-live accepts it.
 		const valid = /^\d+$/.test(String(timeout)) && Number(timeout) >= 1 && Number(timeout) <= 3600;
 		throw new UsageError('option --wait-live-timeout needs --wait-live.', {
-			hint: `${BLOCKS_COMMAND} deploy --wait-live=${valid ? String(timeout) : 'SECONDS'}`,
+			hint: `npm run deploy -- --wait-live=${valid ? String(timeout) : 'SECONDS'}`,
 		});
 	}
 	if (typeof waitLive === 'string' && timeout !== undefined) {
@@ -892,7 +891,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	try {
 		code = await runRunner(ctx, {
 			runner: 'deploy',
-			operation: 'cdk-blocks deploy',
+			operation: 'npm run deploy',
 			options: { cdkAppPath, projectRoot: root, invocation: invocation(ctx, 'deploy') },
 			args,
 			where: [`stack: ${stack}`, label, `project: ${root}`],
@@ -900,9 +899,9 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	} catch (error) {
 		// The deploy succeeded, and only --wait-live failed: report the result, then fail.
 		if (!(error instanceof CliError) || readLastDeploy(root, 'production')?.live !== false) throw error;
-		emitDeployResult(ctx, root, 'production', 'cdk-blocks deploy');
+		emitDeployResult(ctx, root, 'production', 'npm run deploy');
 		throw new CliError(
-			'cdk-blocks deploy deployed the stack, but --wait-live could not confirm that the new build is live; the output above says why.',
+			'npm run deploy deployed the stack, but --wait-live could not confirm that the new build is live; the output above says why.',
 			{ where: [`stack: ${stack}`, label, `project: ${root}`], hint: 'check the frontend, or re-run with a longer --wait-live' },
 		);
 	}
@@ -912,10 +911,10 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	if (deployed && deployed !== stack) {
 		ctx.out.error(
 			`Warning: CDK deployed the stack ${deployed}, not ${stack}, which .blocks/config.json names.\n` +
-				`  cdk-blocks destroy and cdk-blocks whoami use ${stack}; set "stackId" in .blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
+				`  npm run destroy and npm run whoami use ${stack}; set "stackId" in .blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
 		);
 	}
-	emitDeployResult(ctx, root, 'production', 'cdk-blocks deploy');
+	emitDeployResult(ctx, root, 'production', 'npm run deploy');
 	return code;
 }
 
@@ -931,7 +930,7 @@ export async function destroy(ctx: Context): Promise<number> {
 	if (declined !== undefined) return declined;
 	const code = await runRunner(ctx, {
 		runner: 'destroy',
-		operation: 'cdk-blocks destroy',
+		operation: 'npm run destroy',
 		options: { cdkAppPath, projectRoot: root, stackName: stack, invocation: invocation(ctx, 'destroy') },
 		where,
 	});
@@ -940,12 +939,12 @@ export async function destroy(ctx: Context): Promise<number> {
 }
 
 /**
- * The identity and Region that `cdk-blocks deploy` uses. Like core's deploy, it
+ * The identity and Region that `npm run deploy` uses. Like core's deploy, it
  * loads `.env.production` into the environment of this process (an exported
  * variable wins): the credential chain of the AWS SDK reads `process.env`, so
  * a copy would not reach AWS_PROFILE, AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE
  * or the web-identity variables. When `.env.local` (the sandbox's env file)
- * sets an AWS variable to another value, it warns that `cdk-blocks sandbox` can
+ * sets an AWS variable to another value, it warns that `npm run sandbox` can
  * use another identity or Region.
  */
 export async function whoami(ctx: Context): Promise<number> {
@@ -960,7 +959,7 @@ export async function whoami(ctx: Context): Promise<number> {
 			.sort();
 		if (differ.length > 0) {
 			ctx.out.warn(
-				`${STAGE_ENV_FILES.sandbox} sets ${differ.join(', ')} unlike ${STAGE_ENV_FILES.production}, so "cdk-blocks sandbox" can use another identity or Region than this one, which "cdk-blocks deploy" uses.`,
+				`${STAGE_ENV_FILES.sandbox} sets ${differ.join(', ')} unlike ${STAGE_ENV_FILES.production}, so "npm run sandbox" can use another identity or Region than this one, which "npm run deploy" uses.`,
 			);
 		}
 	}
@@ -978,7 +977,7 @@ export async function whoami(ctx: Context): Promise<number> {
 	if (!identity.region) {
 		throw new CliError('no AWS Region is set, so the identity cannot be checked.', {
 			where: [`credentials: ${identity.credentials}`],
-			hint: `${BLOCKS_COMMAND} whoami --region <region>, or set region in your AWS profile`,
+			hint: `npm run whoami -- --region <region>, or set region in your AWS profile`,
 		});
 	}
 	let production: string | null = null;
@@ -1011,7 +1010,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		`Identity:    ${result.arn ?? 'unknown'}`,
 		`Credentials: ${result.credentials}`,
 		`Region:      ${region}`,
-		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "cdk-blocks sandbox")' : '(not in an AWS Blocks app)')}`,
+		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "npm run sandbox")' : '(not in a CDK Blocks app)')}`,
 		`Production:  ${production ?? noProduction}`,
 	].join('\n');
 	ctx.out.result(result, text);
@@ -1049,10 +1048,10 @@ function valueCliOptions(ctx: Context): { interactive: boolean; yes: boolean } {
 	return { interactive: !ctx.globals.noInput && !isCi(ctx.env), yes: ctx.globals.yes };
 }
 
-/** A bare `cdk-blocks secret` or `cdk-blocks config` is a usage error that points to its help. */
+/** A bare `npm run secret` or `npm run config` is a usage error that points to its help. */
 function requireValueVerb(name: 'secret' | 'config', input: CommandInput): void {
 	if (input.flags.help !== true && input.passthrough.length === 0) {
-		throw new UsageError(`"cdk-blocks ${name}" needs a verb: set, list or remove.`, { hint: blocksCommand(name, '--help') });
+		throw new UsageError(`"npm run ${name}" needs a verb: set, list or remove.`, { hint: blocksCommand(name, '--help') });
 	}
 }
 
@@ -1091,7 +1090,7 @@ export async function telemetry(ctx: Context, input: CommandInput): Promise<numb
 	// A project setting needs a project: never write .blocks/config.json into a directory that is not an app.
 	if (!root && action !== 'status' && !global) {
 		throw new UsageError(`not inside an AWS Blocks app, so there is no project to ${action} telemetry for.`, {
-			hint: `${BLOCKS_COMMAND} telemetry ${action} --global, or run it in your app directory`,
+			hint: `npm run telemetry -- ${action} --global, or run it in your app directory`,
 		});
 	}
 	// Core reads the project setting from the working directory: the app, or the -C directory outside one.
@@ -1115,12 +1114,12 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 	const output = outputArg ? resolve(ctx.startDir, outputArg) : join(root, 'aws-blocks', 'client.js');
 	if (app && output === join(app, 'aws-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
 		throw new UsageError(
-			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "cdk-blocks generate client" would replace it with the generic client.',
-			{ where: [`project: ${app}`], hint: `npm run blocks:generate-client, or ${BLOCKS_COMMAND} generate client --force` },
+			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "npm run generate-client" would replace it with the generic client.',
+			{ where: [`project: ${app}`], hint: `npm run blocks:generate-client, or npm run generate-client -- --force` },
 		);
 	}
 	return runChild(ctx, {
-		operation: 'cdk-blocks generate client',
+		operation: 'npm run generate-client',
 		tool: 'blocks-generate-client',
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'generate-client-cli.js'), ...input.positionals.map((p) => resolve(ctx.startDir, p))],
@@ -1139,7 +1138,7 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 	requireFile(backendPath, 'the backend entry');
 	return runRunner(ctx, {
 		runner: 'generate-spec',
-		operation: 'cdk-blocks generate spec',
+		operation: 'npm run spec',
 		// Its own `❌` line says why it failed, as blocks-generate-client's does.
 		tool: 'blocks-generate-spec',
 		options: { backendPath, outputPath },
@@ -1227,7 +1226,7 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const [verb] = passthrough;
 	const oneOf = `${verbs.slice(0, -1).join(', ')} or ${verbs.at(-1)}`;
 	if (verb === undefined) {
-		throw new UsageError(`"cdk-blocks db" needs a verb: ${oneOf}.`, { hint: blocksCommand('db', '--help') });
+		throw new UsageError(`"npm run db" needs a verb: ${oneOf}.`, { hint: blocksCommand('db', '--help') });
 	}
 	if (!verbs.includes(verb)) {
 		const hint = suggest(verb, verbs);
@@ -1248,14 +1247,14 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	// two questions to skip or refuse: pass them on, so a run that cannot prompt fails at once with exit code 2.
 	const answers = help ? [] : [...(ctx.globals.yes ? ['--yes'] : []), ...(ctx.interactive ? [] : ['--no-input'])];
 	return runChild(ctx, {
-		operation: `cdk-blocks db ${verb}`,
+		operation: `npm run db -- ${verb}`,
 		tool: 'bb-database',
 		command: process.execPath,
 		args: [cli, ...passthrough, ...answers],
 		cwd: root,
-		// bb-database's help names the command that runs it. It runs from the project root and resolves the
-		// paths in its own options from the directory the user is in.
-		env: { BB_DATABASE_COMMAND: 'cdk-blocks db', BB_DATABASE_START_DIR: ctx.startDir },
+		// bb-database's help names the task that runs it. It runs from the project root and resolves the
+		// paths in its own options from the task's starting directory (including -C).
+		env: { BB_DATABASE_COMMAND: 'npm run db --', BB_DATABASE_START_DIR: ctx.startDir },
 	});
 }
 
@@ -1266,22 +1265,22 @@ export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
 	const tokens = input.passthrough.filter((token) => token !== '--');
 	const option = tokens.find((token) => token.startsWith('-') && token !== '--force');
 	if (option !== undefined) {
-		throw new UsageError(`unknown option "${option}" for "cdk-blocks vendorize"; it takes only --force.`, {
+		throw new UsageError(`unknown option "${option}" for "npm run vendorize"; it takes only --force.`, {
 			hint: blocksCommand('vendorize', '--help'),
 		});
 	}
 	const packages = tokens.filter((token) => !token.startsWith('-'));
 	if (packages.length === 0) {
-		throw new UsageError('"cdk-blocks vendorize" needs the <package> argument.', { hint: blocksCommand('vendorize', '--help') });
+		throw new UsageError('"npm run vendorize" needs the <package> argument.', { hint: blocksCommand('vendorize', '--help') });
 	}
 	if (packages.length > 1) {
-		throw new UsageError(`unexpected argument "${packages[1]}" for "cdk-blocks vendorize".`, {
+		throw new UsageError(`unexpected argument "${packages[1]}" for "npm run vendorize".`, {
 			hint: blocksCommand('vendorize', '--help'),
 		});
 	}
 	const root = ctx.requireRoot();
 	return runChild(ctx, {
-		operation: 'cdk-blocks vendorize',
+		operation: 'npm run vendorize',
 		tool: 'blocks-vendorize',
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'vendorize.js'), ...input.passthrough],
@@ -1291,12 +1290,12 @@ export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
 
 export interface HelpTarget {
 	command: CommandSpec;
-	/** The tokens after the command, for a passthrough command: `set` in `cdk-blocks help secret set`. */
+	/** The tokens after the command, for a passthrough command: `set` in `npm run help secret set`. */
 	rest: string[];
 }
 
 /**
- * Resolve `cdk-blocks help <tokens>` to a command, through aliases. Tokens after a
+ * Resolve `npm run help <tokens>` to a command, through aliases. Tokens after a
  * passthrough command are its own subcommands; after any other command they
  * are an unknown command.
  */
@@ -1325,14 +1324,14 @@ export function helpTarget(tokens: readonly string[]): HelpTarget {
  */
 export function verbHelp(ctx: Context, command: CommandSpec, verb: string): Promise<number> {
 	if (!command.handler || !command.verbs?.includes(verb)) {
-		throw new Error(`"cdk-blocks ${command.path.join(' ')}" has no verb "${verb}".`);
+		throw new Error(`"${blocksCommand(...command.path)}" has no verb "${verb}".`);
 	}
 	return command.handler(ctx, { flags: { help: true }, positionals: [], passthrough: [verb, '--help'] });
 }
 
 /**
- * `cdk-blocks help [command...]`. For a verb of a passthrough command
- * (`cdk-blocks help secret set`) it shows the tool's own help for that verb; any
+ * `npm run help [task...]`. For a verb of a passthrough command
+ * (`npm run help secret set`) it shows the tool's own help for that verb; any
  * further tokens are ignored and never reach the tool.
  */
 export async function help(ctx: Context, input: CommandInput): Promise<number> {

@@ -1,6 +1,6 @@
 # Shared Example Backend
 
-The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `aws-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npx blocks-generate-spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
+The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `aws-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
 
 > **Upgrading a deployed stack:** todos are now keyed on the owner's `userSub` instead of `userId`. A table's key can't change in place, so a stack deployed from an earlier version of this example fails to update — destroy it (`npm run sandbox:destroy`) and deploy again. Existing todos are not carried over.
 
@@ -16,16 +16,16 @@ npm run dev
 npm run sandbox
 
 # Regenerate the spec — run this after dev or sandbox, whichever you want the apps to target
-npx blocks-generate-spec                            # the dev server (.blocks-sandbox/config.json)
-BLOCKS_SPEC_STAGE=sandbox npx blocks-generate-spec  # the deployed sandbox (.blocks-sandbox/config.sandbox.json)
+npm run spec                            # the dev server (.blocks-sandbox/config.json)
+BLOCKS_SPEC_STAGE=sandbox npm run spec  # the deployed sandbox (.blocks-sandbox/config.sandbox.json)
 ```
 
 The dev server writes `.blocks-sandbox/config.json` with its own URL, and a sandbox deploy records the deployed API in `.blocks-sandbox/config.sandbox.json`. `blocks-generate-spec` copies one `apiUrl` into the spec's `servers` array: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one. So the spec describes **one** server:
 
 | Generated with | Generated `Servers` entry | URL |
 |---|---|---|
-| `npx blocks-generate-spec` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
-| `BLOCKS_SPEC_STAGE=sandbox npx blocks-generate-spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
+| `npm run spec` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
+| `BLOCKS_SPEC_STAGE=sandbox npm run spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
 
 To switch the apps between local and sandbox, regenerate the spec the other way.
 

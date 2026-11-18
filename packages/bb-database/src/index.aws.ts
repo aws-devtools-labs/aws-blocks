@@ -95,7 +95,7 @@ export class Database extends Scope {
 		let buildEngine: () => Promise<PgEngine>;
 		if (resolved.external) {
 			// The connection string of an existing database: the app's own store, or the SSM SecureString that
-			// `cdk-blocks db connect --stage` wrote and the CDK layer lets the app role read. The child setting
+			// `npm run db -- connect --stage` wrote and the CDK layer lets the app role read. The child setting
 			// is built here, in the constructor; the value is read with the first statement.
 			const { ca } = resolved.external;
 			const { source, label } = this.connectionSource(resolved.external);

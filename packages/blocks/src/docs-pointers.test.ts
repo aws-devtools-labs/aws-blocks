@@ -3,7 +3,7 @@
 
 /**
  * Every Building Block re-export in src/index.ts names its package and points at
- * that block's bundled docs through `cdk-blocks docs <package>`. The pointer is plain
+ * that block's bundled docs through `npm run docs <package>`. The pointer is plain
  * JSDoc text, so a renamed or newly EXCLUDED package (scripts/block-packages.mjs) would
  * otherwise leave a dead `Full docs:` name without any build failing.
  *
@@ -35,7 +35,7 @@ test('each Package: entry in src/index.ts points at its own bundled docs', async
 		assert.ok((docs.index ?? 0) > (pkg.index ?? 0), `Full docs: for ${name} must follow its Package: line`);
 		assert.strictEqual(
 			docs[1],
-			`\`npx --no -- cdk-blocks docs ${name}\`.`,
+			`\`npm run docs ${name}\`.`,
 			`Full docs: for @aws-blocks/${name} must name its bundled docs`,
 		);
 		assert.ok(bundled.has(name), `@aws-blocks/${name} is not bundled by gen-block-docs (see getBlockPackages)`);

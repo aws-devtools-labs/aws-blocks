@@ -20,6 +20,7 @@ class DartCodeGenerator {
   /// Output is deterministic for a given [model], so it is safe to check in
   /// and diff.
   String generate(CodegenModel model) {
+    _checkNoTransferableParams(model);
     final buf = StringBuffer();
     buf.writeln('// GENERATED CODE — DO NOT MODIFY BY HAND');
     buf.writeln('// Generator: blocks-codegen');
@@ -1551,6 +1552,93 @@ class DartCodeGenerator {
           "'$typeName', but the generated client also declares $typeName",
         );
       }
+    }
+  }
+
+  /// Throws a [FormatException] naming every operation parameter that holds
+  /// a transferable: directly, optional or nullable, in a list, map or tuple,
+  /// or in a field of a model at any depth. A transferable is read-only (the
+  /// server hands it out and nothing sends one back) and the runtime classes
+  /// have no `toJson()`, so such a method would compile and then always throw
+  /// on the call. The Kotlin generator refuses the same parameters.
+  void _checkNoTransferableParams(CodegenModel model) {
+    final errors = <String>[];
+    for (final ns in model.namespaces) {
+      for (final op in ns.operations) {
+        for (final p in op.params) {
+          final found = _findTransferable(p.type, model.types, const [], {});
+          if (found == null) continue;
+          final (tag, path) = found;
+          final field = path.isEmpty ? '' : ' (field ${path.join('.')})';
+          errors.add(
+            'Transferable types (${escapeForDiagnostic(tag)}) cannot be '
+            'serialized: they are read-only. Method '
+            "'${escapeForDiagnostic(op.fullName)}', parameter "
+            "'${escapeForDiagnostic(p.name)}'${escapeForDiagnostic(field)}.",
+          );
+        }
+      }
+    }
+    if (errors.isNotEmpty) throw FormatException(errors.join('\n'));
+  }
+
+  /// The tag of the first transferable [type] holds, and the model fields
+  /// leading to it (`[Bundle, feed]`), or null when it holds none.
+  (String, List<String>)? _findTransferable(
+    ResolvedType type,
+    Map<String, ResolvedType> allTypes,
+    List<String> path,
+    Set<String> seen,
+  ) {
+    (String, List<String>)? find(ResolvedType t, [List<String>? at]) =>
+        _findTransferable(t, allTypes, at ?? path, seen);
+    (String, List<String>)? inFields(String model, List<RecordField> fields) {
+      for (final f in fields) {
+        final hit = find(f.type, [
+          ...path.isEmpty ? [model] : path,
+          f.name,
+        ]);
+        if (hit != null) return hit;
+      }
+      return null;
+    }
+
+    switch (type) {
+      case TransferableType(blocksType: final tag):
+        return (tag, path);
+      case NullableType(inner: final t) ||
+          ListType(items: final t) ||
+          MapType(valueType: final t):
+        return find(t);
+      case TupleType(items: final items):
+        for (final t in items) {
+          final hit = find(t);
+          if (hit != null) return hit;
+        }
+        return null;
+      case RecordType(name: final n, fields: final fields):
+        if (!seen.add('record:$n')) return null;
+        final extra = type.additionalProperties;
+        return inFields(n, fields) ??
+            (extra == null ? null : find(extra, path.isEmpty ? [n] : path));
+      case SealedClassType(name: final n, variants: final variants):
+        if (!seen.add('sealed:$n')) return null;
+        for (final v in variants) {
+          final extra = v.additionalProperties;
+          final embedded = v.embeddedUnion;
+          final hit =
+              inFields(n, v.fields) ??
+              (embedded == null ? null : find(embedded)) ??
+              (extra == null ? null : find(extra, path.isEmpty ? [n] : path));
+          if (hit != null) return hit;
+        }
+        return null;
+      case SchemaReference(name: final n):
+        if (!seen.add('ref:$n')) return null;
+        final target = allTypes[n];
+        return target == null ? null : find(target);
+      case PrimitiveType() || EnumType():
+        return null;
     }
   }
 

@@ -147,9 +147,9 @@ class SampleType$X {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<SampleType$X> getSampleX({required String runErrorXParamP, required SampleType$X item, int? optIonal}) async {
     final params = <dynamic>[
@@ -302,12 +302,12 @@ class Servers {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
   late final NsApi ns;
 
   Blocks({String? baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl ?? Servers.mainValX1, sessionStore: sessionStore);
-    api = ApiApi(client);
+    api = Api(client);
     ns = NsApi(client);
   }
 }

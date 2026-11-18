@@ -229,6 +229,7 @@ describe('bb-database connect E2E: Supabase', { skip }, () => {
 		assert.ok(typeof connected.caModule === 'string', 'connect reports the CA module it wrote');
 		assert.strictEqual(realpathSync(resolve(ws.cwd, connected.caModule)), caModule);
 		const written = readFileSync(caModule, 'utf8');
+		assert.match(written, /^\/\/ Written by `npm run db -- connect --ca`/m);
 		assert.match(written, /export const DATABASE_CA\s*=/, 'the module exports DATABASE_CA');
 		// The certificate itself is in the module: the first line of its body, which has no line break in it.
 		const firstLine = caPem()

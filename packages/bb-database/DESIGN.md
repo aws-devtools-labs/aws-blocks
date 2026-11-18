@@ -291,15 +291,15 @@ Three properties of an existing database shape this section:
 
 - The CDK entry point grants the execution role read access to the parameter.
 - The Lambda entry point reads the parameter through an `AppSetting` with the first statement.
-- `cdk-blocks db connect --stage` writes the parameter. It takes the stack name from core's `getStackName()`.
+- `npm run db -- connect --stage <stage>` writes the parameter. It takes the stack name from core's `getStackName()`.
 
 Locally the value is an `AppSetting` under one fixed scope, keyed by the name. The block and the command line reach the same entry without the application's scopes. The value appears in no template, no custom resource property and no log. The migration function receives the name of the parameter.
 
-`AppSetting.put()` and `Secret.put()` store a value as JSON, so a string is held in quotes. `cdk-blocks db connect` stores the string as it is. `decodeStoredValue` (`src/external/ssm-store.ts`) reads both forms for the migration function and the command line.
+`AppSetting.put()` and `Secret.put()` store a value as JSON, so a string is held in quotes. `npm run db connect` stores the string as it is. `decodeStoredValue` (`src/external/ssm-store.ts`) reads both forms for the migration function and the command line.
 
 **The driver never sees the connection string.** `pg` merges a connection string over the programmatic config, and a TLS parameter in the string replaces the `ssl` object. For example, `sslmode=no-verify` turns verification off. `src/external/connection.ts` therefore splits the value with `new URL()` into host, port, user, password and database, and refuses the TLS parameters. It also replaces the parser's own error, because that error carries the value in its `input` field. The pool always gets an `ssl` value, `{ ca }` or `true`. With no value, `pg` reads `PGSSLMODE`.
 
-**The certificate authority.** `ca` is an option in code, per connection. `cdk-blocks db connect --ca` writes it to one module per connection name: `aws-blocks/database.ca.ts` for the default name, and `aws-blocks/database.<name>.ca.ts` for another. Every command for that connection verifies the server with that module. A `connect` without `--ca` does the same, so the command checks what the application checks.
+**The certificate authority.** `ca` is an option in code, per connection. `npm run db -- connect --ca <file>` writes it to one module per connection name: `aws-blocks/database.ca.ts` for the default name, and `aws-blocks/database.<name>.ca.ts` for another. Every command for that connection verifies the server with that module. A `connect` without `--ca` does the same, so the command checks what the application checks.
 
 **Session state does not cross a transaction pooler.** Through such a pooler, a session `SET` can reach another client or be lost, and a session advisory lock can stay held. Nothing that the block does on an existing database depends on session state:
 
@@ -323,7 +323,7 @@ The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table i
 
 **No baseline command.** A schema dump is the work of the user's own tool, such as `pg_dump` or a provider's command line. The block supplies the step that such a tool lacks. `migrate --mark-applied <file>` records a file in the ledger of a database that already has the schema, with one `INSERT … ON CONFLICT DO NOTHING`.
 
-**Local mode is the real database.** PGlite cannot rebuild the schema, roles and data of an existing database from files, so the local entry point opens the same engine as the Lambda entry point. It runs no migration file. Nothing that starts from `npm run dev` changes a schema. `cdk-blocks db migrate` is the explicit step, with the runner that the deploy uses.
+**Local mode is the real database.** PGlite cannot rebuild the schema, roles and data of an existing database from files, so the local entry point opens the same engine as the Lambda entry point. It runs no migration file. Nothing that starts from `npm run dev` changes a schema. `npm run db migrate` is the explicit step, with the runner that the deploy uses.
 
 **Identity.** The connection role usually owns the tables, and PostgreSQL does not apply policies to an owner. The claims of `asUser()` alone filter nothing there. `asRole(role, claims?)` switches the role and sets the claims in one statement at the start of each transaction (`src/runtime/scoped.ts`). The role name is a bound parameter. The block takes no position on which roles exist or what the claims hold.
 
@@ -333,7 +333,7 @@ The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table i
 
 ## 8. Command line
 
-The package has one binary, `bb-database`. `cdk-blocks db` runs it from the project root. The wrapper passes the arguments as typed and adds two environment variables: `BB_DATABASE_COMMAND`, the name for the usage text, and `BB_DATABASE_START_DIR`, the directory that the user is in. The binary resolves the paths in its own options from that directory, so the wrapper keeps no list of those options.
+The package has one binary, `bb-database`. `npm run db` runs it from the project root. The wrapper passes the arguments as typed and adds two environment variables: `BB_DATABASE_COMMAND`, the name for the usage text, and `BB_DATABASE_START_DIR`, the directory where the runner started (the app directory for npm scripts). The binary resolves the paths in its own options from that directory, so the wrapper keeps no list of those options.
 
 **An existing database.** `connect`, `migrate`, `types` and `status` work on the database of a stored connection string. `connect` reads the string from a hidden prompt or from stdin. The string is never an argument, and the binary removes it and its password from everything it prints.
 
@@ -409,7 +409,7 @@ An existing database:
 | Area | Local | AWS |
 |---|---|---|
 | Engine | The real database, through the `pg` pool engine | The same |
-| Migrations | Not run by `npm run dev`. `cdk-blocks db migrate` runs them | The migration function runs them during the deploy |
+| Migrations | Not run by `npm run dev`. `npm run db migrate` runs them | The migration function runs them during the deploy |
 | `request.jwt.claims` on a connection after a scoped transaction | An empty string | The same |
 
 ## 12. Limitations and future work

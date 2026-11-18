@@ -69,7 +69,7 @@ export class DatabaseCluster extends Scope {
 	 * privileges are the block's: a role that owns the tables is not filtered by Row Level Security policies.
 	 *
 	 * The connection string is never written in code. With `name`, the block reads the SSM SecureString
-	 * `/<stackName>-<name>` on AWS and the value under `.bb-data/` locally; `cdk-blocks db connect --name <name>`
+	 * `/<stackName>-<name>` on AWS and the value under `.bb-data/` locally; `npm run db -- connect --name <name>`
 	 * checks the database and stores both. With `connectionString`, the block reads your own `AppSetting`
 	 * or `Secret`.
 	 *
@@ -143,7 +143,7 @@ export class Database extends Scope {
 		if (resolved.external) {
 			const external = resolved.external;
 			// An existing database is the real one locally too: its schema, roles and data cannot be rebuilt
-			// from files. Migration files are not run from here; a deploy or `cdk-blocks db migrate` runs them.
+			// from files. Migration files are not run from here; a deploy or `npm run db migrate` runs them.
 			// The driver and the settings store are loaded here, so an app without one never loads them.
 			engine = async () => {
 				const [{ externalEngineFrom }, { localConnectionSetting }] = await Promise.all([

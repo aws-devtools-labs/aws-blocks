@@ -1347,9 +1347,9 @@ class UpdateMfaPreferenceInput extends AuthActionInput {
 
 
 
-class AuthApiApi {
+class AuthApi {
   final BlocksClient _client;
-  AuthApiApi(this._client);
+  AuthApi(this._client);
 
   Future<AuthState> setAuthState({required AuthActionInput input}) async {
     final params = <dynamic>[
@@ -1364,11 +1364,11 @@ class AuthApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final AuthApiApi authApi;
+  late final AuthApi authApi;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    authApi = AuthApiApi(client);
+    authApi = AuthApi(client);
   }
 }
 

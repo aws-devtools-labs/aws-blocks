@@ -156,7 +156,7 @@ Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't 
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
 
-A tag maps to one runtime type, and the generated facade returns that type with the spec's type arguments applied (`RealtimeChannel<Cursor>`). One exception, on Dart only: an `oidc/client` whose spec names its providers returns `TypedOidcClient<P>`, an extension type over the runtime `OidcClient` that narrows `signIn`, `signInRelay` and `exchange` to the generated provider enum `P`. It adds no runtime type and no logic, only a compile-time view. Swift and Kotlin make `OidcClient` itself generic. Dart doesn't, for two reasons: a generic `OidcClient<P>` would break every caller that passes a provider's name, and, because Dart's generics are covariant and `P` only appears in parameters, an upcast client would fail on a wrong provider with a `TypeError` (and in a dart2js `-O4` build not at all). The view is covariant too (`TypedOidcClient<OidcProvider>` takes any provider), but it is erased, so a wrong provider always reaches `OidcClient`'s own check and fails on its name with `OidcUnknownProviderException`. See [`schema-generation-guide-for-devs.md`](./schema-generation-guide-for-devs.md#x-blocks-type-args-on-a-methods-resultschema).
+A tag maps to one runtime type, and the generated facade returns that type with the spec's type arguments applied (`RealtimeChannel<Cursor>`). One exception, on Dart only: an `oidc/client` whose spec names its providers returns `TypedOidcClient<P>`, an extension type over the runtime `OidcClient` that narrows `signInDirect`, `signIn` and `exchange` to the generated provider enum `P`. It adds no runtime type and no logic, only a compile-time view. Swift and Kotlin make `OidcClient` itself generic. Dart doesn't, for two reasons: a generic `OidcClient<P>` would break every caller that passes a provider's name, and, because Dart's generics are covariant and `P` only appears in parameters, an upcast client would fail on a wrong provider with a `TypeError` (and in a dart2js `-O4` build not at all). The view is covariant too (`TypedOidcClient<OidcProvider>` takes any provider), but it is erased, so a wrong provider always reaches `OidcClient`'s own check and fails on its name with `OidcUnknownProviderException`. See [`schema-generation-guide-for-devs.md`](./schema-generation-guide-for-devs.md#x-blocks-type-args-on-a-methods-resultschema).
 
 #### Declared native packages and bindings
 
@@ -176,7 +176,7 @@ This supersedes the `Scope.registerNativePackage()` / `Scope.registerNativeBindi
 
 See [D-019](../DECISIONS.md#d-019-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies) for the scan's trust boundary.
 
-`blocks-generate-spec` reads that key from every `node_modules` level from the spec project up to the filesystem root, resolving each import specifier to its nearest installed copy, and passes what it finds as `nativeDeclarations`.
+The `spec` task reads that key from every `node_modules` level from the spec project up to the filesystem root, resolving each import specifier to its nearest installed copy, and passes what it finds as `nativeDeclarations`.
 
 #### Unbound transferables: the `UnknownTransferable` carrier
 
@@ -312,14 +312,14 @@ The spec is a build input with the same trust as the backend source it is genera
 ```mermaid
 flowchart LR
   App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
-  TS -- "npx blocks-generate-spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
+  TS -- "npm run spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
   Sandbox[.blocks-sandbox/config.json<br/>or config.&lt;stage&gt;.json] -- servers URL --> Spec
   Spec -- local file read --> Dart[blocks_codegen]
   Spec -- local file read --> Swift[BlocksCodegen plugins]
   Spec -- local file read --> Kotlin[Gradle codegen task]
 ```
 
-- **Generated locally.** `generate-spec-cli.ts` (`blocks-generate-spec`, the `spec` script in scaffolded apps) imports the backend entry and writes `aws-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
+- **Generated locally.** `generate-spec-cli.ts` (via `npm run spec` in scaffolded apps) imports the backend entry and writes `aws-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
 - **Gitignored in apps.** Every `create-blocks-app` template, and the entries `create-blocks-app` adds when initializing an existing directory, ignore `aws-blocks/blocks.spec.json`. (This repo commits a few specs as Swift test fixtures under `native/swift/Tests/`.)
 - **Not served by the deployed API.** No runtime or CDK code reads or bundles the spec, and the JSON-RPC handler has no discovery method that returns it.
 - **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `cdkBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.

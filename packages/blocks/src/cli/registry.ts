@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The declarative command tree of the `cdk-blocks` CLI: groups, canonical names,
+ * The declarative command tree of the CDK Blocks task runner: groups, canonical names,
  * hidden aliases, descriptions, flags, examples and handlers.
  *
  * Command names are data. Renaming a command, or making an alias canonical,
@@ -102,17 +102,12 @@ export interface CommandSpec {
 	 */
 	verbs?: readonly string[];
 	/**
-	 * Arguments after `--` are more positional arguments, as `--` means in POSIX (`cdk-blocks docs --exports --
+	 * Arguments after `--` are more positional arguments, as `--` means in POSIX (`npm run docs -- --exports --
 	 * schema`), rather than an error. Only for a command whose positionals are names, never flags it forwards.
 	 */
 	operandsAfterDashDash?: boolean;
 	/** The shape of the `--output json` result; absent when the command has no JSON output. */
 	json?: JsonObjectShape;
-	/**
-	 * The JSON result prints only when the run asks for it (`--output json`, `--query`), never as a default format of
-	 * the command: its text is the answer that people and coding agents read (`docs` prints Markdown on a pipe too).
-	 */
-	jsonOnRequest?: boolean;
 	/**
 	 * The command calls AWS or deploys to it, so an inherited AWS_REGION must be a
 	 * Region code. An explicit `--region` is checked for every command.
@@ -131,7 +126,7 @@ export interface AliasSpec {
 	args?: readonly string[];
 }
 
-/** A hidden flag spelling of another command: `cdk-blocks sandbox --deploy-only` runs `cdk-blocks sandbox deploy`. */
+/** A hidden flag spelling retained by the internal sandbox command parser. */
 export interface FlagAliasSpec {
 	/** The command the flag is given to. */
 	command: readonly string[];
@@ -152,7 +147,7 @@ export const GLOBAL_FLAGS: readonly FlagSpec[] = [
 		name: 'output',
 		type: 'string',
 		value: 'text|json',
-		description: 'Result format on stdout; json prints one JSON document, progress stays on stderr',
+		description: 'Result format: text on a terminal, JSON on a pipe for tasks with a structured result',
 	},
 	{ name: 'yes', short: 'y', type: 'boolean', description: 'Assume yes for confirmations' },
 	{
@@ -270,9 +265,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'no-frontend', type: 'boolean', description: 'Run the backend only' },
 		],
 		examples: [
-			{ command: 'cdk-blocks dev', description: 'open http://localhost:3000' },
-			{ command: 'cdk-blocks dev --port 4000', description: 'open http://localhost:4000' },
-			{ command: 'cdk-blocks dev --no-frontend', description: 'backend only' },
+			{ command: 'npm run dev', description: 'open http://localhost:3000' },
+			{ command: 'npm run dev -- --port 4000', description: 'open http://localhost:4000' },
+			{ command: 'npm run dev -- --no-frontend', description: 'backend only' },
 		],
 		handler: commands.dev,
 	},
@@ -284,13 +279,13 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Stop the local dev server that this app started on the port. It acts only on the process\n' +
 			'that the dev server recorded for itself, never on another process that holds the port.\n' +
 			'Without --port, when nothing is recorded on the configured port but exactly one dev server\n' +
-			'is recorded on another (cdk-blocks dev --port N), it stops that one.',
+			'is recorded on another (npm run dev -- --port N), it stops that one.',
 		flags: [
 			{
 				name: 'port',
 				type: 'string',
 				value: 'N',
-				description: 'Port of the dev server to stop [the "cdk-blocks dev" port]',
+				description: 'Port of the dev server to stop [the "npm run dev" port]',
 			},
 			{ name: 'all', type: 'boolean', description: 'Stop every dev server this app recorded, on any port' },
 		],
@@ -300,8 +295,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			],
 		},
 		examples: [
-			{ command: 'cdk-blocks dev stop', description: 'Stop the dev server on the configured port' },
-			{ command: 'cdk-blocks dev stop --all', description: 'Stop every dev server this app started' },
+			{ command: 'npm run dev:stop', description: 'Stop the dev server on the configured port' },
+			{ command: 'npm run dev:stop -- --all', description: 'Stop every dev server this app started' },
 		],
 		handler: commands.devStop,
 	},
@@ -312,8 +307,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		description:
 			'Deploy your personal sandbox stack, then watch for changes and run the local server\n' +
 			'against it. Ctrl-C stops the local processes; the stack keeps running until you\n' +
-			'run "cdk-blocks sandbox destroy".',
-		examples: [{ command: 'cdk-blocks sandbox', description: 'Deploy and watch your sandbox' }],
+			'run "npm run sandbox:destroy".',
+		examples: [{ command: 'npm run sandbox', description: 'Deploy and watch your sandbox' }],
 		aws: true,
 		handler: commands.sandbox,
 	},
@@ -323,9 +318,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Deploy the sandbox once and exit (CI)',
 		json: DEPLOY_RESULT,
 		examples: [
-			{ command: 'cdk-blocks sandbox deploy', description: 'Deploy once and exit' },
+			{ command: 'npm run sandbox:deploy', description: 'Deploy once and exit' },
 			{
-				command: 'API_URL=$(cdk-blocks sandbox deploy --query apiUrl)',
+				command: 'API_URL=$(npm run -s sandbox:deploy -- --query apiUrl)',
 				description: 'Deploy, then keep the API URL in a shell variable',
 			},
 		],
@@ -338,13 +333,13 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Deploy the sandbox with a hosted preview of the frontend once and exit',
 		description:
 			'Deploy your sandbox with the app hosted in preview shape (API Gateway, no CloudFront), print\n' +
-			'the preview URL, and exit. It is the same stack as "cdk-blocks sandbox": a plain sandbox deploy\n' +
+			'the preview URL, and exit. It is the same stack as "npm run sandbox": a plain sandbox deploy\n' +
 			'removes the preview, and re-adding it gives a new URL. A re-deploy hotswaps a code-only change.',
 		json: DEPLOY_RESULT,
 		examples: [
-			{ command: 'cdk-blocks sandbox preview', description: 'Deploy a hosted preview and print its URL' },
+			{ command: 'npm run sandbox:preview', description: 'Deploy a hosted preview and print its URL' },
 			{
-				command: 'URL=$(cdk-blocks sandbox preview --query url)',
+				command: 'URL=$(npm run -s sandbox:preview -- --query url)',
 				description: 'Deploy, then keep the preview URL in a shell variable',
 			},
 		],
@@ -358,7 +353,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		description:
 			'Delete your personal sandbox stack. This never touches the production stack.\n' +
 			'In an interactive terminal it asks first; --yes skips the question.',
-		examples: [{ command: 'cdk-blocks sandbox destroy --yes', description: 'Delete the sandbox without asking' }],
+		examples: [{ command: 'npm run sandbox:destroy -- --yes', description: 'Delete the sandbox without asking' }],
 		aws: true,
 		handler: commands.sandboxDestroy,
 	},
@@ -366,7 +361,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ['sandbox', 'console'],
 		group: 'Develop',
 		summary: 'Open the AWS console for the sandbox stack',
-		examples: [{ command: 'cdk-blocks sandbox console', description: 'Open the CloudFormation console' }],
+		examples: [{ command: 'npm run sandbox:console', description: 'Open the CloudFormation console' }],
 		aws: true,
 		handler: commands.sandboxConsole,
 	},
@@ -377,14 +372,14 @@ export const COMMANDS: readonly CommandSpec[] = [
 		description: [
 			'Print the docs that ship in @aws-blocks/blocks, looked up by name.',
 			'',
-			...docsForms('cdk-blocks docs'),
+			...docsForms('npm run docs'),
 			'',
 			'Every printed doc starts with "# <folder>/<file>" (# bb-kv-store/README.md, # README.md), and that doc',
-			'path prints the file again (cdk-blocks docs bb-cron-job/DESIGN.md). guide is the package README and',
+			'path prints the file again (npm run docs bb-cron-job/DESIGN.md). guide is the package README and',
 			'troubleshooting its TROUBLESHOOTING.md.',
 			'',
-			'The answer is Markdown text, piped or not. --output json prints it as one JSON document instead,',
-			'each doc in it named by "doc": "<folder>/<file>":',
+			'Structured output defaults to JSON on a pipe and Markdown on a terminal. Use --output text for Markdown',
+			'on a pipe, or --output json for JSON on a terminal. Each doc is named by "doc": "<folder>/<file>":',
 			'  no name     {version, blocks: [{name, classes, summary, doc, files}], framework: [{name, summary, doc}]}',
 			'  a block     {docs: [{doc, lines, text}]}; with --section, each part also has its section',
 			'  a name      {name, kind, package, import, declaration, summary, docs: [{doc, section, lines, text}]}',
@@ -428,19 +423,18 @@ export const COMMANDS: readonly CommandSpec[] = [
 			},
 		],
 		examples: [
-			{ command: 'cdk-blocks docs', description: 'The blocks, their classes and what each does' },
-			{ command: 'cdk-blocks docs KVStore core', description: 'Two READMEs in one call' },
-			{ command: 'cdk-blocks docs KVStore --api', description: 'Its exact signatures' },
-			{ command: 'cdk-blocks docs ifFieldEquals', description: 'Where an option is declared and documented' },
-			{ command: 'cdk-blocks docs Secret.get', description: 'A member of an export' },
-			{ command: 'cdk-blocks docs KVStore --section query', description: 'The part about queries' },
-			{ command: 'cdk-blocks docs KVStore --section local', description: 'How it behaves locally' },
-			{ command: 'cdk-blocks docs --exports Error', description: 'Importable names containing "Error"' },
-			{ command: 'cdk-blocks docs --search ConditionalCheckFailed', description: 'Search every doc' },
-			{ command: 'cdk-blocks docs ApiError --output json', description: 'The same answer as JSON' },
+			{ command: 'npm run docs', description: 'The blocks, their classes and what each does' },
+			{ command: 'npm run docs KVStore core', description: 'Two READMEs in one call' },
+			{ command: 'npm run docs:api KVStore', description: 'Its exact signatures' },
+			{ command: 'npm run docs ifFieldEquals', description: 'Where an option is declared and documented' },
+			{ command: 'npm run docs Secret.get', description: 'A member of an export' },
+			{ command: 'npm run docs KVStore -- --section query', description: 'The part about queries' },
+			{ command: 'npm run docs KVStore -- --section local', description: 'How it behaves locally' },
+			{ command: 'npm run docs -- --exports Error', description: 'Importable names containing "Error"' },
+			{ command: 'npm run docs:search ConditionalCheckFailed', description: 'Search every doc' },
+			{ command: 'npm run -s docs ApiError -- --output json', description: 'The same answer as JSON' },
 		],
 		json: DOCS_RESULT,
-		jsonOnRequest: true,
 		operandsAfterDashDash: true,
 		handler: docs,
 	},
@@ -468,13 +462,13 @@ export const COMMANDS: readonly CommandSpec[] = [
 		],
 		json: { ...DEPLOY_RESULT, live: null },
 		examples: [
-			{ command: 'cdk-blocks deploy', description: 'Deploy to production' },
+			{ command: 'npm run deploy', description: 'Deploy to production' },
 			{
-				command: 'cdk-blocks deploy --wait-live=300',
+				command: 'npm run deploy -- --wait-live=300',
 				description: 'Deploy, then wait up to 300s for the new build',
 			},
-			{ command: 'cdk-blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region}' },
-			{ command: 'API_URL=$(cdk-blocks deploy --query apiUrl)', description: 'Print only the API URL, raw' },
+			{ command: 'npm run -s deploy -- --output json', description: 'Print {apiUrl, url, stack, account, region}' },
+			{ command: 'API_URL=$(npm run -s deploy -- --query apiUrl)', description: 'Print only the API URL, raw' },
 		],
 		aws: true,
 		handler: commands.deploy,
@@ -487,8 +481,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Delete the production stack. The target is printed first. In an interactive terminal it\n' +
 			'asks for confirmation; without a terminal it requires --yes and exits 2 otherwise.',
 		examples: [
-			{ command: 'cdk-blocks destroy', description: 'Delete production, after a confirmation' },
-			{ command: 'cdk-blocks destroy --yes', description: 'Delete production without asking (CI)' },
+			{ command: 'npm run destroy', description: 'Delete production, after a confirmation' },
+			{ command: 'npm run destroy -- --yes', description: 'Delete production without asking (CI)' },
 		],
 		aws: true,
 		handler: commands.destroy,
@@ -499,8 +493,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Show the AWS identity, Region and the stacks that commands would affect',
 		description:
 			'Show the AWS identity, the Region, and the sandbox and production stacks that\n' +
-			'"cdk-blocks sandbox" and "cdk-blocks deploy" would affect. Nothing is deployed.\n' +
-			'The identity and Region are the ones "cdk-blocks deploy" uses, with .env.production\n' +
+			'"npm run sandbox" and "npm run deploy" would affect. Nothing is deployed.\n' +
+			'The identity and Region are the ones "npm run deploy" uses, with .env.production\n' +
 			'applied. A warning names the AWS settings that .env.local sets differently\n' +
 			'for the sandbox.',
 		json: {
@@ -512,9 +506,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			stacks: { sandbox: null, production: null },
 		},
 		examples: [
-			{ command: 'cdk-blocks whoami', description: 'Show the deployment target' },
-			{ command: 'cdk-blocks whoami --profile prod --output json', description: 'The same, as JSON' },
-			{ command: 'cdk-blocks whoami --query stacks.production', description: 'Print the production stack name' },
+			{ command: 'npm run whoami', description: 'Show the deployment target' },
+			{ command: 'npm run -s whoami -- --profile prod --output json', description: 'The same, as JSON' },
+			{ command: 'npm run -s whoami -- --query stacks.production', description: 'Print the production stack name' },
 		],
 		aws: true,
 		handler: commands.whoami,
@@ -529,16 +523,16 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'(--profile, --output, …) before a "--". A secret value is never\n' +
 			'accepted on the command line: pipe it with --value-stdin, or omit it to be prompted.\n' +
 			'Flags: --stage <name>, --value-stdin, --region <name>, --prefix <path>, --force, --yes.\n' +
-			'"cdk-blocks secret <set|list|remove> --help" shows the flags of one subcommand.\n' +
+			'"npm run secret <set|list|remove> -- --help" shows the flags of one subcommand.\n' +
 			STAGE_HELP.replace('%STORE%', 'secretStore'),
 		args: [{ name: 'subcommand', description: 'set KEY | list | remove KEY', variadic: true }],
 		passthrough: true,
 		verbs: ['set', 'list', 'remove', 'rm'],
 		examples: [
-			{ command: 'cdk-blocks secret set API_KEY', description: 'Set API_KEY (prompts for the value)' },
-			{ command: 'cat key.txt | cdk-blocks secret set API_KEY --value-stdin', description: 'Set it from stdin' },
+			{ command: 'npm run secret set API_KEY', description: 'Set API_KEY (prompts for the value)' },
+			{ command: 'cat key.txt | npm run -s secret set API_KEY -- --value-stdin', description: 'Set it from stdin' },
 			{
-				command: 'cdk-blocks secret set API_KEY --stage prod',
+				command: 'npm run secret set API_KEY -- --stage prod',
 				description: "only for an app whose Hosting secretStore sets stage: 'prod'",
 			},
 		],
@@ -553,14 +547,14 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Manage non-secret config values. The tokens after "config" are forwarded unchanged, except\n' +
 			'the global options (--profile, --output, …) before a "--"; put a value that starts with "-" after "--".\n' +
 			'Flags: --stage <name>, --value-stdin, --region <name>, --prefix <path>.\n' +
-			'"cdk-blocks config <set|list|remove> --help" shows the flags of one subcommand.\n' +
+			'"npm run config <set|list|remove> -- --help" shows the flags of one subcommand.\n' +
 			STAGE_HELP.replace('%STORE%', 'configStore'),
 		args: [{ name: 'subcommand', description: 'set KEY VALUE | list | remove KEY', variadic: true }],
 		passthrough: true,
 		verbs: ['set', 'list', 'remove', 'rm'],
 		examples: [
-			{ command: 'cdk-blocks config set FEATURE_FLAG on', description: 'Set FEATURE_FLAG' },
-			{ command: 'cdk-blocks config list', description: 'List config values' },
+			{ command: 'npm run config set FEATURE_FLAG on', description: 'Set FEATURE_FLAG' },
+			{ command: 'npm run config list', description: 'List config values' },
 		],
 		aws: true,
 		handler: commands.config,
@@ -580,8 +574,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'disable', type: 'boolean', description: 'Same as "disable"' },
 		],
 		examples: [
-			{ command: 'cdk-blocks telemetry', description: 'Show the telemetry status' },
-			{ command: 'cdk-blocks telemetry disable --global', description: 'Disable telemetry everywhere' },
+			{ command: 'npm run telemetry', description: 'Show the telemetry status' },
+			{ command: 'npm run telemetry disable -- --global', description: 'Disable telemetry everywhere' },
 		],
 		handler: commands.telemetry,
 	},
@@ -607,7 +601,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 					'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
 			},
 		],
-		examples: [{ command: 'cdk-blocks generate client', description: 'Write aws-blocks/client.js' }],
+		examples: [{ command: 'npm run generate-client', description: 'Write aws-blocks/client.js' }],
 		handler: commands.generateClient,
 	},
 	{
@@ -618,7 +612,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'backend', description: 'Backend entry (default: aws-blocks/index.ts)' },
 			{ name: 'output', description: 'Output file (default: blocks.spec.json next to the backend)' },
 		],
-		examples: [{ command: 'cdk-blocks generate spec', description: 'Write aws-blocks/blocks.spec.json' }],
+		examples: [{ command: 'npm run spec', description: 'Write aws-blocks/blocks.spec.json' }],
 		handler: commands.generateSpec,
 	},
 	{
@@ -633,8 +627,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'module', type: 'string', value: 'spec', multiple: true, description: 'Module to augment' },
 		],
 		examples: [
-			{ command: 'cdk-blocks generate types', description: 'Regenerate the key types' },
-			{ command: 'cdk-blocks generate types --check', description: 'Fail when they are stale' },
+			{ command: 'npm run typegen', description: 'Regenerate the key types' },
+			{ command: 'npm run typegen -- --check', description: 'Fail when they are stale' },
 		],
 		handler: commands.generateTypes,
 	},
@@ -647,33 +641,33 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Work with the existing PostgreSQL database of a Database block (DatabaseCluster.fromExisting()):\n' +
 			'connect, migrate, types, status. For a block that provisions its cluster, "types --block <id>" and\n' +
 			'"status --block <id>" work from its migration files and its local database.\n' +
-			'The verb and the tokens after it are forwarded unchanged to the bb-database CLI of\n' +
-			'@aws-blocks/bb-database, except the global options (--profile, --yes, …) before a "--"; --yes and\n' +
-			'--no-input are passed on. For JSON output give the option to the tool: "cdk-blocks db status -- --output json".\n' +
-			'"cdk-blocks db <verb> --help" shows its options.',
+			'The verb and its arguments go to the bb-database CLI of @aws-blocks/bb-database. After npm’s separator,\n' +
+			'global options (--profile, --yes, …) apply before a second "--"; --yes and --no-input are passed on.\n' +
+			'For JSON output give the option to the tool: "npm run -s db -- status -- --output json".\n' +
+			'"npm run db -- <verb> --help" shows its options.',
 		args: [
 			{ name: 'verb', description: 'connect | migrate | types | status', required: true },
-			{ name: 'args', description: 'Forwarded; a relative path is resolved from your directory', variadic: true },
+			{ name: 'args', description: 'Relative paths start at the task’s working directory (or -C)', variadic: true },
 		],
 		passthrough: true,
 		verbs: ['connect', 'migrate', 'types', 'status'],
 		examples: [
 			{
-				command: 'cdk-blocks db connect --ca ./prod-ca-2021.crt',
+				command: 'npm run db -- connect --ca ./prod-ca-2021.crt',
 				description: 'Check the database and store its connection string for local mode',
 			},
 			{
-				command: 'cdk-blocks db connect --stage production --ca ./prod-ca-2021.crt',
+				command: 'npm run db -- connect --stage production --ca ./prod-ca-2021.crt',
 				description: 'The same for the production stage',
 			},
-			{ command: 'cdk-blocks db migrate', description: 'Apply ./migrations to the local database, then write the types' },
-			{ command: 'cdk-blocks db status --stage production', description: 'Show applied and pending migrations' },
+			{ command: 'npm run db migrate', description: 'Apply ./migrations to the local database, then write the types' },
+			{ command: 'npm run db -- status --stage production', description: 'Show applied and pending migrations' },
 			{
-				command: 'cdk-blocks db types --block main',
+				command: 'npm run db -- types --block main',
 				description: 'Write the Kysely types of the block "main" from its migration files',
 			},
 			{
-				command: 'cdk-blocks db migrate --mark-applied 000_baseline.sql',
+				command: 'npm run db -- migrate --mark-applied 000_baseline.sql',
 				description: 'Record a schema dump of the database as applied, without running it',
 			},
 		],
@@ -691,18 +685,18 @@ export const COMMANDS: readonly CommandSpec[] = [
 		],
 		passthrough: true,
 		examples: [
-			{ command: 'cdk-blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' },
+			{ command: 'npm run vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' },
 		],
 		handler: commands.vendorize,
 	},
 	{
 		path: ['migrate'],
 		group: 'Project',
-		summary: 'Move an app from aws-blocks/scripts wrappers to cdk-blocks commands',
+		summary: 'Move an app from generated wrapper scripts to package-manager tasks',
 		description:
-			'Move an app that create-blocks-app scaffolded with aws-blocks/scripts/*.ts wrappers to the cdk-blocks\n' +
-			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
-			'become cdk-blocks aliases ("cdk-blocks deploy"); every other script stays as it is. The options of a\n' +
+			'Move an app from create-blocks-app wrappers (aws-blocks/scripts/*.ts) to package-manager tasks.\n' +
+			'Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
+			'are rewritten; missing framework tasks are added without overwriting custom scripts. The options of a\n' +
 			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
 			'app file other than Markdown docs uses any more are deleted. Only the wrappers of public\n' +
 			'create-blocks-app releases are recognised; any other version is reported as unrecognised and is\n' +
@@ -722,7 +716,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Exit codes:\n' +
 			'  0  fully migrated, or nothing to do\n' +
 			'  1  kept items remain for you to finish by hand (a report, not a crash), or migrate refused and\n' +
-			'     wrote nothing; with --output json a refusal prints {"error": {"message", "hint"}} on stdout\n' +
+			'     wrote nothing; in JSON mode a refusal prints {"error": {"message", "hint"}} on stdout\n' +
 			'     instead of the result (with --query, only the error on stderr), as it does for wrappers it\n' +
 			'     could not delete after rewriting package.json (fix them, then run it again with --force)\n' +
 			'  2  usage error',
@@ -743,11 +737,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null, generateClient: null },
 		},
 		examples: [
-			{ command: 'cdk-blocks migrate --dry-run', description: 'Show what would change' },
-			{ command: 'cdk-blocks migrate', description: 'Rewrite the scripts and delete the generated wrappers' },
+			{ command: 'npm run migrate -- --dry-run', description: 'Show what would change' },
+			{ command: 'npm run migrate', description: 'Rewrite the scripts and delete the generated wrappers' },
 			{
-				command: 'cdk-blocks migrate --output json',
-				description: 'Print {changed, removed, kept, scriptsRewritten, devConfig}',
+				command: 'npm run -s migrate -- --output json',
+				description: 'Print {changed, removed, kept, scriptsRewritten, devConfig} (added scripts have from: null)',
 			},
 		],
 		handler: migrate,
@@ -756,15 +750,15 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ['help'],
 		group: 'Project',
 		summary: 'Show help for a command',
-		args: [{ name: 'command', description: 'For example "sandbox destroy"', variadic: true }],
+		args: [{ name: 'command', description: 'For example "sandbox:destroy"', variadic: true }],
 		examples: [
-			{ command: 'cdk-blocks help sandbox destroy', description: 'Help for "cdk-blocks sandbox destroy"' },
+			{ command: 'npm run sandbox:destroy -- --help', description: 'Help for "npm run sandbox:destroy"' },
 		],
 		handler: commands.help,
 	},
 ];
 
-/** Hidden aliases. They keep the npm-script spellings working and never appear in grouped help. */
+/** Internal aliases accepted by the parser; task names are rendered separately. */
 export const ALIASES: readonly AliasSpec[] = [
 	{ name: ['dev:stop'], target: ['dev', 'stop'] },
 	{ name: ['cleanup'], target: ['dev', 'stop'], args: ['--all'] },

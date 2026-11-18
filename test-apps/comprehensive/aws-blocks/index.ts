@@ -622,7 +622,7 @@ const dbx = new Database(scope, 'dbx');
 // A result schema: the row type derives from this value, and every row is validated against it.
 const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
 // Kysely on `dbx` through the block's dialect: the same typed builder on a `dsql` cluster.
-// `DbxTables` is written by `cdk-blocks db types --block dbx --out aws-blocks/dbx.types.ts`.
+// `DbxTables` is written by `npm run db -- types --block dbx --out aws-blocks/dbx.types.ts`.
 const dbxKysely = new Kysely<DbxTables>({ dialect: new DatabaseDialect(dbx) });
 // `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
 // Both migrations create a table named `items`; dbxb's adds a foreign key, a
@@ -636,7 +636,7 @@ const dbxb = new Database(scope, 'dbxb', { cluster: sharedDsql });
 const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
 const dbxc = new Database(scope, 'dbxc', { cluster: sharedAurora });
 // Kysely on `dbxc` through the block's dialect: the app installs and configures Kysely.
-// `DbxcTables` is written by `cdk-blocks db types --block dbxc --type aurora --out aws-blocks/dbxc.types.ts`.
+// `DbxcTables` is written by `npm run db -- types --block dbxc --type aurora --out aws-blocks/dbxc.types.ts`.
 const dbxcKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(dbxc) });
 const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 

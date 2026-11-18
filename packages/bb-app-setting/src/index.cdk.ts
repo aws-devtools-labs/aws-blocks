@@ -61,7 +61,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
-	 * (e.g. a connection string stored by `cdk-blocks db connect --stage`). The
+	 * (e.g. a connection string stored by `npm run db -- connect --stage`). The
 	 * construct does not create, seed, tag, or delete it — it only grants the app
 	 * **read-only** access (`ssm:GetParameter`, plus `kms:Decrypt` when `secret`)
 	 * and registers the name for config resolution.
