@@ -34,7 +34,7 @@ class CdkBlocksExtensionWiringTest : FunSpec({
             oidc { it.relayTo = "com.probe.app://auth/callback" }
         }
 
-        val task = project.tasks.getByName("blocksCodegen") as CdkBlocksCodegenTask
+        val task = project.tasks.getByName("cdkBlocksCodegen") as CdkBlocksCodegenTask
         task.openRpcFile.get().asFile.name shouldBe "probe.spec.json"
         task.packageName.get() shouldBe "com.probe.gen"
         task.serverOverrides.get() shouldBe mapOf("local" to "http://127.0.0.1:1")
@@ -50,7 +50,7 @@ class CdkBlocksExtensionWiringTest : FunSpec({
         project.extensions.getByType(CdkBlocksExtension::class.java)
             .excludeNativePackages.set(setOf("example-iot-native"))
 
-        val task = project.tasks.getByName("blocksCodegen") as CdkBlocksCodegenTask
+        val task = project.tasks.getByName("cdkBlocksCodegen") as CdkBlocksCodegenTask
         task.excludeNativePackages.get() shouldBe setOf("example-iot-native")
         task.outputDirectory.get().asFile.path shouldEndWith "generated/source/cdk/blocks/commonMain"
     }

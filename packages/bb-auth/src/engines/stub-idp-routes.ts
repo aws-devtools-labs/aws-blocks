@@ -69,6 +69,23 @@ export interface StubIdpHandlers {
 }
 
 /**
+ * Every route of one stub issuer, relative to {@link stubIssuerPath}: construct id suffix, method, path and handler.
+ * The CDK layer claims the same table at synth (`claimAuthRoutes`).
+ */
+export const STUB_IDP_ROUTES: ReadonlyArray<
+	readonly [suffix: string, method: 'GET' | 'POST', path: string, name: keyof StubIdpHandlers]
+> = [
+	['discovery', 'GET', '/.well-known/openid-configuration', 'discovery'],
+	['jwks', 'GET', '/jwks.json', 'jwks'],
+	['authorize', 'GET', '/authorize', 'authorize'],
+	['authorize-submit', 'POST', '/authorize', 'authorizeSubmit'],
+	['token', 'POST', '/token', 'token'],
+	['userinfo', 'GET', '/userinfo', 'userinfo'],
+	['revoke', 'POST', '/revoke', 'revoke'],
+	['logout', 'GET', '/logout', 'logout'],
+];
+
+/**
  * Mount one provider's stub IdP routes on `scope` (the `Auth` instance). The
  * handlers are built by `load()` on the first request and reused; a failed
  * load is not cached, so the next request retries it.
@@ -90,18 +107,8 @@ export function mountStubIdpRoutes(scope: Scope, providerId: string, load: () =>
 	};
 	const base = stubIssuerPath(providerId);
 	const id = (suffix: string) => `auth-idp-${providerId}-${suffix}`;
-	const routes: ReadonlyArray<[suffix: string, method: 'GET' | 'POST', path: string, name: keyof StubIdpHandlers]> = [
-		['discovery', 'GET', '/.well-known/openid-configuration', 'discovery'],
-		['jwks', 'GET', '/jwks.json', 'jwks'],
-		['authorize', 'GET', '/authorize', 'authorize'],
-		['authorize-submit', 'POST', '/authorize', 'authorizeSubmit'],
-		['token', 'POST', '/token', 'token'],
-		['userinfo', 'GET', '/userinfo', 'userinfo'],
-		['revoke', 'POST', '/revoke', 'revoke'],
-		['logout', 'GET', '/logout', 'logout'],
-	];
 	try {
-		for (const [suffix, method, path, name] of routes) {
+		for (const [suffix, method, path, name] of STUB_IDP_ROUTES) {
 			new RawRoute(scope, id(suffix), {
 				method,
 				path: `${base}${path}`,

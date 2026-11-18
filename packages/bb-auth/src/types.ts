@@ -2129,12 +2129,13 @@ export interface OidcProviderConfig {
 /**
  * The `oidc/client` descriptor `getClient()` sends: the block's sign-in
  * routes and the providers a native client can sign in with. The Swift,
- * Kotlin and Dart SDKs hydrate it into their `OidcClient`, typed by `P`.
+ * Kotlin and Dart SDKs hydrate it into their OIDC client, which the
+ * generated clients type by `P`.
  */
 export interface OidcClientDescriptor<P extends string = string> {
 	/** The transferable tag the native SDKs hydrate. */
 	__blocks: 'oidc/client';
-	/** The providers a native client can sign in with here, in declaration order. */
+	/** The providers a native client can sign in with here, in the block's provider order. */
 	providers: P[];
 	/** Each listed provider's authorize parameters, keyed by provider id. */
 	providerConfigs: Record<string, OidcProviderConfig>;
@@ -2152,6 +2153,12 @@ export interface OidcClientDescriptor<P extends string = string> {
 	sessionPath: string;
 	/** `<base>/exchange/refresh`: renews bearer tokens from `{ refreshToken }`. Served only with `allowBearerAuth`. */
 	refreshPath: string;
+	/**
+	 * The name of the session cookie `/exchange` sets for this block (`auth_<fullId>`). A native client that
+	 * signs out locally after a failed sign-out removes only this cookie, so another block's session survives.
+	 * Always sent by this block; optional so a client reading an older backend's descriptor still works.
+	 */
+	sessionCookieName?: string;
 }
 
 /**
@@ -2180,6 +2187,8 @@ export interface OidcClientHandle<P extends string = string> {
 	readonly sessionPath: string;
 	/** See {@link OidcClientDescriptor.refreshPath}. */
 	readonly refreshPath: string;
+	/** See {@link OidcClientDescriptor.sessionCookieName}. */
+	readonly sessionCookieName?: string;
 	/** @internal Transferable serialization. */
 	toJSON(): OidcClientDescriptor<P>;
 }
@@ -3386,7 +3395,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	/**
 	 * The native SDKs' OIDC client: one RPC method, `getClient()`, returning
 	 * the `oidc/client` transferable the Swift, Kotlin and Dart SDKs hydrate
-	 * into an `OidcClient` typed by this block's provider ids.
+	 * into an OIDC client typed by this block's provider ids.
 	 */
 	createOidcApi(): OidcClientApiOf<O>;
 

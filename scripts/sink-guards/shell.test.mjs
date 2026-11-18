@@ -45,7 +45,10 @@ const ALLOWLIST = [
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
 	{ at: 'packages/core/src/hosting.ts:1221', reason: `Hosting buildCommand. ${APP_COMMAND}` },
 	{ at: 'packages/core/src/scripts/dev-server.ts:1276', reason: `Frontend dev command. ${APP_COMMAND}` },
-	{ at: 'packages/core/src/scripts/sandbox.ts:843', reason: `Sandbox dev-server command. ${APP_COMMAND}` },
+	{
+		at: 'packages/core/src/scripts/run-command.ts:89',
+		reason: `spawnShellCommand, whose only caller is the sandbox dev-server command. ${APP_COMMAND}`,
+	},
 	{
 		at: 'packages/core/src/scripts/process-tree.ts:242',
 		reason: 'CIM query of Windows processes: the only interpolated values are pids through Math.trunc into a fixed Get-CimInstance -Filter template, run with -NoProfile -NonInteractive and an argv array.',
