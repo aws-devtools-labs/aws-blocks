@@ -152,7 +152,7 @@ Generated structs, enums and unions conform to `Sendable` when everything they s
 ### After changing the generator (`SwiftCodeGenerator.swift`)
 
 1. `swift test` — runs `SwiftCodeGeneratorTests` (snapshot-style), `HybridArmTests` (substring assertions), `GoldenFileTests`, and `BlocksGeneratedCodeTests`, which compiles the build plugin's output (`BlocksGeneratedMainActorTests` compiles it again under a `MainActor` default isolation).
-2. `bash scripts/compile-fixture-goldens.sh` — compiles every fixture's Swift golden as its own module against `BlocksRuntime` (the golden tests only compare text).
+2. `bash scripts/compile-fixture-goldens.sh` — compiles every fixture's Swift golden as its own module against `BlocksRuntime`, in Swift 6 language mode so a `Sendable` a golden can't keep fails (the golden tests only compare text).
 3. `REGENERATE_FIXTURES=1 swift test --filter GoldenFileTests` when the output changes on purpose, then review the `../codegen-fixtures/*/swift/` diff. Never hand-edit a golden or change an existing `spec.json`.
 4. **Always** run the `cognito-cli-test --shape-test` harness afterwards — substring tests can't catch nested-vs-flat envelope regressions in custom Codable.
 

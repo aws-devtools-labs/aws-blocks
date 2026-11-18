@@ -81,6 +81,15 @@ if bash "$COMPILE" "$AVAIL" > /dev/null 2>&1; then
   fail "Case 5: an API unavailable on macOS 13 should fail"
 fi
 
+# --- Case 5b: a golden compiles in Swift 6 mode, so a Sendable it can't keep fails ---
+SENDABLE="$WORK/sendable"
+golden "$SENDABLE" 01-wrong-sendable 'public final class Box { public var count = 0 }
+public struct Holder: Sendable { public let box: Box }'
+if out="$(bash "$COMPILE" "$SENDABLE" 2>&1)"; then
+  fail "Case 5b: a struct claiming Sendable over a mutable class should fail: $out"
+fi
+case "$out" in *"01-wrong-sendable/swift/Api.swift:2:"*"non-Sendable type 'Box'"*) ;; *) fail "Case 5b: unexpected output: $out" ;; esac
+
 # --- Case 6: no goldens is an error, not a vacuous pass ---
 mkdir -p "$WORK/empty"
 if bash "$COMPILE" "$WORK/empty" > /dev/null 2>&1; then
