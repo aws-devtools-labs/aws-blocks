@@ -2192,6 +2192,28 @@ describe('JSON output', () => {
 		assert.strictEqual(run.stdout, '');
 	});
 
+	it('keeps redirected deploy stdout as JSON by default and preserves the child stream for a text log', async () => {
+		const root = fixtureApp();
+		const piped = {
+			cwd: root,
+			env: AWS_ENV,
+			stdoutIsTTY: false,
+			onSpawn: () => {
+				writeLastDeploy(root, { production: PROD });
+				return { code: 0 };
+			},
+		};
+		const json = await runCli(['deploy'], piped);
+		assert.strictEqual(json.code, 0, json.stderr);
+		assert.strictEqual(JSON.parse(json.stdout).apiUrl, prodUrl);
+		assert.strictEqual(json.spawned[0].stdoutToStderr, true);
+
+		const text = await runCli(['deploy', '--output', 'text'], piped);
+		assert.strictEqual(text.code, 0, text.stderr);
+		assert.strictEqual(text.spawned[0].stdoutToStderr, false);
+		assert.strictEqual(text.stdout, ''); // The parent appends no JSON after the child's completion line.
+	});
+
 	it('sends a real child stdout to stderr when asked', () => {
 		const context = pathToFileURL(fileURLToPath(new URL('./context.js', import.meta.url))).href;
 		const script = [

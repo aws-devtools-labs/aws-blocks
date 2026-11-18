@@ -1070,6 +1070,9 @@ describe('cdk-blocks migrate', () => {
 			},
 		});
 		assert.match(json.stderr, /^Error: the git working tree has uncommitted changes/);
+		const piped = await runCli(['migrate'], { cwd: root, stdoutIsTTY: false });
+		assert.strictEqual(piped.code, 1);
+		assert.deepStrictEqual(JSON.parse(piped.stdout), JSON.parse(json.stdout));
 		assert.deepStrictEqual(snapshot(root), before);
 
 		// --query prints one field of the result; a refusal has none, so stdout stays empty and the error is on stderr.
