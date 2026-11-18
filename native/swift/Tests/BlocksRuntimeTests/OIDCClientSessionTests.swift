@@ -629,27 +629,263 @@ extension OIDCClientTests {
         XCTAssertEqual(events, [])
     }
 
-    func testRestoreWithoutAUserInTheResponseThrowsInvalidDescriptor() async throws {
-        OIDCMockURLProtocol.handler = { request in
-            (okResponse(for: request.url!), Data("{}".utf8))
+    /// A 2xx session response without a usable user, missing or one `OIDCUser` rejects, is no usable
+    /// result: a `TransportError` with status 200, as for a refresh without an access token.
+    func testRestoreWithoutAUsableUserThrowsATransportError() async throws {
+        for body in [#"{}"#, #"{"user":{"username":"alice"}}"#] {
+            OIDCMockURLProtocol.reset()
+            OIDCMockURLProtocol.handler = { request in
+                (okResponse(for: request.url!), Data(body.utf8))
+            }
+            let client = makeClient(session: makeMockSession())
+
+            let events = await states(of: client) {
+                do {
+                    _ = try await client.restore()
+                    XCTFail("Expected TransportError for \(body)")
+                } catch let error as TransportError {
+                    XCTAssertEqual(error.statusCode, 200, body)
+                    XCTAssertTrue(error.message.contains("/auth/session"), error.message)
+                } catch {
+                    XCTFail("Expected TransportError for \(body), got \(error)")
+                }
+            }
+
+            XCTAssertEqual(events, [], body)
         }
-        let client = makeClient(session: makeMockSession())
+    }
+
+    // MARK: - Cancellation
+
+    func testACancelledRestoreThrowsCancellationErrorAndChangesNothing() async throws {
+        let client = makeClient(session: Self.hangingSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
 
         let events = await states(of: client) {
-            do {
-                _ = try await client.restore()
-                XCTFail("Expected invalidDescriptor")
-            } catch let error as TransferableError {
-                guard case .invalidDescriptor(let blocksType, let missingField) = error else {
-                    return XCTFail("Expected invalidDescriptor, got \(error)")
-                }
-                XCTAssertEqual(blocksType, "oidc")
-                XCTAssertEqual(missingField, "user")
-            } catch {
-                XCTFail("Expected TransferableError, got \(error)")
-            }
+            let error = await Self.errorOfACancelledCall { _ = try await client.restore() }
+            XCTAssertTrue(error is CancellationError, "got \(String(describing: error))")
         }
 
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt")
         XCTAssertEqual(events, [])
+        let state = await client.authState
+        XCTAssertEqual(state, .loading)
+    }
+
+    func testACancelledRefreshThrowsCancellationErrorAndKeepsTheTokens() async throws {
+        let client = makeClient(session: Self.hangingSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("access_token"), value: "expired")
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        await store.set(tokenKey("expires_at"), value: "0")
+
+        let events = await states(of: client) {
+            let error = await Self.errorOfACancelledCall { try await client.refresh() }
+            XCTAssertTrue(error is CancellationError, "got \(String(describing: error))")
+        }
+
+        let access = await store.get(tokenKey("access_token"))
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(access, "expired")
+        XCTAssertEqual(refresh, "rt")
+        XCTAssertEqual(events, [])
+    }
+
+    /// Cancelling one caller of a shared refresh leaves the refresh running: the other caller gets its result,
+    /// and the tokens it stores are kept.
+    func testACancelledRefreshCallerLeavesTheSharedRefreshToTheOtherCaller() async throws {
+        let started = DispatchSemaphore(value: 0)
+        let answer = DispatchSemaphore(value: 0)
+        OIDCMockURLProtocol.handler = { request in
+            started.signal()
+            _ = answer.wait(timeout: .now() + 5)
+            let body = ["accessToken": "at2", "refreshToken": "rt2", "expiresIn": 3_600] as [String: Any]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+
+        let cancelled = Task { try await client.refresh() }
+        await Task.detached { started.wait() }.value
+        let shared = Task { try await client.refresh() }
+        // Let the second caller join the in-flight refresh before the first one is cancelled.
+        try await Task.sleep(for: .milliseconds(50))
+        cancelled.cancel()
+        let cancelledResult = await cancelled.result
+        XCTAssertThrowsError(try cancelledResult.get()) { XCTAssertTrue($0 is CancellationError, "got \($0)") }
+
+        answer.signal()
+        try await shared.value
+
+        let access = await store.get(tokenKey("access_token"))
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(access, "at2")
+        XCTAssertEqual(refresh, "rt2")
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "one shared refresh request")
+    }
+
+    /// A session whose requests never answer, and time out after a second so the abandoned request ends.
+    static func hangingSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HangingURLProtocol.self]
+        config.timeoutIntervalForRequest = 1
+        return URLSession(configuration: config)
+    }
+
+    /// Runs `call` in a task, cancels it once its request is in flight, and returns what it threw.
+    static func errorOfACancelledCall(_ call: @escaping @Sendable () async throws -> Void) async -> Error? {
+        let started = DispatchSemaphore(value: 0)
+        HangingURLProtocol.onStart = { started.signal() }
+        defer { HangingURLProtocol.onStart = nil }
+        let task = Task { try await call() }
+        await Task.detached { _ = started.wait(timeout: .now() + 5) }.value
+        task.cancel()
+        do {
+            try await task.value
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    // MARK: - Session writes that overlap
+
+    /// A restore whose 401 is clearing the tokens while a sign-in finishes leaves the sign-in: the
+    /// sign-in's cookie names stay, and the client ends signed in.
+    func testARestoreClearingAfterA401LeavesASignInThatFinishesMeanwhile() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/aws-blocks/auth/session" {
+                return (errorResponse(for: url, status: 401), Data("{}".utf8))
+            }
+            // A cookie-only answer, as with `tokens: false`.
+            let headers = ["Set-Cookie": "auth_main=a1; Path=/; Secure; HttpOnly"]
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)!
+            return (response, try JSONSerialization.data(withJSONObject: ["user": ["userId": "u1", "username": "dave"]]))
+        }
+        BlocksClient.clearCookies()
+        defer { BlocksClient.clearCookies() }
+        let store = HoldingWriteTokenStore()
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
+        let client = try Self.authClient(on: blocksClient)
+        let key = tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange")
+        await store.arm(.delete, key)
+
+        let restore = Task { try await client.restore() }
+        await store.waitUntilHeld()
+        let signIn = Task {
+            try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        await store.release()
+        _ = try await restore.value
+        let user = try await signIn.value
+
+        let state = await client.authState
+        XCTAssertEqual(state, .signedIn(user))
+        let cookieNames = await store.get(tokenKey("session_cookies", exchangePath: "/aws-blocks/auth/exchange"))
+        XCTAssertEqual(cookieNames, "auth_main")
+    }
+
+    /// A sign-out that lands while a refresh is storing its tokens leaves none of them stored.
+    func testASignOutWhileARefreshStoresItsTokensLeavesNone() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let body: [String: Any] = url.path.hasSuffix("/refresh")
+                ? ["accessToken": "at-new", "refreshToken": "rt-new", "expiresIn": 3_600]
+                : [:]
+            return (okResponse(for: url), try JSONSerialization.data(withJSONObject: body))
+        }
+        let store = HoldingWriteTokenStore()
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
+        let client = try Self.authClient(on: blocksClient)
+        let key = { (name: String) in tokenKey(name, exchangePath: "/aws-blocks/auth/exchange") }
+        await store.set(key("refresh_token"), value: "rt")
+        await store.arm(.set, key("access_token"))
+
+        let refresh = Task { try await client.refresh() }
+        await store.waitUntilHeld()
+        let signOut = Task { try await client.signOut() }
+        try await Task.sleep(for: .milliseconds(50))
+        await store.release()
+        try await refresh.value
+        _ = try await signOut.value
+
+        let access = await store.get(key("access_token"))
+        let refreshToken = await store.get(key("refresh_token"))
+        XCTAssertNil(access)
+        XCTAssertNil(refreshToken)
+        let state = await client.authState
+        XCTAssertEqual(state, .signedOut)
+        let token = await client.getAccessToken()
+        XCTAssertNil(token)
+    }
+
+    /// An `expiresIn` too large for epoch milliseconds is stored as expired instead of trapping.
+    func testAnExpiresInTooLargeForMillisecondsReadsAsExpired() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = ["accessToken": "at-new", "expiresIn": 1e300]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "rt")
+
+        try await client.refresh()
+
+        let expiresAt = await store.get(tokenKey("expires_at"))
+        XCTAssertEqual(expiresAt, "0")
+    }
+}
+
+/// Holds the first `set` or `delete` of an armed key, before applying it, until `release()`, so a test can run
+/// another call while that write is suspended.
+private actor HoldingWriteTokenStore: TokenStore {
+    enum Write { case set, delete }
+
+    private var storage: [String: String] = [:]
+    private var armed: (write: Write, key: String)?
+    private var held: CheckedContinuation<Void, Never>?
+    private var arrived = false
+    private var arrivalWaiter: CheckedContinuation<Void, Never>?
+
+    func arm(_ write: Write, _ key: String) {
+        armed = (write, key)
+    }
+
+    func waitUntilHeld() async {
+        if arrived { return }
+        await withCheckedContinuation { arrivalWaiter = $0 }
+    }
+
+    func release() {
+        held?.resume()
+        held = nil
+    }
+
+    func get(_ key: String) async -> String? {
+        storage[key]
+    }
+
+    func set(_ key: String, value: String) async {
+        await holdIfArmed(.set, key)
+        storage[key] = value
+    }
+
+    func delete(_ key: String) async {
+        await holdIfArmed(.delete, key)
+        storage[key] = nil
+    }
+
+    private func holdIfArmed(_ write: Write, _ key: String) async {
+        guard let armed, armed.write == write, armed.key == key else { return }
+        self.armed = nil
+        arrived = true
+        arrivalWaiter?.resume()
+        arrivalWaiter = nil
+        await withCheckedContinuation { held = $0 }
     }
 }

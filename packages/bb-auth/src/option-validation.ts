@@ -388,6 +388,10 @@ const SESSION = {
 	ttlSeconds: 'value',
 	crossDomain: 'boolean',
 	freshAgeSeconds: 'value',
+	accessTokenValiditySeconds: 'value',
+	idTokenValiditySeconds: 'value',
+	refreshTokenValiditySeconds: 'value',
+	refreshTokenRotation: 'boolean',
 } as const satisfies ShapeOf<SessionOptions>;
 
 const REDIRECTS = {
@@ -448,6 +452,7 @@ export const AUTH_OPTIONS_SHAPE = {
 	featurePlan: 'value',
 	email: { object: EMAIL_SENDER },
 	logger: 'value',
+	audit: 'value',
 	codeDelivery: 'value',
 	totpVerification: 'value',
 } as const satisfies ShapeOf<AuthMockOptions>;

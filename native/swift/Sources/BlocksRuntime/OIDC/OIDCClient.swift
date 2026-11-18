@@ -7,6 +7,7 @@
 
 import Foundation
 import CryptoKit
+import os
 
 /// A provider an `OIDCClient` signs in with: the enum generated from the spec's provider names, or
 /// `String` when the spec doesn't name them.
@@ -66,6 +67,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// and applies its result only if it is unchanged, so a late result can't overwrite a sign-in or
     /// sign-out that finished meanwhile.
     private var sessionGeneration = 0
+    /// Whether a sign-in, sign-out, restore or refresh is writing the session (tokens, cookie names and the
+    /// emitted state). The actor is reentrant at every token-store call, so these writes take turns through
+    /// ``withSessionWrites(_:)``: one that checked `sessionGeneration` can't be overtaken while it writes.
+    private var sessionWriting = false
+    private var sessionWriteWaiters: [CheckedContinuation<Void, Never>] = []
     private var subscribers: [UUID: AsyncStream<OIDCAuthState>.Continuation] = [:]
 
     /// The current auth state: the state most recently emitted to `authStateChanges()` subscribers, or `.loading`
@@ -202,6 +208,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// Sign in using the server-relay flow.
     /// The server signs the state envelope and the IdP redirects to the
     /// server's callback, which then 302s to the app's `relayTo` scheme.
+    ///
+    /// `launcher` opens the IdP and returns that redirect. On iOS and macOS,
+    /// ``WebAuthenticationSessionLauncher`` opens it in `ASWebAuthenticationSession`, and
+    /// ``signIn(provider:relayTo:)`` signs in with one at its defaults.
     public func signIn(
         provider: Provider,
         relayTo: String,
@@ -372,51 +382,77 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             throw OIDCError.malformedExchangeResponse
         }
 
-        sessionGeneration += 1
-        // The cookies this block's exchange set: a failed sign-out removes only these when the
-        // descriptor names no `sessionCookieName`.
-        if !cookieNames.isEmpty {
-            await storeToken(Self.sessionCookiesKey, cookieNames.joined(separator: ","))
-        }
-        if let accessToken = json["accessToken"] as? String {
-            await storeToken("access_token", accessToken)
-            if let refreshToken = json["refreshToken"] as? String {
-                await storeToken("refresh_token", refreshToken)
+        return try await withSessionWrites {
+            sessionGeneration += 1
+            // The cookies this block's exchange set: a failed sign-out removes only these when the
+            // descriptor names no `sessionCookieName`.
+            if !cookieNames.isEmpty {
+                await storeToken(Self.sessionCookiesKey, cookieNames.joined(separator: ","))
             }
-            await storeToken("expires_at", Self.expiresAt(json))
-            await storeToken("provider", provider)
-        }
+            if let accessToken = json["accessToken"] as? String {
+                await storeToken("access_token", accessToken)
+                if let refreshToken = json["refreshToken"] as? String {
+                    await storeToken("refresh_token", refreshToken)
+                }
+                await storeToken("expires_at", Self.expiresAt(json))
+                await storeToken("provider", provider)
+            }
 
-        let user = try OIDCUser.fromJSON(userJSON)
-        emit(.signedIn(user))
-        return user
+            let user = try OIDCUser.fromJSON(userJSON)
+            emit(.signedIn(user))
+            return user
+        }
     }
 
     // MARK: - Token refresh
 
+    /// Refreshes the bearer tokens. With no refresh token stored, as after a cookie-session sign-in, it sends no
+    /// request and leaves the state alone: the cookie session is ``restore()``'s to read. Concurrent callers
+    /// share one in-flight refresh. A caller whose task is
+    /// cancelled throws `CancellationError` at once and leaves the shared refresh running, so other callers
+    /// still get its result and whatever it stores is kept.
     public func refresh() async throws {
-        // Dedupe concurrent refresh requests — only one network call in flight.
+        // Dedupe concurrent refresh requests: only one network call in flight.
+        let task: Task<Void, Error>
         if let existing = inflightRefresh {
-            try await existing.value
-            return
+            task = existing
+        } else {
+            // Isolated to this actor, so it can't start before `inflightRefresh` is set, and it clears
+            // `inflightRefresh` itself: a cancelled caller that started it doesn't end it.
+            task = Task<Void, Error> {
+                defer { self.inflightRefresh = nil }
+                try await self.performRefresh()
+            }
+            inflightRefresh = task
         }
-        let task = Task<Void, Error> { try await self.performRefresh() }
-        inflightRefresh = task
-        defer { inflightRefresh = nil }
-        try await task.value
+        try await Self.result(of: task)
     }
 
-    /// Refreshes the bearer tokens. Only a refusal from the refresh route (an `ApiError` with status 400 or 401)
+    /// Waits for `task`, but throws `CancellationError` as soon as the calling task is cancelled, without
+    /// cancelling `task`.
+    private static func result(of task: Task<Void, Error>) async throws {
+        let waiter = CancellableWaiter()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiter.start(continuation)
+                Task { waiter.finish(await task.result) }
+            }
+        } onCancel: {
+            waiter.finish(.failure(CancellationError()))
+        }
+    }
+
+    /// Refreshes the bearer tokens. With no refresh token stored, as for a cookie session, it sends no request
+    /// and changes nothing. Only a refusal from the refresh route (an `ApiError` with status 400 or 401)
     /// ends the session: it clears the stored tokens and emits `.signedOut`. Any other failure (a
     /// `TransportError` when offline or for a response without an access token, another `ApiError`, a
     /// `CancellationError`, a `ClientClosedError`) is thrown and leaves the tokens and the state as they were.
     /// A result that a sign-in or sign-out on this client overtook while it was in flight is ignored.
     private func performRefresh() async throws {
         let generation = sessionGeneration
-        guard let refreshToken = await storedToken("refresh_token") else {
-            if generation == sessionGeneration { emit(.signedOut) }
-            return
-        }
+        // A cookie session stores no refresh token (the exchange asks for none): nothing to refresh, and
+        // the cookie may still be valid, so the state stays as it is. `restore()` reads the cookie session.
+        guard let refreshToken = await storedToken("refresh_token") else { return }
 
         let json: [String: Any]
         do {
@@ -425,9 +461,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             if let provider = await storedToken("provider") { body["provider"] = provider }
             json = try await client.postRawRoute(path: refreshPath, body: body)
         } catch let error as ApiError where error.status == 400 || error.status == 401 {
-            guard generation == sessionGeneration else { return }
-            await clearTokens()
-            emit(.signedOut)
+            await withSessionWrites {
+                guard generation == sessionGeneration else { return }
+                await clearTokens()
+                emit(.signedOut)
+            }
             return
         }
         guard generation == sessionGeneration else { return }
@@ -437,10 +475,13 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             throw TransportError(message: "Response from \(refreshPath) has no accessToken", statusCode: 200)
         }
 
-        await storeToken("access_token", accessToken)
-        await storeToken("expires_at", Self.expiresAt(json))
-        if let newRefresh = json["refreshToken"] as? String {
-            await storeToken("refresh_token", newRefresh)
+        await withSessionWrites {
+            guard generation == sessionGeneration else { return }
+            await storeToken("access_token", accessToken)
+            await storeToken("expires_at", Self.expiresAt(json))
+            if let newRefresh = json["refreshToken"] as? String {
+                await storeToken("refresh_token", newRefresh)
+            }
         }
     }
 
@@ -452,8 +493,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// cookie; it doesn't revoke bearer tokens, so the stored ones are only cleared locally.
     ///
     /// - Returns: The identity provider's logout URL, or `nil` when it has none, after emitting
-    ///   `.signedOut`. The client doesn't open it: open it with your launcher to end the provider's
-    ///   own session, so the next sign-in asks which account to use.
+    ///   `.signedOut`. The client doesn't open it: open it in the browser, such as with
+    ///   `UIApplication.shared.open`, to end the provider's own session, so the next sign-in asks which
+    ///   account to use. Not in a sign-in sheet: the provider's logout redirects to the backend's
+    ///   post-sign-out page, never to `relayTo`, so a `WebAuthenticationSessionLauncher` sheet would stay
+    ///   open until the user closes it and end in `OIDCError.cancelled`.
     /// - Throws: Any failure, after signing out locally: the stored tokens are cleared and `.signedOut`
     ///   is emitted first. That covers an `ApiError` named `SignOutIncompleteException` (HTTP 503),
     ///   when the server cleared the cookie but could not remove its session, and every other failure
@@ -477,17 +521,21 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         } catch {
             // The server didn't end the session (or, for `SignOutIncompleteException`, only cleared the
             // cookie), so sign out locally: this block's tokens and session cookie go, then the error.
-            sessionGeneration += 1
-            if !Self.isSignOutIncomplete(error) {
-                await removeSessionCookies()
+            await withSessionWrites {
+                sessionGeneration += 1
+                if !Self.isSignOutIncomplete(error) {
+                    await removeSessionCookies()
+                }
+                await clearTokens()
+                emit(.signedOut)
             }
-            await clearTokens()
-            emit(.signedOut)
             throw error
         }
-        sessionGeneration += 1
-        await clearTokens()
-        emit(.signedOut)
+        await withSessionWrites {
+            sessionGeneration += 1
+            await clearTokens()
+            emit(.signedOut)
+        }
         return (json["logoutUrl"] as? String).flatMap { URL(string: $0) }
     }
 
@@ -523,9 +571,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     ///   (or `nil`) is returned.
     /// - Throws: `ApiError` with `status` 404 when the backend serves no session route: an `Auth` block
     ///   without federated providers, or a custom block that doesn't serve `sessionPath`.
-    ///   `TransferableError.invalidDescriptor` when the response has no `user`. Any other failure,
-    ///   including a `TransportError` or `ClientClosedError`, is thrown and leaves the state and stored
-    ///   tokens as they were.
+    ///   `TransportError` with `statusCode` 200 when the response has no `user`, or one without a
+    ///   `userId` or `username`. Any other failure, including a `TransportError` or `ClientClosedError`,
+    ///   is thrown and leaves the state and stored tokens as they were.
     @discardableResult
     public func restore() async throws -> OIDCUser? {
         let generation = sessionGeneration
@@ -539,10 +587,12 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         do {
             json = try await client.getRawRoute(path: sessionPath, headers: headers)
         } catch let error as ApiError where error.status == 401 {
-            guard generation == sessionGeneration else { return currentUser }
-            await clearTokens()
-            emit(.signedOut)
-            return nil
+            return await withSessionWrites {
+                guard generation == sessionGeneration else { return currentUser }
+                await clearTokens()
+                emit(.signedOut)
+                return nil
+            }
         } catch let error as ApiError where error.status == 404 {
             throw ApiError(
                 message: "\(sessionPath) answered HTTP 404: the backend serves no session route at that path. "
@@ -552,10 +602,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
                 name: error.name
             )
         }
-        guard let userJSON = json["user"] as? [String: Any] else {
-            throw TransferableError.invalidDescriptor(blocksType: "oidc", missingField: "user")
+        // No usable result, as for a refresh without an access token.
+        guard let userJSON = json["user"] as? [String: Any], let user = try? OIDCUser.fromJSON(userJSON) else {
+            throw TransportError(message: "Response from \(sessionPath) has no usable user", statusCode: 200)
         }
-        let user = try OIDCUser.fromJSON(userJSON)
         guard generation == sessionGeneration else { return currentUser }
         emit(.signedIn(user))
         return user
@@ -565,6 +615,26 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private var currentUser: OIDCUser? {
         if case .signedIn(let user) = authState { return user }
         return nil
+    }
+
+    /// Runs `body` once no other session write is running, then lets the next one in, in arrival order.
+    /// Every write that bumps or checks `sessionGeneration` and then awaits the token store goes through
+    /// here, so its check still holds when it emits.
+    private func withSessionWrites<T>(_ body: () async throws -> T) async rethrows -> T {
+        if sessionWriting {
+            // Handed the turn by the writer before it: `sessionWriting` stays true.
+            await withCheckedContinuation { sessionWriteWaiters.append($0) }
+        } else {
+            sessionWriting = true
+        }
+        defer {
+            if sessionWriteWaiters.isEmpty {
+                sessionWriting = false
+            } else {
+                sessionWriteWaiters.removeFirst().resume()
+            }
+        }
+        return try await body()
     }
 
     // MARK: - AuthProvider
@@ -711,7 +781,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private static func expiresAt(_ json: [String: Any]) -> String {
         if let seconds = json["expiresIn"] as? NSNumber {
             let nowMs = Int64(Date().timeIntervalSince1970 * 1_000)
-            return String(nowMs + Int64(seconds.doubleValue * 1_000))
+            // An `expiresIn` too large (or not finite) for epoch milliseconds would trap, so it reads as
+            // expired instead.
+            guard let lifetimeMs = Int64(exactly: (seconds.doubleValue * 1_000).rounded()) else { return "0" }
+            let (expiresAt, overflow) = nowMs.addingReportingOverflow(lifetimeMs)
+            return overflow ? "0" : String(expiresAt)
         }
         if let number = json["expiresAt"] as? NSNumber { return number.stringValue }
         if let str = json["expiresAt"] as? String { return str }
@@ -787,9 +861,11 @@ public enum OIDCError: BlocksError {
     case stateMismatch
     case missingAuthorizationCode
     case malformedExchangeResponse
-    /// The sign-in callback failed: the IdP reported an error, or the authorize parameters could not
-    /// be fetched. When a request failed, its `ApiError` or `TransportError` is the cause, so the
-    /// app can tell a retry-later failure from a misconfigured one.
+    /// The sign-in callback failed: the IdP reported an error, the authorize parameters could not
+    /// be fetched, or the browser launcher could not open or finish the sign-in. When a request failed,
+    /// its `ApiError` or `TransportError` is the cause, so the app can tell a retry-later failure from
+    /// a misconfigured one. When `ASWebAuthenticationSession` reported an error, that error is the
+    /// cause; a launcher's own refusal, such as a relayTo without a custom scheme, has none.
     case callbackError(String, Error?)
     /// The code exchange was rejected. The server's error is the cause.
     case exchangeFailed(String, Error?)
@@ -837,5 +913,44 @@ extension Data {
             base64 += String(repeating: "=", count: 4 - remainder)
         }
         self.init(base64Encoded: base64)
+    }
+}
+
+/// Resumes one continuation once: with the awaited task's result, or with `CancellationError` when the
+/// waiting caller is cancelled first, even before the continuation exists.
+private final class CancellableWaiter: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<Void, Error>?
+        var outcome: Result<Void, Error>?
+        var resumed = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func start(_ continuation: CheckedContinuation<Void, Error>) {
+        let outcome: Result<Void, Error>? = state.withLock { state in
+            guard !state.resumed else { return nil }
+            if let outcome = state.outcome {
+                state.resumed = true
+                return outcome
+            }
+            state.continuation = continuation
+            return nil
+        }
+        if let outcome { continuation.resume(with: outcome) }
+    }
+
+    func finish(_ outcome: Result<Void, Error>) {
+        let continuation: CheckedContinuation<Void, Error>? = state.withLock { state in
+            guard !state.resumed, state.outcome == nil else { return nil }
+            guard let continuation = state.continuation else {
+                state.outcome = outcome
+                return nil
+            }
+            state.resumed = true
+            state.continuation = nil
+            return continuation
+        }
+        continuation?.resume(with: outcome)
     }
 }

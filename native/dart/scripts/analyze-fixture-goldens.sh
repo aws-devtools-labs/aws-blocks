@@ -5,7 +5,10 @@
 #
 # Usage: analyze-fixture-goldens.sh [FIXTURES_DIR]
 #   FIXTURES_DIR  defaults to native/codegen-fixtures. Each `*/dart/client.dart`
-#                 under it is analyzed.
+#                 under it is analyzed. A fixture whose Dart golden is
+#                 `dart/codegen-error.txt` (a spec the generator refuses) has
+#                 no client to analyze and is skipped; one with both files
+#                 fails the run.
 #   DART          the dart executable (default: dart).
 #
 # The goldens are copied into a scratch package that depends on the in-repo
@@ -48,6 +51,16 @@ dev_dependencies:
   lints: ^6.0.0
 YAML
 cp "$DART_DIR/analysis_options.yaml" "$WORK/analysis_options.yaml"
+
+refused=0
+for error_golden in "$FIXTURES_DIR"/*/dart/codegen-error.txt; do
+  [ -f "$error_golden" ] || continue
+  if [ -f "$(dirname "$error_golden")/client.dart" ]; then
+    echo "error: $(dirname "$error_golden") has both client.dart and codegen-error.txt" >&2
+    exit 1
+  fi
+  refused=$((refused + 1))
+done
 
 count=0
 for golden in "$FIXTURES_DIR"/*/dart/client.dart; do
@@ -97,3 +110,6 @@ if [ -n "$errors" ]; then
 fi
 
 echo "OK: $count Dart fixture golden(s) analyze with 0 errors (warnings and lints are advisory)"
+if [ "$refused" -gt 0 ]; then
+  echo "Skipped $refused fixture(s) whose Dart golden is an expected codegen-error.txt"
+fi

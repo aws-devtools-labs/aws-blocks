@@ -7,7 +7,10 @@ fix(swift): `OIDCClient.signOut()` returns the identity provider's logout URL an
 **Source-breaking (pre-1.0):** `signOut()` is now `@discardableResult func signOut() async throws -> URL?`.
 Call it with `try`. It POSTs `<signOutPath>?format=json` and returns the provider's logout URL, or
 `nil` when there is none, or when a custom block's route answers with an empty 2xx body. Open that
-URL with your launcher to end the provider's own session; the client doesn't open it. When the server cleared the cookie but could not remove its session, it
+URL in the browser, such as with `UIApplication.shared.open`, to end the provider's own session; the
+client doesn't open it. Don't open it in a sign-in sheet: the provider's logout redirects to the
+backend's post-sign-out page, never to `relayTo`, so a `WebAuthenticationSessionLauncher` sheet stays
+open until the user closes it and ends in `OIDCError.cancelled`. When the server cleared the cookie but could not remove its session, it
 signs out locally and throws an `ApiError` named `SignOutIncompleteException` (HTTP 503). Any
 other failure (a `TransportError`, a `CancellationError`, an `ApiError` with another status) also
 signs out locally before it throws: the client clears the block's stored tokens, removes the

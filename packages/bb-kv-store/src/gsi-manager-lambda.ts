@@ -78,15 +78,16 @@ const UPDATE_CLEANUP = new Set(['UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_R
 /**
  * Decide whether a Delete must leave the table's indexes in place.
  *
- * CloudFormation sends the same Delete when `indexes` is removed from the
- * config (drop them: the table stays in the stack) and when the table itself
- * leaves the stack (keep them: a RETAIN table is orphaned with its data). In
- * the cleanup phase of an update or update rollback the stack's current
- * template tells the two apart: it still has the table only when the table
- * stays. A failure to read the stack status keeps the indexes, the
- * non-destructive choice. A failure to read the template in an update cleanup
- * keeps them too but throws, so the Delete is reported as failed instead of
- * silently leaving indexes the config no longer has.
+ * CloudFormation sends the same Delete in two cases. In the first, `indexes` is
+ * removed from the config: drop the indexes, because the table stays in the
+ * stack. In the second, the table itself leaves the stack: keep the indexes,
+ * because a RETAIN table stays in the account with its data. In the cleanup
+ * phase of an update or update rollback the stack's current template tells the
+ * two apart: it still has the table only when the table stays. A failure to read
+ * the stack status keeps the indexes, the non-destructive choice. A failure to
+ * read the template in an update cleanup keeps them too but throws. The Delete
+ * is then reported as failed, and indexes that the config no longer has are not
+ * left behind with no error.
  */
 async function deleteKeepsIndexes(
 	stackId: string | undefined,

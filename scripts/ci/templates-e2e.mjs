@@ -209,6 +209,25 @@ async function main() {
 			continue;
 		}
 
+		if (template === 'default') {
+			console.log('\n--- Testing docs tasks on an upgraded app ---');
+			const manifest = join(app, 'package.json');
+			const pkg = JSON.parse(readFileSync(manifest, 'utf-8'));
+			for (const task of ['docs', 'docs:search', 'docs:api', 'migrate']) delete pkg.scripts[task];
+			writeFileSync(manifest, JSON.stringify(pkg, null, 2) + '\n');
+			const bootstrap = ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--'];
+			if (
+				!run(process.execPath, [...bootstrap, 'migrate', '--force'], { ...inApp, shell: false }) ||
+				!run('npm', ['run', '-s', 'migrate', '--', '--dry-run'], inApp) ||
+				!run('npm', ['run', '-s', 'docs', 'KVStore'], inApp) ||
+				!run('npm', ['run', '-s', 'docs:search', 'ConditionalCheckFailed'], inApp) ||
+				!run('npm', ['run', '-s', 'docs:api', 'KVStore'], inApp)
+			) {
+				failed.push(`${template} (docs upgrade)`);
+				continue;
+			}
+		}
+
 		console.log('\n--- Running e2e tests ---');
 		if (!run('npm', ['run', 'test:e2e'], inApp)) {
 			console.error(`  FAIL: e2e tests failed for template ${template}`);
@@ -216,7 +235,7 @@ async function main() {
 			continue;
 		}
 
-		console.log('\n--- Testing vendorize bin ---');
+		console.log('\n--- Testing vendorize task ---');
 		if (!run('npm', ['run', 'vendorize', '--', '@aws-blocks/bb-kv-store'], inApp)) {
 			console.error(`  FAIL: vendorize failed for template ${template}`);
 			failed.push(template);
@@ -230,7 +249,7 @@ async function main() {
 			failed.push(template);
 			continue;
 		}
-		// Windows only: the user's `cdk-blocks dev` → edit → `dev stop` session, which `test:e2e`'s
+		// Windows only: the user's `npm run dev` → edit → `npm run dev:stop` session, which `test:e2e`'s
 		// `taskkill /T` teardown does not exercise (see windows-dev-lifecycle.mjs).
 		if (isWin && template === 'default') {
 			try {

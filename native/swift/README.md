@@ -44,20 +44,22 @@ import BlocksRuntime
 let blocks = Blocks()
 
 // Sign in
-let state = try await blocks.authApi.setAuthState(input: .signIn(AuthApi.SetAuthState.SignIn(
+let state = try await blocks.authApi.setAuthState(input: .signIn(.init(
     password: "P@ss1",
     username: "alice"
 )))
 
 // Open-shape sign-up with custom attributes, sent flat beside username and password
-_ = try await blocks.authApi.setAuthState(input: .signUp(AuthApi.SetAuthState.SignUp(
+_ = try await blocks.authApi.setAuthState(input: .signUp(.init(
     password: "P@ss1",
     username: "alice",
     attributes: ["email": "alice@example.com", "custom:department": "platform"]
 )))
 ```
 
-`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `session:` a `URLSession` you own. A signed-in session is a cookie the runtime keeps in the Keychain, so it survives app restarts with no setup. `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there.
+The input is the shared `AuthActionInput` (`AuthActionInput.SignIn`) when the backend's spec names the input type (the `x-blocks-type-name` hint from #1599), and `AuthApi.SetAuthState.Input` against an older backend; `.signIn(.init(…))` compiles with either.
+
+`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `session:` a `URLSession` you own. A signed-in session is a cookie the runtime keeps in the Keychain, so it survives app restarts with no setup. `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there. An `OIDCClient` sign-in asks for no bearer tokens (`tokens: false`), so its `getAccessToken()` returns `nil` afterwards: requests carry the session cookie.
 
 Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a `View` initializer or a `@State` default. Each `blocks.<namespace>` is a stored, `Sendable` wrapper over the same client. `close()` makes later calls throw `ClientClosedError`, lets calls in flight finish, then releases the instance's `URLSession`; an instance that is never closed releases it once nothing references it. That session carries RPC and OIDC calls; realtime channels and file transfers use a shared one and keep working. Generated types are `nonisolated`, so they behave the same under Xcode's default `MainActor` isolation: create, call and close `Blocks` from any actor or task. A file that imports two generated modules names the one it means: `FeatureA.Blocks()`.
 
@@ -75,7 +77,7 @@ export const oidcAuthApi = auth.createOidcApi();
 
 Build the sign-in screen from two sources:
 
-- **Federated sign-in buttons come from the client.** Render one button per provider in `oidc.providers`, typed with the generated `Provider` enum, and have it call `oidc.signIn(provider:relayTo:launcher:)`, then `getAuthState()`. Don't render the state's `signIn:<id>` actions as buttons: their `url` signs the system browser in, not the app.
+- **Federated sign-in buttons come from the client.** Render one button per provider in `oidc.providers`, typed with the generated `Provider` enum, and have it call `oidc.signIn(provider:relayTo:)`, which opens the system's sign-in sheet (see [OIDC sign-in](#oidc-sign-in)), then `getAuthState()`. Don't render the state's `signIn:<id>` actions as buttons: their `url` signs the system browser in, not the app.
 - **Everything else comes from the state machine:** whether the user is signed in, password sign-in, sign-up, MFA steps, and which actions are `unavailable`. Run those actions through `setAuthState(input:)`.
 
 One action carries a `url` the app still handles itself: `signOut` with a `url`, a federated user's sign-out. Call `oidc.signOut()`, then `getAuthState()`. Never submit this one through `setAuthState`: that ends the session but drops the provider's logout URL. A `signOut` without a `url` goes through `setAuthState` like any other action.
@@ -83,7 +85,7 @@ One action carries a `url` the app still handles itself: `signOut` with a `url`,
 ```swift
 let blocks = Blocks()
 let oidc = try await blocks.oidcAuthApi.getClient()
-// Your app's Universal Link or custom scheme, listed in the backend's `redirects.allowedRelayOrigins`.
+// Your app's custom URL scheme, listed in the backend's `redirects.allowedRelayOrigins`.
 let relayTo = "myapp://auth"
 
 // On launch: the state reflects the session the Keychain cookie still holds.
@@ -93,7 +95,7 @@ var state = try await blocks.authApi.getAuthState()
 let providers = oidc.providers.compactMap(OidcAuthApi.GetClient.Provider.init(rawValue:))
 
 func signIn(with provider: OidcAuthApi.GetClient.Provider) async throws -> AuthState {
-    _ = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+    _ = try await oidc.signIn(provider: provider, relayTo: relayTo)
     return try await blocks.authApi.getAuthState()
 }
 
@@ -113,13 +115,11 @@ func run(_ action: AuthAction, _ input: AuthApi.SetAuthState.Input?) async throw
 }
 ```
 
-`launcher` is a `BrowserLauncher`, usually one that wraps `ASWebAuthenticationSession` with `relayTo`'s scheme as the callback scheme. Have it throw `OIDCError.cancelled` when the user closes the sheet, so the app can tell a dismissal from a failed sign-in.
-
-Prefer a verified Universal Link (an `https` URL on a domain your app has an associated domain for) as `relayTo` over a bare custom scheme such as `myapp://auth`. Any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE is what keeps that case safe: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A Universal Link opens only your app, so the code doesn't reach another app at all. Its launcher must accept an `https` callback, for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
+[OIDC sign-in](#oidc-sign-in) covers `relayTo`, the sheet's options, its errors, and passing a launcher of your own.
 
 - **On launch.** Call `getAuthState()`: it works for every `Auth` block and its `user` is the signed-in user. `oidc.restore()` returns the same user and also sets the client's `authState` and emits `.signedIn` or `.signedOut` on `authStateChanges()`, but only a block with federated providers serves its session route; on any other block it throws an `ApiError` with `status` 404.
 - **Unavailable actions.** An action that carries `unavailable` can't run in the current state. Show it disabled, with that text as the reason.
-- **Logout URL.** `signOut()` returns the identity provider's logout URL when it has one. Open it to end the provider's own session; otherwise the next sign-in can pick the same account without asking.
+- **Logout URL.** `signOut()` returns the identity provider's logout URL when it has one. Open it with `UIApplication.shared.open` to end the provider's own session; otherwise the next sign-in can pick the same account without asking. Don't open it in a sign-in sheet: the logout redirects to the backend's post-sign-out page, never to `relayTo`, so the sheet stays open until the user closes it.
 - **Passkeys.** Hide actions whose `capability` is set (`webauthn-get`, `webauthn-create`): they need platform WebAuthn APIs the runtime doesn't call yet.
 - **New actions.** The block can add actions in a later release, so keep a `default` branch when you switch over action names.
 - **One client per block.** Fetch each block's client once with `getClient()` and keep it for the app's lifetime. Its `authState`, `authStateChanges()` and its guard against a stale `restore()` belong to that client, so a second client for the same block doesn't see the first one's sign-in.
@@ -134,13 +134,34 @@ Prefer a verified Universal Link (an `https` URL on a domain your app has an ass
 - **Hybrid discriminated arms.** Regrouped `oneOf` arms (e.g. Cognito's seven `confirmSignIn` challenge shapes) render as one named struct with an embedded discriminated union — both halves flatten into a single JSON envelope.
 - **Schema constraints emit runtime validation.** `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `multipleOf`, `minItems`, `maxItems` all generate `precondition` checks at construct time.
 - **`const` literals** are first-class single-value enums. A literal keeps its JSON type: a boolean discriminator (`{ isUpdated: true } | { isUpdated: false, … }`) encodes and decodes a JSON boolean, a numeric one a number. Outside a discriminator, a boolean or numeric literal is a `Bool`, `Double` or `Int`. A union alternative that is one literal (TypeScript's `"auto" | number` or `false | { … }`) is a case with no payload that encodes as that value and matches only it.
+- **Schema-qualified names.** An enum or union declared for a component schema's property is named after the schema and the property (`AuthAction.capability` → `AuthActionCapability`, `Order.status` → `OrderStatus`), as on Dart, so it doesn't take a generic name like `Status` or `Kind` that your app declares too. The prefix is always added (`User.userType` → `UserUserType`), and an enum or union on a discriminated variant's field is named after the variant and its union (`Notification.payload`'s `email` arm's `priority` → `EmailNotificationPayloadPriority`), also as on Dart.
+- **One input type for every Auth block.** A union parameter the spec names (`x-blocks-type-name`, which the backend writes for a TypeScript type alias like the `Auth` block's `AuthActionInput`) is declared once at the top level, with its variants nested inside it (`AuthActionInput.SignIn`). Every namespace whose parameter has that shape takes the same type, so one sign-in screen serves two Auth blocks: `try await blocks.authApi.setAuthState(input: input)` and `try await blocks.adminAuthApi.setAuthState(input: input)`. The names each operation declared before (`AuthApi.SetAuthState.Input`, `AuthApi.SetAuthState.SignIn`) stay as deprecated typealiases. A parameter whose name another type already has or whose shape differs from the first one's keeps its own nested `Input`, and codegen prints a `swift:` warning that names it. So does, without a warning, one whose union has an arm that isn't a discriminated object (that arm's case is named after the union, `to_Variant2`), or whose operation declares another type of that name (`figure: { label }` beside `input: Figure`).
+- **`Sendable` models.** Generated structs, enums and unions are `Sendable` when everything they store is, so a Swift 6 actor can keep or return an `AuthState`. A type that stores a `RealtimeChannel` isn't `Sendable`, and neither is a type that stores one of those.
 - **Default values** from the spec become Swift initializer defaults.
-- **Public initializers.** Every generated struct has a `public init` with its properties in declaration order; optional and nullable properties default to `nil`. You can construct models and operation inputs from another module, a test target or a SwiftUI preview: `Note(id: "n1", title: "Hello")`.
+- **Public initializers.** Every generated struct has a `public init` with its properties sorted by name (`SignIn(password:username:)`, `AuthUser(displayName:userId:username:)`), not in the order the backend declares them, then an open record's `attributes:` or a hybrid arm's `challenge:`; optional and nullable properties default to `nil`. Dart and Kotlin keep declaration order; Swift keeps sorted labels so code written against earlier releases still compiles. You can construct models and operation inputs from another module, a test target or a SwiftUI preview: `Note(id: "n1", title: "Hello")`.
 - **Transferables anywhere.** A realtime channel, a file handle or an OIDC client can sit in any of your types, at any depth (a property, an array, a dictionary, an optional). `RealtimeChannel`, `FileDownloadHandle`, `FileUploadHandle` and `OIDCClient` are `Codable`: they decode from the server's `{ "__blocks": … }` descriptor. They are read-only, so encoding one throws `EncodingError.invalidValue`. An `OIDCClient` needs the `BlocksClient` that fetched it, so decode a type holding one with `client.makeDecoder()`; generated operations do this for you. A union alternative that is a transferable (`RealtimeChannel<Note> | { error: string }`) carries it: `case result_Variant0(RealtimeChannel<Note>)`.
+- **Transferables are results only.** The server hands a transferable out and never reads one back, so codegen fails on an operation that takes one as a parameter (directly, optional, nullable, or in an array or a dictionary) with the Kotlin generator's error: `Transferable types (realtime/channel) cannot be serialized — they are read-only`. A model or union that holds one still generates, but passing such a model as a parameter throws `EncodingError.invalidValue` when the call is encoded, as it does on Kotlin and Dart.
 - **Schema-ref reuse.** A `oneOf` variant referencing a component schema reuses that named type instead of inventing a duplicate struct.
 - **Unbound transferables.** A direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of a raw `Data?` that did not type-check. Only bare direct results are covered.
 - **Declared native packages.** When `x-blocks-native-bindings` binds the tag and its package has a `swift` field, generated source imports the declared module and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
-- **Typed OIDC providers.** `OIDCClient` is generic over the providers it signs in with. When the spec names an OIDC client's providers, the method's namespace gets a `CaseIterable` `Provider` enum and `getClient()` returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, so `let user = try await client.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)` accepts only that client's own providers. An untyped spec returns `OIDCClient<String>`, whose `signIn` takes a `String`. When the method's own types already use the name `Provider`, the enum is `ResultProvider` and codegen prints a `swift:` warning that names it.
+- **Typed OIDC providers.** `OIDCClient` is generic over the providers it signs in with. When the spec names an OIDC client's providers, the method's namespace gets a `CaseIterable` `Provider` enum and `getClient()` returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, so `let user = try await client.signIn(provider: .google, relayTo: "myapp://auth")` accepts only that client's own providers. An untyped spec returns `OIDCClient<String>`, whose `signIn` takes a `String`. When the method's own types already use the name `Provider`, the enum is `ResultProvider` and codegen prints a `swift:` warning that names it.
+
+## OIDC sign-in
+
+On iOS and macOS, an `OIDCClient` signs in through `ASWebAuthenticationSession`: the system's sign-in sheet on iOS, and on macOS the user's default browser when it supports this, else Safari.
+
+```swift
+let oidc = try await blocks.oidcAuthApi.getClient() // OIDCClient<OidcAuthApi.GetClient.Provider>
+let user = try await oidc.signIn(provider: .google, relayTo: "myapp://auth")
+```
+
+`oidcAuthApi` is the namespace a backend exports with `auth.createOidcApi()` (see the `Auth` block's README, "Native apps"). The sheet opens the provider's sign-in page; the backend's callback receives the provider's redirect and relays it to `relayTo`, and the client exchanges the code to sign in.
+
+- **`relayTo`** must use a custom URL scheme, `myapp` here, and the `Auth` block must allow it: `redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] }`. The sheet catches the redirect to that scheme itself, so the scheme doesn't go in your Info.plist. A relay target with no scheme, or with `http` or `https`, throws `OIDCError.callbackError` before anything opens.
+- **The window, and a private session.** By default the sheet opens over a key window of one of the app's scenes, preferring a foreground one (on macOS, the key window), and it shares the browser's cookies, so a user already signed in to the provider can skip the password; the system asks for consent first. To choose either, pass a launcher: `signIn(provider: .google, relayTo: "myapp://auth", launcher: WebAuthenticationSessionLauncher(prefersEphemeralWebBrowserSession: true, presentationAnchor: { window }))`. An app that can show more than one window, such as on iPad, should pass `presentationAnchor`, and an app extension must. A private session has no consent prompt and asks the browser to share no cookies; Safari always does, but on macOS another default browser might not.
+- **Errors.** Closing the sheet throws `OIDCError.cancelled`. Cancelling the task that called `signIn` dismisses the sheet and throws `CancellationError`. A sheet the system won't show, for example while the app is in the background, throws `OIDCError.callbackError` with the system's error as `underlyingError`. One sign-in opens at a time: a second one while a sheet is open throws `OIDCError.callbackError`, and so does signing in on iOS while the app shows no window, both before anything opens.
+- **Your own browser.** To drive the browser yourself, implement `BrowserLauncher` and pass it as `launcher:`. Return the first redirect to `callbackScheme`, throw `OIDCError.cancelled` when the user backs out without one, throw `CancellationError` when the task is cancelled, and throw `OIDCError.callbackError` with the original error as its cause for any other failure.
+- **A Universal Link as `relayTo`.** `WebAuthenticationSessionLauncher` is safe with a custom scheme: `ASWebAuthenticationSession` hands the redirect to its own session, not to whichever app registered the scheme. A launcher of your own that opens the redirect through the system is different, because any app can register a custom scheme, so another app on the device could receive the relayed `code`. PKCE keeps that case safe too: the code is useless without the verifier, which never leaves your app, so the other app can't exchange it. A verified Universal Link (an `https` URL on a domain your app has an associated domain for) opens only your app, so for such a launcher the code doesn't reach another app at all. It needs a launcher of your own, because `WebAuthenticationSessionLauncher` accepts only a custom scheme: for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later). Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
 
 ## Configuration
 

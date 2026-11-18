@@ -72,7 +72,9 @@ final class OIDCMultiBlockE2ETests: BlocksE2ETestCase {
             URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
                 .queryItems?.first { $0.name == "redirect_uri" }?.value
         )
-        XCTAssertEqual(URL(string: redirectURI)?.path, "/aws-blocks/auth/sso/return")
+        // A deployed gateway puts its stage in front of /aws-blocks, so check the suffix.
+        let redirectPath = try XCTUnwrap(URL(string: redirectURI)?.path)
+        XCTAssertTrue(redirectPath.hasSuffix("/aws-blocks/auth/sso/return"), redirectPath)
         XCTAssertEqual(user.signInProvider, "corp")
         let me = try await api.ssoRequireAuth()
         XCTAssertEqual(me.userId, user.userId)
@@ -139,7 +141,8 @@ final class OIDCMultiBlockE2ETests: BlocksE2ETestCase {
         XCTAssertEqual(restored?.userId, userId)
 
         let logoutURL = try await client.signOut()
-        XCTAssertEqual(logoutURL?.path, "/aws-blocks/auth/idp/\(provider)/logout")
+        let logoutPath = try XCTUnwrap(logoutURL?.path)
+        XCTAssertTrue(logoutPath.hasSuffix("/aws-blocks/auth/idp/\(provider)/logout"), logoutPath)
         let state = await client.authState
         XCTAssertEqual(state, .signedOut)
 

@@ -209,10 +209,10 @@ describe('AuthCognito → Auth: the cookie and the user stay, the stored session
 			'version',
 		]);
 		assert.strictEqual(item.version, 1);
-		const expected = Math.floor(Date.now() / 1000) + 400 * 86400;
+		const expected = Math.floor(Date.now() / 1000) + 30 * 86400;
 		assert.ok(
 			typeof item._bkv_ttl === 'number' && Math.abs(item._bkv_ttl - expected) <= 5,
-			'TTL = now + 400 days, as AuthCognito',
+			'TTL = now + 30 days (the default)',
 		);
 
 		// The row is in the session store of the block, under the session id.

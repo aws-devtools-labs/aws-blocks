@@ -316,6 +316,7 @@ class OpenRpcParser {
     if (schema.containsKey('enum') && (type == null || type == 'string')) {
       return UnionLiteralRef(
         (schema['enum'] as List<dynamic>).map((v) => v.toString()).toList(),
+        isString: type == 'string',
       );
     }
 

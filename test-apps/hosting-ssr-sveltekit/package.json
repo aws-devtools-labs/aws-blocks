@@ -20,7 +20,7 @@
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
-    "vendorize": "node ../../packages/blocks/dist/vendorize.js"
+    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*"

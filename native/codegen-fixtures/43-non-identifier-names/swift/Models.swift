@@ -2,7 +2,7 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum Kind: String, Codable {
+public nonisolated enum Sample_Type__X___Kind: String, Codable, Sendable {
     case a_b = "a\"b"
     case c_d = "c;d"
     case x_y = "x`y"
@@ -14,14 +14,14 @@ public nonisolated enum Kind: String, Codable {
     case _sp_ace = " sp ace"
 }
 
-public nonisolated struct Sample_Type__X___: Codable {
+public nonisolated struct Sample_Type__X___: Codable, Sendable {
     public let _unnamed: String?
     public let __x_: String?
     public let __unnamed: String?
     public let _9lives: Bool?
     public let __y_: String?
     public let back_tick: String?
-    public let kind: Kind?
+    public let kind: Sample_Type__X___Kind?
     public let new_line: String?
     public let q_uote: String?
     public let run___error__x________id: String
@@ -62,7 +62,7 @@ public nonisolated struct Sample_Type__X___: Codable {
         try c.encode(self.with_space, forKey: .with_space)
     }
 
-    public init(_unnamed: String? = nil, __x_: String? = nil, __unnamed: String? = nil, _9lives: Bool? = nil, __y_: String? = nil, back_tick: String? = nil, kind: Kind? = nil, new_line: String? = nil, q_uote: String? = nil, run___error__x________id: String, s_ingle: String? = nil, semi_colon: String, with_space: Int) throws {
+    public init(_unnamed: String? = nil, __x_: String? = nil, __unnamed: String? = nil, _9lives: Bool? = nil, __y_: String? = nil, back_tick: String? = nil, kind: Sample_Type__X___Kind? = nil, new_line: String? = nil, q_uote: String? = nil, run___error__x________id: String, s_ingle: String? = nil, semi_colon: String, with_space: Int) throws {
         self._unnamed = _unnamed
         self.__x_ = __x_
         self.__unnamed = __unnamed
