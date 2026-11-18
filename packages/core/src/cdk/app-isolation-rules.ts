@@ -267,6 +267,9 @@ export function renderResource(value: unknown, parameters: ReadonlySet<string> =
 	return { kind: 'unresolvable' };
 }
 
+/** `*` when an ARN's resource part is a wildcard (`*`, or `<type>/*`, `<type>:*`), else `undefined`. */
+const wildcardName = (rest: string): '*' | undefined => (/^(?:[a-z][a-z-]*[/:])?\*/.test(rest) ? '*' : undefined);
+
 /** The service and the resource-name part of an ARN, or `undefined` for a non-ARN / unsupported service. */
 function arnResourceName(arn: string): { service: string; name: string } | undefined {
 	if (arn === '*') return { service: '*', name: '*' };
@@ -297,7 +300,7 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 			break;
 		case 'lambda':
 			// A function (`function:<name>[:qualifier]`) or a layer (`layer:<name>[:version]`).
-			name = after('function:', ':') ?? after('layer:', ':');
+			name = after('function:', ':') ?? after('layer:', ':') ?? wildcardName(rest);
 			break;
 		case 'rds':
 			// A cluster or an instance (`cluster:<name>`, `db:<name>`), as the boundary fences
@@ -305,11 +308,11 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 			name =
 				after('cluster:', ':') ??
 				after('db:', ':') ??
-				(/^(?:[a-z][a-z-]*[/:])?\*/.test(rest) ? '*' : undefined);
+				wildcardName(rest);
 			break;
 		case 's3vectors':
 			// A vector bucket, or an index in one (`bucket/<name>[/index/<index>]`).
-			name = after('bucket/', '/');
+			name = after('bucket/', '/') ?? wildcardName(rest);
 			break;
 		case 'logs':
 			name = after('log-group:', ':')?.replace(/^\/aws\/lambda\//, '');
@@ -351,7 +354,7 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 		default:
 			// cognito-idp and kms name resources by id, not by name: only `*` is checked.
 			// The services in WILDCARD_ONLY_SERVICES are checked for a wildcard name too.
-			name = WILDCARD_ONLY_SERVICES.has(service) && /^(?:[a-z][a-z-]*[/:])?\*/.test(rest) ? '*' : undefined;
+			name = WILDCARD_ONLY_SERVICES.has(service) ? wildcardName(rest) : undefined;
 	}
 	return name === undefined ? undefined : { service, name };
 }
@@ -671,8 +674,9 @@ export function checkResourcePolicy(
 
 /**
  * Resource types whose policy document lets principals in, and the property that
- * holds it. `AWS::Lambda::Permission` and `AWS::Lambda::LayerVersionPermission`
- * name their one principal directly and are read by {@link checkResourcePolicyPrincipals}.
+ * holds it. `AWS::Lambda::Permission`, `AWS::Lambda::LayerVersionPermission` and
+ * `AWS::Events::EventBusPolicy` hold one statement or name their principal
+ * directly, and are read by {@link checkResourcePolicyPrincipals}.
  */
 const POLICY_DOCUMENT_OF: Record<string, string> = {
 	'AWS::S3::BucketPolicy': 'PolicyDocument',
@@ -680,17 +684,28 @@ const POLICY_DOCUMENT_OF: Record<string, string> = {
 	'AWS::SNS::TopicPolicy': 'PolicyDocument',
 	'AWS::SecretsManager::ResourcePolicy': 'ResourcePolicy',
 	'AWS::KMS::Key': 'KeyPolicy',
+	'AWS::KMS::ReplicaKey': 'KeyPolicy',
 	'AWS::ApiGateway::RestApi': 'Policy',
+	'AWS::Events::EventBus': 'Policy',
 };
 
 /** Condition keys that, matched to the app's own ARNs, pin an "everyone" principal to this app. */
 const APP_ARN_CONDITION_KEYS = new Set(['aws:sourcearn', 'aws:principalarn']);
 
-/** Whether an ARN (rendered) is one of the app's own: a reference to its template, or a name under its prefix. */
-function isOwnArn(value: unknown, id: string, parameters: ReadonlySet<string>): boolean {
+/**
+ * Whether an ARN (rendered) is one of the app's own: a reference to its template,
+ * or a name under its prefix in this account. The account must be the stack's
+ * (`account`), or `AWS::AccountId`; a literal `*` account is every account.
+ */
+function isOwnArn(value: unknown, id: string, parameters: ReadonlySet<string>, account?: string): boolean {
 	const rendered = renderResource(value, parameters);
 	if (rendered.kind === 'own') return true;
 	if (rendered.kind === 'unresolvable') return false;
+	const arnAccount = /^arn:[^:]*:[^:]*:[^:]*:([^:]*):/.exec(rendered.arn)?.[1];
+	if (arnAccount === undefined) return false;
+	// `AWS::AccountId` renders as `*`; in a literal string, `*` matches every account.
+	const thisAccount = arnAccount === '' || arnAccount === account || (arnAccount === '*' && typeof value !== 'string');
+	if (!thisAccount) return false;
 	const iamRole = /^arn:[^:]*:iam::[^:]*:role\/(?:.*\/)?([^/]+)$/.exec(rendered.arn);
 	const name = iamRole ? iamRole[1] : arnResourceName(rendered.arn)?.name;
 	if (name === undefined) return false;
@@ -700,25 +715,39 @@ function isOwnArn(value: unknown, id: string, parameters: ReadonlySet<string>): 
 }
 
 /**
- * Whether a statement's `Condition` pins it to this app: `aws:SourceArn` or
- * `aws:PrincipalArn` matched (`ArnEquals`, `ArnLike`, `StringEquals`,
- * `StringLike`) only to the app's own ARNs, or `aws:PrincipalTag/app` equal to
- * the app id. The account (`aws:SourceAccount`, `aws:PrincipalAccount`, an
- * organization) isn't enough: every app on the platform shares it.
+ * Whether a statement's `Condition` pins everyone (`*`) to this app:
+ * `aws:SourceArn` or `aws:PrincipalArn` matched (`ArnEquals`, `ArnLike`,
+ * `StringEquals`, `StringLike`) only to the app's own ARNs in this account, or
+ * `aws:PrincipalTag/app` equal to the app id together with `aws:PrincipalAccount`
+ * equal to this account. The tag alone isn't enough: the caller's own account
+ * sets it, so another account can tag its role as this app. The account alone
+ * (`aws:SourceAccount`, `aws:PrincipalAccount`, an organization) isn't enough
+ * either: every app on the platform shares it.
  */
-function conditionPinsToApp(condition: unknown, id: string, parameters: ReadonlySet<string>): boolean {
+function conditionPinsToApp(condition: unknown, id: string, parameters: ReadonlySet<string>, account?: string): boolean {
 	if (!condition || typeof condition !== 'object') return false;
+	let tagPinned = false;
+	let accountPinned = false;
 	for (const [operator, entries] of Object.entries(condition as Record<string, unknown>)) {
 		if (!/^(ArnEquals|ArnLike|StringEquals|StringLike)$/.test(operator) || !entries || typeof entries !== 'object') continue;
 		for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
 			const values = asList(value as unknown);
 			if (values.length === 0) continue;
 			const k = key.toLowerCase();
-			if (APP_ARN_CONDITION_KEYS.has(k) && values.every((v) => isOwnArn(v, id, parameters))) return true;
-			if (k === `aws:principaltag/${APP_TAG_KEY}` && values.every((v) => v === id)) return true;
+			if (APP_ARN_CONDITION_KEYS.has(k) && values.every((v) => isOwnArn(v, id, parameters, account))) return true;
+			if (k === `aws:principaltag/${APP_TAG_KEY}` && values.every((v) => v === id)) tagPinned = true;
+			if (k === 'aws:principalaccount' && operator === 'StringEquals' && values.every((v) => isThisAccount(v, account))) {
+				accountPinned = true;
+			}
 		}
 	}
-	return false;
+	return tagPinned && accountPinned;
+}
+
+/** Whether a value names this account: `{ Ref: 'AWS::AccountId' }`, or the stack's literal account. */
+function isThisAccount(value: unknown, account?: string): boolean {
+	if (value && typeof value === 'object') return (value as { Ref?: unknown }).Ref === 'AWS::AccountId';
+	return typeof value === 'string' && account !== undefined && value === account;
 }
 
 /** Why an `AWS` principal value isn't this app's, or `undefined` when it is. */
@@ -737,7 +766,27 @@ function awsPrincipalOutsideApp(value: unknown, id: string, parameters: Readonly
 	// A pseudo-parameter account renders as `*`; a literal one must be the stack's.
 	if (principalAccount !== '*' && principalAccount !== account) return v;
 	if (resource === 'root') return undefined;
-	return isOwnArn(value, id, parameters) ? undefined : v;
+	return isOwnArn(value, id, parameters, account) ? undefined : v;
+}
+
+/** Marks a policy or statement the check can't read, so the report fails closed. */
+const UNREADABLE = '\u0000unreadable';
+
+/** Whether a value is a CloudFormation intrinsic (`Fn::If`, `Fn::Join`, `Ref`, …) rather than a literal object. */
+function isIntrinsic(value: unknown): boolean {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const keys = Object.keys(value);
+	return keys.length === 1 && (keys[0] === 'Ref' || keys[0].startsWith('Fn::'));
+}
+
+/** The statements in a policy document, or {@link UNREADABLE} when it isn't a literal document with a `Statement`. */
+function documentStatements(document: unknown): unknown[] | typeof UNREADABLE {
+	if (!document || typeof document !== 'object' || Array.isArray(document) || isIntrinsic(document)) return UNREADABLE;
+	const statements = (document as { Statement?: unknown }).Statement;
+	if (statements === undefined || statements === null || typeof statements !== 'object' || isIntrinsic(statements)) {
+		return UNREADABLE;
+	}
+	return asList(statements as unknown);
 }
 
 /**
@@ -752,26 +801,29 @@ function statementOutsiders(
 	account?: string,
 	everyoneIsPublic = false,
 ): string[] {
-	if (!statement || typeof statement !== 'object') return [];
+	if (!statement || typeof statement !== 'object' || isIntrinsic(statement)) return [UNREADABLE];
 	const st = statement as { Effect?: unknown; Principal?: unknown; NotPrincipal?: unknown; Condition?: unknown };
 	if (st.Effect !== 'Allow') return [];
 	if (st.NotPrincipal !== undefined) return ['everyone except the NotPrincipal list'];
-	const pinned = conditionPinsToApp(st.Condition, id, parameters) || everyoneIsPublic;
-	if (st.Principal === '*') return pinned ? [] : ['*'];
+	// A pin, or a public REST API, lets in everyone (`*`) only: a named principal is judged on its own.
+	const everyoneLetIn = everyoneIsPublic || conditionPinsToApp(st.Condition, id, parameters, account);
+	if (st.Principal === '*') return everyoneLetIn ? [] : ['*'];
 	if (!st.Principal || typeof st.Principal !== 'object') return [];
 	const out: string[] = [];
 	for (const [kind, values] of Object.entries(st.Principal as Record<string, unknown>)) {
 		if (kind === 'Service') continue;
 		for (const v of asList(values as unknown)) {
+			if (kind === 'AWS' && v === '*') {
+				if (!everyoneLetIn) out.push('*');
+				continue;
+			}
 			const outsider =
 				kind === 'AWS'
-					? everyoneIsPublic && v === '*'
-						? undefined
-						: awsPrincipalOutsideApp(v, id, parameters, account)
+					? awsPrincipalOutsideApp(v, id, parameters, account)
 					: renderResource(v, parameters).kind === 'own'
 						? undefined
 						: `${kind} ${JSON.stringify(v)}`;
-			if (outsider !== undefined && !(pinned && !everyoneIsPublic)) out.push(outsider);
+			if (outsider !== undefined) out.push(outsider);
 		}
 	}
 	return out;
@@ -786,8 +838,9 @@ function statementOutsiders(
  * leaves the decision to IAM and the boundary. "Everyone" is fine only when a
  * condition pins it to the app's own ARNs or app tag, or on an API Gateway REST
  * API, where it means a public API's anonymous callers. Covers Lambda and layer
- * permissions, and bucket, queue, topic, secret, KMS key and API Gateway REST
- * API policies, in every stack the report reads.
+ * permissions, and bucket, queue, topic, secret, KMS key and replica key, API
+ * Gateway REST API and EventBridge bus policies, in every stack the report reads.
+ * A policy the check can't read (an intrinsic, a string) fails closed.
  */
 export function checkResourcePolicyPrincipals(
 	type: string,
@@ -803,23 +856,46 @@ export function checkResourcePolicyPrincipals(
 		if (typeof principal === 'string' && /\.amazonaws\.com(\.cn)?$/.test(principal)) return [];
 		// A function URL that requires IAM auth still needs the caller's own IAM permission.
 		if (principal === '*' && props.FunctionUrlAuthType === 'AWS_IAM') return [];
-		const pinned = isOwnArn(props.SourceArn, id, parameters);
+		const pinned = isOwnArn(props.SourceArn, id, parameters, account);
 		const outsider = principal === '*' ? '*' : awsPrincipalOutsideApp(principal, id, parameters, account);
 		outsiders = outsider !== undefined && !(principal === '*' && pinned) ? [outsider] : [];
+	} else if (type === 'AWS::Events::EventBusPolicy') {
+		// One statement (`Statement`), or the legacy form that names the principal (an account id or `*`) directly.
+		if (props.Statement !== undefined) {
+			outsiders = statementOutsiders(props.Statement, id, parameters, account);
+		} else {
+			const principal = props.Principal;
+			const statement = { Effect: 'Allow', Principal: principal === '*' ? '*' : { AWS: principal }, Condition: props.Condition };
+			outsiders = principal === undefined ? [] : statementOutsiders(statement, id, parameters, account);
+		}
 	} else {
 		const key = POLICY_DOCUMENT_OF[type];
 		if (!key) return [];
-		const document = props[key] as { Statement?: unknown } | undefined;
+		const document = props[key];
+		if (document === undefined || document === null) return [];
 		// A REST API's policy lets in `*` for a public API (Hosting's origin-verify policy
 		// does, and denies requests without CloudFront's secret header): anonymous web
 		// callers aren't IAM principals, and runtime API calls aren't isolated (README,
 		// Limits). Another account or another app's role there is still flagged.
 		const everyoneIsPublic = type === 'AWS::ApiGateway::RestApi';
-		outsiders = asList(document?.Statement as unknown).flatMap((st) =>
-			statementOutsiders(st, id, parameters, account, everyoneIsPublic),
-		);
+		const statements = documentStatements(document);
+		outsiders =
+			statements === UNREADABLE
+				? [UNREADABLE]
+				: statements.flatMap((st) => statementOutsiders(st, id, parameters, account, everyoneIsPublic));
 	}
 	if (outsiders.length === 0) return [];
+	if (outsiders.includes(UNREADABLE)) {
+		return [
+			{
+				rule: 'resource-policy-outside-app',
+				path: where,
+				message:
+					`${where} (${type}) has a policy the check can't read (an intrinsic such as Fn::If, or a string), ` +
+					'so it may let anyone in. Write it as a literal policy document.',
+			},
+		];
+	}
 	return [
 		{
 			rule: 'resource-policy-outside-app',
@@ -853,6 +929,8 @@ const PHYSICAL_NAME_OF: Record<string, readonly [property: string, service: stri
 	'AWS::Events::Rule': ['Name', 'events'],
 	'AWS::Events::EventBus': ['Name', 'events'],
 	'AWS::Scheduler::Schedule': ['Name', 'scheduler'],
+	'AWS::SecretsManager::Secret': ['Name', 'secretsmanager'],
+	'AWS::StepFunctions::StateMachine': ['StateMachineName', 'states'],
 };
 
 /** Whether `name`, given to a resource of `service`, is one the platform's policies let this app create. */
@@ -871,6 +949,9 @@ function isOwnPhysicalName(service: string, name: string, id: string): boolean {
 		case 'rds':
 			// RDS stores identifiers in lowercase.
 			return isUnderAppPrefix(name.toLowerCase(), id);
+		case 'secretsmanager':
+			// Hosting's secret() values (`blocks/<id>/…`) are the app's own too.
+			return isUnderAppPrefix(name, id) || name.startsWith(`blocks/${id}/`);
 		default:
 			return isUnderAppPrefix(name, id);
 	}
@@ -879,7 +960,8 @@ function isOwnPhysicalName(service: string, name: string, id: string): boolean {
 /**
  * `scope-outside-app` when the app gives a name-fenced resource (a table, queue,
  * bucket, function, layer, parameter, log group, RDS cluster or instance, vector
- * bucket, event rule or bus, or schedule) a literal name outside its prefix. A
+ * bucket, event rule or bus, schedule, secret or state machine) a literal name
+ * outside its prefix. A
  * reference to one of the app's own resources counts as its own whatever its
  * name, so the name itself is checked here; the execution policy would refuse
  * to create it anyway. A name with a reference or pseudo parameter in it, or no
