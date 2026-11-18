@@ -89,6 +89,7 @@ mock.module(moduleUrl('run-command'), {
     runSync: (_command, _args, options) => reachedCdk(options.env),
     runCapture: () => '',
     spawnCommand: () => { throw new Error('unexpected watch process'); },
+    spawnShellCommand: () => { throw new Error('unexpected dev server process'); },
   },
 });
 
