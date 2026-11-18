@@ -117,15 +117,6 @@ final class NestedTransferableDecodeTests: XCTestCase {
         return try JSONDecoder().decode(GetSession.Result.self, from: Data(("{" + fields.joined(separator: ",") + "}").utf8))
     }
 
-    /// The JSON object `encode` writes at `path`.
-    private func encodedObject(_ data: Data, at path: [String]) throws -> [String: Any] {
-        var value: Any = try JSONSerialization.jsonObject(with: data)
-        for key in path {
-            value = try XCTUnwrap((value as? [String: Any])?[key], "no \(key) in \(value)")
-        }
-        return try XCTUnwrap(value as? [String: Any])
-    }
-
     // MARK: - Realtime channels
 
     func testDecodesNestedChannelsAtEveryDepth() throws {
@@ -245,20 +236,16 @@ final class NestedTransferableDecodeTests: XCTestCase {
 
     // MARK: - Encoding and descriptor values
 
-    /// A transferable encodes back to the descriptor the server sent, so a model holding one can be sent as a
-    /// parameter (the server re-hydrates it from `__blocks`).
-    func testEncodingANestedTransferableWritesItsDescriptor() throws {
+    /// Transferables are read-only: a model holding one, at any depth, throws when encoded.
+    func testEncodingANestedTransferableThrows() throws {
         let result = try decodeSession(event: #"{"kind":"message","channel":"# + channelDescriptor("messages") + "}")
         let files = try JSONDecoder().decode(Files.self, from: Data(#"{"download":{"url":"https://s3.example/get"},"uploads":[]}"#.utf8))
 
-        let channel = try encodedObject(JSONEncoder().encode(result), at: ["channel"])
-        XCTAssertEqual(channel["__blocks"] as? String, "realtime/channel")
-        XCTAssertEqual(channel["channel"] as? String, result.channel.channel)
-        let eventChannel = try encodedObject(JSONEncoder().encode(result.event), at: ["channel"])
-        XCTAssertEqual(eventChannel["__blocks"] as? String, "realtime/channel")
-        let download = try encodedObject(JSONEncoder().encode(files), at: ["download"])
-        XCTAssertEqual(download["__blocks"] as? String, "file-bucket/download")
-        XCTAssertEqual(download["url"] as? String, "https://s3.example/get")
+        for encode in [{ _ = try JSONEncoder().encode(result) }, { _ = try JSONEncoder().encode(result.event) }, { _ = try JSONEncoder().encode(files) }] {
+            XCTAssertThrowsError(try encode()) { error in
+                guard case EncodingError.invalidValue = error else { return XCTFail("Expected EncodingError, got \(error)") }
+            }
+        }
     }
 
     func testDescriptorReadsAsJSONSerializationDoes() throws {

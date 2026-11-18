@@ -379,9 +379,9 @@ class Same2 {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<ApiSendResult> send({required String request, required String class$, String? args, String? json}) async {
     final params = <dynamic>[
@@ -452,12 +452,12 @@ class ABApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
   late final ABApi aB;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    api = ApiApi(client);
+    api = Api(client);
     aB = ABApi(client);
   }
 }

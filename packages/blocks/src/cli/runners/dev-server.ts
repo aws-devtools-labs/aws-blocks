@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Runs under `tsx watch`, started by `cdk-blocks dev` and by the sandbox. The options
+ * Runs under `tsx watch`, started by `npm run dev` and by the sandbox. The options
  * come from `BLOCKS_DEV_OPTIONS`, so that the sandbox's shell command needs no JSON.
- * The `tsx watch` parent is what `cdk-blocks dev stop` signals.
+ * The `tsx watch` parent is what `npm run dev:stop` signals.
  */
 
 import { type DevServerOptions, startDevServer } from '@aws-blocks/core/scripts';

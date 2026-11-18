@@ -57,7 +57,7 @@ Fixes made to `AuthCognito`, `AuthOIDC` and `AuthBasic` since their last release
 
 - `AuthCognito`'s `DESIGN.md` gave its session cookie as `SameSite=None; Partitioned` (#1288); it is `SameSite=Lax` by default, and `SameSite=None; Partitioned` only with `crossDomain: true`. `Auth`'s `DESIGN.md` already describes its cookie that way (D-007), with the opt-in at `session: { crossDomain: true }`.
 
-- `AuthOIDC`'s docs name the `cdk-blocks secret` CLI (#1203) when they say it does not manage the SSM SecureString behind a `secret: true` `AppSetting`. `Auth`'s README already says how to set each kind of provider secret: `npm run secret` (an alias of `cdk-blocks secret`) for a `Secret`, and `aws ssm put-parameter` for an `AppSetting`.
+- `AuthOIDC`'s docs name the `npm run secret` CLI (#1203) when they say it does not manage the SSM SecureString behind a `secret: true` `AppSetting`. `Auth`'s README already says how to set each kind of provider secret: `npm run secret` for a `Secret`, and `aws ssm put-parameter` for an `AppSetting`.
 
 **From `main` after those releases (#1314, #1312, #1337, #1362, #885, #1401, #1414)**
 

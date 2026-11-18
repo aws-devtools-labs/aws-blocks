@@ -101,4 +101,20 @@ EXIT2_DART="$(fake_dart dart-exit2 '  echo "WARNING|STATIC_WARNING|UNUSED|x|1|1|
   exit 2')"
 DART="$EXIT2_DART" bash "$ANALYZE" "$CLEAN" > /dev/null 2>&1 || fail "Case 8: exit 2 with no errors must pass"
 
+# --- Case 9: an expected codegen error is skipped, not analyzed or counted ---
+REFUSED="$WORK/refused"
+golden "$REFUSED" 01-ok 'int answer() => 42;'
+mkdir -p "$REFUSED/02-refused/dart"
+printf 'not Dart\n' > "$REFUSED/02-refused/dart/codegen-error.txt"
+out="$(bash "$ANALYZE" "$REFUSED" 2>&1)" || fail "Case 9: an expected codegen error should pass: $out"
+case "$out" in *"OK: 1 Dart fixture golden(s) analyze with 0 errors"*) ;; *) fail "Case 9: unexpected output: $out" ;; esac
+case "$out" in *"Skipped 1 fixture(s) whose Dart golden is an expected codegen-error.txt"*) ;; *) fail "Case 9: the skip should be reported: $out" ;; esac
+
+# --- Case 10: a fixture with both a client and a codegen error fails ---
+golden "$REFUSED" 02-refused 'int answer() => 42;'
+if out="$(bash "$ANALYZE" "$REFUSED" 2>&1)"; then
+  fail "Case 10: client.dart beside codegen-error.txt should fail the run: $out"
+fi
+case "$out" in *"has both client.dart and codegen-error.txt"*) ;; *) fail "Case 10: unexpected output: $out" ;; esac
+
 echo "PASS: analyze-fixture-goldens.sh"

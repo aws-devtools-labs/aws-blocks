@@ -89,7 +89,7 @@ describe('requireAuth truth table', () => {
 
 	test('valid but older than freshAgeSeconds → only { fresh: true } throws 401 ReauthenticationRequired; session kept', async () => {
 		const seed = makeAuth();
-		const store = new SessionStore(seed.auth, 400 * 86400);
+		const store = new SessionStore(seed.auth, 30 * 86400);
 		const sid = await store.create(poolTokens('alice', { authTime: Math.floor(Date.now() / 1000) - 120 }));
 		// A fresh instance (as on the next cold start) reads the row from the store.
 		const h = makeAuth({ session: { freshAgeSeconds: 60 } }, { rootId: seed.auth.parent.id });
@@ -147,7 +147,7 @@ describe('requireAuth truth table', () => {
 		const user = await b.request((ctx) => h.auth.requireAuth(ctx));
 		assert.strictEqual(user.username, 'alice');
 		assert.ok(h.native.calls.includes('refresh'));
-		assert.ok(setCookieFor(b.lastSetCookies, h.cookieName)?.includes('Max-Age=34560000'));
+		assert.ok(setCookieFor(b.lastSetCookies, h.cookieName)?.includes('Max-Age=2592000'));
 	});
 
 	test('a transient refresh failure keeps the session and surfaces a retriable 5xx (no sign-out)', async () => {
@@ -782,7 +782,10 @@ describe('email + password flows through AuthBase', () => {
 
 			const ctx = makeContext();
 			await h.auth.signOut(ctx);
-			assert.ok(isCleared(ctx.response.headers.getSetCookie(), h.cookieName), 'sign-out clears the cookie, no 500');
+			assert.ok(
+				isCleared(ctx.response.headers.getSetCookie(), h.cookieName),
+				'sign-out clears the cookie, no 500',
+			);
 		} finally {
 			keys.forEach((k, i) => {
 				const v = before[i];

@@ -26,33 +26,6 @@ export function runSync(
   checkSyncResult(command, args, spawn.sync(command, args, { stdio: 'inherit', ...options }));
 }
 
-/**
- * {@link runSync} with stdout and stderr captured instead of printed. On
- * failure the captured output goes to `onFailure` before the error is thrown,
- * so a hidden step stays diagnosable. stdin stays inherited. Output is not
- * size-capped (spawnSync's default 1 MiB `maxBuffer` would fail a chatty but
- * successful run).
- */
-export function runSyncRetained(
-  command: string,
-  args: string[],
-  options: Omit<SpawnSyncOptions, 'stdio' | 'encoding' | 'maxBuffer'>,
-  onFailure: (stdout: string, stderr: string) => void,
-): void {
-  const result = spawn.sync(command, args, {
-    ...options,
-    stdio: ['inherit', 'pipe', 'pipe'],
-    encoding: 'utf-8',
-    maxBuffer: Infinity,
-  });
-  try {
-    checkSyncResult(command, args, result);
-  } catch (error) {
-    onFailure(String(result.stdout ?? ''), String(result.stderr ?? ''));
-    throw error;
-  }
-}
-
 function checkSyncResult(command: string, args: string[], result: SpawnSyncReturns<string | Buffer>): void {
   if (result.error) {
     throw result.error;
@@ -93,7 +66,25 @@ export function runCapture(
 export function spawnCommand(
   command: string,
   args: string[],
-  options: SpawnOptions,
+  options: Omit<SpawnOptions, 'shell'>,
 ): ChildProcess {
-  return spawn(command, args, options);
+  // Never a shell: the args reach the command as separate argv entries. A
+  // command line that needs a shell goes through spawnShellCommand instead.
+  return spawn(command, args, { ...options, shell: false });
+}
+
+/**
+ * Spawn a user-configured command line (e.g. the sandbox's dev-server command)
+ * under `shell: true` and return the `ChildProcess`. The whole line goes to the
+ * shell as one string with no separate args: Node 24 emits DEP0190 whenever a
+ * non-empty args array is combined with `shell: true`.
+ *
+ * Only pass a command line the app itself configured (never request input):
+ * the line is interpreted by the shell as-is.
+ */
+export function spawnShellCommand(
+  commandLine: string,
+  options: Omit<SpawnOptions, 'shell'>,
+): ChildProcess {
+  return spawn(commandLine, [], { ...options, shell: true });
 }

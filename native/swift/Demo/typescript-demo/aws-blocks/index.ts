@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
@@ -93,6 +93,10 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 }));
 
 export const authApi = auth.createApi();
+// The native apps' OIDC client for federated sign-in. This block has no federated providers yet,
+// so its client signs in with none. To offer one, add it to `new Auth(...)` and list the Swift
+// demo's relay URL, `blocksdemo://auth`, in `redirects.allowedRelayOrigins`.
+export const oidcAuthApi = auth.createOidcApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getValue(key: string) {

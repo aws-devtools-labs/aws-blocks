@@ -14,8 +14,8 @@ Each stage now writes its own document:
 
 Both stay in `.blocks-sandbox/`, which is already ignored, so neither can be committed by a missing ignore entry.
 
-`cdk-blocks destroy` and `cdk-blocks sandbox destroy` now forget the deleted stack in the document of the stage being destroyed, instead of always in `outputs.json`. A production destroy also clears its stack from a pre-split `outputs.json`, so an app that deployed production before upgrading is not left recording a stack that no longer exists.
+`npm run destroy` and `npm run sandbox:destroy` now forget the deleted stack in the document of the stage being destroyed, instead of always in `outputs.json`. A production destroy also clears its stack from a pre-split `outputs.json`, so an app that deployed production before upgrading is not left recording a stack that no longer exists.
 
-**If you read `.blocks-sandbox/outputs.json` for production** (a script, a CI step, or a launcher), read `.blocks-sandbox/outputs.production.json` instead. `OUTPUTS_FILE` from `@aws-blocks/core/scripts` carries both paths. The next deploy of each stage writes its own document, and `cdk-blocks sandbox console` derives the sandbox stack rather than naming one out of a pre-split `outputs.json`.
+**If you read `.blocks-sandbox/outputs.json` for production** (a script, a CI step, or a launcher), read `.blocks-sandbox/outputs.production.json` instead. `OUTPUTS_FILE` from `@aws-blocks/core/scripts` carries both paths. The next deploy of each stage writes its own document, and `npm run sandbox:console` derives the sandbox stack rather than naming one out of a pre-split `outputs.json`.
 
-**If you call `openConsole({ outputsFile })` directly** (the Kotlin and Swift example apps, and any app scaffolded before the `cdk-blocks` CLI), it still opens the document's first stack. On an app that deployed production before upgrading, that is production's stack until one `npm run sandbox` refreshes `outputs.json`, so run it once or delete the stale file.
+**If you call `openConsole({ outputsFile })` directly** (the Kotlin and Swift example apps, and any app scaffolded before AWS Blocks package tasks), it still opens the document's first stack. On an app that deployed production before upgrading, that is production's stack until one `npm run sandbox` refreshes `outputs.json`, so run it once or delete the stale file.

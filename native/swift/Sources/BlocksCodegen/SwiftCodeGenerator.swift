@@ -78,6 +78,7 @@ public struct SwiftCodeGenerator {
             uniquingKeysWith: { first, _ in first }
         )
         generator.sendable = Self.sendableAnalysis(in: model)
+        try generator.rejectTransferableParameters(model)
         generator.openEnums.openTypeNames = generator.openTypeNames(model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)

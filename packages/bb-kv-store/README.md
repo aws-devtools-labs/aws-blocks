@@ -365,9 +365,9 @@ Match an error by name with `isBlocksError`.
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409. |
-| `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, has a `__proto__` field, or has an empty string in a key field or an indexed field. Also a bad expiry. |
-| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where` (this includes a partition value or a sort value of the wrong type, and a sort condition that does not exist), an unknown index, an `order` that is not `'asc'` or `'desc'`, a bad `limit`, a bad cursor, an `indexes` option that is not an object, or `ifValueEquals` with an object. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
+| `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, has a `__proto__` field, has an empty string in a key field or an indexed field, has a key or indexed field over DynamoDB's size limit (2,048 bytes for a partition key, 1,024 for a sort key), or nests lists or maps more than 32 levels deep. Also a bad expiry. |
+| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where` (this includes a partition value or a sort value of the wrong type, a sort condition that does not exist, and a `between` with its bounds reversed), an unknown index, an `order` that is not `'asc'` or `'desc'`, a bad `limit`, a bad cursor, an `indexes` option that is not an object, `ifValueEquals` with an object, or a batch that repeats a key within one DynamoDB request (25 writes or 100 reads). |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
 | `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |
 
@@ -585,10 +585,12 @@ const audit = new KVStore(scope, 'audit', {
 
 The mock keeps data on disk in `.bb-data/{fullId}/`, so data stays across restarts of the dev server. To delete it, run `rm -rf .bb-data`. The data file is `store.json`, with a version field.
 
-The mock applies the schema, the conditions, expiry, the 400 KB limit, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.
+The mock applies the schema, the conditions, expiry, the 400 KB limit (measured the way DynamoDB measures it), DynamoDB's key and nesting limits, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.
 
 The mock handles a data file of an earlier release as follows:
 
 - It converts a `store.json` of an earlier `KVStore`, or a `data.json` of `DistributedTable`, when it first loads the file.
 - It keeps a copy of the `store.json` from before the conversion as `store.json.bak`.
 - It renames a file that it cannot read to a `.bak` file and logs a warning. It does not write over that file.
+
+The mock keeps the store in the memory of the dev server, and reads `store.json` only when it constructs the store. Two processes on the same `.bb-data` folder (two dev servers, or a script beside the dev server) do not see the writes of the other process, and can write over them.

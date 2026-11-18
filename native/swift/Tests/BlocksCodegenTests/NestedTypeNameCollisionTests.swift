@@ -354,16 +354,6 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         assertContains(output.api, "public struct FeedsMessage: Codable, Sendable {\n                public let count: Double")
     }
 
-    func testChannelParameterAndListOfChannelParameters() throws {
-        let params = "[\(param("feed", channel(object(["text": string])))), \(param("feeds", array(channel(object(["count": number])))))]"
-        let output = try generate(methods: [method("relay", params: params, result: string)])
-
-        assertContains(
-            output.api,
-            "public func relay(feed: RealtimeChannel<Relay.FeedMessage>, feeds: [RealtimeChannel<Relay.FeedsMessage>]) async throws -> String {"
-        )
-    }
-
     func testParameterNamedResultLeavesTheResultItsName() throws {
         let params = "[\(param("result", object(["input": string])))]"
         let output = try generate(methods: [method("check", params: params, result: object(["passed": #"{ "type": "boolean" }"#]))])
@@ -467,8 +457,6 @@ final class NestedTypeNameCollisionTests: XCTestCase {
                 result: object(["item": object(["count": number]), "items": array(object(["sku": string]))])
             ),
             method("getFeeds", result: object(["feed": channel(object(["text": string])), "feeds": array(channel(object(["count": number])))])),
-            method("relay", params: "[\(param("feed", channel(object(["text": string])))), \(param("feeds", array(channel(object(["count": number])))))]",
-                   result: string),
             method("check", params: "[\(param("result", object(["input": string])))]", result: object(["passed": #"{ "type": "boolean" }"#])),
             method("act", result: #"{ "oneOf": [\#(pick), \#(skip)] }"#),
             method("search", params: "[\(param("query", #"{ "anyOf": [{ "type": "string" }, \#(object(["text": string]))] }"#))]", result: string)
@@ -487,17 +475,16 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         }
 
         // Every type is nameable from outside the module.
-        func signatures(_ api: Api, feed: RealtimeChannel<Api.Relay.FeedMessage>) async throws {
+        func signatures(_ api: Api) async throws {
             let items: Api.PutItems.Result = try await api.putItems(
                 item: Api.PutItems.Item(sku: "a"), items: [Api.PutItems.Items(qty: 1, sku: "b")]
             )
             let feeds: Api.GetFeeds.Result = try await api.getFeeds()
             let first: RealtimeChannel<Api.GetFeeds.Result.FeedMessage> = feeds.feed
             let rest: [RealtimeChannel<Api.GetFeeds.Result.FeedsMessage>] = feeds.feeds
-            let relayed: String = try await api.relay(feed: feed, feeds: [RealtimeChannel<Api.Relay.FeedsMessage>]())
             let checked: Api.Check.Result = try await api.check(result: Api.Check.Result_2(input: "c"))
             let picked: Api.Act.Result = try await api.act()
-            _ = (items, first, rest, relayed, checked, picked)
+            _ = (items, first, rest, checked, picked)
             _ = (Api.PutItems.Result.Item(count: 1), Api.PutItems.Result.Items(sku: "d"))
             _ = (Api.Act.Pick.Item(sku: "e"), Api.Act.Pick.Items(qty: 2))
         }

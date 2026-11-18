@@ -71,6 +71,7 @@ const blocksRuntimeTypeNames = {
   'OidcExchangeException',
   'OidcLoading',
   'OidcProvider',
+  'OidcRequestException',
   'OidcSignedIn',
   'OidcSignedOut',
   'OidcUnknownProviderException',
@@ -214,8 +215,8 @@ class TransferableType extends ResolvedType {
   /// provider names it lists, in spec order without duplicates; null for any
   /// other transferable, or for an `oidc/client` that names none.
   ///
-  /// A `TypedOidcClient<P>` only ever takes a `P` (in `signIn`,
-  /// `signInRelay` and `exchange`), never returns one, so its argument is
+  /// A `TypedOidcClient<P>` only ever takes a `P` (in `signInDirect`,
+  /// `signIn` and `exchange`), never returns one, so its argument is
   /// narrowed to these values rather than generated as a model, and isn't in
   /// [typeArgs].
   final List<String>? oidcProviders;
@@ -351,6 +352,11 @@ class CodegenModel {
 
 /// Thrown when two structurally distinct inline types resolve to the same
 /// generated Dart identifier and `autoDisambiguate` is not enabled.
+///
+/// Also thrown, whatever `failOnCollision` says, when two namespaces would
+/// generate one `…Api` class because one name already ends in `Api`
+/// (`oidcAuth` and `oidcAuthApi` are both `OidcAuthApi`; see
+/// [apiClassNamesOf]).
 class NamingConflictException implements Exception {
   /// A multi-line report naming each conflicting type and where it came from.
   final String message;
@@ -554,6 +560,7 @@ class CodegenModelBuilder {
       _warnings.add(_formatUnboundTransferable(operation, transferable));
     }
 
+    _checkApiSuffixCollisions(namespaceMap.keys);
     _assignOidcProviderEnums(namespaceMap);
 
     final namespaces = namespaceMap.entries
@@ -1381,6 +1388,32 @@ class CodegenModelBuilder {
     _warnings.addAll(lines);
   }
 
+  /// Throws a [NamingConflictException] when a namespace whose name ends in
+  /// `Api` and one that gains the `Api` land on one class (`oidcAuthApi` and
+  /// `oidcAuth` are both `OidcAuthApi`; see [apiClassNamesOf]). Other
+  /// namespace collisions are warned about and told apart with a `$`, but
+  /// here that would make which export keeps the plain name depend on spec
+  /// order, so the generator refuses instead.
+  void _checkApiSuffixCollisions(Iterable<String> namespaces) {
+    final groups = <String, List<String>>{};
+    for (final n in namespaces) {
+      (groups[apiClassBaseOf(n)] ??= []).add(n);
+    }
+    final lines = <String>[];
+    for (final MapEntry(key: cls, value: group) in groups.entries) {
+      bool keepsApi(String n) => apiClassBaseOf(n) == _capitalizedIdentifier(n);
+      if (!group.any(keepsApi) || group.every(keepsApi)) continue;
+      final quoted = [for (final n in group) "'${escapeForDiagnostic(n)}'"];
+      lines.add(
+        'Naming conflict: namespaces ${quoted.join(', ')} all generate the '
+        'Dart class `$cls`, because a namespace whose name already ends in '
+        '`Api` does not get a second one. Rename one of these exports in '
+        'your backend.',
+      );
+    }
+    if (lines.isNotEmpty) throw NamingConflictException(lines.join('\n'));
+  }
+
   /// Warns when distinct spec names of one scope generate one Dart
   /// identifier. The generator then gives all but one of them trailing `$`s
   /// (see [dartIdentifiers]), and which one depends on spec order, so adding
@@ -1391,7 +1424,7 @@ class CodegenModelBuilder {
     _warnCollisions('namespaces', [
       ...nsNames.where((n) => sanitizeIdentifier(n) == n),
       ...nsNames.where((n) => sanitizeIdentifier(n) != n),
-    ], (n) => '${_capitalize(sanitizeIdentifier(n))}Api');
+    ], apiClassBaseOf);
     for (final ns in namespaces) {
       _warnCollisions(
         'methods of namespace ${escapeForDiagnostic(ns.name)}',
@@ -1779,6 +1812,8 @@ Set<String> modelTypeNames(Iterable<ResolvedType> types) {
 /// The `…Api` class of each of [namespaces], keyed by the namespace's name:
 /// the name camel-cased and capitalized, then `Api` (`todos` is `TodosApi`,
 /// `a.b` is `ABApi`, `_default` is `$defaultApi`; see [dartIdentifiers]).
+/// A name that already ends in `Api` doesn't get a second one
+/// (`oidcAuthApi` is `OidcAuthApi`, `api` is `Api`; see [apiClassBaseOf]).
 /// The class is generated, so it yields to a type of the same name
 /// ([typeNames]; `TodosApi$`), and of namespaces that land on one class, the
 /// one whose name is already an identifier keeps it.
@@ -1791,11 +1826,25 @@ Map<String, String> apiClassNamesOf(
     ...namespaces.where((n) => sanitizeIdentifier(n) != n),
   ],
   reserved: {...typeNames, ...generatedTopLevelNames},
-  sanitize: (n) {
-    final id = sanitizeIdentifier(n);
-    return '${id.isEmpty ? id : id[0].toUpperCase() + id.substring(1)}Api';
-  },
+  sanitize: apiClassBaseOf,
 );
+
+/// The class name [namespace] generates before [dartIdentifiers] escapes
+/// it: [_capitalizedIdentifier], then `Api` unless that already ends in
+/// `Api`. So `todos` is `TodosApi`, `oidcAuthApi` is `OidcAuthApi` and
+/// `api` is `Api`, as Kotlin and Swift name the class (`OidcAuthApi`), so
+/// no generated name doubles `Api`.
+String apiClassBaseOf(String namespace) {
+  final id = _capitalizedIdentifier(namespace);
+  return id.endsWith('Api') ? id : '${id}Api';
+}
+
+/// [name] as an identifier ([sanitizeIdentifier]) with its first letter
+/// capitalized.
+String _capitalizedIdentifier(String name) {
+  final id = sanitizeIdentifier(name);
+  return id.isEmpty ? id : id[0].toUpperCase() + id.substring(1);
+}
 
 /// [name] as one PascalCase word: each run of letters and digits between
 /// other characters capitalized and joined, so the method `get_client` is

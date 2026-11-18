@@ -40,6 +40,32 @@ import type { Expiry, ReadValidationMode, TableOptions } from './types.js';
 /** A stored item: one DynamoDB attribute per top-level field, plus the block's `_bkv_` attributes. */
 export type Item = Record<string, unknown>;
 
+/**
+ * The DocumentClient's marshalling options. The AWS runtime passes them to its
+ * client and the mock marshals every write with them, so both store a value the
+ * same way.
+ */
+export const MARSHALL_OPTIONS = { removeUndefinedValues: true } as const;
+
+/** DynamoDB's size limits for a key attribute value, in UTF-8 bytes. */
+const MAX_PARTITION_KEY_BYTES = 2048;
+const MAX_SORT_KEY_BYTES = 1024;
+
+/**
+ * Deepest nesting of lists and maps DynamoDB stores. The documented limit is 32
+ * levels counting the top-level attribute itself, so an attribute holding 32
+ * nested maps is rejected.
+ */
+const MAX_NESTING_DEPTH = 31;
+
+/**
+ * Most keys one `BatchGetItem` request takes, and most writes one
+ * `BatchWriteItem` request takes. Both runtimes split a batch into requests of
+ * these sizes.
+ */
+export const BATCH_GET_MAX_KEYS = 100;
+export const BATCH_WRITE_MAX_REQUESTS = 25;
+
 /** A key attribute value: a DynamoDB string key or number key. */
 export type KeyValue = string | number;
 
@@ -182,11 +208,21 @@ function describe(value: unknown): string {
  *
  * @throws {KVStoreErrors.InvalidQuery} If the value does not have the type of the field (this
  *   includes `NaN` and an infinite number).
- * @throws {KVStoreErrors.ValidationFailed} If the value is an empty string.
+ * @throws {KVStoreErrors.ValidationFailed} If the value is an empty string, or a string over
+ *   `maxBytes` UTF-8 bytes (the partition key limit unless the field is a sort key).
  */
-function checkKeyValue(field: string, value: unknown, type: 'S' | 'N'): KeyValue {
+function checkKeyValue(
+	field: string,
+	value: unknown,
+	type: 'S' | 'N',
+	maxBytes: number = MAX_PARTITION_KEY_BYTES,
+): KeyValue {
 	if (type === 'S' && typeof value === 'string') {
 		if (value === '') throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.emptyKeyField(field));
+		const bytes = Buffer.byteLength(value, 'utf8');
+		if (bytes > maxBytes) {
+			throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.keyFieldTooLong(field, bytes, maxBytes));
+		}
 		return value;
 	}
 	if (type === 'N' && typeof value === 'number' && Number.isFinite(value)) return value;
@@ -220,7 +256,10 @@ export function normalizeKey(model: KeyModel, key: unknown): Record<string, KeyV
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.keyMustBeObject(fields));
 	}
 	const result: Record<string, KeyValue> = {};
-	for (const field of fields) result[field] = checkKeyValue(field, key[field], keyType(model, field));
+	for (const field of fields) {
+		const maxBytes = field === model.table.sortKey ? MAX_SORT_KEY_BYTES : MAX_PARTITION_KEY_BYTES;
+		result[field] = checkKeyValue(field, key[field], keyType(model, field), maxBytes);
+	}
 	return result;
 }
 
@@ -272,6 +311,16 @@ function hasUnstorableField(value: unknown): boolean {
 	return Object.keys(value).some((field) => field === UNSTORABLE_FIELD || hasUnstorableField(value[field]));
 }
 
+/** Whether a list or map nests deeper than {@link MAX_NESTING_DEPTH}, where `depth` 1 is a top-level attribute. */
+function nestsTooDeep(value: unknown, depth: number): boolean {
+	let children: unknown[];
+	if (Array.isArray(value)) children = value;
+	else if (value instanceof Map) children = [...value.values()];
+	else if (isPlainObject(value)) children = Object.values(value);
+	else return false;
+	return depth > MAX_NESTING_DEPTH || children.some((child) => nestsTooDeep(child, depth + 1));
+}
+
 /**
  * Build the stored item for a write: the key attributes, the value laid out
  * flat (an object) or in `_bkv_value` (anything else), and the expiry.
@@ -281,7 +330,8 @@ function hasUnstorableField(value: unknown): boolean {
  *
  * @throws {KVStoreErrors.ValidationFailed} If the value has a field named `__proto__` at any depth
  *   (a field name that DynamoDB cannot store), or if an object value has a top-level field that
- *   starts with `_bkv_`, or an empty string in an indexed field.
+ *   starts with `_bkv_`, or an indexed field that is an empty string or over DynamoDB's key size
+ *   limit, or if lists or maps nest more than 32 levels deep.
  */
 function buildItem(
 	model: KeyModel,
@@ -302,13 +352,26 @@ function buildItem(
 		item = { ...value, ...keyAttrs };
 		for (const [name, index] of Object.entries(model.indexes)) {
 			for (const field of keyFields(index)) {
-				if (item[field] === '') {
+				const indexed = item[field];
+				if (indexed === '') {
 					throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.emptyIndexField(field, name));
+				}
+				if (typeof indexed !== 'string') continue;
+				const maxBytes = field === index.sortKey ? MAX_SORT_KEY_BYTES : MAX_PARTITION_KEY_BYTES;
+				const bytes = Buffer.byteLength(indexed, 'utf8');
+				if (bytes > maxBytes) {
+					throw blocksError(
+						KVStoreErrors.ValidationFailed,
+						KVStoreMessages.indexFieldTooLong(field, name, bytes, maxBytes),
+					);
 				}
 			}
 		}
 	} else {
 		item = { ...keyAttrs, [VALUE_ATTRIBUTE]: value };
+	}
+	if (Object.values(item).some((attribute) => nestsTooDeep(attribute, 1))) {
+		throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.nestedTooDeep(MAX_NESTING_DEPTH + 1));
 	}
 	// Drop undefined fields: JSON has no undefined, the DocumentClient rejects it,
 	// and the mock would otherwise diverge from what DynamoDB stores.
@@ -713,13 +776,19 @@ export function valueCheckHolds(check: Exclude<ValueCheckPlan, undefined>, exist
  */
 const SORT_CONDITIONS = {
 	equals: { clause: '#sk = :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v === a },
-	greaterThan: { clause: '#sk > :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v > a },
-	greaterThanOrEqual: { clause: '#sk >= :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v >= a },
-	lessThan: { clause: '#sk < :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v < a },
-	lessThanOrEqual: { clause: '#sk <= :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v <= a },
+	greaterThan: { clause: '#sk > :skval', matches: (v: KeyValue, [a]: KeyValue[]) => compareKeyValues(v, a) > 0 },
+	greaterThanOrEqual: {
+		clause: '#sk >= :skval',
+		matches: (v: KeyValue, [a]: KeyValue[]) => compareKeyValues(v, a) >= 0,
+	},
+	lessThan: { clause: '#sk < :skval', matches: (v: KeyValue, [a]: KeyValue[]) => compareKeyValues(v, a) < 0 },
+	lessThanOrEqual: {
+		clause: '#sk <= :skval',
+		matches: (v: KeyValue, [a]: KeyValue[]) => compareKeyValues(v, a) <= 0,
+	},
 	between: {
 		clause: '#sk BETWEEN :skval1 AND :skval2',
-		matches: (v: KeyValue, [lo, hi]: KeyValue[]) => v >= lo && v <= hi,
+		matches: (v: KeyValue, [lo, hi]: KeyValue[]) => compareKeyValues(v, lo) >= 0 && compareKeyValues(v, hi) <= 0,
 	},
 	beginsWith: {
 		clause: 'begins_with(#sk, :skval)',
@@ -844,12 +913,17 @@ function planSort(model: KeyModel, field: string, condition: unknown): QueryPlan
 		if (!Array.isArray(operand) || operand.length !== 2) {
 			throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.betweenNeedsTwoValues(field));
 		}
-		return { op, operands: operand.map((value) => checkKeyValue(field, value, type)) };
+		const operands = operand.map((value) => checkKeyValue(field, value, type, MAX_SORT_KEY_BYTES));
+		// DynamoDB rejects a reversed range; checking here gives both runtimes the same named error.
+		if (compareKeyValues(operands[0], operands[1]) > 0) {
+			throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.betweenBoundsReversed(field));
+		}
+		return { op, operands };
 	}
 	if (op === 'beginsWith' && type !== 'S') {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.beginsWithOnNumberField(field));
 	}
-	return { op, operands: [checkKeyValue(field, operand, type)] };
+	return { op, operands: [checkKeyValue(field, operand, type, MAX_SORT_KEY_BYTES)] };
 }
 
 /** Whether a sort-key value satisfies the sort condition of a query (the mock's counterpart to {@link keyCondition}). */
@@ -882,11 +956,52 @@ export function keyCondition(plan: QueryPlan): {
 	};
 }
 
-/** Compare two key values the way DynamoDB orders a sort key of that type. */
+const utf8 = new TextEncoder();
+
+/**
+ * Compare two key values the way DynamoDB orders a key of that type: numbers
+ * numerically, strings by their UTF-8 bytes. JavaScript's `<` compares strings by
+ * UTF-16 code units, which orders some non-ASCII strings differently.
+ */
 export function compareKeyValues(a: unknown, b: unknown): number {
+	if (typeof a === 'string' && typeof b === 'string') return Math.sign(compareBytes(utf8.encode(a), utf8.encode(b)));
 	const av = a as KeyValue;
 	const bv = b as KeyValue;
 	return av < bv ? -1 : av > bv ? 1 : 0;
+}
+
+function compareBytes(x: Uint8Array, y: Uint8Array): number {
+	const length = Math.min(x.length, y.length);
+	for (let i = 0; i < length; i++) {
+		if (x[i] !== y[i]) return x[i] - y[i];
+	}
+	return x.length - y.length;
+}
+
+/**
+ * Reject a batch that names the same key twice within one DynamoDB request.
+ * Both runtimes split a batch into requests of `requestSize` entries. DynamoDB
+ * refuses a request that repeats a key, and allows a key repeated in a later
+ * request, where the later entry wins.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If two entries of one request share a key.
+ */
+export function assertNoDuplicateKeys(
+	model: KeyModel,
+	operation: string,
+	keys: readonly Record<string, KeyValue>[],
+	requestSize: number,
+): void {
+	let seen = new Map<string, number>();
+	for (const [i, key] of keys.entries()) {
+		if (i % requestSize === 0) seen = new Map();
+		const id = serializeKey(model, key);
+		const first = seen.get(id);
+		if (first !== undefined) {
+			throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.duplicateBatchKey(operation, first, i));
+		}
+		seen.set(id, i);
+	}
 }
 
 /**
@@ -1118,8 +1233,8 @@ export function orderedResults<E>(
 
 /**
  * Deterministic tie-break for ordering: compare two items by the base-table key
- * (partition key, then sort key). Returns a stable -1, 0, or 1. String
- * comparisons use JS UTF-16 order (see DESIGN.md).
+ * (partition key, then sort key). Returns a stable -1, 0, or 1. Strings compare
+ * in DynamoDB's UTF-8 byte order, through {@link compareKeyValues}.
  */
 export function compareByBaseKey(model: KeyModel, a: Item, b: Item): number {
 	for (const field of keyFields(model.table)) {

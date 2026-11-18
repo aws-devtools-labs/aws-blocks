@@ -34,16 +34,16 @@ const SWIFT_CONTENT_LOCAL = (v) =>
 
 const ALLOWLIST = [
 	{
-		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:2059',
+		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:2147',
 		reason: "label is the generated class name, a Dart identifier, with its `$` escaped on the line above, so it holds no quote or interpolation.",
 	},
-	...[582, 677].map((l) => ({ at: `native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:${l}`, reason: SWIFT_TYPE_NAME })),
+	...[583, 678].map((l) => ({ at: `native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:${l}`, reason: SWIFT_TYPE_NAME })),
 	{
-		at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:597',
+		at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:598',
 		reason: 'Decoding error text that is a constant apart from the runtime `\\(disc)` interpolation it writes into the generated code.',
 	},
-	...[1076, 1078, 1097, 1099].map((l) => ({ at: `native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:${l}`, reason: SWIFT_CONTENT_LOCAL('key') })),
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1162', reason: SWIFT_CONTENT_LOCAL('escaped') },
+	...[1077, 1079, 1098, 1100].map((l) => ({ at: `native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:${l}`, reason: SWIFT_CONTENT_LOCAL('key') })),
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1163', reason: SWIFT_CONTENT_LOCAL('escaped') },
 	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator+EntryPoint.swift:112', reason: SWIFT_CONTENT_LOCAL('name and url') },
 ];
 

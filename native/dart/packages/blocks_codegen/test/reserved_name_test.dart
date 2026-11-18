@@ -492,7 +492,7 @@ void main() {
       expect(blocks, contains(r'  late final RuntimeTypeApi runtimeType$;'));
       expect(blocks, contains(r'  late final ToStringApi toString$;'));
       expect(blocks, contains(r'    runtimeType$ = RuntimeTypeApi(client);'));
-      expect(blocks, contains('  late final ApiApi api;'));
+      expect(blocks, contains('  late final Api api;'));
     });
 
     test('a server name is escaped, and the default reads it', () {

@@ -14,7 +14,7 @@ import { isTelemetryEnabled } from './consent.js';
  * to a file path; the synth child writes the resolved framework there; the parent
  * reads it back before building the event. A plain static cannot cross that boundary.
  */
-export const FRAMEWORK_SINK_ENV = 'AWS_BLOCKS_FRAMEWORK_SINK';
+export const FRAMEWORK_SINK_ENV = 'CDK_BLOCKS_FRAMEWORK_SINK';
 
 /**
  * Sinks this process created, so cleanup only ever removes a directory we own. Each maps

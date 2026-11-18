@@ -11,4 +11,4 @@ export const authApi = auth.createApi();
 export const oidcAuthApi = auth.createOidcApi();
 ```
 
-`getClient()` returns the same `oidc/client` descriptor `AuthOIDC` did. It carries this block's own sign-in routes, so a second block with its own `redirects.callbackPath` and `signOutPath` works too, and it lists the providers that can sign in in this runtime. The generated native clients type `signIn` by the block's provider ids, as they did for `AuthOIDC`. `createApi()` is unchanged.
+`getClient()` returns the same `oidc/client` descriptor `AuthOIDC` did. It carries this block's own sign-in routes, so a second block with its own `redirects.callbackPath` and `signOutPath` works too, and it lists the providers that can sign in in this runtime. The generated Swift, Kotlin and Dart clients type `signIn` by the block's provider ids. `createApi()` is unchanged.

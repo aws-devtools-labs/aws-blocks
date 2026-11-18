@@ -52,12 +52,10 @@ public final class FileDownloadHandle: Sendable {
         self.init(url: try container.decode(String.self, forKey: .url))
     }
 
-    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
-    /// `{ "__blocks": "file-bucket/download", "url" }`.
+    /// Always throws `EncodingError.invalidValue`: transferables are read-only. The conformance exists so a
+    /// generated `Codable` model that holds a handle compiles.
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DescriptorKeys.self)
-        try container.encode("file-bucket/download", forKey: .blocksType)
-        try container.encode(url, forKey: .url)
+        throw TransferableDescriptor.readOnly(self, tag: "file-bucket/download", encoder: encoder)
     }
 
     /// Returns the presigned download URL.

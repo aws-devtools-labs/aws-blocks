@@ -37,8 +37,7 @@ npx -y -p ${packageName}@latest node -e "console.log(require('path').dirname(req
 To re-vendorize (overwrites local changes):
 
 \`\`\`bash
-rm -rf vendor/${shortName}
-npm run vendorize ${packageName}
+npm run vendorize ${packageName} -- --force
 \`\`\`
 
 ## Reverting vendorization

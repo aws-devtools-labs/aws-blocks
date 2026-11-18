@@ -1,7 +1,7 @@
 /**
  * Regenerates aws-blocks/client.js from the backend exports.
  *
- * Run: npm run blocks:generate-client
+ * Run: npm run generate-client
  *
  * Uses generateClientCode() to discover ApiNamespace exports,
  * then injects the Amplify auth middleware and URL configuration.
@@ -32,7 +32,7 @@ const codeFromImports = code.slice(code.indexOf(importLine));
 const preamble = `// ============================================================
 // AUTO-GENERATED FILE — DO NOT EDIT
 //
-// Regenerate with: npm run blocks:generate-client
+// Regenerate with: npm run generate-client
 // ============================================================
 
 import { fetchAuthSession } from 'aws-amplify/auth';

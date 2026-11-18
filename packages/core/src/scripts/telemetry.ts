@@ -16,7 +16,7 @@ interface ParsedFlags {
 }
 
 function printUsage(): void {
-  console.log(`Usage: npx --no -- cdk-blocks telemetry [status|enable|disable] [--global]
+  console.log(`Usage: npm run telemetry -- [status|enable|disable] [--global]
        npx blocks-telemetry [options]   (the older form; same options as flags)
 
 Options:
@@ -42,7 +42,7 @@ Environment:
                                               Case-insensitive; surrounding whitespace ignored
   BLOCKS_TELEMETRY_ENDPOINT=<url>             Sends events to <url> instead of the collector
                                               Send failures are ignored; the command is unaffected
-  AWS_BLOCKS_DISABLE_TEMPLATE_METADATA=1|true|yes
+  CDK_BLOCKS_DISABLE_TEMPLATE_METADATA=1|true|yes
                                               Omits AWSToolsMetrics.AWSBlocks from CloudFormation templates
                                               Also: -c blocks:template-metadata=false or cdk --no-version-reporting
                                               Separate from telemetry; --disable does not affect it
