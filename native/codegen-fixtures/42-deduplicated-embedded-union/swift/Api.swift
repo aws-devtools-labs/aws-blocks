@@ -23,7 +23,7 @@ public final nonisolated class AlphaApi: Sendable {
 
     public enum SetState {
 
-        public struct SignIn: Codable {
+        public struct SignIn: Codable, Sendable {
             public let username: String
 
             public init(username: String) {
@@ -31,11 +31,11 @@ public final nonisolated class AlphaApi: Sendable {
             }
         }
 
-        public struct ConfirmSignIn: Codable {
+        public struct ConfirmSignIn: Codable, Sendable {
             public let session: String
             public let challenge: ConfirmSignInChallenge
 
-            public struct Code: Codable {
+            public struct Code: Codable, Sendable {
                 public let code: String
 
                 public init(code: String) {
@@ -43,7 +43,7 @@ public final nonisolated class AlphaApi: Sendable {
                 }
             }
 
-            public struct NewPassword: Codable {
+            public struct NewPassword: Codable, Sendable {
                 public let newPassword: String
 
                 public init(newPassword: String) {
@@ -51,7 +51,7 @@ public final nonisolated class AlphaApi: Sendable {
                 }
             }
 
-            public enum ConfirmSignInChallenge: Codable {
+            public enum ConfirmSignInChallenge: Codable, Sendable {
                 case code(Code)
                 case newPassword(NewPassword)
 
@@ -105,7 +105,7 @@ public final nonisolated class AlphaApi: Sendable {
             }
         }
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case signIn(SignIn)
             case confirmSignIn(ConfirmSignIn)
 
@@ -161,7 +161,7 @@ public final nonisolated class BetaApi: Sendable {
 
     public enum SetState {
 
-        public struct SignIn: Codable {
+        public struct SignIn: Codable, Sendable {
             public let username: String
 
             public init(username: String) {
@@ -169,11 +169,11 @@ public final nonisolated class BetaApi: Sendable {
             }
         }
 
-        public struct ConfirmSignIn: Codable {
+        public struct ConfirmSignIn: Codable, Sendable {
             public let session: String
             public let challenge: ConfirmSignInChallenge
 
-            public struct Code: Codable {
+            public struct Code: Codable, Sendable {
                 public let code: String
 
                 public init(code: String) {
@@ -181,7 +181,7 @@ public final nonisolated class BetaApi: Sendable {
                 }
             }
 
-            public struct NewPassword: Codable {
+            public struct NewPassword: Codable, Sendable {
                 public let newPassword: String
 
                 public init(newPassword: String) {
@@ -189,7 +189,7 @@ public final nonisolated class BetaApi: Sendable {
                 }
             }
 
-            public enum ConfirmSignInChallenge: Codable {
+            public enum ConfirmSignInChallenge: Codable, Sendable {
                 case code(Code)
                 case newPassword(NewPassword)
 
@@ -243,7 +243,7 @@ public final nonisolated class BetaApi: Sendable {
             }
         }
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case signIn(SignIn)
             case confirmSignIn(ConfirmSignIn)
 

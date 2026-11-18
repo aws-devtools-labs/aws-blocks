@@ -1,6 +1,5 @@
 ---
 '@aws-blocks/bb-agent': patch
-'@aws-blocks/bb-data': patch
 '@aws-blocks/bb-realtime': patch
 '@aws-blocks/core': patch
 ---

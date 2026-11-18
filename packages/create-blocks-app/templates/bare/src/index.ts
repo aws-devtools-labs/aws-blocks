@@ -3,7 +3,7 @@ import { api } from 'aws-blocks';
 import { html, render } from 'lit-html';
 
 // Backend APIs are defined in aws-blocks/index.ts
-// Full docs: node_modules/@aws-blocks/blocks/README.md
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 
 async function main() {
   const result = await api.greet("World");

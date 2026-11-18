@@ -6,7 +6,7 @@
  *
  * Centralised because they were wrong. Two pages instructed
  * `blocks deploy --stage <stage>`, which is not a command that exists anywhere:
- * the repo ships `bb-data`, `blocks-vendorize`, `blocks-generate-spec`,
+ * the repo ships `blocks-vendorize`, `blocks-generate-spec`,
  * `blocks-telemetry` and `create-blocks-app`, and no `blocks` binary at all. A
  * third page already said `npm run deploy` correctly, so the dashboard
  * contradicted itself page to page while telling someone their stage was not

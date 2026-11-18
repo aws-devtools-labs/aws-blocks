@@ -226,10 +226,10 @@ test('CDK: the internal external guard requires a name and forbids a value', () 
 });
 
 test('CDK: fromExisting still registers the runtime config key (BLOCKS_SSM_PARAM_*)', () => {
-	// BLOCKS_SSM_PARAM_DB_URL is the ONLY link between db-pull's runtime resolveConnString()
-	// and the deployed parameter name. If config registration ever moved inside the
-	// non-external branch, every external setting would fail at runtime with
-	// ParameterNotFound — and nothing else would catch it. This pins the contract.
+	// BLOCKS_SSM_PARAM_DB_URL is the config key that carries an external setting's
+	// deployed parameter name to the runtime. If config registration ever moved inside
+	// the non-external branch, an external setting would stop registering it — and
+	// nothing else would catch it. This pins the contract.
 	const { stack, parent } = setup();
 	AppSetting.fromExisting(parent, 'db-url', { name: '/blocks/sandbox/db-abc-connection-string', secret: true });
 

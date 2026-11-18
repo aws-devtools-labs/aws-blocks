@@ -32,6 +32,23 @@ class OidcCallbackException extends OidcException {
   OidcCallbackException(super.message);
 }
 
+/// A request to one of the auth block's routes got a response the client
+/// doesn't accept, such as a 5xx from the session or sign-out route.
+class OidcRequestException extends OidcException {
+  /// The HTTP status of the response.
+  final int statusCode;
+
+  /// The error name the server sent in its JSON body (`{"name": …}`), such
+  /// as `SignOutIncompleteException`, or null when it sent none.
+  final String? errorName;
+
+  OidcRequestException(
+    super.message, {
+    required this.statusCode,
+    this.errorName,
+  });
+}
+
 /// The user dismissed / cancelled the sign-in flow.
 class OidcCancelledException extends OidcException {
   OidcCancelledException() : super('Sign-in cancelled');

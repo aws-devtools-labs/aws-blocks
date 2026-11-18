@@ -83,7 +83,7 @@ final class TransferableUnionArmTests: XCTestCase {
         let output = try generate(methods: [method("openFeed", result: anyOf(channel(object(["text": string])), failure))])
 
         assertContains(output.api, "case result_Variant0(RealtimeChannel<Result_Variant0Message>)")
-        assertContains(output.api, "public struct Result_Variant0Message: Codable {")
+        assertContains(output.api, "public struct Result_Variant0Message: Codable, Sendable {")
     }
 
     func testDiscriminatedUnionTriesATransferableArmOnlyWithoutTheDiscriminator() throws {
@@ -139,8 +139,13 @@ final class TransferableUnionArmTests: XCTestCase {
             if case .result_Variant0(let notes) = feed {
                 print("\(notes.channel) \(try notes.deserializer(Data(#"{"text":"hi"}"#.utf8)).text)")
             }
-            // It encodes back to the descriptor the server sent.
-            print(try encoded(feed))
+            // Transferables are read-only: encoding a union holding one throws.
+            do {
+                _ = try encoded(feed)
+                print("encoded")
+            } catch EncodingError.invalidValue {
+                print("read-only")
+            }
             if case .result_Variant1(let failure) = try await api.openFailing() { print(failure.error) }
             if case .result_Variant0(let client) = try await api.signIn() { print("\(client.providers) \(client.exchangePath)") }
             if case .result_Variant2(let notes) = try await api.join() { print(notes.channel) }
@@ -154,7 +159,7 @@ final class TransferableUnionArmTests: XCTestCase {
         XCTAssertFalse(run.compilerOutput.contains("warning:"), "The generated module compiled with warnings:\n\(run.compilerOutput)")
         XCTAssertEqual(run.output.split(separator: "\n").map(String.init), [
             "app/notes hi",
-            #"{"__blocks":"realtime\/channel","channel":"app\/notes","token":"t","wsUrl":"ws:\/\/127.0.0.1:1\/ws"}"#,
+            "read-only",
             "closed",
             #"["google"] /auth/exchange"#,
             "app/notes",

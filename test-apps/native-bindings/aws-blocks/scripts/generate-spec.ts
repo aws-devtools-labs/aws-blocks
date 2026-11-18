@@ -1,11 +1,8 @@
 // Generates aws-blocks/blocks.spec.json from the backend entry point.
 //
 // Mirrors server.ts / deploy-sandbox.ts: a tsx script that imports the helper from
-// `@aws-blocks/blocks/scripts`, rather than invoking the `blocks-generate-spec`
-// bin. In the monorepo, npm does not link a workspace package's bin into the
-// resolution path, so `npx blocks-generate-spec` 404s in CI — but `tsx` is a
-// published dependency that resolves normally, and running under tsx lets
-// writeSpec load the TypeScript backend directly (no explicit loader needed).
+// `@aws-blocks/blocks/scripts` to exercise the native declarations directly.
+// Running under tsx lets writeSpec load the TypeScript backend directly.
 import { readNativeDeclarations, writeSpec } from '@aws-blocks/blocks/scripts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

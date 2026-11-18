@@ -7,7 +7,7 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../core" },
-    { "path": "../data-common" },
+    { "path": "../bb-app-setting" },
     { "path": "../bb-logger" }
   ]
 }

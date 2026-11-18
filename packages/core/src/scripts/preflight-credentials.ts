@@ -135,7 +135,7 @@ const stsProbe: CredentialProbe = async (region, profile, environmentKeys) => {
 export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	/** The npm script name, used in the messages (e.g. `sandbox`, `deploy`). */
 	command: string;
-	/** How the user runs the command, in the messages (for example `cdk-blocks deploy`). Default: `npm run <command>`. */
+	/** How the user runs the command, in the messages. Default: `npm run <command>`. */
 	invocation?: string;
 	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
 	probe?: CredentialProbe;
@@ -343,7 +343,7 @@ export async function assertAwsCredentials({
 		if (denial) {
 			log.warn(
 				[
-					`⚠️  AWS denied access while checking credentials for \`npm run ${command}\` (${label}); ` +
+					`⚠️  AWS denied access while checking credentials for \`${invocation}\` (${label}); ` +
 						'continuing — the deploy will report the error if it is denied too.',
 					...denialGuidance(denial).map((line) => `  ${line}`),
 				].join('\n'),
@@ -383,7 +383,7 @@ export async function assertAwsCredentials({
 					invocation,
 					account: verified.account,
 					region,
-					// The profile CDK deploys with, AWS_PROFILE included (`cdk-blocks --profile` sets it for this
+					// The profile CDK deploys with, AWS_PROFILE included (`--profile` sets it for this
 					// process): resolveDeploymentTarget's `profile` is only cdk.json's or AWS_DEFAULT_PROFILE.
 					profile: environmentKeys ? undefined : profile || env.AWS_PROFILE,
 					credentials: verified.credentials,
@@ -436,7 +436,7 @@ export interface AwsIdentity {
 
 /** Options for {@link readAwsIdentity}. */
 export interface ReadAwsIdentityOptions extends DeploymentTargetOptions {
-	/** How the user runs the command, used in the failure guidance (for example `cdk-blocks whoami`). */
+	/** How the user runs the command, used in the failure guidance (for example `npm run whoami`). */
 	invocation: string;
 	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
 	probe?: CredentialProbe;

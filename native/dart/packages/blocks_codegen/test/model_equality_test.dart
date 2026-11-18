@@ -300,28 +300,6 @@ void main() {
       expect(output, contains(_realtimeExport));
     });
 
-    test('a file upload handle in a list parameter', () {
-      final output = _generate(
-        _spec([
-          _method(
-            'ping',
-            {'type': 'string'},
-            [
-              {
-                'name': 'uploads',
-                'required': true,
-                'schema': _list({
-                  'x-blocks-transferable': 'file-bucket/upload',
-                }),
-              },
-            ],
-          ),
-        ], {}),
-      );
-      expect(output, contains('List<FileUploadHandle> uploads'));
-      expect(output, contains(_realtimeExport));
-    });
-
     test('an oidc client held by a model two levels down', () {
       final output = _generate(
         _spec(

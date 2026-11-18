@@ -12,7 +12,7 @@ import { BB_NAME } from '../version.js';
 import { RELEASE_PK, RELEASE_TTL } from './layout.js';
 
 /**
- * The store of a `KVStore` release up to 0.4.0, for an upgrade.
+ * The store of `KVStore` release 0.4.0 or earlier, for an upgrade.
  *
  * This construct declares the table as release 0.4.0 declares it: the same
  * name, key, billing mode, TTL setting, removal policy, deletion protection,
@@ -21,9 +21,9 @@ import { RELEASE_PK, RELEASE_TTL } from './layout.js';
  * change it. The app's role gets the grant of that release on the table, read
  * and write, so its policy does not change either.
  *
- * @deprecated Only for the upgrade of a store from a release up to 0.4.0. The class is frozen: it has
- *   the API of that release and gets no new features. Use `KVStore` for new data, and remove the
- *   `LegacyKVStore` when the copy is done. The steps are in the README section "Upgrade from release
+ * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
+ *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the
+ *   `LegacyKVStore` when the data is in the new store. The steps are in the README section "Upgrade from release
  *   0.4.0 or earlier":
  *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
  */

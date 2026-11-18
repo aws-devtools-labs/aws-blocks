@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Telemetry bin command e2e test.
+ * Telemetry task e2e test.
  *
- * Verifies the `blocks-telemetry` CLI binary:
- * 1. Bare command shows help/usage
+ * Verifies the `telemetry` task:
+ * 1. Bare command shows status
  * 2. --enable writes project config
  * 3. --disable writes project config
  * 4. --enable --global writes global config
@@ -14,8 +14,8 @@
  * 7. Config uses correct nested format { telemetry: { enabled: bool } }
  * 8. Existing keys in config files are preserved
  */
-import { execSync } from 'node:child_process';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -24,8 +24,7 @@ import assert from 'node:assert';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = join(__dirname, '..');
-const MONO_ROOT = join(APP_ROOT, '../..');
-const CLI_SCRIPT = join(MONO_ROOT, 'packages', 'core', 'dist', 'scripts', 'telemetry-cli.js');
+const TASK = ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--'];
 
 function createTmpDir(): string {
   const dir = join(tmpdir(), `blocks-telemetry-e2e-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -33,41 +32,25 @@ function createTmpDir(): string {
   return dir;
 }
 
-/** Creates a temp project dir with node_modules/.bin/blocks-telemetry symlinked (simulates npm install). */
-function createTmpProject(): string {
-  const dir = createTmpDir();
-  const binDir = join(dir, 'node_modules', '.bin');
-  mkdirSync(binDir, { recursive: true });
-  symlinkSync(CLI_SCRIPT, join(binDir, 'blocks-telemetry'));
-  return dir;
+function runTelemetry(args: string, options?: { cwd?: string; env?: Record<string, string> }) {
+  // Resolve the package from the installed app, but target the isolated project for consent changes.
+  const result = spawnSync(process.execPath, [...TASK, '-C', options?.cwd ?? APP_ROOT, 'telemetry', ...args.split(' ').filter(Boolean)], {
+    cwd: APP_ROOT,
+    encoding: 'utf-8',
+    env: { ...process.env, ...options?.env, USERPROFILE: options?.env?.HOME },
+  });
+  return { stdout: result.stdout, stderr: result.stderr, exitCode: result.status ?? 1 };
 }
 
-function runTelemetry(args: string, options?: { cwd?: string; env?: Record<string, string> }): { stdout: string; stderr: string; exitCode: number } {
-  const cmd = args ? `npx blocks-telemetry ${args}` : `npx blocks-telemetry`;
-  try {
-    const stdout = execSync(cmd, {
-      cwd: options?.cwd ?? APP_ROOT,
-      encoding: 'utf-8',
-      env: { ...process.env, ...options?.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return { stdout, stderr: '', exitCode: 0 };
-  } catch (error: any) {
-    return {
-      stdout: error.stdout?.toString() || '',
-      stderr: error.stderr?.toString() || '',
-      exitCode: error.status ?? 1,
-    };
-  }
-}
-
-describe('blocks-telemetry bin command e2e', () => {
+describe('Telemetry task e2e', () => {
   let tmpHome: string;
   let tmpProject: string;
 
   beforeEach(() => {
     tmpHome = createTmpDir();
-    tmpProject = createTmpProject();
+    tmpProject = createTmpDir();
+    writeFileSync(join(tmpProject, 'package.json'), '{}');
+    mkdirSync(join(tmpProject, 'aws-blocks'));
   });
 
   afterEach(() => {
@@ -75,11 +58,10 @@ describe('blocks-telemetry bin command e2e', () => {
     rmSync(tmpProject, { recursive: true, force: true });
   });
 
-  test('bare command shows help/usage', () => {
+  test('bare command shows status', () => {
     const result = runTelemetry('', { cwd: tmpProject, env: { HOME: tmpHome } });
     assert.strictEqual(result.exitCode, 0);
-    assert.ok(result.stdout.includes('Usage:'), 'Should display usage/help text');
-    assert.ok(result.stdout.includes('--status'), 'Should document --status flag');
+    assert.ok(result.stdout.includes('Telemetry:'), result.stdout);
   });
 
   test('--help shows usage information', () => {

@@ -2,21 +2,21 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum GroupValue: String, Codable {
+public nonisolated enum AuthenticatedUserGroups: String, Codable, Sendable {
     case admins
     case users
 }
 
-public nonisolated enum SignInProvider: String, Codable {
+public nonisolated enum AuthenticatedUserSignInProvider: String, Codable, Sendable {
     case password
 }
 
-public nonisolated struct AuthenticatedUser: Codable {
+public nonisolated struct AuthenticatedUser: Codable, Sendable {
     public let attributes: [String: String?]
     public let claims: [String: JSONValue]?
     public let federatedIdentity: FederatedIdentity?
-    public let groups: [GroupValue]
-    public let signInProvider: SignInProvider
+    public let groups: [AuthenticatedUserGroups]
+    public let signInProvider: AuthenticatedUserSignInProvider
     public let userId: String
     public let userSub: String
     public let username: String
@@ -44,7 +44,7 @@ public nonisolated struct AuthenticatedUser: Codable {
         try c.encode(self.username, forKey: .username)
     }
 
-    public init(attributes: [String: String?], claims: [String: JSONValue]? = nil, federatedIdentity: FederatedIdentity? = nil, groups: [GroupValue], signInProvider: SignInProvider, userId: String, userSub: String, username: String) {
+    public init(attributes: [String: String?], claims: [String: JSONValue]? = nil, federatedIdentity: FederatedIdentity? = nil, groups: [AuthenticatedUserGroups], signInProvider: AuthenticatedUserSignInProvider, userId: String, userSub: String, username: String) {
         self.attributes = attributes
         self.claims = claims
         self.federatedIdentity = federatedIdentity
@@ -56,25 +56,25 @@ public nonisolated struct AuthenticatedUser: Codable {
     }
 }
 
-public nonisolated enum DeliveryMedium: String, Codable {
+public nonisolated enum CodeDeliveryDetailsDeliveryMedium: String, Codable, Sendable {
     case sms = "SMS"
     case email = "EMAIL"
     case phoneNumber = "PHONE_NUMBER"
 }
 
-public nonisolated struct CodeDeliveryDetails: Codable {
+public nonisolated struct CodeDeliveryDetails: Codable, Sendable {
     public let attributeName: String
-    public let deliveryMedium: DeliveryMedium
+    public let deliveryMedium: CodeDeliveryDetailsDeliveryMedium
     public let destination: String
 
-    public init(attributeName: String, deliveryMedium: DeliveryMedium, destination: String) {
+    public init(attributeName: String, deliveryMedium: CodeDeliveryDetailsDeliveryMedium, destination: String) {
         self.attributeName = attributeName
         self.deliveryMedium = deliveryMedium
         self.destination = destination
     }
 }
 
-public nonisolated struct FederatedIdentity: Codable {
+public nonisolated struct FederatedIdentity: Codable, Sendable {
     public let providerId: String
     public let sub: String
 

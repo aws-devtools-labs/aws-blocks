@@ -73,7 +73,7 @@ describe('Windows E2E stacks are reclaimable by cleanup-stacks.yml', () => {
 	it('the driver fails the run when a teardown failed', () => {
 		assert.match(WINDOWS_DRIVER, /if \(teardownFailures\.length > 0\) \{\s*throw /);
 		const checkAt = WINDOWS_DRIVER.indexOf('if (teardownFailures.length > 0)');
-		// `cdk-blocks destroy` prompts for confirmation, so the driver passes --yes.
+		// `npm run destroy` prompts for confirmation, so the driver passes --yes.
 		const destroyAt = WINDOWS_DRIVER.lastIndexOf("teardown('npm', ['run', 'destroy', '--', '--yes']");
 		const lastTeardownAt = Math.max(...[...WINDOWS_DRIVER.matchAll(/\bteardown\(/g)].map((m) => m.index));
 		assert.ok(

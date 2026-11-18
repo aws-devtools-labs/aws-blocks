@@ -121,6 +121,14 @@ describe('marker insertion', () => {
 		assert.match(b, /bb-a/);
 		assert.match(b, /bb-b/);
 	});
+	test('drops trailing whitespace before the markers and inside the block', () => {
+		const entry = "export { Foo } from '@x/bb-foo';";
+		const out = insertBetweenMarkers(`x${' '.repeat(50_000)}\n\t \n`, entry);
+		assert.strictEqual(
+			out,
+			`x\n\n// <!-- BEGIN:generated-block-exports -->\n${entry}\n// <!-- END:generated-block-exports -->\n`,
+		);
+	});
 });
 
 describe('arg parsing', () => {
