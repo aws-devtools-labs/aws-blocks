@@ -241,6 +241,41 @@ final class SharedUnionTypeNameTests: XCTestCase {
         #endif
     }
 
+    /// A result field that deduplicates against the result's own `Input` (`{ input: Message, output: Message }`)
+    /// keeps naming it: only a reference to the hinted parameter's old type names the shared one.
+    func testAResultFieldNamedLikeTheOldInputKeepsItsOwnType() throws {
+        #if os(macOS)
+        func roleArm(_ role: String) -> String {
+            let props = #""role": { "type": "string", "enum": ["\#(role)"] }, "content": { "type": "string" }"#
+            return #"{ "type": "object", "properties": { \#(props) }, "required": ["role", "content"] }"#
+        }
+        let message = #"{ "oneOf": [\#(roleArm("user")), \#(roleArm("assistant"))] }"#
+        let prompt = #"{ "oneOf": [\#(figureArms.joined(separator: ", "))], "x-blocks-type-name": "Prompt" }"#
+        let result = #"{ "type": "object", "properties": { "input": \#(message), "output": \#(message) }, "required": ["input", "output"] }"#
+        let params = #"[{ "name": "input", "required": true, "schema": \#(prompt) }]"#
+        let output = try generate([#"{ "name": "ai.generate", "params": \#(params), "result": { "name": "R", "schema": \#(result) } }"#])
+
+        assertContains(output.api, "public func generate(input: Prompt) async throws -> Generate.Result {")
+        assertNotContains(output.api, "public let output: Prompt")
+        let main = """
+        import Foundation
+        import Generated
+
+        let json = #"{ "input": { "role": "user", "content": "hi" }, "output": { "role": "assistant", "content": "hello" } }"#
+        do {
+            let decoded = try JSONDecoder().decode(Ai.Generate.Result.self, from: Data(json.utf8))
+            print("output:", decoded.output)
+        } catch {
+            print("error:", error)
+        }
+        """
+        guard let run = try runConsumer(models: output.models, api: output.api, main: main) else { return }
+        XCTAssertTrue(run.output.hasPrefix("output: assistant(") && run.output.contains("hello"), run.output)
+        #else
+        throw XCTSkip("Compiling the generated module needs the host toolchain (macOS only).")
+        #endif
+    }
+
     /// A discriminated union with a value arm (`{ action: "user" } | { action: "group" } | string`) names that arm's
     /// case after the union (`to_Variant2`), so sharing it would rename the case under the old names; it keeps its
     /// nested type.

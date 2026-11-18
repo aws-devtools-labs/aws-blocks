@@ -26,6 +26,9 @@ public struct CodegenModelBuilder {
         let shortName: String
         let type: ResolvedType
         let parentId: String?
+        /// For a shared parameter's old root type (`Input`), the shared type (`AuthActionInput`) a union that
+        /// deduplicates against it names.
+        var sharedName: String?
     }
 
     // MARK: - Name Allocation
@@ -251,8 +254,6 @@ public struct CodegenModelBuilder {
             // The types each shared parameter's operation declared before, kept in `inlineTypes` so later
             // parameters and the result name and deduplicate against them, but declared only as aliases.
             var aliasEntryIds: Set<String> = []
-            // Each old root name (`Input`) and the shared type it now names (`AuthActionInput`).
-            var aliasTargets: [String: String] = [:]
             let parameters = method.params.map { param -> OperationParameter in
                 let shortName = specTypeName(param.name)
                 func resolveNested() -> ResolvedType {
@@ -314,7 +315,7 @@ public struct CodegenModelBuilder {
                    variants.allSatisfy({ $0.discriminatorValue != nil }),
                    let oldRoot, !addedNames.contains(typeName), rootClaims[typeName] == "#type:\(typeName)",
                    let sharedNode = buildNestedTypeNodes(from: sharedInlineTypes).first(where: { $0.name == typeName }),
-                   oldNode != nil || aliasTargets[oldRoot] == typeName {
+                   oldNode != nil || oldRoot == typeName {
                     if sharedSchemas[typeName] == nil {
                         sharedSchemas[typeName] = param.schema
                         sharedTypes.append(sharedNode)
@@ -323,8 +324,13 @@ public struct CodegenModelBuilder {
                     }
                     aliasEntryIds.formUnion(added.map(\.id))
                     if let oldNode {
-                        aliasTargets[oldRoot] = typeName
                         sharedTypeAliases.append(SharedTypeAlias(old: oldNode, target: typeName))
+                        // A later parameter or the result that deduplicates against the old type names the shared
+                        // one; a type of the old name in another scope (`Result.Input`) keeps its own.
+                        for index in inlineTypes.indices.dropFirst(firstNew)
+                        where inlineTypes[index].parentId == nil && inlineTypes[index].shortName == oldRoot {
+                            inlineTypes[index].sharedName = typeName
+                        }
                     }
                     let ref: ResolvedType = .typeReference(name: typeName)
                     if case .nullable = old { return OperationParameter(name: param.name, type: .nullable(inner: ref), required: param.required) }
@@ -353,25 +359,12 @@ public struct CodegenModelBuilder {
                 resultType = .primitive(.void)
             }
 
-            // A later parameter or the result deduplicated against an old type names the shared type instead.
-            let resultNamingShared = renamingReferences(in: resultType, aliasTargets)
-            let liveInlineTypes = inlineTypes.filter { !aliasEntryIds.contains($0.id) }.map { entry in
-                InlineTypeEntry(
-                    id: entry.id, shortName: entry.shortName,
-                    type: renamingReferences(in: entry.type, aliasTargets), parentId: entry.parentId
-                )
-            }
-            let parametersNamingShared = parameters.map { param in
-                OperationParameter(
-                    name: param.name, type: renamingReferences(in: param.type, aliasTargets), required: param.required
-                )
-            }
-            let nestedTypes = buildNestedTypeNodes(from: liveInlineTypes)
+            let nestedTypes = buildNestedTypeNodes(from: inlineTypes.filter { !aliasEntryIds.contains($0.id) })
 
             namespaceMap[namespaceName, default: []].append(Operation(
                 name: opName,
-                parameters: parametersNamingShared,
-                result: OperationResult(type: resultNamingShared),
+                parameters: parameters,
+                result: OperationResult(type: resultType),
                 nestedTypes: nestedTypes,
                 sharedTypeAliases: sharedTypeAliases
             ))
@@ -405,46 +398,6 @@ public struct CodegenModelBuilder {
         if let existing = shared[typeName] { return existing == schema }
         return isValidSwiftIdentifier(typeName) && !taken.contains(typeName)
             && !Self.reservedTopLevelNames.contains(typeName)
-    }
-
-    /// `type` with each reference to a key of `targets` (an old root name, `Input`) naming its value instead.
-    private func renamingReferences(in type: ResolvedType, _ targets: [String: String]) -> ResolvedType {
-        guard !targets.isEmpty else { return type }
-        func rename(_ type: ResolvedType) -> ResolvedType {
-            switch type {
-            case .typeReference(let name): return .typeReference(name: targets[name] ?? name)
-            case .list(let element, let constraints): return .list(elementType: rename(element), constraints: constraints)
-            case .map(let value): return .map(valueType: rename(value))
-            case .nullable(let inner): return .nullable(inner: rename(inner))
-            case .record(let name, let fields, let additionalPropertiesType, let embeddedUnion):
-                return .record(
-                    name: name, fields: fields.map(renameField),
-                    additionalPropertiesType: additionalPropertiesType.map(rename), embeddedUnion: embeddedUnion.map(rename)
-                )
-            case .union(let name, let variants, let discriminator):
-                return .union(name: name, variants: variants.map { variant in
-                    UnionVariant(
-                        name: variant.name, fields: variant.fields.map(renameField),
-                        discriminatorValue: variant.discriminatorValue,
-                        payloadTypeName: variant.payloadTypeName.map { targets[$0] ?? $0 },
-                        additionalPropertiesType: variant.additionalPropertiesType.map(rename),
-                        embeddedUnion: variant.embeddedUnion.map(rename), nestedTypes: variant.nestedTypes,
-                        valueType: variant.valueType.map(rename), literal: variant.literal
-                    )
-                }, discriminator: discriminator)
-            case .transferable(let blocksType, let typeArgs):
-                return .transferable(blocksType: blocksType, typeArgs: typeArgs.map(rename))
-            case .primitive, .formattedType, .enum:
-                return type
-            }
-        }
-        func renameField(_ field: ResolvedField) -> ResolvedField {
-            ResolvedField(
-                name: field.name, type: rename(field.type), required: field.required, description: field.description,
-                defaultValue: field.defaultValue, positional: field.positional
-            )
-        }
-        return rename(type)
     }
 
     // MARK: - Nested Type Node Construction
@@ -895,7 +848,7 @@ public struct CodegenModelBuilder {
                     if case .union(_, let existingVariants, let existingDisc) = existing.type,
                        structuralKeyOfUnion(variants: existingVariants, discriminator: existingDisc) == key,
                        existing.shortName != unionName {
-                        let ref: ResolvedType = .typeReference(name: existing.shortName)
+                        let ref: ResolvedType = .typeReference(name: existing.sharedName ?? existing.shortName)
                         return hasNullMember ? .nullable(inner: ref) : ref
                     }
                 }
