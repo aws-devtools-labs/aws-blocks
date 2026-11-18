@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The item layout and the key model, shared by the mock and the AWS runtime so
- * the two cannot drift on what a stored item looks like, on what a key may be,
+ * The item layout and the key model. The mock and the AWS runtime share them, so
+ * the two cannot differ on what a stored item looks like, on what a key may be,
  * on how conditions compose, or on what a cursor holds.
  *
  * Layout (see DESIGN.md):
- * - A store with no `key` option keys its table by the string attribute `_bkv_pk`.
- *   A store with `key` uses the named fields of the value as its key attributes.
- * - An object value is stored as one attribute for each top-level field; any
+ * - A store with no `key` option keys its table by the string attribute
+ *   `_bkv_pk`. A store with `key` uses the named fields of the value as its key
+ *   attributes.
+ * - An object value is stored as one attribute for each top-level field. Any
  *   other value goes in `_bkv_value`.
- * - An expiry goes in `_bkv_ttl`, unless the `ttl` option names a field of the value.
+ * - An expiry goes in `_bkv_ttl`, unless the `ttl` option names a field of the
+ *   value.
  */
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -38,7 +40,7 @@ import type { Expiry, ReadValidationMode, TableOptions } from './types.js';
 /** A stored item: one DynamoDB attribute per top-level field, plus the block's `_bkv_` attributes. */
 export type Item = Record<string, unknown>;
 
-/** A key attribute value — DynamoDB string or number keys. */
+/** A key attribute value: a DynamoDB string key or number key. */
 export type KeyValue = string | number;
 
 /** The resolved key attributes of a table or an index. */
@@ -84,10 +86,10 @@ export interface KeyModel {
 	/** The schema of the store, if it has one. */
 	readonly schema: StandardSchemaV1 | undefined;
 	/**
-	 * The DynamoDB attribute type of each key field of the table and of the
-	 * indexes, `'S'` or `'N'`, probed from the schema on first use (see
-	 * {@link probeKeyType}) and then kept, so a store that is never read by key
-	 * does not probe its schema.
+	 * The DynamoDB attribute type of each key field of the table and of the indexes,
+	 * `'S'` or `'N'`. The type is probed from the schema on first use (see
+	 * {@link probeKeyType}) and then kept, so a store that is never read by key does
+	 * not probe its schema.
 	 */
 	readonly keyTypes: Map<string, 'S' | 'N'>;
 }
@@ -116,7 +118,7 @@ const NUMBER_SAMPLES = [0, 1, -1];
  * type for the field.
  *
  * The field is a number if the schema accepts one of the samples `0`, `1`,
- * `-1` as its value, which means `validate({ [field]: sample })` reports no
+ * `-1` as its value. That means `validate({ [field]: sample })` reports no
  * issue at the path of the field. In all other cases the field is a string.
  * Three samples, so a refined number such as `z.number().positive()` is a
  * number. A store with no schema has string fields. A schema that validates
@@ -173,7 +175,7 @@ function describe(value: unknown): string {
  * Check one key attribute value: a non-empty string for a string field, a
  * finite number for a number field.
  *
- * This is the one gate for a key value, wherever a call passes one: the
+ * This is the one check for a key value, wherever a call passes one. It covers the
  * fields of a key, the partition value of a `query`, the operands of a sort
  * condition, and the key values inside a cursor. The same value fails the
  * same way in each place (a cursor reports it as a cursor error).
@@ -193,9 +195,9 @@ function checkKeyValue(field: string, value: unknown, type: 'S' | 'N'): KeyValue
 
 /**
  * Turn the key a caller passed into the key attributes of the table, checking
- * its shape. A string store takes a string; a store with a declared key takes
- * an object with exactly the key fields. The compiler enforces this for
- * TypeScript callers; the check is for JavaScript callers and casts.
+ * its shape. A string store takes a string. A store with a declared key takes an
+ * object with exactly the key fields. The compiler enforces this for TypeScript
+ * callers. The check is for JavaScript callers and casts.
  *
  * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape.
  * @throws {KVStoreErrors.ValidationFailed} If a key field is an empty string.
@@ -236,10 +238,12 @@ export function keyOfItem(model: KeyModel, item: Item): Record<string, KeyValue>
 
 /**
  * Merge the key into the value and check that the two agree. Returns the full
- * value as the schema sees it (key fields included) — the thing to validate.
+ * value as the schema sees it (key fields included), which is the value to
+ * validate.
  *
- * @throws {KVStoreErrors.ValidationFailed} If a key field of the value differs from the key, or if a
- *   store with a declared key is given a value that is not an object.
+ * @throws {KVStoreErrors.ValidationFailed} If a key field of the value differs
+ *   from the key, or if a store with a declared key is given a value that is not
+ *   an object.
  */
 function mergeKeyIntoValue(model: KeyModel, keyAttrs: Record<string, KeyValue>, value: unknown): unknown {
 	if (!model.declared) return value;
@@ -258,9 +262,9 @@ const UNSTORABLE_FIELD = '__proto__';
 /**
  * Whether a value has, at any depth, a field with a name that DynamoDB cannot
  * store. The one such name is `__proto__`: the DynamoDB document client drops
- * the field without an error, so an item would lose it on AWS and keep it in
- * the mock. An object that `JSON.parse` built can have a field of that name;
- * an object literal `{ __proto__: x }` sets the prototype and has no such field.
+ * the field without an error, so an item would lose it on AWS and keep it in the
+ * mock. An object that `JSON.parse` built can have a field of that name. An
+ * object literal `{ __proto__: x }` sets the prototype and has no such field.
  */
 function hasUnstorableField(value: unknown): boolean {
 	if (Array.isArray(value)) return value.some(hasUnstorableField);
@@ -314,11 +318,11 @@ function buildItem(
 }
 
 /**
- * The full value of a write, as the schema sees it and as the item stores it:
- * the value with the key fields merged in ({@link mergeKeyIntoValue}) and, for
- * a store whose `ttl` option names a field, with the expiry of the call in
- * that field. Built once, before schema validation, so the schema validates
- * what is stored.
+ * The full value of a write, as the schema sees it and as the item stores it. It
+ * is the value with the key fields merged in ({@link mergeKeyIntoValue}). For a
+ * store whose `ttl` option names a field, it also has the expiry of the call in
+ * that field. Built once, before schema validation, so the schema validates what
+ * is stored.
  */
 function fullValue(
 	model: KeyModel,
@@ -332,15 +336,17 @@ function fullValue(
 }
 
 /**
- * Validate a write and build its stored item, the same way in both runtimes:
- * the key checks, the full value ({@link fullValue}: the key merged in, and
- * the expiry of the call in a named `ttl` field), schema validation of that
- * full value, and then the layout checks of {@link buildItem}.
+ * Validate a write and build its stored item, the same way in both runtimes. The
+ * steps are the key checks, the full value, schema validation of that full
+ * value, and then the layout checks of {@link buildItem}. The full value
+ * ({@link fullValue}) has the key merged in, and the expiry of the call in a
+ * named `ttl` field.
  *
  * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape.
- * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema, disagrees with its key, has a
- *   reserved field, has a field name that DynamoDB cannot store, or has an empty string in a key field
- *   or an indexed field; or if the expiry is not usable.
+ * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema,
+ *   disagrees with its key, has a reserved field, has a field name that DynamoDB
+ *   cannot store, or has an empty string in a key field or an indexed field.
+ *   Also if the expiry is not usable.
  */
 export async function prepareItem(
 	model: KeyModel,
@@ -355,7 +361,10 @@ export async function prepareItem(
 	return { keyAttrs, item: itemOfFullValue(model, keyAttrs, full, expiresAt) };
 }
 
-/** The stored item of a full value. A named `ttl` field of an object value holds the expiry already; any other expiry is set by {@link buildItem}. */
+/**
+ * The stored item of a full value. A named `ttl` field of an object value holds
+ * the expiry already. {@link buildItem} sets any other expiry.
+ */
 function itemOfFullValue(
 	model: KeyModel,
 	keyAttrs: Record<string, KeyValue>,
@@ -366,13 +375,13 @@ function itemOfFullValue(
 }
 
 /**
- * Lay out an item the way a write does, without the schema: the key checks,
- * the full value, and the layout checks of {@link buildItem}.
- * {@link prepareItem} is these steps plus schema validation.
+ * Lay out an item the way a write does, without the schema: the key checks, the
+ * full value, and the layout checks of {@link buildItem}. {@link prepareItem} is
+ * these steps plus schema validation.
  *
  * The mock calls this when it converts a data file of an earlier format. It
  * loads its file in the constructor, which cannot wait for a schema that
- * validates asynchronously; a read reconciles a converted item with the schema
+ * validates asynchronously. A read reconciles a converted item with the schema
  * (`readValidation`).
  *
  * @throws The errors of {@link prepareItem}, except those of the schema.
@@ -405,14 +414,14 @@ export function isStoredItem(model: KeyModel, entry: unknown): entry is Item {
 const NULL_IS_A_VALUE: ReadonlySet<string> = new Set(['key', 'value', 'ifValueEquals', 'ifFieldEquals']);
 
 /**
- * The options of a call as the block reads them: an option with the value
- * `null` counts as an option that the caller did not pass. Every public
- * method that reads options calls this first, so the rule is the same for
- * every option of every method, in both runtimes.
+ * The options of a call as the block reads them: an option with the value `null`
+ * counts as an option that the caller did not pass. Every public method that
+ * reads options calls this first, so the rule is the same for every option of
+ * every method, in both runtimes.
  *
- * The option types do not include `null`; this is for a value that comes from
- * a request. JSON has no `undefined`, so an API method that forwards its
- * arguments (`store.scan({ limit, cursor })`) can get `null` for an argument
+ * The option types do not include `null`. This function is for a value that
+ * comes from a request. JSON has no `undefined`, so an API method that forwards
+ * its arguments (`store.scan({ limit, cursor })`) can get `null` for an argument
  * that the client left out.
  *
  * The exceptions are the names in {@link NULL_IS_A_VALUE}.
@@ -435,9 +444,9 @@ export interface ReadEntry {
 }
 
 /**
- * The value of a stored item. The block's own attributes (`_bkv_pk`,
- * `_bkv_ttl`) leave the value; the declared key fields and a `ttl` field stay
- * in it, because they are fields of the value.
+ * The value of a stored item. The block's own attributes (`_bkv_pk`, `_bkv_ttl`)
+ * leave the value. The declared key fields and a `ttl` field stay in it, because
+ * they are fields of the value.
  */
 function readValue(item: Item): unknown {
 	if (VALUE_ATTRIBUTE in item) return item[VALUE_ATTRIBUTE];
@@ -479,7 +488,7 @@ export function liveItems(model: KeyModel, items: Item[]): Item[] {
  * per-item validation work.
  */
 export interface Reader<V, E> {
-	/** The value of a live item; `null` for a missing or expired item. */
+	/** The value of a live item, or `null` for a missing or expired item. */
 	value(item: Item | undefined, nowSeconds?: number): Promise<V | null>;
 	/** The `{ key, value, expiresAt }` entry of an item. A promise only when the store reconciles reads. */
 	entry(item: Item): E | Promise<E>;
@@ -618,15 +627,16 @@ function buildCondition(
 
 /**
  * The DynamoDB condition for a `put`. `ifNotExists` and a value check compose
- * with OR: `attribute_not_exists(#pk) OR <value check>` — the write succeeds when
+ * with OR: `attribute_not_exists(#pk) OR <value check>`. The write succeeds when
  * the key is absent OR its current value matches, the optimistic "create it, or
- * update it only if unchanged" pattern. (AND would be unsatisfiable: a key can't
- * be both absent and have a matching value.)
+ * update it only if unchanged" pattern. (AND could never hold: a key can't be
+ * both absent and have a matching value.)
  *
- * Returns the expression and whether a failure is retriable: `true` whenever a
- * value check took part (under OR composition the combined failure means the
- * key exists but its value differs, so a re-read and retry can succeed), `false`
- * for a pure `ifNotExists` existence assertion (a blind retry fails identically).
+ * Returns the expression and whether a failure is retriable. It is `true`
+ * whenever a value check took part: under OR composition the combined failure
+ * means the key exists but its value differs, so a re-read and retry can
+ * succeed. It is `false` for a pure `ifNotExists` existence assertion, where the
+ * same call fails again in the same way.
  */
 export function putCondition(model: KeyModel, options: Conditions | undefined): ConditionPlan {
 	const check = planValueCheck(options);
@@ -641,7 +651,7 @@ export function putCondition(model: KeyModel, options: Conditions | undefined): 
 
 /**
  * The DynamoDB condition for a `delete`. `ifExists` and a value check compose
- * with AND — both must hold. Retriable only for a value check without
+ * with AND, so both must hold. Retriable only for a value check without
  * `ifExists`: the existence assertion wins, so a combined conflict is not
  * retriable.
  */
@@ -659,7 +669,7 @@ export function deleteCondition(model: KeyModel, options: Conditions | undefined
 /**
  * Order-independent structural equality, used by the mock to compare a value
  * check against stored attributes. DynamoDB Maps are an unordered collection of
- * name-value pairs, so `{ a, b }` and `{ b, a }` are the same value — a plain
+ * name-value pairs, so `{ a, b }` and `{ b, a }` are the same value. A plain
  * `JSON.stringify` compare would wrongly treat them as different and fail the
  * condition. Arrays remain order-sensitive (DynamoDB Lists are ordered).
  */
@@ -808,14 +818,15 @@ export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
 }
 
 /**
- * Normalize the sort-key condition up front — before any data is read — so a
- * present-but-empty condition becomes "no filter" and multiple conditions are
- * rejected eagerly, even on an empty table. Each operand passes
+ * Normalize the sort-key condition up front, before any data is read. A
+ * present-but-empty condition then becomes "no filter", and multiple conditions
+ * are rejected at once, even on an empty table. Each operand passes
  * {@link checkKeyValue} with the type of the sort field.
  *
- * @throws {KVStoreErrors.InvalidQuery} If the condition is not an object, has more than one
- *   condition, names a condition that does not exist, gives `between` anything but two
- *   operands, uses `beginsWith` on a number field, or has an operand of the wrong type.
+ * @throws {KVStoreErrors.InvalidQuery} If the condition is not an object, has
+ *   more than one condition, names a condition that does not exist, gives
+ *   `between` anything but two operands, uses `beginsWith` on a number field, or
+ *   has an operand of the wrong type.
  * @throws {KVStoreErrors.ValidationFailed} If an operand is an empty string.
  */
 function planSort(model: KeyModel, field: string, condition: unknown): QueryPlan['sort'] {
@@ -897,9 +908,10 @@ export function normalizeLimit(limit: unknown): number | undefined {
 
 /**
  * A cursor marks the position after the last entry an iterator returned. It
- * encodes the DynamoDB `LastEvaluatedKey` of that position — the key attributes
- * of the table, plus those of the index for an index query — in a readable
- * (base64url JSON) form. It is not a secret and not a permission.
+ * encodes the DynamoDB `LastEvaluatedKey` of that position in a readable
+ * (base64url JSON) form. The key holds the key attributes of the table, plus
+ * those of the index for an index query. It is not a secret and not a
+ * permission.
  */
 interface CursorPayload {
 	v: 1;
@@ -925,15 +937,17 @@ export function encodeCursor(model: KeyModel, indexName: string | undefined, ite
 
 /**
  * Decode and check a `cursor` option before it drives a read, or return
- * `undefined` when there is none. `undefined` means "start at the first
- * entry", which any caller can already ask for by leaving the cursor out. A
- * `null` does not arrive here: {@link presentOptions} takes it out of the
- * options at the method entry.
+ * `undefined` when there is none. `undefined` means "start at the first entry",
+ * which any caller can already ask for by leaving the cursor out. A `null` does
+ * not arrive here: {@link presentOptions} takes it out of the options at the
+ * method entry.
  *
- * The cursor must decode, must name the same index as the call, must hold
- * exactly the key attributes of that table or index (each one a value that
- * {@link checkKeyValue} accepts for its field), and — for a query — its
- * partition value must match `where`.
+ * The cursor must pass four checks:
+ * - It decodes.
+ * - It names the same index as the call.
+ * - It holds exactly the key attributes of that table or index, each one a value
+ *   that {@link checkKeyValue} accepts for its field.
+ * - For a query, its partition value matches `where`.
  *
  * @throws {KVStoreErrors.InvalidQuery} If any check fails.
  */
@@ -1103,9 +1117,9 @@ export function orderedResults<E>(
 }
 
 /**
- * Deterministic tie-break for ordering: compare two items by the base-table
- * key (partition key, then sort key). Returns a stable -1/0/1. (String
- * comparisons use JS UTF-16 order — see DESIGN.md.)
+ * Deterministic tie-break for ordering: compare two items by the base-table key
+ * (partition key, then sort key). Returns a stable -1, 0, or 1. String
+ * comparisons use JS UTF-16 order (see DESIGN.md).
  */
 export function compareByBaseKey(model: KeyModel, a: Item, b: Item): number {
 	for (const field of keyFields(model.table)) {

@@ -253,6 +253,38 @@ export interface AuthCommonOptions {
 	logger?: ChildLogger;
 
 	/**
+	 * Write an audit record for each session lifecycle event, so you can see
+	 * and alarm on auth activity. Off by default.
+	 *
+	 * - `true` writes them through a dedicated `info`-level `Logger`: one JSON
+	 *   line per event in the function's CloudWatch log group, whatever level
+	 *   `logger` is set to.
+	 * - A `ChildLogger` sends them to that logger instead, at `info`. It must
+	 *   accept `info`: a logger set to `warn` or `error` drops every record
+	 *   without an error.
+	 *
+	 * Each record's message is its `event`, and its fields are an
+	 * {@link AuthAuditRecord}: `auth.session.issued`, `auth.signin.failed`
+	 * (an email + password sign-in or challenge answer, a federated callback, a
+	 * `validateUser` or `onSignIn` rejection, or an insecure-transport refusal),
+	 * `auth.signout` and `auth.sessions.revoked` (a password reset or
+	 * `admin.revokeUserSessions` ending all the user's sessions; `deleteUser`
+	 * ending the current one). A record never holds a password, code, token,
+	 * session id, email or error message. It identifies the user by `sub`,
+	 * which on a Cognito-store session is the id CloudTrail records; a
+	 * password-reset record carries the pool `username` instead. Writing a
+	 * record is best-effort: an error from the logger never changes the result,
+	 * and the first one is logged once as a `warn`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const auth = new Auth(scope, 'auth', { audit: true });
+	 * // CloudWatch metric filter for failed sign-ins: { $.event = "auth.signin.failed" }
+	 * ```
+	 */
+	audit?: boolean | ChildLogger;
+
+	/**
 	 * @deprecated Replaced by `providers`: move each entry there, keyed as
 	 * before, with `type: 'google' | 'facebook' | 'amazon' | 'apple'`. See
 	 * {@link ERROR_replaced_by_providers}.
@@ -3840,4 +3872,51 @@ export interface AuthClient<P extends string = string> {
 	 * to the provider's logout URL when there is one (see {@link SignOutResult}).
 	 */
 	signOut(options?: { endProviderSession?: boolean }): Promise<SignOutResult>;
+}
+
+/**
+ * The fields of one audit record (the `audit` option). A record is written
+ * as one log line whose message is its `event`, so a CloudWatch metric filter
+ * such as `{ $.event = "auth.signin.failed" }` counts it.
+ */
+export interface AuthAuditRecord {
+	/** What happened. */
+	event: 'auth.session.issued' | 'auth.signin.failed' | 'auth.signout' | 'auth.sessions.revoked';
+	/** The `Auth` block's `fullId`, so two blocks in one app can be told apart. */
+	block: string;
+	/** How the user signed in: `'password'` or the provider id. Absent when unknown. */
+	provider?: string;
+	/**
+	 * The user's id: the Cognito `sub`, or `<issuer>:<sub>` for a direct-federated
+	 * session (which CloudTrail never records). Absent when the event does not
+	 * know the user, such as a failed password sign-in, or when an admin revoke
+	 * could not look the user up.
+	 */
+	sub?: string;
+	/**
+	 * The pool username, only on a password-reset `auth.sessions.revoked` record:
+	 * the `cognito:username` the reset's sessions are keyed by (never the email
+	 * the user typed).
+	 */
+	username?: string;
+	/**
+	 * - `'success'`: the event completed (a session issued, ended or revoked).
+	 * - `'failure'`: a sign-in was refused; always on `auth.signin.failed`.
+	 * - `'incomplete'`: ending sessions failed part-way, so some may still be
+	 *   valid: a `signOut` that could not delete the server-side session, or an
+	 *   `auth.sessions.revoked` whose revocation threw (with `error`).
+	 */
+	outcome: 'success' | 'failure' | 'incomplete';
+	/**
+	 * Why: on `auth.signin.failed`, `'challenge'` (a wrong MFA, email or SMS code),
+	 * `'provider'` (the callback failed), `'validate-user'`, `'on-sign-in'` or
+	 * `'insecure-transport'` (refused because the session cookie could not be
+	 * sent securely); absent for a refused password. On `auth.sessions.revoked`,
+	 * `'password-reset'` or `'admin'` (every session of the user) or
+	 * `'account-deleted'` (the current session; the user's others end on their
+	 * next request, without a record).
+	 */
+	reason?: string;
+	/** The error name of a failure, such as `NotAuthorizedException`. Never its message. */
+	error?: string;
 }

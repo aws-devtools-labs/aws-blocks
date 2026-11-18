@@ -56,7 +56,7 @@ final class NonIdentifierNamesRoundTripTests: XCTestCase {
         let values = ["a\"b", "c;d", "x`y", "new\nline", "${x}", "\\(z)", "*/", "1st", " sp ace"]
         for value in values {
             let encodedValue = try JSONEncoder().encode([value])
-            let decoded = try JSONDecoder().decode([Kind].self, from: encodedValue)
+            let decoded = try JSONDecoder().decode([Sample_Type__X___Kind].self, from: encodedValue)
             XCTAssertEqual(decoded.first?.rawValue, value)
             XCTAssertEqual(try JSONDecoder().decode([String].self, from: JSONEncoder().encode(decoded)), [value])
         }

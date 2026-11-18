@@ -39,31 +39,30 @@ export class KVStore<
 
 	/**
 	 * Reference an existing DynamoDB table instead of provisioning a new one.
-	 * Mirrors the same factory exposed by the runtime build so the same code
-	 * works in both contexts. The customer is responsible for ensuring the
-	 * pre-existing table already has the key schema the `key` option names and
-	 * any required indexes — Blocks will not modify the table when this factory
-	 * is used.
+	 * Matches the factory that the runtime build exposes, so the same code works in
+	 * both contexts. The customer must make sure that the existing table already has
+	 * the key schema that the `key` option names, and any required indexes. Blocks
+	 * will not modify the table when this factory is used.
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
 	}
 
 	/**
-	 * Reference an existing customer-managed KMS key to encrypt the table,
-	 * instead of letting `encryption: 'customer-managed'` provision a dedicated
-	 * key per table. Pass the result as the `encryption` option so several
-	 * stores can share one key (and one monthly charge).
+	 * Reference an existing customer-managed KMS key to encrypt the table, instead
+	 * of letting `encryption: 'customer-managed'` provision a dedicated key per
+	 * table. Pass the result as the `encryption` option so several stores can share
+	 * one key (and one monthly charge).
 	 *
-	 * @param keyArn - ARN of a KMS key you already own. Because this is an
-	 *   imported key, Blocks can only attach IAM-side grants to this stack's
-	 *   execution role; it cannot edit the key's own key policy. For the table
-	 *   to read and write through the key, that key policy must already allow
-	 *   this stack's execution role — either by naming it directly or by
-	 *   delegating to account IAM (a statement granting `kms:*` to the account
-	 *   root). The key must also live in the same account and region as the
-	 *   table. A key policy that does neither surfaces only as an AccessDenied
-	 *   when the table is first used at runtime, with no signal at deploy time.
+	 * @param keyArn - ARN of a KMS key you already own. Because this is an imported
+	 *   key, Blocks can only attach IAM-side grants to this stack's execution role.
+	 *   It cannot edit the key's own key policy. For the table to read and write
+	 *   through the key, that key policy must already allow this stack's execution
+	 *   role. The policy can name the role directly, or it can delegate to account
+	 *   IAM (a statement granting `kms:*` to the account root). The key must also
+	 *   live in the same account and region as the table. With a key policy that
+	 *   does neither, the only sign is an AccessDenied error when the table is first
+	 *   used at runtime. Nothing fails at deploy time.
 	 */
 	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
 		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };

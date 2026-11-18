@@ -51,7 +51,7 @@ export interface ExternalKmsKeyRef {
     readonly keyArn: string;
 }
 
-// @public (undocumented)
+// @public
 export interface ExternalTableRef {
     // (undocumented)
     readonly __brand: 'ExternalTableRef';
