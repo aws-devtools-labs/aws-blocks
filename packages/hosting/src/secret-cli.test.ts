@@ -275,8 +275,12 @@ void describe('runValueCli() — the hidden prompt', () => {
 	});
 });
 
-/** Answer each Secrets Manager call with `answer(commandName, input)`, recording the calls; no AWS. */
-function fakeSecretsManager(answer: (command: string, input: Record<string, unknown>) => unknown): string[] {
+/**
+ * Answer each Secrets Manager call with `answer(commandName, input)`, recording the calls; no AWS. Also silences
+ * `console.warn`, returning that mock as `warn` (a second mock of it would stack, and `mock.restoreAll()` restores
+ * stacked mocks to the first one, leaving `console.warn` silenced for every later test file).
+ */
+function fakeSecretsManager(answer: (command: string, input: Record<string, unknown>) => unknown) {
 	const calls: string[] = [];
 	mock.method(
 		SecretsManagerClient.prototype,
@@ -286,8 +290,8 @@ function fakeSecretsManager(answer: (command: string, input: Record<string, unkn
 			return answer(command.constructor.name, command.input);
 		},
 	);
-	mock.method(console, 'warn', () => {});
-	return calls;
+	const warn = mock.method(console, 'warn', () => {});
+	return { calls, warn };
 }
 
 function awsError(name: string, message: string): Error {
@@ -296,7 +300,7 @@ function awsError(name: string, message: string): Error {
 
 void describe('runValueCli() — Secrets Manager edge cases', () => {
 	void it('restores a secret that remove scheduled for deletion, then sets it', async () => {
-		const calls = fakeSecretsManager((command) => {
+		const { calls } = fakeSecretsManager((command) => {
 			if (command === 'CreateSecretCommand') {
 				throw awsError(
 					'InvalidRequestException',
@@ -318,14 +322,13 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 	});
 
 	void it('reports a forced remove of a secret that does not exist as not set, and deletes nothing', async () => {
-		const calls = fakeSecretsManager((command) => {
+		const { calls, warn } = fakeSecretsManager((command) => {
 			if (command === 'DescribeSecretCommand') {
 				throw awsError('ResourceNotFoundException', "Secrets Manager can't find the specified secret.");
 			}
 			return {};
 		});
 		const log = mock.method(console, 'log', () => {});
-		const warn = mock.method(console, 'warn', () => {});
 		await runValueCli(['remove', 'ZZ_NOPE', '--force', '--yes'], { kind: 'secret', prefix: 'blocks/secrets' });
 		assert.deepStrictEqual(calls, ['DescribeSecretCommand']);
 		assert.match(String(log.mock.calls.at(-1)?.arguments[0]), /'ZZ_NOPE' was not set/);

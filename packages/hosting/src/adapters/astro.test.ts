@@ -250,7 +250,14 @@ export { loadRemoteImage };
     // to exercise the actual injected code path without a full Astro build.
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const fn = new Function(harness.replace('.headers.get("location")', '.headers.get("location")'));
-    const { okStatus, badStatus } = (await fn()) as { okStatus: number; badStatus: number };
+    const realFetch = globalThis.fetch;
+    let result: { okStatus: number; badStatus: number };
+    try {
+      result = (await fn()) as { okStatus: number; badStatus: number };
+    } finally {
+      globalThis.fetch = realFetch; // the harness replaced it
+    }
+    const { okStatus, badStatus } = result;
     assert.equal(okStatus, 200, 'allowed redirect (picsum→fastly) is followed to the 200');
     assert.equal(badStatus, 302, 'disallowed redirect (picsum→evil) is NOT followed; returns the 3xx for Astro to reject');
   });
