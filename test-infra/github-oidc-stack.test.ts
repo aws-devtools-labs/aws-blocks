@@ -54,6 +54,13 @@ describe('BlocksGithubE2eOidc', () => {
     assertTrustIsExactly(synth({ agentBench: true }).benchRole, BENCH_GITHUB_ENVIRONMENT);
   });
 
+  // Every other assertion interpolates GITHUB_REPO, so it would pass against
+  // any repo. Pin the literal: a repo rename leaves this value stale, and a
+  // stale `sub` fails every job at "Configure AWS credentials".
+  test('trust policies are pinned to this repo', () => {
+    assert.equal(GITHUB_REPO, 'aws/cdk-blocks');
+  });
+
   // A token from one environment must not assume the other environment's role.
   test('E2E and bench roles trust different environments', () => {
     assert.notEqual(GITHUB_ENVIRONMENT, BENCH_GITHUB_ENVIRONMENT);
