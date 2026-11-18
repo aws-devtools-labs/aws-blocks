@@ -38,7 +38,7 @@ import 'package:http/http.dart' as http;
 import 'harness.dart';
 
 // The generated enum of the providers `oidcAuthApi.getClient()` names.
-const _provider = OidcAuthApiApiGetClientProvider.google;
+const _provider = OidcAuthApiGetClientProvider.google;
 const _relayTo = 'nativebindings://auth';
 
 /// HTTP-driven [BrowserLauncher] standing in for a real browser.

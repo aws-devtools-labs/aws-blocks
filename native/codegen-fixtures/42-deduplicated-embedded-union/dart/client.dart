@@ -182,9 +182,9 @@ class ConfirmSignInInput extends AlphaApiSetStateInput {
 
 // --- API Namespaces ---
 
-class AlphaApiApi {
+class AlphaApi {
   final BlocksClient _client;
-  AlphaApiApi(this._client);
+  AlphaApi(this._client);
 
   Future<bool> setState({required AlphaApiSetStateInput input}) async {
     final params = <dynamic>[
@@ -196,9 +196,9 @@ class AlphaApiApi {
 }
 
 
-class BetaApiApi {
+class BetaApi {
   final BlocksClient _client;
-  BetaApiApi(this._client);
+  BetaApi(this._client);
 
   Future<bool> setState({required AlphaApiSetStateInput input}) async {
     final params = <dynamic>[
@@ -213,13 +213,13 @@ class BetaApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final AlphaApiApi alphaApi;
-  late final BetaApiApi betaApi;
+  late final AlphaApi alphaApi;
+  late final BetaApi betaApi;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    alphaApi = AlphaApiApi(client);
-    betaApi = BetaApiApi(client);
+    alphaApi = AlphaApi(client);
+    betaApi = BetaApi(client);
   }
 }
 

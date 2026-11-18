@@ -480,4 +480,48 @@ void main() {
       contains(r'getClient({required String AuthApiGetClientProvider$})'),
     );
   });
+
+  test('a namespace whose name ends in Api does not double it', () {
+    final (:source, :warnings) = _generate([
+      _method('oidcAuthApi.getClient', _oidc(['google'])),
+      _method('api.getOther', _oidc(['github'])),
+    ]);
+    expect(source, contains('class OidcAuthApi {'));
+    expect(source, contains('enum OidcAuthApiGetClientProvider implements'));
+    expect(
+      source,
+      contains(
+        'Future<TypedOidcClient<OidcAuthApiGetClientProvider>> getClient()',
+      ),
+    );
+    expect(source, contains('class Api {'));
+    expect(source, contains('enum ApiGetOtherProvider implements'));
+    expect(source, isNot(contains('ApiApi')));
+    expect(warnings, isEmpty);
+  });
+
+  test('a namespace that would share its class with one ending in Api is an '
+      'error, whatever the spec order', () {
+    for (final names in [
+      ['oidcAuth', 'oidcAuthApi'],
+      ['oidcAuthApi', 'oidcAuth'],
+    ]) {
+      expect(
+        () => _generate([
+          for (final ns in names) _method('$ns.getClient', _oidc(['google'])),
+        ]),
+        throwsA(
+          isA<NamingConflictException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains("'${names[0]}', '${names[1]}'"),
+              contains('`OidcAuthApi`'),
+              contains('Rename one of these exports'),
+            ),
+          ),
+        ),
+      );
+    }
+  });
 }
