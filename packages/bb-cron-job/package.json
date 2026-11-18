@@ -10,12 +10,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "url": "git+https://github.com/aws/cdk-blocks.git",
     "directory": "packages/bb-cron-job"
   },
-  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-cron-job#readme",
+  "homepage": "https://github.com/aws/cdk-blocks/tree/main/packages/bb-cron-job#readme",
   "bugs": {
-    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+    "url": "https://github.com/aws/cdk-blocks/issues"
   },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
