@@ -1,6 +1,0 @@
-AWS Blocks
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-
-The @aws-blocks/hosting npm package includes third-party software. The license
-notices for that software are in dist/constructs/THIRD-PARTY-LICENSES.txt
-inside the @aws-blocks/hosting package, not in other AWS Blocks packages.

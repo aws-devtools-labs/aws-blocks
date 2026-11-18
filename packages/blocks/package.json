@@ -34,8 +34,7 @@
     "TROUBLESHOOTING.md",
     "VPC.md",
     "VPC-DESIGN.md",
-    "LICENSE",
-    "NOTICE"
+    "LICENSE"
   ],
   "exports": {
     ".": {

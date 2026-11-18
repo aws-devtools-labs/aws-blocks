@@ -125,7 +125,6 @@
     "check:runtime-guard": "node --experimental-strip-types scripts/check-runtime-guard-coverage.ts",
     "check:packed-assets": "npx tsx scripts/check-packed-assets.ts",
     "check:headers": "node scripts/check-license-headers.mjs",
-    "check:notices": "node scripts/check-notice-files.mjs",
     "lint": "biome lint --skip=correctness/noUndeclaredDependencies --reporter=github --changed --since=origin/main --no-errors-on-unmatched packages/",
     "lint:deps": "npx tsx scripts/lint-deps.ts",
     "update:api": "bash scripts/update-api-reports.sh",

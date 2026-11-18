@@ -28,8 +28,7 @@
     "README.md",
     "src",
     "!src/**/*.test.json",
-    "LICENSE",
-    "NOTICE"
+    "LICENSE"
   ],
   "exports": {
     ".": {

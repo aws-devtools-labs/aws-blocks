@@ -1,7 +1,3 @@
-## Unreleased
-
-- Ship the NOTICE file in the package.
-
 ## 0.2.0
 
 - `FlutterSecureStore()` now stores iOS and macOS Keychain items with

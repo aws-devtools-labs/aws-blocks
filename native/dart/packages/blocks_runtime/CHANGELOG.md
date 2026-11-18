@@ -9,7 +9,6 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the sign-out below.
   been replaced by a `Set-Cookie` since; those users are signed out once and
   sign in again. A stored cookie record without a `secure` field is read as
   `Secure`.
-- Ship the NOTICE file in the package.
 
 ## 0.2.0
 
