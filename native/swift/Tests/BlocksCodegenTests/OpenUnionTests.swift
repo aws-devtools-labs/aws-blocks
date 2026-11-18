@@ -30,6 +30,16 @@ final class OpenUnionTests: XCTestCase {
         XCTAssertTrue(api.contains("            public var unknownDiscriminator: String? {"))
     }
 
+    func testComponentHybridArmKeepsItsEmbeddedUnionClosed() throws {
+        let models = try generate(fixture: "45-open-enums").models
+        let challenge = models.components(separatedBy: "public nonisolated enum ConfirmChallenge: Codable, Sendable {")[1]
+            .components(separatedBy: "\n}\n")[0]
+        XCTAssertFalse(challenge.contains("unknown"), challenge)
+        let authStep = models.components(separatedBy: "public nonisolated enum AuthStep: Codable, Sendable {")[1]
+            .components(separatedBy: "\n}\n")[0]
+        XCTAssertTrue(authStep.contains("case unknown(JSONValue)"), authStep)
+    }
+
     func testParameterOnlyUnionStaysClosed() throws {
         let output = try generate(fixture: "18-hybrid-arm")
         XCTAssertFalse(output.api.contains("JSONValue)"))
@@ -42,8 +52,8 @@ final class OpenUnionTests: XCTestCase {
         XCTAssertEqual(api.components(separatedBy: "case unknown(JSONValue)").count - 1, 1)
     }
 
-    func testAResultUnionNamedLikeAnEmbeddedUnionIsStillOpen() throws {
-        // `Event`'s `step` arm embeds a union named `StepChallenge`; a component of that name is a direct result.
+    func testAResultUnionBesideAnEmbeddedUnionIsStillOpen() throws {
+        // `Event`'s `step` arm embeds a union (`StepChallenge`); a component union `Prompt` is a direct result.
         let challenge = { (tag: String) in
             #"{ "type": "object", "properties": { "challenge": { "type": "string", "enum": ["\#(tag)"] } }, "required": ["challenge"] }"#
         }
@@ -52,7 +62,7 @@ final class OpenUnionTests: XCTestCase {
           "methods": [
             { "name": "api.getEvent", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Event" } } },
             { "name": "api.getChallenge", "params": [],
-              "result": { "name": "R", "schema": { "$ref": "#/components/schemas/StepChallenge" } } }
+              "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Prompt" } } }
           ],
           "components": { "schemas": {
             "Event": { "oneOf": [
@@ -60,14 +70,14 @@ final class OpenUnionTests: XCTestCase {
                 "required": ["kind", "id"], "oneOf": [\(challenge("a")), \(challenge("b"))] },
               { "type": "object", "properties": { "kind": { "type": "string", "enum": ["done"] } }, "required": ["kind"] }
             ] },
-            "StepChallenge": { "oneOf": [\(challenge("x")), \(challenge("y"))] }
+            "Prompt": { "oneOf": [\(challenge("x")), \(challenge("y"))] }
           } } }
         """
         let output = try SwiftCodeGenerator().generate(
             from: CodegenModelBuilder().build(from: OpenRPCParser().parse(data: Data(spec.utf8)))
         )
         let all = output.models + output.api
-        // `Event` and the component `StepChallenge` are open; the union embedded in `step` is not.
+        // `Event` and `Prompt` are open; the union embedded in `step` is not.
         XCTAssertEqual(all.components(separatedBy: "case unknown(JSONValue)").count - 1, 2, all)
     }
 
@@ -107,6 +117,17 @@ final class OpenUnionTests: XCTestCase {
             check(decoded == nil, "\(text) throws")
         }
         check(String(decoding: try encoder.encode(moved), as: UTF8.self) == #"{"kind":"moved","to":"done"}"#, "known round trip")
+        // `AuthStep`'s `confirm` arm embeds a union of challenges. That union shares the arm's object, so it stays
+        // closed while `AuthStep` itself is open.
+        func step(_ text: String) -> AuthStep? { try? JSONDecoder().decode(AuthStep.self, from: Data(text.utf8)) }
+        check(step(#"{"step":"confirm","session":"s1","challenge":"webauthn"}"#) == nil, "unknown challenge throws")
+        if case .confirm(let confirm)? = step(#"{"challenge":"sms","code":"1","session":"s1","step":"confirm"}"#),
+           case .sms(let sms) = confirm.challenge {
+            check(sms.code == "1" && confirm.session == "s1", "known challenge")
+        } else {
+            check(false, "known challenge arm")
+        }
+        if case .unknown? = step(#"{"step":"later"}"#) {} else { check(false, "unknown step") }
         print("ok")
         """#
         guard let run = try runConsumer(models: output.models, api: output.api, main: main) else { return }

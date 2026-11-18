@@ -14,6 +14,7 @@ import kotlin.OptIn
 import kotlin.String
 import kotlin.Throwable
 import kotlin.collections.List
+import kotlin.collections.Set
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -26,6 +27,7 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
@@ -126,6 +128,13 @@ public class Api(
     val request = BlocksRequest(method = "api.getJob", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
     if (result is JsonNull) throw TransportException("Unexpected null result for api.getJob")
+    return BlocksJson.decodeFromJsonElement(result)
+  }
+
+  public suspend fun getAuthStep(): GetAuthStep.Result {
+    val request = BlocksRequest(method = "api.getAuthStep", params = emptyList(), id = BlocksRequest.nextId())
+    val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.getAuthStep")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
@@ -504,6 +513,111 @@ public class Api(
         public val state: Failed.State,
         public val message: String,
       ) : Result()
+    }
+  }
+
+  public object GetAuthStep {
+    @Serializable(with = Result.ResultSerializer::class)
+    public sealed class Result {
+      /**
+       * Reads and writes [Result] with its discriminator `step` as the JSON value
+       * the spec gives it.
+       */
+      public object ResultSerializer : KSerializer<Result> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Result")
+
+        override fun serialize(encoder: Encoder, `value`: Result) {
+          val output = encoder as? JsonEncoder ?: throw SerializationException("Result can only be written as JSON")
+          val element = when (value) {
+            is Done -> buildJsonObject {
+              put("step", JsonPrimitive("done"))
+            }
+            is Confirm -> buildJsonObject {
+              put("step", JsonPrimitive("confirm"))
+              output.json.encodeToJsonElement(Confirm.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is Unknown -> value.json
+          }
+          output.encodeJsonElement(element)
+        }
+
+        override fun deserialize(decoder: Decoder): Result {
+          val input = decoder as? JsonDecoder ?: throw SerializationException("Result can only be read from JSON")
+          val element = input.decodeJsonElement()
+          if (element is JsonObject) {
+            val fields = JsonObject(element - "step")
+            when (element["step"]) {
+              JsonPrimitive("done") -> return Done
+              JsonPrimitive("confirm") -> return input.json.decodeFromJsonElement(Confirm.serializer(), fields)
+              else -> if ((element["step"] as? JsonPrimitive)?.isString == true) return Unknown(element)
+            }
+          }
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"step\": \"done\"; or an object with \"step\": \"confirm\"")
+        }
+      }
+
+      public data class Unknown(
+        public val json: JsonObject,
+      ) : Result() {
+        public val discriminator: String
+          get() = (json.getValue("step") as JsonPrimitive).content
+      }
+
+      @Serializable
+      @SerialName("done")
+      public data object Done : Result()
+
+      @Serializable(with = Confirm.HybridArmSerializer::class)
+      @SerialName("confirm")
+      public data class Confirm(
+        public val session: String,
+        public val challenge: Challenge,
+      ) : Result() {
+        @Serializable
+        @JsonClassDiscriminator("challenge")
+        public sealed class Challenge {
+          @Serializable
+          @SerialName("sms")
+          public data class Sms(
+            public val code: String,
+          ) : Challenge()
+
+          @Serializable
+          @SerialName("totp")
+          public data class Totp(
+            public val otp: String,
+          ) : Challenge()
+        }
+
+        @Serializable
+        private data class HybridArmFields(
+          public val session: String,
+        )
+
+        /**
+         * Writes [challenge] and the arm's own properties as one flat JSON object, the hybrid arm's wire shape.
+         */
+        internal object HybridArmSerializer : KSerializer<Confirm> {
+          private val fieldKeys: Set<String> = setOf("session")
+
+          override val descriptor: SerialDescriptor = buildClassSerialDescriptor("confirm")
+
+          override fun serialize(encoder: Encoder, `value`: Confirm) {
+            val output = encoder as? JsonEncoder ?: throw SerializationException("Confirm can only be written as JSON")
+            val fields = output.json.encodeToJsonElement(Confirm.HybridArmFields.serializer(), Confirm.HybridArmFields(value.session)).jsonObject
+            val union = output.json.encodeToJsonElement(Challenge.serializer(), value.challenge).jsonObject
+            output.encodeJsonElement(JsonObject(fields + union))
+          }
+
+          override fun deserialize(decoder: Decoder): Confirm {
+            val input = decoder as? JsonDecoder ?: throw SerializationException("Confirm can only be read from JSON")
+            val flat = input.decodeJsonElement().jsonObject
+            val fields = input.json.decodeFromJsonElement(Confirm.HybridArmFields.serializer(), JsonObject(flat.filterKeys { it in fieldKeys }))
+            val challenge = input.json.decodeFromJsonElement(Challenge.serializer(), JsonObject(flat.filterKeys { key -> key !in fieldKeys && key != "step" }))
+            return Confirm(session = fields.session, challenge = challenge)
+          }
+        }
+      }
     }
   }
 }

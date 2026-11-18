@@ -111,6 +111,14 @@ public final nonisolated class Api: Sendable {
         return try JSONDecoder().decode(GetJob.Result.self, from: result)
     }
 
+    /// Calls `api.getAuthStep`.
+    public func getAuthStep() async throws -> AuthStep {
+        let request = BlocksRequest(method: "api.getAuthStep", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getAuthStep") }
+        return try JSONDecoder().decode(AuthStep.self, from: result)
+    }
+
     public enum UpdateTask {
 
         public enum Sort: String, Codable, Sendable {

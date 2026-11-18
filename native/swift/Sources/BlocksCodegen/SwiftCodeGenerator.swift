@@ -762,7 +762,7 @@ public struct SwiftCodeGenerator {
                 emitDependentTypes(addPropsType, emitted: &emitted, lines: &lines)
             }
             if let embedded = embeddedUnion {
-                emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+                emitEmbeddedUnion(embedded, emitted: &emitted, lines: &lines)
             }
             emitRecordStruct(
                 name: name, fields: fields, additionalPropertiesType: additionalPropertiesType,
@@ -780,6 +780,7 @@ public struct SwiftCodeGenerator {
 
         case .union(_, let variants, let discriminator):
             emitted.insert(name)
+            let embedded = openEnums.takeEmbeddedUnion()
             // Emit variant structs BEFORE the enum (flat, not nested). When
             // the variant name is already a known type (because the spec
             // referenced an existing component schema for that variant), we
@@ -802,7 +803,7 @@ public struct SwiftCodeGenerator {
                         emitDependentTypes(addPropsType, emitted: &emitted, lines: &lines)
                     }
                     if let embedded = variant.embeddedUnion {
-                        emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+                        emitEmbeddedUnion(embedded, emitted: &emitted, lines: &lines)
                     }
                     emitted.insert(variant.name)
                     emitRecordStruct(
@@ -829,7 +830,7 @@ public struct SwiftCodeGenerator {
             body.append("")
             let conformances = valueConformances([.union(name: name, variants: variants, discriminator: discriminator)])
             emitDeclaration(name, line: "public nonisolated enum \(name): \(conformances) {", lines: &body)
-            let unknownCase = openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
+            let unknownCase = embedded ? nil : openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
             body.append(contentsOf: unionCaseLines(variants, indent: "", unknownCase: unknownCase))
             // Internal-discriminator union: write the discriminator at JSON
             // top level alongside the payload.
@@ -1498,6 +1499,13 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Swift Type Name Resolution
 
+    /// Pre-emits a hybrid arm's embedded union, which stays closed: it shares the arm's JSON object.
+    private func emitEmbeddedUnion(_ embedded: ResolvedType, emitted: inout Set<String>, lines: inout [String]) {
+        openEnums.embeddedUnion = true
+        emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+        openEnums.embeddedUnion = false
+    }
+
     /// Pre-emits any types that a given type depends on (ensures they're defined before use).
     private func emitDependentTypes(_ type: ResolvedType, emitted: inout Set<String>, lines: inout [String]) {
         switch type {
@@ -1506,7 +1514,7 @@ public struct SwiftCodeGenerator {
                 emitType(type, name: name, lines: &lines, emitted: &emitted)
             }
             if let embedded = embeddedUnion {
-                emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+                emitEmbeddedUnion(embedded, emitted: &emitted, lines: &lines)
             }
         case .enum(let name, _):
             if !emitted.contains(name) {

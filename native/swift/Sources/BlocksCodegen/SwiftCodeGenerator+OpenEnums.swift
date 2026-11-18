@@ -22,6 +22,16 @@ final class OpenEnumScope {
     /// Whether the enums emitted now are open.
     var isOpen = false
 
+    /// Set while a hybrid arm's embedded union is emitted as a dependent type; the union emission reads it once.
+    /// That union shares the arm's JSON object, so it stays closed.
+    var embeddedUnion = false
+
+    /// Reads and clears `embeddedUnion`.
+    func takeEmbeddedUnion() -> Bool {
+        defer { embeddedUnion = false }
+        return embeddedUnion
+    }
+
     /// Runs `body` with `isOpen` set to `open`, then restores it.
     func with(open: Bool, _ body: () -> Void) {
         let saved = isOpen

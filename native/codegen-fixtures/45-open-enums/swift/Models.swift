@@ -1,5 +1,121 @@
 import Foundation
+import BlocksRuntime
 
+
+public nonisolated struct Sms: Codable, Sendable {
+    public let code: String
+
+    public init(code: String) {
+        self.code = code
+    }
+}
+
+public nonisolated struct Totp: Codable, Sendable {
+    public let otp: String
+
+    public init(otp: String) {
+        self.otp = otp
+    }
+}
+
+public nonisolated enum ConfirmChallenge: Codable, Sendable {
+    case sms(Sms)
+    case totp(Totp)
+
+    enum CodingKeys: String, CodingKey {
+        case challenge
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .sms(let params):
+            try container.encode("sms", forKey: .challenge)
+            try params.encode(to: encoder)
+        case .totp(let params):
+            try container.encode("totp", forKey: .challenge)
+            try params.encode(to: encoder)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let disc = try container.decode(String.self, forKey: .challenge)
+        switch disc {
+        case "sms": self = .sms(try Sms(from: decoder))
+        case "totp": self = .totp(try Totp(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .challenge, in: container, debugDescription: "Unknown value: \(disc)")
+        }
+    }
+}
+
+public nonisolated struct Confirm: Codable, Sendable {
+    public let session: String
+    public let challenge: ConfirmChallenge
+
+    public init(session: String, challenge: ConfirmChallenge) {
+        self.session = session
+        self.challenge = challenge
+    }
+
+    private enum OuterCodingKeys: String, CodingKey {
+        case session
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: OuterCodingKeys.self)
+        try c.encode(self.session, forKey: .session)
+        try self.challenge.encode(to: encoder)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: OuterCodingKeys.self)
+        self.session = try c.decode(String.self, forKey: .session)
+        self.challenge = try ConfirmChallenge(from: decoder)
+    }
+}
+
+public nonisolated enum AuthStep: Codable, Sendable {
+    case done
+    case confirm(Confirm)
+    case unknown(JSONValue)
+
+    enum CodingKeys: String, CodingKey {
+        case step
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .done:
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode("done", forKey: .step)
+        case .confirm(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode("confirm", forKey: .step)
+            try params.encode(to: encoder)
+        case .unknown(let value):
+            try value.encode(to: encoder)
+        }
+    }
+
+    public var unknownDiscriminator: String? {
+        guard case .unknown(.dictionary(let object)) = self,
+              case .string(let tag)? = object["step"] else { return nil }
+        return tag
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let disc = try container.decode(String.self, forKey: .step)
+        switch disc {
+        case "done": self = .done
+        case "confirm": self = .confirm(try Confirm(from: decoder))
+        default:
+            self = .unknown(try JSONValue(from: decoder))
+        }
+    }
+}
 
 public nonisolated enum Color: RawRepresentable, Codable, Hashable, Sendable {
     case red

@@ -294,6 +294,16 @@
           ]
         }
       }
+    },
+    {
+      "name": "api.getAuthStep",
+      "params": [],
+      "result": {
+        "name": "GetAuthStepResult",
+        "schema": {
+          "$ref": "#/components/schemas/AuthStep"
+        }
+      }
     }
   ],
   "components": {
@@ -505,6 +515,80 @@
         "required": [
           "state",
           "message"
+        ]
+      },
+      "AuthStep": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "type": "string",
+                "enum": [
+                  "done"
+                ]
+              }
+            },
+            "required": [
+              "step"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "type": "string",
+                "enum": [
+                  "confirm"
+                ]
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "session"
+            ],
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "challenge": {
+                    "type": "string",
+                    "enum": [
+                      "sms"
+                    ]
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "challenge",
+                  "code"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "challenge": {
+                    "type": "string",
+                    "enum": [
+                      "totp"
+                    ]
+                  },
+                  "otp": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "challenge",
+                  "otp"
+                ]
+              }
+            ]
+          }
         ]
       }
     }

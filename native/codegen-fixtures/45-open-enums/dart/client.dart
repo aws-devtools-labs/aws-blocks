@@ -533,6 +533,88 @@ class Failed {
 }
 
 
+sealed class ConfirmAuthStepChallenge {
+  const ConfirmAuthStepChallenge();
+  Map<String, dynamic> toJson();
+  static ConfirmAuthStepChallenge fromJson(Map<String, dynamic> json) {
+    switch (json['challenge'] as String) {
+      case 'sms': return SmsConfirmAuthStepChallenge.fromJson(json);
+      case 'totp': return TotpConfirmAuthStepChallenge.fromJson(json);
+      default: throw ArgumentError('Unknown challenge: ${json['challenge']}');
+    }
+  }
+}
+
+class SmsConfirmAuthStepChallenge extends ConfirmAuthStepChallenge {
+  final String code;
+
+  const SmsConfirmAuthStepChallenge({
+    required this.code,
+  });
+
+  factory SmsConfirmAuthStepChallenge.fromJson(Map<String, dynamic> json) {
+    return SmsConfirmAuthStepChallenge(
+      code: json['code'] as String,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'challenge': 'sms',
+      'code': code,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmsConfirmAuthStepChallenge &&
+          code == other.code;
+
+  @override
+  int get hashCode => code.hashCode;
+
+  @override
+  String toString() => 'SmsConfirmAuthStepChallenge(code: $code)';
+}
+
+class TotpConfirmAuthStepChallenge extends ConfirmAuthStepChallenge {
+  final String otp;
+
+  const TotpConfirmAuthStepChallenge({
+    required this.otp,
+  });
+
+  factory TotpConfirmAuthStepChallenge.fromJson(Map<String, dynamic> json) {
+    return TotpConfirmAuthStepChallenge(
+      otp: json['otp'] as String,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'challenge': 'totp',
+      'otp': otp,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TotpConfirmAuthStepChallenge &&
+          otp == other.otp;
+
+  @override
+  int get hashCode => otp.hashCode;
+
+  @override
+  String toString() => 'TotpConfirmAuthStepChallenge(otp: $otp)';
+}
+
+
+
 sealed class FlaggedGetEventResultSeverity {
   static const low = FlaggedGetEventResultSeverityKnown.low;
   static const high = FlaggedGetEventResultSeverityKnown.high;
@@ -995,6 +1077,110 @@ class Labels {
 }
 
 
+sealed class AuthStep {
+  const AuthStep();
+  Map<String, dynamic> toJson();
+  static AuthStep fromJson(Map<String, dynamic> json) {
+    switch (json['step'] as String) {
+      case 'done': return DoneAuthStep.fromJson(json);
+      case 'confirm': return ConfirmAuthStep.fromJson(json);
+      default: return AuthStepUnknown(_blocksFrozenObject(json));
+    }
+  }
+}
+
+class DoneAuthStep extends AuthStep {
+
+  const DoneAuthStep();
+
+  factory DoneAuthStep.fromJson(Map<String, dynamic> json) {
+    return DoneAuthStep(
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'step': 'done',
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DoneAuthStep;
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() => 'DoneAuthStep()';
+}
+
+
+
+class ConfirmAuthStep extends AuthStep {
+  final String session;
+  final ConfirmAuthStepChallenge challenge;
+
+  const ConfirmAuthStep({
+    required this.session,
+    required this.challenge,
+  });
+
+  factory ConfirmAuthStep.fromJson(Map<String, dynamic> json) {
+    return ConfirmAuthStep(
+      session: json['session'] as String,
+      challenge: ConfirmAuthStepChallenge.fromJson(json),
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'step': 'confirm',
+      'session': session,
+      ...challenge.toJson(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConfirmAuthStep &&
+          session == other.session &&
+          challenge == other.challenge;
+
+  @override
+  int get hashCode => Object.hash(session, challenge);
+
+  @override
+  String toString() => 'ConfirmAuthStep(session: $session, challenge: $challenge)';
+}
+
+final class AuthStepUnknown extends AuthStep {
+  final Map<String, dynamic> json;
+
+  const AuthStepUnknown(this.json);
+
+  String get discriminator => json['step'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthStepUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'AuthStepUnknown' '($json)';
+}
+
+
+
 enum ApiUpdateTaskSort {
   newest,
   oldest
@@ -1321,6 +1507,11 @@ class ApiApi {
   Future<dynamic> getJob() async {
     final result = await _client.call('api.getJob', const <dynamic>[]);
     return result as dynamic;
+  }
+
+  Future<AuthStep> getAuthStep() async {
+    final result = await _client.call('api.getAuthStep', const <dynamic>[]);
+    return AuthStep.fromJson(result as Map<String, dynamic>);
   }
 }
 
