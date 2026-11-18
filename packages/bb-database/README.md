@@ -140,7 +140,7 @@ Block options:
 | `removalPolicy` | `'retain' \| 'destroy'` | Only when `cluster` is omitted. With a shared cluster, set it on the `DatabaseCluster`. |
 | `logger` | `ChildLogger` | Logger for internal operations. Defaults to a `Logger` at error level. |
 
-`Database` and `DatabaseCluster` ids are unique per app. A second block with the same id is an error at construction.
+`Database` and `DatabaseCluster` ids are unique per app. A second block with the same id is an error at construction. The ids of two blocks that each own a cluster must also differ in a letter or a digit. Ids that differ only in punctuation, such as `db-a` and `dba` in one scope, are an error at synth.
 
 ## Sharing a cluster
 

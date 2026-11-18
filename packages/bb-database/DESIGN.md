@@ -277,6 +277,10 @@ R4 is not met yet. Nothing stops a deploy that renames a `Database` or `Database
 
 The planned mechanism has three parts: a binding record in stack metadata, a marker in `.bb-data` for the dev server, and a guard that inspects a change set before `cdk deploy`.
 
+**The logical id of an owned cluster.** The cluster of a `Database` that owns it has the CloudFormation logical id `<fullId>DsqlCluster`, without the characters that a logical id cannot have. The id does not come from the construct path. `DistributedDatabase` of `@aws-blocks/bb-distributed-data` declared its cluster under that id. A `Database` with the id of a deployed `DistributedDatabase`, in the same scope and stack, is therefore the same resource to CloudFormation, and the deploy keeps the cluster. The runner reads the `_migrations` table of that block as it is: the table has an extra `id` column with a default. The database role has the same name in both blocks.
+
+Two blocks whose ids give the same logical id fail at synth with an error that names both. A shared `DatabaseCluster` has the logical id of its construct path.
+
 ## 7. Existing databases
 
 `DatabaseCluster.fromExisting()` returns `{ type: 'external' }` with either a `name` or the application's own connection string source, and an optional `ca`. A block on it has `cluster.kind === 'external'` and provisions no cluster.

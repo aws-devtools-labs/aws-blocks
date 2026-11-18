@@ -94,8 +94,8 @@ describe('Database (CDK)', () => {
 		cdk.Tags.of(stack).add('app', 'ledger', { priority: 1000 });
 		cdk.Tags.of(parent).add('cost-center', 'payments');
 		const clusters = Template.fromStack(stack).findResources('AWS::DSQL::Cluster');
-		// The logical id the cluster had as a raw CfnResource: a changed id would replace the cluster.
-		assert.deepStrictEqual(Object.keys(clusters), ['ledgerdbDsqlClusterB0EDBE16']);
+		// A changed logical id would replace the cluster.
+		assert.deepStrictEqual(Object.keys(clusters), [`${stack.id}ledgerdbDsqlCluster`]);
 		const [cluster] = Object.values(clusters);
 		assert.deepStrictEqual(cluster.Properties, {
 			DeletionProtectionEnabled: false,
@@ -104,6 +104,44 @@ describe('Database (CDK)', () => {
 				{ Key: 'cost-center', Value: 'payments' },
 			],
 		});
+	});
+
+	test('an owned DSQL cluster has the logical id DistributedDatabase declared, so an upgraded app keeps its cluster', () => {
+		const { stack } = setup();
+		const db = new Database(new Scope('ledger'), 'db');
+		// How `DistributedDatabase` declared its cluster: a child of the stack named `<fullId>DsqlCluster`.
+		const earlierStack = new cdk.Stack(new cdk.App(), 'Earlier');
+		const earlier = new cdk.CfnResource(earlierStack, `${db.fullId}DsqlCluster`, { type: 'AWS::DSQL::Cluster' });
+		const earlierId = earlierStack.getLogicalId(earlier);
+		// The block's `fullId` starts with the stack's id.
+		assert.strictEqual(earlierId, `${stack.id}ledgerdbDsqlCluster`);
+
+		const template = Template.fromStack(stack);
+		assert.deepStrictEqual(Object.keys(template.findResources('AWS::DSQL::Cluster')), [earlierId]);
+		// Everything that names the cluster follows the id.
+		const [migration] = Object.values(migrationResources(template));
+		assert.deepStrictEqual(migration.Properties.clusterEndpoint, { 'Fn::GetAtt': [earlierId, 'Endpoint'] });
+		assert.ok(migration.DependsOn.includes(earlierId));
+	});
+
+	test('two owned blocks whose ids differ only in punctuation fail at synth, by name', () => {
+		const { stack } = setup();
+		const parent = new Scope('ledger');
+		new Database(parent, 'db-a');
+		assert.throws(
+			() => {
+				new Database(parent, 'dba');
+				Template.fromStack(stack);
+			},
+			(e: unknown) => e instanceof Error && /ledger-dba/.test(e.message) && /ledger-db-a/.test(e.message),
+		);
+	});
+
+	test('a shared DSQL cluster keeps the logical id of its construct path', () => {
+		const { stack } = setup();
+		new DatabaseCluster(new Scope('ledger'), 'shared', { type: 'dsql' });
+		const ids = Object.keys(Template.fromStack(stack).findResources('AWS::DSQL::Cluster'));
+		assert.deepStrictEqual(ids, ['ledgersharedDsqlCluster2ACEACDA']);
 	});
 
 	test('the app role gets dsql:DbConnect; the migration Lambdas get dsql:DbConnectAdmin', () => {

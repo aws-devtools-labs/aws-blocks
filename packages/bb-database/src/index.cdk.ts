@@ -6,7 +6,7 @@ import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core
 import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { connectionParameterName } from './constants.js';
-import { ClusterInfra } from './deploy/cluster-infra.js';
+import { ClusterInfra, ownedDsqlClusterLogicalId } from './deploy/cluster-infra.js';
 import { type ConnectionStore, connectionReadStatements, externalMigrations } from './deploy/external-infra.js';
 import { configError } from './errors.js';
 import { lintMigrationFiles } from './migrations/plan.js';
@@ -36,8 +36,12 @@ function projectRootOf(scope: BuildingBlockScope): string {
 	return typeof ctx === 'string' && ctx ? ctx : process.cwd();
 }
 
-function clusterInfra(owner: BuildingBlockScope, options: ResolvedClusterOptions): ClusterInfra {
-	const infra = new ClusterInfra({ owner, fullId: owner.fullId, options });
+function clusterInfra(
+	owner: BuildingBlockScope,
+	options: ResolvedClusterOptions,
+	clusterLogicalId?: string,
+): ClusterInfra {
+	const infra = new ClusterInfra({ owner, fullId: owner.fullId, options, clusterLogicalId });
 	for (const [key, value] of Object.entries(infra.configEntries)) registerConfig(owner, key, value);
 	return infra;
 }
@@ -125,6 +129,7 @@ export class Database extends BuildingBlockScope {
 			infra = clusterInfra(
 				this,
 				resolveClusterOptions({ type: 'dsql', removalPolicy: options.removalPolicy }, this.fullId),
+				ownedDsqlClusterLogicalId(cdk.Stack.of(this), this.fullId),
 			);
 		} else if (resolved.shared instanceof DatabaseCluster) {
 			infra = resolved.shared.infra;
