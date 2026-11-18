@@ -2,11 +2,11 @@
 
 The Dart SDK for AWS Blocks.
 
-AWS Blocks lets you define a backend in TypeScript — APIs, auth, databases, realtime channels, file storage — and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
+AWS Blocks lets you define a backend in TypeScript (APIs, auth, databases, realtime channels, file storage) and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
 
 ## How it works
 
-You write your backend. AWS Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions — ready to drop into your Flutter app.
+You write your backend. AWS Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions, ready to drop into your Flutter app.
 
 ```
 Your backend (TypeScript)  →  blocks.spec.json  →  blocks_codegen  →  Typed Dart client
@@ -15,7 +15,7 @@ Your backend (TypeScript)  →  blocks.spec.json  →  blocks_codegen  →  Type
 ## What you get
 
 ```dart
-final blocks = Blocks(baseUrl: 'https://your-api.example.com');
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
 
 // Call your API methods with full type safety
 final todo = await blocks.api.createTodo(title: 'Buy milk', priority: 1);
@@ -26,7 +26,7 @@ await blocks.authApi.setAuthState(
   input: SignInInput(username: 'alice', password: 'secret'),
 );
 
-// Realtime — subscribe to live data over WebSocket
+// Realtime: subscribe to live data over WebSocket
 final channel = await blocks.api.getCursorChannel();
 channel.subscribe().listen((cursor) {
   print('${cursor.userId} moved to (${cursor.x}, ${cursor.y})');
@@ -37,59 +37,95 @@ channel.subscribe().listen((cursor) {
 
 | Package | Role |
 |---------|------|
-| **blocks_runtime** | The runtime your app ships with — HTTP client, WebSocket realtime, file handles |
-| **blocks_codegen** | The code generator — reads your spec, outputs Dart. Only runs at build time. |
+| **blocks_runtime** | The runtime your app ships with: HTTP client, WebSocket realtime, file handles, OIDC client |
+| **blocks_codegen** | The code generator: reads your spec, outputs Dart. Only runs at build time. |
+| **blocks_runtime_flutter** | Flutter support: keeps the session in the platform's secure storage, and opens the browser for OIDC sign-in |
 
 ## Getting started
 
-### 1. Add dependencies
+You need Node.js 22 or later for the backend, and Flutter 3.41 or later (Dart 3.11 or later) for the app.
+
+### 1. Create a backend
+
+Create a backend with the `api-only` template, which has no web frontend:
+
+```bash
+npm create @aws-blocks/blocks-app@latest my-backend -- --template api-only
+cd my-backend
+npm run dev
+```
+
+`npm run dev` starts a local development server for the API at `http://localhost:3001/aws-blocks/api`. Leave it running.
+
+### 2. Generate the spec
+
+In a second terminal, in `my-backend`:
+
+```bash
+npm run spec
+```
+
+This writes `aws-blocks/blocks.spec.json`, which describes every method the backend exports. It also records the URL of the dev server that last ran, so the generated client calls it by default. Run `npm run spec` again after you change the backend. To point the client at a deployed sandbox instead, run `BLOCKS_SPEC_STAGE=sandbox npm run spec`.
+
+### 3. Add the packages to your app
+
+Create the app and add the packages:
+
+```bash
+flutter create my_app
+cd my_app
+```
 
 ```yaml
 # pubspec.yaml
 dependencies:
   blocks_runtime: ^0.2.0
+  blocks_runtime_flutter: ^0.2.0
 
 dev_dependencies:
   blocks_codegen: ^0.2.0
   build_runner: ^2.4.0
 ```
 
-### 2. Add your spec and configure the builder
+`blocks_runtime_flutter` keeps the session in the platform's secure storage (see [Sessions](#sessions)). A pure Dart program needs only `blocks_runtime`.
 
-Drop your `blocks.spec.json` into `lib/`, then create a `build.yaml`:
+### 4. Generate the client
 
-```yaml
-targets:
-  $default:
-    builders:
-      blocks_codegen|blocks_codegen:
-        options:
-          spec: lib/blocks.spec.json
-          # Logical identities from x-blocks-native-packages that keep the
-          # UnknownTransferable fallback instead of a declared type (optional).
-          # An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
-          native_package_opt_out:
-            - example-iot-native
-```
-
-### 3. Generate your client
+Copy the spec into `lib/` and run the builder:
 
 ```bash
+cp ../my-backend/aws-blocks/blocks.spec.json lib/
 dart run build_runner build
 ```
 
-This produces a typed Dart client from your spec.
+The builder turns every `*.spec.json` file in the package into a `*.blocks.dart` file next to it, here `lib/blocks.blocks.dart`. It needs no `build.yaml`; add one only to set the builder's options (see [blocks_codegen](packages/blocks_codegen/README.md#options)). Copy the spec and run the builder again whenever the backend changes.
 
-### 4. Use it
+### 5. Use it
 
 ```dart
-import 'package:blocks_runtime/blocks_runtime.dart';
 import 'blocks.blocks.dart';
 
-final blocks = Blocks(baseUrl: 'http://localhost:3001/aws-blocks/api');
-final greeting = await blocks.hello.greet(name: 'World');
-print(greeting.message); // "Hello, World!"
+Future<void> main() async {
+  // With no baseUrl, the client calls the server the spec names. Pass
+  // baseUrl: 'https://<your API>/aws-blocks/api' to call another one.
+  final blocks = Blocks();
+  final health = await blocks.api.health();
+  print(health.status.name); // ok
+}
 ```
+
+`api` is the backend's `export const api = new ApiNamespace(...)`: each export becomes a field of the generated `Blocks` class, and each method a Dart method with named parameters.
+
+Before you run the app:
+
+- **macOS:** a Flutter macOS app runs in the App Sandbox, which blocks outgoing connections until you add the `com.apple.security.network.client` entitlement to `macos/Runner/DebugProfile.entitlements` and `macos/Runner/Release.entitlements`. Without it every call throws a `TransportException`.
+
+  ```xml
+  <key>com.apple.security.network.client</key>
+  <true/>
+  ```
+
+- **Android emulator:** `localhost` is the emulator itself. `BlocksConfig.rewriteLocalhost(Servers.local, host: '10.0.2.2')` gives the URL of the dev server on the host machine, to pass as `baseUrl`.
 
 ## Using Auth
 
@@ -240,15 +276,81 @@ On desktop, a call without a `launcher` binds `127.0.0.1` on a port the operatin
 - For a command-line app: when the default handler can't open a browser, for example on a Linux host with no `xdg-open`, the client prints a one-time `http://127.0.0.1:<port>/oidc/start/<random>` URL to stderr and keeps waiting. Opening it redirects to the sign-in page. Treat it like the sign-in link itself: it works once, for this sign-in only. On Windows, `rundll32` usually exits 0 even when nothing opened, so this fallback rarely runs there. A Flutter app has no stderr to read, which is why it should set `openBrowser`.
 - A sandboxed macOS app needs the `com.apple.security.network.server` entitlement to accept the redirect on its listener, and should set `openBrowser` to `url_launcher`, because the sandbox can stop it from running `open`.
 
+## Sessions
+
+When the backend signs a user in, it sets a session cookie, and the client sends it back on every later call. Where that cookie is kept depends on the platform, the same way it does in the Swift and Kotlin SDKs:
+
+| Where the app runs | Where the session is kept |
+|---|---|
+| Flutter on Android, iOS, macOS, Linux or Windows, with `blocks_runtime_flutter` | The platform's secure storage, through `flutter_secure_storage` (the Keystore on Android, the Keychain on iOS and macOS). The user stays signed in after the app restarts. |
+| Flutter web, or Dart compiled for the web | The browser's own cookie jar, for a backend on the app's own origin. The browser never shows the session cookie to Dart. |
+| A pure Dart program (command-line tool, server) | Memory, unless the program registers a store (see below). |
+
+A Flutter app needs no code for this. Add the dependency:
+
+```yaml
+dependencies:
+  blocks_runtime: ^0.2.0
+  blocks_runtime_flutter: ^0.2.0
+```
+
+and build the client as usual, before or after `runApp`. The app does not have to call `WidgetsFlutterBinding.ensureInitialized()` first:
+
+```dart
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+// Signed in if the user was signed in before the app restarted.
+final state = await blocks.authApi.getAuthState();
+```
+
+`blocks_runtime_flutter` registers itself as a Dart plugin, so Flutter sets up the secure store before `main` runs. Every `Blocks` (and `BlocksClient` or `OidcClient`) built without a `sessionStore:` then shares that one store. It reads the saved session before the first call, and writes it back only when the backend changes a cookie. If the secure storage cannot be read or written, the call still goes ahead with the session held in memory, and the error is passed to `FlutterError.reportError` as a silent error, so a crash reporter hooked to `FlutterError.onError` sees it.
+
+macOS, Android and Linux each need some app setup for the secure storage to work, or to keep the session safe: the macOS `keychain-access-groups` entitlement, Android backup rules, and the libsecret runtime on Linux. See [Platform setup](packages/blocks_runtime_flutter/README.md#platform-setup).
+
+Flutter does not run plugin registration under `flutter test`, so widget and unit tests keep the session in memory. An `integration_test` run on a device does register it, and keeps the session between runs.
+
+To keep the session in memory only, so that it ends when the process does, pass `InMemorySessionStore()`:
+
+```dart
+final blocks = Blocks(
+  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  sessionStore: InMemorySessionStore(),
+);
+```
+
+A pure Dart program has no per-application storage to default to: the home directory is shared by every program the user runs. To keep its session across runs, it names itself once at startup, before building any client (registering a different store after a client exists throws a `StateError`):
+
+```dart
+import 'dart:io';
+
+import 'package:blocks_runtime/blocks_runtime.dart';
+import 'blocks.blocks.dart'; // the generated client
+
+Future<void> main() async {
+  final session = PersistentSessionStore(
+    store: FileTokenStore(applicationId: 'com.example.notes_cli'),
+    onPersistError: (error, _) => stderr.writeln('session not saved: $error'),
+  );
+  registerDefaultSessionStore(() => session);
+  final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  // ... sign in ...
+
+  // The session is written in the background; wait for it before exit().
+  await session.flush();
+  exit(0);
+}
+```
+
+`FileTokenStore` keeps the session unencrypted in `~/.blocks/<applicationId>/dart/`, in a directory only your OS user can read on Linux and macOS. See its documentation for what that does and does not protect against. Without `onPersistError`, a storage error is written once to standard error.
+
 ## Features
 
-**Type-safe API calls** — every method, parameter, and return type is generated from your spec. Typos and type mismatches are caught at compile time.
+**Type-safe API calls**: every method, parameter, and return type is generated from your spec. Typos and type mismatches are caught at compile time.
 
-**Realtime subscriptions** — if your backend has realtime channels (e.g., cursor tracking, live updates), the generated client gives you typed `Stream<T>` subscriptions over WebSocket.
+**Realtime subscriptions**: if your backend has realtime channels (e.g., cursor tracking, live updates), the generated client gives you typed `Stream<T>` subscriptions over WebSocket.
 
 **Auth flows**: each auth action's input is its own class in a sealed union, so a misspelled field or action doesn't compile. `AuthState.state` is an enum, and its actions arrive at runtime, so render them by name and skip the ones you don't know.
 
-**File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
+**File transfers**: presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
 
 **Typed OIDC providers**: for a custom block whose method returns an OIDC client, when the spec names its providers, the method returns a `TypedOidcClient` of an enum generated for it, so `signIn` accepts only those providers and a typo doesn't compile:
 
@@ -263,13 +365,13 @@ final user = await oidc.signIn(
 
 The enum is named `<Api class><Method>Provider`. Each value carries the name the backend knows the provider by (`loginGov` is `'login.gov'`), and `fromProviderName(name)` finds a value from a name known only at runtime. A `TypedOidcClient` is the runtime's `OidcClient` with those three methods narrowed, so every other member works as before. A spec that names no providers, a client inside a model, and a client built with `OidcClient(...)` are a plain `OidcClient`, which takes the provider's name: `signIn('google', …)`.
 
-**Unbound transferables** — a direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of untyped `dynamic`. Only bare direct results are covered.
+**Unbound transferables**: a direct result with an unbound transferable tag returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of untyped `dynamic`. Only bare direct results are covered.
 
-**Declared native packages** — when `x-blocks-native-bindings` binds the tag and its package has a `dart` field, the client imports the declared library and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
+**Declared native packages**: when `x-blocks-native-bindings` binds the tag and its package has a `dart` field, the client imports the declared library and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 
 **Errors and HTTP status** — a JSON-RPC error is thrown as a `BlocksRpcException` (with `code` and `data`) whatever the HTTP status, so a backend namespace created with `httpErrorStatus: true` (which answers a 4xx `ApiError` with that HTTP status) decodes the same. One difference to plan for: when the client has an `authProvider` (bearer tokens), any HTTP 401 makes it call `onAuthFailure()` (a token refresh) and run the method **once more**. Without `httpErrorStatus` an `ApiError` 401 arrives as HTTP 200 and is not retried; with it, a method that rejects with 401 after a side effect runs twice, so put the guard first on the backend: call `auth.requireAuth(context)` before anything else in the method, or wrap the method with `auth.protect` (`Auth`), which runs the guard before any of the method's code. A method that can still answer 401 after a write should be idempotent.
 
-**No Flutter dependency** — `blocks_runtime` is pure Dart. Works in CLI apps, server-side Dart, or Flutter.
+**No Flutter dependency**: `blocks_runtime` is pure Dart. Works in CLI apps, server-side Dart, or Flutter.
 
 ## Project structure
 
@@ -279,25 +381,25 @@ native/dart/
 │   ├── blocks_runtime/          # Runtime library (ships with your app)
 │   ├── blocks_codegen/          # Code generator (build-time only)
 │   └── blocks_runtime_flutter/  # Flutter integration (secure storage, browser launcher)
-├── example/                     # Demo Flutter app with auth, todos, realtime cursors
+├── example/                     # End-to-end tests the SDK runs against a local backend
 └── README.md
 ```
 
 ## Requirements
 
-- Dart 3.3+
-- Flutter (for the demo app — the SDK itself is pure Dart)
-- Node.js 22+ (for running the AWS Blocks backend locally)
+- Dart 3.11+
+- Flutter 3.41+, for `blocks_runtime_flutter` (`blocks_runtime` and `blocks_codegen` are pure Dart)
+- Node.js 22+, for running the AWS Blocks backend locally
 
 ## How the codegen works
 
 The generator has three stages:
 
-1. **Parse** — reads the OpenRPC JSON spec, extracts methods, schemas, and type relationships
-2. **Build** — resolves types, deduplicates identical shapes, groups methods into namespaces
-3. **Generate** — outputs Dart source with data classes, sealed hierarchies, API methods, and a `Blocks` facade
+1. **Parse**: reads the OpenRPC JSON spec, extracts methods, schemas, and type relationships
+2. **Build**: resolves types, deduplicates identical shapes, groups methods into namespaces
+3. **Generate**: outputs Dart source with data classes, sealed hierarchies, API methods, and a `Blocks` facade
 
-The output is a single self-contained `.blocks.dart` file. For backends with realtime or file features, it also imports `blocks_runtime` for WebSocket and presigned URL support.
+The output is a single `.blocks.dart` file that imports `blocks_runtime` and re-exports the runtime types an app uses most, such as `ApiException`, `isBlocksError` and `OidcClient`, so most code needs only that one import.
 
 ## License
 
