@@ -1233,8 +1233,8 @@ export function orderedResults<E>(
 
 /**
  * Deterministic tie-break for ordering: compare two items by the base-table key
- * (partition key, then sort key). Returns a stable -1, 0, or 1. String
- * comparisons use JS UTF-16 order (see DESIGN.md).
+ * (partition key, then sort key). Returns a stable -1, 0, or 1. Strings compare
+ * in DynamoDB's UTF-8 byte order, through {@link compareKeyValues}.
  */
 export function compareByBaseKey(model: KeyModel, a: Item, b: Item): number {
 	for (const field of keyFields(model.table)) {
