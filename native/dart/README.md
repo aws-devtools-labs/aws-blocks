@@ -65,7 +65,7 @@ In a second terminal, in `my-backend`:
 npm run spec
 ```
 
-This writes `aws-blocks/blocks.spec.json`, which describes every method the backend exports. It also records the URL of the dev server that last ran, so the generated client calls it by default. Run `npm run spec` again after you change the backend. To point the client at a deployed sandbox instead, run `BLOCKS_SPEC_STAGE=sandbox npm run spec`.
+This writes `aws-blocks/blocks.spec.json`, which describes every method the backend exports. It also records the URL of the dev server that last ran, so the generated client calls it by default. Run `npm run spec` again after you change the backend. To point the client at AWS instead, deploy a sandbox with `npm run sandbox:deploy` and then run `BLOCKS_SPEC_STAGE=sandbox npm run spec`; the spec then names the deployed API URL, stage segment included. `npm run sandbox:destroy` deletes the sandbox.
 
 ### 3. Add the packages to your app
 
