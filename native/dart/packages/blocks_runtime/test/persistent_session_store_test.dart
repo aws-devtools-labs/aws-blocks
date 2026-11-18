@@ -212,6 +212,84 @@ void main() async {
     });
   });
 
+  group('PersistentSessionStore while storage is unreadable', () {
+    final api = Uri.parse('https://example.com/aws-blocks/api');
+
+    /// Storage holding a session cookie with [value], then locked.
+    Future<_LockableTokenStore> locked(String value) async {
+      final token = _LockableTokenStore()..unreadable = false;
+      final writer = PersistentSessionStore(store: token, storageKey: 'k')
+        ..setCookies('session=$value; Path=/', requestUri: api);
+      await writer.flush();
+      expect(await token.get('k'), contains(value));
+      return token..unreadable = true;
+    }
+
+    test('sign-out still deletes the stored session', () async {
+      final token = await locked('secret');
+      final store = PersistentSessionStore(
+        store: token,
+        storageKey: 'k',
+        onPersistError: (_, _) {},
+      )..clear();
+      await store.flush();
+
+      token.unreadable = false;
+      expect(await token.get('k'), isNull);
+    });
+
+    test('a change is written once a later read succeeds', () async {
+      final token = await locked('old');
+      var now = DateTime.utc(2030);
+      final store =
+          PersistentSessionStore(
+              store: token,
+              storageKey: 'k',
+              clock: () => now,
+              onPersistError: (_, _) {},
+            )
+            // The backend rotates the session while storage can't be read.
+            ..setCookies('session=rotated; Path=/', requestUri: api);
+      await store.flush();
+
+      // Storage becomes readable; a request after the retry interval reads it.
+      token.unreadable = false;
+      now = now.add(const Duration(seconds: 31));
+      expect(await store.cookieHeaderFor(api), 'session=rotated');
+      await store.flush();
+
+      final records = (jsonDecode((await token.get('k'))!) as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      expect(records.map((r) => r['value']), ['rotated']);
+    });
+
+    test(
+      'flush settles when the read succeeds inside a queued write',
+      () async {
+        final token = await locked('old');
+        final store = PersistentSessionStore(
+          store: token,
+          storageKey: 'k',
+          onPersistError: (_, _) {},
+        )..setCookies('session=rotated; Path=/', requestUri: api);
+        await store.flush();
+
+        // The next change reads storage from inside its own write, which queues
+        // the skipped write behind it.
+        token.unreadable = false;
+        store.setCookies('other=1; Path=/', requestUri: api);
+        await store.flush().timeout(const Duration(seconds: 5));
+
+        final records = (jsonDecode((await token.get('k'))!) as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+        expect(records.map((r) => '${r['name']}=${r['value']}'), {
+          'session=rotated',
+          'other=1',
+        });
+      },
+    );
+  });
+
   group('cookie attributes', () {
     final now = DateTime.utc(2030, 1, 1, 12);
     InMemorySessionStore store() => InMemorySessionStore(clock: () => now);
@@ -438,4 +516,16 @@ void main() async {
       },
     );
   });
+}
+
+/// An [InMemoryTokenStore] whose reads throw while [unreadable] is set, as an
+/// iOS Keychain item does while the device is locked.
+class _LockableTokenStore extends InMemoryTokenStore {
+  bool unreadable = true;
+
+  @override
+  Future<String?> get(String key) {
+    if (unreadable) throw StateError('locked');
+    return super.get(key);
+  }
 }

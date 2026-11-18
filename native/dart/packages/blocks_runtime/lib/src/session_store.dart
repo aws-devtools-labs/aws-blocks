@@ -363,8 +363,9 @@ final class InMemorySessionStore implements SessionStore {
 /// be read at launch (an iOS Keychain item while the device is still locked,
 /// for example) is read once it becomes readable, and its session is sent
 /// from then on. Until a read succeeds nothing is written, so a session that
-/// could not be read is not overwritten. A failed write is retried on the
-/// next change.
+/// could not be read is not overwritten; a change made meanwhile is written
+/// once a read succeeds. [clear] is the exception: it deletes the stored
+/// session at once. A failed write is retried on the next change.
 ///
 /// Flutter apps reuse the existing secure storage with zero new code:
 /// ```dart
@@ -512,11 +513,14 @@ final class PersistentSessionStore implements SessionStore {
     _persist();
   }
 
+  /// Deletes the stored session too, even while the backing store can't be
+  /// read: a sign-out removes it either way, so the delete doesn't wait for
+  /// the first read the way a write does.
   @override
   void clear() {
     _cache.clear();
     _changes++;
-    _persist();
+    _writes = _writes.then((_) => _deleteReportingErrors());
   }
 
   /// Loads the backing store once, before the first cookie read and the first
@@ -543,6 +547,10 @@ final class PersistentSessionStore implements SessionStore {
       _persisted = _changes == 0 ? _serialize() : null;
       _failedLoadAt = null;
       _failing = false;
+      // A change made while the store couldn't be read wasn't written; queue
+      // it now. When this load runs inside a queued write, the new write runs
+      // after that one, and finds nothing left to write.
+      if (_changes != 0) _persist();
       return true;
     } on Object catch (error, stackTrace) {
       _loading = null;
@@ -576,6 +584,16 @@ final class PersistentSessionStore implements SessionStore {
     } on Object catch (error, stackTrace) {
       // [_persisted] still names what storage holds, so the next change
       // writes again.
+      _report(error, stackTrace);
+    }
+  }
+
+  Future<void> _deleteReportingErrors() async {
+    try {
+      await _store.delete(_storageKey);
+      _persisted = '[]';
+      _failing = false;
+    } on Object catch (error, stackTrace) {
       _report(error, stackTrace);
     }
   }

@@ -150,7 +150,9 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   changes, and on a request made at least 30 seconds after the last failed
   attempt, so a store that was unreadable at launch (a Keychain item while the
   device is locked) is read once it becomes readable. Nothing is written until the store has been
-  read, so a session that could not be read is not overwritten. A stored value
+  read, so a session that could not be read is not overwritten; a cookie
+  change made meanwhile is written once a read succeeds. Signing out deletes
+  the stored session even while the store can't be read. A stored value
   that is not a cookie list is now reported before it is deleted.
 - A `restore()` still in flight when a sign-in or sign-out finishes ignores
   its response and returns the current user, or null. A late 401 used to sign
