@@ -112,7 +112,9 @@ internal class EncryptedFileKeyValueStore(
         if (held != null) return SecretKeySpec(held, "AES")
         val fresh = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
         val installed = custody.storeIfAbsent(alias, fresh)
-        if (installed.contentEquals(fresh)) discardEntriesWrittenUnderAnOlderKey()
+        // The fingerprint is computed here rather than read from [keyFingerprint], which resolves
+        // the very key this function is still producing and would re-enter its own initializer.
+        if (installed.contentEquals(fresh)) discardEntriesWrittenUnderAnOlderKey(fingerprintOf(installed))
         return SecretKeySpec(installed, "AES")
     }
 
@@ -133,32 +135,42 @@ internal class EncryptedFileKeyValueStore(
      * observer can tell is whether two entries share a key, which on the file tier is already
      * evident from the key sitting next to them.
      */
-    private val keyFingerprint: ByteArray by lazy {
+    private val keyFingerprint: ByteArray by lazy { fingerprintOf(secretKey.encoded) }
+
+    private fun fingerprintOf(key: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256")
-            .digest(FINGERPRINT_DOMAIN + secretKey.encoded)
+            .digest(FINGERPRINT_DOMAIN + key)
             .copyOf(FINGERPRINT_SIZE)
-    }
 
     /**
-     * Removes the entries in a directory this store has just minted a key for.
+     * Removes the entries that some earlier key wrote, after this store has minted a replacement.
+     * Reached when a key is lost between launches — a Keychain item deleted, a keyring recreated
+     * after a password change, a directory restored onto a machine the old key is not on.
      *
      * Tidying rather than correctness: [keyFingerprint] is what keeps an entry written under
      * another key from being mistaken for a corrupt one, and it does so without this sweep having
      * run. What the sweep adds is that a directory does not accumulate entries no key on the
      * machine can read, waiting for a write to the same name to displace them.
      *
-     * Minting is proof that every entry present belongs to a previous life of the directory: the
-     * key came back equal to the random bytes offered, which nothing else could have produced, so
-     * no other process installed it and nothing was written under it. Reached when a key is lost
-     * between launches — a Keychain item deleted, a keyring recreated after a password change, a
-     * directory restored onto a machine the old key is not on.
+     * Minting is not on its own a licence to delete, which is why every deletion is justified by
+     * the fingerprint the file itself carries rather than by having minted. The key is published
+     * before this runs, so a second instance created at the same moment adopts it and can write an
+     * entry while the sweep is in progress — an entry belonging to the key in hand, which deleting
+     * would discard a session the caller believes was saved. Anything that cannot be read as
+     * another key's is left alone: a staging file a concurrent writer has not finished, a file
+     * whose contents do not decode, one too short to carry a fingerprint.
      *
      * Best-effort: a failure here leaves unreadable entries in place, which the fingerprint check
      * already copes with, so it does not deserve to fail the call that provoked it.
      */
-    private fun discardEntriesWrittenUnderAnOlderKey() {
+    private fun discardEntriesWrittenUnderAnOlderKey(fingerprint: ByteArray) {
         runCatching {
-            forEachEntry { runCatching { Files.deleteIfExists(it) } }
+            forEachEntry { path ->
+                runCatching {
+                    val envelope = envelopeAt(path) ?: return@runCatching
+                    if (wasWrittenUnderAnotherKey(envelope, fingerprint)) Files.deleteIfExists(path)
+                }
+            }
         }
     }
 
@@ -191,7 +203,7 @@ internal class EncryptedFileKeyValueStore(
             // and this read on a concurrent reader. Treat as absent.
             return@withContext null
         }
-        val envelope = runCatching { Base64.getDecoder().decode(stored) }.getOrNull()
+        val envelope = decodeEnvelope(stored)
             ?: throw KeyValueStoreException("Could not decrypt the stored entry for '$key'")
         // An entry some other key wrote is not this store's to read, and reporting it as absent is
         // what lets the caller replace it. Reporting a failure instead would be taken as temporary
@@ -199,23 +211,30 @@ internal class EncryptedFileKeyValueStore(
         // persist again. The reverse matters just as much: an entry that does carry this key's
         // fingerprint and still will not decrypt has been damaged, and a caller told it was absent
         // would overwrite a jar that is still there.
-        if (wasWrittenUnderAnotherKey(envelope)) return@withContext null
+        if (wasWrittenUnderAnotherKey(envelope, keyFingerprint)) return@withContext null
         decrypt(envelope)
             ?: throw KeyValueStoreException("Could not decrypt the stored entry for '$key'")
     }
 
     /**
-     * Whether [envelope] carries a fingerprint other than this key's.
+     * Whether [envelope] carries a fingerprint other than [fingerprint].
      *
      * An envelope too short to hold one is left for [decrypt] to reject: it cannot have come from
      * this store and cannot be attributed to any key, so it is damage rather than another key's
      * entry. An entry written before fingerprints existed is long enough to reach the comparison
      * and fail it, which is the answer that gets it replaced.
      */
-    private fun wasWrittenUnderAnotherKey(envelope: ByteArray): Boolean {
+    private fun wasWrittenUnderAnotherKey(envelope: ByteArray, fingerprint: ByteArray): Boolean {
         if (envelope.size < CIPHERTEXT_OFFSET) return false
-        return !envelope.copyOf(FINGERPRINT_SIZE).contentEquals(keyFingerprint)
+        return !envelope.copyOf(FINGERPRINT_SIZE).contentEquals(fingerprint)
     }
+
+    /** The envelope stored at [path], or null when there is nothing there that decodes as one. */
+    private fun envelopeAt(path: Path): ByteArray? =
+        runCatching { decodeEnvelope(Files.readString(path)) }.getOrNull()
+
+    private fun decodeEnvelope(stored: String): ByteArray? =
+        runCatching { Base64.getDecoder().decode(stored) }.getOrNull()
 
     /**
      * Deletes every entry and leaves this library's own files alone. Dropping the key would leave
