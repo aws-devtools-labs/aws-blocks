@@ -712,7 +712,34 @@ Users are identified by `sub`. On the default Cognito store that is the id Cloud
 
 To alarm on failed sign-ins, create a CloudWatch metric filter on the log group with the pattern `{ $.event = "auth.signin.failed" }`, or `{ $.event = "auth.signin.failed" && $.block = "<fullId>" }` to count one block of several. Alarm on the metric's `Sum` over a period (for example 100 in 5 minutes) with `treatMissingData: notBreaching`: the filter has no data points while nothing fails, so without it the alarm sits in `INSUFFICIENT_DATA` on a quiet day.
 
-Records come from this block, so they don't include failed attempts on Cognito's managed login page or calls a client makes to Cognito directly; CloudTrail has those. Design details: [DESIGN.md](./DESIGN.md#audit-records-audit).
+Records come from this block, so they don't include failed attempts on Cognito's managed login page or calls a client makes to Cognito directly; CloudTrail and Cognito's activity log (below) have those. Design details: [DESIGN.md](./DESIGN.md#audit-records-audit).
+
+### Cognito's activity log (`activityLog`)
+
+On the default store, `activityLog: true` exports Cognito's own user-activity log to a CloudWatch log group the stack owns: one record per sign-in, sign-out or password operation that Cognito's threat protection scores, with its risk assessment, device and location. It needs the Plus feature plan, which is billed per monthly active user, and synth refuses it without one:
+
+```typescript
+const auth = new Auth(scope, 'auth', { featurePlan: 'plus', activityLog: true });
+```
+
+- **Threat protection runs in audit-only mode.** Cognito scores each sign-in but never blocks or challenges one, so sign-in behaves as before.
+- **What it covers:** username-password sign-in (the default `USER_PASSWORD_AUTH`) and managed login, including attempts that never reach this block. Cognito's threat protection doesn't score federated sign-ins, and its documentation doesn't list `users.authFlow: 'USER_AUTH'`.
+- **Where:** the log group `/aws/vendedlogs/cognito/<fullId>/user-activity`, which the CDK `Auth` exposes as `activityLogGroup` for metric filters. It keeps the stack's `logRetention` and follows the pool's removal policy.
+- **Turning it on or off** later updates the pool in place; no user, session or token is affected.
+- Synth refuses it on a pool wrapped with `userPool`, whose settings belong to its owner. On a `store: 'builtin'` block it is a compile error. Locally (`npm run dev`) it does nothing.
+
+### Where each event is recorded
+
+| Event | `audit` records | CloudTrail | `activityLog` |
+|---|---|---|---|
+| Sign-in through this block (email + password, challenge answers, provider callbacks) | Yes (`auth.session.issued`, `auth.signin.failed`) | The Cognito calls the block makes, on the default store | Username-password sign-ins |
+| Sign-in on Cognito's managed login page | Successes, when the callback issues a session | Yes (managed-login events) | Yes |
+| Calls a client makes to Cognito directly | No | Yes | Username-password sign-ins |
+| Password reset request and completion | The sign-out everywhere after completion (`auth.sessions.revoked`) | `ForgotPassword`, `ConfirmForgotPassword` | Yes |
+| Session issued, sign-out, session revoked | Yes | No: these are this block's session-table operations | No |
+| Any sign-in on a `store: 'builtin'` block | Yes | No: there is no user pool | No (refused) |
+
+CloudTrail identifies users by `sub`, not username ([Amazon Cognito logging in CloudTrail](https://docs.aws.amazon.com/cognito/latest/developerguide/logging-using-cloudtrail.html)), as the `audit` records do.
 
 ## Local development
 

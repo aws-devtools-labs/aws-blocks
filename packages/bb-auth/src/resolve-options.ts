@@ -211,6 +211,7 @@ export function resolveOptions(input: AuthOptions, blockId?: string): ResolvedAu
 			admin: _admin,
 			userPool: _userPool,
 			featurePlan: _featurePlan,
+			activityLog: _activityLog,
 			email: _email,
 			socialProviders: _social,
 			oidcProviders: _oidc,

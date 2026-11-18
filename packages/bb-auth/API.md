@@ -473,6 +473,8 @@ export interface BuiltinAuthMockOptions extends BuiltinAuthOptions {
 // @public
 export interface BuiltinAuthOptions extends AuthCommonOptions {
     // @deprecated (undocumented)
+    activityLog?: ERROR_needs_store_cognito<'activityLog'>;
+    // @deprecated (undocumented)
     admin?: ERROR_needs_store_cognito<'admin'>;
     allowBearerAuth?: boolean | ERROR_needs_store_cognito<'allowBearerAuth (object form)'>;
     // @deprecated (undocumented)
@@ -530,6 +532,7 @@ export interface CognitoAuthMockOptions extends CognitoAuthOptions {
 
 // @public
 export interface CognitoAuthOptions extends AuthCommonOptions {
+    activityLog?: boolean;
     admin?: AdminOptions;
     allowBearerAuth?: boolean | BearerAuthOptions;
     email?: EmailSenderOptions;

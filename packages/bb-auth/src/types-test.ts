@@ -862,6 +862,8 @@ function wrongStoreOptions() {
 	new Auth(scope, 'b-hosted-ui', { store: 'builtin', providers: { okta }, hostedUi: { domainPrefix: 'example' } });
 	// @ts-expect-error — ERROR_needs_store_cognito<'featurePlan'>
 	new Auth(scope, 'b-feature-plan', { store: 'builtin', providers: { okta }, featurePlan: 'essentials' });
+	// @ts-expect-error — ERROR_needs_store_cognito<'activityLog'>
+	new Auth(scope, 'b-activity-log', { store: 'builtin', providers: { okta }, activityLog: true });
 	// @ts-expect-error — ERROR_needs_store_cognito<'email'>
 	new Auth(scope, 'b-email', { store: 'builtin', providers: { okta }, email: { fromAddress: 'a@example.com' } });
 	// @ts-expect-error — ERROR_needs_store_cognito<'users.signInWith'>: only `users.groups` exists here.
