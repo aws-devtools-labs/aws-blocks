@@ -149,7 +149,7 @@ The boundary, outermost first:
      `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH`), node/TLS/proxy (`NODE_OPTIONS`,
      `NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`/`DIR`, `HTTP(S)_PROXY`,
      `NO_PROXY`, `ALL_PROXY`), `AWS_REGION`/`AWS_DEFAULT_REGION`, the framework's
-     `AWS_BLOCKS_DISABLE_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
+     `CDK_DISABLE_CLI_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
      `npm_config_*`, `PLAYWRIGHT_*` and `BLOCKS_*` prefixes. `PATH` keeps only
      system dirs and the harness's own node dir (both covered by the lockdown);
      `NODE_OPTIONS` keeps only flags that load no code.

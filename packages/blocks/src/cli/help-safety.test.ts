@@ -180,7 +180,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 		const child = spawnSync(process.execPath, [bin, '@aws-blocks/bb-kv-store', '--force', '--help'], {
 			cwd: root,
 			encoding: 'utf-8',
-			env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+			env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' },
 		});
 		assert.strictEqual(child.status, 0, child.stderr);
 		assert.match(child.stdout, /^Usage: npm run vendorize <package-name> \[-- --force\]/);

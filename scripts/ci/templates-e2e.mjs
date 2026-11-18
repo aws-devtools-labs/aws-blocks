@@ -167,7 +167,7 @@ async function main() {
 		// test traffic, not real usage. A local run (no CI env var set) would
 		// otherwise emit telemetry tagged Ci=false and be counted as a real user
 		// on the product dashboard, so suppress it at the source.
-		AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+		CDK_DISABLE_CLI_TELEMETRY: '1',
 	};
 
 	console.log('\n=== Step 3: Install create-blocks-app from registry ===');

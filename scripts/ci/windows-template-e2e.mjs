@@ -93,7 +93,7 @@ async function main() {
     ...process.env,
     NPM_CONFIG_USERCONFIG: userNpmrc,
     npm_config_cache: join(work, '.npm-cache'),
-    AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+    CDK_DISABLE_CLI_TELEMETRY: '1',
   };
 
   run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });

@@ -401,26 +401,6 @@ describe('passthrough commands', () => {
 		}
 	});
 
-	it('maps telemetry subcommands and flags to the core telemetry argv', async () => {
-		const seen: string[][] = [];
-		const core = {
-			telemetry: async (options?: { argv?: string[] }) => {
-				seen.push(options?.argv ?? []);
-			},
-		};
-		const cwd = fixtureApp();
-		for (const argv of [['telemetry'], ['telemetry', 'disable', '--global'], ['telemetry', '--enable']]) {
-			const run = await runCli(argv, { cwd, core });
-			assert.strictEqual(run.code, 0, run.stderr);
-		}
-		assert.deepStrictEqual(seen, [
-			['node', 'cdk-blocks', '--status'],
-			['node', 'cdk-blocks', '--disable', '--global'],
-			['node', 'cdk-blocks', '--enable'],
-		]);
-		const conflict = await runCli(['telemetry', 'enable', '--disable'], { cwd, core });
-		assert.strictEqual(conflict.code, 2);
-	});
 });
 
 describe('lifecycle commands', () => {
@@ -769,45 +749,18 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(read('config.sandbox.json'), { apiUrl: 'https://s', environment: 'sandbox' });
 	});
 
-	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
-		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
-		const other = mkdtempSync(join(tmpdir(), 'blocks-cli-other-'));
-		const seen: string[][] = [];
-		const core = {
-			telemetry: async (options?: { argv?: string[] }) => {
-				seen.push(options?.argv ?? []);
-			},
-		};
-		const disable = await runCli(['-C', other, 'telemetry', 'disable'], { cwd: shell, core });
-		assert.strictEqual(disable.code, 2);
-		assert.match(
-			disable.stderr,
-			/^Error: not inside an AWS Blocks app, so there is no project to disable telemetry for\./,
-		);
-		assert.deepStrictEqual(seen, []);
-		const status = await runCli(['-C', other, 'telemetry'], { cwd: shell, core });
-		assert.strictEqual(status.code, 0, status.stderr);
-		assert.deepStrictEqual(status.chdirs, [other]);
-		const global = await runCli(['telemetry', 'disable', '--global'], { cwd: shell, core });
-		assert.strictEqual(global.code, 0, global.stderr);
-		assert.deepStrictEqual(seen, [
-			['node', 'cdk-blocks', '--status'],
-			['node', 'cdk-blocks', '--disable', '--global'],
-		]);
-	});
-
 	it('makes --telemetry-file absolute in the argv that in-process core functions read', async () => {
 		const root = fixtureApp();
 		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
-		const core = { telemetry: async () => {} };
+		const core = { runConfigCli: async () => {} };
 		for (const [argv, expected] of [
 			[
-				['-C', root, '--telemetry-file', 'rel.json', 'telemetry'],
-				['-C', root, '--telemetry-file', join(shell, 'rel.json'), 'telemetry'],
+				['-C', root, '--telemetry-file', 'rel.json', 'config', 'list'],
+				['-C', root, '--telemetry-file', join(shell, 'rel.json'), 'config', 'list'],
 			],
 			[
-				['-C', root, 'telemetry', '--telemetry-file=rel.json'],
-				['-C', root, 'telemetry', `--telemetry-file=${join(shell, 'rel.json')}`],
+				['-C', root, 'config', 'list', '--telemetry-file=rel.json'],
+				['-C', root, 'config', 'list', `--telemetry-file=${join(shell, 'rel.json')}`],
 			],
 		] as const) {
 			const run = await runCli([...argv], { cwd: shell, core });

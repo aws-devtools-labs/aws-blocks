@@ -68,7 +68,7 @@ function recordDestroyArgv(modulePath: string, call: string): string[] {
     cwd: root,
     // HOME without ~/.aws and no Region; the callers fake the credential check,
     // so the child never reaches AWS. PATH holds only the fake binaries.
-    env: { PATH: join(root, 'bin'), HOME: root, USERPROFILE: root, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+    env: { PATH: join(root, 'bin'), HOME: root, USERPROFILE: root, CDK_DISABLE_CLI_TELEMETRY: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 60_000,
   });
@@ -165,7 +165,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
       env: {
         PATH: join(root, 'bin'),
         HOME: root,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        CDK_DISABLE_CLI_TELEMETRY: '1',
         AWS_REGION: 'us-east-1',
         AWS_ACCESS_KEY_ID: 'AKIDTEST',
         AWS_SECRET_ACCESS_KEY: 'secret',
@@ -238,7 +238,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
       const script = `const mod = await import(${JSON.stringify(moduleUrl)}); console.log(String(await mod.deployedStackExists(${JSON.stringify({ projectRoot: root, ...options })})));`;
       const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
         cwd: root,
-        env: { HOME: root, AWS_BLOCKS_DISABLE_TELEMETRY: '1', ...env },
+        env: { HOME: root, CDK_DISABLE_CLI_TELEMETRY: '1', ...env },
         timeout: 60_000,
       });
       return stdout.trim();

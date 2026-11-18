@@ -35,6 +35,9 @@ import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 import { OUTPUTS_FILE } from './deploy-outputs.js';
 
+// Prevent an inherited CDK telemetry opt-out from disabling enabled-path tests.
+delete process.env.CDK_DISABLE_CLI_TELEMETRY;
+
 /**
  * Return the value that follows `flag` in `args`, failing with a clear message
  * if the flag is absent. Reading `args[indexOf(flag) + 1]` directly silently
@@ -214,7 +217,7 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
   }
 
   it('carries the framework sink path and the cdk resolution condition', () => {
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     inCleanProject();
 
     const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink', 'aws-blocks/index.cdk.ts');
@@ -225,7 +228,7 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
   });
 
   it('omits the sink when the user opted out, so nothing is written to disk', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
 
     const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink', 'aws-blocks/index.cdk.ts');
 

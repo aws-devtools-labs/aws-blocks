@@ -193,7 +193,7 @@ export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent
  */
 export function buildAndSendEvent(opts: BuildAndSendEventOptions): void {
   try {
-    if (!isTelemetryEnabled()) return;
+    if (!isTelemetryEnabled(opts.projectRoot)) return;
 
     const filePath = getTelemetryFilePath();
     const event = buildEvent(opts);

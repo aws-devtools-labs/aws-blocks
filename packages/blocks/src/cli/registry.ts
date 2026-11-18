@@ -559,26 +559,6 @@ export const COMMANDS: readonly CommandSpec[] = [
 		aws: true,
 		handler: commands.config,
 	},
-	{
-		path: ['telemetry'],
-		group: 'Configure',
-		summary: 'Show or change telemetry consent',
-		description:
-			'Show or change telemetry consent for this project, or for every project with --global.\n' +
-			'Also accepts --status, --enable and --disable.',
-		args: [{ name: 'action', description: 'status (default) | enable | disable' }],
-		flags: [
-			{ name: 'global', type: 'boolean', description: 'Apply to every project (~/.blocks/config.json)' },
-			{ name: 'status', type: 'boolean', description: 'Same as "status"' },
-			{ name: 'enable', type: 'boolean', description: 'Same as "enable"' },
-			{ name: 'disable', type: 'boolean', description: 'Same as "disable"' },
-		],
-		examples: [
-			{ command: 'npm run telemetry', description: 'Show the telemetry status' },
-			{ command: 'npm run telemetry disable -- --global', description: 'Disable telemetry everywhere' },
-		],
-		handler: commands.telemetry,
-	},
 	// ── Generate ─────────────────────────────────────────────────────────────
 	{
 		path: ['generate'],
