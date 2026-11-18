@@ -257,6 +257,7 @@ npx --no -- cdk-blocks --version
 | Generate | `cdk-blocks generate client [foundation] [output]` | Generate the typed client (`aws-blocks/client.js`) |
 | | `cdk-blocks generate spec [backend] [output]` | Generate the OpenRPC spec |
 | | `cdk-blocks generate types [--check]` | Generate secret/config key types; `--check` exits 1 when stale |
+| Data and blocks | `cdk-blocks db <connect\|migrate\|types\|status> [args...]` | The database of a `Database` block: an existing PostgreSQL database, or `types` and `status` with `--block <id>` for a block that provisions its cluster. Forwarded unchanged to the `bb-database` CLI |
 | Project | `cdk-blocks vendorize <package> [--force]` | Copy a Building Block into the app for customization |
 | | `cdk-blocks migrate [--dry-run] [--force]` | Move an app from `aws-blocks/scripts/*.ts` wrappers to `cdk-blocks` commands |
 | | `cdk-blocks help [command...]` | Help |

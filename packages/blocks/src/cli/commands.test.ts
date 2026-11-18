@@ -126,6 +126,10 @@ describe('passthrough commands', () => {
 		const vendorize = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--no-input', '-y'], { cwd: root });
 		assert.strictEqual(vendorize.code, 0, vendorize.stderr);
 		assert.deepStrictEqual(vendorize.spawned[0].args.slice(1), ['@aws-blocks/bb-kv-store']);
+		// bb-database has the same two answers: they are passed on after the tool's tokens, as its own options.
+		const db = await runCli(['db', 'types', '--no-input', '-y'], { cwd: root });
+		assert.strictEqual(db.code, 0, db.stderr);
+		assert.deepStrictEqual(db.spawned[0].args.slice(1), ['types', '--yes', '--no-input']);
 
 		// A bad global option is a usage error before anything runs: never a value, never ignored.
 		const callsBefore = calls.length;
@@ -156,9 +160,79 @@ describe('passthrough commands', () => {
 		assert.match(run.stderr, /^Error: Usage: cdk-blocks secret set <KEY>\n/);
 	});
 
-	it('resolves the relative paths of generate types from the directory the command runs in', async () => {
+	it('forwards db verbs and every argument to the bb-database CLI', async () => {
+		const root = fixtureApp();
+		// On a terminal the tool gets the verb and the user's tokens, and nothing more.
+		const run = await runCli(['db', 'status', './db/migrations', '--stage', 'sandbox'], {
+			cwd: root,
+			stdinIsTTY: true,
+		});
+		assert.strictEqual(run.code, 0, run.stderr);
+		const [spec] = run.spawned;
+		assert.strictEqual(spec.command, process.execPath);
+		assert.match(spec.args[0], /bb-database[\\/]dist[\\/]cli\.js$/);
+		assert.deepStrictEqual(spec.args.slice(1), ['status', './db/migrations', '--stage', 'sandbox']);
+		assert.strictEqual(spec.cwd, root);
+	});
+
+	it('resolves the relative paths of db and generate types from the directory the command runs in', async () => {
 		const root = fixtureApp();
 		const sub = join(root, 'aws-blocks');
+		// These runs have no terminal, so each one ends with --no-input.
+		const db = await runCli(['db', 'status', './migrations', '--stage', 'sandbox', '--name', 'main'], {
+			cwd: sub,
+		});
+		assert.strictEqual(db.code, 0, db.stderr);
+		assert.deepStrictEqual(db.spawned[0].args.slice(1), [
+			'status',
+			join(sub, 'migrations'),
+			'--stage',
+			'sandbox',
+			'--name',
+			'main',
+			'--no-input',
+		]);
+		assert.strictEqual(db.spawned[0].cwd, root);
+		const types = await runCli(['db', 'types', '--out', 'gen/types.ts'], { cwd: sub });
+		assert.deepStrictEqual(types.spawned[0].args.slice(1), [
+			'types',
+			'--out',
+			join(sub, 'gen', 'types.ts'),
+			'--no-input',
+		]);
+		// Ids are not paths either.
+		const block = await runCli(['db', 'status', '--block', 'main', '--cluster', 'shared', '--type', 'aurora'], {
+			cwd: sub,
+		});
+		assert.deepStrictEqual(block.spawned[0].args.slice(1), [
+			'status',
+			'--block',
+			'main',
+			'--cluster',
+			'shared',
+			'--type',
+			'aurora',
+			'--no-input',
+		]);
+		// The value of --mark-applied is a file name in the migrations directory, not a path: it is not resolved.
+		const mark = await runCli(['db', 'migrate', './migrations', '--mark-applied', '000_baseline.sql'], { cwd: sub });
+		assert.deepStrictEqual(mark.spawned[0].args.slice(1), [
+			'migrate',
+			join(sub, 'migrations'),
+			'--mark-applied',
+			'000_baseline.sql',
+			'--no-input',
+		]);
+		const connect = await runCli(['db', 'connect', '--ca=certs/ca.crt'], { cwd: sub });
+		assert.deepStrictEqual(connect.spawned[0].args.slice(1), [
+			'connect',
+			`--ca=${join(sub, 'certs', 'ca.crt')}`,
+			'--no-input',
+		]);
+		// bb-database reads no `--`; the CLI drops the one that ends its own options.
+		const dashes = await runCli(['db', 'migrate', '--', 'dir'], { cwd: root });
+		assert.deepStrictEqual(dashes.spawned[0].args.slice(1), ['migrate', 'dir', '--no-input']);
+
 		const argvs: string[][] = [];
 		const run = await runCli(
 			['generate', 'types', '--out', 'mine.d.ts', '--include', '*.ts', '--include', '!skip/**'],
@@ -270,6 +344,9 @@ describe('passthrough commands', () => {
 
 	it('forwards only "<verb> --help" when --help appears anywhere after secret or config', async () => {
 		const root = fixtureApp();
+		const db = await runCli(['db', 'status', './dir', '--stage', 'sandbox', '--help'], { cwd: root });
+		assert.strictEqual(db.code, 0, db.stderr);
+		assert.deepStrictEqual(db.spawned[0].args.slice(1), ['status', '--help']);
 		const calls: string[][] = [];
 		const record = async (args: string[]) => {
 			calls.push(args);
@@ -295,6 +372,27 @@ describe('passthrough commands', () => {
 		const unknown = await runCli(['config', 'drop', 'FLAG', '--help'], { cwd: root, core });
 		assert.match(unknown.stdout, /Usage: cdk-blocks config /);
 		assert.strictEqual(calls.length, 2);
+		const unknownDb = await runCli(['db', 'drop', '--help'], { cwd: root });
+		assert.match(unknownDb.stdout, /Usage: cdk-blocks db <verb>/);
+		assert.strictEqual(unknownDb.spawned.length, 0);
+	});
+
+	it('requires a db verb', async () => {
+		const run = await runCli(['db'], { cwd: fixtureApp() });
+		assert.strictEqual(run.code, 2);
+		assert.match(run.stderr, /needs a verb/);
+		assert.strictEqual(run.spawned.length, 0);
+	});
+
+	it('shows db examples for an existing database, and runs the verb help as cdk-blocks db', async () => {
+		const root = fixtureApp();
+		const help = await runCli(['db', '--help'], { cwd: root });
+		assert.strictEqual(help.code, 0, help.stderr);
+		assert.match(help.stdout, /cdk-blocks db connect --ca \.\/prod-ca-2021\.crt /);
+		assert.match(help.stdout, /cdk-blocks db status --stage production /);
+		const verb = await runCli(['db', 'migrate', '--help'], { cwd: root });
+		assert.strictEqual(verb.code, 0, verb.stderr);
+		assert.strictEqual(verb.spawned[0].env.BB_DATABASE_COMMAND, 'cdk-blocks db');
 	});
 
 	it('forwards vendorize arguments verbatim', async () => {
@@ -1233,6 +1331,15 @@ describe('help for passthrough subcommands', () => {
 			['remove', '--help'],
 			['list', '--help'],
 		]);
+		for (const argv of [
+			['db', 'migrate', '--help'],
+			['help', 'db', 'connect'],
+		]) {
+			const run = await runCli(argv, { cwd: outside });
+			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
+			assert.match(run.spawned[0].args[0], /bb-database[\\/]dist[\\/]cli\.js$/);
+			assert.strictEqual(run.spawned[0].cwd, outside);
+		}
 		// Running a verb still needs the app.
 		const run = await runCli(['secret', 'list'], { cwd: outside, core });
 		assert.strictEqual(run.code, 1);

@@ -155,6 +155,8 @@ describe('parseArgv', () => {
 		for (const [argv, verb] of [
 			[['config', 'list', '--help'], 'list'],
 			[['secret', 'set', 'KEY', '-h'], 'set'],
+			[['db', 'status', '--help'], 'status'],
+			[['db', 'migrate', './migrations', '-h'], 'migrate'],
 			[['config', 'remove', 'KEY', '--help'], 'remove'],
 			[['secret', '--stage', 'prod', 'remove', 'KEY', '--force', '--yes', '--help'], 'remove'],
 			[['vendorize', '@aws-blocks/bb-kv-store', '--help'], undefined],
@@ -194,6 +196,9 @@ describe('parseArgv', () => {
 		const own = parseArgv(['config', 'set', 'K', 'v', '--stage', 'prod', '--debug', '--prefix=/p', '-x']);
 		assert.deepStrictEqual(own.passthrough, ['set', 'K', 'v', '--stage', 'prod', '--prefix=/p', '-x']);
 		assert.strictEqual(own.globals.debug, true);
+		const db = parseArgv(['db', 'migrate', 'dir', '--stage', 'prod', '--debug', '--types=gen/types.ts', '-x']);
+		assert.deepStrictEqual(db.passthrough, ['migrate', 'dir', '--stage', 'prod', '--types=gen/types.ts', '-x']);
+		assert.strictEqual(db.globals.debug, true);
 		usageError(['secret', 'list', '--output', 'json'], /^--output json is not supported for "cdk-blocks secret"/);
 		usageError(['config', 'list', '--query', 'keys'], /^--query is not supported for "cdk-blocks config"/);
 		usageError(['telemetry', '--output', 'json'], /^--output json is not supported for "cdk-blocks telemetry"/);

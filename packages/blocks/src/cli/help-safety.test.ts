@@ -3,15 +3,15 @@
 
 /**
  * Help on a passthrough command must never run the tool with the user's
- * arguments. These tests use the real tools behind `secret`, `config` and
- * `vendorize` (the real runValueCli and the real vendorize bin) and a
+ * arguments. These tests use the real tools behind `secret`, `config`, `db` and
+ * `vendorize` (the real runValueCli, the real bb-database and vendorize bins) and a
  * loopback stand-in for SSM and Secrets Manager that records every request, so
  * "no side effect" is observed, not assumed.
  */
 
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -129,6 +129,37 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 		});
 	}
 
+	it('cdk-blocks help db types and cdk-blocks db types --out ./out.ts --help: the real bb-database prints its usage, writes nothing', async () => {
+		for (const argv of [
+			['help', 'db', 'types'],
+			['db', 'types', '--out', './out.ts', '--help'],
+		]) {
+			const root = fixtureApp();
+			const outputs: string[] = [];
+			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn(outputs) });
+			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}${outputs.join('')}`);
+			assert.deepStrictEqual(run.spawned[0].args.slice(1), ['types', '--help']);
+			// bb-database has one usage text for every verb.
+			assert.match(
+				outputs.join(''),
+				/^Usage: cdk-blocks db <command> \[options\]\n[\s\S]*\n {2}types \[--name <name>\] \[--schema <schema>\] \[--out <file>\]\n/,
+			);
+			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'aws-blocks', 'package.json']);
+		}
+	});
+
+	it('cdk-blocks help db migrate runs the real bb-database, which prints the migrate options', async () => {
+		const root = fixtureApp();
+		const outputs: string[] = [];
+		const run = await runCli(['help', 'db', 'migrate'], { cwd: root, onSpawn: realSpawn(outputs) });
+		assert.strictEqual(run.code, 0, run.stderr + outputs.join(''));
+		assert.match(
+			outputs.join(''),
+			/^Usage: cdk-blocks db <command> \[options\]\n[\s\S]*\n {2}migrate \[dir\] \[--name <name>\] \[--schema <schema>\] \[--types <file> \| --no-types\]\n/,
+		);
+		assert.ok(!existsSync(join(root, '.bb-data')));
+	});
+
 	it('cdk-blocks help vendorize x and cdk-blocks vendorize x --help: CLI help, vendorize never starts', async () => {
 		for (const argv of [
 			['help', 'vendorize', '@aws-blocks/bb-kv-store'],
@@ -201,5 +232,12 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 				argv.join(' '),
 			);
 		}
+	});
+
+	it('validates the db verb before spawning', async () => {
+		const unknown = await runCli(['db', 'migrat'], { cwd: fixtureApp() });
+		assert.strictEqual(unknown.code, 2);
+		assert.match(unknown.stderr, /unknown db verb "migrat".*Did you mean "migrate"\?/);
+		assert.deepStrictEqual(unknown.spawned, []);
 	});
 });

@@ -8,6 +8,7 @@
  */
 
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1189,6 +1190,116 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 		throw new CliError(error instanceof Error ? error.message : String(error), { cause: error });
 	}
 	return code === 0 ? ExitCode.Ok : ExitCode.Failure;
+}
+
+// ── Data and blocks ──────────────────────────────────────────────────────────
+
+/**
+ * The absolute path of a package's bin: from the app's own install first, then
+ * from the dependencies of `@aws-blocks/blocks`.
+ */
+export function resolvePackageBin(root: string, packageName: string, bin: string): string | undefined {
+	for (const from of [join(root, 'package.json'), fileURLToPath(import.meta.url)]) {
+		let entry: string;
+		try {
+			entry = createRequire(from).resolve(packageName);
+		} catch {
+			continue;
+		}
+		for (let dir = dirname(entry); dir !== dirname(dir); dir = dirname(dir)) {
+			const manifest = join(dir, 'package.json');
+			if (!existsSync(manifest)) continue;
+			const pkg = JSON.parse(readFileSync(manifest, 'utf-8')) as { name?: string; bin?: Record<string, string> };
+			if (pkg.name !== packageName) continue;
+			const target = pkg.bin?.[bin];
+			if (target) return join(dir, target);
+			break;
+		}
+	}
+	return undefined;
+}
+
+export async function db(ctx: Context, input: CommandInput): Promise<number> {
+	const verbs = findCommand(['db'])?.verbs ?? [];
+	// bb-database reads no `--`: drop the one that ended the CLI's own options.
+	const dashes = input.passthrough.indexOf('--');
+	const passthrough = input.passthrough.filter((_, i) => i !== dashes);
+	const [verb] = passthrough;
+	if (verb === undefined) {
+		throw new UsageError('"cdk-blocks db" needs a verb: connect, migrate, types or status.', {
+			hint: blocksCommand('db', '--help'),
+		});
+	}
+	if (!verbs.includes(verb)) {
+		const hint = suggest(verb, verbs);
+		throw new UsageError(
+			`unknown db verb "${verb}"; expected connect, migrate, types or status.${hint ? ` Did you mean "${hint}"?` : ''}`,
+			{ hint: blocksCommand('db', '--help') },
+		);
+	}
+	const help = input.flags.help === true;
+	// A verb's help works outside an app too, when @aws-blocks/bb-database is installed next to @aws-blocks/blocks.
+	const root = help ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
+	const cli = resolvePackageBin(root, '@aws-blocks/bb-database', 'bb-database');
+	if (!cli) {
+		throw new CliError('cannot find the bb-database CLI of @aws-blocks/bb-database.', {
+			hint: 'npm install @aws-blocks/bb-database',
+		});
+	}
+	// The CLI's own --yes and --no-input are not forwarded with the other tokens, and bb-database has the same
+	// two questions to skip or refuse: pass them on, so a run that cannot prompt fails at once with exit code 2.
+	const answers = help ? [] : [...(ctx.globals.yes ? ['--yes'] : []), ...(ctx.interactive ? [] : ['--no-input'])];
+	return runChild(ctx, {
+		operation: `cdk-blocks db ${verb}`,
+		tool: 'bb-database',
+		command: process.execPath,
+		args: [cli, ...(ctx.startDir === root ? passthrough : dbArgsFrom(ctx.startDir, passthrough)), ...answers],
+		cwd: root,
+		// bb-database's help names the command that runs it.
+		env: { BB_DATABASE_COMMAND: 'cdk-blocks db' },
+	});
+}
+
+// The bb-database options whose value is a file, and the ones whose value is not.
+const DB_PATH_OPTIONS = new Set(['--ca', '--types', '--out']);
+const DB_VALUE_OPTIONS = new Set([
+	'--name',
+	'--schema',
+	'--stage',
+	'--output',
+	'--mark-applied',
+	'--block',
+	'--cluster',
+	'--type',
+]);
+
+/**
+ * The bb-database arguments, with each path made absolute from `startDir`: bb-database
+ * runs from the project root, and a path such as `./migrations` names the
+ * user's own directory. The values of `--name`, `--schema`, `--stage` and `--output` are not paths.
+ */
+function dbArgsFrom(startDir: string, passthrough: readonly string[]): string[] {
+	const [verb, ...rest] = passthrough;
+	const args = [verb];
+	for (let i = 0; i < rest.length; i++) {
+		const token = rest[i];
+		const [name, inline] = token.startsWith('--') && token.includes('=') ? token.split(/=(.*)/s) : [token, undefined];
+		if (DB_PATH_OPTIONS.has(name)) {
+			if (inline !== undefined) args.push(`${name}=${resolve(startDir, inline)}`);
+			else {
+				args.push(token);
+				if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) args.push(resolve(startDir, rest[++i]));
+			}
+		} else if (DB_VALUE_OPTIONS.has(name)) {
+			args.push(token);
+			if (inline === undefined && rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) args.push(rest[++i]);
+		} else if (token.startsWith('-')) {
+			args.push(token);
+		} else {
+			args.push(resolve(startDir, token));
+		}
+	}
+	return args;
 }
 
 // ── Project ──────────────────────────────────────────────────────────────────

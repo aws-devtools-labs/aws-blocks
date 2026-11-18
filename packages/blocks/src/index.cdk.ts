@@ -116,9 +116,14 @@ export type {
 } from '@aws-blocks/bb-dashboard';
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
 export type {
+	ClusterKind,
 	ClusterType,
+	ConnectionStringSource,
 	DatabaseClusterOptions,
 	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+	ScopedDatabase,
 	SqlQuery,
 	Transaction,
 	TransactionOptions,

@@ -38,7 +38,7 @@ export interface ArgSpec {
 }
 
 /** Root help groups, in display order. */
-export const GROUPS = ['Develop', 'Deploy', 'Configure', 'Generate', 'Project'] as const;
+export const GROUPS = ['Develop', 'Deploy', 'Configure', 'Generate', 'Data and blocks', 'Project'] as const;
 export type HelpGroup = (typeof GROUPS)[number];
 
 export type FlagValues = Record<string, string | boolean | string[] | undefined>;
@@ -489,6 +489,48 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ command: 'cdk-blocks generate types --check', description: 'Fail when they are stale' },
 		],
 		handler: commands.generateTypes,
+	},
+	// ── Data and blocks ──────────────────────────────────────────────────────
+	{
+		path: ['db'],
+		group: 'Data and blocks',
+		summary: 'The database of a Database block: connect, migrate, types, status',
+		description:
+			'Work with the existing PostgreSQL database of a Database block (DatabaseCluster.fromExisting()):\n' +
+			'connect, migrate, types, status. For a block that provisions its cluster, "types --block <id>" and\n' +
+			'"status --block <id>" work from its migration files and its local database.\n' +
+			'The verb and the tokens after it are forwarded unchanged to the bb-database CLI of\n' +
+			'@aws-blocks/bb-database, except the global options (--profile, --yes, …) before a "--"; --yes and\n' +
+			'--no-input are passed on. For JSON output give the option to the tool: "cdk-blocks db status -- --output json".\n' +
+			'"cdk-blocks db <verb> --help" shows its options.',
+		args: [
+			{ name: 'verb', description: 'connect | migrate | types | status', required: true },
+			{ name: 'args', description: 'Forwarded; a relative path is resolved from your directory', variadic: true },
+		],
+		passthrough: true,
+		verbs: ['connect', 'migrate', 'types', 'status'],
+		examples: [
+			{
+				command: 'cdk-blocks db connect --ca ./prod-ca-2021.crt',
+				description: 'Check the database and store its connection string for local mode',
+			},
+			{
+				command: 'cdk-blocks db connect --stage production --ca ./prod-ca-2021.crt',
+				description: 'The same for the production stage',
+			},
+			{ command: 'cdk-blocks db migrate', description: 'Apply ./migrations to the local database, then write the types' },
+			{ command: 'cdk-blocks db status --stage production', description: 'Show applied and pending migrations' },
+			{
+				command: 'cdk-blocks db types --block main',
+				description: 'Write the Kysely types of the block "main" from its migration files',
+			},
+			{
+				command: 'cdk-blocks db migrate --mark-applied 000_baseline.sql',
+				description: 'Record a schema dump of the database as applied, without running it',
+			},
+		],
+		aws: true,
+		handler: commands.db,
 	},
 	// ── Project ──────────────────────────────────────────────────────────────
 	{

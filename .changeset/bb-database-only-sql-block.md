@@ -23,8 +23,8 @@ const users = new Database(scope, 'users', { cluster });
 ```
 
 - **`Database`** owns an Aurora DSQL cluster when it has no `cluster` option. A `DatabaseCluster` of type `'dsql'` or `'aurora'` holds several `Database` blocks, each in its own schema. Migrations are ordered `.sql` files in `aws-blocks/migrations/<id>/`.
-- **Not exported any more:** `DistributedDatabase`, `DistributedDatabaseErrors`, `DistributedDatabaseOptions`, `fromExisting` (external PostgreSQL), `ExternalDatabaseRef`. `withRLS()`, `crud()` and the `bb-data` command line tool have no equivalent in `@aws-blocks/bb-database`. For Kysely, use `DatabaseDialect` from `@aws-blocks/bb-database/kysely`.
-- **`cdk-blocks db`** is not a command any more. Migrations run on the first statement in local mode and during the deploy on AWS.
+- **Not exported any more:** `DistributedDatabase`, `DistributedDatabaseErrors`, `DistributedDatabaseOptions`, `Database.fromExisting()` and `ExternalDatabaseRef` (an existing PostgreSQL database is now `DatabaseCluster.fromExisting()`, passed as `cluster`). `withRLS()` is replaced by `asUser()` and `asRole()`. `crud()` has no equivalent in `@aws-blocks/bb-database`. For Kysely, use `DatabaseDialect` from `@aws-blocks/bb-database/kysely`.
+- **`cdk-blocks db`** runs the commands of `@aws-blocks/bb-database` for an existing database: `connect`, `migrate`, `types`, `status`. `pull` and `generate-types` are not commands any more. On a cluster that the block owns, migrations run on the first statement in local mode and during the deploy on AWS.
 - **`getSdkIdentifiers(db)`** returns `clusterId` and `schemaName`, plus `clusterEndpoint` and `region` in a deployed Lambda. `getSdkIdentifiers(cluster)` returns `clusterEndpoint`.
 - **Data is not moved.** A `Database` in an app that upgrades is a new block with a new cluster. Export the data of the old cluster before you deploy.
 - **`@aws-blocks/core`:** `npm run dev`, `sandbox` and `deploy` do not apply migrations to an external database before they run.

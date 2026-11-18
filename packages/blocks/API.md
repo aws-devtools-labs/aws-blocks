@@ -36,6 +36,7 @@ import { BlocksAuth } from '@aws-blocks/auth-common';
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { ChunkingConfig } from '@aws-blocks/bb-knowledge-base';
 import { ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
+import { ClusterKind } from '@aws-blocks/bb-database';
 import { ClusterType } from '@aws-blocks/bb-database';
 import { Compute } from '@aws-blocks/bb-compute';
 import { ComputeOptions } from '@aws-blocks/core';
@@ -43,6 +44,7 @@ import { ComputeProps } from '@aws-blocks/bb-compute';
 import { ComputeType } from '@aws-blocks/core';
 import { ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import { ConditionalWriteOptions } from '@aws-blocks/bb-kv-store';
+import { ConnectionStringSource } from '@aws-blocks/bb-database';
 import { ContainerComputeOptions } from '@aws-blocks/core';
 import { ContainerScaling } from '@aws-blocks/core';
 import { ContainerSize } from '@aws-blocks/core';
@@ -76,6 +78,8 @@ import { EmailErrors } from '@aws-blocks/bb-email-client';
 import { EmailMessage } from '@aws-blocks/bb-email-client';
 import { EmailOptions } from '@aws-blocks/bb-email-client';
 import { EmitOptions } from '@aws-blocks/bb-metrics';
+import { ExistingClusterOptions } from '@aws-blocks/bb-database';
+import { ExistingClusterRef } from '@aws-blocks/bb-database';
 import { ExternalKmsKeyRef } from '@aws-blocks/bb-kv-store';
 import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
@@ -131,6 +135,7 @@ import { relayOrigin } from '@aws-blocks/bb-auth';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { ScalingSignal } from '@aws-blocks/core';
+import { ScopedDatabase } from '@aws-blocks/bb-database';
 import { Secret } from '@aws-blocks/bb-secret';
 import { SecretErrors } from '@aws-blocks/bb-secret';
 import { SecretOptions } from '@aws-blocks/bb-secret';
@@ -227,6 +232,8 @@ export { ChunkingConfig }
 
 export { ChunkingStrategy }
 
+export { ClusterKind }
+
 export { ClusterType }
 
 export { Compute }
@@ -240,6 +247,8 @@ export { ComputeType }
 export { ConditionalDeleteOptions }
 
 export { ConditionalWriteOptions }
+
+export { ConnectionStringSource }
 
 export { ContainerComputeOptions }
 
@@ -306,6 +315,10 @@ export { EmailMessage }
 export { EmailOptions }
 
 export { EmitOptions }
+
+export { ExistingClusterOptions }
+
+export { ExistingClusterRef }
 
 export { ExternalKmsKeyRef }
 
@@ -504,6 +517,8 @@ export { RetrieveOptions }
 export { RetrieveResult }
 
 export { ScalingSignal }
+
+export { ScopedDatabase }
 
 export { Secret }
 

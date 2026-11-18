@@ -179,9 +179,14 @@ export type {
  */
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
 export type {
+	ClusterKind,
 	ClusterType,
+	ConnectionStringSource,
 	DatabaseClusterOptions,
 	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+	ScopedDatabase,
 	SqlQuery,
 	Transaction,
 	TransactionOptions,
@@ -193,7 +198,8 @@ export type {
  * most application data, prefer `KVStore` (lower cost, simpler ops).
  * `new Database(scope, id)` owns an Aurora DSQL cluster. To use Aurora
  * PostgreSQL Serverless v2 (express configuration), or to put several
- * databases on one cluster, pass a `DatabaseCluster` as `cluster`.
+ * databases on one cluster, pass a `DatabaseCluster` as `cluster`. For a
+ * PostgreSQL database that already exists, pass `DatabaseCluster.fromExisting()`.
  * Migrations are ordered `.sql` files in `aws-blocks/migrations/<id>/`.
  *
  * Package: `@aws-blocks/bb-database`
