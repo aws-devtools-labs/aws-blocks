@@ -466,7 +466,8 @@ async function addBlocksWorkspace(targetDir: string, options: {
   }
 
   const installedScripts: Record<string, string> = {};
-  const hostScripts = pkg.scripts ??= {};
+  pkg.scripts ??= {};
+  const hostScripts = pkg.scripts;
   for (const [name, cmd] of Object.entries(scripts)) {
     const fallback = name.startsWith('blocks:') ? name : `blocks:${name}`;
     let actual = name;
@@ -941,7 +942,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       // Keep Cognito middleware and the API URL from amplify_outputs.json.
       'blocks:generate-client': clientScript,
       'generate-client': clientScript,
-      ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'telemetry', 'help', 'db', 'migrate']
+      ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'help', 'db', 'migrate']
         .map(name => [name, standalone.scripts[name]])),
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,

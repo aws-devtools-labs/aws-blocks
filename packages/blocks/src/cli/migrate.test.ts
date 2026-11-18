@@ -599,7 +599,6 @@ describe('cdk-blocks migrate', () => {
 			'docs:api': task('docs --api'),
 			'db': task('db'),
 			'whoami': task('whoami'),
-			'telemetry': task('telemetry'),
 			'migrate': task('migrate'),
 			'help': task('--help'),
 			'generate-client': task('generate client'),
@@ -867,7 +866,6 @@ describe('cdk-blocks migrate', () => {
 			'generate-client',
 			'help',
 			'migrate',
-			'telemetry',
 			'whoami',
 		]);
 		assert.strictEqual(result.devConfig, null);

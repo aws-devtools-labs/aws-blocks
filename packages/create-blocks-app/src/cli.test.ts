@@ -15,7 +15,7 @@ const task = (args: string) => `node --input-type=module -e "import '@aws-blocks
 // Tasks available both in a standalone app and alongside an Amplify-owned backend.
 const discoveryTasks = {
   docs: 'docs', 'docs:api': 'docs --api', 'docs:search': 'docs --search',
-  help: '--help', whoami: 'whoami', telemetry: 'telemetry',
+  help: '--help', whoami: 'whoami',
 };
 
 const standaloneTasks = {

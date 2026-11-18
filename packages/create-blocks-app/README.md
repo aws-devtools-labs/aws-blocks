@@ -141,7 +141,6 @@ The app runs its installed `@aws-blocks/blocks/run` entry through npm scripts. R
     "help": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- help",
     "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
     "whoami": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- whoami",
-    "telemetry": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- telemetry",
     "migrate": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- migrate",
     "generate-client": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client",
     "dev": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- dev",

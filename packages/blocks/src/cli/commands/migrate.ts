@@ -173,7 +173,6 @@ const USER_TASKS: Readonly<Record<string, string>> = {
 	'docs:api': 'docs --api',
 	'db': 'db',
 	'whoami': 'whoami',
-	'telemetry': 'telemetry',
 	'migrate': 'migrate',
 	'help': '--help',
 };
