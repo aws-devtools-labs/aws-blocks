@@ -40,6 +40,7 @@ import {
 	encryptAutoSignInPayload,
 	readAutoSignInCookie,
 	readSessionCookie,
+	sessionCookieName,
 	setAutoSignInCookie,
 	setSessionCookie,
 	signSessionId,
@@ -816,10 +817,11 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			callbackPath: paths.callback,
 			exchangePath: paths.exchange,
 			signOutPath: paths.signOut,
-			signInBasePath: `${paths.base}/signin`,
-			authorizeParamsBasePath: `${paths.base}/authorize-params`,
+			signInBasePath: paths.signInBase,
+			authorizeParamsBasePath: paths.authorizeParamsBase,
 			sessionPath: paths.session,
 			refreshPath: paths.refreshCompat,
+			sessionCookieName: sessionCookieName(this.fullId),
 		};
 		const { __blocks: _tag, ...fields } = descriptor;
 		return { ...fields, toJSON: () => descriptor };

@@ -16,9 +16,9 @@
 ///   - RPC (authed):  api.oidcRequireAuth   (bound to the `auth-oidc` block)
 ///   - auth routes:   `Auth`'s fixed routes under /aws-blocks/auth/* at the
 ///                    API **origin** — NOT under the JSON-RPC prefix
-///                    (/aws-blocks/api). The client is built with
-///                    [OidcClient]'s default authorize-params and callback
-///                    paths, which are exactly those routes.
+///                    (/aws-blocks/api). The client is the one the
+///                    backend's `oidcAuthApi.getClient()` returns
+///                    (`Auth.createOidcApi()`), carrying those routes.
 ///
 /// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend
 /// serves the stub only on a sandbox deployment (the native-bindings test app
