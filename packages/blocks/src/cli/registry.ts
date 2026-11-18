@@ -109,6 +109,11 @@ export interface CommandSpec {
 	/** The shape of the `--output json` result; absent when the command has no JSON output. */
 	json?: JsonObjectShape;
 	/**
+	 * The JSON result prints only when the run asks for it (`--output json`, `--query`), never as a default format of
+	 * the command: its text is the answer that people and coding agents read (`docs` prints Markdown on a pipe too).
+	 */
+	jsonOnRequest?: boolean;
+	/**
 	 * The command calls AWS or deploys to it, so an inherited AWS_REGION must be a
 	 * Region code. An explicit `--region` is checked for every command.
 	 */
@@ -179,6 +184,54 @@ const STAGE_HELP =
 
 /** The deploy result: `{apiUrl, url, stack, account, region}`. */
 const DEPLOY_RESULT: JsonObjectShape = { apiUrl: null, url: null, stack: null, account: null, region: null };
+
+/** A doc, or the part of one, in a `docs` answer, and a `--search` hit. */
+const DOC_PART: JsonObjectShape = {
+	doc: null,
+	section: null,
+	lines: [null],
+	note: null,
+	text: null,
+	headings: [{ level: null, title: null, slug: null, lines: [null] }],
+};
+const DOCS_HIT: JsonObjectShape = { doc: null, line: null, section: null, text: null };
+const DOCS_EXPORT: JsonObjectShape = {
+	name: null,
+	kind: null,
+	package: null,
+	entry: null,
+	import: null,
+	also: [null],
+	original: null,
+};
+/** What `docs` answers for one name: a block's docs, a name's card, or an entry's names. */
+const DOCS_ANSWER: JsonObjectShape = {
+	docs: [DOC_PART],
+	name: null,
+	kind: null,
+	of: [null],
+	package: null,
+	import: null,
+	declaration: null,
+	summary: null,
+	mentions: [DOCS_HIT],
+	also: [null],
+	notes: [null],
+	names: [DOCS_EXPORT],
+};
+/** Every form of the `docs` answer: the listing, `--exports`, `--search`, one name, or several (`answers`). */
+const DOCS_RESULT: JsonObjectShape = {
+	...DOCS_ANSWER,
+	version: null,
+	blocks: [{ name: null, classes: [null], summary: null, doc: null, files: [null] }],
+	framework: [{ name: null, summary: null, doc: null }],
+	term: null,
+	hits: [DOCS_HIT],
+	total: null,
+	files: null,
+	lookup: DOCS_ANSWER,
+	answers: [DOCS_ANSWER],
+};
 
 export const COMMANDS: readonly CommandSpec[] = [
 	// ── Develop ──────────────────────────────────────────────────────────────
@@ -329,6 +382,15 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Every printed doc starts with "# <folder>/<file>" (# bb-kv-store/README.md, # README.md), and that doc',
 			'path prints the file again (cdk-blocks docs bb-cron-job/DESIGN.md). guide is the package README and',
 			'troubleshooting its TROUBLESHOOTING.md.',
+			'',
+			'The answer is Markdown text, piped or not. --output json prints it as one JSON document instead,',
+			'each doc in it named by "doc": "<folder>/<file>":',
+			'  no name     {version, blocks: [{name, classes, summary, doc, files}], framework: [{name, summary, doc}]}',
+			'  a block     {docs: [{doc, lines, text}]}; with --section, each part also has its section',
+			'  a name      {name, kind, package, import, declaration, summary, docs: [{doc, section, lines, text}]}',
+			'  --exports   {names: [{name, kind, package, entry, import, also}]}',
+			'  --search    {term, hits: [{doc, line, section, text}], total, files}',
+			'Several names print {answers: [...]}, one per name. Errors stay text on stderr.',
 		].join('\n'),
 		args: [
 			{
@@ -375,7 +437,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ command: 'cdk-blocks docs KVStore --section local', description: 'How it behaves locally' },
 			{ command: 'cdk-blocks docs --exports Error', description: 'Importable names containing "Error"' },
 			{ command: 'cdk-blocks docs --search ConditionalCheckFailed', description: 'Search every doc' },
+			{ command: 'cdk-blocks docs ApiError --output json', description: 'The same answer as JSON' },
 		],
+		json: DOCS_RESULT,
+		jsonOnRequest: true,
 		operandsAfterDashDash: true,
 		handler: docs,
 	},

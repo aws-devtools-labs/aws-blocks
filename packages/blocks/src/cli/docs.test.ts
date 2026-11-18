@@ -8,7 +8,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { type DocsIndex, type DocsRequest, loadDocs, parseSections, renderDocs } from './docs.js';
+import {
+	answerDocs,
+	type DocPart,
+	type DocsIndex,
+	type DocsRequest,
+	loadDocs,
+	parseSections,
+	renderDocs,
+} from './docs.js';
 import { CliError, ExitCode, formatError } from './errors.js';
 import { commandHelp } from './help.js';
 import { COMMANDS } from './registry.js';
@@ -1138,7 +1146,13 @@ describe('cdk-blocks docs (no name)', () => {
 		for (const form of ['npx --no -- cdk-blocks docs <block>...', 'npx --no -- cdk-blocks docs <name>...']) {
 			assert.ok(usage.includes(`\n  ${form} `), form);
 		}
-		for (const option of ['--api', '--section <topic>', '--exports [filter...]', '--search <term>']) {
+		for (const option of [
+			'--api',
+			'--section <topic>',
+			'--exports [filter...]',
+			'--search <term>',
+			'--output json',
+		]) {
 			assert.match(usage, new RegExp(`^ {2}${option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} +\\S`, 'm'), option);
 		}
 		assert.doesNotMatch(out, /--(?:source|toc|design)\b/);
@@ -1215,6 +1229,24 @@ describe('cdk-blocks docs output names no path on disk', () => {
 		);
 	});
 
+	it('names each doc of a JSON answer by "doc", and no path on disk in any other field', () => {
+		for (const [what, names, options] of COMMANDS_RUN) {
+			let json: Record<string, unknown>;
+			try {
+				json = answerDocs(installed, { names, api: false, toc: false, sections: [], ...options }, '1.2.3').json;
+			} catch {
+				continue; // An error: text on stderr, checked above.
+			}
+			// Every field but the docs' and the declarations' own text, which quote the docs.
+			const fields = JSON.stringify(json, (key, value) => (key === 'text' || key === 'declaration' ? '' : value));
+			assert.doesNotMatch(fields, /node_modules/, what);
+			assert.ok(!fields.includes(app), what);
+			for (const [, doc] of fields.matchAll(/"doc":"([^"]*)"/g)) {
+				assert.match(doc, /^(?:[\w@.-]+\/)*[\w.-]+\.(?:md|d\.ts)$/, `${what}: ${doc}`);
+			}
+		}
+	});
+
 	it('names no node_modules path in --help either', () => {
 		const spec = COMMANDS.find((c) => c.path.join(' ') === 'docs');
 		assert.ok(spec);
@@ -1223,13 +1255,180 @@ describe('cdk-blocks docs output names no path on disk', () => {
 	});
 });
 
+describe('cdk-blocks docs --output json', () => {
+	const answer = (names: string[], options: Partial<DocsRequest> = {}) =>
+		answerDocs(index, { names, api: false, toc: false, sections: [], ...options }, '1.2.3');
+	const json = (names: string[], options: Partial<DocsRequest> = {}) => answer(names, options).json;
+
+	it('lists the blocks with their classes, summary and docs, then the framework docs', () => {
+		const out = json([]);
+		assert.strictEqual(out.version, '1.2.3');
+		const blocks = out.blocks as { name: string }[];
+		assert.deepStrictEqual(
+			blocks.find((b) => b.name === 'bb-distributed-table'),
+			{
+				name: 'bb-distributed-table',
+				classes: ['DistributedTable'],
+				summary: 'Tables with indexes.',
+				doc: 'bb-distributed-table/README.md',
+				files: [
+					'bb-distributed-table/README.md',
+					'bb-distributed-table/API.md',
+					'bb-distributed-table/DESIGN.md',
+				],
+			},
+		);
+		assert.deepStrictEqual(
+			(out.framework as { name: string; doc: string }[]).map((f) => [f.name, f.doc]),
+			[
+				['guide', 'README.md'],
+				['troubleshooting', 'TROUBLESHOOTING.md'],
+			],
+		);
+	});
+
+	it('prints a block as its docs, each with the Markdown as text, and a section with its slug and lines', () => {
+		const [readme] = json(['KVStore']).docs as DocPart[];
+		assert.strictEqual(readme.doc, 'bb-kv-store/README.md');
+		assert.strictEqual(readme.text, FILES['bb-kv-store/README.md'].replace(/\n$/, ''));
+		assert.deepStrictEqual(readme.lines, [1, readme.text?.split('\n').length]);
+		assert.strictEqual((json(['KVStore'], { api: true }).docs as DocPart[])[0].doc, 'bb-kv-store/API.md');
+		const [section] = json(['DistributedTable'], { sections: ['queries'] }).docs as DocPart[];
+		assert.deepStrictEqual(section, {
+			doc: 'bb-distributed-table/README.md',
+			section: 'queries',
+			lines: [3, 5],
+			text: '## Queries\nUse an index; never scan. limit caps the page.\n',
+		});
+		const [mention] = json(['Secret'], { sections: ['read caching'] }).docs as DocPart[];
+		assert.strictEqual(mention.section, 'usage');
+		assert.match(mention.note ?? '', /no heading names "read caching"/);
+		const [toc] = json(['core'], { toc: true }).docs as DocPart[];
+		assert.strictEqual(toc.doc, 'core/README.md');
+		assert.strictEqual(toc.text, undefined);
+		assert.deepStrictEqual(toc.headings?.[1], { level: 2, title: 'Namespaces', slug: 'namespaces', lines: [3, 9] });
+	});
+
+	it('prints a name as its import, declaration and the docs about it', () => {
+		const out = json(['ApiError']);
+		assert.strictEqual(out.name, 'ApiError');
+		assert.strictEqual(out.kind, 'class');
+		assert.strictEqual(out.package, '@aws-blocks/core');
+		assert.strictEqual(out.import, "import { ApiError } from '@aws-blocks/blocks';");
+		assert.match(String(out.declaration), /^export class ApiError extends Error \{\n/);
+		const docs = out.docs as DocPart[];
+		assert.deepStrictEqual(
+			docs.map((d) => [d.doc, d.section]),
+			[
+				['core/API.md', undefined],
+				['core/README.md', 'throwing'],
+			],
+		);
+		assert.match(docs[1].text ?? '', /^### Throwing\n/);
+		// A type imports with `import type`; a renamed export under its @aws-blocks/blocks name.
+		assert.strictEqual(json(['DTPutOptions']).import, "import type { DTPutOptions } from '@aws-blocks/blocks';");
+	});
+
+	it("prints Owner.member as a member, with its owner's import and the type file it comes from", () => {
+		const out = json(['KVStore.get']);
+		assert.strictEqual(out.kind, 'member');
+		assert.deepStrictEqual(out.of, ['KVStore']);
+		assert.strictEqual(out.import, "import { KVStore } from '@aws-blocks/blocks';");
+		assert.deepStrictEqual(
+			(out.docs as DocPart[]).map((d) => d.doc),
+			['@aws-blocks/bb-kv-store/dist/index.mock.d.ts', 'bb-kv-store/README.md'],
+		);
+		// What the export stands for: Vault is `Omit<VaultImpl, 'put'>`, imported from its own package.
+		assert.strictEqual(json(['Vault.get']).import, "import { Vault } from '@aws-blocks/bb-locker';");
+		assert.match(String(json(['Auth.protect']).notes), /^Auth inherits protect from AuthBase/);
+	});
+
+	it('prints --exports as the names with their kind, package, entry and import line', () => {
+		const names = json([], { exports: true }).names as Record<string, unknown>[];
+		assert.deepStrictEqual(
+			names.find((n) => n.name === 'DTPutOptions'),
+			{
+				name: 'DTPutOptions',
+				kind: 'type',
+				package: '@aws-blocks/bb-distributed-table',
+				entry: '@aws-blocks/blocks',
+				import: "import type { DTPutOptions } from '@aws-blocks/blocks';",
+				original: 'PutOptions',
+			},
+		);
+		assert.deepStrictEqual(
+			names.find((n) => n.name === 'onAuthChange'),
+			{
+				name: 'onAuthChange',
+				kind: 'export',
+				entry: '@aws-blocks/blocks/ui',
+				import: "import { onAuthChange } from '@aws-blocks/blocks/ui';",
+			},
+		);
+		const filtered = json(['putoptions'], { exports: true }).names as { name: string }[];
+		assert.deepStrictEqual(
+			filtered.map((n) => n.name),
+			['DTPutOptions', 'KVPutOptions'],
+		);
+		assert.deepStrictEqual(
+			(json(['ui'], { exports: true }).names as { name: string }[]).map((n) => n.name),
+			['Authenticator', 'AuthStateApi', 'onAuthChange'],
+		);
+	});
+
+	it('prints --search as hits with their doc, line, full section slug and text', () => {
+		const out = json([], { search: 'limit' });
+		assert.strictEqual(out.term, 'limit');
+		assert.deepStrictEqual((out.hits as unknown[])[0], {
+			doc: 'bb-distributed-table/README.md',
+			line: 4,
+			section: 'queries',
+			text: 'Use an index; never scan. limit caps the page.',
+		});
+		assert.strictEqual(out.total, (out.hits as unknown[]).length);
+		const lookup = json([], { search: 'onAuthChange' });
+		assert.deepStrictEqual(lookup.hits, []);
+		assert.strictEqual((lookup.lookup as { name: string }).name, 'onAuthChange');
+	});
+
+	it('answers several names with one element each, and keeps the text the same', () => {
+		const out = json(['KVStore', 'ApiError']);
+		const answers = out.answers as Record<string, unknown>[];
+		assert.deepStrictEqual(
+			answers.map((a) => (a.docs as DocPart[])[0].doc),
+			['bb-kv-store/README.md', 'core/API.md'],
+		);
+		assert.strictEqual(answer(['KVStore', 'ApiError']).text, render(['KVStore', 'ApiError']));
+	});
+});
+
 describe('cdk-blocks docs through the CLI', () => {
-	it('prints the shipped docs from any directory, and rejects --output json', async () => {
+	it('prints the shipped docs from any directory as Markdown, also when stdout is not a terminal', async () => {
 		const run = await runCli(['docs', 'KVStore', '--api'], { cwd: tmpdir() });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.match(run.stdout, /^# bb-kv-store\/API\.md\n/);
-		const json = await runCli(['docs', 'core', '--output', 'json'], { cwd: tmpdir() });
-		assert.strictEqual(json.code, ExitCode.Usage);
+	});
+
+	it('prints the answer as one JSON document with --output json, and a field of it with --query', async () => {
+		const run = await runCli(['docs', 'core', '--output', 'json'], { cwd: tmpdir() });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const [readme] = JSON.parse(run.stdout).docs as DocPart[];
+		assert.strictEqual(readme.doc, 'core/README.md');
+		assert.match(readme.text ?? '', /^# /);
+		// No field but the docs' own text names a path: in an app, the shipped docs are in node_modules.
+		assert.doesNotMatch(
+			JSON.stringify({ ...JSON.parse(run.stdout), docs: [{ ...readme, text: '' }] }),
+			/node_modules|"\//,
+		);
+		const query = await runCli(['docs', 'ApiError', '--query', 'docs.0.doc'], { cwd: tmpdir() });
+		assert.strictEqual(query.stdout, 'core/API.md\n', query.stderr);
+		const typo = await runCli(['docs', 'core', '--query', 'doc'], { cwd: tmpdir() });
+		assert.strictEqual(typo.code, ExitCode.Usage);
+		// Errors stay text on stderr, with their exit code.
+		const unknown = await runCli(['docs', 'NoSuchBlockAnywhere', '--output', 'json'], { cwd: tmpdir() });
+		assert.strictEqual(unknown.code, ExitCode.Usage);
+		assert.strictEqual(unknown.stdout, '');
+		assert.match(unknown.stderr, /^Error: no block, export or option named "NoSuchBlockAnywhere"/);
 	});
 
 	it('reads a bare --section at the end of the line as the headings', async () => {

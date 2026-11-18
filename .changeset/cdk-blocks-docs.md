@@ -18,6 +18,7 @@ Usage: npx --no -- cdk-blocks docs [name...] [options]
   --section <topic>      the part of the docs about a topic; repeatable; with no topic, the headings
   --exports [filter...]  the names @aws-blocks/blocks and its entries export, and which entry to use
   --search <term>        matching lines in every doc, or in the named blocks, with their section
+  --output json          the same answer as one JSON document, each doc in it named by "doc"
 ```
 
 - **Listing and reading:**
@@ -36,5 +37,7 @@ Usage: npx --no -- cdk-blocks docs [name...] [options]
   - `--search <term>` prints matching lines from every doc with their section. It accepts grep's `a|b` and drops grep's own flags (`-i`, `--`) before the term.
 
 Every printed doc starts with a `# <folder>/<file>` line (`# bb-kv-store/README.md`, `# README.md` for the package README), and that doc path prints the file again. Output never names a path on disk, so nothing points into `node_modules`. An unknown name, section or doc file is a usage error (exit 2): a name or section names the closest matches, a file the files the block has. A topic with no letters or digits (`--section '('`) names no section, and a name longer than 200 characters is unknown. `--search` or `--exports` with no match exits 1. Arguments after `--` are names.
+
+`--output json` prints the same answer as one JSON document, each doc in it named by `"doc": "<folder>/<file>"`: the listing as `{version, blocks, framework}`, a block or section as `{docs: [{doc, section, lines, text}]}` with the Markdown as `text`, a name as `{name, kind, package, import, declaration, summary, docs}`, `--exports` as `{names: [{name, kind, package, entry, import}]}` and `--search` as `{term, hits: [{doc, line, section, text}], total, files}`; several names as `{answers: [...]}`. Without `--output json` the output is Markdown text, also when stdout isn't a terminal. Errors stay text on stderr.
 
 The scaffolded `AGENTS.md`, every template's README and code comments, the guide's "Building Block documentation" paragraph and the JSDoc of the `@aws-blocks/blocks` re-exports point at `npx --no -- cdk-blocks docs` instead of the `node_modules` docs path. The `AGENTS.md` bullet describes the command as the docs command for the app's blocks and APIs, which answers types, signatures and how a block behaves; the templates say `npx --no -- cdk-blocks docs` lists the blocks and `npx --no -- cdk-blocks docs <Block>...` prints their docs.
