@@ -413,7 +413,7 @@ payload format 2.0 event and can't stream. `Hosting` from `@aws-cdk-blocks/core`
 selects the HTTP API build profile for the adapter. If you run the adapter
 yourself for `HostingConstruct`, import `withBuildProfile` from
 `@aws-cdk-blocks/hosting/adapters` and wrap the build, for example
-`withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: process.cwd() }))`.
+`withBuildProfile({ serverInvoke: 'http-api', edgeToRegional: true }, () => nextjsAdapter({ projectDir: process.cwd() }))`.
 Without that profile, the default Next.js build streams and fails synth.
 Core `Hosting` uses these settings:
 
