@@ -187,16 +187,19 @@ final class FileTokenStore implements TokenStore {
       '$parent${Platform.pathSeparator}$child';
 
   /// [name] reduced to characters a file name can hold, with a digest of the
-  /// original appended when the reduction changed anything. Matches how the
-  /// Kotlin runtime names its JVM storage directory.
+  /// original appended when the reduction changed anything. Stripping a
+  /// leading dot counts as a change, so `.foo` and `foo` get different names.
   static String _storageName(String name) {
+    final original = name.trim();
     // A leading dot would hide the entry, and `.`/`..` would name a parent.
-    final trimmed = name.trim().replaceFirst(RegExp(r'^\.+'), '');
+    final trimmed = original.replaceFirst(RegExp(r'^\.+'), '');
     var safe = trimmed.replaceAll(_unsafeCharacters, '_');
     if (safe.length > _maxNameLength) {
       safe = safe.substring(0, _maxNameLength);
     }
-    return safe == trimmed && safe.isNotEmpty ? safe : '$safe-${_digest(name)}';
+    return safe == original && safe.isNotEmpty
+        ? safe
+        : '$safe-${_digest(name)}';
   }
 
   /// FNV-1a, for a short stable suffix. Not a security property, only

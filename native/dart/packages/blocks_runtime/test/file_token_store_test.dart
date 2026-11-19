@@ -66,6 +66,25 @@ void main() {
     );
   });
 
+  test('a leading dot is not stripped into a collision', () async {
+    String directory(String id) => Directory(
+      store(id).directoryPath,
+    ).parent.path.split(Platform.pathSeparator).last;
+    expect(directory('acme.cli'), 'acme.cli');
+    expect(directory(' acme.cli '), 'acme.cli');
+    expect(directory('.acme.cli'), startsWith('acme.cli-'));
+
+    final s = store('com.example.app');
+    await s.set('.foo', 'dotted');
+    await s.set('foo', 'plain');
+    expect(await s.get('.foo'), 'dotted');
+    expect(await s.get('foo'), 'plain');
+    expect(
+      File('${s.directoryPath}${Platform.pathSeparator}foo.value').existsSync(),
+      isTrue,
+    );
+  });
+
   test('rejects a blank application id', () {
     expect(() => store('  '), throwsArgumentError);
   });
