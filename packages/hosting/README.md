@@ -625,6 +625,30 @@ const blocksStack = await BlocksStack.create(app, stackName, {
 - `npm run destroy` passes no stack selection, so the CDK CLI refuses to
   destroy an app with more than one top-level stack.
 
+## SvelteKit: the server's dependencies
+
+The SvelteKit adapter runs `@sveltejs/adapter-node`'s server, and the server
+function ships `build/` without your app's `node_modules`. adapter-node leaves
+each package in your `dependencies` (for example `@aws-blocks/blocks`, whose
+`/server` entry a `+page.server.ts` imports) as an import that it expects to
+find in `node_modules` at runtime. So the deploy builds the server with its
+dependencies bundled:
+
+- While the build runs, `vite.config.ts` (or `.js`, `.mjs`, `.mts`) is replaced
+  by a config that imports yours and adds one build-only Vite plugin, which sets
+  `ssr.noExternal: true`. Your file is restored when the build ends, also when it
+  fails. Your own adapter-node setup and the adapter's transparent build are
+  treated the same.
+- A package that you list in `ssr.external` stays an import. After the build,
+  synth fails with `SvelteKitUnbundledDependencyError` when the server in
+  `build/` imports a package that `build/` can't resolve, and names each one
+  with the file that imports it. Remove it from `ssr.external`, or, for a
+  CommonJS `vite.config.cjs`/`.cts` (which the deploy doesn't replace), set
+  `ssr: { noExternal: true }` yourself.
+- If a run is stopped before the restore, the next deploy fails with
+  `SvelteKitBridgeCollisionError` and leaves your files alone: rename
+  `vite.config.blocks-original.*` back to `vite.config.*`.
+
 ## SSR compute: Lambda or Lambda Web Functions
 
 By default the SSR server runs on a Lambda function behind an API Gateway REST

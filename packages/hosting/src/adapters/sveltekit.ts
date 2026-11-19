@@ -22,6 +22,17 @@
  * then restores the original in a `finally`. When the user already configured
  * `@sveltejs/adapter-node`, the bridge is skipped and the build runs as-is.
  *
+ * Server dependencies: the server function's bundle is `build/`, without the
+ * app's `node_modules`. adapter-node leaves every package in the app's
+ * `dependencies` as a bare import (its docs expect `node_modules` next to the
+ * server), so the build always runs with a second bridge that swaps
+ * `vite.config.*` for one that imports the original and appends a build-only
+ * Vite plugin setting `ssr.noExternal: true`: the server output then carries its
+ * dependencies, whichever adapter config the app has. After the build, a bare
+ * import of a package that `build/` can't resolve fails synth
+ * (`SvelteKitUnbundledDependencyError`) instead of deploying a server that
+ * crashes on its first request.
+ *
  * Inputs read from the project after build (`build/` — adapter-node's default
  * `out`):
  *   - `build/index.js`      — the server entry (`node index.js`)
@@ -35,6 +46,7 @@ import { appBuildEnv } from './shared/app_build_env.js';
 import { normalizeBasePath } from './shared/basepath.js';
 import { warnIfVercelCron } from './shared/feature_warnings.js';
 import * as fs from 'fs';
+import { builtinModules } from 'node:module';
 import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
@@ -127,6 +139,25 @@ const SVELTE_CONFIG_FILES = [
 const BRIDGE_BACKUP_BASENAME = 'svelte.config.blocks-original';
 
 /**
+ * Vite config files the server-dependency bridge can stand in for, in Vite's
+ * own lookup order. A CommonJS config (`.cjs`/`.cts`) is left alone: the ESM
+ * bridge can't take its slot, and the post-build import check still catches an
+ * unbundled dependency.
+ */
+const VITE_CONFIG_FILES = [
+  'vite.config.js',
+  'vite.config.mjs',
+  'vite.config.ts',
+  'vite.config.mts',
+];
+
+/** Basename the server-dependency bridge parks the user's `vite.config.*` under (extension preserved). */
+const VITE_BRIDGE_BACKUP_BASENAME = 'vite.config.blocks-original';
+
+/** Name of the build-only Vite plugin the server-dependency bridge appends. */
+export const SVELTEKIT_BUNDLE_PLUGIN_NAME = 'aws-blocks:sveltekit-bundle-server-dependencies';
+
+/**
  * Run the SvelteKit adapter pipeline.
  * @param options - adapter configuration
  * @returns the generated DeployManifest
@@ -162,9 +193,14 @@ export const sveltekitAdapter = (
         '✨ Detected @sveltejs/adapter-node in svelte.config; building as-is.\n',
       );
     }
+    let cleanupViteBridge: (() => void) | undefined;
     try {
+      // Bundle the server's dependencies into build/ (see the header), with
+      // the transparent bridge and with the app's own adapter-node alike.
+      cleanupViteBridge = installViteBundleBridge(projectDir);
       runSvelteKitBuild(projectDir, buildCommand);
     } finally {
+      cleanupViteBridge?.();
       cleanupBridge?.();
     }
   }
@@ -192,6 +228,10 @@ export const sveltekitAdapter = (
         'produced `build/client/` and that the build completed without errors.',
     });
   }
+
+  // build/ is the whole server bundle: an import it can't resolve would crash
+  // the server on its first request, after a deploy that reports success.
+  assertServerDependenciesBundled(buildDir);
 
   // Warn (don't fail) when a vercel.json declares crons — parity with the
   // other adapters; the hosting architecture wires no scheduler.
@@ -449,6 +489,148 @@ export default {
   },
 };
 `;
+
+// ---- server-dependency bridge ----
+
+/**
+ * Swap the app's `vite.config.*` for a bridge that imports the original and
+ * appends a build-only plugin setting `ssr.noExternal: true`, so the SSR build
+ * bundles the server's dependencies. Vite merges `noExternal: true` over any
+ * list the app sets, and an explicit `ssr.external` entry still stays external
+ * (the post-build check then names it). The plugin has `apply: 'build'`, so a
+ * `vite dev` that the build starts is unaffected. Returns the cleanup that
+ * restores the original, or `undefined` when there is no ESM Vite config to
+ * stand in for.
+ */
+const installViteBundleBridge = (projectDir: string): (() => void) | undefined => {
+  const staleBackup = ['.js', '.mjs', '.ts', '.mts']
+    .map((ext) => path.join(projectDir, `${VITE_BRIDGE_BACKUP_BASENAME}${ext}`))
+    .find((p) => fs.existsSync(p));
+  const userConfigPath = VITE_CONFIG_FILES.map((f) => path.join(projectDir, f)).find((p) => fs.existsSync(p));
+  if (staleBackup) {
+    const configName = userConfigPath ? path.basename(userConfigPath) : 'vite.config.ts';
+    throw new HostingError('SvelteKitBridgeCollisionError', {
+      message: `A leftover Vite config bridge backup already exists at ${staleBackup}.`,
+      resolution: `Restore your original Vite config: rename ${path.basename(staleBackup)} back to ${configName} (replacing the generated ${configName}), then re-run the deploy.`,
+    });
+  }
+  if (!userConfigPath) return undefined;
+
+  const backupFile = `${VITE_BRIDGE_BACKUP_BASENAME}${path.extname(userConfigPath)}`;
+  const backupPath = path.join(projectDir, backupFile);
+  fs.renameSync(userConfigPath, backupPath);
+  try {
+    fs.writeFileSync(userConfigPath, buildViteBridgeSource(backupFile), 'utf-8');
+  } catch (writeErr) {
+    try {
+      fs.renameSync(backupPath, userConfigPath);
+    } catch {
+      // Best-effort; the collision guard reports a leftover backup next run.
+    }
+    throw writeErr;
+  }
+  return (): void => {
+    try {
+      if (fs.existsSync(userConfigPath)) fs.rmSync(userConfigPath);
+      if (fs.existsSync(backupPath)) fs.renameSync(backupPath, userConfigPath);
+    } catch {
+      // Best-effort; the collision guard reports a leftover backup next run.
+    }
+  };
+};
+
+/**
+ * The bridged Vite config: the app's config (an object, a promise or a
+ * function of the config env) with the bundling plugin appended.
+ * @internal exported for unit tests.
+ */
+export const buildViteBridgeSource = (originalConfigFile: string): string => `import userConfig from './${originalConfigFile}';
+
+// Written by @aws-blocks/hosting for the build only; the original is restored afterwards.
+// The server function ships build/ without node_modules, so its dependencies are bundled.
+const bundleServerDependencies = {
+  name: '${SVELTEKIT_BUNDLE_PLUGIN_NAME}',
+  apply: 'build',
+  config: () => ({ ssr: { noExternal: true } }),
+};
+
+export default async (env) => {
+  const config = (typeof userConfig === 'function' ? await userConfig(env) : await userConfig) ?? {};
+  return { ...config, plugins: [...(config.plugins ?? []), bundleServerDependencies] };
+};
+`;
+
+/** Node's built-in modules, with and without the `node:` prefix. */
+const BUILTIN_MODULES = new Set(builtinModules);
+
+/** The package a bare import specifier names (`@scope/pkg/sub` → `@scope/pkg`). */
+const packageOfSpecifier = (specifier: string): string => {
+  const parts = specifier.split('/');
+  return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : (parts[0] ?? specifier);
+};
+
+/**
+ * The packages that the server files of `build/` import by a bare specifier
+ * (static `import`/`export … from` statements and literal dynamic `import()`),
+ * Node built-ins and comments excluded. Client assets and prerendered pages are not
+ * scanned: only the server runs on Lambda.
+ * @internal exported for unit tests.
+ */
+export const bareServerImports = (buildDir: string): Map<string, string> => {
+  const files = fg.sync('**/*.{js,mjs}', {
+    cwd: buildDir,
+    absolute: true,
+    ignore: ['client/**', 'prerendered/**', 'node_modules/**'],
+  });
+  // `import … from 'x'` / `export … from 'x'` (bindings may span lines), `import 'x'`, `import('x')`.
+  const fromImport = /^[ \t]*(?:import|export)\b[^'"`;]{0,2000}?\bfrom\s*['"]([^'"\n]+)['"]/gm;
+  const sideEffectImport = /^[ \t]*import\s*['"]([^'"\n]+)['"]/gm;
+  const dynamicImport = /\bimport\(\s*['"]([^'"\n]+)['"]\s*\)/g;
+  const found = new Map<string, string>();
+  for (const file of files) {
+    // Comments out first: bundled code keeps JSDoc type references such as
+    // `@type {import('polka').Middleware}`, which are no imports.
+    const source = fs
+      .readFileSync(file, 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|\s)\/\/[^\n]*/g, '$1');
+    for (const pattern of [fromImport, sideEffectImport, dynamicImport]) {
+      for (const match of source.matchAll(pattern)) {
+        const specifier = match[1];
+        if (!specifier) continue;
+        if (/^[./#]/.test(specifier) || specifier.startsWith('node:') || /[\s$]/.test(specifier)) continue;
+        if (/^[a-z][a-z0-9+.-]*:/i.test(specifier)) continue; // data:, file:, https: URLs
+        if (BUILTIN_MODULES.has(specifier) || BUILTIN_MODULES.has(packageOfSpecifier(specifier))) continue;
+        const pkg = packageOfSpecifier(specifier);
+        if (!found.has(pkg)) found.set(pkg, path.relative(buildDir, file).replace(/\\/g, '/'));
+      }
+    }
+  }
+  return found;
+};
+
+/**
+ * Fail synth when the server in `build/` imports a package that `build/`
+ * itself can't resolve: the function ships `build/` alone, so the import fails
+ * with `ERR_MODULE_NOT_FOUND` on the first request.
+ */
+const assertServerDependenciesBundled = (buildDir: string): void => {
+  const unresolved = [...bareServerImports(buildDir)].filter(
+    ([pkg]) => !fs.existsSync(path.join(buildDir, 'node_modules', pkg, 'package.json')),
+  );
+  if (unresolved.length === 0) return;
+  const listed = unresolved.map(([pkg, file]) => `${pkg} (imported from build/${file})`).join(', ');
+  throw new HostingError('SvelteKitUnbundledDependencyError', {
+    message:
+      `The SvelteKit server imports packages that the deployed server function would not have: ${listed}. ` +
+      'The function ships build/ without node_modules.',
+    resolution:
+      'Remove these packages from `ssr.external` in your Vite config so the build bundles them, ' +
+      'and rebuild (a build reused with BLOCKS_SKIP_FRONTEND_BUILD may predate the bundling). ' +
+      'The deploy builds the server with `ssr.noExternal: true` through a Vite config bridge; ' +
+      'a CommonJS vite.config.cjs/.cts is not bridged, so set `ssr: { noExternal: true }` there yourself.',
+  });
+};
 
 type PackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm';
 
