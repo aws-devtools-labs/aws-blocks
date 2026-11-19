@@ -41,13 +41,21 @@ export function processValue(value: unknown): unknown {
  * Falls back to a degraded entry on unexpected serialization failure.
  */
 export function safeStringify(obj: Record<string, unknown>): string {
-	const seen = new WeakSet();
+	// Objects on the path from the root to the value being serialized. Only an
+	// ancestor makes a reference circular: the same object reached through two
+	// sibling keys (`{ a: o, b: o }`) is serialized both times.
+	const ancestors: object[] = [];
 	try {
-		return JSON.stringify(obj, (_key, value) => {
+		// A `function` (not an arrow) so JSON.stringify binds `this` to the object
+		// that holds `key`, which tells us where in the tree we are.
+		return JSON.stringify(obj, function (this: unknown, _key, value) {
 			if (typeof value === 'bigint') return value.toString();
 			if (typeof value === 'object' && value !== null) {
-				if (seen.has(value)) return '[Circular]';
-				seen.add(value);
+				// Unwind to the holder: anything above it on the stack belongs to a
+				// branch that has already been fully serialized.
+				while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+				if (ancestors.includes(value)) return '[Circular]';
+				ancestors.push(value);
 			}
 			if (typeof value === 'function' || typeof value === 'symbol') {
 				return '[unserializable]';

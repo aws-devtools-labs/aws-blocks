@@ -56,7 +56,7 @@ Fields:
 
 ### Serialization Safety
 
-- **Circular references** → replaced with `"[Circular]"` via WeakSet tracking.
+- **Circular references** → replaced with `"[Circular]"`. Only a reference back to an object on the current path counts; the same object under two keys is serialized both times.
 - **BigInt values** → converted to string representation.
 - **Functions/Symbols** → replaced with `"[unserializable]"`.
 - **Error objects in context** → extracted to `{ name, message, stack }`.

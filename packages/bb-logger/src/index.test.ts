@@ -302,6 +302,33 @@ describe('serialization safety', () => {
 		assert.strictEqual((entry.data as any).self, '[Circular]');
 	});
 
+	test('the same object under two keys is serialized both times', () => {
+		const log = new Logger(fakeScope, 'app');
+		const o = { x: 1 };
+		log.info('shared', { a: o, b: o });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.a, { x: 1 });
+		assert.deepStrictEqual(entry.b, { x: 1 });
+	});
+
+	test('the same object repeated in an array is serialized each time', () => {
+		const log = new Logger(fakeScope, 'app');
+		const o = { x: 1 };
+		log.info('shared', { list: [o, o, { nested: o }] });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.list, [{ x: 1 }, { x: 1 }, { nested: { x: 1 } }]);
+	});
+
+	test('a cycle through a shared object is still detected', () => {
+		const log = new Logger(fakeScope, 'app');
+		const o: any = { x: 1 };
+		o.loop = { back: o };
+		log.info('cycle', { a: o, b: o });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.a, { x: 1, loop: { back: '[Circular]' } });
+		assert.deepStrictEqual(entry.b, { x: 1, loop: { back: '[Circular]' } });
+	});
+
 	test('BigInt values are serialized as strings', () => {
 		const log = new Logger(fakeScope, 'app');
 		log.info('bigint', { value: 9007199254740993n });
