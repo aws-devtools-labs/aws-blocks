@@ -329,6 +329,56 @@ describe('serialization safety', () => {
 		assert.deepStrictEqual(entry.b, { x: 1, loop: { back: '[Circular]' } });
 	});
 
+	test('an array that contains itself is detected as circular', () => {
+		const log = new Logger(fakeScope, 'app');
+		const arr: unknown[] = [1];
+		arr.push(arr);
+		log.info('cycle', { arr });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.arr, [1, '[Circular]']);
+	});
+
+	test('a cycle that closes through an array element is detected', () => {
+		const log = new Logger(fakeScope, 'app');
+		const o: any = {};
+		o.k = [{ up: o }];
+		log.info('cycle', { o });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.o, { k: [{ up: '[Circular]' }] });
+	});
+
+	test('a toJSON() result that points back at an ancestor is detected', () => {
+		const log = new Logger(fakeScope, 'app');
+		const o: any = { x: 1 };
+		o.child = { toJSON: () => ({ parent: o }) };
+		log.info('cycle', { o });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.o, { x: 1, child: { parent: '[Circular]' } });
+	});
+
+	test('an object repeated more than 8 times becomes [Repeated]', () => {
+		const log = new Logger(fakeScope, 'app');
+		const o = { x: 1 };
+		log.info('shared', { list: Array.from({ length: 10 }, () => o) });
+		const entry = getStdoutEntry();
+		const list = entry.list as unknown[];
+		assert.deepStrictEqual(list.slice(0, 8), Array.from({ length: 8 }, () => ({ x: 1 })));
+		assert.deepStrictEqual(list.slice(8), ['[Repeated]', '[Repeated]']);
+	});
+
+	test('a deeply shared graph serializes quickly and stays small', () => {
+		const log = new Logger(fakeScope, 'app');
+		let leaf: Record<string, unknown> = { id: 'xxxxxxxx' };
+		for (let i = 0; i < 30; i++) leaf = { a: leaf, b: leaf };
+		const start = performance.now();
+		log.info('dag', { leaf });
+		const elapsed = performance.now() - start;
+		const line = stdoutLines[0];
+		assert.ok(line.length < 64 * 1024, `expected a small line, got ${line.length} chars`);
+		assert.ok(elapsed < 1000, `expected under 1s, took ${elapsed}ms`);
+		assert.notStrictEqual(JSON.parse(line)._serializationError, 'SerializationFailedException');
+	});
+
 	test('BigInt values are serialized as strings', () => {
 		const log = new Logger(fakeScope, 'app');
 		log.info('bigint', { value: 9007199254740993n });

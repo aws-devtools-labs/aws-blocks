@@ -37,6 +37,15 @@ export function processValue(value: unknown): unknown {
 }
 
 /**
+ * How many times one object is written out in a single entry before further
+ * references to it become `"[Repeated]"`. Without a cap, a graph whose nodes are
+ * shared at several levels (`leaf = { a: leaf, b: leaf }`, repeated) expands once
+ * per path, which grows exponentially; the cap keeps output linear in the
+ * number of distinct objects.
+ */
+const MAX_REPEATS = 8;
+
+/**
  * Safely stringify an object, handling circular references and BigInt values.
  * Falls back to a degraded entry on unexpected serialization failure.
  */
@@ -45,6 +54,8 @@ export function safeStringify(obj: Record<string, unknown>): string {
 	// ancestor makes a reference circular: the same object reached through two
 	// sibling keys (`{ a: o, b: o }`) is serialized both times.
 	const ancestors: object[] = [];
+	// How many times each object has been expanded so far (see MAX_REPEATS).
+	const expansions = new WeakMap<object, number>();
 	try {
 		// A `function` (not an arrow) so JSON.stringify binds `this` to the object
 		// that holds `key`, which tells us where in the tree we are.
@@ -55,6 +66,9 @@ export function safeStringify(obj: Record<string, unknown>): string {
 				// branch that has already been fully serialized.
 				while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) ancestors.pop();
 				if (ancestors.includes(value)) return '[Circular]';
+				const count = (expansions.get(value) ?? 0) + 1;
+				if (count > MAX_REPEATS) return '[Repeated]';
+				expansions.set(value, count);
 				ancestors.push(value);
 			}
 			if (typeof value === 'function' || typeof value === 'symbol') {

@@ -115,6 +115,7 @@ try {
 
 The logger handles edge cases gracefully:
 - **Circular references** → replaced with `"[Circular]"`
+- **Repeated references** → an object is written out at most 8 times per entry, then replaced with `"[Repeated]"`
 - **BigInt values** → converted to string
 - **Functions/Symbols** → replaced with `"[unserializable]"`
 - **Errors in context** → extracted to `{ name, message, stack }`
