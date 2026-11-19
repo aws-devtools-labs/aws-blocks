@@ -10,20 +10,22 @@ In your `Package.swift`, pinned to the minor version, since until 1.0 a minor re
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aws-devtools-labs/aws-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
+    .package(url: "https://github.com/aws/cdk-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
 ],
 targets: [
     .target(
         name: "MyApp",
         dependencies: [
-            .product(name: "BlocksRuntime", package: "aws-blocks-swift"),
+            .product(name: "BlocksRuntime", package: "cdk-blocks-swift"),
         ],
         plugins: [
-            .plugin(name: "BlocksCodegenBuildPlugin", package: "aws-blocks-swift"),
+            .plugin(name: "BlocksCodegenBuildPlugin", package: "cdk-blocks-swift"),
         ],
     ),
 ]
 ```
+
+SwiftPM takes `package:` from the URL, so if you are moving from `aws-blocks-swift`, change the URL and every `package:` together, in every `Package.swift` that uses the SDK. An Xcode project only needs the new URL.
 
 ### 2. Drop your spec next to the target
 
