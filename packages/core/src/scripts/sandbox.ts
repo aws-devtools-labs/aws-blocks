@@ -444,6 +444,12 @@ const STACK_BUSY_LINE = /is in [A-Z_]+_IN_PROGRESS state and can not be updated/
 /** A stack status that the next deploy can't update, so the stack has to be destroyed. */
 const FAILED_STACK_STATUS = /_FAILED$|^ROLLBACK_COMPLETE$/;
 
+/**
+ * The synth warnings this sandbox has printed at `normal`, shared by the initial
+ * deploy's output and the `cdk watch` relay, so a warning prints once per session.
+ */
+const sandboxSynthWarnings = new Set<string>();
+
 export interface SandboxFailureInput {
   phase: SandboxFailurePhase;
   /** The failed step's retained CDK output ([] when the output was not retained). */
@@ -710,7 +716,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
 
   // At BLOCKS_LOG_LEVEL=quiet|normal the synth + deploy output is condensed and
   // retained; the failure path below prints it.
-  const cdkOutput = createCdkOutput({ label: 'cdk synth + deploy', verb: 'deploy' });
+  const cdkOutput = createCdkOutput({ label: 'cdk synth + deploy', verb: 'deploy', printedWarnings: sandboxSynthWarnings });
 
   const cdkEnv = buildSandboxCdkEnv(frameworkSink, backendPath);
   const argOptions = { outDir, projectRoot: process.cwd(), preview };
@@ -841,7 +847,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
 
   // Unchanged relay at the default level; condensed and retained (printed when
   // a watch deploy fails) at BLOCKS_LOG_LEVEL=quiet|normal.
-  attachCdkWatchOutput(cdkWatch, { stopping: () => cleaningUp });
+  attachCdkWatchOutput(cdkWatch, { stopping: () => cleaningUp, printedWarnings: sandboxSynthWarnings });
 
   const devServerSpawn = buildDevServerSpawn(devCommand);
 

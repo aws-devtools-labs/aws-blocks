@@ -143,6 +143,75 @@ describe('createCdkProgressReporter', () => {
     assert.strictEqual(out.text(), '   Synthesizing app...\n');
   });
 
+  it("keeps each stream's warning state apart: an interleaved line on the other stream neither joins nor splits a warning", () => {
+    const out = collectingSink();
+    const err = collectingSink();
+    const reporter = createCdkProgressReporter(out, err);
+    const block = [
+      'aws-blocks/index.cdk.ts:33:3',
+      'WARNING Plain HTTP front door.',
+      '   app-sandbox/Hosting/Hosting',
+      "   Acknowledge with 'Annotation::@aws-cdk-blocks/hosting:PlainHttpFrontDoor'",
+    ];
+    for (let i = 0; i < 2; i++) {
+      reporter.line(block[0], 'stderr');
+      reporter.line('  cdk.out/asset.abc/index.mjs  1.2kb', 'stdout'); // esbuild, between location and WARNING
+      reporter.line(block[1], 'stderr');
+      reporter.line('  cdk.out/asset.def/index.mjs  3.4kb', 'stdout'); // esbuild, inside the warning
+      reporter.line(block[2], 'stderr');
+      reporter.line(block[3], 'stderr');
+      reporter.line('', 'stderr');
+    }
+    reporter.finish(true);
+    assert.strictEqual(err.text(), `${block.join('\n')}\n`);
+    assert.strictEqual(out.text(), '');
+  });
+
+  it('keeps every source location of a warning raised at several places, including the "and N more" line', () => {
+    const err = collectingSink();
+    const reporter = createCdkProgressReporter(collectingSink(), err);
+    const block = [
+      'aws-blocks/index.cdk.ts:33:3',
+      'or aws-blocks/a.ts:1:1',
+      'or aws-blocks/b.ts:2:2',
+      'or aws-blocks/c.ts:3:3',
+      'or aws-blocks/d.ts:4:4',
+      '(and 2 more...)',
+      'WARNING Shared warning.',
+      '   app/A',
+    ];
+    for (const line of ['unrelated: 1:2', ...block, '']) reporter.line(line, 'stderr');
+    reporter.finish(true);
+    assert.strictEqual(err.text(), `${block.join('\n')}\n`);
+  });
+
+  it('prints a warning on stdout, ends one at a resource event line, flushes one at finish, and reads CRLF blocks', () => {
+    const out = collectingSink();
+    const err = collectingSink();
+    const reporter = createCdkProgressReporter(out, err);
+    reporter.line('WARNING On stdout.\r', 'stdout');
+    reporter.line('   app/Stdout\r', 'stdout');
+    reporter.line('\r', 'stdout');
+    reporter.line('WARNING Before an event.', 'stderr');
+    reporter.line('   app/Evented', 'stderr');
+    reporter.line('  Stack | 1/3 | 10:00:01 AM | UPDATE_FAILED | AWS::S3::Bucket | Bucket Resource creation failed', 'stderr');
+    reporter.line('WARNING Last line.', 'stderr');
+    reporter.line('   app/Last', 'stderr');
+    reporter.finish(false);
+    assert.strictEqual(out.text(), 'WARNING On stdout.\n   app/Stdout\n');
+    assert.strictEqual(
+      err.text(),
+      [
+        'WARNING Before an event.',
+        '   app/Evented',
+        'Stack | 1/3 | 10:00:01 AM | UPDATE_FAILED | AWS::S3::Bucket | Bucket Resource creation failed',
+        'WARNING Last line.',
+        '   app/Last',
+        '',
+      ].join('\n'),
+    );
+  });
+
   it("drops OpenNext's expected wrapper/converter ERROR on a Next.js build, and keeps other OpenNext errors", () => {
     const out = collectingSink();
     const err = collectingSink();
@@ -326,6 +395,26 @@ describe('attachCdkWatchOutput', () => {
     assert.match(err.text(), /──── cdk watch output \(3 lines, retained because BLOCKS_LOG_LEVEL=normal\) ────/);
     assert.ok(err.text().includes('bundling chatter\n'));
     assert.ok(!err.text().includes('RequestId'), 'Lambda platform lines are never kept');
+  });
+
+  it('at normal, prints a synth warning a watch deploy raises, once, unless the initial deploy already printed it', async () => {
+    const calls = captureConsole();
+    const child = fakeWatch();
+    const printedWarnings = new Set(['WARNING Already printed.\n   app/Old']);
+    attachCdkWatchOutput(child, { level: 'normal', stderr: collectingSink(), printedWarnings });
+    const fresh = 'aws-blocks/index.cdk.ts:33:3\nWARNING Plain HTTP front door.\n   app-sandbox/Hosting/Hosting\n';
+    child.err.write(`Detected change to aws-blocks/index.cdk.ts\n${fresh}WARNING Already printed.\n   app/Old\n\n`);
+    child.err.write(`${fresh}\n`);
+    await tick();
+    child.out.end();
+    child.err.end();
+    await tick();
+    assert.deepStrictEqual(calls, [
+      ['error', '[CDK Watch] Detected change to aws-blocks/index.cdk.ts'],
+      ['error', '[CDK Watch] aws-blocks/index.cdk.ts:33:3'],
+      ['error', '[CDK Watch] WARNING Plain HTTP front door.'],
+      ['error', '[CDK Watch]    app-sandbox/Hosting/Hosting'],
+    ]);
   });
 
   it('at quiet, prints nothing until cdk watch exits non-zero, and not when the sandbox is stopping', async () => {
