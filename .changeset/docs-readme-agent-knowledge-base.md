@@ -21,6 +21,7 @@ docs(bb-agent, bb-knowledge-base): the Agent README shows the backend that the `
 
 - `### Options` has a Default column and rows for `removalPolicy` and `logger`. `## Errors` has an `error.name` column.
 - Tables for the `createChat` options, the methods of the controller it returns, the `ConversationManagerConfig` fields and the `InterruptResponse` fields; the two rules for the `refresh` callback.
+- The backend sample defines `agentGetRawDescriptor` and the frontend sample passes it to `refresh`. Both samples name their file (`cdk-blocks/index.ts`, `src/chat.ts`) and declare the UI functions they call, so the code-sample check of the shipped docs compiles them together.
 
 **`bb-agent` README, moved and removed**
 

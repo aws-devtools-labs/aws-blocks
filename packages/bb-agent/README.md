@@ -673,6 +673,7 @@ tools: (tool) => ({
 **Backend** (`cdk-blocks/index.ts`): the methods the client calls. Each one takes the user from the session (see [Authorization](#authorization)).
 
 ```typescript
+// cdk-blocks/index.ts
 import { Scope, ApiNamespace } from '@aws-cdk-blocks/core';
 import { Agent } from '@aws-cdk-blocks/bb-agent';
 import type { InterruptResponse } from '@aws-cdk-blocks/bb-agent';
@@ -695,6 +696,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async agentGetChannel(channelId: string) {
     const user = await auth.requireAuth(context);
     return { channel: await agent.getChannel(channelId, { userId: user.userSub }) };
+  },
+  // For `refresh`: the channel descriptor without `__blocks`. It issues tokens, like agentGetChannel.
+  async agentGetRawDescriptor(channelId: string) {
+    const user = await auth.requireAuth(context);
+    const channel = await agent.getChannel(channelId, { userId: user.userSub });
+    const { __blocks, ...descriptor } = channel.toJSON();
+    return descriptor;
   },
   async agentStream(message: string, conversationId?: string, channelId?: string) {
     const user = await auth.requireAuth(context);
@@ -719,8 +727,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 **Frontend:**
 
 ```typescript
-import { createChat, realtimeTransport } from '@aws-cdk-blocks/bb-agent/client';
+// src/chat.ts
+import { createChat, realtimeTransport, type ChatMessage } from '@aws-cdk-blocks/bb-agent/client';
 import { api } from 'cdk-blocks'; // the typed client of the backend above
+
+// Your UI code.
+declare function renderMessages(messages: ChatMessage[]): void;
+declare function updateSpinner(loading: boolean): void;
+declare function showApprovalUI(
+  interrupts: { interruptId: string; name: string; reason?: unknown }[],
+): Promise<{ interruptId: string; approved: boolean }[]>;
 
 const transport = realtimeTransport({
   subscribe: async (channelId, handlerOrOptions) => {
@@ -746,6 +762,8 @@ const chat = createChat({
     getConversation:      (id) => api.agentGetConversation(id),
     getPendingInterrupts: (id) => api.agentGetPendingInterrupts(id),
   },
+  // Before each reconnect: a fresh descriptor, with the `__blocks` field the backend method removed.
+  refresh: async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' }),
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange:  (loading) => updateSpinner(loading),
   onInterrupt: async (interrupts) => {
@@ -772,8 +790,8 @@ await chat.sendMessage('Hello!');
 
 `refresh` must return the raw channel descriptor, not a hydrated channel:
 
-- A backend method returns `channel.toJSON()` without its `__blocks` field. That method issues tokens, so give it the same authorization as the method that returns the channel.
-- The callback adds the field back: `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`, where `agentGetRawDescriptor` is that backend method.
+- The backend method `agentGetRawDescriptor` returns `channel.toJSON()` without its `__blocks` field, so the client receives the descriptor and not a hydrated channel. It issues tokens, so it has the same authorization as `agentGetChannel`.
+- The `refresh` callback of the frontend sample adds the field back (`__blocks: 'realtime/channel'`) and leaves the other fields as they are.
 - The JSDoc of `CreateChatOptions.refresh` in `src/index.chat.ts` has the full contract.
 
 | Method of `chat` | Returns | Description |
