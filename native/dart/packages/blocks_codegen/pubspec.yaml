@@ -1,6 +1,6 @@
 name: blocks_codegen
 description: Code generator for AWS CDK Blocks client SDK — reads OpenRPC spec and generates typed Dart clients.
-version: 0.2.0
+version: 1.0.0
 homepage: https://docs.aws.amazon.com/blocks/latest/devguide
 repository: https://github.com/aws-devtools-labs/aws-blocks
 issue_tracker: https://github.com/aws-devtools-labs/aws-blocks/issues
@@ -14,9 +14,9 @@ dependencies:
   # still pin build <5. build 5.0.0 only breaks BuildStep implementers;
   # this package extends Builder, which is unchanged.
   build: '>=4.0.0 <6.0.0'
-  # Generated clients need blocks_runtime 0.2.0 (`minimumRuntimeVersion` in
+  # Generated clients need blocks_runtime 1.0.0 (`minimumRuntimeVersion` in
   # lib/src/generator.dart); test/generator_test.dart checks the two agree.
-  blocks_runtime: ^0.2.0
+  blocks_runtime: ^1.0.0
 
 dev_dependencies:
   # build_runner 2.16.2 is the first release that compiles against analyzer
