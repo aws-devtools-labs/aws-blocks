@@ -56,8 +56,8 @@ console.log(`Sent: ${sent}, Failed: ${failed}`);
 `.test`, `.example`, `.invalid` or `.localhost` (RFC 2606 and RFC 6761).
 
 - Deployed: every send from a reserved-domain sender fails with `DomainNotVerifiedException`.
-- Synth: the warning `@aws-blocks/bb-email-client:UnverifiableSender`, in sandbox and production
-  alike. A `replyTo` address on such a domain gets `@aws-blocks/bb-email-client:UndeliverableReplyTo`.
+- Synth: the warning `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, in sandbox and production
+  alike. A `replyTo` address on such a domain gets `@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`.
   They are warnings, not errors: the app still synthesizes and deploys.
 - Local mock: accepts the address.
 
@@ -66,7 +66,7 @@ If the sender is deliberate (for example a stack that never sends), acknowledge 
 ```typescript
 import { Annotations } from 'aws-cdk-lib';
 
-Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-email-client:UnverifiableSender');
+Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-email-client:UnverifiableSender');
 ```
 
 ### `emailClient.send(message): Promise<SendResult>`
@@ -118,18 +118,21 @@ calling SES:
   (`Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`). The address is checked as
   given: surrounding whitespace and control characters are rejected;
 - at most 50 recipients per message (To + CC + BCC combined);
+- the subject must be a single line: CR, LF and other control characters (C0, DEL, C1, U+2028
+  and U+2029) are rejected, not stripped. Remove line breaks from a subject built from user
+  input before sending;
 - at most 40 MB per message.
 
-A malformed address or too many recipients throws `InvalidInputException`; an oversized message
+A malformed address, too many recipients or a control character in the subject throws `InvalidInputException`; an oversized message
 throws `EmailSendFailedException`. In `sendBatch()` the message is marked `failed` instead.
 
 ## Errors
 
-Match with `isBlocksError(e, EmailErrors.<Constant>)`. `isBlocksError` is exported from `@aws-blocks/core`, `EmailErrors` from `@aws-blocks/bb-email-client`.
+Match with `isBlocksError(e, EmailErrors.<Constant>)`. `isBlocksError` is exported from `@aws-cdk-blocks/core`, `EmailErrors` from `@aws-cdk-blocks/bb-email-client`.
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `EmailErrors.InvalidInput` | `InvalidInputException` | A malformed address, more than 50 recipients, a batch larger than `maxBatchSize`, an invalid `maxBatchSize`, or SES rejects the request as invalid |
+| `EmailErrors.InvalidInput` | `InvalidInputException` | A malformed address, a control character in the subject, more than 50 recipients, a batch larger than `maxBatchSize`, an invalid `maxBatchSize`, or SES rejects the request as invalid |
 | `EmailErrors.SendFailed` | `EmailSendFailedException` | A message over 40 MB, SES rejects the message, or any other send failure |
 | `EmailErrors.DomainNotVerified` | `DomainNotVerifiedException` | The sending domain or address is not verified in SES |
 | `EmailErrors.AccountPaused` | `AccountSendingPausedException` | AWS has paused or suspended the account's sending |

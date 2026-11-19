@@ -58,7 +58,7 @@ The handler receives a `CronJobEvent<T>` with:
 ## Errors
 
 ```typescript
-import { CronJobErrors } from '@aws-blocks/bb-cron-job';
+import { CronJobErrors } from '@aws-cdk-blocks/bb-cron-job';
 ```
 
 | Constant | `error.name` | Thrown when |

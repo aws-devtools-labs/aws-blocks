@@ -6,8 +6,8 @@ pollers for the `AsyncJob`s and `CronJob`s assigned to it, and serves any
 `ApiNamespace` routed to it through an internal Application Load Balancer.
 
 > **Internal package.** You don't construct `ContainerCompute` yourself. The
-> public `Compute` Building Block (`@aws-blocks/bb-compute`, re-exported from
-> `@aws-blocks/blocks`) builds one when you pass `type: 'container'`. Use
+> public `Compute` Building Block (`@aws-cdk-blocks/bb-compute`, re-exported from
+> `aws-cdk-blocks`) builds one when you pass `type: 'container'`. Use
 > `Compute`, and see the [bb-compute README](../bb-compute/README.md) for usage,
 > options and defaults, scaling, image rules and errors.
 
@@ -15,7 +15,7 @@ pollers for the `AsyncJob`s and `CronJob`s assigned to it, and serves any
 
 ## API
 
-`ContainerCompute` extends the `Compute` base class from `@aws-blocks/core`.
+`ContainerCompute` extends the `Compute` base class from `@aws-cdk-blocks/core`.
 
 | Member | Type | Description |
 |--------|------|-------------|
@@ -28,7 +28,7 @@ pollers for the `AsyncJob`s and `CronJob`s assigned to it, and serves any
 | `ContainerCompute.isContainerCompute(x)` | `boolean` | Type guard that works across duplicate package copies. |
 
 Every member except `setEnv` exists only on the CDK export
-(`@aws-blocks/bb-container-compute/cdk`).
+(`@aws-cdk-blocks/bb-container-compute/cdk`).
 
 `service` and `taskDefinition` are `undefined` when the backend module path
 can't be discovered (for example, in isolated unit tests).
@@ -41,7 +41,7 @@ rules: [bb-compute README](../bb-compute/README.md#container).
 
 ## Errors
 
-The synth checks and the `@aws-blocks/bb-container-compute:api-rule-quota`
+The synth checks and the `@aws-cdk-blocks/bb-container-compute:api-rule-quota`
 warning are thrown from `src/index.cdk.ts` and listed in the
 [bb-compute README](../bb-compute/README.md#errors).
 

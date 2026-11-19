@@ -99,7 +99,7 @@ the compute or the namespace path at fault:
 
 Synth warnings:
 
-- `@aws-blocks/bb-container-compute:api-rule-quota`: more than 100 container
+- `@aws-cdk-blocks/bb-container-compute:api-rule-quota`: more than 100 container
   API namespaces share one load balancer, its default listener-rule quota.
   Request a quota increase before deploying.
 - `blocks:apigateway:bare-endpoint-serves-placed-namespaces`: see
@@ -219,7 +219,7 @@ new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async 
 
 An `ApiNamespace` runs on the app's default compute unless it gets a compute
 from its own `compute` option or from its scope. `RawRoute`s and the auth HTTP
-routes (`/aws-blocks/auth/*`) always run on the default compute.
+routes (`/cdk-blocks/auth/*`) always run on the default compute.
 
 - **Routing follows the export name** — the name your frontend imports
   (`export const reports = …` → `reports`), not the second `ApiNamespace`
@@ -228,7 +228,7 @@ routes (`/aws-blocks/auth/*`) always run on the default compute.
   `Compute` to each; they then run in the same function (or the same
   container tasks).
 - **Clients don't change.** `reports.build('2026-10')` calls
-  `POST /aws-blocks/api/reports` from the TypeScript client and from the
+  `POST /cdk-blocks/api/reports` from the TypeScript client and from the
   Swift, Kotlin and Dart clients alike, and the stack's shared API gateway
   routes that path to the namespace's compute. It works the same on every
   `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain.
@@ -238,7 +238,7 @@ routes (`/aws-blocks/auth/*`) always run on the default compute.
 By default, placing a namespace on its own compute is a routing preference,
 not a boundary:
 
-- The bare `POST /aws-blocks/api` endpoint, served by the default compute, runs
+- The bare `POST /cdk-blocks/api` endpoint, served by the default compute, runs
   any namespace named in the request body. Anyone who can call your API can run
   a placed namespace on the default compute instead: with the default compute's
   memory and timeout, outside the container you placed it on, and outside the

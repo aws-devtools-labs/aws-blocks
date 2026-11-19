@@ -122,7 +122,7 @@ Configuration for a single pre-registered CloudWatch metric.
 ## Errors
 
 ```typescript
-import { DashboardErrors } from '@aws-blocks/bb-dashboard';
+import { DashboardErrors } from '@aws-cdk-blocks/bb-dashboard';
 ```
 
 | Constant | `error.name` | Thrown when |
@@ -163,7 +163,7 @@ const dashboard = new Dashboard(scope, 'dashboard', {
 
 ## Local development
 
-Run `npm run dev` and open `/cdk-blocks/dashboard` on the dev server. The page lists configured metric names by namespace and points to the terminal for logs and metric values and `.bb-data/` for saved traces. It also shows how to launch the separate, session-protected Admin UI. Live CloudWatch charts are available only on the deployed dashboard.
+Run `npm run dev` and open `/cdk-blocks/dashboard` on the dev server. The page lists configured metric names by namespace and points to the terminal for logs and metric values and `.cdk-blocks/local/data/` for saved traces. It also shows how to launch the separate, session-protected Admin UI. Live CloudWatch charts are available only on the deployed dashboard.
 
 ## Scaling and cost (AWS)
 

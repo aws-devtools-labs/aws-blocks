@@ -1,16 +1,16 @@
 ---
-"@aws-blocks/bb-compute": patch
-"@aws-blocks/bb-container-compute": patch
-"@aws-blocks/bb-lambda-compute": patch
-"@aws-blocks/bb-email-client": patch
-"@aws-blocks/bb-async-job": patch
-"@aws-blocks/bb-cron-job": patch
-"@aws-blocks/bb-realtime": patch
-"@aws-blocks/bb-dashboard": patch
-"@aws-blocks/bb-logger": patch
-"@aws-blocks/bb-metrics": patch
-"@aws-blocks/bb-tracer": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-compute": patch
+"@aws-cdk-blocks/bb-container-compute": patch
+"@aws-cdk-blocks/bb-lambda-compute": patch
+"@aws-cdk-blocks/bb-email-client": patch
+"@aws-cdk-blocks/bb-async-job": patch
+"@aws-cdk-blocks/bb-cron-job": patch
+"@aws-cdk-blocks/bb-realtime": patch
+"@aws-cdk-blocks/bb-dashboard": patch
+"@aws-cdk-blocks/bb-logger": patch
+"@aws-cdk-blocks/bb-metrics": patch
+"@aws-cdk-blocks/bb-tracer": patch
+"aws-cdk-blocks": patch
 ---
 
 docs(compute, async, observability): the READMEs of 11 blocks correct wrong statements, list every error in one section, and the `bb-compute` README holds the `Compute` options, defaults, scaling rules and synth errors.

@@ -70,7 +70,7 @@ Every log entry is a JSON object written to stdout (or stderr for errors):
 
 `awsRequestId`:
 
-- On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), it is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically.
+- On the Lambda functions AWS CDK Blocks runs through `createLambdaHandler` (the backend API and its event handlers), it is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically.
 - To find everything one request logged, query by it, for example with CloudWatch Logs Insights: `filter awsRequestId = "<id>"`.
 - Your own correlation fields, such as a `requestId` passed to `child()`, are separate keys and are kept as is.
 - Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
@@ -102,7 +102,7 @@ group, which carries the stack-wide default retention (`defaults.logRetention` â
 one week in sandbox, one year in production).
 
 To change retention, set `logRetention` on the stack-wide `defaults` that
-`aws-blocks/index.cdk.ts` passes to `BlocksStack.create()` (it applies to every
+`cdk-blocks/index.cdk.ts` passes to `BlocksStack.create()` (it applies to every
 compute's handler log group). Keep the preset choice that file makes with `sandboxMode`:
 
 ```typescript

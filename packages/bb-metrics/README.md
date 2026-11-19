@@ -11,8 +11,8 @@ Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Form
 ## Quick start
 
 ```typescript
-import { Scope, ApiNamespace } from '@aws-blocks/blocks';
-import { Metrics } from '@aws-blocks/bb-metrics';
+import { Scope, ApiNamespace } from 'aws-cdk-blocks';
+import { Metrics } from '@aws-cdk-blocks/bb-metrics';
 
 const scope = new Scope('my-app');
 const metrics = new Metrics(scope, 'appMetrics', {

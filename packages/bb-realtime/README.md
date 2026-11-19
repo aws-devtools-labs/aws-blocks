@@ -35,7 +35,7 @@ const rt = new Realtime(scope, 'collab', {
 | `rt.revokeAccess(principal)` | `Promise<void>` | End a user's access: handles minted for `principal` before this call stop working, and open subscriptions end on the connection's next keep-alive ping. See [Binding a handle to a user](#binding-a-handle-to-a-user). |
 | `rt.subscribe(namespace, channel, handler)` | `() => void` | Server-side subscribe. Returns unsubscribe function. |
 
-**Runtime only.** Call `publish`, `subscribe`, `getChannel` and `revokeAccess` inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`.
+**Runtime only.** Call `publish`, `subscribe`, `getChannel` and `revokeAccess` inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `cdk-blocks/index.ts`.
 
 - Top-level code runs during CDK synth, where a call throws an `Error` reading `Realtime.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
 - Constructing the block at module scope is fine.
@@ -144,8 +144,8 @@ API Gateway throttles the WebSocket stage in messages per second (the stack-wide
 ## Errors
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { RealtimeErrors } from '@aws-blocks/bb-realtime';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 
 try {
   await rt.publish('chat', 'room-1', { sender: 123 }); // wrong type

@@ -12,14 +12,14 @@ is no per-compute gateway.
 >   `aws-cdk-blocks` build one `LambdaCompute` for every app; handlers that
 >   don't name a compute run on it.
 > - **Through the `Compute` block.** `new Compute(scope, id, { type: 'serverless', … })`
->   from `@aws-blocks/blocks` creates and owns a `LambdaCompute`. See the
+>   from `aws-cdk-blocks` creates and owns a `LambdaCompute`. See the
 >   [bb-compute README](../bb-compute/README.md) for usage, options and defaults.
 
 > Design and rationale: [DESIGN.md](./DESIGN.md)
 
 ## API
 
-`LambdaCompute` is a `Compute` (the abstract base from `@aws-blocks/core`) that
+`LambdaCompute` is a `Compute` (the abstract base from `@aws-cdk-blocks/core`) that
 provisions and owns a `NodejsFunction` and its CloudWatch log group. The
 function assumes the shared Blocks execution role, so Building Block grants
 reach it. Its handler entry and `BLOCKS_STACK_NAME` are derived from the owning
