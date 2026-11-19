@@ -984,15 +984,17 @@ origin on those routes (an auth-gated image source does not receive them).
 Image optimization requests (Next.js `/_next/image`, the Nuxt and Astro image
 endpoints) share the default behavior's cache key, and the optimizer picks the
 output format from the viewer's `Accept` header. CloudFront ignores
-`Vary: Accept`, so the edge router writes the formats the viewer accepts
-(`avif`, `webp`, both, or neither) into an `x-blocks-image-format` header on
-image routes, and the SSR cache policy keys on it: a browser that accepts WebP
-and a client that doesn't get separate cached copies. `Accept` itself stays out
-of the cache key, so pages keep one cache entry whatever `Accept` the browser
-sends. The router drops an `x-blocks-image-format` header the viewer sends on
-any route. The header takes one of the cache-key header slots; when
-`cacheKeyHeaders` already uses all five, it stays out of the key and synth warns
-with `@aws-blocks/hosting:ImageFormatNotInCacheKey`.
+`Vary: Accept`, so on image routes the edge router copies the viewer's complete
+`Accept` value into an `x-blocks-image-accept` header, and the SSR cache policy
+keys on it: viewers that accept, reject (`image/webp;q=0`) or prefer different
+formats get separate cached copies. `Accept` itself stays out of the cache key,
+so pages keep one cache entry whatever `Accept` the browser sends. The router
+drops an `x-blocks-image-accept` header the viewer sends on any route, so with
+an image optimizer that name is reserved and synth rejects it in
+`cacheKeyHeaders`; without one the router leaves it alone. The header takes one
+of the cache-key header slots; when `cacheKeyHeaders` already uses all five, it
+stays out of the key and synth warns with
+`@aws-blocks/hosting:ImageAcceptNotInCacheKey`.
 
 ## Custom domains (CloudFront door)
 

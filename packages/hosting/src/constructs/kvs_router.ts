@@ -44,20 +44,26 @@ export const ORIGIN_ID = {
 } as const;
 
 /**
- * The cache-key header that carries the image formats a viewer accepts on an
- * image-optimization route: `avif`, `webp`, `avifwebp`, or absent for neither.
+ * The cache-key header that carries the viewer's complete `Accept` value on an
+ * image-optimization route (repeated `Accept` fields joined with `,`), or is
+ * absent when the viewer sends no `Accept`.
  *
  * The router reaches the image origin through the default behavior, so an
  * image request is keyed by the default (SSR) cache policy, which leaves out
  * `Accept` on purpose: browsers send many different `Accept` values for pages,
- * and keying every page on it would split the page cache. Without a format in
- * the key, the first viewer's format (WebP, AVIF or the source image) would be
- * served to every later viewer of the same URL; CloudFront ignores `Vary`.
- * The router sets this header only on image routes, from the two image types
- * the optimizers negotiate (Next.js and IPX pick AVIF or WebP when `Accept`
- * names it), and drops a value the viewer sent on every route.
+ * and keying every page on it would split the page cache. Without `Accept` in
+ * the image key, the first viewer's format (WebP, AVIF or the source image)
+ * would be served to every later viewer of the same URL; CloudFront ignores
+ * `Vary`. The value is copied as sent, not reduced to a format: the optimizers
+ * negotiate on the whole value (Next.js honours `q=0`, so
+ * `image/png,image/webp;q=0` gets the source PNG; IPX tells JPEG and PNG
+ * apart), and any reduction that differs from theirs would serve one viewer's
+ * cached format to a viewer that rejects it.
+ *
+ * The router sets this header only on image routes, and only when the
+ * distribution keys on it; it then drops a value the viewer sent on every route.
  */
-export const IMAGE_FORMAT_CACHE_KEY_HEADER = 'x-blocks-image-format';
+export const IMAGE_ACCEPT_CACHE_KEY_HEADER = 'x-blocks-image-accept';
 
 /** Route kind markers stored in the KVS route table (kept terse for size). */
 type RouteKind = 's' | 'c' | 'i'; // static(S3) | compute(server) | image
@@ -595,15 +601,23 @@ export const headerRowsJs = (rows: string, indent: string): string =>
  * required" (and any ?ms=/?tag= API param is likewise lost). It mirrors the www
  * 301 and appends the rebuilt query string.
  *
- * On image routes (step 4a) the router writes the formats the viewer accepts
- * into {@link IMAGE_FORMAT_CACHE_KEY_HEADER}, and it deletes a viewer-sent value
- * of that header on every route first.
+ * With `imageAcceptKey` set, the router copies the viewer's complete `Accept`
+ * value (repeated fields joined with `,`) into {@link IMAGE_ACCEPT_CACHE_KEY_HEADER}
+ * on image routes (step 4a), and deletes a viewer-sent value of that header on
+ * every route first. Without it the router leaves that header alone, so an app
+ * that keys pages on a header of the same name through `cacheKeyHeaders` keeps
+ * its cache key.
  *
  * NOTE: this function source ships to CloudFront, which enforces a 10 KB code
  * limit — keep in-function comments terse (the rationale lives here in the
  * JSDoc, which does NOT ship).
  */
-export const generateKvsRouterRequestCode = (): string => `import cf from 'cloudfront';
+export const generateKvsRouterRequestCode = (
+  opts: {
+    /** Write the image cache key ({@link IMAGE_ACCEPT_CACHE_KEY_HEADER}) on image routes. Default: false. */
+    readonly imageAcceptKey?: boolean;
+  } = {},
+): string => `import cf from 'cloudfront';
 ${SHARED_CF_HELPERS}
 function buildQueryString(request) {
   return request.querystring && Object.keys(request.querystring).length > 0
@@ -617,8 +631,7 @@ function stripCred(request, meta) {
 async function handler(event) {
   var request = event.request;
   var uri = request.uri;
-  delete request.headers['${IMAGE_FORMAT_CACHE_KEY_HEADER}'];
-  var meta = await getJson('meta', null);
+${opts.imageAcceptKey ? `  delete request.headers['${IMAGE_ACCEPT_CACHE_KEY_HEADER}'];\n` : ''}  var meta = await getJson('meta', null);
   if (!meta) { return request; }
 
   // 0. Already-prefixed asset fetches (CloudFront custom-error responses
@@ -702,10 +715,13 @@ ${redirectRowsJs('drows', '    ')}
   if (kind === 'i') {
     uri = stripBasePath(uri, bp);
     request.uri = uri;
-    var ac = (request.headers.accept || {}).value || '';
-    var fm = (ac.indexOf('image/avif') < 0 ? '' : 'avif') + (ac.indexOf('image/webp') < 0 ? '' : 'webp');
-    if (fm) { request.headers['${IMAGE_FORMAT_CACHE_KEY_HEADER}'] = { value: fm }; }
-    cf.selectRequestOriginById(meta.oImg);
+${
+      opts.imageAcceptKey
+        ? `    var ac = request.headers.accept;
+    if (ac) { request.headers['${IMAGE_ACCEPT_CACHE_KEY_HEADER}'] = { value: ac.multiValue ? ac.multiValue.map(function(v){ return v.value; }).join(',') : ac.value }; }
+`
+        : ''
+    }    cf.selectRequestOriginById(meta.oImg);
     return request;
   }
   // 4b. compute/server origin — keep URI, set x-forwarded-host, select server.

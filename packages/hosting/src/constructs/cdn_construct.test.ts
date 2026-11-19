@@ -24,7 +24,7 @@ import { CdnConstruct } from './cdn_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
-import { IMAGE_FORMAT_CACHE_KEY_HEADER, ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
+import { IMAGE_ACCEPT_CACHE_KEY_HEADER, ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
 
 // ---- KVS edge-router helpers ----
 //
@@ -2225,7 +2225,7 @@ void describe('CdnConstruct', () => {
       return ssrPolicy.Properties.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.HeadersConfig.Headers ?? [];
     };
 
-    void it('keys the default behavior on the image format the router derives from Accept, when an image origin exists', () => {
+    void it('keys the default behavior on the image Accept key the router writes, when an image origin exists', () => {
       const template = withImageOpt(createStack(), {
         bundle: '/tmp/img',
         handler: 'index.handler',
@@ -2234,8 +2234,8 @@ void describe('CdnConstruct', () => {
       });
       const headers = ssrCacheKeyHeaders(template);
       assert.ok(
-        headers.includes(IMAGE_FORMAT_CACHE_KEY_HEADER),
-        `the SSR cache key must include ${IMAGE_FORMAT_CACHE_KEY_HEADER}: ${headers.join(', ')}`,
+        headers.includes(IMAGE_ACCEPT_CACHE_KEY_HEADER),
+        `the SSR cache key must include ${IMAGE_ACCEPT_CACHE_KEY_HEADER}: ${headers.join(', ')}`,
       );
       // The raw Accept stays out: browsers send many different Accept values for
       // HTML, so keying every page on it would split the page cache.
@@ -2269,12 +2269,12 @@ void describe('CdnConstruct', () => {
         cacheKeyHeaders: ['h1', 'h2', 'h3', 'h4', 'h5'],
       });
       const template = Template.fromStack(stack);
-      assert.ok(!ssrCacheKeyHeaders(template).includes(IMAGE_FORMAT_CACHE_KEY_HEADER));
-      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('ImageFormatNotInCacheKey'));
+      assert.ok(!ssrCacheKeyHeaders(template).includes(IMAGE_ACCEPT_CACHE_KEY_HEADER));
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('ImageAcceptNotInCacheKey'));
       assert.equal(warnings.length, 1);
     });
 
-    void it('leaves the image-format header out of the cache key when there is no image origin', () => {
+    void it('leaves the image key header out of the cache key when there is no image origin', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const { fn, fnUrl } = createSsrFunction(stack);
@@ -2285,7 +2285,63 @@ void describe('CdnConstruct', () => {
         computeFunctionUrls: new Map([['default', fnUrl]]),
         computeFunctions: new Map([['default', fn]]),
       });
-      assert.ok(!ssrCacheKeyHeaders(Template.fromStack(stack)).includes(IMAGE_FORMAT_CACHE_KEY_HEADER));
+      assert.ok(!ssrCacheKeyHeaders(Template.fromStack(stack)).includes(IMAGE_ACCEPT_CACHE_KEY_HEADER));
+    });
+
+    void it('keeps a caller-defined cache-key header of the image key name when there is no image origin', () => {
+      // An app may already key pages on this header name. Without an image
+      // origin the router writes no image key, so it must neither drop the
+      // header at the edge nor leave it out of the cache key.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        cacheKeyHeaders: [IMAGE_ACCEPT_CACHE_KEY_HEADER],
+      });
+      const template = Template.fromStack(stack);
+      assert.ok(ssrCacheKeyHeaders(template).includes(IMAGE_ACCEPT_CACHE_KEY_HEADER));
+      const routerCode = Object.values(template.findResources('AWS::CloudFront::Function'))
+        .map((r) => (r as { Properties: { FunctionCode: string } }).Properties.FunctionCode)
+        .find((c) => c.includes('selectRequestOriginById'));
+      assert.ok(routerCode, 'Should have the KVS router request function');
+      assert.ok(!routerCode.includes(IMAGE_ACCEPT_CACHE_KEY_HEADER), 'the router must not touch the header');
+    });
+
+    void it('rejects a caller-defined cache-key header of the image key name when there is an image origin', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const imageFn = new LambdaFunction(stack, 'ImageFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest: {
+              ...ssrManifest,
+              imageOptimization: { bundle: '/tmp/img', handler: 'index.handler', formats: ['webp'], sizes: [640] },
+            },
+            securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+            computeFunctionUrls: new Map([
+              ['default', fnUrl],
+              ['image-optimization', imageFn.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM })],
+            ]),
+            computeFunctions: new Map([
+              ['default', fn],
+              ['image-optimization', imageFn],
+            ]),
+            cacheKeyHeaders: [IMAGE_ACCEPT_CACHE_KEY_HEADER.toUpperCase()],
+          }),
+        (e: unknown) => e instanceof HostingError && e.message.includes(IMAGE_ACCEPT_CACHE_KEY_HEADER),
+      );
     });
 
     void it('IPX image Lambda (baseURL set) gets its own API Gateway, next to the SSR one', () => {

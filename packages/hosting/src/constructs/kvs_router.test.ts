@@ -20,7 +20,7 @@ import {
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
   generateEdgeBasePathStripCode,
-  IMAGE_FORMAT_CACHE_KEY_HEADER,
+  IMAGE_ACCEPT_CACHE_KEY_HEADER,
   ORIGIN_ID,
 } from './kvs_router.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -355,10 +355,10 @@ void describe('generated request fn — image origin basePath strip', () => {
   });
 });
 
-void describe('generated request fn — image format in the cache key', () => {
-  // The image route shares the default behavior's cache key. The router puts
-  // the format the viewer accepts into a cache-key header, so a viewer that
-  // can't decode WebP/AVIF never gets the cached copy made for one that can.
+void describe('generated request fn — image Accept in the cache key', () => {
+  // The image route shares the default behavior's cache key. The router copies
+  // the viewer's Accept into a cache-key header, so a viewer that can't decode
+  // (or rejects) WebP/AVIF never gets the cached copy made for one that can.
   const manifest = baseManifest({
     routes: [
       { pattern: '/_next/image*', target: 'image-optimization' },
@@ -366,7 +366,7 @@ void describe('generated request fn — image format in the cache key', () => {
     ],
   });
   const entries = buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: true });
-  const code = generateKvsRouterRequestCode();
+  const code = generateKvsRouterRequestCode({ imageAcceptKey: true });
   const imageRequest = (headers: Record<string, { value: string }>) =>
     runRequestFn(code, entries, {
       uri: '/_next/image',
@@ -375,42 +375,84 @@ void describe('generated request fn — image format in the cache key', () => {
       cookies: {},
     });
 
-  for (const [accept, expected] of [
-    ['image/avif,image/webp,image/apng,*/*;q=0.8', 'avifwebp'],
-    ['image/webp,*/*', 'webp'],
-    ['image/avif,*/*', 'avif'],
-  ] as const) {
-    void it(`sets ${IMAGE_FORMAT_CACHE_KEY_HEADER}: ${expected} for Accept: ${accept}`, async () => {
+  for (const accept of ['image/avif,image/webp,image/apng,*/*;q=0.8', 'image/webp,*/*', '*/*']) {
+    void it(`sets ${IMAGE_ACCEPT_CACHE_KEY_HEADER} to the viewer's Accept: ${accept}`, async () => {
       const { output, selectedOrigin } = await imageRequest({ accept: { value: accept } });
       assert.equal(selectedOrigin, ORIGIN_ID.image);
-      assert.deepEqual(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], { value: expected });
+      assert.deepEqual(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: accept });
     });
   }
 
-  void it('sends no format header for a viewer that accepts neither WebP nor AVIF', async () => {
-    const cases: Record<string, { value: string }>[] = [{ accept: { value: '*/*' } }, {}];
-    for (const headers of cases) {
-      const { output } = await imageRequest(headers);
-      assert.equal(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], undefined);
-    }
+  void it('sends no image key header for a viewer that sends no Accept', async () => {
+    const { output } = await imageRequest({});
+    assert.equal(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], undefined);
   });
 
-  void it('replaces a format header the viewer sent on an image route', async () => {
-    const { output } = await imageRequest({
+  void it('replaces an image key header the viewer sent on an image route', async () => {
+    const forged = await imageRequest({
       accept: { value: '*/*' },
-      [IMAGE_FORMAT_CACHE_KEY_HEADER]: { value: 'webp' },
+      [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: 'image/webp' },
     });
-    assert.equal(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], undefined);
+    assert.deepEqual(forged.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: '*/*' });
+    const noAccept = await imageRequest({ [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: 'image/webp' } });
+    assert.equal(noAccept.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], undefined);
   });
 
-  void it('drops a format header the viewer sent on a page route, so it cannot split the page cache', async () => {
+  void it('keys a viewer that explicitly rejects the cached format apart from one that accepts it', async () => {
+    // Same URL, two viewers. The optimizers honour q=0 (Next.js negotiates
+    // `image/png,image/webp;q=0` to the source PNG), so the second viewer must
+    // never get the WebP cached for the first.
+    const first = await imageRequest({ accept: { value: 'image/png,image/webp' } });
+    const second = await imageRequest({ accept: { value: 'image/png,image/webp;q=0' } });
+    assert.ok(first.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER]);
+    assert.ok(second.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER]);
+    assert.notDeepEqual(
+      first.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER],
+      second.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER],
+    );
+  });
+
+  void it('keys JPEG-only and PNG-only viewers apart (IPX negotiates them separately)', async () => {
+    const jpeg = await imageRequest({ accept: { value: 'image/jpeg' } });
+    const png = await imageRequest({ accept: { value: 'image/png' } });
+    assert.notDeepEqual(
+      jpeg.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER],
+      png.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER],
+    );
+  });
+
+  void it('keys on every Accept field when the viewer repeats the header', async () => {
+    const { output } = await imageRequest({
+      accept: { value: 'image/png', multiValue: [{ value: 'image/png' }, { value: 'image/webp;q=0' }] },
+    } as Record<string, { value: string }>);
+    assert.deepEqual(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: 'image/png,image/webp;q=0' });
+  });
+
+  void it('drops an image key header the viewer sent on a page route, so it cannot split the page cache', async () => {
     const { output, selectedOrigin } = await runRequestFn(code, entries, {
       uri: '/about',
-      headers: { host: { value: 'x.test' }, [IMAGE_FORMAT_CACHE_KEY_HEADER]: { value: 'webp' } },
+      headers: { host: { value: 'x.test' }, [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: 'image/webp' } },
       cookies: {},
     });
     assert.equal(selectedOrigin, ORIGIN_ID.server);
-    assert.equal(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], undefined);
+    assert.equal(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], undefined);
+  });
+});
+
+void describe('generated request fn — caller-defined header of the image key name', () => {
+  // Without an image cache key (no image origin), the router must leave a
+  // viewer-sent header of that name alone: an app may already key pages on it
+  // through cdn.cacheKeyHeaders.
+  const manifest = baseManifest({ routes: [{ pattern: '/*', target: 'compute' }] });
+  const entries = buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: false });
+
+  void it('keeps the header on a page route when the router writes no image key', async () => {
+    const { output } = await runRequestFn(generateKvsRouterRequestCode(), entries, {
+      uri: '/about',
+      headers: { host: { value: 'x.test' }, [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: 'tenant-a' } },
+      cookies: {},
+    });
+    assert.deepEqual(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: 'tenant-a' });
   });
 });
 
