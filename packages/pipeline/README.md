@@ -29,10 +29,7 @@ await Pipeline.create(app, 'Pipeline', {
   branches: [
     {
       branch: 'main',
-      stages: [
-        { name: 'beta' },
-        { name: 'prod', requireApproval: true, environment: { DOMAIN: 'myapp.com' } },
-      ],
+      stages: [{ name: 'beta' }],
     },
   ],
 });
@@ -46,6 +43,14 @@ that file attaches its stack to the stage. The explicit `--app` selects the
 pipeline for the synth step. Keep `cdk.json` pointed at `cdk-blocks/index.cdk.ts`
 for local app deploys. To deploy the pipeline itself from the project root,
 run `npx cdk deploy --app "npx tsx -C cdk cdk-blocks/pipeline.cdk.ts"`.
+
+For multiple stages with the same app file, give each stage a distinct
+`BlocksStack.create()` ID. For example, set `environment: { APP_STAGE: 'beta' }`
+and `environment: { APP_STAGE: 'prod' }` on the stages, and use
+`` `MyApp-${process.env.APP_STAGE ?? 'local'}` `` as the ID in `index.cdk.ts`.
+The backend module is imported by stack ID: if two stages reuse the ID,
+top-level block declarations run only for the first, even though both stages
+synthesize. Use the existing stack ID when deploying an existing stack.
 
 The CodeConnections connection needs a one-time OAuth handshake in the AWS
 Console (Developer Tools → Connections) before the pipeline can pull source.
@@ -98,11 +103,16 @@ new Pipeline(stack, 'Pipeline', {
 | `appFile` | `string` | `'./index.cdk.ts'` with `Pipeline.create()` and no `stageFactory` | CDK app file imported once per stage, with the stage's `environment` set on `process.env`. Resolved relative to the calling file. Must be `.ts`, `.js`, `.mjs` or `.cjs` and inside the project root. Never take this path from external input: the file is executed during synth. |
 | `synth` | `PipelineSynthConfig` | | The synth step (below). |
 | `postStage` | `(context: PostStageContext) => Array<ShellStep \| CodeBuildStep> \| undefined` | | Steps to run after each stage deploys. See [`postStage`](#per-stage-post-deploy-steps-poststage). |
-| `buildSecrets` | `Record<string, SecretValue \| ISecret>` | | Environment variables of the synth CodeBuild project, each from a `secret('…')` marker or an `ISecret`. CodeBuild fetches them on every build and masks them in logs; they are not written into the template. Read them in `synth.commands` as `$NAME`. A `config()` marker is not accepted. |
+| `buildSecrets` | `Record<string, SecretValue \| ISecret>` | | Exposes a `secret('…')` marker or `ISecret` as `$NAME` in the synth build; `config()` is not accepted. CodeBuild fetches the value at build time rather than embedding it in the template. |
 | `secretStore` | `KindStoreOptions` | prefix `/hosting/secrets` | Where `buildSecrets` markers are read from. Must match the prefix the values were set with. |
 | `configStore` | `KindStoreOptions` | prefix `/hosting/config` | Where a `config()` `connectionArn` is read from. |
 | `selfMutation` | `boolean` | `true` | Whether the pipeline updates its own definition. |
 | `crossAccountKeys` | `boolean` | `false` | KMS keys for artifact encryption. Must be `true` when a stage's `env.account` differs from the pipeline's account, or synth throws. |
+
+CodeBuild masks the exact stored secret in logs, not transformed values.
+Avoid logging either. For a secret encrypted with a customer-managed KMS
+key, make sure the synth build role can decrypt with that key; passing the
+`ISecret` does not grant that permission.
 
 `Pipeline` from `@aws-cdk-blocks/core/cdk` takes the same props and defaults the two
 prefixes to the ones the AWS CDK Blocks `secret` and `config` scripts write:

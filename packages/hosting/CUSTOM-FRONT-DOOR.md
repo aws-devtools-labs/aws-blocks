@@ -37,6 +37,11 @@ export const myDoor = defineFrontDoor({
   // and the API, and before it declares the asset uploads.
   build(scope, { app, origins, features }) {
     const pages = cf.errorPages(app.errorPages, origins); // the app's 404/500 pages
+    if (features.waf?.enabled && !features.waf.webAclArn) {
+      throw new Error('my-cdn requires a CloudFront-scoped webAclArn when WAF is enabled.');
+    }
+    const functionAssociations = [...cf.redirects(scope, app.redirects), ...cf.headers(scope, app.headers)];
+    const routes = { ...cf.behaviors(app.routes), ...cf.apiBehaviors(origins.api), ...pages.behaviors };
     const dist = new Distribution(scope, 'Cdn', {
       defaultBehavior: {
         origin: cf.origin(origins.server ?? origins.assets),
@@ -50,16 +55,14 @@ export const myDoor = defineFrontDoor({
             }
           : {}),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        // the app's redirects (viewer request) and per-pattern headers (viewer response)
-        functionAssociations: [...cf.redirects(scope, app.redirects), ...cf.headers(scope, app.headers)],
+        functionAssociations,
       },
       // A static site: `/` serves the index (the assets origin sits at the build prefix).
       ...(origins.server ? {} : { defaultRootObject: 'index.html' }),
-      additionalBehaviors: {
-        ...cf.behaviors(app.routes), // each route → its origin
-        ...cf.apiBehaviors(origins.api), // /cdk-blocks/* and raw routes → the API
-        ...pages.behaviors, // the error pages, from the assets
-      },
+      // CloudFront selects one behavior per request; additional behaviors do not inherit the default's rules.
+      additionalBehaviors: Object.fromEntries(
+        Object.entries(routes).map(([path, behavior]) => [path, { ...behavior, functionAssociations }]),
+      ),
       errorResponses: pages.errorResponses,
       webAclId: features.waf?.webAclArn,
     });
@@ -248,6 +251,17 @@ const origin = new HttpOrigin(routerDomainName, {
 
 `PrefixList.fromLookup` needs the stack's `env` (account and region); the
 built-in door looks the list up at deploy time instead. For an internal ALB,
-use `VpcOrigin.withApplicationLoadBalancer(alb)` and admit the VPC origin's
-`CloudFront-VPCOrigins-Service-SG` security group (see the CDK
-`aws-cloudfront-origins` documentation).
+admit the VPC origin's `CloudFront-VPCOrigins-Service-SG` security group on
+port 443. Replace the `HttpOrigin` with a `VpcOrigin` from
+`aws-cdk-lib/aws-cloudfront-origins`, keeping the certificate name and the
+header the listener requires:
+
+```ts
+import { VpcOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
+
+const origin = VpcOrigin.withApplicationLoadBalancer(alb, {
+  domainName: routerDomainName,
+  protocolPolicy: OriginProtocolPolicy.HTTPS_ONLY,
+  customHeaders: { [ORIGIN_VERIFY_HEADER]: secret },
+});
+```

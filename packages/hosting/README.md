@@ -218,8 +218,8 @@ with `StreamingServerNeedsStreamingDoorError`. A Lambda Web Adapter server
 
 The CloudFront door maps 403 / 404 to a not-found page when the app has one
 (`errorPages.notFound`, or a static build's own `404.html`) and, for a
-multi-page static site with no server and no 404 page of its own, to AWS
-Blocks' default page. The mapping applies to every path the distribution
+multi-page static site with no server and no 404 page of its own, to the
+default AWS CDK Blocks page. The mapping applies to every path the distribution
 serves, the proxied API (`/cdk-blocks/*`) included. The API answers every
 call with HTTP 200 unless an `ApiNamespace` sets `httpErrorStatus: true`
 (`@aws-cdk-blocks/core`), which answers a 4xx `ApiError` with that status. Its
@@ -975,9 +975,7 @@ route that should still be cached by the browser should send
 `Cache-Control: private, max-age=…`, which the guard leaves unchanged.
 
 The SSR cache policy caps edge TTLs at 1 day, whatever `s-maxage` the origin
-sends. CloudFront caps the cache key at 10 cookies and 10 headers; reserved
-slots leave 8 cookies and 5 headers for `cacheKeyCookies` and
-`cacheKeyHeaders`.
+sends. The cache-key limits in the table above are defaults, not hard caps.
 
 Static and image routes are not keyed on `cacheKeyCookies` /
 `cacheKeyHeaders`, and those cookies and headers are not forwarded to the
