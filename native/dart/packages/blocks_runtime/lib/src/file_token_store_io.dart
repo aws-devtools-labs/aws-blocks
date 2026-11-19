@@ -88,7 +88,9 @@ final class FileTokenStore implements TokenStore {
       if (!Platform.isWindows) await _chmod('600', temporary.path);
       await temporary.writeAsString(value, flush: true);
       await temporary.rename(file.path);
-    } on FileSystemException {
+    } on Object {
+      // Any failure, including a ProcessException from chmod, would otherwise
+      // leave the randomly named temporary file behind.
       if (temporary.existsSync()) await temporary.delete();
       rethrow;
     }
