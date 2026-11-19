@@ -19,6 +19,7 @@ import { configError } from '../errors.js';
 import { assertCaPem } from '../external/connection.js';
 import type {
 	AuroraClusterOptions,
+	ClusterKind,
 	ClusterRef,
 	ClusterType,
 	DatabaseClusterLike,
@@ -26,6 +27,7 @@ import type {
 	DatabaseOptions,
 	ExistingClusterOptions,
 	ExistingClusterRef,
+	LegacyDatabaseClusterOptions,
 } from '../types.js';
 
 /** `AuroraClusterOptions` with the capacity defaults filled in and every value checked. */
@@ -91,9 +93,21 @@ const OWNER = 'DatabaseCluster.fromExisting()';
  * is read or connected here; the reference only says where the connection string is.
  */
 export function existingCluster(options: ExistingClusterOptions): ExistingClusterRef {
-	const { name, connectionString, ca } = options ?? {};
-	if ((name === undefined) === (connectionString === undefined)) {
-		throw configError(`${OWNER}: give exactly one of 'name' and 'connectionString'.`);
+	const { name, connectionString, dataApi, ca } = options ?? {};
+	if ([name, connectionString, dataApi].filter((v) => v !== undefined).length !== 1) {
+		throw configError(`${OWNER}: give exactly one of 'name', 'connectionString' and 'dataApi'.`);
+	}
+	if (dataApi !== undefined) {
+		for (const key of ['clusterArn', 'secretArn', 'database'] as const) {
+			if (typeof dataApi?.[key] !== 'string' || dataApi[key] === '') {
+				throw configError(`${OWNER}: 'dataApi.${key}' must be a non-empty string.`);
+			}
+		}
+		if (ca !== undefined) {
+			throw configError(
+				`${OWNER}: 'ca' is for a connection string. The Data API has no server certificate to check.`,
+			);
+		}
 	}
 	if (name !== undefined && (typeof name !== 'string' || !CONNECTION_NAME_PATTERN.test(name))) {
 		throw configError(`${OWNER}: 'name' ${CONNECTION_NAME_RULE}.`);
@@ -110,8 +124,33 @@ export function existingCluster(options: ExistingClusterOptions): ExistingCluste
 		type: 'external',
 		...(name !== undefined ? { name } : {}),
 		...(connectionString !== undefined ? { connectionString } : {}),
+		...(dataApi !== undefined
+			? { dataApi: { clusterArn: dataApi.clusterArn, secretArn: dataApi.secretArn, database: dataApi.database } }
+			: {}),
 		...(ca !== undefined ? { ca } : {}),
 	};
+}
+
+const LEGACY_OWNER = 'LegacyDatabaseCluster';
+const POSTGRES_VERSION = /^\d+\.\d+$/;
+
+/** Checks the options of a `LegacyDatabaseCluster` the same way in every entry point. */
+export function checkLegacyClusterOptions(options: LegacyDatabaseClusterOptions | undefined, fullId: string): void {
+	const version = options?.postgresVersion;
+	if (version !== undefined && !POSTGRES_VERSION.test(version)) {
+		throw configError(
+			`${LEGACY_OWNER} '${fullId}': postgresVersion must be "MAJOR.MINOR" like "16.13", not "${version}".`,
+		);
+	}
+	const subnets = options?.subnets;
+	if (
+		subnets &&
+		[subnets.subnetType, subnets.subnetGroupName, subnets.subnetIds].filter((v) => v !== undefined).length > 1
+	) {
+		throw configError(
+			`${LEGACY_OWNER} '${fullId}': set at most one of 'subnetType', 'subnetGroupName' and 'subnetIds' in 'subnets'.`,
+		);
+	}
 }
 
 export function isExistingClusterRef(value: unknown): value is ExistingClusterRef {
@@ -130,6 +169,8 @@ let nextSourceId = 0;
 
 function existingClusterKey(ref: ExistingClusterRef): string {
 	if (ref.name !== undefined) return `${EXTERNAL_CLUSTER_ID}:${ref.name}`;
+	if (ref.dataApi !== undefined)
+		return `${EXTERNAL_CLUSTER_ID}:data-api:${ref.dataApi.clusterArn}/${ref.dataApi.database}`;
 	const source = ref.connectionString as object;
 	let id = sourceIds.get(source);
 	if (id === undefined) {
@@ -163,27 +204,47 @@ type ResolvedCluster =
 export const defaultSchemaName = (blockId: string, shared: boolean): string =>
 	shared ? sanitizeSchemaName(blockId) : DEFAULT_SCHEMA;
 
+// A block that names no schema is in `public` on its own cluster and on an existing database, and in a schema
+// named after it on a shared cluster. The Data API has no session, so a schema cannot be put on a search path:
+// a database behind it is in `public` only.
+function schemaOn(
+	cluster: { dataApi?: unknown } | undefined,
+	shared: boolean,
+	blockId: string,
+	blockFullId: string,
+	explicitSchema: string | undefined,
+): string {
+	if (!cluster?.dataApi) return explicitSchema ?? defaultSchemaName(blockId, shared);
+	if (explicitSchema !== undefined && explicitSchema !== DEFAULT_SCHEMA) {
+		throw configError(
+			`Database '${blockFullId}': a database that is reached through the RDS Data API has the schema ` +
+				`'${DEFAULT_SCHEMA}'. Remove 'schemaName'.`,
+		);
+	}
+	return DEFAULT_SCHEMA;
+}
+
 function resolveCluster(blockId: string, blockFullId: string, options: DatabaseOptions | undefined): ResolvedCluster {
 	const cluster = options?.cluster;
 	const explicitSchema = options?.schemaName;
 	if (cluster === undefined || cluster === null) {
 		return {
 			ref: { kind: 'dsql', id: DEFAULT_CLUSTER_ID },
-			schemaName: explicitSchema ?? defaultSchemaName(blockId, false),
+			schemaName: schemaOn(undefined, false, blockId, blockFullId, explicitSchema),
 		};
 	}
 	if (isExistingClusterRef(cluster)) {
 		// The tables that already exist are in `public`, so that is the block's schema unless it names another.
 		return {
 			ref: { kind: 'external', id: EXTERNAL_CLUSTER_ID },
-			schemaName: explicitSchema ?? defaultSchemaName(blockId, false),
+			schemaName: schemaOn(cluster, false, blockId, blockFullId, explicitSchema),
 			external: cluster,
 		};
 	}
 	if (isDatabaseClusterLike(cluster)) {
 		return {
 			ref: { kind: cluster.type, id: cluster.fullId },
-			schemaName: explicitSchema ?? defaultSchemaName(blockId, true),
+			schemaName: schemaOn(cluster, true, blockId, blockFullId, explicitSchema),
 			shared: cluster,
 		};
 	}
@@ -195,6 +256,12 @@ function resolveCluster(blockId: string, blockFullId: string, options: DatabaseO
 export type DatabaseRegistration = ResolvedCluster & {
 	/** The fullId the cluster's resources are named after: the block's own, or the shared cluster's. */
 	clusterFullId: string;
+	/**
+	 * The kind whose file check applies to the block's migration files. The files of a `LegacyDatabaseCluster`
+	 * are older than the block and may be applied already, as those of an existing database are, so they get
+	 * no check.
+	 */
+	fileKind: ClusterKind;
 };
 
 /**
@@ -216,7 +283,7 @@ export function registerDatabase(
 			? resolved.shared.fullId
 			: fullId;
 	claimSchema(s, clusterFullId, resolved.schemaName, fullId);
-	return { ...resolved, clusterFullId };
+	return { ...resolved, clusterFullId, fileKind: resolved.shared?.dataApi ? 'external' : resolved.ref.kind };
 }
 
 interface RegistryState {

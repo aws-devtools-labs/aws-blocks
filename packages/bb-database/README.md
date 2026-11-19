@@ -140,7 +140,7 @@ Block options:
 | `removalPolicy` | `'retain' \| 'destroy'` | Only when `cluster` is omitted. With a shared cluster, set it on the `DatabaseCluster`. |
 | `logger` | `ChildLogger` | Logger for internal operations. Defaults to a `Logger` at error level. |
 
-`Database` and `DatabaseCluster` ids are unique per app. A second block with the same id is an error at construction.
+`Database` and `DatabaseCluster` ids are unique per app. A second block with the same id is an error at construction. The ids of two blocks that each own a cluster must also differ in a letter or a digit. Ids that differ only in punctuation, such as `db-a` and `dba` in one scope, are an error at synth.
 
 ## Sharing a cluster
 
@@ -186,7 +186,8 @@ const open = await db.query<{ id: string; title: string }>(sql`SELECT id, title 
 | Option | Type | Description |
 |---|---|---|
 | `name` | `string` | A short name for the connection string. On AWS the block reads the SSM SecureString `/<stackName>-<name>`, so each stage has its own value. Locally it reads the value stored under `.bb-data/`. `npm run db connect` writes both. |
-| `connectionString` | `AppSetting` or `Secret` | Your own store, in place of `name`, for an app that manages the value itself. The block calls `get()` with its first statement. Give exactly one of `name` and `connectionString`. |
+| `connectionString` | `AppSetting` or `Secret` | Your own store, in place of `name`, for an app that manages the value itself. The block calls `get()` with its first statement. Give exactly one of `name`, `connectionString` and `dataApi`. |
+| `dataApi` | `{ clusterArn, secretArn, database }` | An Aurora PostgreSQL cluster that the block reaches through the RDS Data API. See [An Aurora cluster through the Data API](#an-aurora-cluster-through-the-data-api). |
 | `ca` | `string` | The certificate authority that signed the server certificate, as PEM text. Supabase uses its own authority, so it needs one. Without `ca`, Node's trust store applies. |
 
 **The connection string is never written in code.** It is a secret: store it with the command below, or in your own `AppSetting` or `Secret`.
@@ -258,6 +259,71 @@ Migration files describe changes from now on. A database that was built before t
    ```
 
 A database without the record gets the file like every other file: a new stage builds its schema from it on the first deploy.
+
+### An Aurora cluster through the Data API
+
+An Aurora PostgreSQL cluster in a VPC has no address that a Lambda function outside the VPC can reach. With `dataApi`, the block does not connect to it. It sends each statement to the [RDS Data API](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api.html) as an HTTPS call, and the Data API reads the user name and password from a Secrets Manager secret. The cluster must have the Data API enabled.
+
+```ts
+import { Scope } from '@aws-blocks/core';
+import { Database, DatabaseCluster } from '@aws-blocks/bb-database';
+
+const scope = new Scope('app');
+const db = new Database(scope, 'db', {
+  cluster: DatabaseCluster.fromExisting({
+    dataApi: {
+      clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:orders',
+      secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:orders-credentials-AbCdEf',
+      database: 'orders',
+    },
+  }),
+  migrationsPath: './migrations',
+});
+```
+
+The three values name the database and are not secrets. The app's execution role and the migration Lambdas get the Data API actions on that cluster and `secretsmanager:GetSecretValue` on that secret. A secret under a customer managed KMS key also needs `kms:Decrypt` for those roles, which you grant.
+
+What is different from a connection string:
+
+- **Every stage uses the cluster that the code names.** The three values are in code, so `npm run dev`, a sandbox and production all use that database, unless your code chooses the values by stage. Local mode calls the Data API of that cluster with your AWS credentials, and a sandbox deploy applies new migration files to it. Name a development cluster while you develop.
+- **One statement in each call.** A transaction is a Data API transaction, and each of its statements is one HTTPS call, so a transaction with many statements is slow.
+- **The Data API ends a statement after 45 seconds.** A migration statement that needs longer, such as an index on a large table, fails. Run that statement on the cluster yourself. The text of a statement is at most 65,536 characters, and a result at most 1 MB.
+- **The schema is `public`.** The Data API keeps no session, so `schemaName` is an error.
+- **Parameters have a type.** A string, a number, a boolean, `null` and a `Buffer` go as they are. A `Date` goes as its ISO text, and an object or an array as its JSON text; the Data API has no array parameters. PostgreSQL does not convert a text parameter by itself, so a statement casts a parameter that it compares with or writes to a `uuid`, `timestamptz` or `jsonb` column: `WHERE id = ${id}::uuid`.
+- **Results.** A `json` or `jsonb` value is parsed and an array is an array. A `numeric`, `timestamp` or `date` value is a string.
+- **A paused cluster.** A statement outside a transaction waits up to 24 seconds for a cluster at a minimum capacity of 0 to resume. After that, and inside a transaction, it fails with `ConnectionFailed`.
+- **The command line.** `npm run db` works with a stored connection string. It has no command for a Data API source. A deploy applies the migration files.
+
+## Upgrade from `@aws-blocks/bb-data`
+
+An app that deployed `Database` of `@aws-blocks/bb-data` has an Aurora PostgreSQL cluster in a VPC, with a credentials secret, and reaches it through the Data API. `LegacyDatabaseCluster` keeps that cluster in the stack as it is. A `Database` of this package then runs on it, with the tables and the `_migrations` table that are in it.
+
+1. In `aws-blocks/index.ts`, change the class on the line of the old `Database` to `LegacyDatabaseCluster`. Keep its id, its scope and the options that shaped the cluster. Add a `Database` with a new id, and give it the cluster and the `migrationsPath`:
+
+   ```ts
+   import { Database, LegacyDatabaseCluster } from '@aws-blocks/bb-database';
+
+   // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './aws-blocks/migrations' });
+   const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1 });
+   const db = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+   ```
+
+   The options of `LegacyDatabaseCluster` are those of release 0.5.0: `minCapacity`, `maxCapacity`, `databaseName`, `removalPolicy`, `postgresVersion`, `subnets`, `storageEncryptionKeyArn` and `pointInTimeRecovery`. Give each one the value that the old `Database` had. It also reads the context key `@aws-blocks/bb-data:encryptStorageByDefault` of your `cdk.json`; keep that key.
+
+2. Keep the migration files and their names. A file that is in the `_migrations` table does not run again, and the block does not check these files. Local mode runs every file again in a new PGlite database, each file in one transaction; a file with a statement that PostgreSQL refuses in a transaction, such as `CREATE INDEX CONCURRENTLY`, fails there.
+
+3. Before you deploy, run `cdk diff`. No resource of the types `AWS::RDS::*`, `AWS::SecretsManager::Secret` and `AWS::EC2::*` may show as changed, removed or added. A change there means that an id, the scope, the stack name or an option is not the one of the old `Database`.
+
+4. Deploy. The migration function of the old block leaves the stack, and the block's own take its place.
+
+`query`, `queryOne`, `execute`, `transaction` and `sql` take the same arguments. `db.cluster.kind` is `'aurora'`, and the statements run as the user of the cluster's secret, through the Data API, with [the differences above](#an-aurora-cluster-through-the-data-api).
+
+- **`withRLS()` is now [`asRole()`](#policies-written-for-a-role).** `db.withRLS({ userId })` becomes `db.asRole('authenticated', { sub: userId, role: 'authenticated' })`. `asUser()` is an error on a `LegacyDatabaseCluster`: the user of the secret owns the tables, and PostgreSQL applies no policy to an owner.
+- **Test on a deployed stage.** Locally the cluster is a PGlite database, as it was. PGlite accepts a parameter without a cast where the Data API does not, so a statement can pass locally and fail on AWS.
+
+`LegacyDatabaseCluster` is deprecated and frozen. It exists for this upgrade and gets no new features. To leave it, add a `Database` on a new cluster, copy the rows, and switch your handlers.
+
+**Do not remove a `LegacyDatabaseCluster` that still holds data you need.** When it leaves the app with the removal policy `retain` (the production default), CloudFormation keeps the cluster but deletes its credentials secret, without a recovery window, and then tries to delete the VPC that the cluster is still in. In a test that deploy took 1 hour 49 minutes and left the VPC behind. Take a snapshot and delete the cluster yourself first.
 
 ## Migrations
 
@@ -530,6 +596,8 @@ Per cluster, whether a block owns it or a `DatabaseCluster` declares it:
 - **Two migration Lambdas** (`onEvent` and `isComplete`), one log group, and a custom-resource provider that waits for DSQL index and validation jobs for up to 55 minutes.
 - **IAM:** on `dsql`, the app's execution role gets `dsql:DbConnect` on the cluster and the migration Lambdas get `dsql:DbConnectAdmin`. On `aurora`, the execution role gets `rds-db:connect` for the app's database role and the migration Lambdas get it for `postgres`.
 - **Config:** `BLOCKS_{CLUSTER_ID}_ENDPOINT` and `BLOCKS_{CLUSTER_ID}_REGION` (the cluster's full id upper-cased, with `_` for other characters), injected through the config bucket.
+
+A `LegacyDatabaseCluster` declares what `Database` of `@aws-blocks/bb-data` 0.5.0 declared: an Aurora PostgreSQL Serverless v2 cluster with one writer instance and the Data API enabled, its credentials secret, a security group, and a VPC with two isolated subnets when the app provides none. The execution role gets the Data API actions on the cluster and the read of the secret, and the config has `BLOCKS_{CLUSTER_ID}_CLUSTER_ARN`, `_SECRET_ARN` and `_DATABASE`. A block on it has two migration Lambdas of its own, outside the VPC.
 
 Per block: one CloudFormation custom resource that applies its migrations, and one S3 asset with the migration files when it has any. The migration Lambda also creates a per-cluster database role for the app, maps it to IAM (`AWS IAM GRANT` to the execution role on `dsql`; `GRANT rds_iam` on `aurora`, where the `rds-db:connect` grant decides who gets a token for it), and grants it `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE, SELECT` on its sequences. DDL needs the admin token, which only the migration Lambdas hold.
 

@@ -40,6 +40,13 @@ export interface ConnectionStringSource {
 }
 
 // @public
+export interface DataApiOptions {
+    clusterArn: string;
+    database: string;
+    secretArn: string;
+}
+
+// @public
 export class Database extends Scope {
     constructor(scope: ScopeParent, id: string, options?: DatabaseOptions);
     // (undocumented)
@@ -82,6 +89,7 @@ export class DatabaseCluster extends Scope {
 
 // @public
 export interface DatabaseClusterLike {
+    readonly dataApi?: true;
     readonly fullId: string;
     readonly type: ClusterType;
 }
@@ -118,6 +126,7 @@ export interface DsqlClusterOptions {
 export interface ExistingClusterOptions {
     ca?: string;
     connectionString?: ConnectionStringSource;
+    dataApi?: DataApiOptions;
     name?: string;
 }
 
@@ -130,6 +139,8 @@ export interface ExistingClusterRef {
     // (undocumented)
     readonly connectionString?: ConnectionStringSource;
     // (undocumented)
+    readonly dataApi?: DataApiOptions;
+    // (undocumented)
     readonly name?: string;
     // (undocumented)
     readonly type: 'external';
@@ -139,6 +150,38 @@ export interface ExistingClusterRef {
 export interface ExistingDatabaseOptions extends DatabaseBlockOptions {
     // (undocumented)
     cluster: ExistingClusterRef;
+}
+
+// @public @deprecated
+export class LegacyDatabaseCluster extends Scope {
+    constructor(scope: ScopeParent, id: string, options?: LegacyDatabaseClusterOptions);
+    readonly dataApi: true;
+    // @internal
+    dataApiCoordinates(blockFullId: string): DataApiOptions;
+    readonly type: "aurora";
+}
+
+// @public
+export interface LegacyDatabaseClusterOptions {
+    databaseName?: string;
+    maxCapacity?: number;
+    minCapacity?: number;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
+    postgresVersion?: string;
+    removalPolicy?: 'destroy' | 'retain' | 'snapshot';
+    storageEncryptionKeyArn?: string;
+    subnets?: LegacySubnetSelection;
+}
+
+// @public
+export interface LegacySubnetSelection {
+    availabilityZones?: string[];
+    onePerAz?: boolean;
+    subnetGroupName?: string;
+    subnetIds?: string[];
+    subnetType?: 'isolated' | 'private-with-egress' | 'public';
 }
 
 // @public
