@@ -1,8 +1,8 @@
-# AWS Blocks
+# AWS CDK Blocks
 
 **Write your backend and frontend together — fully typed, runnable on your laptop, deployable to AWS unchanged.**
 
-AWS Blocks is a backend framework built from **Building Blocks**: self-contained modules that each bundle a CDK construct, its AWS SDK integration, and a local mock. You compose blocks in one directory, export an API, and call it from your frontend with end-to-end type safety. No client generation, no glue code, no AWS account needed to start.
+AWS CDK Blocks is a backend framework built from **Building Blocks**: self-contained modules that each bundle a CDK construct, its AWS SDK integration, and a local mock. You compose blocks in one directory, export an API, and call it from your frontend with end-to-end type safety. No client generation, no glue code, no AWS account needed to start.
 
 This package (`aws-cdk-blocks`) re-exports every Building Block and the core primitives, so you import everything from one place:
 
@@ -172,11 +172,11 @@ Run `npm run docs` in the app to list the Building Blocks shipped with its insta
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |
 |-------|--------------|----------|
-| auth-common | Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAuth` contract that `Auth` implements, the `AuthErrors` vocabulary, and the provider-agnostic sign-in UI. | — |
+| auth-common | Shared interfaces and UI components for AWS CDK Blocks authentication: the `BlocksAuth` contract that `Auth` implements, the `AuthErrors` vocabulary, and the provider-agnostic sign-in UI. | — |
 | bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
 | bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
 | bb-async-job | Background job processing backed by SQS, run on Lambda or a container. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
-| bb-auth | `Auth` is the single authentication Building Block for AWS Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML. | — |
+| bb-auth | `Auth` is the single authentication Building Block for AWS CDK Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML. | — |
 | bb-compute | The `Compute` Building Block is the single surface for choosing where a workload runs. | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda, or a container compute for long-running jobs. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
@@ -190,9 +190,9 @@ Run `npm run docs` in the app to list the Building Blocks shipped with its insta
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
 | bb-secret | A single application secret backed by AWS Secrets Manager. | — |
 | bb-tracer | Distributed tracing backed by AWS X-Ray. | — |
-| core | Core primitives for building full-stack applications with the AWS Blocks. | — |
+| core | Core primitives for building full-stack applications with the AWS CDK Blocks. | — |
 | hosting | Low-level CDK L3 constructs for deploying web applications on AWS | — |
-| pipeline | CDK Pipelines-based CI/CD construct for AWS Blocks applications. | — |
+| pipeline | CDK Pipelines-based CI/CD construct for AWS CDK Blocks applications. | — |
 <!-- END:block-catalog -->
 
 ## Local development and deploying
@@ -260,7 +260,7 @@ With another package manager, use its script runner (for example, `pnpm run docs
 
 `db`, `secret`, `config` and `vendorize` forward arguments to their underlying tools. Global options apply to the runner: `npm run secret list -- --profile prod` lists the secrets of that profile's account, and `npm run config list -- --output json` exits 2 because `config` has no JSON output. To pass a literal option-like value to the tool, use a second `--` for the runner: `npm run config set GREETING -- -- -hello-`. To show just one verb's help without running it, use `npm run db -- connect --help` or `npm run help secret remove`. For the database tool’s own JSON, use `npm run -s db -- status -- --output json`. Run from the app directory when supplying relative paths to `db`, `generate-client`, `spec` or `typegen`: npm runs scripts from the package root.
 
-The runner collects usage data to improve AWS Blocks and prints a notice the first time it does. An event can include random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code. As with any HTTPS request, the collection endpoint also receives your IP address. It is not stored, except in logs of requests that the endpoint's firewall blocks. Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years. AWS Blocks has no opt-out of its own: telemetry follows your CDK CLI telemetry setting, so opting out of CDK CLI telemetry opts you out of this too. Set `CDK_DISABLE_CLI_TELEMETRY` to `1` or `true`, run `cdk cli-telemetry --disable` (which records `cli-telemetry: false` in the app's `cdk.context.json`), or set `cli-telemetry: false` in the `context` of `cdk.json` or `~/.cdk.json`. CDK documents those settings at https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out; the DNS filtering and `--no-version-reporting` methods on that page stop CDK's own telemetry only, and do not opt you out of this. Those settings are read exactly as the CDK CLI reads them, so a value CDK does not act on does not opt you out here either. Pass `--telemetry-file <path>` to see the exact events a run sends.
+The runner collects usage data to improve AWS CDK Blocks and prints a notice the first time it does. An event can include random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS CDK Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code. As with any HTTPS request, the collection endpoint also receives your IP address. It is not stored, except in logs of requests that the endpoint's firewall blocks. Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years. AWS CDK Blocks has no opt-out of its own: telemetry follows your CDK CLI telemetry setting, so opting out of CDK CLI telemetry opts you out of this too. Set `CDK_DISABLE_CLI_TELEMETRY` to `1` or `true`, run `cdk cli-telemetry --disable` (which records `cli-telemetry: false` in the app's `cdk.context.json`), or set `cli-telemetry: false` in the `context` of `cdk.json` or `~/.cdk.json`. CDK documents those settings at https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out; the DNS filtering and `--no-version-reporting` methods on that page stop CDK's own telemetry only, and do not opt you out of this. Those settings are read exactly as the CDK CLI reads them, so a value CDK does not act on does not opt you out here either. Pass `--telemetry-file <path>` to see the exact events a run sends.
 
 Run `npm run typegen` once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`; until then the check exits 1.
 
@@ -385,7 +385,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 ### IAM hardening
 
-Every Blocks compute runs as one shared IAM (Identity and Access Management) execution role, and every Building Block grants its permissions onto it. Set `defaults.permissionsBoundary` to attach a [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html), a ceiling on effective permissions, to every IAM role AWS Blocks creates. Pass the policy's name, its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. It's unset in both presets, and unset leaves templates unchanged.
+Every Blocks compute runs as one shared IAM (Identity and Access Management) execution role, and every Building Block grants its permissions onto it. Set `defaults.permissionsBoundary` to attach a [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html), a ceiling on effective permissions, to every IAM role AWS CDK Blocks creates. Pass the policy's name, its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. It's unset in both presets, and unset leaves templates unchanged.
 
 ```typescript
 // cdk-blocks/index.cdk.ts
@@ -404,7 +404,7 @@ Details, including sharing one AWS account across many apps, are in the bundled 
 
 ## VPC Support
 
-AWS Blocks supports running your backend in a VPC for network-level isolation or to connect to VPC-bound resources. You can let Blocks manage endpoint provisioning and security groups automatically, or bring a fully-configured VPC and handle networking yourself.
+AWS CDK Blocks supports running your backend in a VPC for network-level isolation or to connect to VPC-bound resources. You can let Blocks manage endpoint provisioning and security groups automatically, or bring a fully-configured VPC and handle networking yourself.
 
 See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guidance on when a VPC is appropriate.
 

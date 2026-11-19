@@ -251,7 +251,13 @@ describe('create-blocks-app template metadata', () => {
       for (const [name, value] of Object.entries(scripts)) {
         // Anchored so the legacy binary name is matched standalone: a `\b` alone matches
         // inside `aws-cdk-blocks` (the `-` is a word boundary) and rejects the package.
-        assert.doesNotMatch(value, /(?<![\w.-])cdk-blocks\b/, `${entry.name}: ${name}`);
+        // `(?!\/)` keeps the scaffolded `cdk-blocks/` folder legitimate; the second arm
+        // still bans the generated wrapper directory.
+        assert.doesNotMatch(
+          value,
+          /(?<![\w.-])cdk-blocks\b(?!\/)|(?<![\w.-])cdk-blocks\/scripts\//,
+          `${entry.name}: ${name}`,
+        );
       }
       assert.ok(!existsSync(join(templatesDir, entry.name, 'cdk-blocks', 'scripts')), entry.name);
       checked.push(entry.name);
@@ -562,7 +568,7 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(packageJson.scripts['generate-client'], packageJson.scripts['blocks:generate-client']);
       for (const command of Object.values<string>(packageJson.scripts)) {
         // In particular, an alias or prebuild must not replace the Cognito-aware client.
-        assert.doesNotMatch(command, /@aws-cdk-blocks\/blocks\/run.* -- (?:sandbox|deploy|destroy|generate client)(?: |$)/);
+        assert.doesNotMatch(command, /aws-cdk-blocks\/run.* -- (?:sandbox|deploy|destroy|generate client)(?: |$)/);
       }
       // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
       // even with vite and next installed: the Amplify app runs its own frontend.
@@ -574,8 +580,8 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(dev.port, 3001);
       assert.ok(!existsSync(join(tmpDir, 'cdk-blocks', 'scripts', 'server.ts')));
       assert.ok(!existsSync(join(tmpDir, 'cdk-blocks', 'scripts', 'stop.ts')));
-      assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-cdk-blocks\/blocks\/scripts'/);
-      assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-cdk-blocks\/blocks'/);
+      assert.match(readFileSync(generateClientPath, 'utf-8'), /from 'aws-cdk-blocks\/scripts'/);
+      assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from 'aws-cdk-blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-cdk-blocks\/core/);
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-cdk-blocks\/core/);
       // With `next` installed, the app's tsconfig.json checks cdk-blocks/ (next build ignores
@@ -586,7 +592,7 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(result.stdout, /npm run blocks:dev\b/);
       // The CLI name as a command, not the `.cdk-blocks*` directory names the rebrand
       // introduced: a next step must say `npm run <task>`, never invoke the binary.
-      assert.doesNotMatch(result.stdout, /(?<![\w.-])cdk-blocks\b(?!-)/);
+      assert.doesNotMatch(result.stdout, /(?<![\w.-])cdk-blocks\b(?![-/])/);
       assert.ok(result.stdout.includes(task('sandbox')), result.stdout);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -835,9 +841,10 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run([app, '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0, result.stderr);
-      const scope = join(root, 'node_modules', '@aws-cdk-blocks');
-      mkdirSync(scope, { recursive: true });
-      symlinkSync(join(__dirname, '../../blocks'), join(scope, 'blocks'), 'junction');
+      // The umbrella is unscoped, so a hoisted copy sits directly in node_modules.
+      const hoisted = join(root, 'node_modules');
+      mkdirSync(hoisted, { recursive: true });
+      symlinkSync(join(__dirname, '../../blocks'), join(hoisted, 'aws-cdk-blocks'), 'junction');
       const docs = (command: string) => JSON.parse(execSync(command, {
         cwd: app, encoding: 'utf-8', timeout: 30_000,
         // Same guard as run(): the scaffolded task calls trackCommand, so opt out and
@@ -1219,7 +1226,7 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(result.stdout, /npm run help\b/);
       // The CLI name as a command, not the `.cdk-blocks*` directory names the rebrand
       // introduced: a next step must say `npm run <task>`, never invoke the binary.
-      assert.doesNotMatch(result.stdout, /(?<![\w.-])cdk-blocks\b(?!-)/);
+      assert.doesNotMatch(result.stdout, /(?<![\w.-])cdk-blocks\b(?![-/])/);
       const web = join(tmpDir, 'web');
       const frontend = run([web, '--template', 'bare', '-y', '--skip-install']);
       assert.strictEqual(frontend.exitCode, 0, frontend.stderr);

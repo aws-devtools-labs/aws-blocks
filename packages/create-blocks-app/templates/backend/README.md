@@ -1,6 +1,6 @@
 # Blocks Backend Application
 
-Backend-only TypeScript API with AWS Blocks — no frontend included.
+Backend-only TypeScript API with AWS CDK Blocks — no frontend included.
 
 > Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template backend`
 

@@ -1,6 +1,6 @@
 # @aws-cdk-blocks/pipeline
 
-CDK Pipelines-based CI/CD construct for AWS Blocks applications.
+CDK Pipelines-based CI/CD construct for AWS CDK Blocks applications.
 
 Creates one self-mutating CodePipeline V2 per branch. Each pipeline:
 

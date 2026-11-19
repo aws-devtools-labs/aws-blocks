@@ -347,7 +347,7 @@ const agent = new Agent(scope, 'agent', {
 });
 ```
 
-`identifier` takes a guardrail id or ARN. Create the guardrail outside AWS Blocks (console, CLI, or a CDK `CfnGuardrail`). Setting `guardrail` on any other provider (including `canned`) throws `InvalidModelConfig`. The older `guardrails` field is deprecated: no provider ever applied it, and the agent now logs a warning when it is set.
+`identifier` takes a guardrail id or ARN. Create the guardrail outside AWS CDK Blocks (console, CLI, or a CDK `CfnGuardrail`). Setting `guardrail` on any other provider (including `canned`) throws `InvalidModelConfig`. The older `guardrails` field is deprecated: no provider ever applied it, and the agent now logs a warning when it is set.
 
 #### Health Checks
 

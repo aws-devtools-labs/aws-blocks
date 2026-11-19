@@ -1,6 +1,6 @@
 # @aws-cdk-blocks/bb-container-compute
 
-The container-backed **compute** for AWS Blocks: an AWS Fargate service (ARM64)
+The container-backed **compute** for AWS CDK Blocks: an AWS Fargate service (ARM64)
 that runs the app's backend as a long-lived process. It self-starts the SQS
 pollers for the `AsyncJob`s and `CronJob`s assigned to it, and serves any
 `ApiNamespace` routed to it through an internal Application Load Balancer.

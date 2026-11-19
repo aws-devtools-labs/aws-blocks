@@ -1,6 +1,6 @@
 # Blocks Demo App
 
-A fuller example app on AWS Blocks. It wires together several Building Blocks in
+A fuller example app on AWS CDK Blocks. It wires together several Building Blocks in
 one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
 loose key/value data, and a second `KVStore` with a `schema` and a `key` for a
 sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.

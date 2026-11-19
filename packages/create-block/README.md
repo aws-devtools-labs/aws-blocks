@@ -1,6 +1,6 @@
 # @aws-cdk-blocks/create-block
 
-Scaffold a new AWS Blocks Building Block (`bb-*`) — inside the AWS Blocks monorepo,
+Scaffold a new AWS CDK Blocks Building Block (`bb-*`) — inside the AWS CDK Blocks monorepo,
 inside your own workspace, or as a standalone package.
 
 ```bash

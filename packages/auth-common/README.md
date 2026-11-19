@@ -1,6 +1,6 @@
 # @aws-cdk-blocks/auth-common
 
-Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAuth` contract that `Auth` implements, the `AuthErrors` vocabulary, and the provider-agnostic sign-in UI. Use this package to build provider-agnostic auth UI, or import the types when authoring a custom auth Building Block.
+Shared interfaces and UI components for AWS CDK Blocks authentication: the `BlocksAuth` contract that `Auth` implements, the `AuthErrors` vocabulary, and the provider-agnostic sign-in UI. Use this package to build provider-agnostic auth UI, or import the types when authoring a custom auth Building Block.
 
 > For authentication itself, use `Auth` (`@aws-cdk-blocks/bb-auth`, also exported from `aws-cdk-blocks`): one block for email + password, social sign-in, OIDC and SAML. Its README explains which sign-in option to choose and why.
 

@@ -1,6 +1,6 @@
 # @aws-cdk-blocks/bb-lambda-compute
 
-The Lambda-backed **compute** for AWS Blocks: a `NodejsFunction` that backs the
+The Lambda-backed **compute** for AWS CDK Blocks: a `NodejsFunction` that backs the
 handler code an app's Building Blocks run on. The stack's single shared API
 Gateway REST API (provisioned by core) integrates this compute's function — not
 a per-compute gateway.

@@ -1,6 +1,6 @@
 # Harbor agent check
 
-An opt-in, **non-required** GitHub Actions check for AWS Blocks PRs. It packs the PR head and
+An opt-in, **non-required** GitHub Actions check for AWS CDK Blocks PRs. It packs the PR head and
 its merge-base, then asks Claude Code to create a todo app, add due dates and add labels in one
 resumed session per trial. The default is one trial per arm (**n=1**): that report is
 descriptive, not a statistical claim. More trials give pass-rate intervals and metric
@@ -45,7 +45,7 @@ prompt names it. Nothing sets `PLAYWRIGHT_BROWSERS_PATH` globally, so a project'
 ## Pins and skill delivery
 
 `pins.py` holds the model (`global.anthropic.claude-opus-5-5`), Claude Code version, Harbor
-revision and the public [AWS Blocks skill](https://github.com/aws/agent-toolkit-for-aws/tree/2cb0fa1c2e668e1bb075028800b6b27efb95779e/skills/core-skills/aws-blocks)
+revision and the public [AWS CDK Blocks skill](https://github.com/aws/agent-toolkit-for-aws/tree/2cb0fa1c2e668e1bb075028800b6b27efb95779e/skills/core-skills/aws-blocks)
 revision and SHA-256. `requirements.txt` and the workflow's session policy repeat the Harbor
 revision and model ARN; change them together.
 

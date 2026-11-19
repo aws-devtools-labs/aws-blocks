@@ -23,12 +23,12 @@ This package provides:
 ## When to use this package directly
 
 Most users should use `Hosting` from `@aws-cdk-blocks/core`, which wraps these
-constructs with the AWS Blocks integration layer (route registry, config.json
+constructs with the AWS CDK Blocks integration layer (route registry, config.json
 generation, RPC prefix wiring).
 
 Use `HostingConstruct` directly when you need:
 
-- A standalone CDK app without the AWS Blocks layer
+- A standalone CDK app without the AWS CDK Blocks layer
 - Fine-grained control over construct props
 - Custom adapters or manifest generation pipelines
 
@@ -878,7 +878,7 @@ semantics, using the same matching code:
   an S3 failure with the 500 page (status 500). The 404 page is the app's
   `errorPages.notFound`, else the framework build's, else, for a multi-page
   static site that ships none (Astro `output: 'static'` without a 404 page),
-  AWS Blocks' default "404 — Page Not Found" page, as on the CloudFront door.
+  AWS CDK Blocks' default "404 — Page Not Found" page, as on the CloudFront door.
   An SPA keeps its `index.html` fallback.
 
 Responses the door sends straight to a function or the backend don't pass
@@ -1099,7 +1099,7 @@ export const myDoor = defineFrontDoor({
   // A name for this door, used in error messages.
   service: 'my-cdn',
 
-  // Called ONCE at synth, after AWS Blocks has created the bucket, the compute
+  // Called ONCE at synth, after AWS CDK Blocks has created the bucket, the compute
   // and the API, and before it declares the asset uploads.
   build(scope, { app, origins, features }) {
     const pages = cf.errorPages(app.errorPages, origins); // the app's 404/500 pages
@@ -1158,7 +1158,7 @@ This door doesn't do two things the built-in CloudFront door does:
 
 **Streaming or buffered.** A door that invokes the server without streaming
 (an ALB Lambda target, an API Gateway HTTP API integration, a `BUFFERED`
-Function URL) declares `serverResponse: 'buffered'`, and AWS Blocks builds the
+Function URL) declares `serverResponse: 'buffered'`, and AWS CDK Blocks builds the
 server to answer with a complete response. The default is `'streaming'`.
 
 ```ts
@@ -1175,9 +1175,9 @@ export const myAlbDoor = defineFrontDoor({
   `assetPrefix`; only the Next.js adapter sets it), `spaFallback`, `routes`
   (most-specific first, each already joined to its origin object), `redirects`,
   `headers` and `errorPages` (the app's, else the framework build's, else, for
-  a multi-page static site with no 404 page, AWS Blocks' default
+  a multi-page static site with no 404 page, AWS CDK Blocks' default
   `_not_found.html`).
-- `origins`: what AWS Blocks provisioned.
+- `origins`: what AWS CDK Blocks provisioned.
   - `assets`: `{ bucket, prefix, sourceDir }`. The private bucket and the
     `builds/<buildId>/` prefix.
   - `server`: `{ fn, url, streaming }`. `streaming` says whether the server
@@ -1219,7 +1219,7 @@ URL with IAM auth (reach it with origin access control, as `cf.origin` does).
   `builds/<buildId>`). Each waits for every upload, the runtime config
   included, so the previous build serves until the new one is whole.
 
-**The wiring check.** AWS Blocks checks one thing about a bring-your-own door:
+**The wiring check.** AWS CDK Blocks checks one thing about a bring-your-own door:
 its routing, from what the `cf.*` helpers recorded.
 
 - If nothing reaches the static assets, synth fails with `ServeStaticAsset`.

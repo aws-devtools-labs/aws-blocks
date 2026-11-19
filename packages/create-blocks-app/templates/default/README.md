@@ -1,4 +1,4 @@
-# AWS Blocks App
+# AWS CDK Blocks App
 
 Real-time todo app with authentication, per-user data isolation, and live sync across tabs.
 

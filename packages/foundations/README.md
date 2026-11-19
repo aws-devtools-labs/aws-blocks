@@ -1,6 +1,6 @@
 # foundations
 
-Standard Building Blocks for common AWS services in the AWS Blocks.
+Standard Building Blocks for common AWS services in the AWS CDK Blocks.
 
 > **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md), [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) and [`packages/bb-auth/README.md`](../bb-auth/README.md), which are the authoritative reference for the shipped blocks. The `Auth` section below matches the shipped API.
 
@@ -160,7 +160,7 @@ import { LLM } from 'aws-cdk-blocks';
 const ai = new LLM('app', 'assistant', {
   model: 'anthropic.claude-v2'
 });
-const response = await ai.generate('Explain AWS Blocks');
+const response = await ai.generate('Explain AWS CDK Blocks');
 ```
 
 ## Installation

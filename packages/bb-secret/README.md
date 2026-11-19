@@ -159,7 +159,7 @@ const legacy = new Secret(scope, 'legacy-key', {
 const value = await legacy.get();
 ```
 
-AWS Blocks will not create, seed, or delete the referenced secret — it only reads its value (and writes it when `allowRuntimeWrite: true`) and grants the app access.
+AWS CDK Blocks will not create, seed, or delete the referenced secret — it only reads its value (and writes it when `allowRuntimeWrite: true`) and grants the app access.
 
 ## Managing secret values
 
@@ -171,7 +171,7 @@ Pass `generate: true` and never call `put()`: the secret is created with a **ran
 
 ### 2. Set via the settings endpoint → console — the default for most apps
 
-Every AWS Blocks app exposes a built-in **`/aws-blocks/settings`** route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.bb-data/settings.json`, where secret values live next to settings (plaintext, dev-only). One route, one place, local and deployed.
+Every AWS CDK Blocks app exposes a built-in **`/aws-blocks/settings`** route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.bb-data/settings.json`, where secret values live next to settings (plaintext, dev-only). One route, one place, local and deployed.
 
 ### 3. Well-known `name` + the `aws` CLI — for CI/CD-driven workflows
 
@@ -304,6 +304,6 @@ Delete the key to simulate an unset secret (`get()` returns `null`). A value wri
 
 `Secret` runs server-side only. Importing and instantiating it in browser/client code throws `SecretErrors.NotSupported` — a secret read in the browser would expose it to the client.
 
-## Keys AWS Blocks generates for its own blocks
+## Keys AWS CDK Blocks generates for its own blocks
 
-Keys that AWS Blocks generates for its own blocks are created through an internal part of this package. Where they are stored follows the stack's `defaults.secretsStore`: a `Secret` in Secrets Manager (`'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset). This covers the `Auth` session secret and the `Realtime` connection token key. That internal part is for AWS Blocks' own blocks only and is not a public API; it does not change the defaults of a `Secret` you declare.
+Keys that AWS CDK Blocks generates for its own blocks are created through an internal part of this package. Where they are stored follows the stack's `defaults.secretsStore`: a `Secret` in Secrets Manager (`'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset). This covers the `Auth` session secret and the `Realtime` connection token key. That internal part is for AWS CDK Blocks' own blocks only and is not a public API; it does not change the defaults of a `Secret` you declare.

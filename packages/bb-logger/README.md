@@ -71,7 +71,7 @@ Every log entry is a JSON object written to stdout (or stderr for errors):
 }
 ```
 
-On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), `awsRequestId` is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically, so you can find everything one request logged, for example with CloudWatch Logs Insights: `filter awsRequestId = "<id>"`. It is reserved: a context value under that key is ignored. Your own correlation fields, such as a `requestId` passed to `child()`, are separate keys and are kept as is. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
+On the Lambda functions AWS CDK Blocks runs through `createLambdaHandler` (the backend API and its event handlers), `awsRequestId` is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically, so you can find everything one request logged, for example with CloudWatch Logs Insights: `filter awsRequestId = "<id>"`. It is reserved: a context value under that key is ignored. Your own correlation fields, such as a `requestId` passed to `child()`, are separate keys and are kept as is. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
 
 ### Child Loggers
 

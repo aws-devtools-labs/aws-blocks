@@ -1,4 +1,4 @@
-# AWS Blocks Kotlin
+# AWS CDK Blocks Kotlin
 
 [![Maven Central](https://img.shields.io/maven-central/v/com.aws.blocks.kotlin/runtime)](https://central.sonatype.com/search?namespace=com.aws.blocks.kotlin)
 [![Kotlin](https://img.shields.io/badge/kotlin-2.2.10-blue.svg?logo=kotlin)](https://kotlinlang.org)
@@ -6,7 +6,7 @@
 ![iOS](http://img.shields.io/badge/platform-ios-CDCDCD.svg?style=flat)
 ![Desktop](http://img.shields.io/badge/platform-desktop-DB413D.svg?style=flat)
 
-A Gradle plugin and Kotlin Multiplatform runtime that generates type-safe client code from an AWS Blocks spec. It parses your spec at build time and produces Kotlin interfaces, data classes, and a suspending client implementation that calls your backend methods with full type safety across Android, iOS, and JVM.
+A Gradle plugin and Kotlin Multiplatform runtime that generates type-safe client code from an AWS CDK Blocks spec. It parses your spec at build time and produces Kotlin interfaces, data classes, and a suspending client implementation that calls your backend methods with full type safety across Android, iOS, and JVM.
 
 ## Quick Start
 
@@ -70,7 +70,7 @@ closing the engine it owns — is covered in
 
 ## Using Auth
 
-An AWS Blocks `Auth` block exposes its sign-in flow as a state machine (`export const authApi =
+An AWS CDK Blocks `Auth` block exposes its sign-in flow as a state machine (`export const authApi =
 auth.createApi()` in the backend). `getAuthState()` reports the current state and the actions
 available from it; the app renders those actions and submits each one through `setAuthState`. A
 block with federated providers also exports its OIDC client (`export const oidcAuthApi =

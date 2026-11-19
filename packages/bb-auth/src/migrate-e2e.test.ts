@@ -66,6 +66,9 @@ export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 		// only ever exported from `@aws-blocks/blocks`, so that is what an app being migrated
 		// imports. The codemod rewrites it to `aws-cdk-blocks` on the lines it touches.
 		'@aws-blocks/blocks': [join(dir, 'umbrella-before-cutover.ts')],
+		// `auth-common` is a live package here, renamed by the cutover, so the BEFORE app's
+		// pre-cutover specifier is mapped at this checkout's copy. Its types did not change.
+		'@aws-blocks/auth-common/ui': [join(REPO_ROOT, 'packages', 'auth-common', 'dist', 'ui.d.ts')],
 	};
 }
 
@@ -255,7 +258,7 @@ export const api = new blocks.ApiNamespace(scope, 'api', (context) => ({
 		const dir = scratch('signup-default');
 		// AuthCognito's signUp() defaulted autoSignIn to false; Auth's emailPassword.autoSignIn defaults to true.
 		const [file] = writeFiles(dir, {
-			'index.ts': `import { AuthCognito } from '@aws-cdk-blocks/bb-auth-cognito';
+			'index.ts': `import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 import type { BlocksContext } from '@aws-cdk-blocks/core';
 
 const codes: string[] = [];

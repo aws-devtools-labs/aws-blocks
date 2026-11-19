@@ -1566,7 +1566,7 @@ export async function startDevServer(options: DevServerOptions) {
       try { recorded = parsePidRecord(readFileSync(pidfilePath, 'utf-8')); } catch { /* no pidfile */ }
       if (recorded?.pid !== process.pid) claimDevPidfile(pidfilePath, selfRecord);
     } catch { /* best effort: the server runs on, as it would without a record */ }
-    console.log(`AWS Blocks local server running on ${frontDoor}`);
+    console.log(`AWS CDK Blocks local server running on ${frontDoor}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
     // Spawn frontend dev server after Blocks server is ready

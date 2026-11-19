@@ -1,6 +1,6 @@
 # Blocks Next.js App
 
-A Next.js 16 App Router frontend on AWS Blocks. Shows both halves of the App
+A Next.js 16 App Router frontend on AWS CDK Blocks. Shows both halves of the App
 Router calling the same Blocks backend: a **Server Component** that fetches on
 the server, and a **Client Component** that calls the API from the browser.
 

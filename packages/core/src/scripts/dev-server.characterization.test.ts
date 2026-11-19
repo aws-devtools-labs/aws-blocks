@@ -1320,7 +1320,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
     devProcess.stderr?.on('data', chunk => { output.stderr += chunk.toString(); });
 
     const deadline = Date.now() + 20_000;
-    while (!output.stdout.includes('AWS Blocks local server running')) {
+    while (!output.stdout.includes('AWS CDK Blocks local server running')) {
       if (Date.now() > deadline || devProcess.exitCode !== null) {
         assert.fail(`Dev server did not start\nstdout: ${output.stdout}\nstderr: ${output.stderr}`);
       }
