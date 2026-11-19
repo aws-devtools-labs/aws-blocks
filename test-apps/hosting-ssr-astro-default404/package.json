@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev:api": "tsx watch cdk-blocks/scripts/server.ts",
-    "dev:astro": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api astro dev",
+    "dev:astro": "BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api astro dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:astro\"",
     "build": "astro build",
     "preview": "astro preview",

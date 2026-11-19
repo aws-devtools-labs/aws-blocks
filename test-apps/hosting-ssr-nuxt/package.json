@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev:api": "tsx watch cdk-blocks/scripts/server.ts",
-    "dev:nuxt": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api nuxt dev",
+    "dev:nuxt": "BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api nuxt dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:nuxt\"",
     "build": "nuxt build",
     "start": "node .output/server/index.mjs",

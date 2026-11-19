@@ -4,7 +4,7 @@
 /**
  * The one check every same-origin redirect target goes through: the
  * `redirectPath` of a sign-in (`getSignInUrl()` and
- * `GET /aws-blocks/auth/signin/<id>?redirectPath=`), `redirects.postSignInPath`
+ * `GET /cdk-blocks/auth/signin/<id>?redirectPath=`), `redirects.postSignInPath`
  * and `redirects.postSignOutPath`. Anything that becomes a `Location` header
  * (or the path part of an absolute URL handed to an IdP) is passed through
  * {@link safeRedirectPath}, and its **normalised** result is what is emitted —

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The ALB door's API forwarder (same-origin `/aws-blocks/*` and raw routes):
+ * The ALB door's API forwarder (same-origin `/cdk-blocks/*` and raw routes):
  * it relays the request to the backend and the response back in the ALB
  * multi-value shape, so several `Set-Cookie` headers survive, and applies the
  * app's header rules to a successful response, as the CloudFront door does at
@@ -88,7 +88,7 @@ const bodyOf = (res: AlbResponse): string =>
   res.isBase64Encoded ? Buffer.from(res.body, 'base64').toString('utf8') : res.body;
 
 const HEADER_RULES: Array<{ pattern: string; headers: Record<string, string> }> = [
-  { pattern: '/aws-blocks/*', headers: { 'X-Api-Rule': 'api' } },
+  { pattern: '/cdk-blocks/*', headers: { 'X-Api-Rule': 'api' } },
   { pattern: '/hooks/*', headers: { 'X-Hook-Rule': 'hook' } },
 ];
 
@@ -100,9 +100,9 @@ describe('ALB API forwarder', () => {
       { status: 200, headers: { 'content-type': 'application/json', 'set-cookie': ['a=1', 'b=2'] }, body: '{"ok":true}' },
       seen,
     );
-    const res = await handler(event('/aws-blocks/api'));
+    const res = await handler(event('/cdk-blocks/api'));
     assert.equal(seen.method, 'POST');
-    assert.equal(seen.path, '/prod/aws-blocks/api?a=1');
+    assert.equal(seen.path, '/prod/cdk-blocks/api?a=1');
     assert.equal(seen.body, '{"x":1}');
     assert.equal(seen.headers?.host, 'abc.execute-api.us-west-2.amazonaws.com');
     assert.equal(res.statusCode, 200);
@@ -113,14 +113,14 @@ describe('ALB API forwarder', () => {
     const seen: Seen = {};
     const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
     // The client's length is for the base64 body the ALB delivered, not the 7 bytes relayed.
-    await handler(event('/aws-blocks/api', { headers: { 'content-type': ['application/json'], 'content-length': ['12'] } }));
+    await handler(event('/cdk-blocks/api', { headers: { 'content-type': ['application/json'], 'content-length': ['12'] } }));
     assert.equal(seen.headers?.['content-length'], '7');
     assert.equal(seen.headers?.['transfer-encoding'], undefined);
 
     // A GET with no body sends no length.
     const get: Seen = {};
     const noBody = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, get);
-    await noBody({ ...event('/aws-blocks/api'), httpMethod: 'GET', body: null });
+    await noBody({ ...event('/cdk-blocks/api'), httpMethod: 'GET', body: null });
     assert.equal(get.headers?.['content-length'], undefined);
   });
 
@@ -152,7 +152,7 @@ describe('ALB API forwarder', () => {
         mod,
         env,
       );
-      const res = await mod.exports.handler?.(event('/aws-blocks/api'));
+      const res = await mod.exports.handler?.(event('/cdk-blocks/api'));
       assert.equal(res?.statusCode, 200);
       assert.equal(got.body, '{"x":1}');
       assert.equal(got.headers?.['content-length'], '7');
@@ -168,7 +168,7 @@ describe('ALB API forwarder', () => {
       { status: 200, headers: { 'content-type': 'application/json' }, body: '{}' },
       {},
     );
-    const api = await handler(event('/aws-blocks/api'));
+    const api = await handler(event('/cdk-blocks/api'));
     assert.deepEqual(api.multiValueHeaders['x-api-rule'], ['api']);
     assert.equal(api.multiValueHeaders['x-hook-rule'], undefined);
     const hook = await handler(event('/hooks/door-probe'));
@@ -181,7 +181,7 @@ describe('ALB API forwarder', () => {
       { status: 401, headers: { 'content-type': 'application/json' }, body: '{"error":"unauthorized"}' },
       {},
     );
-    const res = await handler(event('/aws-blocks/api'));
+    const res = await handler(event('/cdk-blocks/api'));
     assert.equal(res.statusCode, 401);
     assert.equal(res.multiValueHeaders['x-api-rule'], undefined);
   });
@@ -190,13 +190,13 @@ describe('ALB API forwarder', () => {
     const seen: Seen = {};
     const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
     await handler(
-      event('/aws-blocks/auth/callback', {
+      event('/cdk-blocks/auth/callback', {
         query: { q: ['a%20b'], state: ['eyJ4IjoxfQ%3D%3D'], next: ['%2Fhome'], plus: ['a+b'], 'a%5Bb%5D': ['1', '2'] },
       }),
     );
     assert.equal(
       seen.path,
-      '/prod/aws-blocks/auth/callback?q=a%20b&state=eyJ4IjoxfQ%3D%3D&next=%2Fhome&plus=a+b&a%5Bb%5D=1&a%5Bb%5D=2',
+      '/prod/cdk-blocks/auth/callback?q=a%20b&state=eyJ4IjoxfQ%3D%3D&next=%2Fhome&plus=a+b&a%5Bb%5D=1&a%5Bb%5D=2',
     );
   });
 
@@ -204,7 +204,7 @@ describe('ALB API forwarder', () => {
     const seen: Seen = {};
     const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
     await handler(
-      event('/aws-blocks/api', {
+      event('/cdk-blocks/api', {
         headers: { cookie: ['seen=1', 'session=abc'], accept: ['text/html', 'application/json'] },
       }),
     );
@@ -216,7 +216,7 @@ describe('ALB API forwarder', () => {
     const seen: Seen = {};
     const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
     await handler(
-      event('/aws-blocks/api', {
+      event('/cdk-blocks/api', {
         headers: {
           'X-Blocks-Origin-Verify': ['secret'],
           'x-forwarded-host': ['localhost:3000'],
@@ -250,7 +250,7 @@ describe('ALB API forwarder', () => {
       },
       {},
     );
-    const res = await handler(event('/aws-blocks/api'));
+    const res = await handler(event('/cdk-blocks/api'));
     assert.equal(res.multiValueHeaders['transfer-encoding'], undefined);
     assert.equal(res.multiValueHeaders.connection, undefined);
     assert.equal(res.multiValueHeaders['keep-alive'], undefined);
@@ -272,7 +272,7 @@ describe('ALB API forwarder', () => {
     const original = console.error;
     console.error = (...args: unknown[]) => errors.push(args);
     try {
-      const res = await handler(event('/aws-blocks/api'));
+      const res = await handler(event('/cdk-blocks/api'));
       assert.equal(res.statusCode, 502);
       assert.equal(bodyOf(res), '{"error":"Bad Gateway"}');
       assert.ok(!bodyOf(res).includes('execute-api'));
@@ -289,7 +289,7 @@ describe('ALB API forwarder', () => {
       { status: 200, headers: { 'content-type': 'application/json; charset=utf-8' }, body: json },
       {},
     );
-    const t = await text(event('/aws-blocks/api'));
+    const t = await text(event('/cdk-blocks/api'));
     assert.equal(t.isBase64Encoded, false);
     assert.equal(t.body, json);
 
@@ -302,7 +302,7 @@ describe('ALB API forwarder', () => {
     // A text type whose bytes are not valid UTF-8 stays base64 so nothing is lost.
     const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9]);
     const odd = load(generateAlbApiProxyCode(), { status: 200, headers: { 'content-type': 'text/plain' }, body: latin1 }, {});
-    const o = await odd(event('/aws-blocks/api'));
+    const o = await odd(event('/cdk-blocks/api'));
     assert.equal(o.isBase64Encoded, true);
     assert.deepEqual(Buffer.from(o.body, 'base64'), latin1);
   });

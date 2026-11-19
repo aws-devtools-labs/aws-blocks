@@ -206,7 +206,7 @@ export interface DashboardOptions {
 	 * The redirect requires AWS Console login to view the dashboard —
 	 * exposing the URL alone grants no data access.
 	 *
-	 * @default '/aws-blocks/dashboard'
+	 * @default '/cdk-blocks/dashboard'
 	 */
 	routePath?: string | false;
 }

@@ -12,7 +12,7 @@ const renderCompute = new Compute(scope, 'render', { type: 'container', size: { 
 export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
 ```
 
-The container's tasks serve the namespace with the same dispatch as the Lambda handler (CORS, cookies, error envelopes), so clients call it exactly as before at `/aws-blocks/api/render`.
+The container's tasks serve the namespace with the same dispatch as the Lambda handler (CORS, cookies, error envelopes), so clients call it exactly as before at `/cdk-blocks/api/render`.
 
 - The shared API gateway reaches the tasks through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC: one load balancer and one listener per backend, with a path rule per namespace forwarding to its container's target group, health-checked on the task's readiness port. A container that only runs jobs gets no target group.
 - The tasks admit the load balancer on a security group of their own; the shared compute security group stays closed to inbound traffic.

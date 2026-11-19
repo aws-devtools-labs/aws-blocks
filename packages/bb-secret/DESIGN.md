@@ -100,7 +100,7 @@ For a stack-managed secret it creates one `aws-cdk-lib/aws-secretsmanager.Secret
 - **Resource group:** the created secret is tagged
   `aws-blocks-stack=<rootStackName>` (walking to the non-nested parent stack,
   mirroring `AppSetting`), so it joins the stack's `-settings` resource group —
-  the one the `/aws-blocks/settings` console redirect points at. Core's
+  the one the `/cdk-blocks/settings` console redirect points at. Core's
   `-settings` group query includes `AWS::SecretsManager::Secret` alongside
   `AWS::SSM::Parameter` for this reason.
 - **Config:** the created secret's ARN is passed to the runtime via
@@ -214,7 +214,7 @@ consumer's choice (`zod` is a `devDependency` here, used only by tests).
 
 | Aspect | Mock (`index.mock.ts`) | AWS (`index.aws.ts`) |
 |--------|------------------------|----------------------|
-| Storage | Plaintext entry in the shared `.bb-data/settings.json` (keyed by `name`/`fullId`), alongside `AppSetting` — so the `/aws-blocks/settings` route surfaces it | Secrets Manager secret (KMS-encrypted) |
+| Storage | Plaintext entry in the shared `.bb-data/settings.json` (keyed by `name`/`fullId`), alongside `AppSetting` — so the `/cdk-blocks/settings` route surfaces it | Secrets Manager secret (KMS-encrypted) |
 | ARN source | none (keyed by `name`/`fullId`) | `BLOCKS_SECRET_ARN_<FULLID>` config, or `fromExisting` ARN |
 | Unset value | key absent → `null`; `generate: true` seeds a random 32-char value on first construction | empty secret (neither `GenerateSecretString` nor `SecretString`) → `GetSecretValue` has no `SecretString` → `null`; `generate: true` emits `GenerateSecretString` so a random value exists on deploy |
 | Missing value | key absent → `null` | `SecretString` absent / `ResourceNotFound` → `null` |
@@ -223,7 +223,7 @@ consumer's choice (`zod` is a `devDependency` here, used only by tests).
 | Read caching | none — every `get()` reads fresh from `settings.json` (so `cacheTtlSeconds` is a no-op) | per-instance in-memory cache keyed by version selector, cleared by `put()`; entries held for `cacheTtlSeconds` (default 300s, `0` disables) so steady-state reads skip the API |
 | Security | **plaintext, insecure — dev only** | KMS-encrypted at rest |
 
-Sharing `settings.json` is deliberate: it makes the single `/aws-blocks/settings`
+Sharing `settings.json` is deliberate: it makes the single `/cdk-blocks/settings`
 console/editor route cover both settings and secrets, locally and when deployed.
 
 Because the mock cannot catch serialization/permission differences, behavior is
@@ -234,7 +234,7 @@ sandbox and production deploy.
 
 Values are set **out-of-band**, never from source or the constructor — see the
 README's "Managing secret values" for the three approaches (auto-generated, the
-`/aws-blocks/settings` console route, and a well-known `name` + the `aws` CLI for
+`/cdk-blocks/settings` console route, and a well-known `name` + the `aws` CLI for
 CI/CD). The CDK construct's job is name + IAM grant + runtime ARN registration;
 it never carries the value.
 

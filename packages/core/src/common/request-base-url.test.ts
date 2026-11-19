@@ -12,7 +12,7 @@ const second: typeof first = await import(`./request-base-url.js?copy=${Date.now
 
 describe('getRequestBaseUrl across duplicate copies of @aws-blocks/core', () => {
 	const ctx = {
-		request: { url: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/auth/callback') },
+		request: { url: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/cdk-blocks/auth/callback') },
 	};
 
 	it('a base set by one copy is read by another (the stage survives)', () => {

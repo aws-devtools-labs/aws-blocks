@@ -137,11 +137,11 @@ test.describe('Blog with Auth — SSR Hosting', () => {
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
-    // Local dev uses http://localhost:PORT/aws-blocks/api, production uses relative /aws-blocks/api
+    // Local dev uses http://localhost:PORT/cdk-blocks/api, production uses relative /cdk-blocks/api
     if (ENV === 'local') {
-      expect(config.apiUrl).toContain('/aws-blocks/api');
+      expect(config.apiUrl).toContain('/cdk-blocks/api');
     } else {
-      expect(config.apiUrl).toBe('/aws-blocks/api');
+      expect(config.apiUrl).toBe('/cdk-blocks/api');
     }
   });
 

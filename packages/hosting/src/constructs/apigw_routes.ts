@@ -49,18 +49,18 @@ export const routableApiPaths = (scope: IConstruct, door: string, patterns: Iter
 
 /**
  * The backend base URL for a same-origin API proxy: split a namespace ingress
- * URL (`https://…/prod/aws-blocks/api`) on the `/aws-blocks/api` suffix to get
+ * URL (`https://…/prod/cdk-blocks/api`) on the `/cdk-blocks/api` suffix to get
  * the base (`https://…/prod`) — token-safe, the same shape whether the ingress is
  * a Lambda API Gateway, a container ALB, or a BYOC endpoint.
  */
-export const backendBaseUrl = (ingressUrl: string): string => Fn.select(0, Fn.split('/aws-blocks/api', ingressUrl));
+export const backendBaseUrl = (ingressUrl: string): string => Fn.select(0, Fn.split('/cdk-blocks/api', ingressUrl));
 
 /**
  * The default API path set for a single-compute backend when the door was not
- * handed `DoorInput.origins.api.paths`: the reserved `/aws-blocks/*` subtree
- * (RPC, and sign-in at `/aws-blocks/auth/*`).
+ * handed `DoorInput.origins.api.paths`: the reserved `/cdk-blocks/*` subtree
+ * (RPC, and sign-in at `/cdk-blocks/auth/*`), and its legacy `/aws-blocks/*` alias.
  */
-export const DEFAULT_API_PATHS: readonly string[] = ['/aws-blocks/*'];
+export const DEFAULT_API_PATHS: readonly string[] = ['/cdk-blocks/*', '/aws-blocks/*'];
 
 /** Whether a route-table pattern has a wildcard API Gateway can't express (anything but one trailing `/*`). */
 export const hasInnerWildcard = (pattern: string): boolean => {

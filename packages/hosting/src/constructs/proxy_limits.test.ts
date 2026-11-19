@@ -20,7 +20,7 @@ import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
 const WARNING = '@aws-blocks/hosting:AssetExceedsProxyLimit';
 
 describe('a build asset too large for the Lambda asset proxy is reported at synth', () => {

@@ -273,7 +273,7 @@ describe('apiFrontDoor tier selection', () => {
 		const value = JSON.stringify(apiUrl.Value);
 		assert.ok(value.includes(distId), `ApiUrl should reference the CloudFront distribution, got ${value}`);
 		assert.ok(value.includes('DomainName'), 'ApiUrl should resolve the distribution domain');
-		assert.ok(value.includes('/aws-blocks/api'), 'ApiUrl should carry the RPC prefix');
+		assert.ok(value.includes('/cdk-blocks/api'), 'ApiUrl should carry the RPC prefix');
 		assert.ok(
 			!value.includes('execute-api'),
 			'cloudfront ApiUrl should be the CloudFront URL, not the raw gateway',
@@ -382,7 +382,7 @@ describe('apiFrontDoor: cloudfront', () => {
 		const { parent } = await create('cloudfront');
 		const value = JSON.stringify(Object.values(parent.findOutputs('PublicApiUrl'))[0].Value);
 		assert.ok(value.includes('BlocksApiFrontDoor9F3D9B2C') && value.includes('DomainName'), value);
-		assert.ok(value.includes('/aws-blocks/api'), value);
+		assert.ok(value.includes('/cdk-blocks/api'), value);
 		assert.ok(!value.includes('execute-api'), `publicApiUrl should not be the gateway URL, got ${value}`);
 	});
 
@@ -511,7 +511,7 @@ describe('ApiNamespace compute option', () => {
 		// Routed by the export name, to the reports compute's function only.
 		const parts = Object.entries(resources).filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource');
 		const reportsResource = parts.find(([, r]) => r.Properties.PathPart === 'reports');
-		assert.ok(reportsResource, 'a /aws-blocks/api/reports resource');
+		assert.ok(reportsResource, 'a /cdk-blocks/api/reports resource');
 		assert.ok(!parts.some(([, r]) => r.Properties.PathPart === 'reportsApi'), 'not the constructor name');
 		const method = Object.values(resources).find(
 			(r) =>
@@ -531,7 +531,7 @@ describe('ApiNamespace compute option', () => {
 		assert.ok(otherMethods.length > 0, 'the catch-all methods exist');
 		assert.ok(
 			otherMethods.every((m) => !JSON.stringify(m.Properties.Integration).includes(fnId)),
-			'only /aws-blocks/api/reports integrates the reports function',
+			'only /cdk-blocks/api/reports integrates the reports function',
 		);
 
 		// The compute's options apply, and the same function also runs the AsyncJob.
@@ -642,8 +642,8 @@ describe('ApiNamespace on a container compute', () => {
 			}),
 		);
 		assert.deepStrictEqual(forwards, {
-			'/aws-blocks/api/render': targetGroupOf('render'),
-			'/aws-blocks/api/preview': targetGroupOf('preview'),
+			'/cdk-blocks/api/render': targetGroupOf('render'),
+			'/cdk-blocks/api/preview': targetGroupOf('preview'),
 		});
 		assert.strictEqual(new Set(rules.map((r) => r.Priority)).size, 2, 'distinct priorities');
 	});
@@ -674,7 +674,7 @@ describe('ApiNamespace on a container compute', () => {
 		assert.strictEqual(render[1].Properties.HealthCheckGracePeriodSeconds, 60);
 	});
 
-	test('/aws-blocks/api/render proxies to the load balancer through a VPC link', () => {
+	test('/cdk-blocks/api/render proxies to the load balancer through a VPC link', () => {
 		const [lbId] = one(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer');
 		const [linkId] = one(resources, 'AWS::ApiGatewayV2::VpcLink');
 		const parts = ofType(resources, 'AWS::ApiGateway::Resource');
@@ -692,7 +692,7 @@ describe('ApiNamespace on a container compute', () => {
 		assert.deepStrictEqual(integration.ConnectionId, { Ref: linkId });
 		assert.deepStrictEqual(integration.IntegrationTarget, { Ref: lbId }, 'the load balancer ARN, not a listener ARN');
 		assert.deepStrictEqual(integration.Uri, {
-			'Fn::Join': ['', ['http://', { 'Fn::GetAtt': [lbId, 'DNSName'] }, ':10000/aws-blocks/api/render']],
+			'Fn::Join': ['', ['http://', { 'Fn::GetAtt': [lbId, 'DNSName'] }, ':10000/cdk-blocks/api/render']],
 		});
 		assert.deepStrictEqual(integration.RequestParameters, {
 			'integration.request.header.x-blocks-forwarded-host': 'context.domainName',
@@ -776,7 +776,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const [, dist] = ofType(resources, 'AWS::CloudFront::Distribution')[0];
 		const config = dist.Properties.DistributionConfig;
 		const behaviors = config.CacheBehaviors as Array<Record<string, any>>;
-		assert.deepStrictEqual(behaviors.map((b) => b.PathPattern).sort(), ['/aws-blocks/api/preview', '/aws-blocks/api/render']);
+		assert.deepStrictEqual(behaviors.map((b) => b.PathPattern).sort(), ['/cdk-blocks/api/preview', '/cdk-blocks/api/render']);
 		assert.strictEqual(new Set(behaviors.map((b) => b.TargetOriginId)).size, 1, 'both containers share one origin');
 		const origin = config.Origins.find((o: Record<string, any>) => o.Id === behaviors[0].TargetOriginId);
 		assert.ok(origin.VpcOriginConfig, 'a VPC origin');
@@ -866,7 +866,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const distributions = ofType(hosted, 'AWS::CloudFront::Distribution');
 		assert.strictEqual(distributions.length, 1, "Hosting's distribution only");
 		const config = distributions[0][1].Properties.DistributionConfig;
-		const render = config.CacheBehaviors.find((b: Record<string, any>) => b.PathPattern === '/aws-blocks/api/render');
+		const render = config.CacheBehaviors.find((b: Record<string, any>) => b.PathPattern === '/cdk-blocks/api/render');
 		const origin = config.Origins.find((o: Record<string, any>) => o.Id === render?.TargetOriginId);
 		assert.ok(origin?.VpcOriginConfig, 'the container path goes to a VPC origin');
 		assert.strictEqual(ofType(hosted, 'AWS::CloudFront::VpcOrigin').length, 1);
@@ -876,8 +876,8 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const hosted = await withHosting('ContainerApiHostingGw');
 		const [, dist] = ofType(hosted, 'AWS::CloudFront::Distribution')[0];
 		const patterns = dist.Properties.DistributionConfig.CacheBehaviors.map((b: Record<string, any>) => b.PathPattern);
-		assert.ok(!patterns.includes('/aws-blocks/api/render'), `no direct behavior, got ${patterns.join(', ')}`);
-		assert.ok(patterns.includes('/aws-blocks/api/*'), 'the RPC subtree reaches the gateway');
+		assert.ok(!patterns.includes('/cdk-blocks/api/render'), `no direct behavior, got ${patterns.join(', ')}`);
+		assert.ok(patterns.includes('/cdk-blocks/api/*'), 'the RPC subtree reaches the gateway');
 		for (const type of ['AWS::CloudFront::VpcOrigin', 'Custom::AWS']) assert.strictEqual(ofType(hosted, type).length, 0, type);
 		const vpcLink = ofType(hosted, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
 		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
@@ -894,7 +894,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const patterns = distributions[0][1].Properties.DistributionConfig.CacheBehaviors.map(
 			(b: Record<string, any>) => b.PathPattern,
 		);
-		assert.ok(!patterns.includes('/aws-blocks/api/render'), `no direct behavior, got ${patterns.join(', ')}`);
+		assert.ok(!patterns.includes('/cdk-blocks/api/render'), `no direct behavior, got ${patterns.join(', ')}`);
 		const [blocksLbId] = ofType(hosted, 'AWS::ElasticLoadBalancingV2::LoadBalancer').find(
 			([, lb]) => lb.Properties.Scheme === 'internal',
 		) ?? [];
@@ -994,7 +994,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		assert.strictEqual(distributions.length, 2, 'a managed distribution per backend');
 		const routedLbs = distributions.map(([distId, dist]) => {
 			const config = dist.Properties.DistributionConfig;
-			const render = config.CacheBehaviors.find((b: Record<string, any>) => b.PathPattern === '/aws-blocks/api/render');
+			const render = config.CacheBehaviors.find((b: Record<string, any>) => b.PathPattern === '/cdk-blocks/api/render');
 			assert.ok(render, `${distId} routes render directly`);
 			const origin = config.Origins.find((o: Record<string, any>) => o.Id === render.TargetOriginId);
 			const vpcOriginId = origin.VpcOriginConfig.VpcOriginId['Fn::GetAtt'][0];
@@ -1071,7 +1071,7 @@ describe('Scope-level compute', () => {
 		assert.strictEqual(ids.length, 1, `one default function, got ${ids.join(', ')}`);
 		return ids[0];
 	};
-	/** The function each literal `/aws-blocks/api/{name}` resource integrates. */
+	/** The function each literal `/cdk-blocks/api/{name}` resource integrates. */
 	const routedFunction = (resources: Resources, pathPart: string) => {
 		const resource = Object.entries(resources).find(
 			([, r]) => r.Type === 'AWS::ApiGateway::Resource' && r.Properties.PathPart === pathPart,
@@ -1158,7 +1158,7 @@ describe('Scope-level compute', () => {
 		const rules = ofType('AWS::ElasticLoadBalancingV2::ListenerRule').map(([, r]) => r.Properties);
 		assert.deepStrictEqual(
 			rules.map((r) => [r.Conditions[0].PathPatternConfig.Values[0], r.Actions[0].TargetGroupArn.Ref]),
-			[['/aws-blocks/api/jobsApi', targetGroups[0][0]]],
+			[['/cdk-blocks/api/jobsApi', targetGroups[0][0]]],
 		);
 		// The gateway's literal resource for the export name proxies through the VPC link.
 		const [resourceId] = ofType('AWS::ApiGateway::Resource').find(([, r]) => r.Properties.PathPart === 'jobsApi') ?? [];

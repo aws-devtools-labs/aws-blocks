@@ -71,7 +71,7 @@ describe('sandbox state migration — copying an upgraded app forward across the
 	it('copies each state file it finds and tolerates the ones an app never wrote', () => {
 		const root = appWithLegacyState({
 			'sandbox-id.txt': 'alice-0d7e1c',
-			'config.json': '{"apiUrl":"http://localhost:3000/aws-blocks/api"}',
+			'config.json': '{"apiUrl":"http://localhost:3000/cdk-blocks/api"}',
 			'config.sandbox.json': '{"apiUrl":"https://s.example"}',
 			'config.production.json': '{"apiUrl":"https://p.example"}',
 			'outputs.json': '{"s":{}}',

@@ -10,7 +10,7 @@
 // is environment rather than backend config so that a change rolls every
 // compute (see `applyStrictNamespacePlacement`). Each compute's dispatcher then
 // serves only the namespaces placed on it: the default compute (no id) refuses a
-// namespace placed elsewhere, even on the bare `/aws-blocks/api` endpoint, and a
+// namespace placed elsewhere, even on the bare `/cdk-blocks/api` endpoint, and a
 // non-default compute refuses every namespace that isn't its own.
 //
 // Kept free of Node and CDK imports: the CDK layer imports the key names, the

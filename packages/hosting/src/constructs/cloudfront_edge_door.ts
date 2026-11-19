@@ -287,7 +287,7 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
           `a CloudFront distribution allows ${MAX_EDGE_BEHAVIORS} besides its default by default. The edge keeps ` +
           `${plan.behaviors.length}; the remaining static routes are served through the ALB router (correct, but not ` +
           'edge-direct, and subject to its 1 MB response limit). Group static routes under fewer prefixes, or move ' +
-          'raw backend routes under `/aws-blocks/`.',
+          'raw backend routes under `/cdk-blocks/`.',
       );
     }
     // What reaches the router's asset proxy (the ALB's 1 MB Lambda response

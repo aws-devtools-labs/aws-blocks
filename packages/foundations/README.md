@@ -30,7 +30,7 @@ export const authApi = auth.createApi();
 const sso = new Auth(scope, 'sso', {
   store: 'builtin',
   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
-  redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+  redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' },
 });
 export const ssoApi = sso.createApi();
 

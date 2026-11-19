@@ -32,7 +32,7 @@ export type BlocksContext = {
      * Behind a Blocks CloudFront front door (the `apiFrontDoor: 'cloudfront'`
      * distribution, or `Hosting`'s CloudFront door), Lambda and container handlers
      * alike see the URL the client called: the distribution's domain or the custom
-     * domain it was called at (`https://app.example.com/aws-blocks/api/orders`).
+     * domain it was called at (`https://app.example.com/cdk-blocks/api/orders`).
      * The door stamps the viewer's host, and a handler takes it only when it is one
      * of the backend's own front-door hosts. Behind `Hosting`'s other doors (ALB,
      * API Gateway, stacked, bring-your-own), and for a request sent to the
@@ -167,9 +167,9 @@ export interface ApiNamespaceOptions {
    * ```
    *
    * The TypeScript, Swift, Kotlin and Dart clients call the namespace exactly as
-   * before: the shared API gateway routes `/aws-blocks/api/<export name>` to the
+   * before: the shared API gateway routes `/cdk-blocks/api/<export name>` to the
    * namespace's compute, on every `apiFrontDoor` tier and behind `Hosting`. A
-   * call to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a
+   * call to the bare `/cdk-blocks/api` endpoint — a raw HTTP call, or one from a
    * native client released before per-namespace paths — still runs on the
    * default compute. API calls stay capped at ~29 seconds by
    * the gateway whatever the compute's `maxTimeoutSeconds` (except a container
@@ -245,7 +245,7 @@ export interface ApiNamespaceOptions {
    *   any of the method's code — so a rejected call has done nothing; and keep
    *   methods that can still fail with 401 later idempotent.
    * - **`Hosting` error pages.** CloudFront custom error responses apply to the
-   *   whole distribution, the proxied `/aws-blocks/*` paths included. When the
+   *   whole distribution, the proxied `/cdk-blocks/*` paths included. When the
    *   distribution maps 403 or 404 to a page — `errorPages.notFound`, a static
    *   build's own `404.html`, or the default not-found page of a static
    *   multi-page site (no server, no SPA fallback, no 404 page of its own) — a
@@ -254,7 +254,7 @@ export interface ApiNamespaceOptions {
    *   status (message `HTTP 404`) instead of the namespace's error name and
    *   message. `Hosting` fails synth for that combination with a
    *   `HostingError` named `HttpErrorStatusErrorPagesError`: CloudFront
-   *   cannot scope error responses away from `/aws-blocks/*`. Remove the 4xx
+   *   cannot scope error responses away from `/cdk-blocks/*`. Remove the 4xx
    *   error pages, or leave this option off for the namespace. A 401, a 409 or
    *   a 429 is not mapped and is unaffected.
    *

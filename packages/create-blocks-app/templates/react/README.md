@@ -11,7 +11,7 @@ npm run sandbox      # Deploy to AWS sandbox
 npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
-Open http://localhost:3000 after `npm run dev`. The dev server serves the React frontend and the backend (`/aws-blocks/*`) from a single origin, so browser-navigation auth flows (e.g. OIDC redirects) work locally.
+Open http://localhost:3000 after `npm run dev`. The dev server serves the React frontend and the backend (`/cdk-blocks/*`) from a single origin, so browser-navigation auth flows (e.g. OIDC redirects) work locally.
 
 **Signing up locally:** sign-up confirms the email address with a 6-digit code. Locally no email is sent, so the code is printed in the `npm run dev` terminal (`[auth] signUp code for …`). Enter it and you are signed in. Once deployed, Amazon Cognito emails the code (its default sender is limited to 50 emails a day).
 
@@ -65,4 +65,4 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all data persistence and cloud abstractions (they mock locally and deploy to AWS automatically).
 
-Start in `cdk-blocks/index.ts` (backend) and `src/App.tsx` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /aws-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.listTodos"`, `"authApi.getAuthState"`); there are no per-namespace paths like `/aws-blocks/authApi`. See `npm run docs troubleshooting` for curl examples.
+Start in `cdk-blocks/index.ts` (backend) and `src/App.tsx` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /cdk-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.listTodos"`, `"authApi.getAuthState"`); there are no per-namespace paths like `/cdk-blocks/authApi`. See `npm run docs troubleshooting` for curl examples.

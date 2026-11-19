@@ -270,7 +270,7 @@ describe('AuthState.user.displayName for a directly federated OIDC user', () => 
 			providers: { corp: stubIdp({ users: [user], onAuthorize: (r) => r.users[0] }) },
 		});
 		const b = new TestBrowser();
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		const toCallback = await b.fetch(location(start, server.origin));
 		await b.fetch(location(toCallback, server.origin));
 		return bind(auth.createApi(), b.context(server.origin)).getAuthState();

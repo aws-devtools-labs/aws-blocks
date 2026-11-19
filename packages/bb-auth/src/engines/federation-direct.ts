@@ -61,7 +61,7 @@ const DEFAULT_SCOPES = ['openid', 'email', 'profile'];
 /** Default when the IdP reports no lifetime: one hour. */
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const HTTP_TIMEOUT_MS = 10_000;
-const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
+const DEFAULT_CALLBACK_PATH = '/cdk-blocks/auth/callback';
 const USER_AGENT = 'aws-blocks-bb-auth';
 
 /** What discovery (or the endpoints override) yields. */

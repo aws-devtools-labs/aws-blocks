@@ -13,7 +13,7 @@ export function corsPreflightTests(_getApi: () => typeof apiType) {
   describe('CORS preflight allow-list', () => {
     test('preflight allows Content-Type, Authorization and the client user-agent header', async () => {
       const baseUrl = getBaseUrl();
-      const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+      const resp = await fetch(`${baseUrl}/cdk-blocks/api`, {
         method: 'OPTIONS',
         headers: {
           // The frontend origin: a non-allowlisted one is rejected before the preflight.

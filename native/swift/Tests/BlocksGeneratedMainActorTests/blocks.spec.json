@@ -2,8 +2,8 @@
   "openrpc": "1.3.2",
   "info": { "title": "entry-point", "version": "1.0.0" },
   "servers": [
-    { "name": "default", "url": "https://example.invalid/prod/aws-blocks/api" },
-    { "name": "local", "url": "http://localhost:3001/aws-blocks/api" }
+    { "name": "default", "url": "https://example.invalid/prod/cdk-blocks/api" },
+    { "name": "local", "url": "http://localhost:3001/cdk-blocks/api" }
   ],
   "methods": [
     { "name": "users.list", "params": [], "result": { "name": "R", "schema": { "type": "array", "items": { "type": "string" } } } },

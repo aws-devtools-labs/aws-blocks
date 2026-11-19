@@ -21,7 +21,7 @@ async function rpc(
 	method: string,
 	params: unknown[] = [],
 ): Promise<{ status: number; body: any }> {
-	const res = await request.post(`${BASE}/aws-blocks/api`, {
+	const res = await request.post(`${BASE}/cdk-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
 		data: { jsonrpc: '2.0', method, params, id: ++rpcSeq },
 	});

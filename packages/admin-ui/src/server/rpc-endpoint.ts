@@ -28,7 +28,7 @@ import type { DeployStage } from './stage-outputs.js';
  * Two endpoints exist and both are already discoverable, so neither is invented
  * here:
  *
- * - Local: `http://localhost:<port>/aws-blocks/api`, the port from `detect.ts`'s
+ * - Local: `http://localhost:<port>/cdk-blocks/api`, the port from `detect.ts`'s
  *   `resolveLocalPort` (which reads `startDevServer({ port })` out of the app's own
  *   server script and falls back to 3000).
  * - Cloud: the deployed stack's `ApiUrl` output, which already includes the RPC
@@ -51,7 +51,7 @@ import type { DeployStage } from './stage-outputs.js';
  * `admin-ui` installs into a *user's* project and must not pin a core version.
  * `detect.ts` already hardcodes the same literal in its probe.
  */
-const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
+const BLOCKS_RPC_PREFIX = '/cdk-blocks/api';
 
 /** Output key the CDK stack publishes its RPC base URL under. */
 const API_URL_OUTPUT_KEY = 'ApiUrl';

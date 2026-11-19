@@ -83,7 +83,7 @@ const handler = new lambda.Function(stack, 'Handler', {
 stack.executionRole = executionRole;
 // A stand-in default compute exposing \`apiUrl\` (adds no resources): hosted-UI
 // federation registers its callback URLs on it.
-stack._defaultCompute = { apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', fn: handler };
+stack._defaultCompute = { apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api', fn: handler };
 ${handlerPath ? `stack.backendHandlerPath = ${JSON.stringify(handlerPath)};` : ''}
 globalThis.CURRENT_BLOCKS_STACK = stack;
 {

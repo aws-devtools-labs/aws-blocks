@@ -29,7 +29,7 @@ test.before(async () => {
   for (let i = 0; i < 60 && !ready; i++) {
     await setTimeout(1000);
     try {
-      const res = await fetch('http://localhost:3001/aws-blocks/api', {
+      const res = await fetch('http://localhost:3001/cdk-blocks/api', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'hello.greet', params: ['ping'] }),
@@ -78,7 +78,7 @@ test('todo methods refuse a signed-out caller', async () => {
     ['api.updateTodo', ['some-id', { title: 'x' }]],
     ['api.deleteTodo', ['some-id']],
   ] as const) {
-    const res = await fetch('http://localhost:3001/aws-blocks/api', {
+    const res = await fetch('http://localhost:3001/cdk-blocks/api', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),

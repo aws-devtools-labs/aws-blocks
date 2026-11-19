@@ -56,7 +56,7 @@ export class Dashboard extends Scope {
 
 		const routePath = options?.routePath;
 		if (routePath !== false) {
-			mountDashboardRoute(scope, routePath ?? '/aws-blocks/dashboard', this.url);
+			mountDashboardRoute(scope, routePath ?? '/cdk-blocks/dashboard', this.url);
 		}
 	}
 }

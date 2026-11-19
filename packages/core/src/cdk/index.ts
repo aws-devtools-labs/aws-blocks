@@ -182,7 +182,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	}
 	/**
 	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
-	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * `/cdk-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
 	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
 	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
 	 * deploy-time value works. The stack's `ApiUrl` output is this value.

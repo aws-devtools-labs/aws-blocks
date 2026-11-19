@@ -78,7 +78,7 @@ async function startAbruptServer(opts: {
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 	const { port } = server.address() as AddressInfo;
 	return {
-		url: `http://127.0.0.1:${port}/aws-blocks/api`,
+		url: `http://127.0.0.1:${port}/cdk-blocks/api`,
 		arrived,
 		executed,
 		close: () =>
@@ -197,7 +197,7 @@ describe('client: retryStaleConnection option', () => {
 	for (const retryStaleConnection of [true, false]) {
 		it(`${retryStaleConnection}: fetch is looked up per call, so one installed after the client was built is used`, async () => {
 			const api = ApiNamespaceClient<{ echo(v: string): string }>('api', {
-				url: 'http://127.0.0.1:1/aws-blocks/api',
+				url: 'http://127.0.0.1:1/cdk-blocks/api',
 				retryStaleConnection,
 			});
 			const original = globalThis.fetch;
@@ -210,7 +210,7 @@ describe('client: retryStaleConnection option', () => {
 			};
 			try {
 				assert.strictEqual(await api.echo('x'), 'from-spy');
-				assert.deepStrictEqual(calls, ['http://127.0.0.1:1/aws-blocks/api/api']);
+				assert.deepStrictEqual(calls, ['http://127.0.0.1:1/cdk-blocks/api/api']);
 			} finally {
 				globalThis.fetch = original;
 			}

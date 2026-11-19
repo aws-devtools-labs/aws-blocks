@@ -44,7 +44,7 @@ before(async () => {
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-	url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/aws-blocks/api`;
+	url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/cdk-blocks/api`;
 });
 
 after(() => {

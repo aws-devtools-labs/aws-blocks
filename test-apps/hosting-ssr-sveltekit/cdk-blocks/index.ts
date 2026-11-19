@@ -7,7 +7,7 @@ const scope = new Scope('hosting-ssr-sveltekit');
 
 const counters = new KVStore(scope, 'counters', {});
 
-// Minimal backend proving the single-origin /aws-blocks/* CloudFront proxy
+// Minimal backend proving the single-origin /cdk-blocks/* CloudFront proxy
 // reaches the Blocks API from a SvelteKit app with no CORS.
 export const api = new ApiNamespace(scope, 'api', () => ({
   async ping() {

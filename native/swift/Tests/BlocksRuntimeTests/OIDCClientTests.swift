@@ -173,7 +173,7 @@ actor HoldingTokenStore: TokenStore {
 final class OIDCClientTests: XCTestCase {
 
     func makeClient(session: URLSession) -> OIDCClient<String> {
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: session)
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: session)
         return OIDCClient<String>(
             exchangePath: "/auth/exchange",
             refreshPath: "/auth/refresh",
@@ -300,7 +300,7 @@ final class OIDCClientTests: XCTestCase {
             ]
             return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
         }
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let client = try Self.authClient(on: blocksClient)
 
         do {
@@ -672,7 +672,7 @@ final class OIDCClientTests: XCTestCase {
             return (okResponse(for: url), try JSONSerialization.data(withJSONObject: body))
         }
         let (client, store) = try await holdingClient()
-        let key = { (name: String) in tokenKey(name, exchangePath: "/aws-blocks/auth/exchange") }
+        let key = { (name: String) in tokenKey(name, exchangePath: "/cdk-blocks/auth/exchange") }
         await store.set(key("refresh_token"), value: "rt")
         await store.arm(key("refresh_token"))
 
@@ -801,7 +801,7 @@ final class OIDCClientTests: XCTestCase {
     /// finds no session.
     func testAuthStateFollowsAHydratedClientsSignInAndRestore() async throws {
         stubAuthRoutes()
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let client = try Self.authClient(on: blocksClient)
 
         let user = try await client.signIn(provider: "google", relayTo: "myapp://auth", launcher: EchoStateRelayLauncher(relay: "myapp://auth?code=c"))
@@ -894,7 +894,7 @@ final class OIDCClientTests: XCTestCase {
             }
             return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
         }
-        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let shared = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let auth = makeClient(named: "auth", on: shared)
         let admin = makeClient(named: "admin", on: shared)
         for client in [auth, admin] {
@@ -911,19 +911,19 @@ final class OIDCClientTests: XCTestCase {
     }
 
     /// The unscoped tokens a 0.x version stored belong to the `Auth` block's default routes: only the client
-    /// on `/aws-blocks/auth/exchange` takes them, once.
+    /// on `/cdk-blocks/auth/exchange` takes them, once.
     func testTokensUnderTheUnscopedKeysAreAdoptedOnce() async {
-        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let shared = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let store = shared.tokenStore
         await store.set("access_token", value: "legacy-access")
         await store.set("refresh_token", value: "legacy-refresh")
         await store.set("expires_at", value: "9999999999000")
-        let client = makeClient(named: "aws-blocks/auth", on: shared)
-        let second = makeClient(named: "aws-blocks/auth", on: shared)
+        let client = makeClient(named: "cdk-blocks/auth", on: shared)
+        let second = makeClient(named: "cdk-blocks/auth", on: shared)
 
         let token = await client.getAccessToken()
         let secondToken = await second.getAccessToken()
-        let scoped = await store.get(tokenKey("refresh_token", exchangePath: "/aws-blocks/auth/exchange"))
+        let scoped = await store.get(tokenKey("refresh_token", exchangePath: "/cdk-blocks/auth/exchange"))
         let legacy = await store.get("refresh_token")
         XCTAssertEqual(token, "legacy-access")
         XCTAssertEqual(secondToken, "legacy-access", "a second client for the same block reads the moved session")
@@ -933,13 +933,13 @@ final class OIDCClientTests: XCTestCase {
 
     /// A client for another block, used first, leaves the unscoped tokens for the default block's client.
     func testAnotherBlocksClientUsedFirstLeavesTheUnscopedTokens() async {
-        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let shared = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let store = shared.tokenStore
         await store.set("access_token", value: "legacy-access")
         await store.set("refresh_token", value: "legacy-refresh")
         await store.set("expires_at", value: "9999999999000")
         let sso = makeClient(named: "cdk-blocks/auth/sso", on: shared)
-        let main = makeClient(named: "aws-blocks/auth", on: shared)
+        let main = makeClient(named: "cdk-blocks/auth", on: shared)
 
         let ssoToken = await sso.getAccessToken()
         let stillUnscoped = await store.get("refresh_token")
@@ -948,7 +948,7 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertNil(ssoToken)
         XCTAssertEqual(stillUnscoped, "legacy-refresh")
         XCTAssertEqual(mainToken, "legacy-access")
-        let ssoScoped = await store.get(tokenKey("refresh_token", exchangePath: "/aws-blocks/auth/sso/exchange"))
+        let ssoScoped = await store.get(tokenKey("refresh_token", exchangePath: "/cdk-blocks/auth/sso/exchange"))
         XCTAssertNil(ssoScoped)
     }
 
@@ -957,8 +957,8 @@ final class OIDCClientTests: XCTestCase {
             ["access_token": "legacy-access", "refresh_token": "legacy-refresh", "expires_at": "9999999999000"],
             holding: "access_token"
         )
-        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
-        let auth = makeClient(named: "aws-blocks/auth", on: shared)
+        let shared = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession(), tokenStore: store)
+        let auth = makeClient(named: "cdk-blocks/auth", on: shared)
         let sso = makeClient(named: "cdk-blocks/auth/sso", on: shared)
 
         async let authToken = auth.getAccessToken()
@@ -966,7 +966,7 @@ final class OIDCClientTests: XCTestCase {
         let tokens = await [authToken, ssoToken]
 
         let adopters = await Set(store.writtenKeys.map { $0.components(separatedBy: "#")[0] })
-        XCTAssertEqual(adopters, ["/aws-blocks/auth/exchange"], "only the default block's client adopts the old session")
+        XCTAssertEqual(adopters, ["/cdk-blocks/auth/exchange"], "only the default block's client adopts the old session")
         XCTAssertEqual(tokens, ["legacy-access", nil])
         XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
     }
@@ -977,9 +977,9 @@ final class OIDCClientTests: XCTestCase {
             ["access_token": "legacy-access", "refresh_token": "legacy-refresh", "expires_at": "9999999999000"],
             holding: "access_token"
         )
-        let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
-        let first = makeClient(named: "aws-blocks/auth", on: shared)
-        let second = makeClient(named: "aws-blocks/auth", on: shared)
+        let shared = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession(), tokenStore: store)
+        let first = makeClient(named: "cdk-blocks/auth", on: shared)
+        let second = makeClient(named: "cdk-blocks/auth", on: shared)
 
         async let firstToken = first.getAccessToken()
         async let secondToken = second.getAccessToken()
@@ -1005,7 +1005,7 @@ final class OIDCClientTests: XCTestCase {
                 ]
             ]
         ]
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api")
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api")
         let client = try OIDCClient<String>.fromJSON(descriptor, baseUrl: "https://api.example.com", client: blocksClient)
         XCTAssertEqual(client.providers, ["google"])
         XCTAssertEqual(client.exchangePath, "/auth/exchange")
@@ -1021,11 +1021,11 @@ final class OIDCClientTests: XCTestCase {
     func testSignInDerivesTheAuthBlockRoutesFromExchangePath() async throws {
         let session = makeMockSession()
         stubAuthRoutes()
-        let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: session)
+        let blocksClient = BlocksClient(url: "https://api.example.com/prod/cdk-blocks/api", session: session)
         let client = try OIDCClient<String>.fromJSON(
             [
-                "exchangePath": "/aws-blocks/auth/exchange",
-                "signOutPath": "/aws-blocks/auth/signout",
+                "exchangePath": "/cdk-blocks/auth/exchange",
+                "signOutPath": "/cdk-blocks/auth/signout",
                 "providers": ["google"]
             ],
             baseUrl: blocksClient.baseUrl,
@@ -1036,18 +1036,18 @@ final class OIDCClientTests: XCTestCase {
         let user = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: launcher)
 
         XCTAssertEqual(user.userId, "u1")
-        XCTAssertEqual(client.refreshPath, "/aws-blocks/auth/exchange/refresh")
+        XCTAssertEqual(client.refreshPath, "/cdk-blocks/auth/exchange/refresh")
         XCTAssertEqual(
             OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
             [
-                "https://api.example.com/prod/aws-blocks/auth/authorize-params/google",
-                "https://api.example.com/prod/aws-blocks/auth/exchange"
+                "https://api.example.com/prod/cdk-blocks/auth/authorize-params/google",
+                "https://api.example.com/prod/cdk-blocks/auth/exchange"
             ]
         )
         let authorizeURL = try XCTUnwrap(launcher.authorizeURL)
         let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == "redirect_uri" }?.value
-        XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/callback")
+        XCTAssertEqual(redirectURI, "https://api.example.com/prod/cdk-blocks/auth/callback")
     }
 
     // MARK: - Descriptor routes
@@ -1055,7 +1055,7 @@ final class OIDCClientTests: XCTestCase {
     /// The `oidc/client` descriptor `Auth.createOidcApi().getClient()` sends for a block whose routes
     /// sit under `base`, with `callback` as its `redirects.callbackPath`.
     static func authDescriptor(
-        base: String = "/aws-blocks/auth",
+        base: String = "/cdk-blocks/auth",
         callback: String? = nil,
         providers: [String] = ["google"],
         sessionCookieName: String? = nil
@@ -1077,7 +1077,7 @@ final class OIDCClientTests: XCTestCase {
     /// A client hydrated from `authDescriptor`, as `blocks.<ns>.getClient()` returns it.
     static func authClient(
         on blocksClient: BlocksClient,
-        base: String = "/aws-blocks/auth",
+        base: String = "/cdk-blocks/auth",
         callback: String? = nil,
         providers: [String] = ["google"],
         sessionCookieName: String? = nil
@@ -1123,11 +1123,11 @@ final class OIDCClientTests: XCTestCase {
     /// descriptor's routes, and the IdP `redirect_uri` is the block's own callback.
     func testFromJSONSignsInAtTheDescriptorsCallbackAndAuthorizeParamsPaths() async throws {
         stubAuthRoutes()
-        let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/prod/cdk-blocks/api", session: makeMockSession())
         let client = try Self.authClient(
             on: blocksClient,
-            base: "/aws-blocks/auth/sso",
-            callback: "/aws-blocks/auth/sso/return",
+            base: "/cdk-blocks/auth/sso",
+            callback: "/cdk-blocks/auth/sso/return",
             providers: ["corp sso"]
         )
         let launcher = EchoStateRelayLauncher(relay: "nativebindings://auth?code=c")
@@ -1135,67 +1135,67 @@ final class OIDCClientTests: XCTestCase {
         let user = try await client.signIn(provider: "corp sso", relayTo: "nativebindings://auth", launcher: launcher)
 
         XCTAssertEqual(user.userId, "u1")
-        XCTAssertEqual(client.callbackPath, "/aws-blocks/auth/sso/return")
-        XCTAssertEqual(client.authorizeParamsBasePath, "/aws-blocks/auth/sso/authorize-params")
+        XCTAssertEqual(client.callbackPath, "/cdk-blocks/auth/sso/return")
+        XCTAssertEqual(client.authorizeParamsBasePath, "/cdk-blocks/auth/sso/authorize-params")
         XCTAssertEqual(
             OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
             [
-                "https://api.example.com/prod/aws-blocks/auth/sso/authorize-params/corp%20sso",
-                "https://api.example.com/prod/aws-blocks/auth/sso/exchange"
+                "https://api.example.com/prod/cdk-blocks/auth/sso/authorize-params/corp%20sso",
+                "https://api.example.com/prod/cdk-blocks/auth/sso/exchange"
             ]
         )
         let exchange = requestJSON(OIDCMockURLProtocol.requests[1])
-        XCTAssertEqual(exchange["callbackUrl"] as? String, "https://api.example.com/prod/aws-blocks/auth/sso/return")
+        XCTAssertEqual(exchange["callbackUrl"] as? String, "https://api.example.com/prod/cdk-blocks/auth/sso/return")
         let authorizeURL = try XCTUnwrap(launcher.authorizeURL)
         let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == "redirect_uri" }?.value
-        XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/sso/return")
+        XCTAssertEqual(redirectURI, "https://api.example.com/prod/cdk-blocks/auth/sso/return")
     }
 
     func testDecodedClientKeepsTheDescriptorsRoutePaths() throws {
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api")
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api")
         let data = try JSONSerialization.data(withJSONObject: Self.authDescriptor(
-            base: "/aws-blocks/auth/sso",
-            callback: "/aws-blocks/auth/sso/return"
+            base: "/cdk-blocks/auth/sso",
+            callback: "/cdk-blocks/auth/sso/return"
         ))
         let client = try blocksClient.makeDecoder().decode(OIDCClient<String>.self, from: data)
-        XCTAssertEqual(client.callbackPath, "/aws-blocks/auth/sso/return")
-        XCTAssertEqual(client.authorizeParamsBasePath, "/aws-blocks/auth/sso/authorize-params")
+        XCTAssertEqual(client.callbackPath, "/cdk-blocks/auth/sso/return")
+        XCTAssertEqual(client.authorizeParamsBasePath, "/cdk-blocks/auth/sso/authorize-params")
     }
 
     /// A client built with `init` for a block whose callback isn't named `callback`
-    /// (`redirects.callbackPath: '/aws-blocks/auth/partner/return'`) signs in through the paths it was given,
+    /// (`redirects.callbackPath: '/cdk-blocks/auth/partner/return'`) signs in through the paths it was given,
     /// not ones derived from `exchangePath`.
     func testSignInUsesTheCallbackAndAuthorizeParamsPathsPassedToInit() async throws {
         stubAuthRoutes()
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let client = OIDCClient<String>(
-            exchangePath: "/aws-blocks/auth/partner/exchange",
-            refreshPath: "/aws-blocks/auth/partner/exchange/refresh",
-            signOutPath: "/aws-blocks/auth/partner/signout",
+            exchangePath: "/cdk-blocks/auth/partner/exchange",
+            refreshPath: "/cdk-blocks/auth/partner/exchange/refresh",
+            signOutPath: "/cdk-blocks/auth/partner/signout",
             providers: ["google"],
             providerConfigs: [:],
             baseUrl: blocksClient.baseUrl,
             client: blocksClient,
-            authorizeParamsBasePath: "/aws-blocks/auth/partner/authorize-params",
-            callbackPath: "/aws-blocks/auth/partner/return"
+            authorizeParamsBasePath: "/cdk-blocks/auth/partner/authorize-params",
+            callbackPath: "/cdk-blocks/auth/partner/return"
         )
         let launcher = EchoStateRelayLauncher(relay: "nativebindings://auth?code=c")
 
         _ = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: launcher)
 
-        XCTAssertEqual(client.sessionPath, "/aws-blocks/auth/partner/session")
+        XCTAssertEqual(client.sessionPath, "/cdk-blocks/auth/partner/session")
         XCTAssertEqual(
             OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
             [
-                "https://api.example.com/aws-blocks/auth/partner/authorize-params/google",
-                "https://api.example.com/aws-blocks/auth/partner/exchange"
+                "https://api.example.com/cdk-blocks/auth/partner/authorize-params/google",
+                "https://api.example.com/cdk-blocks/auth/partner/exchange"
             ]
         )
         let authorizeURL = try XCTUnwrap(launcher.authorizeURL)
         let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == "redirect_uri" }?.value
-        XCTAssertEqual(redirectURI, "https://api.example.com/aws-blocks/auth/partner/return")
+        XCTAssertEqual(redirectURI, "https://api.example.com/cdk-blocks/auth/partner/return")
     }
 
     func testExchangeRefusesAnUnknownProviderBeforeAnyRequest() async {
@@ -1231,7 +1231,7 @@ final class OIDCClientTests: XCTestCase {
                 ])
                 return (okResponse(for: request.url!), body)
             }
-            let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+            let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
             let client = try Self.authClient(on: blocksClient)
 
             do {
@@ -1250,7 +1250,7 @@ final class OIDCClientTests: XCTestCase {
 
     func testSignInChecksTheStateBeforeTheIdPError() async throws {
         stubAuthRoutes()
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let client = try Self.authClient(on: blocksClient)
 
         // An error without the sign-in's state is refused as a mismatch, whatever its text.
@@ -1295,7 +1295,7 @@ final class OIDCClientTests: XCTestCase {
             ])
             return (okResponse(for: request.url!), body)
         }
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let client = try Self.authClient(on: blocksClient)
 
         do {
@@ -1311,16 +1311,17 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "no exchange")
     }
 
-    /// The origin raw routes are requested at: the client URL cut at its first `aws-blocks` segment.
-    func testRawRouteBaseKeepsTheStageAndCutsAtTheFirstAwsBlocksSegment() {
+    /// The origin raw routes are requested at: the client URL cut at its first `cdk-blocks` segment.
+    func testRawRouteBaseKeepsTheStageAndCutsAtTheFirstBlocksSegment() {
         let cases = [
-            ("https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api",
+            ("https://x.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api",
              "https://x.execute-api.us-east-1.amazonaws.com/prod"),
-            ("https://d1.cloudfront.net/aws-blocks/api", "https://d1.cloudfront.net"),
-            ("https://d1.cloudfront.net/aws-blocks/api/aws-blocks/api", "https://d1.cloudfront.net"),
+            ("https://d1.cloudfront.net/cdk-blocks/api", "https://d1.cloudfront.net"),
+            ("https://d1.cloudfront.net/cdk-blocks/api/cdk-blocks/api", "https://d1.cloudfront.net"),
+            ("https://host/prod/aws-blocks/api", "https://host/prod"),
             ("http://localhost:3001", "http://localhost:3001"),
-            ("http://[::1]:3001/aws-blocks/api", "http://[::1]:3001"),
-            ("https://x.example.com/pr%20od/aws-blocks/api", "https://x.example.com/pr%20od"),
+            ("http://[::1]:3001/cdk-blocks/api", "http://[::1]:3001"),
+            ("https://x.example.com/pr%20od/cdk-blocks/api", "https://x.example.com/pr%20od"),
             ("http://localhost:3001/", "http://localhost:3001")
         ]
         for (url, origin) in cases {
@@ -1329,7 +1330,7 @@ final class OIDCClientTests: XCTestCase {
     }
 
     func testFromJSONReadsTheSessionCookieName() throws {
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api")
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api")
         let named = try Self.authClient(on: blocksClient, sessionCookieName: "auth_app")
         XCTAssertEqual(named.sessionCookieName, "auth_app")
         let older = try Self.authClient(on: blocksClient)

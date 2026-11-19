@@ -157,7 +157,7 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
       '@aws-blocks/hosting:FrontDoorBehaviorLimit',
       `Front door '${service}' asked the cf.* helpers for ${wiring.behaviors.size} cache behaviors; a CloudFront ` +
         `distribution allows ${MAX_ADDITIONAL_BEHAVIORS} besides its default by default, so the deploy fails unless the ` +
-        'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/aws-blocks/`.',
+        'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/cdk-blocks/`.',
     );
   }
   if (problems.length === 0) return;

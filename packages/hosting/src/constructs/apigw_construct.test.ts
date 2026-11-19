@@ -158,20 +158,21 @@ describe('ApiGatewayConstruct — Next.js routes with no image function', () => 
 
 describe('ApiGatewayConstruct — with backend proxy', () => {
   it("leaves the backend's catch-all raw route ('/*') out on HTTP and REST, and warns (as the ALB door does)", () => {
-    const plan = withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api');
+    const plan = withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api');
     for (const Ctor of [ApiGatewayConstruct, ApiGatewayRestConstruct]) {
       const stack = new Stack(new App(), 'C', { env: { account: '111111111111', region: 'us-west-2' } });
-      new Ctor(stack, 'ApiGw', { plan, bucket: new Bucket(stack, 'Assets'), apiPaths: ['/aws-blocks/*', '/*'] });
+      new Ctor(stack, 'ApiGw', { plan, bucket: new Bucket(stack, 'Assets'), apiPaths: ['/cdk-blocks/*', '/*'] });
       const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('CatchAllApiPathNotRouted'));
       assert.equal(warnings.length, 1, Ctor.name);
     }
   });
 
-  it('adds the same-origin backend route (/aws-blocks/*, which covers sign-in) via HTTP integration', () => {
-    const t = synth(withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api'));
-    // 2 static + 2 backend (`/aws-blocks/{proxy+}`, and `/aws-blocks` itself — a
-    // greedy `{proxy+}` needs at least one character) + $default = 5 routes
-    t.resourceCountIs('AWS::ApiGatewayV2::Route', 5);
+  it('adds the same-origin backend route (/cdk-blocks/*, which covers sign-in) via HTTP integration', () => {
+    const t = synth(withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api'));
+    // 2 static + 4 backend (`/cdk-blocks/{proxy+}` and `/cdk-blocks` itself — a
+    // greedy `{proxy+}` needs at least one character — plus the same pair for the
+    // legacy `/aws-blocks`) + $default = 7 routes
+    t.resourceCountIs('AWS::ApiGatewayV2::Route', 7);
     // At least one HTTP_PROXY integration to the backend
     t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
   });
@@ -181,8 +182,8 @@ describe('ApiGatewayConstruct — with backend proxy', () => {
       ...staticPlan,
       backend: {
         origins: [
-          { namespace: 'notes', ingress: { kind: 'url', url: 'https://notes.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } },
-          { namespace: 'users', ingress: { kind: 'url', url: 'https://users.example.com/aws-blocks/api' } },
+          { namespace: 'notes', ingress: { kind: 'url', url: 'https://notes.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' } },
+          { namespace: 'users', ingress: { kind: 'url', url: 'https://users.example.com/cdk-blocks/api' } },
         ],
       },
     };
@@ -233,9 +234,9 @@ describe('ApiGatewayRestConstruct — static plan', () => {
 });
 
 describe('ApiGatewayRestConstruct — with backend proxy', () => {
-	it('adds a same-origin HTTP_PROXY backend integration for /aws-blocks/*', () => {
+	it('adds a same-origin HTTP_PROXY backend integration for /cdk-blocks/*', () => {
 		const t = synthRest(
-			withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api'),
+			withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api'),
 		);
 		t.hasResourceProperties('AWS::ApiGateway::Method', {
 			Integration: { Type: 'HTTP_PROXY' },

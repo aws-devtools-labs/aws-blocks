@@ -186,17 +186,17 @@ describe('runContainer({ backend }) — serving the API', { timeout: 90_000 }, (
 		const container = await startContainer(true);
 		assert.match(container.output(), /api=on/);
 
-		const reply = await send(container.httpPort, 'POST', '/aws-blocks/api/api', rpc('api.echo', ['hi']));
+		const reply = await send(container.httpPort, 'POST', '/cdk-blocks/api/api', rpc('api.echo', ['hi']));
 		assert.strictEqual(reply.status, 200, reply.body);
 		const body = JSON.parse(reply.body);
 		assert.strictEqual(body.error, undefined, reply.body);
 		assert.strictEqual(body.result.msg, 'hi');
-		assert.strictEqual(new URL(body.result.url).pathname, '/aws-blocks/api/api');
+		assert.strictEqual(new URL(body.result.url).pathname, '/cdk-blocks/api/api');
 	});
 
 	it('rejects a path naming a different namespace than the body', async () => {
 		const container = await startContainer(true);
-		const reply = await send(container.httpPort, 'POST', '/aws-blocks/api/other', rpc('api.echo', ['x']));
+		const reply = await send(container.httpPort, 'POST', '/cdk-blocks/api/other', rpc('api.echo', ['x']));
 		const body = JSON.parse(reply.body);
 		assert.strictEqual(body.error?.code, -32600, reply.body);
 		assert.strictEqual(body.error?.data?.name, 'InvalidRequest');
@@ -217,7 +217,7 @@ describe('runContainer({ backend }) — serving the API', { timeout: 90_000 }, (
 
 	it('on SIGTERM reports not-ready, finishes the in-flight call, closes its ports, and exits cleanly', async () => {
 		const container = await startContainer(true);
-		const inFlight = send(container.httpPort, 'POST', '/aws-blocks/api/api', rpc('api.hold', [HOLD_MS]));
+		const inFlight = send(container.httpPort, 'POST', '/cdk-blocks/api/api', rpc('api.hold', [HOLD_MS]));
 		await container.waitForOutput('hold started');
 
 		const signalledAt = Date.now();

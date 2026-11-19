@@ -27,7 +27,7 @@ import { cf } from './cf_helpers.js';
 import { defineFrontDoor } from './front_door.js';
 import { doorCapabilitiesFor, HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
 
 const customCloudFrontDoor = defineFrontDoor({
   service: 'my-cdn',

@@ -51,7 +51,7 @@ function readTestSupportSecret(): string {
 
 /** Call `testSupport.provisionUser` and return the raw JSON-RPC response body. */
 async function callProvisionUser(request: APIRequestContext, secret: string, username: string, password: string) {
-  const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+  const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {
     headers: { 'Content-Type': 'application/json' },
     data: JSON.stringify({
       jsonrpc: '2.0',
@@ -100,7 +100,7 @@ test.describe('Notes Manager — SPA Hosting', () => {
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
-    expect(config.apiUrl).toBe('/aws-blocks/api');
+    expect(config.apiUrl).toBe('/cdk-blocks/api');
   });
 
   test('3. SPA fallback — deep path still loads the app', async ({ page }) => {
@@ -152,7 +152,7 @@ test.describe('Notes Manager — SPA Hosting', () => {
     // up, and the record returned belongs to the user asked for. Called over
     // JSON-RPC directly — testUser signed up in the previous serial test.
     const rpc = async (method: string, args: unknown[]) => {
-      const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+      const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {
         headers: { 'Content-Type': 'application/json' },
         data: { jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 },
       });
@@ -261,7 +261,7 @@ test.describe('Notes Manager — SPA Hosting', () => {
     await expect(statsLocator).toHaveText(/^[1-9]\d*$/);
   });
 
-  test('11. A raw route outside /aws-blocks/* answers same-origin, with an encoded query intact', async ({ request }) => {
+  test('11. A raw route outside /cdk-blocks/* answers same-origin, with an encoded query intact', async ({ request }) => {
     const res = await request.get(`${hostingUrl}/hooks/echo?q=${encodeURIComponent('a b+c&d=é/%')}`);
     expect(res.status()).toBe(200);
     const body = await res.json();
@@ -275,7 +275,7 @@ test.describe('Notes Manager — SPA Hosting', () => {
     // The browser path: same origin as the page, per-namespace path, Hosting's
     // front door → shared gateway → the namespace's compute.
     const whereAmI = async (namespace: string) => {
-      const resp = await request.post(`${hostingUrl}/aws-blocks/api/${namespace}`, {
+      const resp = await request.post(`${hostingUrl}/cdk-blocks/api/${namespace}`, {
         headers: { 'Content-Type': 'application/json' },
         data: { jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 },
       });

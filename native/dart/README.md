@@ -91,7 +91,7 @@ This produces a typed Dart client from your spec.
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'blocks.blocks.dart';
 
-final blocks = Blocks(baseUrl: 'http://localhost:3001/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'http://localhost:3001/cdk-blocks/api');
 final greeting = await blocks.hello.greet(name: 'World');
 print(greeting.message); // "Hello, World!"
 ```
@@ -114,7 +114,7 @@ import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'blocks.blocks.dart'; // the generated client
 
-const rpcUrl = 'https://api.example.com/aws-blocks/api';
+const rpcUrl = 'https://api.example.com/cdk-blocks/api';
 
 // blocks_runtime_flutter keeps the session in secure storage by default
 // (see Sessions), so a restarted app is still signed in.

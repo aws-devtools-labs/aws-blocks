@@ -40,7 +40,7 @@ interface RpcResponse {
  * technique).
  */
 async function rpcRaw(baseUrl: string, method: string, args: unknown[], cookie?: string): Promise<RpcResponse> {
-  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+  const resp = await fetch(`${baseUrl}/cdk-blocks/api`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
     body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),

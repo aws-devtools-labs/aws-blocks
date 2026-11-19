@@ -21,7 +21,7 @@ import { cf } from './cf_helpers.js';
 import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api';
 
 describe('HostingConstruct — bring-your-own front door', () => {
   let tmpDir: string;
@@ -91,7 +91,7 @@ describe('HostingConstruct — bring-your-own front door', () => {
     assert.equal(input.origins.assets.prefix, 'builds/byo1/');
     assert.equal(input.origins.assets.sourceDir, tmpDir);
     assert.equal(input.origins.server, undefined, 'a static app has no server origin');
-    assert.deepEqual(input.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*']);
+    assert.deepEqual(input.origins.api?.paths, ['/cdk-blocks/*', '/aws-blocks/*', '/webhooks/*']);
     assert.deepEqual(Object.keys(input.features), ['waf', 'skewProtection'], 'only the WAF (and default skew protection) asked for');
     assert.equal(input.features.waf?.webAclArn, 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/x/1');
   });

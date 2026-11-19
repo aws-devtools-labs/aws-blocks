@@ -106,19 +106,19 @@ export type ImageOrigin = {
 /**
  * The backend API, present when `Hosting` was given one (`api`). Every path
  * that must reach the backend is listed, so a door cannot silently drop a raw
- * route by proxying only `/aws-blocks/*`.
+ * route by proxying only `/cdk-blocks/*`.
  */
 export type ApiOrigin = {
   /** Discriminant. */
   readonly kind: 'api';
-  /** The backend's full API URL (a CDK token), e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks/api`. */
+  /** The backend's full API URL (a CDK token), e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/cdk-blocks/api`. */
   readonly url: string;
   /** The API host (no scheme, no path), derived from {@link url} in-template. */
   readonly host: string;
   /** The stage path to set as the origin path, e.g. `/prod`, derived from {@link url} in-template. */
   readonly stagePath: string;
   /**
-   * Every path pattern to proxy to the API: `/aws-blocks/*` (RPC and sign-in)
+   * Every path pattern to proxy to the API: `/cdk-blocks/*` (RPC and sign-in)
    * plus each raw route the backend registered.
    */
   readonly paths: readonly string[];

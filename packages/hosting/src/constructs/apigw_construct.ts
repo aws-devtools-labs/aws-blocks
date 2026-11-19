@@ -13,7 +13,7 @@
  *   - `$default`      → the SSR server Lambda (or the asset proxy for a static
  *     site, which serves index.html on a miss for SPA fallback).
  *   - image routes    → the image-opt Lambda.
- *   - every API path (`/aws-blocks/*` plus the backend's raw routes) → an HTTP
+ *   - every API path (`/cdk-blocks/*` plus the backend's raw routes) → an HTTP
  *     proxy integration straight to the backend API Gateway (same-origin; no
  *     forwarder Lambda needed, unlike ALB — HTTP API can proxy an external
  *     HTTPS URL natively).
@@ -68,9 +68,9 @@ export type ApiGatewayConstructProps = {
   domain?: ApiGwCustomDomain;
   /**
    * Every path pattern the single-compute (`'*'`) backend serves — the
-   * `DoorInput.origins.api.paths`: `/aws-blocks/*` plus the backend's raw
+   * `DoorInput.origins.api.paths`: `/cdk-blocks/*` plus the backend's raw
    * routes. Each becomes a route proxied to the same path on the backend.
-   * @default ['/aws-blocks/*']
+   * @default ['/cdk-blocks/*']
    */
   apiPaths?: readonly string[];
   /**
@@ -196,12 +196,12 @@ export class ApiGatewayConstruct extends Construct {
     // Same-origin backend routing (native HTTP proxy — HTTP API can proxy an
     // external HTTPS URL directly, no forwarder Lambda). Each backend origin
     // path-routes its namespace to that compute's ingress. A lone `'*'` origin
-    // is the single-compute case: every API path (`/aws-blocks/*`, which covers
-    // sign-in at `/aws-blocks/auth/*`, plus the backend's raw routes) → one
-    // backend; a named namespace routes `/aws-blocks/api/{ns}/*`.
+    // is the single-compute case: every API path (`/cdk-blocks/*`, which covers
+    // sign-in at `/cdk-blocks/auth/*`, plus the backend's raw routes) → one
+    // backend; a named namespace routes `/cdk-blocks/api/{ns}/*`.
     const backendPaths = new Set<string>();
     for (const origin of plan.backend?.origins ?? []) {
-      // Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to get
+      // Split the ingress URL on the `/cdk-blocks/api` suffix (token-safe) to get
       // the backend base — the same URL shape whether it is a Lambda API Gateway,
       // a container ALB, or a BYOC endpoint.
       const base = backendBaseUrl(origin.ingress.url); // https://…/prod
@@ -211,8 +211,8 @@ export class ApiGatewayConstruct extends Construct {
           for (const route of apiPathToRoutes(pattern, 'API Gateway')) {
             if (backendPaths.has(route.path)) continue;
             backendPaths.add(route.path);
-            // `BackendRpc` is the `/aws-blocks/{proxy+}` route's integration.
-            const id = route.path === '/aws-blocks/{proxy+}' ? 'BackendRpc' : `BackendRoute${++i}`;
+            // `BackendRpc` is the `/cdk-blocks/{proxy+}` route's integration.
+            const id = route.path === '/cdk-blocks/{proxy+}' ? 'BackendRpc' : `BackendRoute${++i}`;
             this.api.addRoutes({
               path: route.path,
               methods: [HttpMethod.ANY],
@@ -223,9 +223,9 @@ export class ApiGatewayConstruct extends Construct {
       } else {
         const ns = origin.namespace;
         this.api.addRoutes({
-          path: `/aws-blocks/api/${ns}/{proxy+}`,
+          path: `/cdk-blocks/api/${ns}/{proxy+}`,
           methods: [HttpMethod.ANY],
-          integration: new HttpUrlIntegration(`BackendNs-${ns}`, `${base}/aws-blocks/api/${ns}/{proxy}`),
+          integration: new HttpUrlIntegration(`BackendNs-${ns}`, `${base}/cdk-blocks/api/${ns}/{proxy}`),
         });
       }
     }
@@ -277,7 +277,7 @@ export class ApiGatewayConstruct extends Construct {
         continue;
       }
       if (path === null || seen.has(path) || backendPaths.has(path)) continue;
-      if (path.startsWith('/aws-blocks/')) continue; // backend owns these
+      if (path.startsWith('/cdk-blocks/') || path.startsWith('/aws-blocks/')) continue; // backend owns these
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
     }
@@ -291,7 +291,7 @@ export class ApiGatewayConstruct extends Construct {
       }
       const path = globToProxyPath(entry.pattern);
       if (path === null || seen.has(path) || backendPaths.has(path)) continue;
-      if (path.startsWith('/aws-blocks/')) continue; // backend owns these
+      if (path.startsWith('/cdk-blocks/') || path.startsWith('/aws-blocks/')) continue; // backend owns these
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: integrationForKind(entry.kind) });
     }

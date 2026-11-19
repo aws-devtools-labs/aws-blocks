@@ -1915,7 +1915,7 @@ describe('JSON output', () => {
 				);
 				writeFileSync(
 					join(root, '.cdk-blocks-sandbox', 'config.json'),
-					JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }),
+					JSON.stringify({ apiUrl: 'http://localhost:3000/cdk-blocks/api', environment: 'local' }),
 				);
 				return { code: 0 };
 			},

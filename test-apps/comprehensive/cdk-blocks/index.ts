@@ -395,12 +395,12 @@ const oidcAuthExtras = new Auth(scope, 'oidc-auth-extras', {
     'google-extras': e2eOidcProvider(),
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/extras/callback',
-    signOutPath: '/aws-blocks/auth/extras/signout',
+    callbackPath: '/cdk-blocks/auth/extras/callback',
+    signOutPath: '/cdk-blocks/auth/extras/signout',
   },
   // Bearer-token auth is enabled on this instance so e2e tests can exercise
-  // the native-client flow — /aws-blocks/auth/extras/exchange returns tokens
-  // alongside the user, and /aws-blocks/auth/extras/refresh renews tokens.
+  // the native-client flow — /cdk-blocks/auth/extras/exchange returns tokens
+  // alongside the user, and /cdk-blocks/auth/extras/refresh renews tokens.
   allowBearerAuth: true,
   onSignIn: async (user) => {
     const email = user.attributes.email ?? null;
@@ -425,8 +425,8 @@ const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
     'google-relay': e2eOidcProvider(),
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/relay/callback',
-    signOutPath: '/aws-blocks/auth/relay/signout',
+    callbackPath: '/cdk-blocks/auth/relay/callback',
+    signOutPath: '/cdk-blocks/auth/relay/signout',
     allowedRelayOrigins: [relayOrigin('testapp://auth')],
   },
   allowBearerAuth: true,
@@ -444,8 +444,8 @@ const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
     'web-idp': e2eOidcProvider(),
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/web/callback',
-    signOutPath: '/aws-blocks/auth/web/signout',
+    callbackPath: '/cdk-blocks/auth/web/callback',
+    signOutPath: '/cdk-blocks/auth/web/signout',
     allowedRelayOrigins: [relayOrigin('https://app.example.com')],
   },
 });
@@ -495,8 +495,8 @@ new Auth(scope, 'auth-gated-idp', {
       : { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' },
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/gated/callback',
-    signOutPath: '/aws-blocks/auth/gated/signout',
+    callbackPath: '/cdk-blocks/auth/gated/callback',
+    signOutPath: '/cdk-blocks/auth/gated/signout',
   },
   validateUser: gatedPolicy,
 });
@@ -527,8 +527,8 @@ new Auth(scope, 'oidc-auth-hookfail', {
       }
     : { 'hookfail-raw': { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' } },
   redirects: {
-    callbackPath: '/aws-blocks/auth/hookfail/callback',
-    signOutPath: '/aws-blocks/auth/hookfail/signout',
+    callbackPath: '/cdk-blocks/auth/hookfail/callback',
+    signOutPath: '/cdk-blocks/auth/hookfail/signout',
   },
   onSignIn: async (user) => {
     if (user.signInProvider === 'hookfail-api') {
@@ -3402,8 +3402,8 @@ const authSocial = localDev
         },
       },
       redirects: {
-        callbackPath: '/aws-blocks/auth/social/callback',
-        signOutPath: '/aws-blocks/auth/social/signout',
+        callbackPath: '/cdk-blocks/auth/social/callback',
+        signOutPath: '/cdk-blocks/auth/social/signout',
       },
     })
   : undefined;

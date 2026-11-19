@@ -10,7 +10,7 @@
  * @see https://www.jsonrpc.org/specification
  */
 
-import { BLOCKS_RPC_PREFIX, rpcNamespaceFromPath } from './constants.js';
+import { BLOCKS_RPC_PREFIX, canonicalBlocksPath, rpcNamespaceFromPath } from './constants.js';
 import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
 
 /**
@@ -41,7 +41,7 @@ export type RpcParseResult =
 export interface RpcParseOptions {
   /**
    * The request path, without query string. When it is a per-namespace RPC path
-   * it must be exactly `/aws-blocks/api/{namespace}` (an optional trailing slash
+   * it must be exactly `/cdk-blocks/api/{namespace}` (an optional trailing slash
    * aside), and the namespace it names must match the body's `namespace.method`
    * prefix, or the request is rejected as invalid.
    */
@@ -395,12 +395,13 @@ function clipName(name: string): string {
  * Why `pathname` can't carry a call into `bodyNamespace`, or `undefined` when it
  * can. The bare endpoint carries any namespace (which compute serves which
  * namespace is the dispatcher's `servesNamespace` check). A per-namespace path must be
- * exactly `/aws-blocks/api/{namespace}` — one segment, so a deeper path is
+ * exactly `/cdk-blocks/api/{namespace}` — one segment, so a deeper path is
  * rejected the same way whichever compute serves it — and must name the body's
  * namespace exactly (export names are case-sensitive). Names are clipped before
  * they are echoed, so the error stays small whatever the caller sent.
  */
-function rpcPathProblem(pathname: string, bodyNamespace: string): string | undefined {
+function rpcPathProblem(requestPath: string, bodyNamespace: string): string | undefined {
+  const pathname = canonicalBlocksPath(requestPath);
   if (!pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
   const rest = pathname.slice(BLOCKS_RPC_PREFIX.length + 1).replace(/\/$/, '');
   if (rest.includes('/')) {

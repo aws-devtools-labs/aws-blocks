@@ -195,7 +195,7 @@ jobs:
           # BLOCKS_URL) agree on it without a hardcoded literal.
           PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
           echo "PORT=${PORT}" >> "$GITHUB_ENV"
-          echo "BLOCKS_URL=http://localhost:${PORT}/aws-blocks/api" >> "$GITHUB_ENV"
+          echo "BLOCKS_URL=http://localhost:${PORT}/cdk-blocks/api" >> "$GITHUB_ENV"
           echo "Picked local server port ${PORT}"
 
       - name: Start native-bindings server
@@ -301,7 +301,7 @@ jobs:
           # Keep the server's output: a later step prints it if the job fails.
           npx tsx cdk-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
           for i in $(seq 1 30); do
-            curl -s -X POST http://localhost:3001/aws-blocks/api \
+            curl -s -X POST http://localhost:3001/cdk-blocks/api \
               -H "Content-Type: application/json" \
               -d '{"jsonrpc":"2.0","method":"api.kvGet","params":{"key":"healthcheck"},"id":1}' && break
             sleep 1
@@ -311,7 +311,7 @@ jobs:
         if: matrix.label != 'Android'
         working-directory: native/kotlin/e2e
         env:
-          BLOCKS_URL: http://localhost:3001/aws-blocks/api
+          BLOCKS_URL: http://localhost:3001/cdk-blocks/api
         run: ./gradlew ${{ matrix.gradle-task }}
 
       # `adb reverse` forwards the device's own localhost:3001 to the runner's,
@@ -326,7 +326,7 @@ jobs:
         uses: ./.github/actions/android-emulator
         with:
           working-directory: native/kotlin/e2e
-          blocks-url: http://localhost:3001/aws-blocks/api
+          blocks-url: http://localhost:3001/cdk-blocks/api
           script: |
             adb reverse tcp:3001 tcp:3001
             ./gradlew ${{ matrix.gradle-task }}
@@ -389,7 +389,7 @@ jobs:
           # BLOCKS_URL) agree on it without a hardcoded literal.
           PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
           echo "PORT=${PORT}" >> "$GITHUB_ENV"
-          echo "BLOCKS_URL=http://localhost:${PORT}/aws-blocks/api" >> "$GITHUB_ENV"
+          echo "BLOCKS_URL=http://localhost:${PORT}/cdk-blocks/api" >> "$GITHUB_ENV"
           echo "Picked local server port ${PORT}"
 
       - name: Run Swift codegen
@@ -472,7 +472,7 @@ jobs:
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
   # dispatch. Deploy uses `npm run deploy:sandbox` (cdk-blocks/scripts/deploy-sandbox.ts
   # -> startSandbox deployOnly -> cdk-blocks/index.cdk.ts with sandboxMode); the
-  # API serves JSON-RPC under `/aws-blocks/api`.
+  # API serves JSON-RPC under `/cdk-blocks/api`.
   #
   # Native OIDC sign-in against the sandbox. The OIDC relay suites (Dart
   # oidc_test.dart, Swift OIDCE2ETests, Kotlin OidcE2ETest) always run in the
@@ -498,7 +498,7 @@ jobs:
   #     test IdP that auto-approves a fixed user; a real Google/Okta tenant
   #     will not work);
   #   - accept the per-run redirect URI
-  #     https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/callback
+  #     https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/auth/callback
   #     — each run deploys a new API, so it must allow any `<api-id>`;
   #   - issue ID tokens signed with an asymmetric key published in its JWKS,
   #     with `aud` set to the client id.
@@ -595,10 +595,10 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.cdk-blocks-sandbox/config.sandbox.json'))['apiUrl'])")
-          # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
-          # so emit it as-is. (Appending /aws-blocks/api here previously doubled
+          # apiUrl is already the full JSON-RPC endpoint (…/prod/cdk-blocks/api),
+          # so emit it as-is. (Appending /cdk-blocks/api here previously doubled
           # the path: the non-OIDC suites still worked because API Gateway routes
-          # /prod/aws-blocks/api/* to the JSON-RPC Lambda, but the OIDC suite
+          # /prod/cdk-blocks/api/* to the JSON-RPC Lambda, but the OIDC suite
           # derived a wrong origin and misrouted its /auth/* relay request.)
           echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 
@@ -910,9 +910,9 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.cdk-blocks-sandbox/config.sandbox.json'))['apiUrl'])")
-          # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
-          # so emit it as-is. Appending /aws-blocks/api here doubled the path;
-          # API Gateway still routed /prod/aws-blocks/api/* to the JSON-RPC Lambda
+          # apiUrl is already the full JSON-RPC endpoint (…/prod/cdk-blocks/api),
+          # so emit it as-is. Appending /cdk-blocks/api here doubled the path;
+          # API Gateway still routed /prod/cdk-blocks/api/* to the JSON-RPC Lambda
           # so the suite "worked", but keeping the URL clean avoids surprises.
           echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 

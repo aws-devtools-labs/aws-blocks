@@ -48,7 +48,7 @@ private class RecordingLauncher : OidcPlatformLauncher {
 /**
  * Two federated `Auth` blocks, each signed in through the client its `getClient()` returns:
  * `auth-oidc` on the default routes, signing in with its second provider (`github2`), and
- * `auth-sso`, whose routes live under `/aws-blocks/auth/sso/` with the callback named `return`.
+ * `auth-sso`, whose routes live under `/cdk-blocks/auth/sso/` with the callback named `return`.
  *
  * Same headless-IdP rule as [OidcE2ETest]: local dev server, or a deployed backend with
  * `RUN_OIDC=1`.
@@ -102,8 +102,8 @@ class OidcMultiBlockE2ETest {
 
         // The IdP was sent the block's own callback, from the descriptor, not the default name.
         val redirectUri = Url(launcher.authorizeUrls.single()).parameters["redirect_uri"].shouldNotBeNull()
-        // A deployed API URL carries the API Gateway stage before /aws-blocks, so check the suffix.
-        Url(redirectUri).encodedPath shouldEndWith "/aws-blocks/auth/sso/return"
+        // A deployed API URL carries the API Gateway stage before /cdk-blocks, so check the suffix.
+        Url(redirectUri).encodedPath shouldEndWith "/cdk-blocks/auth/sso/return"
         client.authState.value shouldBe OidcAuthState.SignedIn(user)
         val me = api.ssoRequireAuth()
         me.userId shouldBe user.userId
@@ -175,7 +175,7 @@ class OidcMultiBlockE2ETest {
         fresh.restore()?.userId shouldBe userId
 
         val logoutUrl = fresh.signOut()
-        logoutUrl.shouldNotBeNull().substringBefore('?') shouldEndWith "/aws-blocks/auth/idp/$provider/logout"
+        logoutUrl.shouldNotBeNull().substringBefore('?') shouldEndWith "/cdk-blocks/auth/idp/$provider/logout"
         fresh.authState.value shouldBe OidcAuthState.SignedOut
 
         fresh.restore().shouldBeNull()

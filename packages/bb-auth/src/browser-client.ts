@@ -79,8 +79,8 @@ export type {
 } from './types.js';
 
 // `BLOCKS_AUTH_PREFIX` is not in core's browser entry, so the defaults are spelled out (pinned by a test).
-const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
-const DEFAULT_SIGN_OUT_PATH = '/aws-blocks/auth/signout';
+const DEFAULT_CALLBACK_PATH = '/cdk-blocks/auth/callback';
+const DEFAULT_SIGN_OUT_PATH = '/cdk-blocks/auth/signout';
 /** A pending sign-in older than this is discarded (the provider round trip is minutes, not hours). */
 const PENDING_TTL_MS = 10 * 60 * 1000;
 /** The OAuth response parameters `handleSignInRedirect()` reads and then removes from the URL. */

@@ -50,7 +50,7 @@ const PERMITTED: Record<string, string> = {
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, mfa: { mode: 'optional', types: ['TOTP'] } })",
 	'token validities (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('AccessTokenValidity', 30); ${L1_CLIENT}.addPropertyOverride('IdTokenValidity', 30); ${L1_CLIENT}.addPropertyOverride('RefreshTokenValidity', 7); ${L1_CLIENT}.addPropertyOverride('TokenValidityUnits', { AccessToken: 'minutes', IdToken: 'minutes', RefreshToken: 'days' });`,
 	'refresh-token rotation + explicit auth flows (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('RefreshTokenRotation', { Feature: 'ENABLED', RetryGracePeriodSeconds: 10 }); ${L1_CLIENT}.addPropertyOverride('ExplicitAuthFlows', ['ALLOW_USER_PASSWORD_AUTH']);`,
-	'callback URLs (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('CallbackURLs', ['https://app.example.com/aws-blocks/auth/callback']); ${L1_CLIENT}.addPropertyOverride('LogoutURLs', ['https://app.example.com/']);`,
+	'callback URLs (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('CallbackURLs', ['https://app.example.com/cdk-blocks/auth/callback']); ${L1_CLIENT}.addPropertyOverride('LogoutURLs', ['https://app.example.com/']);`,
 	'SupportedIdentityProviders (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('SupportedIdentityProviders', ['COGNITO', 'Google']);`,
 	'adding a social provider': `new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } } })`,
 	'adding a custom attribute':

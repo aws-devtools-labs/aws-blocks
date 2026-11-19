@@ -76,11 +76,11 @@ OidcClient _client(_AuthServer server) => OidcClient.fromJson(
     '__blocks': 'oidc/client',
     'providers': ['google'],
     'providerConfigs': <String, dynamic>{},
-    'exchangePath': '/aws-blocks/auth/exchange',
-    'signOutPath': '/aws-blocks/auth/signout',
-    'callbackPath': '/aws-blocks/auth/callback',
+    'exchangePath': '/cdk-blocks/auth/exchange',
+    'signOutPath': '/cdk-blocks/auth/signout',
+    'callbackPath': '/cdk-blocks/auth/callback',
   },
-  baseUrl: 'http://localhost:3001/aws-blocks/api',
+  baseUrl: 'http://localhost:3001/cdk-blocks/api',
   tokenStore: InMemoryTokenStore(),
   httpClient: server.client,
 );
@@ -116,7 +116,7 @@ void main() {
       expect(relayTo.scheme, 'http');
       expect(relayTo.host, '127.0.0.1');
       expect(relayTo.path, '/oidc/callback');
-      expect(server.requests.last.url.path, '/aws-blocks/auth/exchange');
+      expect(server.requests.last.url.path, '/cdk-blocks/auth/exchange');
       // The listener is closed once the sign-in returns.
       await expectLater(http.get(relayTo), throwsA(anything));
     }, testOn: 'vm && (mac-os || linux || windows)');

@@ -52,7 +52,7 @@ const compose = (id: string, opts: { internal: boolean; https: boolean }) => {
     plan,
     bucket,
     staticDir: '.',
-    api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' },
+    api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' },
   });
   buildFrontDoor(
     stack,
@@ -135,7 +135,7 @@ describe('cloudFrontEdgeDoor — an HTTPS router at its own domain', () => {
         plan,
         bucket,
         staticDir: '.',
-        api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' },
+        api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' },
       });
       buildFrontDoor(stack, cloudFrontEdgeDoor, { ...input, upstream: { service: 'alb', url: alb.url, originHandle: alb.originHandle } }, { wiringCheck: false });
       const t = Template.fromStack(stack);
@@ -179,7 +179,7 @@ const edgeFor = (
     staticDir: opts.staticDir ?? '.',
     ...(server ? { server: { fn: server, streaming: false } } : {}),
     ...(image ? { image: { fn: image, url: image.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM }) } } : {}),
-    api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', paths: opts.apiPaths },
+    api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api', paths: opts.apiPaths },
   });
   buildFrontDoor(
     stack,
@@ -351,7 +351,7 @@ describe('cloudFrontEdgeDoor — the router default of a site without a server',
         staticDir: '.',
         ...(server ? { server: { fn: server, url: server.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM }), streaming: false } } : {}),
         api: {
-          url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api',
+          url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api',
           paths: Array.from({ length: 30 }, (_, i) => `/hook${i}/*`),
         },
       });
@@ -390,7 +390,7 @@ describe('cloudFrontEdgeDoor — the origin-verify secret never crosses a plain-
       plan,
       bucket,
       staticDir: '.',
-      api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api' },
+      api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api' },
     });
     buildFrontDoor(
       stack,

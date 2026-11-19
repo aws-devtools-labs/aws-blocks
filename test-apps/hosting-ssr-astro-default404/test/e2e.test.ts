@@ -240,16 +240,16 @@ test.describe('Astro static multi-page — caching & API', () => {
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
     if (ENV === 'local') {
-      expect(config.apiUrl).toContain('/aws-blocks/api');
+      expect(config.apiUrl).toContain('/cdk-blocks/api');
     } else {
-      expect(config.apiUrl).toBe('/aws-blocks/api');
+      expect(config.apiUrl).toBe('/cdk-blocks/api');
     }
   });
 
   // The Blocks backend is reachable through the SAME CloudFront domain at
-  // the relative /aws-blocks/api path (single-origin, no CORS).
-  test('single-origin /aws-blocks/api reaches the backend', async ({ request }) => {
-    const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+  // the relative /cdk-blocks/api path (single-origin, no CORS).
+  test('single-origin /cdk-blocks/api reaches the backend', async ({ request }) => {
+    const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {
       headers: { 'content-type': 'application/json' },
       data: JSON.stringify({ jsonrpc: '2.0', method: 'api.listPosts', params: [], id: 1 }),
     });

@@ -34,7 +34,7 @@ export function _setEditorOpenerForTest(opener: (filePath: string) => void): voi
 /**
  * The per-request local-dev signal for the settings route: the request comes from
  * the developer, not from another site. A page on another site can make the
- * browser send a GET to the dev server (`<img src="http://localhost:3000/aws-blocks/settings">`),
+ * browser send a GET to the dev server (`<img src="http://localhost:3000/cdk-blocks/settings">`),
  * so opening the editor needs, on the request itself:
  *
  * - `Sec-Fetch-Site` absent (a non-browser client), `none` (a typed-in URL or a
@@ -72,7 +72,7 @@ export interface BuiltinRoutesOptions {
 	/**
 	 * `true` only when called by the LOCAL dev server. Enables the convenience of
 	 * opening `.bb-data/settings.json` in the developer's editor from
-	 * `GET /aws-blocks/settings`. Every other caller — the deployed Lambda, CDK
+	 * `GET /cdk-blocks/settings`. Every other caller — the deployed Lambda, CDK
 	 * synth — leaves it unset, so an anonymous GET can never spawn a process
 	 * there.
 	 *
@@ -85,7 +85,7 @@ export interface BuiltinRoutesOptions {
 }
 
 /**
- * Register built-in /aws-blocks/resources and /aws-blocks/settings routes.
+ * Register built-in /cdk-blocks/resources and /cdk-blocks/settings routes.
  * Skips if already registered (safe to call from both CDK and dev server).
  */
 export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void {
@@ -93,7 +93,7 @@ export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void 
 	const routes: Array<{ method: 'GET' | 'POST'; path: string; handler: (ctx: BlocksContext) => Promise<void> }> = [
 		{
 			method: 'GET',
-			path: '/aws-blocks/resources',
+			path: '/cdk-blocks/resources',
 			handler: async (ctx: BlocksContext) => {
 				const url = process.env.BB_RESOURCES_GROUP_URL;
 				if (!url) {
@@ -111,7 +111,7 @@ export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void 
 		},
 		{
 			method: 'GET',
-			path: '/aws-blocks/settings',
+			path: '/cdk-blocks/settings',
 			handler: async (ctx: BlocksContext) => {
 				const url = process.env.BB_SETTINGS_GROUP_URL;
 				if (!url) {
@@ -126,7 +126,7 @@ export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void 
 					if (!isSameOriginRequest(ctx)) {
 						ctx.response.status = 403;
 						ctx.response.headers.set('Content-Type', 'text/plain; charset=utf-8');
-						ctx.response.send('Forbidden: open /aws-blocks/settings from the app or the address bar.\n');
+						ctx.response.send('Forbidden: open /cdk-blocks/settings from the app or the address bar.\n');
 						return;
 					}
 					const settingsPath = join(process.cwd(), '.bb-data', 'settings.json');

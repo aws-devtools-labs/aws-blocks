@@ -130,7 +130,7 @@ export class TestBrowser {
 				body: null,
 				json: async () => ({}),
 				text: async () => '',
-				url: new URL(`${origin}/aws-blocks/api`),
+				url: new URL(`${origin}/cdk-blocks/api`),
 				params: {},
 			},
 			response: { headers: new Headers(), status: 200, send: () => {} },

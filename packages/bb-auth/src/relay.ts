@@ -6,7 +6,7 @@
  * `bb-auth-oidc/src/relay.ts` (same rules, so the native SDKs see the same
  * accept/reject decisions and the same `reason` strings).
  *
- * `POST /aws-blocks/auth/authorize-params/<id>` is unauthenticated, so a
+ * `POST /cdk-blocks/auth/authorize-params/<id>` is unauthenticated, so a
  * `relayTo` URI is checked against an allowlist to prevent open redirects:
  *
  * 1. Loopback (`127.0.0.1`, `[::1]`): http only, any port (RFC 8252 §7.3).

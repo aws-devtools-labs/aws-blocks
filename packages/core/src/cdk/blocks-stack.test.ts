@@ -171,7 +171,7 @@ describe('ApiUrl output and the Hosting front-door claim', () => {
 		stack.claimApiFrontDoor('https://d123.cloudfront.net');
 		const value = apiUrlOutput(stack);
 		assert.ok(
-			value.includes('https://d123.cloudfront.net/aws-blocks/api'),
+			value.includes('https://d123.cloudfront.net/cdk-blocks/api'),
 			`cloudfront ApiUrl should follow the claim, got ${value}`,
 		);
 	});
@@ -415,11 +415,12 @@ describe('shared gateway routes namespaces by export name (create())', () => {
 		const pathParts = Object.entries(resources)
 			.filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource')
 			.map(([id, r]) => [id, r.Properties.PathPart as string] as const);
-		// Exactly the catch-all tree plus `shop`: routed by export name (not the
-		// constructor name 'orders'), and the default-compute `api` namespace adds
-		// no resource of its own.
+		// Exactly the catch-all trees (canonical and legacy prefix) plus `shop` in each:
+		// routed by export name (not the constructor name 'orders'), and the
+		// default-compute `api` namespace adds no resource of its own.
 		const parts = pathParts.map(([, part]) => part).sort();
-		assert.deepStrictEqual(parts, ['aws-blocks', 'api', 'shop', '{proxy+}', '{proxy+}', '{proxy+}'].sort());
+		const tree = ['api', 'shop', '{proxy+}', '{proxy+}'];
+		assert.deepStrictEqual(parts, ['cdk-blocks', ...tree, 'aws-blocks', ...tree, '{proxy+}'].sort());
 
 		const orders = getComputes(owner).find((c) => c.node.id === 'OrdersCompute') as StubLambdaCompute;
 		const ordersFnId = stackOfGateway.getLogicalId(orders.fn.node.defaultChild as cdk.CfnElement);

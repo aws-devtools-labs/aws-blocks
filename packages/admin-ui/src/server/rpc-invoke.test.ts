@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import { resetRpcIdForTests } from './rpc-codec.js';
 import { type InvokeResult, type NonJsonBody, invokeRpc } from './rpc-invoke.js';
 
-const ENDPOINT = 'http://localhost:3000/aws-blocks/api';
+const ENDPOINT = 'http://localhost:3000/cdk-blocks/api';
 
 interface Captured {
 	url: string;

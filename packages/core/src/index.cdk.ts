@@ -87,7 +87,7 @@ export {
 	getSdkIdentifiers,
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
-export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX, canonicalBlocksPath } from './constants.js';
 export {
 	type ContainerPollerHandle,
 	type ContainerPollerStarter,

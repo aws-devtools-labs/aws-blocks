@@ -674,11 +674,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// {
     ///   "providers": ["google", "github"],
     ///   "providerConfigs": { "google": { "authorizeUrl": "...", "clientId": "...", "scopes": [...], "kind": "..." } },
-    ///   "exchangePath": "/aws-blocks/auth/exchange",
-    ///   "refreshPath": "/aws-blocks/auth/exchange/refresh",
-    ///   "signOutPath": "/aws-blocks/auth/signout",
-    ///   "callbackPath": "/aws-blocks/auth/callback",
-    ///   "authorizeParamsBasePath": "/aws-blocks/auth/authorize-params"
+    ///   "exchangePath": "/cdk-blocks/auth/exchange",
+    ///   "refreshPath": "/cdk-blocks/auth/exchange/refresh",
+    ///   "signOutPath": "/cdk-blocks/auth/signout",
+    ///   "callbackPath": "/cdk-blocks/auth/callback",
+    ///   "authorizeParamsBasePath": "/cdk-blocks/auth/authorize-params"
     /// }
     /// ```
     ///
@@ -755,10 +755,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     /// The exchange path of the `Auth` block's default routes, the block 0.x versions wrote unscoped tokens for.
-    private static var legacyExchangePath: String { "/aws-blocks/auth/exchange" }
+    private static var legacyExchangePath: String { "/cdk-blocks/auth/exchange" }
 
     /// Moves the unscoped tokens a 0.x version stored into this client's keys, once per `BlocksClient`, unless it
-    /// has its own. Only a client on the default routes (`exchangePath` `/aws-blocks/auth/exchange`) takes them:
+    /// has its own. Only a client on the default routes (`exchangePath` `/cdk-blocks/auth/exchange`) takes them:
     /// they belong to that block, so a client for another block leaves them in place.
     private func adoptLegacyTokens() async {
         guard exchangePath == Self.legacyExchangePath else { return }

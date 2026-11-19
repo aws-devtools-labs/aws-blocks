@@ -400,22 +400,25 @@ describe('HTTP method validation', () => {
   });
 });
 
-// ── FIX 6: Reserve /cdk-blocks namespace ────────────────────────────────────
+// ── FIX 6: Reserve /cdk-blocks namespace (and its legacy /aws-blocks alias) ──
 
-describe('/aws-blocks namespace reservation', () => {
-  it('registering /aws-blocks/api throws', () => {
-    assert.throws(
-      () => registerRoute({ method: 'GET', path: '/aws-blocks/api', handler: noop }),
-      (err: Error) => {
-        assert.ok(err.message.includes('reserved for RPC dispatch'));
-        return true;
-      },
-    );
+describe('/cdk-blocks namespace reservation', () => {
+  it('rejects /CDK-BLOCKS/API and the exact /cdk-blocks namespace', () => {
+    for (const path of ['/CDK-BLOCKS/API', '/cdk-blocks']) {
+      assert.throws(() => registerRoute({ method: 'GET', path, handler: noop }), /reserved for RPC dispatch/, path);
+    }
   });
 
-  it('registering /aws-blocks/api/foo throws', () => {
+  it('rejects the legacy /aws-blocks/api subtree', () => {
     assert.throws(
       () => registerRoute({ method: 'GET', path: '/aws-blocks/api/foo', handler: noop }),
+      /reserved for RPC dispatch/,
+    );
+  });
+
+  it('registering /cdk-blocks/api throws', () => {
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/api', handler: noop }),
       (err: Error) => {
         assert.ok(err.message.includes('reserved for RPC dispatch'));
         return true;
@@ -423,9 +426,19 @@ describe('/aws-blocks namespace reservation', () => {
     );
   });
 
-  it('registering /aws-blocks/api/ (trailing slash) throws', () => {
+  it('registering /cdk-blocks/api/foo throws', () => {
     assert.throws(
-      () => registerRoute({ method: 'GET', path: '/aws-blocks/api/', handler: noop }),
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/api/foo', handler: noop }),
+      (err: Error) => {
+        assert.ok(err.message.includes('reserved for RPC dispatch'));
+        return true;
+      },
+    );
+  });
+
+  it('registering /cdk-blocks/api/ (trailing slash) throws', () => {
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/api/', handler: noop }),
       (err: Error) => {
         assert.ok(err.message.includes('reserved for RPC dispatch'));
         return true;
@@ -463,15 +476,15 @@ describe('/aws-blocks namespace reservation', () => {
     );
   });
 
-  it('allows /aws-blocks/dashboard (not under /aws-blocks/api)', () => {
+  it('allows /cdk-blocks/dashboard (not under /cdk-blocks/api)', () => {
     assert.doesNotThrow(() => {
-      registerRoute({ method: 'GET', path: '/aws-blocks/dashboard', handler: noop });
+      registerRoute({ method: 'GET', path: '/cdk-blocks/dashboard', handler: noop });
     });
   });
 
-  it('allows /aws-blocks/health (not under /aws-blocks/api)', () => {
+  it('allows /cdk-blocks/health (not under /cdk-blocks/api)', () => {
     assert.doesNotThrow(() => {
-      registerRoute({ method: 'GET', path: '/aws-blocks/health', handler: noop });
+      registerRoute({ method: 'GET', path: '/cdk-blocks/health', handler: noop });
     });
   });
 
@@ -501,9 +514,9 @@ describe('/aws-blocks namespace reservation', () => {
     });
   });
 
-  it('allows /aws-blocks/api-docs (not exactly /aws-blocks/api)', () => {
+  it('allows /cdk-blocks/api-docs (not exactly /cdk-blocks/api)', () => {
     assert.doesNotThrow(() => {
-      registerRoute({ method: 'GET', path: '/aws-blocks/api-docs', handler: noop });
+      registerRoute({ method: 'GET', path: '/cdk-blocks/api-docs', handler: noop });
     });
   });
 });
@@ -1080,8 +1093,8 @@ const TWO_COPY_ENTRY = `
 import * as a from './copy-a/dist/raw-route.js';
 import * as b from './copy-b/dist/raw-route.js';
 
-a.registerRoute({ method: 'GET', path: '/aws-blocks/auth/signin/google', handler: async () => {} });
-const matched = b.matchRoute('GET', '/aws-blocks/auth/signin/google');
+a.registerRoute({ method: 'GET', path: '/cdk-blocks/auth/signin/google', handler: async () => {} });
+const matched = b.matchRoute('GET', '/cdk-blocks/auth/signin/google');
 
 const observed = {
   distinctInstances: a !== b,
@@ -1175,7 +1188,7 @@ describe('two physical core copies share one registry', () => {
   it('dispatches a route the other copy registered', () => {
     assert.strictEqual(
       probe.matchedPath,
-      '/aws-blocks/auth/signin/google',
+      '/cdk-blocks/auth/signin/google',
       'the dispatcher copy must resolve a route registered through the other copy',
     );
   });
@@ -1235,11 +1248,28 @@ describe('the shared registry survives bundling', () => {
   });
 
   it('dispatches a route the other copy registered', () => {
-    assert.strictEqual(probe.matchedPath, '/aws-blocks/auth/signin/google');
+    assert.strictEqual(probe.matchedPath, '/cdk-blocks/auth/signin/google');
     assert.strictEqual(probe.routesSeenByDispatcher, 1);
   });
 
   it('keeps the registry key greppable in the bundle', () => {
     assert.ok(probe.bundleText?.includes('__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__'));
+  });
+});
+
+describe('legacy /aws-blocks prefix', () => {
+  it('serves a route registered under /cdk-blocks at its /aws-blocks twin too', () => {
+    registerRoute({ method: 'GET', path: '/cdk-blocks/auth/callback', handler: noop });
+    assert.strictEqual(matchRoute('GET', '/cdk-blocks/auth/callback')?.route.path, '/cdk-blocks/auth/callback');
+    assert.strictEqual(matchRoute('GET', '/aws-blocks/auth/callback')?.route.path, '/cdk-blocks/auth/callback');
+  });
+
+  it('registers a legacy /aws-blocks path under its canonical /cdk-blocks path', () => {
+    registerRoute({ method: 'GET', path: '/aws-blocks/settings', handler: noop });
+    assert.strictEqual(getRegisteredRoutes().at(-1)?.path, '/cdk-blocks/settings');
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/settings', handler: noop }),
+      (err: Error) => err.name === RawRouteErrors.DuplicateRoute,
+    );
   });
 });

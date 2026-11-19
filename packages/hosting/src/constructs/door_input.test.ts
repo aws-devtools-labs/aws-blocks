@@ -81,15 +81,15 @@ describe('buildDoorInput — app facts and origins', () => {
     Template.fromStack(stack).resourceCountIs('AWS::Lambda::Url', 2); // the image URL + the server URL
   });
 
-  it('lists /aws-blocks/* plus the raw routes as API paths, (sign-in included under /aws-blocks/*)', () => {
+  it('lists /cdk-blocks/*, the legacy /aws-blocks/* and the raw routes as API paths, (sign-in included under /cdk-blocks/*)', () => {
     const { bucket } = setup();
     const input = buildDoorInput({
       plan: ssrPlan,
       bucket,
       staticDir: '.',
-      api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', paths: ['/webhooks/*', '/health'] },
+      api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api', paths: ['/webhooks/*', '/health'] },
     });
-    assert.deepEqual(input.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*', '/health']);
+    assert.deepEqual(input.origins.api?.paths, ['/cdk-blocks/*', '/aws-blocks/*', '/webhooks/*', '/health']);
     assert.ok(!input.origins.api?.paths.includes('/aws-blocks-auth/*'), 'no stale /aws-blocks-auth/* path');
     // A literal URL resolves at synth; a token URL is split in-template.
     assert.equal(input.origins.api?.host, 'abc123.execute-api.us-east-1.amazonaws.com');

@@ -151,7 +151,7 @@ export class Dashboard extends Scope {
 		// Register the redirect route so the Lambda handler dispatches it.
 		const routePath = options?.routePath;
 		if (routePath !== false) {
-			mountDashboardRoute(this, routePath ?? '/aws-blocks/dashboard', this.url);
+			mountDashboardRoute(this, routePath ?? '/cdk-blocks/dashboard', this.url);
 		}
 
 		new CfnOutput(this, 'Url', {

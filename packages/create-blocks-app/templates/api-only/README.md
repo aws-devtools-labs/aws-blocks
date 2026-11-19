@@ -110,7 +110,7 @@ Use `GET` for health checks; `HEAD /healthz` is not routed and returns 404.
 
 ```bash
 # The health check is public — no cookie needed:
-curl -X POST http://localhost:3001/aws-blocks/api \
+curl -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.health","params":[],"id":1}'
 # method = "<namespace>.<methodName>"; params = positional array.

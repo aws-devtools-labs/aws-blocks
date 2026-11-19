@@ -138,7 +138,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 
 - **What placement guarantees.** By default, placing a namespace on its own
   compute is a **routing preference, not a boundary**. The namespace's own path
-  goes to its compute, but the bare `POST /aws-blocks/api` endpoint, served by
+  goes to its compute, but the bare `POST /cdk-blocks/api` endpoint, served by
   the default compute, runs **any** namespace named in the request body. So
   anyone who can call your API can run a placed namespace on the default
   compute instead: with the default compute's memory and timeout, outside the
@@ -150,11 +150,11 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   change" below describes. It is `false` in both presets. Neither setting gives a namespace
   its own IAM permissions; see "It's placement, not isolation" below.
 - **Clients don't change.** `reports.build('2026-10')` still calls
-  `POST /aws-blocks/api/reports` — from the TypeScript client and from the
+  `POST /cdk-blocks/api/reports` — from the TypeScript client and from the
   Swift, Kotlin and Dart clients alike — and the stack's shared API gateway
   routes that path to the namespace's compute. It works the same on every
   `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain. A call
-  to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a native
+  to the bare `/cdk-blocks/api` endpoint — a raw HTTP call, or one from a native
   client released before per-namespace paths — still runs on the default
   compute, and synth warns (`blocks:apigateway:bare-endpoint-serves-placed-namespaces`).
   Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the
@@ -208,7 +208,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   - The load balancer allows 100 namespaces by default (synth warns past that;
     the quota can be raised), and an export name can be at most 112 characters
     (the load balancer's 128-character rule path limit, minus the 16-character
-    `/aws-blocks/api/` prefix).
+    `/cdk-blocks/api/` prefix).
 
   Through a Blocks CloudFront front door, `ctx.request.url` is the CloudFront
   (or custom-domain) URL in a container namespace and in a namespace on a
@@ -216,7 +216,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   both report the gateway's host.
 - **Everything else stays on the default compute:** namespaces with no
   `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
-  routes (`/aws-blocks/auth/*`).
+  routes (`/cdk-blocks/auth/*`).
 
 ## Local development
 

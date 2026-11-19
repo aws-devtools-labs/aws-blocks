@@ -328,7 +328,7 @@ describe('create-blocks-app template metadata', () => {
     // The Node client resolves BLOCKS_API_URL before it reads .cdk-blocks-sandbox/config.json. A test that
     // left the choice to that file sent its sign-ups and writes to the stack a deploy had just recorded.
     const templatesDir = join(__dirname, '..', 'templates');
-    const pin = 'process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;';
+    const pin = 'process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/cdk-blocks/api`;';
     const problems: string[] = [];
     for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
       const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
@@ -411,11 +411,11 @@ describe('create-blocks-app template metadata', () => {
     assert.match(guide, /`npm run vendorize -- @aws-blocks\/[\w-]+`/);
   });
 
-  it('the backend README gives the dev server API URL with its /aws-blocks/api path', () => {
+  it('the backend README gives the dev server API URL with its /cdk-blocks/api path', () => {
     const readme = readFileSync(join(__dirname, '..', 'templates', 'backend', 'README.md'), 'utf-8');
     const row = readme.split('\n').find((line) => line.startsWith('| `npm run dev` |'));
     assert.ok(row, 'the process model table has an npm run dev row');
-    assert.match(row, /\| `http:\/\/localhost:3001\/aws-blocks\/api` \|$/);
+    assert.match(row, /\| `http:\/\/localhost:3001\/cdk-blocks\/api` \|$/);
   });
 
   it('nextjs template ignores what next build and the deploy write', () => {
@@ -582,7 +582,7 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
       assert.match(result.stdout, /npm run sandbox\b/);
       assert.match(result.stdout, /npm run blocks:dev\b/);
-      // The CLI name as a command, not the `.cdk-blocks*` directory names the rebrand
+      // The CLI name as a command, not the `.cdk-blocks*` directories or the `/cdk-blocks/` URL path the rebrand
       // introduced: a next step must say `npm run <task>`, never invoke the binary.
       assert.doesNotMatch(result.stdout, /(?<!\.)\bcdk-blocks\b(?![-/])/);
       assert.ok(result.stdout.includes(task('sandbox')), result.stdout);
@@ -893,8 +893,8 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       const guide = readFileSync(join(tmpDir, 'AGENTS.md'), 'utf-8');
       assert.doesNotMatch(guide, /localhost:3000/);
-      assert.match(guide, /curl -X POST http:\/\/localhost:3001\/aws-blocks\/api/);
-      assert.match(guide, /\(locally `http:\/\/localhost:3001\/aws-blocks\/api`\)/);
+      assert.match(guide, /curl -X POST http:\/\/localhost:3001\/cdk-blocks\/api/);
+      assert.match(guide, /\(locally `http:\/\/localhost:3001\/cdk-blocks\/api`\)/);
       assert.doesNotMatch(guide, /or frontend \(`src\/`\)/);
       assert.match(guide, /This app has no frontend/);
     } finally {
@@ -908,7 +908,7 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([tmpDir, '--template', 'bare', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
       const guide = readFileSync(join(tmpDir, 'AGENTS.md'), 'utf-8');
-      assert.match(guide, /curl -X POST http:\/\/localhost:3000\/aws-blocks\/api/);
+      assert.match(guide, /curl -X POST http:\/\/localhost:3000\/cdk-blocks\/api/);
       assert.match(guide, /or frontend \(`src\/`\)/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -1212,10 +1212,10 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([backend, '--template=backend', '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0, result.stderr);
       assert.ok(result.stdout.includes(`\n  cd '${backend}'\n`), result.stdout);
-      assert.match(result.stdout, /http:\/\/localhost:3001\/aws-blocks\/api/);
+      assert.match(result.stdout, /http:\/\/localhost:3001\/cdk-blocks\/api/);
       assert.doesNotMatch(result.stdout, /localhost:3000/);
       assert.match(result.stdout, /npm run help\b/);
-      // The CLI name as a command, not the `.cdk-blocks*` directory names the rebrand
+      // The CLI name as a command, not the `.cdk-blocks*` directories or the `/cdk-blocks/` URL path the rebrand
       // introduced: a next step must say `npm run <task>`, never invoke the binary.
       assert.doesNotMatch(result.stdout, /(?<!\.)\bcdk-blocks\b(?![-/])/);
       const web = join(tmpDir, 'web');

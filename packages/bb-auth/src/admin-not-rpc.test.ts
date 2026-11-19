@@ -31,7 +31,7 @@ const root = () => ({ id: `anr${process.pid}x${++counter}` });
 
 const rpc = (method: string, params: unknown[]) => ({
 	httpMethod: 'POST',
-	path: '/aws-blocks/api',
+	path: '/cdk-blocks/api',
 	headers: { 'Content-Type': 'application/json' },
 	body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
 	isBase64Encoded: false,

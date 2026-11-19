@@ -208,7 +208,7 @@ export async function detectLocalDevServer(
 	let serverUp = false;
 	let namespaces: string[] = [];
 	try {
-		const response = await fetchImpl(`${serverUrl}/aws-blocks/api`, {
+		const response = await fetchImpl(`${serverUrl}/cdk-blocks/api`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: PROBE_RPC_BODY,

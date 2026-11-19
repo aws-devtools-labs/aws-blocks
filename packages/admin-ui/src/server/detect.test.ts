@@ -202,7 +202,7 @@ describe('detectLocalDevServer', () => {
 				});
 			}),
 		);
-		assert.deepStrictEqual(seen, ['http://localhost:4400/aws-blocks/api']);
+		assert.deepStrictEqual(seen, ['http://localhost:4400/cdk-blocks/api']);
 		assert.strictEqual(status.serverUp, true);
 		assert.strictEqual(status.serverUrl, 'http://localhost:4400');
 		assert.strictEqual(status.port, 4400);

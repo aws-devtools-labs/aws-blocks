@@ -24,10 +24,10 @@ cdkBlocks {
 
     // Override or add server URLs (optional). Each is the RPC URL, not the origin.
     servers {
-        local("http://10.0.2.2:3001/aws-blocks/api")
-        sandbox("https://sandbox.example.com/aws-blocks/api")
-        prod("https://api.example.com/aws-blocks/api")
-        custom("staging", "https://staging.example.com/aws-blocks/api")
+        local("http://10.0.2.2:3001/cdk-blocks/api")
+        sandbox("https://sandbox.example.com/cdk-blocks/api")
+        prod("https://api.example.com/cdk-blocks/api")
+        custom("staging", "https://staging.example.com/cdk-blocks/api")
     }
 
     // Logical identities from x-blocks-native-packages that keep the
@@ -46,13 +46,13 @@ cdkBlocks {
 
 Servers defined here override entries from the spec file that share the same name. New names are
 added alongside the spec's servers. Each becomes a constant on the generated `Servers` object, so
-`prod("https://api.example.com/aws-blocks/api")` is reachable as `Servers.prod`.
+`prod("https://api.example.com/cdk-blocks/api")` is reachable as `Servers.prod`.
 
 A server URL is the RPC URL itself: the `apiUrl` that `npm run dev` writes to
 `.cdk-blocks-sandbox/config.json`, or a deploy to `.cdk-blocks-sandbox/config.<stage>.json`, whose path ends
-in `/aws-blocks/api`. It is not the origin that serves it. The generated client posts to the URL as
+in `/cdk-blocks/api`. It is not the origin that serves it. The generated client posts to the URL as
 given, so an override such as `local("http://10.0.2.2:3001")` replaces the
-`http://localhost:3001/aws-blocks/api` the client would otherwise use with the bare origin, and
+`http://localhost:3001/cdk-blocks/api` the client would otherwise use with the bare origin, and
 every call through it, including `Blocks()` when that is the spec's first server, fails (`HTTP 404`
 from the local dev server, `HTTP 403` from a deployed API Gateway).
 

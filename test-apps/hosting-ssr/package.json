@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev:api": "tsx watch cdk-blocks/scripts/server.ts",
-    "dev:next": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev",
+    "dev:next": "BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api next dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:next\"",
     "build": "next build",
     "typegen": "hosting-typegen",

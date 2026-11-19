@@ -24,8 +24,8 @@ The dev server writes `.cdk-blocks-sandbox/config.json` with its own URL, and a 
 
 | Generated with | Generated `Servers` entry | URL |
 |---|---|---|
-| `npm run spec` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
-| `BLOCKS_SPEC_STAGE=sandbox npm run spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
+| `npm run spec` | `Servers.local` | `http://localhost:3001/cdk-blocks/api` |
+| `BLOCKS_SPEC_STAGE=sandbox npm run spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api` |
 
 To switch the apps between local and sandbox, regenerate the spec the other way.
 
@@ -81,16 +81,16 @@ Sign-in talks to real Google in every environment, including `npm run dev` — t
 
 ### 2. Register the right redirect URIs
 
-The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, swapping `/aws-blocks/api` for `/aws-blocks/auth/callback`. So the URI to register follows directly from the server in the generated spec:
+The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, swapping `/cdk-blocks/api` for `/cdk-blocks/auth/callback`. So the URI to register follows directly from the server in the generated spec:
 
 | Environment | Redirect URI to register with Google |
 |---|---|
-| Local (`npm run dev`) | `http://localhost:3001/aws-blocks/auth/callback` |
-| Sandbox (`npm run sandbox`) | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/auth/callback` |
+| Local (`npm run dev`) | `http://localhost:3001/cdk-blocks/auth/callback` |
+| Sandbox (`npm run sandbox`) | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/auth/callback` |
 
 Read the sandbox host out of `.cdk-blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
 
-> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/aws-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
+> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/cdk-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
 
 ### 3. Provide the client ID and secret
 

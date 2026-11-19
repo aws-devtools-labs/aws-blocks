@@ -194,7 +194,7 @@ export interface AuthCommonOptions {
 	/** Session cookie and server-side session record behaviour. */
 	session?: SessionOptions;
 
-	/** HTTP paths for the federated redirect flow. All must sit under `/aws-blocks/auth/`. */
+	/** HTTP paths for the federated redirect flow. All must sit under `/cdk-blocks/auth/`. */
 	redirects?: RedirectOptions;
 
 	/**
@@ -408,7 +408,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 	 *
 	 * What is accepted (the same as `AuthOIDC`, so the native SDKs work
 	 * unchanged): a directly federated OIDC provider's JWT access token — the
-	 * one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/refresh`
+	 * one `/cdk-blocks/auth/exchange` returns and `/cdk-blocks/auth/refresh`
 	 * renews — verified against the provider's JWKS (issuer, audience = its
 	 * client id, expiry); or, for a user-pool user, the Cognito access token.
 	 * The session cookie takes precedence when a request carries both. A token
@@ -550,8 +550,8 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	/**
 	 * Accept `Authorization: Bearer <access token>` in addition to the session
 	 * cookie, for native and CLI clients that cannot hold a cookie: the
-	 * provider's JWT access token that `/aws-blocks/auth/exchange` returns and
-	 * `/aws-blocks/auth/refresh` renews, verified against the provider's JWKS
+	 * provider's JWT access token that `/cdk-blocks/auth/exchange` returns and
+	 * `/cdk-blocks/auth/refresh` renews, verified against the provider's JWKS
 	 * (issuer, audience = its client id, expiry). See
 	 * {@link CognitoAuthOptions.allowBearerAuth} for the details. The object
 	 * form (extra Cognito app clients) needs `store: 'cognito'`.
@@ -1151,7 +1151,7 @@ export interface StubIdpSettings {
 /**
  * A provider served by the built-in **stub IdP** — a real, local OIDC
  * provider (ES256-signed ID tokens, discovery, JWKS, PKCE S256) mounted on the
- * dev server under `/aws-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
+ * dev server under `/cdk-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
  * and put it in a `store: 'builtin'` block's `providers`.
  *
  * Local development and sandbox deployments only: in `npm run dev` it gives
@@ -1163,7 +1163,7 @@ export interface StubIdpSettings {
  * URL.
  *
  * In a sandbox, the issuer is the API Gateway's own HTTPS URL plus
- * `/aws-blocks/auth/idp/<id>`, the same value `AuthOIDC`'s deployed stub used,
+ * `/cdk-blocks/auth/idp/<id>`, the same value `AuthOIDC`'s deployed stub used,
  * so `userId`s carry over. A sandbox stub signs users in **without
  * credentials** — see `stubIdp()`.
  */
@@ -1508,9 +1508,9 @@ export interface SessionOptions {
 
 /** Settings for {@link AuthCommonOptions.redirects}. */
 export interface RedirectOptions {
-	/** @default '/aws-blocks/auth/callback' — must start with `/aws-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/callback' — must start with `/cdk-blocks/auth/`. */
 	callbackPath?: string;
-	/** @default '/aws-blocks/auth/signout' — must start with `/aws-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/signout' — must start with `/cdk-blocks/auth/`. */
 	signOutPath?: string;
 	/** Where the browser lands after a successful federated sign-in. @default '/' */
 	postSignInPath?: string;
@@ -1531,7 +1531,7 @@ export interface RedirectOptions {
 	postSignOutPath?: string;
 	/**
 	 * Origins a native or CLI client's relay sign-in may redirect back to
-	 * (`POST /aws-blocks/auth/authorize-params/<id>` with `relayTo`), each built
+	 * (`POST /cdk-blocks/auth/authorize-params/<id>` with `relayTo`), each built
 	 * with `relayOrigin()`. Loopback (`http://127.0.0.1`, `http://[::1]`, any
 	 * port) and the API's own origin are always allowed.
 	 *
@@ -3852,16 +3852,16 @@ export interface AuthClientEnvironment {
 /** Options for {@link createAuthClient}. */
 export interface AuthClientOptions {
 	/**
-	 * Where the `Auth` block's routes (`/aws-blocks/auth/*`) are served: the
+	 * Where the `Auth` block's routes (`/cdk-blocks/auth/*`) are served: the
 	 * API's origin, plus the API Gateway stage when you call the gateway URL
 	 * directly. For example `'https://api.example.com'` or
 	 * `'https://abc123.execute-api.us-east-1.amazonaws.com/prod'`. Defaults to
 	 * the page's own origin.
 	 */
 	baseUrl?: string;
-	/** The block's `redirects.callbackPath`. @default '/aws-blocks/auth/callback' */
+	/** The block's `redirects.callbackPath`. @default '/cdk-blocks/auth/callback' */
 	callbackPath?: string;
-	/** The block's `redirects.signOutPath`. @default '/aws-blocks/auth/signout' */
+	/** The block's `redirects.signOutPath`. @default '/cdk-blocks/auth/signout' */
 	signOutPath?: string;
 	/**
 	 * Where the provider's answer returns in this app: the page that calls

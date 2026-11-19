@@ -56,7 +56,7 @@ await api.setValue('greeting', 'hello');
 const value = await api.getValue('greeting'); // typed: string | null
 ```
 
-That's the whole model: **define blocks → export an API → import it on the frontend.** The transport (JSON-RPC under `/aws-blocks/api`) is handled for you and is intentionally invisible.
+That's the whole model: **define blocks → export an API → import it on the frontend.** The transport (JSON-RPC under `/cdk-blocks/api`) is handled for you and is intentionally invisible.
 
 ## Adding auth and data
 
@@ -367,7 +367,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
 - **`Database` when `KVStore` would do** — `KVStore` has no cluster to manage; reach for SQL only when you need it.
-- **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/aws-blocks/api`; use the typed import instead.
+- **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/cdk-blocks/api`; use the typed import instead.
 
 ## Security Considerations
 
@@ -415,4 +415,4 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. For custom auth forms, `submitAuthAction` submits an action and notifies every component and tab; `subscribeAuthState` / `getAuthStateSnapshot` expose the auth state as a store (React's `useSyncExternalStore`). See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
 - **Test helpers** (`@aws-blocks/blocks/utils`, Node only: tests and scripts, including the templates' `tsx -C browser` e2e tests, since the entry has no `browser` condition; not browser bundles): `installCookieJar(): () => void` keeps `Set-Cookie` across `fetch` calls, so a signed-in session persists between API calls; call it once before `await import('cdk-blocks')` (it returns a function that restores `fetch`). `createTestClient(clients)` returns the same typed clients bound to a cookie jar of their own, for several signed-in users in one test. `getLastAuthCode(username, options?): Promise<string>` reads the verification code the local `Auth` pool last sent (local only). `totpCodeFor(sharedSecret, time?): string` computes an authenticator-app (TOTP) code. `isServerRunning(port = 3000): Promise<boolean>` checks whether a dev server is already listening, so test setup can skip starting one.
-- **Wire protocol & debugging:** the client is JSON-RPC 2.0 under `/aws-blocks/api` — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+- **Wire protocol & debugging:** the client is JSON-RPC 2.0 under `/cdk-blocks/api` — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

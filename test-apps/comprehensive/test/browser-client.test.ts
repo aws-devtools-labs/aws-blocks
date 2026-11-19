@@ -7,7 +7,7 @@
  * provider, reads its session and signs out — against the running backend
  * (the dev server locally; the deployed stack in sandbox / production).
  *
- * Instance: `oidc-auth-web` (routes under `/aws-blocks/auth/web/*`, the stub
+ * Instance: `oidc-auth-web` (routes under `/cdk-blocks/auth/web/*`, the stub
  * IdP as provider `web-idp`). The frontend is `http://127.0.0.1:5173`, a
  * loopback origin the relay always allows.
  *
@@ -30,7 +30,7 @@ import { testBaseUrl } from './api-url.js';
 
 const SPA = 'http://127.0.0.1:5173';
 const RETURN_PAGE = `${SPA}/return`;
-const BASE = '/aws-blocks/auth/web';
+const BASE = '/cdk-blocks/auth/web';
 const stubSkip = process.env.BLOCKS_TEST_ENV === 'production' && 'stub IdP is sandbox-only';
 
 const getBaseUrl = testBaseUrl;
