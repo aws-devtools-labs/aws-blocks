@@ -440,6 +440,9 @@ class CodegenModelBuilder {
   // name it had before (`<Namespace><Method><Param>`).
   final Map<SealedClassType, String> _hintedUnions = Map.identity();
   int _anonCounter = 0;
+  // Keys an enum by its values instead of its name (see
+  // [_differOnlyInNestedNames]).
+  bool _keyEnumsByValues = false;
   // Whether an operation returns an `oidc/client` that names its providers,
   // directly or optionally: such a library gets a provider enum and names
   // [oidcRuntimeTypeNames], so it reserves them (see [_assignDartTypeNames]).
@@ -676,9 +679,14 @@ class CodegenModelBuilder {
       _renameType(union, old);
       if (identical(_types[name], union)) _types.remove(name);
       _types[old] = union;
+      final keeper = kept[name];
       _warnings.add(
-        'Naming conflict: union $name is generated as $old, since another '
-        'type is named $name.',
+        keeper != null && _differOnlyInNestedNames(union, keeper)
+            ? 'Naming conflict: union $name is generated as $old, since its '
+                  'copy named $name differs from it only in the names of the '
+                  'types nested in its arms.'
+            : 'Naming conflict: union $name is generated as $old, since '
+                  'another type is named $name.',
       );
     }
     // A later union of the name may have taken the keeper's table entry.
@@ -686,6 +694,18 @@ class CodegenModelBuilder {
       _types[name] = union;
     }
     _hintedUnions.removeWhere((union, old) => union.name == old);
+  }
+
+  /// Whether [a] and [b] have one shape once the names of the enums nested in
+  /// their arms are set aside: two namespaces' copies of one spec union whose
+  /// arms were named after each namespace's own old name.
+  bool _differOnlyInNestedNames(SealedClassType a, SealedClassType b) {
+    _keyEnumsByValues = true;
+    try {
+      return _structuralKeyOfSealed(a) == _structuralKeyOfSealed(b);
+    } finally {
+      _keyEnumsByValues = false;
+    }
   }
 
   /// The final name of every declared type and union arm.
@@ -827,7 +847,8 @@ class CodegenModelBuilder {
     MapType(valueType: final v) => 'Map<${_typeKey(v)}>',
     SchemaReference(name: final n) => 'ref:$n',
     RecordType() => _structuralKeyOfRecord(t),
-    EnumType(name: final n) => 'ref:$n',
+    EnumType(name: final n, values: final vs) =>
+      _keyEnumsByValues ? 'enum[${vs.join(',')}]' : 'ref:$n',
     SealedClassType() => _structuralKeyOfSealed(t),
     TransferableType(blocksType: final kt, typeArgs: final args) =>
       'xfer:$kt<${args.map(_typeArgKey).join(',')}>',

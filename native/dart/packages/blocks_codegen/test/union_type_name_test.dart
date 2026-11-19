@@ -54,10 +54,12 @@ String _generate(String spec) =>
 
 /// One `<ns>.run(input)` method per entry of [unions]: the namespace, the
 /// `kind` values of its union's arms, and the name the spec gives the union.
-/// The first arm of each has a `mode` enum field, so it nests a type.
+/// The first arm of each has a `mode` enum field, so it nests a type. The
+/// union is the parameter [param].
 String _runSpec(
   List<(String, List<String>, String?)> unions, {
   Map<String, dynamic> schemas = const {},
+  String param = 'input',
 }) => jsonEncode({
   'openrpc': '1.3.2',
   'info': {'title': 'test', 'version': '1.0.0'},
@@ -67,7 +69,7 @@ String _runSpec(
         'name': '$ns.run',
         'params': [
           {
-            'name': 'input',
+            'name': param,
             'required': true,
             'schema': {
               'oneOf': [
@@ -269,6 +271,26 @@ void main() {
           contains(contains('union Shared is generated as BetaApiRunInput')),
         );
       }
+    });
+
+    test('says when copies of one union differ only in nested names', () {
+      final model = _build(
+        _runSpec([
+          ('alphaApi', ['start', 'stop'], 'Command'),
+          ('betaApi', ['start', 'stop'], 'Command'),
+        ], param: 'cmd'),
+      );
+      expect(model.types['Command'], isA<SealedClassType>());
+      expect(model.types['BetaApiRunCmd'], isA<SealedClassType>());
+      expect(
+        model.warnings,
+        contains(
+          'Naming conflict: union Command is generated as BetaApiRunCmd, '
+          'since its copy named Command differs from it only in the names of '
+          'the types nested in its arms.',
+        ),
+      );
+      expect(model.warnings, isNot(contains(contains('another type'))));
     });
 
     test(r'escapes a `$` in the deprecated alias message', () {
