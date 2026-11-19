@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -24,6 +24,7 @@ const CI_VARS = [
 describe('entry points send their own event', () => {
   const originalEnv = { ...process.env };
   const originalArgv = [...process.argv];
+  const originalCwd = process.cwd();
   let dir: string;
   let telemetryFile: string;
 
@@ -39,6 +40,7 @@ describe('entry points send their own event', () => {
   });
 
   afterEach(() => {
+    process.chdir(originalCwd);
     process.env = { ...originalEnv };
     process.argv = originalArgv;
     rmSync(dir, { recursive: true, force: true });
@@ -70,6 +72,18 @@ describe('entry points send their own event', () => {
     await assert.rejects(writeSpec(join(dir, 'missing', 'cdk-blocks', 'index.js'), join(dir, 'spec.json')));
     assert.deepStrictEqual(events(), [{ command: 'generate:spec', state: 'FAIL' }]);
   });
+
+  // The opt-out is read from the working directory's cdk.json, where the npm script and the
+  // CLI run it, not from two levels above the backend, which is the project root only for
+  // a backend at `<root>/<dir>/index.ts`.
+  for (const backend of ['backend.ts', join('src', 'api', 'cdk-blocks', 'index.ts')]) {
+    it(`writeSpec honours a cdk.json opt-out in the working directory for a backend at ${backend}`, async () => {
+      writeFileSync(join(dir, 'cdk.json'), JSON.stringify({ context: { 'cli-telemetry': false } }));
+      process.chdir(dir);
+      await assert.rejects(writeSpec(join(dir, backend), join(dir, 'spec.json')));
+      assert.deepStrictEqual(events(), []);
+    });
+  }
 
   it('sends nothing when the CDK CLI telemetry opt-out is set', async () => {
     process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
