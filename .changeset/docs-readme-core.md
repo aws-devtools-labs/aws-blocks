@@ -32,3 +32,5 @@ Removed from the core README:
 - The per-door settings matrix, the build-retention rules and the plain-HTTP details under `Hosting`; the `@aws-cdk-blocks/hosting` README holds them and the section links to it.
 - The curl examples for inspecting a deployed app; `npm run docs troubleshooting` has them.
 - The partial list of Building Block packages; `npm run docs` lists every block.
+
+The defaults descriptions distinguish service-side deletion protection, provisioned-bucket logging, Hosting origin logging and routing from enforced namespace placement. WAF guidance accounts for unresolved values and doors without WAF support. The shared-account guide preserves the CLI's stack naming, exports the app id for report checks, and describes the limits of KMS, resource-type and asset-publishing controls. Package pointers, overflow-policy names and legacy route restrictions are corrected.
