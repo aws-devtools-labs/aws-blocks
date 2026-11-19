@@ -37,6 +37,7 @@ import {
 	snapshotChildren,
 } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { enableRolePolicyPacking } from './role-policy-packing.js';
 import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
 import { applyAppIdentity } from './app-identity.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
@@ -187,7 +188,7 @@ export const UPGRADE_GUIDE_URL =
 
 /**
  * Fail fast with an actionable message if `defaults` is missing. TypeScript
- * callers get a compile error, but `cdk` runs `aws-blocks/index.cdk.ts` through a
+ * callers get a compile error, but `cdk` runs `cdk-blocks/index.cdk.ts` through a
  * loader that doesn't type-check, so an app scaffolded before `defaults` became
  * required (or a plain-JS caller, `as any`, or a dynamically built props object)
  * reaches the constructors without it, which then throw a cryptic
@@ -217,7 +218,7 @@ export function assertBlocksDefaults(
 			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
 			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
 			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
-			`aws-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
+			`cdk-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
 	);
 }
 
@@ -271,6 +272,12 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
+	// Merge combinable statements before CDK packs any overflow into managed
+	// policies, give those overflow policies content-derived logical IDs so a
+	// deploy adds moved statements before it removes them, and fail synth with a
+	// fix if the role would exceed the managed-policies-per-role quota
+	// (role-policy-packing.ts).
+	enableRolePolicyPacking(executionRole, scope);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
 	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an

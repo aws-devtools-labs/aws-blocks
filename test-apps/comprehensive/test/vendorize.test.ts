@@ -36,7 +36,7 @@ const PROBES_DIR = join(APP_ROOT, '.vendorize-probes');
 function synth(outputDir: string) {
   rmSync(outputDir, { recursive: true, force: true });
   execSync(
-    `npx cdk synth --app "npx tsx -C cdk aws-blocks/index.cdk.ts" --output "${outputDir}" --context sandboxMode=true --quiet`,
+    `npx cdk synth --app "npx tsx -C cdk cdk-blocks/index.cdk.ts" --output "${outputDir}" --context sandboxMode=true --quiet`,
     { cwd: APP_ROOT, stdio: 'pipe' }
   );
 }
@@ -202,7 +202,7 @@ new KVStore(scope, 'items', {
 import { Database } from '${join(databaseDir, 'src/index.cdk.ts')}';
 const scope = new Scope('vendorized-database');
 // Owns an Aurora DSQL cluster → the migration provider's onEvent and isComplete Lambdas.
-new Database(scope, 'db', { migrationsPath: '${join(APP_ROOT, 'aws-blocks/migrations/dbx')}' });
+new Database(scope, 'db', { migrationsPath: '${join(APP_ROOT, 'cdk-blocks/migrations/dbx')}' });
 `,
     );
     assert.match(probe.handlerOf(/MigrationFn/), /migrationsKey/, 'the onEvent asset holds the migration handler');
@@ -246,11 +246,11 @@ function synthProbe(name: string, backend: string): Probe {
   const dir = join(PROBES_DIR, name);
   const out = join(dir, 'cdk.out');
   rmSync(dir, { recursive: true, force: true });
-  mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
-  writeFileSync(join(dir, 'aws-blocks/index.handler.ts'), 'export const handler = async () => ({});\n');
-  writeFileSync(join(dir, 'aws-blocks/index.ts'), backend);
+  mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
+  writeFileSync(join(dir, 'cdk-blocks/index.handler.ts'), 'export const handler = async () => ({});\n');
+  writeFileSync(join(dir, 'cdk-blocks/index.ts'), backend);
   writeFileSync(
-    join(dir, 'aws-blocks/index.cdk.ts'),
+    join(dir, 'cdk-blocks/index.cdk.ts'),
     `import * as cdk from 'aws-cdk-lib';
 import { BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
 import { dirname, join } from 'node:path';
@@ -269,7 +269,7 @@ await BlocksStack.create(app, 'VendorizedProbe', {
     // shell, so the app path is JSON-quoted there; the paths are the test's own temp directory.
     execFileSync(
       'npx',
-      ['cdk', 'synth', '--app', `npx tsx -C cdk ${JSON.stringify(join(dir, 'aws-blocks/index.cdk.ts'))}`, '--output', out, '--quiet'],
+      ['cdk', 'synth', '--app', `npx tsx -C cdk ${JSON.stringify(join(dir, 'cdk-blocks/index.cdk.ts'))}`, '--output', out, '--quiet'],
       { cwd: APP_ROOT, stdio: 'pipe' },
     );
   } catch (e) {

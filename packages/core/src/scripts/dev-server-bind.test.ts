@@ -149,7 +149,7 @@ import { startDevServer } from ${JSON.stringify(join(__dirname, 'dev-server.js')
 startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port, typegen: false })});
 `);
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
-    const env: NodeJS.ProcessEnv = { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1', BLOCKS_API_URL: '' };
+    const env: NodeJS.ProcessEnv = { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1', BLOCKS_API_URL: '' };
     delete env.BLOCKS_DEV_HOST;
     devProcess = spawn(tsxBin, [join(tempDir, 'run-dev.ts')], { cwd: tempDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
     devProcess.stdout?.on('data', (c: Buffer) => { output += c.toString(); });
@@ -332,7 +332,7 @@ import { startDevServer } from ${JSON.stringify(join(__dirname, 'dev-server.js')
 startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port, typegen: false })});
 `);
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
-    const env: NodeJS.ProcessEnv = { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1', BLOCKS_API_URL: '' };
+    const env: NodeJS.ProcessEnv = { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1', BLOCKS_API_URL: '' };
     delete env.BLOCKS_DEV_HOST;
     devProcess = spawn(tsxBin, [join(tempDir, 'run-dev.ts')], { cwd: tempDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
     devProcess.stdout?.on('data', (c: Buffer) => { output += c.toString(); });
@@ -450,7 +450,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+      CDK_DISABLE_CLI_TELEMETRY: '1',
       BLOCKS_DEV_QUIET: '1',
       BLOCKS_API_URL: `http://127.0.0.1:${upstreamPort}/aws-blocks/api`,
     };

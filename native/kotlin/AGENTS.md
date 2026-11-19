@@ -57,7 +57,7 @@ Plus **fixture-goldens**, a check-only module (not published) that compiles ever
 
 | Purpose | Path |
 |---------|------|
-| Example spec file | `example/typescript/aws-blocks/blocks.spec.json` |
+| Example spec file | `example/typescript/cdk-blocks/blocks.spec.json` |
 | Android example app | `example/android/app/` |
 | Android app build config | `example/android/app/build.gradle.kts` |
 | Android: MainActivity | `example/android/app/src/main/java/com/aws/blocks/example/MainActivity.kt` |

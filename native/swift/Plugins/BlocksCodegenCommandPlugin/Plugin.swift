@@ -101,7 +101,7 @@ extension BlocksCodegenCommandPlugin: XcodeCommandPlugin {
         let projectDir = context.xcodeProject.directoryURL
         let candidates = [
             projectDir.appendingPathComponent("blocks.spec.json"),
-            projectDir.appendingPathComponent("aws-blocks/blocks.spec.json"),
+            projectDir.appendingPathComponent("cdk-blocks/blocks.spec.json"),
         ]
 
         guard let specPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) }) else {

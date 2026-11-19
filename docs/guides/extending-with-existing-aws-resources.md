@@ -102,7 +102,7 @@ There is no `BB-queue` today. Your account already has an SQS queue
 provisioned by another stack. You want `api.enqueue(payload)` to drop a message
 onto it.
 
-**`aws-blocks/index.cdk.ts`**
+**`cdk-blocks/index.cdk.ts`**
 
 ```ts
 import * as cdk from 'aws-cdk-lib';
@@ -127,7 +127,7 @@ externalQueue.grantSendMessages(blocksStack.executionRole);
 registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 ```
 
-**`aws-blocks/index.ts`** (your runtime layer)
+**`cdk-blocks/index.ts`** (your runtime layer)
 
 ```ts
 import { Scope, ApiNamespace } from '@aws-blocks/blocks';
@@ -170,8 +170,8 @@ export class MyApiStack extends cdk.Stack {
 
     // Drop Blocks into this stack as a single Construct.
     const blocks = await BlocksBackend.create(this, 'BlocksApi', {
-      backendHandlerPath: join(__dirname, 'aws-blocks/index.handler.ts'),
-      backendCDKPath: join(__dirname, 'aws-blocks/index.ts'),
+      backendHandlerPath: join(__dirname, 'cdk-blocks/index.handler.ts'),
+      backendCDKPath: join(__dirname, 'cdk-blocks/index.ts'),
     });
 
     // Same .executionRole / .apiUrl / .gateway as BlocksStack — wire normally.

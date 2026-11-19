@@ -18,7 +18,7 @@
  * @example
  * ```typescript
  * import { Authenticator, authOverrides, submitAuthAction } from '@aws-blocks/bb-auth/ui';
- * import { authApi } from 'aws-blocks';
+ * import { authApi } from 'cdk-blocks';
  *
  * document.body.appendChild(Authenticator(authApi, authOverrides({
  *   hideActions: ['signUp'],                       // typed: only Auth action names

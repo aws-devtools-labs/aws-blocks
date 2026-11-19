@@ -630,7 +630,7 @@ export interface ScopeInfo {
 	line: number;
 }
 
-/** A block declared in the app's `aws-blocks/` source. */
+/** A block declared in the app's `cdk-blocks/` source. */
 export interface DiscoveredBlock {
 	/** Block class name, e.g. 'KVStore'. */
 	type: string;

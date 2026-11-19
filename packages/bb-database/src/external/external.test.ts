@@ -512,7 +512,7 @@ describe('the lines that connect prints', () => {
 	};
 
 	test('name the directory that `db migrate` applies, so a deploy runs the same files', () => {
-		// The block's own default is aws-blocks/migrations/<id>; without this line a deploy finds no file.
+		// The block's own default is cdk-blocks/migrations/<id>; without this line a deploy finds no file.
 		assert.match(linesToPaste(result, true), /\n {2}migrationsPath: '\.\/migrations',\n/);
 	});
 

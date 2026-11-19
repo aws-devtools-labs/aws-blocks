@@ -134,7 +134,7 @@ to every compute's handler log group):
 import { BlocksPresets } from '@aws-blocks/core/cdk';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
-// In your aws-blocks backend, override the preset's logRetention:
+// In your cdk-blocks backend, override the preset's logRetention:
 defaults: { ...BlocksPresets.production, logRetention: RetentionDays.ONE_MONTH };
 ```
 

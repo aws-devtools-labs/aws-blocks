@@ -49,7 +49,7 @@ def verify(registry=Path('/opt/registry'), app=Path('/app/todo-app'),
                         'integrity': expected['integrity'], 'files': count})
     for required in ('@aws-blocks/blocks', '@aws-blocks/core'):
         assert any(p['name'] == required for p in checked), required
-    sources = '\n'.join(p.read_text() for p in (app / 'aws-blocks').rglob('*.ts') if 'node_modules' not in p.parts)
+    sources = '\n'.join(p.read_text() for p in (app / 'cdk-blocks').rglob('*.ts') if 'node_modules' not in p.parts)
     # Persistence is a separate verify.py heuristic: verifier records must appear under .bb-data.
     assert '@aws-blocks/' in sources and 'ApiNamespace' in sources, 'backend must expose a Blocks ApiNamespace'
     return {'status': 'passed', 'packages': checked,

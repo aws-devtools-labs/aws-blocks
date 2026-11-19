@@ -10,5 +10,5 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["aws-blocks/**/*", "test/**/*"]
+  "include": ["cdk-blocks/**/*", "test/**/*"]
 }

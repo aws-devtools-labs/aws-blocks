@@ -34,7 +34,7 @@ export interface GuardSynthResult {
 export interface GuardSynthOptions {
 	/** An expression or statements run with `stack`, `Auth` and `cdk` in scope (the block id `auth`). */
 	build: string;
-	/** The app directory: the stack's `backendHandlerPath` is `<appDir>/aws-blocks/index.handler.ts`. Omit for no path. */
+	/** The app directory: the stack's `backendHandlerPath` is `<appDir>/cdk-blocks/index.handler.ts`. Omit for no path. */
 	appDir?: string;
 	/** Extra environment for the child (e.g. `BLOCKS_AUTH_REBASELINE`). */
 	env?: Record<string, string>;
@@ -50,14 +50,14 @@ export function freshAppDir(): string {
 	return mkdtempSync(join(tmpdir(), 'bb-auth-guard-'));
 }
 
-/** `<appDir>/aws-blocks/baselines/TestStack/TestStack-auth.auth-pool.json` — the default block's baseline. */
+/** `<appDir>/cdk-blocks/baselines/TestStack/TestStack-auth.auth-pool.json` — the default block's baseline. */
 export function defaultBaselineFile(appDir: string, fullId = 'TestStack-auth'): string {
-	return join(appDir, 'aws-blocks', 'baselines', 'TestStack', `${fullId}.auth-pool.json`);
+	return join(appDir, 'cdk-blocks', 'baselines', 'TestStack', `${fullId}.auth-pool.json`);
 }
 
 export function synthGuarded(options: GuardSynthOptions): GuardSynthResult {
 	const probe = join(DIST_DIR, `.guard-synth-probe.${process.pid}.${counter++}.mjs`);
-	const handlerPath = options.appDir ? join(options.appDir, 'aws-blocks', 'index.handler.ts') : '';
+	const handlerPath = options.appDir ? join(options.appDir, 'cdk-blocks', 'index.handler.ts') : '';
 	writeFileSync(
 		probe,
 		`

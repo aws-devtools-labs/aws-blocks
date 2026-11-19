@@ -5,7 +5,7 @@
  * Layer 1 of the immutability guard: a **committed baseline
  * file** per block, diffed at synth.
  *
- * Where it lives: `<app>/aws-blocks/baselines/<stack>/<fullId>.auth-pool.json`
+ * Where it lives: `<app>/cdk-blocks/baselines/<stack>/<fullId>.auth-pool.json`
  * — next to the backend handler file the `BlocksStack` was created with
  * (`backendHandlerPath`, an absolute path in every template), so it lands in
  * the app's own source tree and resolves to the same file whatever directory

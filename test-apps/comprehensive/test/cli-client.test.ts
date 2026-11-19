@@ -9,11 +9,11 @@ import { testApiUrl } from './api-url.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = join(__dirname, '..');
-const clientUrl = pathToFileURL(join(projectRoot, 'aws-blocks', 'client.js')).href;
+const clientUrl = pathToFileURL(join(projectRoot, 'cdk-blocks', 'client.js')).href;
 
 /**
  * How long the keep-alive regression test idles the main test process's HTTP pool

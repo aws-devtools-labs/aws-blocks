@@ -249,7 +249,7 @@ export async function runJobWorker(
 /** Options for {@link runContainer}. */
 export interface RunContainerOptions {
 	/**
-	 * The imported backend module (the app's `aws-blocks/index.ts`). When given,
+	 * The imported backend module (the app's `cdk-blocks/index.ts`). When given,
 	 * the container serves the backend's API — the same RawRoute and JSON-RPC
 	 * dispatch as the Lambda handler — on port 8080, with readiness on port 8081,
 	 * for the load balancer in front of a container that hosts an API namespace.

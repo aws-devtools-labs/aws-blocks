@@ -18,7 +18,7 @@ Expose an **`api` namespace** (the framework's server-side RPC surface — a `PO
 2. **`api.listProducts()`** — returns every product as `[{ id, name }]`, read back from the SQL table, in a stable order (oldest first / ascending `id`). Because rows live in real SQL, they persist across reloads and process restarts.
 3. **`api.searchKb(query)`** — runs a retrieval query against the **knowledge-base block** (local TF-IDF over your `knowledge/` folder) and returns an array of hits, each `{ text }` (the matched FAQ snippet/text). An empty/blank query returns an empty array (no error).
 
-You must create the SQL table with a numbered `.sql` migration file (e.g. `aws-blocks/migrations/<block id>/001_products.sql`).
+You must create the SQL table with a numbered `.sql` migration file (e.g. `cdk-blocks/migrations/<block id>/001_products.sql`).
 
 ### The knowledge base (real seeded content)
 

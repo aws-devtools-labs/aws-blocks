@@ -148,9 +148,9 @@ describe('buildShellEnv (agent/judge shell env policy)', () => {
 	});
 
 	it('keeps the framework telemetry opt-out (a non-credential AWS_* flag)', () => {
-		const env = buildShellEnv({ ...JOB_ENV, AWS_BLOCKS_DISABLE_TELEMETRY: '1' });
-		assert.equal(env.AWS_BLOCKS_DISABLE_TELEMETRY, '1');
-		assert.equal(isCredentialName('AWS_BLOCKS_DISABLE_TELEMETRY'), false);
+		const env = buildShellEnv({ ...JOB_ENV, CDK_DISABLE_CLI_TELEMETRY: '1' });
+		assert.equal(env.CDK_DISABLE_CLI_TELEMETRY, '1');
+		assert.equal(isCredentialName('CDK_DISABLE_CLI_TELEMETRY'), false);
 	});
 
 	it('never forwards undefined values', () => {
@@ -313,9 +313,9 @@ describe('redaction', () => {
 	});
 
 	it('redactDeep with keyAware:false redacts by value only (agent-written JSON)', () => {
-		const value = { scripts: { secret: 'tsx aws-blocks/scripts/secret.ts' }, password: 'not-a-known-value', note: `x ${FAKE_CREDENTIAL_ENV.GITHUB_TOKEN}` };
+		const value = { scripts: { secret: 'tsx cdk-blocks/scripts/secret.ts' }, password: 'not-a-known-value', note: `x ${FAKE_CREDENTIAL_ENV.GITHUB_TOKEN}` };
 		const out = redactDeep(value, redactPatterns, { keyAware: false });
-		assert.equal(out.scripts.secret, 'tsx aws-blocks/scripts/secret.ts');
+		assert.equal(out.scripts.secret, 'tsx cdk-blocks/scripts/secret.ts');
 		assert.equal(out.password, 'not-a-known-value');
 		assert.equal(out.note, 'x ***REDACTED-GH-TOKEN***');
 	});

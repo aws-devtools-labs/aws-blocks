@@ -6,7 +6,7 @@
  */
 import { registerConfig } from '@aws-blocks/blocks/cdk';
 import type { Stack } from 'aws-cdk-lib';
-import { createBlocksBackend } from '../aws-blocks/index.cdk.js';
+import { createBlocksBackend } from '../cdk-blocks/index.cdk.js';
 
 /** The parts of Amplify Gen 2's `defineBackend(...)` result this file uses. */
 interface AmplifyBackend {

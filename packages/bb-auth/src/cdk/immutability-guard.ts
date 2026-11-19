@@ -115,7 +115,7 @@ export function guardUserPool(block: BuildingBlockScope, pool: cognito.IUserPool
 
 // ── Layer 1 ─────────────────────────────────────────────────────────────────
 
-/** The app's `aws-blocks/` directory and stack name, or `undefined` outside a Blocks stack/backend. */
+/** The app's `cdk-blocks/` directory and stack name, or `undefined` outside a Blocks stack/backend. */
 function baselineLocation(block: BuildingBlockScope): { appDir: string; stack: string } | undefined {
 	let handlerPath: unknown;
 	let stack: string;

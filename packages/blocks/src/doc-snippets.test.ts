@@ -70,7 +70,7 @@ const FIXTURE: DocInput = {
 		'```',
 		'## App', // 16
 		'```ts', // 17: a complete file with a type error
-		'// aws-blocks/index.ts',
+		'// cdk-blocks/index.ts',
 		"import { Scope } from '@aws-blocks/blocks';",
 		"export const n: number = new Scope('app').fullId;",
 		'```',
@@ -83,7 +83,7 @@ const FIXTURE: DocInput = {
 		'```',
 		'<!-- doc-snippet: fragment — uses the scope from above -->',
 		'```ts', // 30: light-checked only
-		'// aws-blocks/index.ts',
+		'// cdk-blocks/index.ts',
 		"import { Auth } from '@aws-blocks/blocks';",
 		"const auth = new Auth(scope, 'auth');",
 		'Auth.noSuchStatic;',
@@ -96,7 +96,7 @@ const FIXTURE: DocInput = {
 		"import type { Auth } from '@aws-blocks/blocks';",
 		'```',
 		'```ts', // 44: the same import in a backend file is fine
-		'// aws-blocks/index.ts',
+		'// cdk-blocks/index.ts',
 		"import { isBlocksError } from '@aws-blocks/blocks';",
 		'```',
 		'> **Tip:** a sample inside a blockquote is checked too:', // 47

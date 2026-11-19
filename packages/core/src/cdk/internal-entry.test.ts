@@ -46,8 +46,8 @@ describe('@aws-blocks/core/cdk/internal', () => {
 
 	test('the helpers take options objects', () => {
 		assert.strictEqual(
-			internal.baselineDir({ backendHandlerPath: '/app/aws-blocks/index.handler.ts', stack: 'Prod' }),
-			'/app/aws-blocks/baselines/Prod',
+			internal.baselineDir({ backendHandlerPath: '/app/cdk-blocks/index.handler.ts', stack: 'Prod' }),
+			'/app/cdk-blocks/baselines/Prod',
 		);
 		assert.throws(
 			() => internal.deployTimeLambdaEntry({ moduleUrl: import.meta.url, source: './no-such-handler' }),

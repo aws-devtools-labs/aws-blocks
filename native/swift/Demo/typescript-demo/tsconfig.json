@@ -15,7 +15,7 @@
   },
   "include": [
     "src/**/*",
-    "aws-blocks/**/*",
+    "cdk-blocks/**/*",
     "test/**/*"
   ]
 }

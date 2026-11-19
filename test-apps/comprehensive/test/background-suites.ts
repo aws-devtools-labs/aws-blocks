@@ -16,7 +16,7 @@
  * pooled WebSocket (the Agent suite force-closes it to test reconnects) and
  * fetch spies. A child process gets its own copy of all three. Server-side
  * state the suites share is kept apart with per-suite keys and resources
- * instead (see the AppSetting and delivered-code notes in aws-blocks/index.ts).
+ * instead (see the AppSetting and delivered-code notes in cdk-blocks/index.ts).
  *
  * A new suite belongs here only if it shares no server-side state that a test
  * asserts on with the suites in e2e.test.ts or with the other background
@@ -192,7 +192,7 @@ export function backgroundSuites<Name extends string>(
     new Promise<void>((resolve, reject) => {
       const prefix = `[${name}] `;
       // Same node binary and loader flags as this process (tsx, -C browser), so
-      // `import 'aws-blocks'` resolves to the same generated client.
+      // `import 'cdk-blocks'` resolves to the same generated client.
       const child = spawn(
         process.execPath,
         [...childExecArgv(), ...reporterArgs(), entry, name],

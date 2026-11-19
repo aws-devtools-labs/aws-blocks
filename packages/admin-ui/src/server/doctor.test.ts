@@ -116,7 +116,7 @@ describe('buildDoctorChecks — local dev server', () => {
 	it('reports the URL, port and discovered namespaces when up', () => {
 		const check = byId(buildDoctorChecks(input()), 'local-dev-server');
 		assert.match(check.detail, /running at http:\/\/localhost:3000/);
-		assert.match(check.detail, /port 3000 from aws-blocks\/scripts\/server\.ts/);
+		assert.match(check.detail, /port 3000 from cdk-blocks\/scripts\/server\.ts/);
 		assert.match(check.detail, /api, admin/);
 	});
 
@@ -125,7 +125,7 @@ describe('buildDoctorChecks — local dev server', () => {
 			buildDoctorChecks(input({ localDevServer: { ...healthyServer, portSource: 'default' } })),
 			'local-dev-server',
 		);
-		assert.match(check.detail, /not discovered from aws-blocks\/scripts\/server\.ts/);
+		assert.match(check.detail, /not discovered from cdk-blocks\/scripts\/server\.ts/);
 	});
 });
 

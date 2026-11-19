@@ -9,5 +9,5 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["aws-blocks/**/*.ts", "test/**/*.ts"]
+  "include": ["cdk-blocks/**/*.ts", "test/**/*.ts"]
 }

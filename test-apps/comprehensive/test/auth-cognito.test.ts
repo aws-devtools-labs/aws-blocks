@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { AuthErrors } from '@aws-blocks/bb-auth';
 import { totpCodeFor } from '@aws-blocks/blocks/utils';
 import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 
 // The `authC` / `authCMfa` instances were `AuthCognito`; they are now the

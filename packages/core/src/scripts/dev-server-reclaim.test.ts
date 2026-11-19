@@ -836,7 +836,7 @@ describe('runsUnderTsxWatch — whether a failed first start must end its tsx wa
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '1' }, ''), true);
     assert.strictEqual(runsUnderTsxWatch({}, ''), false);
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '0' }, 'bash'), false);
-    assert.strictEqual(runsUnderTsxWatch({}, 'node /app/node_modules/.bin/tsx watch aws-blocks/scripts/server.ts'), true);
+    assert.strictEqual(runsUnderTsxWatch({}, 'node /app/node_modules/.bin/tsx watch cdk-blocks/scripts/server.ts'), true);
   });
 });
 

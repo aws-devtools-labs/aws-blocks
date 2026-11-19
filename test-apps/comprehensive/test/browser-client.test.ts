@@ -13,7 +13,7 @@
  *
  * The stub IdP is local and sandbox only: in production the app configures a
  * placeholder real provider under the same id (see `e2eOidcProvider()` in
- * `aws-blocks/index.ts`), so the provider round trip is skipped there.
+ * `cdk-blocks/index.ts`), so the provider round trip is skipped there.
  *
  * The page is simulated (address bar, sessionStorage, navigations) and every
  * request carries the frontend's `Origin`, as a browser's cross-origin fetch

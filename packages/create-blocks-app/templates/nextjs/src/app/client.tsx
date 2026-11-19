@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { api } from 'aws-blocks';
+import { api } from 'cdk-blocks';
 import { injectTheme } from '@aws-blocks/blocks/theme';
 import { StatusMessage, type StatusMessageHandle } from '@aws-blocks/blocks/ui';
 

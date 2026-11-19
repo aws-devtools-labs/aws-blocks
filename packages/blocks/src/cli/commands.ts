@@ -273,7 +273,7 @@ function devServerEnv(env: NodeJS.ProcessEnv, options: { backendPath: string; ho
  * Run a lifecycle runner with the app's `tsx`, from the project root (see
  * {@link runnerArgs}). The runner's client generation (core's deploy and
  * sandbox) loads the same `tsx`, and both compile the backend with
- * `aws-blocks/tsconfig.json` when the app has one (see {@link tsxTsconfigEnv}).
+ * `cdk-blocks/tsconfig.json` when the app has one (see {@link tsxTsconfigEnv}).
  */
 function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 	const root = run.cwd ?? ctx.requireRoot();
@@ -437,7 +437,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
 	const portWarning = frontendPortWarning(config);
 	if (portWarning) ctx.out.warn(portWarning);
-	const backendPath = requireFile(join(root, 'aws-blocks', 'index.ts'), 'the backend entry');
+	const backendPath = requireFile(join(root, 'cdk-blocks', 'index.ts'), 'the backend entry');
 	if (ctx.logLevel === 'verbose' || ctx.logLevel === 'debug') {
 		ctx.out.progress(
 			`Frontend: ${config.frontendCommand ?? 'none (backend only)'} (from ${config.source}); port ${config.port ?? 3000}`,
@@ -657,7 +657,7 @@ async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 	const deployOnly = mode !== 'watch';
 	const operation = deployOnly ? `npm run sandbox:${mode}` : 'npm run sandbox';
 	const root = ctx.requireRoot();
-	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const backendPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const config = resolveDevConfig(root);
 	for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
 	const portWarning = deployOnly ? undefined : frontendPortWarning(config);
@@ -686,7 +686,7 @@ async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 			destroyInvocation: invocation(ctx, 'sandbox', 'destroy'),
 			previewInvocation: invocation(ctx, 'sandbox', 'preview'),
 		},
-		env: devServerEnv(ctx.env, { backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
+		env: devServerEnv(ctx.env, { backendPath: join(root, 'cdk-blocks', 'index.ts'), ...devConfig }),
 		// Watch mode runs until stopped. A deploy-only run is not long-running: the CLI does not stop it on a
 		// hangup, but core's sandbox deploy does not defer SIGHUP, so a hangup of the whole process group ends it.
 		longRunning: !deployOnly,
@@ -710,7 +710,7 @@ export function sandboxPreview(ctx: Context): Promise<number> {
 
 export async function sandboxDestroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
-	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const backendPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	if (!existsSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'))) {
 		// The CDK app would create a sandbox id, and `cdk destroy` of a stack that does not exist succeeds.
 		ctx.out.text(
@@ -882,7 +882,7 @@ function waitLiveArgs(flags: CommandInput['flags']): string[] {
 export async function deploy(ctx: Context, input: CommandInput): Promise<number> {
 	const args = waitLiveArgs(input.flags);
 	const root = ctx.requireRoot();
-	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const cdkAppPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
 	ctx.out.progress(`Deploying the production stack ${stack}; ${label}; project ${root}.`);
@@ -920,7 +920,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 
 export async function destroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
-	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const cdkAppPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
 	// Core's production destroy loads `.env.production`, as its deploy does.
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
@@ -1070,36 +1070,6 @@ export async function config(ctx: Context, input: CommandInput): Promise<number>
 	return inProcess(ctx, () => core.runConfigCli(input.passthrough, valueCliOptions(ctx)));
 }
 
-export async function telemetry(ctx: Context, input: CommandInput): Promise<number> {
-	const actions = new Set<string>();
-	for (const action of ['status', 'enable', 'disable']) if (input.flags[action] === true) actions.add(action);
-	const [positional] = input.positionals;
-	if (positional !== undefined) {
-		if (!['status', 'enable', 'disable'].includes(positional)) {
-			const hint = suggest(positional, ['status', 'enable', 'disable']);
-			throw new UsageError(`unknown telemetry action "${positional}".${hint ? ` Did you mean "${hint}"?` : ''}`, {
-				hint: blocksCommand('telemetry', '--help'),
-			});
-		}
-		actions.add(positional);
-	}
-	if (actions.size > 1) throw new UsageError(`choose one telemetry action, not ${[...actions].join(' and ')}.`);
-	const action = [...actions][0] ?? 'status';
-	const root = ctx.findRoot();
-	const global = input.flags.global === true;
-	// A project setting needs a project: never write .blocks/config.json into a directory that is not an app.
-	if (!root && action !== 'status' && !global) {
-		throw new UsageError(`not inside an AWS Blocks app, so there is no project to ${action} telemetry for.`, {
-			hint: `npm run telemetry -- ${action} --global, or run it in your app directory`,
-		});
-	}
-	// Core reads the project setting from the working directory: the app, or the -C directory outside one.
-	ctx.deps.chdir(root ?? ctx.startDir);
-	const core = await ctx.core();
-	const argv = ['node', 'cdk-blocks', `--${action}`, ...(global ? ['--global'] : [])];
-	return inProcess(ctx, () => core.telemetry({ argv }));
-}
-
 // ── Generate ─────────────────────────────────────────────────────────────────
 
 const BLOCKS_DIST = fileURLToPath(new URL('..', import.meta.url));
@@ -1110,11 +1080,11 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 	const root = input.positionals.length === 2 ? (app ?? ctx.startDir) : ctx.requireRoot();
 	// Checked here, as generate spec checks it, so both report a missing backend the same way.
 	const [backendArg, outputArg] = input.positionals;
-	requireFile(backendArg ? resolve(ctx.startDir, backendArg) : join(root, 'aws-blocks', 'index.ts'), 'the backend entry');
-	const output = outputArg ? resolve(ctx.startDir, outputArg) : join(root, 'aws-blocks', 'client.js');
-	if (app && output === join(app, 'aws-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
+	requireFile(backendArg ? resolve(ctx.startDir, backendArg) : join(root, 'cdk-blocks', 'index.ts'), 'the backend entry');
+	const output = outputArg ? resolve(ctx.startDir, outputArg) : join(root, 'cdk-blocks', 'client.js');
+	if (app && output === join(app, 'cdk-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
 		throw new UsageError(
-			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "npm run generate-client" would replace it with the generic client.',
+			'this app generates its own cdk-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "npm run generate-client" would replace it with the generic client.',
 			{ where: [`project: ${app}`], hint: `npm run blocks:generate-client, or npm run generate-client -- --force` },
 		);
 	}
@@ -1132,7 +1102,7 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 export function generateSpec(ctx: Context, input: CommandInput): Promise<number> {
 	const [backendArg, outputArg] = input.positionals;
 	// With the backend given, the spec needs no app; its default output sits next to the backend.
-	const backendPath = backendArg ? resolve(ctx.startDir, backendArg) : join(ctx.requireRoot(), 'aws-blocks', 'index.ts');
+	const backendPath = backendArg ? resolve(ctx.startDir, backendArg) : join(ctx.requireRoot(), 'cdk-blocks', 'index.ts');
 	const root = ctx.findRoot();
 	const outputPath = outputArg ? resolve(ctx.startDir, outputArg) : join(dirname(backendPath), 'blocks.spec.json');
 	requireFile(backendPath, 'the backend entry');

@@ -6,7 +6,7 @@ import {
 	type CognitoActionOverride,
 	type CognitoAuthenticatorOptions,
 } from '@aws-blocks/bb-auth-cognito/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 const hidden: CognitoActionName[] = ['signUp'];
 

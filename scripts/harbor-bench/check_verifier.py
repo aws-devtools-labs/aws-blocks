@@ -70,9 +70,9 @@ def snapshot(image, root):
     process = subprocess.run([
         'docker', 'run', '--rm', '-v', f'{root / "task/tests"}:/tests:ro', image, 'bash', '-c',
         'set -e; app=/app/todo-app; mkdir -p /logs/verifier "$app/node_modules/pkg" '
-        '"$app/aws-blocks/node_modules/nested" "$app/.bb-data/app-todos"; '
+        '"$app/cdk-blocks/node_modules/nested" "$app/.bb-data/app-todos"; '
         'echo "{}" > "$app/package-lock.json"; echo stale > "$app/node_modules/pkg/index.js"; '
-        'echo stale > "$app/aws-blocks/node_modules/nested/index.js"; '
+        'echo stale > "$app/cdk-blocks/node_modules/nested/index.js"; '
         'echo "{\\"1\\":{\\"title\\":\\"survival-a\\"}}" > "$app/.bb-data/app-todos/store.json"; '
         'echo "{\\"items\\":[{\\"title\\":\\"survival-a\\"}]}" > /var/lib/harbor-verifier/state.json; '
         'BENCH_PHASE=2 python3 /tests/verify.py 2>/dev/null || true; '

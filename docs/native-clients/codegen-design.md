@@ -80,7 +80,7 @@ The question this document answers: **what format does the codegen layer read?**
 
 ## Decision: OpenRPC over fabricated OpenAPI
 
-The format is OpenRPC 1.3.2, emitted as `aws-blocks/blocks.spec.json`. The alternative considered was OpenAPI 3.1 with fabricated paths.
+The format is OpenRPC 1.3.2, emitted as `cdk-blocks/blocks.spec.json`. The alternative considered was OpenAPI 3.1 with fabricated paths.
 
 ### Why not OpenAPI
 
@@ -293,7 +293,7 @@ The trade-off is one parallel definition layer per method (the schema). Schemas 
 The OpenRPC document is emitted at build time, alongside the existing `client.js` codegen. The mechanism is shared: dynamically import the backend, discover `ApiNamespace` exports via `API_NAMESPACE_MARKER`, introspect methods, and emit the document. See `packages/core/src/scripts/generate-spec.ts` for the implementation.
 
 ```
-aws-blocks/
+cdk-blocks/
 	blocks.spec.json        # all namespaces, all methods
 ```
 
@@ -333,16 +333,16 @@ The spec is a build input with the same trust as the backend source it is genera
 
 ```mermaid
 flowchart LR
-  App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
-  TS -- "npm run spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
+  App[Hand-written<br/>ApiNamespace code] --> TS[cdk-blocks/*.ts]
+  TS -- "npm run spec" --> Spec[cdk-blocks/blocks.spec.json<br/>local, gitignored]
   Sandbox[.cdk-blocks-sandbox/config.json<br/>or config.&lt;stage&gt;.json] -- servers URL --> Spec
   Spec -- local file read --> Dart[blocks_codegen]
   Spec -- local file read --> Swift[BlocksCodegen plugins]
   Spec -- local file read --> Kotlin[Gradle codegen task]
 ```
 
-- **Generated locally.** `generate-spec-cli.ts` (via `npm run spec` in scaffolded apps) imports the backend entry and writes `aws-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
-- **Gitignored in apps.** Every `create-blocks-app` template, and the entries `create-blocks-app` adds when initializing an existing directory, ignore `aws-blocks/blocks.spec.json`. (This repo commits a few specs as Swift test fixtures under `native/swift/Tests/`.)
+- **Generated locally.** `generate-spec-cli.ts` (via `npm run spec` in scaffolded apps) imports the backend entry and writes `cdk-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
+- **Gitignored in apps.** Every `create-blocks-app` template, and the entries `create-blocks-app` adds when initializing an existing directory, ignore `cdk-blocks/blocks.spec.json`. (This repo commits a few specs as Swift test fixtures under `native/swift/Tests/`.)
 - **Not served by the deployed API.** No runtime or CDK code reads or bundles the spec, and the JSON-RPC handler has no discovery method that returns it.
 - **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `cdkBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
 

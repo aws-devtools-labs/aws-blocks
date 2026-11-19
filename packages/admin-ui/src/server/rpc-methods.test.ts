@@ -24,7 +24,7 @@ function apiBlock(id: string, methods: ApiMethod[]): DiscoveredBlock {
 		id,
 		fullId: `my-app-${id}`,
 		category: 'core',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 12,
 		methods,
 	};
@@ -452,7 +452,7 @@ describe('no API blocks', () => {
 				id: 'posts',
 				fullId: 'my-app-posts',
 				category: 'data',
-				file: 'aws-blocks/index.ts',
+				file: 'cdk-blocks/index.ts',
 				line: 4,
 			},
 		];
@@ -478,7 +478,7 @@ describe('no API blocks', () => {
 				id: 'api',
 				fullId: 'my-app-api',
 				category: 'core',
-				file: 'aws-blocks/index.ts',
+				file: 'cdk-blocks/index.ts',
 				line: 9,
 			},
 		];
@@ -496,7 +496,7 @@ describe('no API blocks', () => {
 				id: 'api',
 				fullId: 'my-app-api',
 				category: 'core',
-				file: 'aws-blocks/index.ts',
+				file: 'cdk-blocks/index.ts',
 				line: 9,
 			},
 		];

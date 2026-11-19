@@ -1,5 +1,10 @@
 name: Publish Kotlin to Maven Central
 
+# The repository's Gradle build runs only in `build`, which holds no id-token and no
+# secrets. `publish` runs no repository code: it signs the staged publication with
+# gpg and uploads it to the Central Portal. `release` tags and creates the release.
+# dry_run: build, stage, sign and bundle, then stop before upload, tag and release.
+
 on:
   pull_request:
     types: [closed]
@@ -12,31 +17,42 @@ on:
         default: false
 
 permissions:
-  id-token: write
-  contents: write
+  contents: read
 
 concurrency:
   group: publish-kotlin-maven
   cancel-in-progress: false
 
 jobs:
-  publish:
-    # Publish on a manual dispatch, or when a release/kotlin-* PR is merged.
+  build:
+    # Publish on a manual dispatch from main, or when a release/kotlin-* PR is merged.
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.pull_request.merged == true &&
        startsWith(github.event.pull_request.head.ref, 'release/kotlin-'))
+    # The runtime has iOS targets, which only build on a macOS host.
     runs-on: macos-latest
-    environment: publish-maven
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+      version: ${{ steps.meta.outputs.version }}
     defaults:
       run:
         working-directory: native/kotlin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # For the merge event, check out main (the merged commit). For a manual
-          # dispatch, fall back to the dispatched ref (empty ref => default).
-          ref: ${{ github.event_name == 'pull_request' && 'main' || '' }}
+          # For the merge event, check out the merged commit. For a manual
+          # dispatch, the dispatched commit on main.
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Read release commit and version
+        id: meta
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
@@ -45,10 +61,62 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
-      # Build before loading credentials because Gradle plugins, build scripts, and
-      # code generators execute during compilation.
-      - name: Build and test (pre-publish gate)
-        run: ./gradlew build
+      # Gradle plugins, build scripts, and code generators execute here, so this job
+      # gets no credentials. Signing is off (the vanniktech plugin reads
+      # signAllPublications, then RELEASE_SIGNING_ENABLED); the publish job signs.
+      - name: Build, test and stage the unsigned publication
+        run: |
+          set -euo pipefail
+          ./gradlew build publishToMavenLocal \
+            -PsignAllPublications=false -PRELEASE_SIGNING_ENABLED=false \
+            -Dmaven.repo.local="$RUNNER_TEMP/maven-staging"
+          find "$RUNNER_TEMP/maven-staging" -type f -name 'maven-metadata-local*' -delete
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kotlin-maven-staging
+          path: ${{ runner.temp }}/maven-staging
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: publish-maven
+    # Checks out nothing, so it needs no contents permission.
+    permissions:
+      id-token: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      # RAM-backed, so the imported private key never reaches the runner's disk.
+      GNUPGHOME: /dev/shm/gnupg-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Set paths
+        run: |
+          echo "STAGING=$RUNNER_TEMP/maven-staging" >> "$GITHUB_ENV"
+          echo "BUNDLE=$RUNNER_TEMP/central-bundle.zip" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kotlin-maven-staging
+          path: ${{ runner.temp }}/maven-staging
+
+      - name: Check the staged layout
+        run: |
+          set -euo pipefail
+          cd "$STAGING"
+          BAD="$(find . ! -type d \( ! -type f -o ! -path './com/aws/blocks/kotlin/*' -o -name '*.asc' \))"
+          if [ -n "$BAD" ]; then
+            echo "::error::Unexpected entries in the staged publication:"
+            printf '%s\n' "$BAD"
+            exit 1
+          fi
+          # An empty staging directory would otherwise sign and upload nothing.
+          if [ -z "$(find ./com/aws/blocks/kotlin -type f -print -quit 2>/dev/null)" ]; then
+            echo "::error::The staged publication contains no files."
+            exit 1
+          fi
+          find . -type f | sort
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
@@ -56,16 +124,13 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Fetched immediately before publish. Every value is masked before it is
-      # written anywhere (the signing key line by line too, since a mask only
-      # matches a single line), and the properties file is owner-only and removed
-      # again in the always-run cleanup step below.
-      - name: Fetch credentials and write Gradle properties
+      # Every value is masked before use (the signing key line by line too, since a
+      # mask only matches a single line). The key is imported into GNUPGHOME and the
+      # passphrase reaches gpg on stdin, never on a command line or in a file.
+      - name: Sign the publication
         run: |
           set -euo pipefail
-          MAVEN_SECRET=$(aws secretsmanager get-secret-value \
-            --secret-id awsmobilesdk/android/sonatype_central_portal \
-            --query SecretString --output text)
+          mkdir -m 700 "$GNUPGHOME"
           SIGNING_SECRET=$(aws secretsmanager get-secret-value \
             --secret-id awsmobilesdk/android/signing \
             --query SecretString --output text)
@@ -78,58 +143,120 @@ jobs:
             done <<< "$1"
             return 0
           }
-          MAVEN_USER=$(printf '%s' "$MAVEN_SECRET" | jq -r .username); mask "$MAVEN_USER"
-          MAVEN_PASS=$(printf '%s' "$MAVEN_SECRET" | jq -r .password); mask "$MAVEN_PASS"
-          KEY_ID=$(printf '%s' "$SIGNING_SECRET" | jq -r .keyId); mask "$KEY_ID"
-          KEY_PASS=$(printf '%s' "$SIGNING_SECRET" | jq -r .password); mask "$KEY_PASS"
-          KEY=$(printf '%s' "$SIGNING_SECRET" | jq -r .inMemoryKey); mask "$KEY"
-          unset MAVEN_SECRET SIGNING_SECRET
+          # jq -e fails the step when a required field is missing.
+          KEY_ID=$(printf '%s' "$SIGNING_SECRET" | jq -er '.keyId // ""'); mask "$KEY_ID"
+          KEY_PASS=$(printf '%s' "$SIGNING_SECRET" | jq -er .password); mask "$KEY_PASS"
+          # The key is stored with its line breaks as literal "\n" text.
+          KEY=$(printf '%s' "$SIGNING_SECRET" | jq -er '.inMemoryKey | gsub("\\\\n"; "\n")'); mask "$KEY"
+          unset SIGNING_SECRET
 
-          PROPS="$HOME/.gradle/gradle.properties"
-          mkdir -p "$(dirname "$PROPS")"
-          umask 077
+          printf '%s\n' "$KEY_PASS" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+            --import <(printf '%s\n' "$KEY")
+          unset KEY
+          SIGNER=()
+          if [ -n "$KEY_ID" ]; then SIGNER=(--local-user "${KEY_ID}!"); fi
 
-          # jq -r unescapes the JSON \\n to literal \n text on a single line.
-          # Java Properties.load() interprets \n as a real newline, so the
-          # signing plugin receives a properly formatted multiline PGP key.
-          {
-            printf 'mavenCentralUsername=%s\n' "$MAVEN_USER"
-            printf 'mavenCentralPassword=%s\n' "$MAVEN_PASS"
-            printf 'signingInMemoryKeyId=%s\n' "$KEY_ID"
-            printf 'signingInMemoryKeyPassword=%s\n' "$KEY_PASS"
-            printf 'signingInMemoryKey=%s\n' "$KEY"
-          } >> "$PROPS"
-          chmod 600 "$PROPS"
+          # Listed up front, so the .asc files written below are not picked up.
+          mapfile -d '' FILES < <(find "$STAGING" -type f -print0)
+          for f in "${FILES[@]}"; do
+            printf '%s\n' "$KEY_PASS" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+              "${SIGNER[@]}" --armor --detach-sign --output "$f.asc" "$f"
+          done
 
-      - name: Publish to Maven Central
-        if: inputs.dry_run != true
-        run: ./gradlew publishAllPublicationsToMavenCentralRepository
-
-      - name: Publish dry-run
-        if: inputs.dry_run == true
-        run: ./gradlew publishToMavenLocal
-
-      - name: Remove publishing credentials
-        if: always()
-        run: rm -f "$HOME/.gradle/gradle.properties"
-
-      - name: Tag and create GitHub Release
-        # Only on a real publish (not dry-run). Runs after a successful publish,
-        # so a failed Maven upload never creates an orphan tag.
-        if: inputs.dry_run != true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add checksums and build the Central bundle
         run: |
           set -euo pipefail
-          VERSION=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
+          # Central requires .md5 and .sha1 for every file except the signatures.
+          mapfile -d '' FILES < <(find "$STAGING" -type f ! -name '*.asc' -print0)
+          for f in "${FILES[@]}"; do
+            md5sum "$f" | cut -d' ' -f1 > "$f.md5"
+            sha1sum "$f" | cut -d' ' -f1 > "$f.sha1"
+          done
+          (cd "$STAGING" && zip -q -r -X "$BUNDLE" com)
+          unzip -l "$BUNDLE"
+
+      - name: Upload to Maven Central
+        if: inputs.dry_run != true
+        run: |
+          set -euo pipefail
+          MAVEN_SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id awsmobilesdk/android/sonatype_central_portal \
+            --query SecretString --output text)
+          mask() {
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then printf '::add-mask::%s\n' "$line"; fi
+            done <<< "$1"
+            return 0
+          }
+          MAVEN_USER=$(printf '%s' "$MAVEN_SECRET" | jq -er .username); mask "$MAVEN_USER"
+          MAVEN_PASS=$(printf '%s' "$MAVEN_SECRET" | jq -er .password); mask "$MAVEN_PASS"
+          TOKEN=$(printf '%s:%s' "$MAVEN_USER" "$MAVEN_PASS" | base64 -w0); mask "$TOKEN"
+          unset MAVEN_SECRET MAVEN_USER MAVEN_PASS
+
+          # curl reads the header from stdin, so the token never appears on a command line.
+          auth() { printf 'Authorization: Bearer %s\n' "$TOKEN"; }
+          API=https://central.sonatype.com/api/v1/publisher
+          ID=$(auth | curl --fail-with-body -sS -X POST -H @- \
+            -F "bundle=@${BUNDLE};type=application/octet-stream" \
+            "${API}/upload?name=aws-blocks-kotlin-${VERSION}&publishingType=AUTOMATIC")
+          echo "Deployment $ID uploaded."
+
+          # Publishing can take a while, so poll for up to 45 minutes.
+          for _ in $(seq 1 90); do
+            sleep 30
+            STATUS=$(auth | curl --fail-with-body -sS -X POST -H @- "${API}/status?id=${ID}") || continue
+            STATE=$(printf '%s' "$STATUS" | jq -r .deploymentState)
+            echo "Deployment state: $STATE"
+            case "$STATE" in
+              PUBLISHED) exit 0 ;;
+              FAILED) printf '%s' "$STATUS" | jq .errors; exit 1 ;;
+            esac
+          done
+          echo "::error::Deployment $ID did not reach PUBLISHED in time"
+          exit 1
+
+      - name: Remove the signing keyring
+        if: always()
+        run: |
+          gpgconf --kill all 2> /dev/null || true
+          rm -rf "$GNUPGHOME"
+
+  release:
+    needs: [build, publish]
+    # Only on a real publish (not dry-run). Runs after a successful publish,
+    # so a failed Maven upload never creates an orphan tag.
+    if: inputs.dry_run != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SHA: ${{ needs.build.outputs.sha }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /native/kotlin/CHANGELOG.md
+            /native/kotlin/scripts/extract-changelog.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Tag and create GitHub Release
+        working-directory: native/kotlin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
           TAG="kotlin@${VERSION}"
 
-          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+          if gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" > /dev/null 2>&1; then
             echo "Tag $TAG already exists — skipping tag/release (safe re-run)."
             exit 0
           fi
 
-          # Extract release notes BEFORE pushing the tag, so a missing/malformed
+          # Extract release notes BEFORE creating the tag, so a missing/malformed
           # changelog entry fails here rather than stranding a tag with no release.
           NOTES="$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")"
 
@@ -139,12 +266,9 @@ jobs:
             PRERELEASE="--prerelease"
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$TAG"
-          git push origin "$TAG"
-
+          # Creates the tag on the published commit together with the release.
           gh release create "$TAG" \
+            --target "$SHA" \
             --title "Kotlin SDK ${VERSION}" \
             --notes "$NOTES" \
             $PRERELEASE

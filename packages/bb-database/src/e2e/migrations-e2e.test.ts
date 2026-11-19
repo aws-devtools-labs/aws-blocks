@@ -179,7 +179,7 @@ describe('bb-database migrate E2E: Supabase', { skip }, () => {
 			'migrate reports the host it ran on',
 		);
 		assert.strictEqual(result.types, undefined, '--no-types writes no types file');
-		assert.ok(!existsSync(join(ws.cwd, 'aws-blocks', 'database.types.ts')), '--no-types writes no types file');
+		assert.ok(!existsSync(join(ws.cwd, 'cdk-blocks', 'database.types.ts')), '--no-types writes no types file');
 
 		// Verify table exists
 		assert.deepStrictEqual(await columnsOf(db, TABLE), ['id', 'value']);
@@ -256,7 +256,7 @@ describe('bb-database migrate E2E: Supabase', { skip }, () => {
  * E2E: the dev-loop flow: apply a migration with `migrate`, which then refreshes the generated types, against a
  * real Supabase DB.
  *
- * Asserts the customer-visible promise: after a migration, the generated `aws-blocks/database.types.ts`
+ * Asserts the customer-visible promise: after a migration, the generated `cdk-blocks/database.types.ts`
  * reflects the new schema. Idempotent re-application applies nothing.
  *
  * Uses the originals' non-underscore table name with a distinctive prefix, and high migration numbers, cleaned
@@ -299,7 +299,7 @@ describe('bb-database migrate + types E2E: Supabase', { skip }, () => {
 
 	before(async () => {
 		ws = workspace('bbdb-types-e2e-');
-		typesFile = join(ws.cwd, 'aws-blocks', 'database.types.ts');
+		typesFile = join(ws.cwd, 'cdk-blocks', 'database.types.ts');
 		mkdirSync(join(ws.cwd, DIR));
 		db = openDb(url);
 		await db.exec(LEGACY_LEDGER);
@@ -359,7 +359,7 @@ describe('bb-database migrate + types E2E: Supabase', { skip }, () => {
 		assert.strictEqual(readFileSync(typesFile, 'utf8'), written, 'the same schema gives the same file');
 
 		// connect and the refresh write these two files and no others: no scaffolding.
-		assert.deepStrictEqual(readdirSync(join(ws.cwd, 'aws-blocks')).sort(), ['database.e2e.ca.ts', 'database.types.ts']);
+		assert.deepStrictEqual(readdirSync(join(ws.cwd, 'cdk-blocks')).sort(), ['database.e2e.ca.ts', 'database.types.ts']);
 	});
 
 	test('a delta migration + refresh surfaces the new column', async () => {

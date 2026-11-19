@@ -16,6 +16,14 @@
 # blocks any commit that touches that file. Synthetic value, already public.
 210987654321
 
+# More synthetic account numbers already on main (NOT introduced by this
+# change): AWS's documented example account 111122223333 in
+# packages/core/src/cdk/api-waf.test.ts, and 999999999999 in
+# scripts/ci/sweep-cognito-pools.test.mjs. Staging them in a merge from main
+# trips the account-id pattern and blocks the commit.
+111122223333
+999999999999
+
 # Pre-existing transitive dependency (@graphql-tools, already on main — NOT
 # introduced by this change) whose package name trips the internal-tooling
 # "[aA]pollo" guard. git-secrets' pre-commit hook scans staged lockfile

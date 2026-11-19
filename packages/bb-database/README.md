@@ -16,7 +16,7 @@ The umbrella package `@aws-blocks/blocks` exports this block: `import { Database
 
 ## Quick start
 
-Define the blocks in `aws-blocks/index.ts`:
+Define the blocks in `cdk-blocks/index.ts`:
 
 ```ts
 import { ApiNamespace, Scope } from '@aws-blocks/core';
@@ -38,7 +38,7 @@ const search = new Database(scope, 'search', { cluster: shared });
 
 > **⚠️ Data lives on the cluster. AWS Blocks does not move it.** Treat the cluster a `Database` first deploys to as permanent. If you change its `cluster` option, or rename a `Database` or `DatabaseCluster` id, the block points at a different, empty cluster or schema. Nothing copies the rows. The old data stays where it was. A schema on a shared cluster is never dropped. An owned cluster that leaves the template is kept under `removalPolicy: 'retain'` (the production default). Under `'destroy'` (the sandbox default) it is **deleted in that same deploy**. To move data: 1. Add a new block on the target cluster. 2. Copy the rows. 3. Switch your handlers. 4. Remove the old block. See [Sharing a cluster](#sharing-a-cluster).
 
-Create tables in a migration file, not in a handler. The deployed app can only read and write rows. Put the file at `aws-blocks/migrations/shop/001_init.sql`, written in DSQL (see [Migrations](#migrations)):
+Create tables in a migration file, not in a handler. The deployed app can only read and write rows. Put the file at `cdk-blocks/migrations/shop/001_init.sql`, written in DSQL (see [Migrations](#migrations)):
 
 ```sql
 CREATE TABLE customers (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL);
@@ -135,7 +135,7 @@ Block options:
 | Option | Type | Description |
 |---|---|---|
 | `cluster` | `DatabaseCluster` or the result of `DatabaseCluster.fromExisting()` | The cluster to run on. Omit it and the block owns a `dsql` cluster. |
-| `migrationsPath` | `string` | Directory of `.sql` files, relative to the project root. Defaults to `./aws-blocks/migrations/{id}`. The default may be missing; an explicit path must exist. |
+| `migrationsPath` | `string` | Directory of `.sql` files, relative to the project root. Defaults to `./cdk-blocks/migrations/{id}`. The default may be missing; an explicit path must exist. |
 | `schemaName` | `string` | The PostgreSQL schema for this block's tables. `public` when the block owns its cluster, otherwise the block id as a PostgreSQL identifier (lower-cased, `_` for other characters). Two blocks on one cluster cannot share a schema. |
 | `removalPolicy` | `'retain' \| 'destroy'` | Only when `cluster` is omitted. With a shared cluster, set it on the `DatabaseCluster`. |
 | `logger` | `ChildLogger` | Logger for internal operations. Defaults to a `Logger` at error level. |
@@ -200,17 +200,17 @@ const open = await db.query<{ id: string; title: string }>(sql`SELECT id, title 
 npm run db -- connect --ca ./prod-ca-2021.crt                      # local: asks for the string, checks, stores
 npm run db -- connect --stage production --ca ./prod-ca-2021.crt   # the same for a deployed stage
 npm run db migrate                                              # apply ./migrations to the local database
-npm run db types                                                # write aws-blocks/database.types.ts
+npm run db types                                                # write cdk-blocks/database.types.ts
 npm run db -- status --stage production                            # applied and pending files
 npm run db -- migrate --mark-applied 000_baseline.sql              # record a file as applied, without running it
 ```
 
 | Command | What it does |
 |---|---|
-| `connect [--name <name>] [--stage sandbox\|production] [--ca <file>] [--value-stdin] [--check-only]` | Reads the connection string from a hidden prompt, or from stdin with `--value-stdin`. Connects with the certificate verified and reports the server version, what the role can do (superuser, `BYPASSRLS`, the roles it may switch to), the tables whose policies call `auth.uid()`, `auth.email()` or `auth.role()`, and for a Supabase host which endpoint it is. Then stores the string: for local mode by default, as the SSM SecureString of the stage with `--stage`. With `--ca` it also writes the certificate module of the connection: `aws-blocks/database.ca.ts`, or `aws-blocks/database.<name>.ca.ts` for a name other than `db-url`. Every later command for that connection, and a later `connect` without `--ca`, verifies the server with it. `--name` defaults to `db-url`. The lines it prints for your backend file name `./migrations` as `migrationsPath`, the directory that `migrate` applies, so a deploy runs the same files. |
+| `connect [--name <name>] [--stage sandbox\|production] [--ca <file>] [--value-stdin] [--check-only]` | Reads the connection string from a hidden prompt, or from stdin with `--value-stdin`. Connects with the certificate verified and reports the server version, what the role can do (superuser, `BYPASSRLS`, the roles it may switch to), the tables whose policies call `auth.uid()`, `auth.email()` or `auth.role()`, and for a Supabase host which endpoint it is. Then stores the string: for local mode by default, as the SSM SecureString of the stage with `--stage`. With `--ca` it also writes the certificate module of the connection: `cdk-blocks/database.ca.ts`, or `cdk-blocks/database.<name>.ca.ts` for a name other than `db-url`. Every later command for that connection, and a later `connect` without `--ca`, verifies the server with it. `--name` defaults to `db-url`. The lines it prints for your backend file name `./migrations` as `migrationsPath`, the directory that `migrate` applies, so a deploy runs the same files. |
 | `migrate [dir] [--types <file> \| --no-types]` | Applies the pending files of `dir` (default `./migrations`) to the database of the local value, with the code a deploy uses, then writes the types file. Shows the host and asks first; `--yes` skips the question. It does not take `--stage`: the deploy migrates a stage. |
 | `migrate [dir] --mark-applied <file> [--stage sandbox\|production]` | Records `<file>` as applied without running it, on the database of the local value or of a stage. For a file that describes what the database already has; see [Starting from the schema you have](#starting-from-the-schema-you-have). Repeat the option for more files. Shows the host and asks first. |
-| `types [--out <file>]` | Writes one `Tables` interface for Kysely from the live schema (default `aws-blocks/database.types.ts`). The file needs no import: its `Generated` type is structurally Kysely's. |
+| `types [--out <file>]` | Writes one `Tables` interface for Kysely from the live schema (default `cdk-blocks/database.types.ts`). The file needs no import: its `Generated` type is structurally Kysely's. |
 | `status [dir] [--stage sandbox\|production]` | Lists the applied and the pending files. |
 
 `npm run db` runs the block's own command line (the `bb-database` binary of this package) from the project root, so `@aws-blocks/bb-database` must be installed in the app. Every command takes `--name` and `--schema`, and the `--yes` and `--no-input` of the task runner. To request JSON explicitly, pass `--output json` through both npm and the runner: `npm run -s db -- status -- --output json`. Use `-s` to omit npm’s banner. The exit code is 0 for success, 1 for a failure and 2 for a usage error. The connection string is never an argument and never printed.
@@ -298,14 +298,14 @@ What is different from a connection string:
 
 An app that deployed `Database` of `@aws-blocks/bb-data` has an Aurora PostgreSQL cluster in a VPC, with a credentials secret, and reaches it through the Data API. `LegacyDatabaseCluster` keeps that cluster in the stack as it is. A `Database` of this package then runs on it, with the tables and the `_migrations` table that are in it.
 
-1. In `aws-blocks/index.ts`, change the class on the line of the old `Database` to `LegacyDatabaseCluster`. Keep its id, its scope and the options that shaped the cluster. Add a `Database` with a new id, and give it the cluster and the `migrationsPath`:
+1. In `cdk-blocks/index.ts`, change the class on the line of the old `Database` to `LegacyDatabaseCluster`. Keep its id, its scope and the options that shaped the cluster. Add a `Database` with a new id, and give it the cluster and the `migrationsPath`:
 
    ```ts
    import { Database, LegacyDatabaseCluster } from '@aws-blocks/bb-database';
 
-   // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './aws-blocks/migrations' });
+   // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './cdk-blocks/migrations' });
    const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1 });
-   const db = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+   const db = new Database(scope, 'main-db', { cluster, migrationsPath: './cdk-blocks/migrations' });
    ```
 
    The options of `LegacyDatabaseCluster` are those of release 0.5.0: `minCapacity`, `maxCapacity`, `databaseName`, `removalPolicy`, `postgresVersion`, `subnets`, `storageEncryptionKeyArn` and `pointInTimeRecovery`. Give each one the value that the old `Database` had. It also reads the context key `@aws-blocks/bb-data:encryptStorageByDefault` of your `cdk.json`; keep that key.
@@ -331,10 +331,10 @@ A `Database` on an `aurora` cluster runs PostgreSQL: write its migrations as you
 
 A `Database` on Aurora DSQL needs its migrations written in DSQL, as the AWS documentation shows them: [DDL and distributed transactions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html), [`CREATE TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-table-syntax-support.html), [`ALTER TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html), [`CREATE SEQUENCE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-sequence-syntax-support.html) and [Asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html). What is in the file is what runs on the cluster. Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) before anything runs (see [What is rejected](#what-is-rejected)).
 
-Each block has one directory of `.sql` files, `./aws-blocks/migrations/{id}` unless `migrationsPath` says otherwise. Block ids are unique per app because they name this directory and, on a shared cluster, the block's schema. Files run in name order, once each:
+Each block has one directory of `.sql` files, `./cdk-blocks/migrations/{id}` unless `migrationsPath` says otherwise. Block ids are unique per app because they name this directory and, on a shared cluster, the block's schema. Files run in name order, once each:
 
 ```
-aws-blocks/migrations/
+cdk-blocks/migrations/
   shop/
     001_init.sql
     002_orders_customer_index.sql
@@ -393,15 +393,15 @@ An app that used `@aws-blocks/bb-data` with `fromExisting()` keeps its files and
 For a block that provisions its cluster, name the block. These two commands need no AWS account and no connection string.
 
 ```sh
-npm run db -- types --block shop                                  # aws-blocks/migrations/shop -> aws-blocks/database.types.ts
-npm run db -- types --block orders --type aurora --out aws-blocks/orders.types.ts
+npm run db -- types --block shop                                  # cdk-blocks/migrations/shop -> cdk-blocks/database.types.ts
+npm run db -- types --block orders --type aurora --out cdk-blocks/orders.types.ts
 npm run db -- status --block shop                                 # applied and pending files in the local database
 npm run db -- status --block orders --cluster main                # a block on the DatabaseCluster 'main'
 ```
 
 | Command | What it does |
 |---|---|
-| `types [dir] --block <id> [--type dsql\|aurora] [--cluster <id>] [--schema <schema>] [--out <file>]` | Writes one `Tables` interface for Kysely from the block's migration files (`aws-blocks/migrations/<id>`, or `dir` for a block with `migrationsPath`). The files are applied to a new local database in a temporary directory, with the code `npm run dev` runs them with, so the result does not depend on `.bb-data/` and a running dev server is not touched. Pass `--type aurora` for a block on an `aurora` cluster. Run it again after you add a file. |
+| `types [dir] --block <id> [--type dsql\|aurora] [--cluster <id>] [--schema <schema>] [--out <file>]` | Writes one `Tables` interface for Kysely from the block's migration files (`cdk-blocks/migrations/<id>`, or `dir` for a block with `migrationsPath`). The files are applied to a new local database in a temporary directory, with the code `npm run dev` runs them with, so the result does not depend on `.bb-data/` and a running dev server is not touched. Pass `--type aurora` for a block on an `aurora` cluster. Run it again after you add a file. |
 | `status [dir] --block <id> [--cluster <id>] [--schema <schema>]` | Lists the applied and the pending files in the block's local database under `.bb-data/`. For a block on a `DatabaseCluster`, pass the cluster's id as `--cluster`. It reads a copy of the database, so it is safe while `npm run dev` runs; it then shows what the dev server had written to disk. It does not read a deployed stage. |
 
 `connect` and `migrate` are for an [existing database](#existing-database): a block that provisions its cluster applies its files itself.
@@ -459,7 +459,7 @@ Statements run through the same engine as `query()`: they use the block's schema
 On an `aurora` cluster, PostgreSQL can decide which rows each user reads and writes. You write the policies in a migration, and `asUser()` tells PostgreSQL who the user is.
 
 ```sql
--- aws-blocks/migrations/app/002_notes.sql
+-- cdk-blocks/migrations/app/002_notes.sql
 CREATE TABLE notes (id SERIAL PRIMARY KEY, owner_id TEXT NOT NULL, body TEXT NOT NULL);
 ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY notes_owner ON notes

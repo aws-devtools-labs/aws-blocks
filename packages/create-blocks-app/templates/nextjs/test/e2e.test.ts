@@ -4,7 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
-import type { api as apiType } from '../aws-blocks/index.js';
+import type { api as apiType } from '../cdk-blocks/index.js';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -87,7 +87,7 @@ test('home page loads', async () => {
 });
 
 test('app: server serves its Blocks config', async () => {
-  const configUrl = `${baseUrl.replace(/\/$/, '')}/.cdk-blocks-sandbox/config.json`;
+  const configUrl = `${baseUrl.replace(/\/$/, '')}/.blocks-sandbox/config.json`;
   const response = await fetch(configUrl);
   assert.ok(response.ok, `expected ${configUrl} to respond ok`);
 });
@@ -95,7 +95,7 @@ test('app: server serves its Blocks config', async () => {
 // Validate the sample API in a freshly scaffolded app. When you replace it,
 // update or delete this test to exercise your own methods instead.
 test('greet returns message and timestamp', async () => {
-  const configUrl = `${baseUrl.replace(/\/$/, '')}/.cdk-blocks-sandbox/config.json`;
+  const configUrl = `${baseUrl.replace(/\/$/, '')}/.blocks-sandbox/config.json`;
   const response = await fetch(configUrl);
   assert.ok(response.ok, `expected ${configUrl} to respond ok`);
   const config = await response.json();

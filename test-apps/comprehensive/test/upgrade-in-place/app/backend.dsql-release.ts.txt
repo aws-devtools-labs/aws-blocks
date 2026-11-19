@@ -6,7 +6,7 @@
 import { ApiNamespace, DistributedDatabase, Scope, sql } from '@aws-blocks/blocks';
 
 const scope = new Scope('upgrade');
-const ledger = new DistributedDatabase(scope, 'ledger', { migrationsPath: './aws-blocks/migrations' });
+const ledger = new DistributedDatabase(scope, 'ledger', { migrationsPath: './cdk-blocks/migrations' });
 
 export const api = new ApiNamespace(scope, 'api', () => ({
 	async seed() {

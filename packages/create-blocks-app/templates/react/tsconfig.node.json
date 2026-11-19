@@ -24,7 +24,7 @@
   ],
   "references": [
     {
-      "path": "./aws-blocks"
+      "path": "./cdk-blocks"
     }
   ]
 }

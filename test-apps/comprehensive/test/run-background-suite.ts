@@ -13,7 +13,7 @@
  */
 
 import { test } from 'node:test';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { installCookieJar } from './cookie-jar.js';
 import { agentTests } from './agent.test.js';
 import { asyncJobTests } from './async-job.test.js';
@@ -37,7 +37,7 @@ test.before(async () => {
   // Own cookie jar: this process starts signed out, whatever the parent's
   // suites do to theirs.
   installCookieJar();
-  api = (await import('aws-blocks')).api;
+  api = (await import('cdk-blocks')).api;
 });
 
 test.after(async () => {

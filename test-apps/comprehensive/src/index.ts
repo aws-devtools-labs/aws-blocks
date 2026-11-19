@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Comprehensive test frontend — exercises all Building Blocks from the browser
-import { api, oidcAuthApi } from 'aws-blocks';
+import { api, oidcAuthApi } from 'cdk-blocks';
 
 const w = window as any;
 

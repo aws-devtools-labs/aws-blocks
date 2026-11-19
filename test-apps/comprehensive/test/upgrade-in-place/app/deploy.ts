@@ -6,4 +6,4 @@
 // ../../upgrade-in-place.ts as a child process (cwd = the app directory).
 import { deploy } from '@aws-blocks/blocks/scripts';
 
-await deploy({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: process.cwd() });
+await deploy({ cdkAppPath: 'cdk-blocks/index.cdk.ts', projectRoot: process.cwd() });

@@ -23,7 +23,7 @@ import { Auth } from './index.mock.js';
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
-/** The backend module an app would write (`aws-blocks/index.ts`). */
+/** The backend module an app would write (`cdk-blocks/index.ts`). */
 function backend() {
 	const codes: string[] = [];
 	const scope = { id: `smoke${process.pid}` };

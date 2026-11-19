@@ -1,4 +1,4 @@
-import { api, authBasicApi, authCognitoApi, oidcAuthStateApi } from 'aws-blocks';
+import { api, authBasicApi, authCognitoApi, oidcAuthStateApi } from 'cdk-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/bb-auth/ui';
 
 function esc(str: string): string {

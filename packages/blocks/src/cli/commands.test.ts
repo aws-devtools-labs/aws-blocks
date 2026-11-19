@@ -62,7 +62,7 @@ function withSandboxId(root: string): string {
 describe('passthrough commands', () => {
 	it('forwards secret and config arguments verbatim, from the project root', async () => {
 		const root = fixtureApp();
-		const sub = join(root, 'aws-blocks');
+		const sub = join(root, 'cdk-blocks');
 		const calls: string[][] = [];
 		const argv = ['set', 'API_KEY', '--value-stdin', '--stage', 'production', '--prefix', '/p'];
 		const run = await runCli(['secret', ...argv], {
@@ -178,7 +178,7 @@ describe('passthrough commands', () => {
 
 	it('gives db the directory the command runs in, and resolves the relative paths of generate types', async () => {
 		const root = fixtureApp();
-		const sub = join(root, 'aws-blocks');
+		const sub = join(root, 'cdk-blocks');
 		// bb-database runs from the project root and resolves the paths of its own options, so it gets the
 		// tokens as typed and the directory they were typed in. These runs have no terminal: each ends with --no-input.
 		const db = await runCli(['db', 'status', './migrations', '--stage', 'sandbox', '--name', 'main'], {
@@ -227,7 +227,7 @@ describe('passthrough commands', () => {
 		);
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(argvs, [
-			['--out', join(sub, 'mine.d.ts'), '--include', 'aws-blocks/*.ts', '--include', '!aws-blocks/skip/**'],
+			['--out', join(sub, 'mine.d.ts'), '--include', 'cdk-blocks/*.ts', '--include', '!cdk-blocks/skip/**'],
 		]);
 	});
 
@@ -303,20 +303,20 @@ describe('passthrough commands', () => {
 		const root = fixtureApp({ blocks: { dev: { generateClient: false } } });
 		const refused = await runCli(['generate', 'client'], { cwd: root });
 		assert.strictEqual(refused.code, 2);
-		assert.match(refused.stderr, /generates its own aws-blocks\/client\.js/);
+		assert.match(refused.stderr, /generates its own cdk-blocks\/client\.js/);
 		assert.match(refused.stderr, /Try: npm run blocks:generate-client, or npm run generate-client -- --force/);
 		assert.strictEqual(refused.spawned.length, 0);
 		const forced = await runCli(['generate', 'client', '--force'], { cwd: root });
 		assert.strictEqual(forced.code, 0, forced.stderr);
 		assert.strictEqual(forced.spawned.length, 1);
 		// Another output file leaves the app's client alone.
-		const other = await runCli(['generate', 'client', 'aws-blocks/index.ts', 'other.js'], { cwd: root });
+		const other = await runCli(['generate', 'client', 'cdk-blocks/index.ts', 'other.js'], { cwd: root });
 		assert.strictEqual(other.code, 0, other.stderr);
 	});
 
 	it('rejects a generate types --out that names a directory', async () => {
 		const root = fixtureApp();
-		const run = await runCli(['generate', 'types', '--out', 'aws-blocks'], { cwd: root });
+		const run = await runCli(['generate', 'types', '--out', 'cdk-blocks'], { cwd: root });
 		assert.strictEqual(run.code, 2);
 		assert.match(run.stderr, /option --out names a directory/);
 	});
@@ -401,26 +401,6 @@ describe('passthrough commands', () => {
 		}
 	});
 
-	it('maps telemetry subcommands and flags to the core telemetry argv', async () => {
-		const seen: string[][] = [];
-		const core = {
-			telemetry: async (options?: { argv?: string[] }) => {
-				seen.push(options?.argv ?? []);
-			},
-		};
-		const cwd = fixtureApp();
-		for (const argv of [['telemetry'], ['telemetry', 'disable', '--global'], ['telemetry', '--enable']]) {
-			const run = await runCli(argv, { cwd, core });
-			assert.strictEqual(run.code, 0, run.stderr);
-		}
-		assert.deepStrictEqual(seen, [
-			['node', 'cdk-blocks', '--status'],
-			['node', 'cdk-blocks', '--disable', '--global'],
-			['node', 'cdk-blocks', '--enable'],
-		]);
-		const conflict = await runCli(['telemetry', 'enable', '--disable'], { cwd, core });
-		assert.strictEqual(conflict.code, 2);
-	});
 });
 
 describe('lifecycle commands', () => {
@@ -433,7 +413,7 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(spec.args[1], 'watch');
 		assert.strictEqual(spec.args[2], runnerPath('dev-server'));
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
-			backendPath: join(root, 'aws-blocks', 'index.ts'),
+			backendPath: join(root, 'cdk-blocks', 'index.ts'),
 			port: 4000,
 			frontendCommand: 'npx vite --host 127.0.0.1 --port 3100 --strictPort',
 			frontendPort: 3100,
@@ -452,7 +432,7 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(
 			{ ...options, devCommand: undefined },
 			{
-				backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+				backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 				deployOnly: false,
 				preview: false,
 				devCommand: undefined,
@@ -474,7 +454,7 @@ describe('lifecycle commands', () => {
 		assert.ok(options.devCommand.includes(join(fileURLToPath(loader), '..', 'cli.mjs')), options.devCommand);
 		// package.json "blocks.dev" without a frontendCommand keeps auto-detection on.
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
-			backendPath: join(root, 'aws-blocks', 'index.ts'),
+			backendPath: join(root, 'cdk-blocks', 'index.ts'),
 			port: 3005,
 			frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100',
 			frontendPort: 3100,
@@ -494,7 +474,7 @@ describe('lifecycle commands', () => {
 			runnerPath('sandbox-destroy'),
 		]);
 		assert.deepStrictEqual(runnerOptions(spec, 'sandbox-destroy'), {
-			backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 			invocation: 'npm run sandbox:destroy',
 		});
 		assert.match(run.stderr, /production stack is not affected/);
@@ -520,7 +500,7 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 		const [spec] = run.spawned;
 		assert.deepStrictEqual(runnerOptions(spec, 'deploy'), {
-			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 			projectRoot: root,
 			invocation: 'npm run deploy',
 		});
@@ -769,45 +749,18 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(read('config.sandbox.json'), { apiUrl: 'https://s', environment: 'sandbox' });
 	});
 
-	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
-		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
-		const other = mkdtempSync(join(tmpdir(), 'blocks-cli-other-'));
-		const seen: string[][] = [];
-		const core = {
-			telemetry: async (options?: { argv?: string[] }) => {
-				seen.push(options?.argv ?? []);
-			},
-		};
-		const disable = await runCli(['-C', other, 'telemetry', 'disable'], { cwd: shell, core });
-		assert.strictEqual(disable.code, 2);
-		assert.match(
-			disable.stderr,
-			/^Error: not inside an AWS Blocks app, so there is no project to disable telemetry for\./,
-		);
-		assert.deepStrictEqual(seen, []);
-		const status = await runCli(['-C', other, 'telemetry'], { cwd: shell, core });
-		assert.strictEqual(status.code, 0, status.stderr);
-		assert.deepStrictEqual(status.chdirs, [other]);
-		const global = await runCli(['telemetry', 'disable', '--global'], { cwd: shell, core });
-		assert.strictEqual(global.code, 0, global.stderr);
-		assert.deepStrictEqual(seen, [
-			['node', 'cdk-blocks', '--status'],
-			['node', 'cdk-blocks', '--disable', '--global'],
-		]);
-	});
-
 	it('makes --telemetry-file absolute in the argv that in-process core functions read', async () => {
 		const root = fixtureApp();
 		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
-		const core = { telemetry: async () => {} };
+		const core = { runConfigCli: async () => {} };
 		for (const [argv, expected] of [
 			[
-				['-C', root, '--telemetry-file', 'rel.json', 'telemetry'],
-				['-C', root, '--telemetry-file', join(shell, 'rel.json'), 'telemetry'],
+				['-C', root, '--telemetry-file', 'rel.json', 'config', 'list'],
+				['-C', root, '--telemetry-file', join(shell, 'rel.json'), 'config', 'list'],
 			],
 			[
-				['-C', root, 'telemetry', '--telemetry-file=rel.json'],
-				['-C', root, 'telemetry', `--telemetry-file=${join(shell, 'rel.json')}`],
+				['-C', root, 'config', 'list', '--telemetry-file=rel.json'],
+				['-C', root, 'config', 'list', `--telemetry-file=${join(shell, 'rel.json')}`],
 			],
 		] as const) {
 			const run = await runCli([...argv], { cwd: shell, core });
@@ -877,11 +830,11 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(deployOptions.preview, false);
 	});
 
-	it("points the runners' tsx at aws-blocks/tsconfig.json when the backend has one", async () => {
+	it("points the runners' tsx at cdk-blocks/tsconfig.json when the backend has one", async () => {
 		// A Vite template's root tsconfig.json only lists project references, so tsx would
 		// compile backend files with no options (no jsx, no paths) without this.
 		const root = fixtureApp();
-		const backend = join(root, 'aws-blocks', 'tsconfig.json');
+		const backend = join(root, 'cdk-blocks', 'tsconfig.json');
 		const without = await runCli(['dev'], { cwd: root });
 		assert.strictEqual(without.code, 0, without.stderr);
 		assert.strictEqual(without.spawned[0].env[TSX_TSCONFIG_ENV], undefined);
@@ -1386,7 +1339,7 @@ describe('destroy safety', () => {
 		assert.strictEqual(run.spawned.length, 1);
 		// Core refuses when the CDK app does not define this stack, and says "nothing to delete" when it does not exist.
 		assert.deepStrictEqual(runnerOptions(run.spawned[0], 'destroy'), {
-			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 			projectRoot: root,
 			stackName: 'demo-prod',
 			invocation: 'npm run destroy',
@@ -1526,14 +1479,14 @@ describe('verbose echo', () => {
 
 	it('quotes the words of the echoed command line that a shell would split', async () => {
 		const root = join(fixtureApp(), 'app x');
-		mkdirSync(join(root, 'aws-blocks'), { recursive: true });
+		mkdirSync(join(root, 'cdk-blocks'), { recursive: true });
 		writeFileSync(join(root, 'package.json'), '{}');
-		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
+		writeFileSync(join(root, 'cdk-blocks', 'index.ts'), 'export {};\n');
 		const run = await runCli(['-v', 'generate', 'spec'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const options = JSON.stringify({
-			backendPath: join(root, 'aws-blocks', 'index.ts'),
-			outputPath: join(root, 'aws-blocks', 'blocks.spec.json'),
+			backendPath: join(root, 'cdk-blocks', 'index.ts'),
+			outputPath: join(root, 'cdk-blocks', 'blocks.spec.json'),
 		});
 		assert.ok(run.stderr.includes(` '${options}'`), run.stderr);
 		assert.doesNotMatch(run.stderr, / \{"backendPath"/);
@@ -2298,7 +2251,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 
 	it('npm run deploy: the outputs core read before its wait, not the outputs.json rewritten during it', () => {
 		const root = fixtureApp();
-		runRunner(root, 'deploy', { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root });
+		runRunner(root, 'deploy', { cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'), projectRoot: root });
 		assert.deepStrictEqual(lastDeploy(root), {
 			production: { stack: 'demo-prod', apiUrl: prodUrl, url: 'https://d111.cloudfront.net', ...target },
 		});
@@ -2308,8 +2261,8 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 		const root = fixtureApp();
 		mkdirSync(join(root, '.cdk-blocks-sandbox'));
 		writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
-		runRunner(root, 'deploy', { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root });
-		runRunner(root, 'sandbox', { backendPath: join(root, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
+		runRunner(root, 'deploy', { cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'), projectRoot: root });
+		runRunner(root, 'sandbox', { backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'), deployOnly: true });
 		assert.deepStrictEqual(lastDeploy(root), {
 			production: { stack: 'demo-prod', apiUrl: prodUrl, url: 'https://d111.cloudfront.net', ...target },
 			sandbox: { stack: 'demo-jdoe-abc123', apiUrl: sandboxUrl, url: null, ...target },
@@ -2318,7 +2271,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 
 	it('npm run sandbox (watch mode): records the sandbox after its first deploy', () => {
 		const root = fixtureApp();
-		runRunner(root, 'sandbox', { backendPath: join(root, 'aws-blocks', 'index.cdk.ts'), deployOnly: false });
+		runRunner(root, 'sandbox', { backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'), deployOnly: false });
 		assert.deepStrictEqual(lastDeploy(root), {
 			sandbox: { stack: 'demo-jdoe-abc123', apiUrl: sandboxUrl, url: null, ...target },
 		});
@@ -2326,7 +2279,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 
 	it('npm run deploy -- --wait-live: records the deploy with live false when the wait fails, and exits 1', () => {
 		const root = fixtureApp();
-		const options = { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root };
+		const options = { cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'), projectRoot: root };
 		runRunner(root, 'deploy', options, ['--wait-live', '--wait-live-timeout=5'], true);
 		assert.strictEqual(lastDeploy(root).production?.live, false);
 		runRunner(root, 'deploy', options, ['--wait-live']);

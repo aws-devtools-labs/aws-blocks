@@ -286,7 +286,7 @@ async function runDeploy(options: DeployOptions) {
     // never by importing the backend here: an in-process import loads the local
     // mock layer, whose runtimes (PGlite, CronJob schedulers, …) kept this
     // process alive forever after the deploy finished.
-    const foundationPath = resolve(options.projectRoot, 'aws-blocks/index.ts');
+    const foundationPath = resolve(options.projectRoot, 'cdk-blocks/index.ts');
     const clientPath = join(dirname(foundationPath), 'client.js');
     log.progress('📝 Generating client code...');
     await generateDeployClient(foundationPath, clientPath);
@@ -311,7 +311,7 @@ async function runDeploy(options: DeployOptions) {
     // Framework resolves in the cdk synth child (where Hosting is built); it writes the
     // value to this file so the parent can attach it to telemetry. Created immediately
     // before the spawn, so a failure earlier in the command leaves nothing behind.
-    const frameworkSink = createFrameworkSink();
+    const frameworkSink = createFrameworkSink(options.projectRoot);
 
     try {
       await runStreaming(
@@ -326,8 +326,8 @@ async function runDeploy(options: DeployOptions) {
           env: {
             ...process.env,
             NODE_OPTIONS: '--conditions=cdk',
-            ...getCdkTelemetryEnv('production'),
-            ...getFrameworkSinkEnv(frameworkSink),
+            ...getCdkTelemetryEnv('production', options.projectRoot),
+            ...getFrameworkSinkEnv(frameworkSink, options.projectRoot),
           },
           curated: cdkOutput.streams,
           onHostingUrl: (url) => {

@@ -199,7 +199,7 @@ export type {
  * PostgreSQL Serverless v2 (express configuration), or to put several
  * databases on one cluster, pass a `DatabaseCluster` as `cluster`. For a
  * PostgreSQL database that already exists, pass `DatabaseCluster.fromExisting()`.
- * Migrations are ordered `.sql` files in `aws-blocks/migrations/<id>/`.
+ * Migrations are ordered `.sql` files in `cdk-blocks/migrations/<id>/`.
  *
  * Package: `@aws-blocks/bb-database`
  * Full docs: `npm run docs bb-database`.

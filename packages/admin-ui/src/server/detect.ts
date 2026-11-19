@@ -75,7 +75,7 @@ export function resolveLocalPort(projectRoot: string): {
 	source: 'server-script' | 'default' | 'indeterminate';
 } {
 	try {
-		const script = readFileSync(join(projectRoot, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
+		const script = readFileSync(join(projectRoot, 'cdk-blocks', 'scripts', 'server.ts'), 'utf-8');
 		const match = PORT_PATTERN.exec(script);
 		if (match) {
 			const port = Number.parseInt(match[1], 10);

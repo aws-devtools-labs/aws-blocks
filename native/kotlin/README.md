@@ -33,7 +33,7 @@ dependencies {
 
 ```kotlin
 cdkBlocks {
-    apiSpec = rootProject.file("aws-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
+    apiSpec = rootProject.file("cdk-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
     packageName = "com.example.myapp.generated" // default: "com.aws.blocks.generated"
 }
 ```

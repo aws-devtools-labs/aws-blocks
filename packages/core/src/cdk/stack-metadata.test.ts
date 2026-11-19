@@ -10,7 +10,7 @@ import type { ScopeParent } from '../common/index.js';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
 import { CORE_VERSION } from '../version.js';
 import { Scope } from './index.js';
-import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
+import { addBlocksStackMetadata, isDisableValue, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 
 before(() => delete process.env.CDK_BLOCKS_DISABLE_TEMPLATE_METADATA);
 
@@ -348,7 +348,7 @@ describe('addBlocksStackMetadata opt-out', () => {
 	});
 
 	test('ignores the CLI telemetry opt-out', () => {
-		withEnv({ AWS_BLOCKS_DISABLE_TELEMETRY: '1', [DISABLE_ENV]: undefined }, () => {
+		withEnv({ CDK_DISABLE_CLI_TELEMETRY: '1', [DISABLE_ENV]: undefined }, () => {
 			assert.ok(synthMetadata()?.AWSToolsMetrics);
 		});
 	});
@@ -439,4 +439,30 @@ describe('isSandboxContext', () => {
 		const child = new Construct(new cdk.Stack(app, 'S'), 'Child');
 		assert.strictEqual(isSandboxContext(child), true);
 	});
+});
+
+// Inline because this matcher has one consumer and compiled tests cannot read fixtures from src/.
+const DISABLE_VALUE_CASES: { value: string | null; expected: boolean }[] = [
+	{ value: '1', expected: true },
+	{ value: 'true', expected: true },
+	{ value: 'TRUE', expected: true },
+	{ value: 'yes', expected: true },
+	{ value: 'YES', expected: true },
+	{ value: ' true ', expected: true },
+	{ value: ' 1 ', expected: true },
+	{ value: '0', expected: false },
+	{ value: 'false', expected: false },
+	{ value: '', expected: false },
+	{ value: '   ', expected: false },
+	{ value: 'no', expected: false },
+	{ value: 'enabled', expected: false },
+	{ value: null, expected: false },
+];
+
+describe('isDisableValue', () => {
+	for (const testCase of DISABLE_VALUE_CASES) {
+		test(`${JSON.stringify(testCase.value)} -> ${testCase.expected}`, () => {
+			assert.strictEqual(isDisableValue(testCase.value ?? undefined), testCase.expected);
+		});
+	}
 });

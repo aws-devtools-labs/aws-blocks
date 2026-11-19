@@ -3,7 +3,7 @@
 
 /**
  * Harness side of the backend's `testSupport` namespace — see "e2e test
- * support" in `aws-blocks/index.ts`.
+ * support" in `cdk-blocks/index.ts`.
  *
  * `testSupport` exists only on an e2e build (`BLOCKS_TEST_ENV` is `local`,
  * `sandbox` or `production`; every run of this harness is one), and every call
@@ -31,13 +31,13 @@
  * sign-up. The whole CI run keeps one successful real sign-up, the
  * `auth-gated` one in auth-validate-user.test.ts, in E2E Sandbox only; the
  * native suites sign in a pre-seeded user
- * (test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts). A new
+ * (test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts). A new
  * test that must send a real email uses a simulator recipient and runs in E2E
  * Sandbox only.
  */
 
 import { randomBytes } from 'node:crypto';
-import type { api as apiType, testSupport as testSupportExport } from 'aws-blocks';
+import type { api as apiType, testSupport as testSupportExport } from 'cdk-blocks';
 import { codePoller } from './poll-for-code.js';
 import { testApiUrl } from './api-url.js';
 
@@ -116,8 +116,8 @@ export type TestSupportClient = NonNullable<typeof testSupportExport>;
  * takes as its first argument. Errors arrive hydrated, exactly as from `api`.
  */
 export async function getTestSupport(): Promise<{ testSupport: TestSupportClient; secret: string }> {
-  const { testSupport } = await import('aws-blocks');
-  if (!testSupport) throw new Error('aws-blocks exports no testSupport: the backend was not built for an e2e run');
+  const { testSupport } = await import('cdk-blocks');
+  if (!testSupport) throw new Error('cdk-blocks exports no testSupport: the backend was not built for an e2e run');
   return { testSupport, secret: await readTestSupportSecret() };
 }
 

@@ -3,7 +3,7 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { isBlocksError } from '@aws-blocks/core';
 import { AgentErrors } from '@aws-blocks/bb-agent';
 import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
@@ -175,7 +175,7 @@ export function agentTests(getApi: () => typeof apiType) {
             const fresh = await api.agentGetRawDescriptor(conversationId);
             return { ...fresh, __blocks: 'realtime/channel' };
           },
-        } satisfies import('aws-blocks').SubscribeOptions<any>);
+        } satisfies import('cdk-blocks').SubscribeOptions<any>);
 
         try {
           await sub.established;
