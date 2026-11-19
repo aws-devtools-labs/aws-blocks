@@ -68,6 +68,29 @@
   are unchanged. Two exports that would now share a class, such as `oidcAuth`
   and `oidcAuthApi` (both `OidcAuthApi`), are a generation error naming both;
   rename one of them.
+- A union with a string discriminator that a response can
+  carry is now open, so an arm a newer backend adds no longer makes decoding
+  throw `ArgumentError`. An object whose discriminator names no arm decodes
+  to `XUnknown`, whose `json` is the object as sent and whose
+  `discriminator` is its tag; `json` is unmodifiable at every depth and
+  `toJson()` returns a copy of it, so it round-trips. When another type of the
+  library is already named `XUnknown`, the fallback is `XUnknown$`. An object
+  with no discriminator, or one that isn't a string, still throws. An
+  exhaustive `switch` over `X` needs an `XUnknown()` case. Unions only
+  parameters use, unions with a boolean discriminator and a union embedded in
+  a hybrid arm stay closed.
+- A string enum that a response can carry is now open, so a
+  value a newer backend adds no longer makes decoding throw. Such an enum
+  `X` (reachable from a method result, at any depth) is a sealed class:
+  its known values are the constants of the enum `XKnown`, which `X.a` and
+  `X.values` still name, and any other value decodes to `XUnknown`, whose
+  `value` is the string as sent. `toJson()` writes that string back, so an
+  unknown value round-trips. When another type of the library is already
+  named `XKnown` or `XUnknown`, that class takes a trailing `$` (`XKnown$`,
+  `XUnknown$`). An exhaustive `switch` over `X` needs an `XUnknown()` case.
+  `name` and `index` are on `XKnown` only; `X.values.byName` still works,
+  since `X.values` is `XKnown.values`. An enum that only parameters use stays
+  a closed Dart enum.
 
 ### Other changes
 

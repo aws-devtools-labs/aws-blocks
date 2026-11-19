@@ -40,9 +40,45 @@ public nonisolated struct Bag: Codable, Sendable {
     }
 }
 
-public nonisolated enum ProfileState: String, Codable, Sendable {
-    case inProgress = "in-progress"
-    case in_Progress = "in_progress"
+public nonisolated enum ProfileState: RawRepresentable, Codable, Hashable, Sendable {
+    case inProgress
+    case in_Progress
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "in-progress": self = .inProgress
+        case "in_progress": self = .in_Progress
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .inProgress: return "in-progress"
+        case .in_Progress: return "in_progress"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.inProgress, .inProgress): return true
+        case (.in_Progress, .in_Progress): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .inProgress: hasher.combine(0)
+        case .in_Progress: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated struct Profile: Codable, Sendable {

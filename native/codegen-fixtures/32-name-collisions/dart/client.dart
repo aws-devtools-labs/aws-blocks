@@ -76,43 +76,159 @@ class CartTagsValue {
 }
 
 
-enum OrderStatus {
+sealed class OrderStatus {
+  static const pending = OrderStatusKnown.pending;
+  static const shipped = OrderStatusKnown.shipped;
+  static const values = OrderStatusKnown.values;
+  static final Map<String, OrderStatusKnown> _byJson = OrderStatusKnown.values.asNameMap();
+
+  String toJson();
+  static OrderStatus fromJson(String json) => _byJson[json] ?? OrderStatusUnknown(json);
+}
+
+enum OrderStatusKnown implements OrderStatus {
   pending,
   shipped
 ;
 
+  @override
   String toJson() => name;
-  static OrderStatus fromJson(String json) => values.byName(json);
+}
+
+final class OrderStatusUnknown implements OrderStatus {
+  final String value;
+
+  const OrderStatusUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is OrderStatusUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'OrderStatusUnknown' '($value)';
 }
 
 
-enum TicketStatus {
+sealed class TicketStatus {
+  static const open = TicketStatusKnown.open;
+  static const closed = TicketStatusKnown.closed;
+  static const values = TicketStatusKnown.values;
+  static final Map<String, TicketStatusKnown> _byJson = TicketStatusKnown.values.asNameMap();
+
+  String toJson();
+  static TicketStatus fromJson(String json) => _byJson[json] ?? TicketStatusUnknown(json);
+}
+
+enum TicketStatusKnown implements TicketStatus {
   open,
   closed
 ;
 
+  @override
   String toJson() => name;
-  static TicketStatus fromJson(String json) => values.byName(json);
+}
+
+final class TicketStatusUnknown implements TicketStatus {
+  final String value;
+
+  const TicketStatusUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TicketStatusUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'TicketStatusUnknown' '($value)';
 }
 
 
-enum TicketKind {
+sealed class TicketKind {
+  static const bug = TicketKindKnown.bug;
+  static const task = TicketKindKnown.task;
+  static const values = TicketKindKnown.values;
+  static final Map<String, TicketKindKnown> _byJson = TicketKindKnown.values.asNameMap();
+
+  String toJson();
+  static TicketKind fromJson(String json) => _byJson[json] ?? TicketKindUnknown(json);
+}
+
+enum TicketKindKnown implements TicketKind {
   bug,
   task
 ;
 
+  @override
   String toJson() => name;
-  static TicketKind fromJson(String json) => values.byName(json);
+}
+
+final class TicketKindUnknown implements TicketKind {
+  final String value;
+
+  const TicketKindUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TicketKindUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'TicketKindUnknown' '($value)';
 }
 
 
-enum TicketKinds {
+sealed class TicketKinds {
+  static const urgent = TicketKindsKnown.urgent;
+  static const later = TicketKindsKnown.later;
+  static const values = TicketKindsKnown.values;
+  static final Map<String, TicketKindsKnown> _byJson = TicketKindsKnown.values.asNameMap();
+
+  String toJson();
+  static TicketKinds fromJson(String json) => _byJson[json] ?? TicketKindsUnknown(json);
+}
+
+enum TicketKindsKnown implements TicketKinds {
   urgent,
   later
 ;
 
+  @override
   String toJson() => name;
-  static TicketKinds fromJson(String json) => values.byName(json);
+}
+
+final class TicketKindsUnknown implements TicketKinds {
+  final String value;
+
+  const TicketKindsUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TicketKindsUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'TicketKindsUnknown' '($value)';
 }
 
 
@@ -123,7 +239,7 @@ sealed class TicketPayload {
     switch (json['type'] as String) {
       case 'text': return TextTicketPayload.fromJson(json);
       case 'count': return CountTicketPayload.fromJson(json);
-      default: throw ArgumentError('Unknown type: ${json['type']}');
+      default: return TicketPayloadUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -196,6 +312,27 @@ class CountTicketPayload extends TicketPayload {
   String toString() => 'CountTicketPayload(total: $total)';
 }
 
+final class TicketPayloadUnknown extends TicketPayload {
+  final Map<String, dynamic> json;
+
+  const TicketPayloadUnknown(this.json);
+
+  String get discriminator => json['type'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is TicketPayloadUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'TicketPayloadUnknown' '($json)';
+}
+
 
 
 sealed class TicketPayloads {
@@ -205,7 +342,7 @@ sealed class TicketPayloads {
     switch (json['format'] as String) {
       case 'plain': return PlainTicketPayloads.fromJson(json);
       case 'rich': return RichTicketPayloads.fromJson(json);
-      default: throw ArgumentError('Unknown format: ${json['format']}');
+      default: return TicketPayloadsUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -276,6 +413,27 @@ class RichTicketPayloads extends TicketPayloads {
 
   @override
   String toString() => 'RichTicketPayloads(html: $html)';
+}
+
+final class TicketPayloadsUnknown extends TicketPayloads {
+  final Map<String, dynamic> json;
+
+  const TicketPayloadsUnknown(this.json);
+
+  String get discriminator => json['format'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is TicketPayloadsUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'TicketPayloadsUnknown' '($json)';
 }
 
 
@@ -378,6 +536,19 @@ class PickActResultItems {
   String toString() => 'PickActResultItems(qty: $qty)';
 }
 
+
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
 
 // --- API Namespaces ---
 
@@ -505,13 +676,42 @@ class Cart {
 }
 
 
-enum Kind {
+sealed class Kind {
+  static const x = KindKnown.x;
+  static const y = KindKnown.y;
+  static const values = KindKnown.values;
+  static final Map<String, KindKnown> _byJson = KindKnown.values.asNameMap();
+
+  String toJson();
+  static Kind fromJson(String json) => _byJson[json] ?? KindUnknown(json);
+}
+
+enum KindKnown implements Kind {
   x,
   y
 ;
 
+  @override
   String toJson() => name;
-  static Kind fromJson(String json) => values.byName(json);
+}
+
+final class KindUnknown implements Kind {
+  final String value;
+
+  const KindUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is KindUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'KindUnknown' '($value)';
 }
 
 
@@ -684,7 +884,7 @@ sealed class ActResult {
     switch (json['action'] as String) {
       case 'pick': return PickActResult.fromJson(json);
       case 'skip': return SkipActResult.fromJson(json);
-      default: throw ArgumentError('Unknown action: ${json['action']}');
+      default: return ActResultUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -760,6 +960,27 @@ class SkipActResult extends ActResult {
 
   @override
   String toString() => 'SkipActResult(reason: $reason)';
+}
+
+final class ActResultUnknown extends ActResult {
+  final Map<String, dynamic> json;
+
+  const ActResultUnknown(this.json);
+
+  String get discriminator => json['action'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is ActResultUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'ActResultUnknown' '($json)';
 }
 
 

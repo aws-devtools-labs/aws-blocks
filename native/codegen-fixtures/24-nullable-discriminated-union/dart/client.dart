@@ -47,6 +47,19 @@ class IsUpdatedFalseNextStep {
 }
 
 
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
+
 // --- API Namespaces ---
 
 sealed class UpdateAttributesResult {
@@ -131,7 +144,7 @@ sealed class GetNotificationResult {
     switch (json['type'] as String) {
       case 'email': return EmailGetNotificationResult.fromJson(json);
       case 'sms': return SmsGetNotificationResult.fromJson(json);
-      default: throw ArgumentError('Unknown type: ${json['type']}');
+      default: return GetNotificationResultUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -207,6 +220,27 @@ class SmsGetNotificationResult extends GetNotificationResult {
 
   @override
   String toString() => 'SmsGetNotificationResult(message: $message)';
+}
+
+final class GetNotificationResultUnknown extends GetNotificationResult {
+  final Map<String, dynamic> json;
+
+  const GetNotificationResultUnknown(this.json);
+
+  String get discriminator => json['type'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is GetNotificationResultUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'GetNotificationResultUnknown' '($json)';
 }
 
 
