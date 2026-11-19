@@ -1,6 +1,6 @@
 # Bring your own front door
 
-For `frontDoor: { kind: 'custom', door }` on `HostingConstruct` or on `Hosting` from `@aws-blocks/core`. The built-in doors, the settings each takes and the rules for switching doors are in the [README](./README.md#front-doors).
+For `frontDoor: { kind: 'custom', door }` on `HostingConstruct` or on `Hosting` from `@aws-cdk-blocks/core`. The built-in doors, the settings each takes and the rules for switching doors are in the [README](./README.md#front-doors).
 
 A door is one function. `defineFrontDoor` types it. The example below is a
 CloudFront door for a static site or a server that takes no request bodies.
@@ -19,7 +19,7 @@ It does not do two things the built-in CloudFront door does:
   that posts to its server.
 
 ```ts
-// aws-blocks/my-door.ts
+// cdk-blocks/my-door.ts
 import {
   AllowedMethods,
   CachePolicy,
@@ -27,13 +27,13 @@ import {
   OriginRequestPolicy,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
-import { cf, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+import { cf, defineFrontDoor } from '@aws-cdk-blocks/hosting/constructs';
 
 export const myDoor = defineFrontDoor({
   // A name for this door, used in error messages.
   service: 'my-cdn',
 
-  // Called ONCE at synth, after AWS Blocks has created the bucket, the compute
+  // Called ONCE at synth, after AWS CDK Blocks has created the bucket, the compute
   // and the API, and before it declares the asset uploads.
   build(scope, { app, origins, features }) {
     const pages = cf.errorPages(app.errorPages, origins); // the app's 404/500 pages
@@ -57,7 +57,7 @@ export const myDoor = defineFrontDoor({
       ...(origins.server ? {} : { defaultRootObject: 'index.html' }),
       additionalBehaviors: {
         ...cf.behaviors(app.routes), // each route → its origin
-        ...cf.apiBehaviors(origins.api), // /aws-blocks/* and raw routes → the API
+        ...cf.apiBehaviors(origins.api), // /cdk-blocks/* and raw routes → the API
         ...pages.behaviors, // the error pages, from the assets
       },
       errorResponses: pages.errorResponses,
@@ -72,13 +72,13 @@ export const myDoor = defineFrontDoor({
 ```
 
 ```ts
-// aws-blocks/index.cdk.ts
+// cdk-blocks/index.cdk.ts
 new Hosting(stack, 'Hosting', { root: '..', api: stack, frontDoor: { kind: 'custom', door: myDoor } });
 ```
 
 **Streaming or buffered.** A door that invokes the server without streaming
 (an ALB Lambda target, an API Gateway HTTP API integration, a `BUFFERED`
-Function URL) declares `serverResponse: 'buffered'`, and AWS Blocks builds the
+Function URL) declares `serverResponse: 'buffered'`, and AWS CDK Blocks builds the
 server to answer with a complete response. The default is `'streaming'`.
 
 ```ts
@@ -95,16 +95,16 @@ export const myAlbDoor = defineFrontDoor({
   `assetPrefix`; only the Next.js adapter sets it), `spaFallback`, `routes`
   (most-specific first, each already joined to its origin object), `redirects`,
   `headers` and `errorPages` (the app's, else the framework build's, else, for
-  a multi-page static site with no 404 page, AWS Blocks' default
+  a multi-page static site with no 404 page, AWS CDK Blocks' default
   `_not_found.html`).
-- `origins`: what AWS Blocks provisioned.
+- `origins`: what AWS CDK Blocks provisioned.
   - `assets`: `{ bucket, prefix, sourceDir }`. The private bucket and the
     `builds/<buildId>/` prefix.
   - `server`: `{ fn, url, streaming }`. `streaming` says whether the server
     streams its response (see `serverResponse`). The Function URL is created on
     first read, in the matching invoke mode.
   - `image`: `{ fn, url }`. Its routes are in `app.routes`.
-  - `api`: `{ url, host, stagePath, paths }`. `paths` is `/aws-blocks/*` (RPC
+  - `api`: `{ url, host, stagePath, paths }`. `paths` is `/cdk-blocks/*` (RPC
     and sign-in) plus every raw route.
 - `features`: the door's `frontDoor.features`, under the same names and shapes,
   each present only when asked for: `domain` (with `wwwRedirect`), `waf` (when
@@ -139,22 +139,22 @@ URL with IAM auth (reach it with origin access control, as `cf.origin` does).
   `builds/<buildId>`). Each waits for every upload, the runtime config
   included, so the previous build serves until the new one is whole.
 
-**The wiring check.** AWS Blocks checks one thing about a bring-your-own door:
+**The wiring check.** AWS CDK Blocks checks one thing about a bring-your-own door:
 its routing, from what the `cf.*` helpers recorded. A failed check throws
 `UnsupportedFrontDoorError`, whose message lists the unmet rules:
 
 - `ServeStaticAsset`: nothing reaches the static assets.
 - `ProxySameOriginApi`: the app has an API and none of `origins.api.paths`
-  were wired.
+  were wired, or the door wired `/aws-blocks/*` but not `/cdk-blocks/*`.
 
 It warns in three cases:
 
-- `@aws-blocks/hosting:FrontDoorApiPathUnwired`: some API paths (for example
+- `@aws-cdk-blocks/hosting:FrontDoorApiPathUnwired`: some API paths (for example
   a raw route) were left unwired.
-- `@aws-blocks/hosting:FrontDoorRuleUnwired`: the app has redirects,
+- `@aws-cdk-blocks/hosting:FrontDoorRuleUnwired`: the app has redirects,
   per-pattern headers or error pages and the door wired none of them
   (`cf.redirects`, `cf.headers`, `cf.errorPages`).
-- `@aws-blocks/hosting:FrontDoorBehaviorLimit`: `cf.behaviors` and
+- `@aws-cdk-blocks/hosting:FrontDoorBehaviorLimit`: `cf.behaviors` and
   `cf.apiBehaviors` handed out more than the 24 behaviors a distribution
   allows besides its default.
 
@@ -177,7 +177,7 @@ unconditionally.
 |---|---|
 | `cf.origin(origin)` | The CloudFront origin for `origins.assets`, `origins.server`, `origins.image` or `origins.api`. |
 | `cf.behaviors(app.routes)` | One behavior per route, to its origin. An image-optimization route gets a cache policy that honors the image function's `Cache-Control` (one per stack). |
-| `cf.apiBehaviors(origins.api)` | The behaviors for `/aws-blocks/*` and the raw routes. |
+| `cf.apiBehaviors(origins.api)` | The behaviors for `/cdk-blocks/*` and the raw routes. |
 | `cf.redirects(scope, app.redirects)` | A viewer-request CloudFront Function association that runs the built-in CloudFront door's matcher. The rules are inline: above the 10 KB a CloudFront Function holds, synth fails with `InvalidPropsError`. |
 | `cf.headers(scope, app.headers)` | The same as a viewer-response association, with the same limit. |
 | `cf.errorPages(app.errorPages, origins)` | The distribution's `errorResponses` and the `behaviors` that serve the pages from the assets. |
@@ -185,13 +185,13 @@ unconditionally.
 | `cf.recordWired(origin, paths?)` | Nothing. It declares an origin or a rule set you wired by hand. |
 
 **Testing a door.** Use `assertDoorConformance(door)` from
-`@aws-blocks/hosting/constructs` in the door's own tests. It builds the door
+`@aws-cdk-blocks/hosting/constructs` in the door's own tests. It builds the door
 against a sample SPA with an API and runs the same checks: the shape, a
 non-empty `url`, and the wiring.
 
 The built-in doors (`cloudFrontDoor`, `albDoor`, `apiGatewayDoor`,
 `s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way. The pieces
-they share are exported from `@aws-blocks/hosting/constructs`:
+they share are exported from `@aws-cdk-blocks/hosting/constructs`:
 
 - `generateAlbAssetProxyCode`, `generateApiGwAssetProxyCode`: the asset-proxy
   Lambda source. Pass `app.redirects`, `app.headers` and the error pages to
@@ -218,7 +218,7 @@ import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
-import { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from '@aws-blocks/hosting/constructs';
+import { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from '@aws-cdk-blocks/hosting/constructs';
 
 // In build(scope, input): `alb` is your ApplicationLoadBalancer, `target` its target group,
 // `certificate` an ACM certificate for `routerDomainName`, a name of yours that points at the ALB.

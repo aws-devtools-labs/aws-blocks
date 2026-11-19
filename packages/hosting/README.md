@@ -1,4 +1,4 @@
-# @aws-blocks/hosting
+# @aws-cdk-blocks/hosting
 
 Low-level CDK L3 constructs for deploying web applications on AWS
 (S3, Lambda, WAF, monitoring, DNS), behind a front door of your choice:
@@ -7,10 +7,10 @@ website, or your own (see [Front doors](#front-doors)).
 
 ## When to use this package directly
 
-Most apps use `Hosting` from `@aws-blocks/core`, which wraps these
-constructs with the AWS Blocks integration layer (route registry, config.json
+Most apps use `Hosting` from `@aws-cdk-blocks/core`, which wraps these
+constructs with the AWS CDK Blocks integration layer (route registry, config.json
 generation, RPC prefix wiring). Use `HostingConstruct` directly for a CDK app
-without an AWS Blocks backend, or to pass a `DeployManifest` you built
+without an AWS CDK Blocks backend, or to pass a `DeployManifest` you built
 yourself.
 
 The `frontDoor` prop and its settings (front doors, caching, custom domains,
@@ -24,8 +24,8 @@ An adapter runs the framework build and returns a `DeployManifest`.
 
 ```ts
 import { App, Stack } from 'aws-cdk-lib';
-import { nextjsAdapter } from '@aws-blocks/hosting/adapters';
-import { HostingConstruct } from '@aws-blocks/hosting/constructs';
+import { nextjsAdapter } from '@aws-cdk-blocks/hosting/adapters';
+import { HostingConstruct } from '@aws-cdk-blocks/hosting/constructs';
 
 const app = new App();
 const stack = new Stack(app, 'Web');
@@ -48,10 +48,10 @@ new HostingConstruct(stack, 'Hosting', { manifest });
 
 | Import from | Exports |
 |---|---|
-| `@aws-blocks/hosting` | `secret`, `config`, `getSecret`, `getConfig` and the marker codec. It imports no CDK, so SSR and runtime code can use it. |
-| `@aws-blocks/hosting/constructs` | `HostingConstruct`, `HostingConstructProps`, `HostingDomainConfig`, `HostingWafConfig`, `generateBuildId`, `defineFrontDoor`, the manifest types (`DeployManifest`, `RouteBehavior`, `ComputeResource`), `FrameworkAdapterFn`, `HostingError`. |
-| `@aws-blocks/hosting/adapters` | The adapters, `withComputeTarget`, `LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`. |
-| `@aws-blocks/hosting/error` | `HostingError`. |
+| `@aws-cdk-blocks/hosting` | `secret`, `config`, `getSecret`, `getConfig` and the marker codec. It imports no CDK, so SSR and runtime code can use it. |
+| `@aws-cdk-blocks/hosting/constructs` | `HostingConstruct`, `HostingConstructProps`, `HostingDomainConfig`, `HostingWafConfig`, `generateBuildId`, `defineFrontDoor`, the manifest types (`DeployManifest`, `RouteBehavior`, `ComputeResource`), `FrameworkAdapterFn`, `HostingError`. |
+| `@aws-cdk-blocks/hosting/adapters` | The adapters, `withComputeTarget`, `LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`. |
+| `@aws-cdk-blocks/hosting/error` | `HostingError`. |
 
 ### Props (`HostingConstructProps`)
 
@@ -65,7 +65,7 @@ new HostingConstruct(stack, 'Hosting', { manifest });
 | `storage` | object | | `encryption` (`'S3_MANAGED'` or `'KMS'`), `encryptionKey`, `retainOnDelete`, `buildRetentionDays` (default 30), `deployIntervalDays`, `inventory: { enabled }`, `deployment: { memoryLimit, ephemeralStorageMiB }` (the asset-upload Lambda, default 1024 MiB each). |
 | `errorPages` | `{ notFound?, serverError? }` | | Paths of the 404 and 500 HTML files, relative to the project root. |
 | `buildCache` | `{ enabled, bucket? }` | | An S3 bucket for framework build caches. Created unless `bucket` is given. |
-| `backendApi` | `{ url, paths? }` | | The backend API a door other than CloudFront and `'none'` proxies on the app's origin. `url` ends in `/aws-blocks/api`; `paths` adds raw routes to `/aws-blocks/*`. |
+| `backendApi` | `{ url, paths? }` | | The backend API a door other than CloudFront and `'none'` proxies on the app's origin. `url` ends in `/cdk-blocks/api`; `paths` adds raw routes to `/cdk-blocks/*`. |
 | `skipImageOptimization` | `boolean` | `false` | Builds no image-optimization function, even when the manifest declares one. |
 | `inPlaceBuild` | `boolean` | `false` | For a manifest whose `buildId` stays the same while the build is unchanged: the door's cutover does not wait for the uploads. For throwaway environments only. The CloudFront door ignores it. |
 | `skipRegionValidation` | `boolean` | | Skips the Region checks for WAF, ACM, the Lambda Web Adapter, Web Functions and logging v2. |
@@ -77,14 +77,14 @@ new HostingConstruct(stack, 'Hosting', { manifest });
 The front door is the public entry point in front of the app: it exposes one
 address and routes each request to the static assets, the server-rendering
 compute, image optimization, or the backend API. Pick it with the `frontDoor`
-prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
+prop (on `HostingConstruct`, or on `Hosting` from `@aws-cdk-blocks/core`):
 
 | `frontDoor` | What serves the app |
 |---|---|
 | omitted / `'cloudfront'` / `{ features }` | The global CloudFront CDN (default): edge cache, WAF, custom domain, streaming, skew protection. |
 | `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms; HTTPS at your domain with `certificate` + `features.domain`. SSR responses are buffered. |
 | `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero). `'http'` (default) buffers SSR responses. `'rest'` streams them, but needs a custom `domain`: its own URL carries the `/prod` stage, which the app's root-relative links miss, so synth fails without one (`RestFrontDoorNeedsDomainError`). |
-| `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only): static routes come straight from S3 at the edge, the API and dynamic routes go through the ALB, which admits only the edge. |
+| `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A CloudFront edge in front of a full ALB router (`Hosting` from `@aws-cdk-blocks/core` only): static routes come straight from S3 at the edge, the API and dynamic routes go through the ALB, which admits only the edge. |
 | `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
 | `{ kind: 'custom', door }` | Your own door (see [Bring your own front door](#bring-your-own-front-door)). |
 
@@ -109,9 +109,9 @@ deploy fails synth, and a sandbox deploy warns:
 
 | Shape | Production synth | Production synth with `allowPlainHttp: true` | Sandbox synth |
 |---|---|---|---|
-| `{ kind: 'alb' }` without `certificate` + `features.domain`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
-| `{ kind: 'custom', door }` whose URL is `http://`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
-| `stacked` with an internet-facing router and no router `certificate` + `features.router.domain` | Fails: `OriginSecretOverPlainHttpError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction` (the origin secret crosses the edge → router hop in cleartext) | Warns: `@aws-blocks/hosting:OriginSecretOverPlainHttp` and `@aws-blocks/hosting:StackedRouterPlainHttp` |
+| `{ kind: 'alb' }` without `certificate` + `features.domain`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-cdk-blocks/hosting:PlainHttpFrontDoor` |
+| `{ kind: 'custom', door }` whose URL is `http://`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-cdk-blocks/hosting:PlainHttpFrontDoor` |
+| `stacked` with an internet-facing router and no router `certificate` + `features.router.domain` | Fails: `OriginSecretOverPlainHttpError` | Warns: `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` (the origin secret crosses the edge → router hop in cleartext) | Warns: `@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp` and `@aws-cdk-blocks/hosting:StackedRouterPlainHttp` |
 
 > [!WARNING]
 > `allowPlainHttp: true` turns off a production safeguard. Sign-in, session
@@ -123,7 +123,7 @@ deploy fails synth, and a sandbox deploy warns:
 > [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production).
 
 `'none'` is not sandbox-only: it serves static sites with no same-origin API,
-and warns in every stage (`@aws-blocks/hosting:PlainHttpFrontDoor`, see
+and warns in every stage (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`, see
 [the `'none'` door](#the-none-door)). An ALB door without a certificate and
 without an API synthesizes in every stage.
 
@@ -147,11 +147,11 @@ new Hosting(stack, 'Hosting', {
 // Or: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true }
 
 // After reviewing the warning, acknowledge it:
-Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction');
+Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction');
 ```
 
 - A production synth with the option warns
-  `@aws-blocks/hosting:PlainHttpAllowedInProduction`. A sandbox deploy behaves
+  `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`. A sandbox deploy behaves
   as without the option.
 - On the `stacked` door the browser still reaches the edge over HTTPS. Only
   the edge → router hop is plain HTTP: anyone who reads the
@@ -220,11 +220,11 @@ The CloudFront door maps 403 / 404 to a not-found page when the app has one
 (`errorPages.notFound`, or a static build's own `404.html`) and, for a
 multi-page static site with no server and no 404 page of its own, to AWS
 Blocks' default page. The mapping applies to every path the distribution
-serves, the proxied API (`/aws-blocks/*`) included. The API answers every
+serves, the proxied API (`/cdk-blocks/*`) included. The API answers every
 call with HTTP 200 unless an `ApiNamespace` sets `httpErrorStatus: true`
-(`@aws-blocks/core`), which answers a 4xx `ApiError` with that status. Its
+(`@aws-cdk-blocks/core`), which answers a 4xx `ApiError` with that status. Its
 403 / 404 would then reach the browser as the HTML page instead of the
-JSON-RPC error. `Hosting` from `@aws-blocks/core` fails synth when it sees
+JSON-RPC error. `Hosting` from `@aws-cdk-blocks/core` fails synth when it sees
 both (`HttpErrorStatusErrorPagesError`, naming the namespaces and the mapped
 codes). Remove the 4xx error pages (`errorPages.notFound`, a build's own 404
 page), or leave `httpErrorStatus` off for those namespaces.
@@ -284,7 +284,7 @@ synthesized template.
   `UnsupportedFrontDoorSettingError`.
 
 **The API on the app's origin.** Every door except `'none'` serves the API on
-the app's own origin: `/aws-blocks/*` (RPC and sign-in) and each of the
+the app's own origin: `/cdk-blocks/*` (RPC and sign-in) and each of the
 backend's raw routes registered before `Hosting`
 (`DoorInput.origins.api.paths`). `ApiUrl` (what native clients call) depends
 on the backend's `apiFrontDoor`:
@@ -350,13 +350,13 @@ semantics, using the same matching code:
   an S3 failure with the 500 page (status 500). The 404 page is the app's
   `errorPages.notFound`, else the framework build's, else, for a multi-page
   static site that ships none (Astro `output: 'static'` without a 404 page),
-  AWS Blocks' default "404 — Page Not Found" page, as on the CloudFront door.
+  AWS CDK Blocks' default "404 — Page Not Found" page, as on the CloudFront door.
   An SPA keeps its `index.html` fallback.
 
 Responses the door sends straight to a function or the backend don't pass
 through those proxies: server-rendered (SSR) and image-optimization responses,
 and on API Gateway the API (proxied natively). Synth names exactly what is not
-applied (`@aws-blocks/hosting:DoorRulesNotApplied`). The CloudFront door and
+applied (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`). The CloudFront door and
 the stacked door's edge apply the rules to every response.
 
 **Size and time limits.** The asset proxy returns each file base64-encoded (a
@@ -369,7 +369,7 @@ file is capped by that response's limit:
 | API Gateway (Lambda proxy integration) | 6 MB (Lambda's response limit, below API Gateway's 10 MB payload limit) | 4.5 MB |
 
 Synth lists every build asset over the limit
-(`@aws-blocks/hosting:AssetExceedsProxyLimit`). Serve large files from the
+(`@aws-cdk-blocks/hosting:AssetExceedsProxyLimit`). Serve large files from the
 CloudFront door or the stacked door (static files come straight from S3), or
 from a file bucket. The same limits bind everything else these doors carry:
 
@@ -384,7 +384,7 @@ rule: up to five path values (four alongside the stacked router's header
 check) and six wildcards per rule. Routes to the default target need no rule. A single pattern
 with more than six wildcards (`*` or `?`) fails synth
 (`UnsupportedRoutePatternError`). A load balancer allows 100 rules by default;
-synth warns above that (`@aws-blocks/hosting:AlbRuleLimit`).
+synth warns above that (`@aws-cdk-blocks/hosting:AlbRuleLimit`).
 
 **ALB custom domain.** `{ kind: 'alb', certificate, features: { domain } }`
 serves HTTPS (TLS 1.2+, the `RECOMMENDED_TLS` policy) with a port 80 → 443
@@ -403,16 +403,16 @@ still reaches the backend at its public endpoint.
 route with a wildcard inside a segment (`/files*`) has no API Gateway form and
 fails synth (`UnsupportedRoutePatternError`); a route-table pattern of that
 shape is served by the default integration, with a synth warning
-(`@aws-blocks/hosting:RouteNotExpressible`). A REST API allows 300 resources
+(`@aws-cdk-blocks/hosting:RouteNotExpressible`). A REST API allows 300 resources
 by default (every path segment is one); synth warns above that.
 Each function gets one API-scoped invoke permission, not one per route, so
 adding routes doesn't fill Lambda's 20 KB resource policy.
 
 **The server behind the HTTP API.** An HTTP API Lambda integration sends the
-payload format 2.0 event and can't stream. `Hosting` from `@aws-blocks/core`
+payload format 2.0 event and can't stream. `Hosting` from `@aws-cdk-blocks/core`
 selects the HTTP API build profile for the adapter. If you run the adapter
 yourself for `HostingConstruct`, import `withBuildProfile` from
-`@aws-blocks/hosting/adapters` and wrap the build, for example
+`@aws-cdk-blocks/hosting/adapters` and wrap the build, for example
 `withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: process.cwd() }))`.
 Without that profile, the default Next.js build streams and fails synth.
 Core `Hosting` uses these settings:
@@ -421,7 +421,7 @@ Core `Hosting` uses these settings:
   wrapper. A hand-written `open-next.config.ts` must use the same pair.
 - Nitro with no preset set, in a stack whose region is pinned to one with a
   Lambda Web Adapter layer (`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported
-  from `@aws-blocks/hosting/adapters`): the `node-server` preset, a Lambda Web
+  from `@aws-cdk-blocks/hosting/adapters`): the `node-server` preset, a Lambda Web
   Adapter server run buffered.
 - Nitro otherwise, including a stack with no `env`: the `aws-lambda` preset,
   which the HTTP API serves while `awsLambda.streaming` is off. The CloudFront
@@ -433,7 +433,7 @@ Core `Hosting` uses these settings:
   that function.
 
 **No image function.** With `imageOptimization: false` on `Hosting` from
-`@aws-blocks/core` (which `HostingPresets.preview` sets) no image function is
+`@aws-cdk-blocks/core` (which `HostingPresets.preview` sets) no image function is
 built, and the HTTP API routes the framework image endpoints (`/_next/image`,
 `/_ipx/*`, `/_image`, under the basePath) to the asset proxy, which serves the
 source image unoptimized. A remote source is redirected (302) to itself only
@@ -453,7 +453,7 @@ API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
 
 The website endpoint takes no certificate, so `'none'` always warns at synth
-(`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API: the
+(`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API: the
 HTML and scripts travel unencrypted and can be altered in transit, even when
 the API they call is HTTPS. Use `'none'` for testing or public,
 non-interactive content; use the CloudFront door for HTTPS. If you chose
@@ -462,7 +462,7 @@ non-interactive content; use the CloudFront door for HTTPS. If you chose
 ```ts
 import { Annotations } from 'aws-cdk-lib';
 
-Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFrontDoor');
 ```
 
 ### The stacked door
@@ -492,7 +492,7 @@ Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor
 - **Behavior budget.** A distribution allows 25 behaviors, the default
   included. Over that, the router becomes the default, API paths no static
   route can shadow are left to it first, and the rest goes through the ALB
-  (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`); files that then reach the
+  (`@aws-cdk-blocks/hosting:StackedEdgeBehaviorLimit`); files that then reach the
   router are checked against its 1 MB limit.
 - **The ALB admits only the edge.**
   - Every listener rule requires a secret header (`x-blocks-origin-verify`)
@@ -550,14 +550,14 @@ it is not an in-place update.
 ### Bring your own front door
 
 A door is one function, typed by `defineFrontDoor` from
-`@aws-blocks/hosting/constructs` and passed as
+`@aws-cdk-blocks/hosting/constructs` and passed as
 `frontDoor: { kind: 'custom', door }`.
 [CUSTOM-FRONT-DOOR.md](./CUSTOM-FRONT-DOOR.md) shows a complete CloudFront
 door and its limits, and covers what the door receives (`DoorInput`) and
 returns, the `cf.*` helpers, testing a door with `assertDoorConformance`, and
 a door that stacks CloudFront over its own ALB.
 
-What AWS Blocks checks for a bring-your-own door:
+What AWS CDK Blocks checks for a bring-your-own door:
 
 - A missing or empty `url` fails synth with `MissingFrontDoorUrlError`.
 - An `http://` `url` with an API is a plain-HTTP door: see
@@ -566,14 +566,14 @@ What AWS Blocks checks for a bring-your-own door:
   `UnsupportedFrontDoorError`, whose message lists the unmet rules:
   - `ServeStaticAsset`: nothing reaches the static assets.
   - `ProxySameOriginApi`: the app has an API and none of `origins.api.paths`
-    were wired.
+    were wired, or the door wired `/aws-blocks/*` but not `/cdk-blocks/*`.
 - The same check warns:
-  - `@aws-blocks/hosting:FrontDoorApiPathUnwired`: some API paths (for
+  - `@aws-cdk-blocks/hosting:FrontDoorApiPathUnwired`: some API paths (for
     example a raw route) were left unwired.
-  - `@aws-blocks/hosting:FrontDoorRuleUnwired`: the app has redirects,
+  - `@aws-cdk-blocks/hosting:FrontDoorRuleUnwired`: the app has redirects,
     per-pattern headers or error pages and the door wired none of them
     (`cf.redirects`, `cf.headers`, `cf.errorPages`).
-  - `@aws-blocks/hosting:FrontDoorBehaviorLimit`: `cf.behaviors` and
+  - `@aws-cdk-blocks/hosting:FrontDoorBehaviorLimit`: `cf.behaviors` and
     `cf.apiBehaviors` handed out more than the 24 behaviors a distribution
     allows besides its default.
 - A door that wires with raw CDK declares its origins and rules with
@@ -582,7 +582,7 @@ What AWS Blocks checks for a bring-your-own door:
 - Features are not checked. If a door ignores `features.waf`, the app deploys
   without a WAF.
 - A door that invokes the server without streaming declares
-  `serverResponse: 'buffered'`, and AWS Blocks builds the server to answer
+  `serverResponse: 'buffered'`, and AWS CDK Blocks builds the server to answer
   with a complete response. The default is `'streaming'`.
 
 ## Next.js: the OpenNext version
@@ -656,7 +656,7 @@ new HostingConstruct(stack, 'Hosting', {
 | Runtime | Node.js 18–24, x86_64 | Node.js 24, Arm64, 2 GB per environment |
 
 **Requirements.**
-- An HTTP-server build. With `Hosting` from `@aws-blocks/core` every built-in
+- An HTTP-server build. With `Hosting` from `@aws-cdk-blocks/core` every built-in
   framework works unchanged, because the adapters switch their output when
   Web Functions are selected:
   - Astro (`@astrojs/node` standalone) and SvelteKit (`adapter-node`)
@@ -666,7 +666,7 @@ new HostingConstruct(stack, 'Hosting', {
     origin. A user `open-next.config.ts` must then set `wrapper: 'node'`,
     `converter: 'node'` and `generateDockerfile: true`.
 - If you run an adapter yourself in front of `HostingConstruct`, wrap the run in
-  `withComputeTarget('web-function', …)` from `@aws-blocks/hosting/adapters` to
+  `withComputeTarget('web-function', …)` from `@aws-cdk-blocks/hosting/adapters` to
   get the same output.
 - An event-handler build (an OpenNext `aws-lambda` wrapper or a Nitro
   `aws-lambda` preset) fails synth with `WebFunctionUnsupportedComputeError`.
@@ -750,7 +750,7 @@ The REST API invokes the server the way it was built:
 - **A separate image origin.** A Nuxt IPX image optimizer (`imageOptimization.baseURL`)
   gets its own REST API with its own secret, so neither value reaches the other
   Lambda.
-- **A web ACL on the stage.** With an AWS Blocks-managed web ACL on the
+- **A web ACL on the stage.** With an AWS CDK Blocks-managed web ACL on the
   distribution (`waf: { enabled: true }`), each server-origin stage also gets
   a REGIONAL web ACL.
   - It has the same rules: the AWS managed common and known-bad-inputs rule
@@ -770,7 +770,7 @@ The REST API invokes the server the way it was built:
   access logs (`AccessLogFormat.jsonWithStandardFields()`) from each stage to a
   CloudWatch log group. REST API access logging needs the account-level API
   Gateway CloudWatch Logs role (`AWS::ApiGateway::Account`), which this then
-  creates once per stack (the same resource `@aws-blocks/core`'s
+  creates once per stack (the same resource `@aws-cdk-blocks/core`'s
   `defaults.accessLogging` uses). That setting is one per account and region:
   a second stack that also creates it repoints it, and tearing that stack down
   leaves it pointing at a deleted role. Turn it on in one stack per account and
@@ -814,7 +814,7 @@ without it. While it is set:
 - the SSR REST API's stage gets no web ACL, because edges on the previous
   config don't send the `x-blocks-front-door` marker and would hit the per-IP
   rate limit. The next deploy attaches it;
-- synth warns (`@aws-blocks/hosting:AcceptLegacyVerifyHeader`).
+- synth warns (`@aws-cdk-blocks/hosting:AcceptLegacyVerifyHeader`).
 
 ## Build retention & rollback
 
@@ -880,11 +880,11 @@ new HostingConstruct(stack, 'Hosting', {
 
 `version: 'v2'` needs the stack in us-east-1. Synth throws
 `LoggingV2RegionError` in any other Region, and warns
-`@aws-blocks/hosting:LoggingV2RegionUnresolved` when the stack's Region is
+`@aws-cdk-blocks/hosting:LoggingV2RegionUnresolved` when the stack's Region is
 unresolved. `skipRegionValidation` skips this check along with the WAF, ACM
 and Lambda Web Adapter Region checks.
 
-The deprecated top-level `logging` prop of `Hosting` from `@aws-blocks/core`
+The deprecated top-level `logging` prop of `Hosting` from `@aws-cdk-blocks/core`
 accepts only `enabled` and `retentionDays`, so it always uses v1.
 
 ## SSR caching & cache-key credentials
@@ -922,7 +922,7 @@ server and of every other regional compute a route targets: Lambda handlers,
 and Node.js servers on the Lambda Web Adapter or a Web Function. Where the
 guard cannot be installed (for example a Lambda Web Adapter server that is not
 Node.js, or a handler module missing from the bundle), synth warns
-`@aws-blocks/hosting:SsrCacheGuardNotInstalled` and that server's responses
+`@aws-cdk-blocks/hosting:SsrCacheGuardNotInstalled` and that server's responses
 are cached as its `Cache-Control` says. The guard sends
 `Cache-Control: private, no-store` instead of the origin's value when:
 
@@ -1103,8 +1103,8 @@ picks the store:
 ### Declare — in your hosting infra
 
 ```ts
-import { HostingConstruct } from '@aws-blocks/hosting/constructs';
-import { secret, config } from '@aws-blocks/hosting';
+import { HostingConstruct } from '@aws-cdk-blocks/hosting/constructs';
+import { secret, config } from '@aws-cdk-blocks/hosting';
 
 new HostingConstruct(stack, 'Web', {
   manifest, // a DeployManifest from an adapter (see Quick start)
@@ -1131,7 +1131,7 @@ the exact ARN) plus `kms:Decrypt`.
 
 `environment` accepts both `secret()` and `config()`. On `HostingConstruct`,
 `domain.domainName` is a plain `string | string[]`. Only
-`await Hosting.create(...)` (`Hosting` from `@aws-blocks/core`) resolves a
+`await Hosting.create(...)` (`Hosting` from `@aws-cdk-blocks/core`) resolves a
 marker at synth, and there it accepts only `config()` or a plain string, never
 `secret()`: the resolved value is written into the CloudFormation template.
 
@@ -1142,7 +1142,7 @@ its locator, so `getSecret` / `getConfig` read it the same way.
 ### Read — in your SSR / API / runtime code
 
 ```ts
-import { getSecret, getConfig } from '@aws-blocks/hosting';
+import { getSecret, getConfig } from '@aws-cdk-blocks/hosting';
 
 const key = await getSecret('STRIPE_KEY'); // Secrets Manager
 const flags = await getConfig('FEATURE_FLAGS'); // SSM
@@ -1172,7 +1172,7 @@ npx hosting-typegen --watch   # regenerate on every save (run alongside your dev
 npx hosting-typegen --check   # CI: fail if that file is stale
 ```
 
-In an AWS Blocks app, `npm run dev` runs the generate-and-watch step itself
+In an AWS CDK Blocks app, `npm run dev` runs the generate-and-watch step itself
 when the app calls `secret()` / `config()`. In a standalone hosting app, run
 `hosting-typegen --watch` beside the dev server or add a `"predev"` hook.
 
@@ -1188,7 +1188,7 @@ Add the generated file to your `tsconfig.json` `include`. Do not edit it by
 hand: the tool regenerates it.
 
 ```jsonc
-{ "include": ["src", "aws-blocks", ".blocks/**/*.d.ts"] }
+{ "include": ["src", "cdk-blocks", ".blocks/**/*.d.ts"] }
 ```
 
 The file is safe to delete (the keys fall back to `string`) and safe to
@@ -1223,7 +1223,7 @@ for example in a build environment variable that a later build phase reads,
 use the codec:
 
 ```ts
-import { config, isSecret, managedValueReplacer, managedValueReviver, secret } from '@aws-blocks/hosting';
+import { config, isSecret, managedValueReplacer, managedValueReviver, secret } from '@aws-cdk-blocks/hosting';
 
 // Producer (phase 1): stringify with the replacer, stash in an env var.
 process.env.STAGE_CONFIG = JSON.stringify({ domain: config('DOMAIN'), apiKey: secret('API_KEY') }, managedValueReplacer);
@@ -1299,7 +1299,7 @@ npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
 
 ## Errors
 
-The errors below are `HostingError`s (`@aws-blocks/hosting/error`), thrown at
+The errors below are `HostingError`s (`@aws-cdk-blocks/hosting/error`), thrown at
 synth. `error.name` and `error.code` hold the name in the table, and
 `error.resolution` says how to fix it.
 
@@ -1311,7 +1311,7 @@ synth. `error.name` and `error.code` hold the name in the table, and
 | `EdgeRouteNeedsCloudFrontDoorError` | A Lambda@Edge compute is behind a door other than CloudFront. |
 | `EmptyGeoRestrictionError` | `geoRestriction.countries` is empty. |
 | `FrontDoorSettingConflictError` | A setting is set both as a top-level prop and in `frontDoor.features`. |
-| `HttpErrorStatusErrorPagesError` | `Hosting` from `@aws-blocks/core` sees an `ApiNamespace` with `httpErrorStatus: true` and a CloudFront 403 / 404 error page. |
+| `HttpErrorStatusErrorPagesError` | `Hosting` from `@aws-cdk-blocks/core` sees an `ApiNamespace` with `httpErrorStatus: true` and a CloudFront 403 / 404 error page. |
 | `InvalidCertificateRegionError` | The CloudFront door's `certificate` is not in us-east-1. |
 | `InvalidFrontDoorOptionError` | A door option is unknown for the kind or has the wrong type. |
 | `InvalidFrontDoorSettingError` | A `features` setting has an unknown key, an unknown `geoRestriction.type`, or a `serverOrigin.verifySecretRotation` that is not a non-negative integer. |
@@ -1328,7 +1328,7 @@ synth. `error.name` and `error.code` hold the name in the table, and
 | `SsrCacheKeyCookieCapError` | Extra cookie names plus the 2 reserved names exceed `quotas.cacheKeyCookies` (10 by default). |
 | `SsrCacheKeyCredentialsRequiredError` | `ssrDefaultTtl` is above 0 and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set. |
 | `SsrCacheKeyHeaderCapError` | Extra header names plus the 5 reserved names exceed `quotas.cacheKeyHeaders` (10 by default). |
-| `StackedRouterCertificateNeedsDomainError` | `Hosting` from `@aws-blocks/core`: the stacked door's router has a `certificate` and no `features.router.domain`. |
+| `StackedRouterCertificateNeedsDomainError` | `Hosting` from `@aws-cdk-blocks/core`: the stacked door's router has a `certificate` and no `features.router.domain`. |
 | `StreamingServerNeedsStreamingDoorError` | A streaming server handler is behind a door that invokes it without streaming. |
 | `TooManyCacheBehaviorsError` | The default behavior plus the additional CloudFront cache behaviors exceed `quotas.cacheBehaviors`. |
 | `UnsupportedComputeFrontDoorError` | `compute.type: 'web-function'` behind a door other than CloudFront. |
@@ -1343,7 +1343,7 @@ synth. `error.name` and `error.code` hold the name in the table, and
 The adapters and the construct throw further `HostingError`s for build
 failures and invalid props. Two errors are not `HostingError`s:
 
-- `ManagedValueCodecError` (from `@aws-blocks/hosting`): `decodeManagedValue`
+- `ManagedValueCodecError` (from `@aws-cdk-blocks/hosting`): `decodeManagedValue`
   got a malformed value or an unsupported version.
 - `InsecureTransportException`: thrown by `Auth` at sign-in behind a
   plain-HTTP door (see
