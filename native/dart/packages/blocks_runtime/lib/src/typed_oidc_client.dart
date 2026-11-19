@@ -58,10 +58,12 @@ extension type TypedOidcClient<P extends OidcProvider>(OidcClient untyped)
     P provider, {
     required BrowserLauncher launcher,
     required String redirectUri,
+    Future<void>? cancel,
   }) => untyped.signInDirect(
     provider.providerName,
     launcher: launcher,
     redirectUri: redirectUri,
+    cancel: cancel,
   );
 
   /// [OidcClient.signIn] with [provider]'s name.
