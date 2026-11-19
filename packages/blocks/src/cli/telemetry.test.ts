@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { runConfigCli, runSecretCli, runTypegenCli, writeSpec } from '@aws-cdk-blocks/core/scripts';
 import { COMMANDS } from './registry.js';
 import { CLI_TRACKED_COMMANDS, type LoadTelemetry, trackedCommandName, withCommandTelemetry } from './telemetry.js';
 import { fixtureApp, runCli } from './test-helpers.js';
@@ -46,6 +52,104 @@ describe('CLI telemetry coverage', () => {
 		assert.equal(trackedCommandName(['deploy']), undefined);
 		assert.equal(trackedCommandName(['toString']), undefined);
 	});
+});
+
+/**
+ * How each command in {@link CORE_TRACKED} is shown to send its own event: the core entry
+ * point (or bin) the CLI runs, called for real with the telemetry file sink, so removing
+ * its tracking fails here and not only in core's own tests. Each probe ends the command
+ * early (a usage error, `--help`, a missing backend) so that nothing reaches AWS.
+ */
+const CORE_PROBES: Record<string, { event: string; run: (dir: string) => Promise<unknown> }> = {
+	secret: { event: 'secret', run: () => runSecretCli(['bogus-verb'], { interactive: false }).catch(() => {}) },
+	config: { event: 'config', run: () => runConfigCli(['bogus-verb'], { interactive: false }).catch(() => {}) },
+	'generate types': {
+		event: 'generate:types',
+		run: () => runTypegenCli(['--help'], { log: () => {}, error: () => {} }),
+	},
+	'generate spec': {
+		event: 'generate:spec',
+		run: (dir) => writeSpec(join(dir, 'missing', 'index.js'), join(dir, 'spec.json')).catch(() => {}),
+	},
+	// A bin, not a function: run it as `blocks-generate-client` runs, in its own process.
+	'generate client': {
+		event: 'generate:client',
+		run: async (dir) => {
+			const bin = fileURLToPath(new URL('../generate-client-cli.js', import.meta.url));
+			spawnSync(process.execPath, [bin, join(dir, 'missing.ts'), `--telemetry-file=${join(dir, 'events.json')}`], {
+				cwd: dir,
+				env: process.env,
+				stdio: 'ignore',
+			});
+		},
+	},
+};
+
+/**
+ * The commands in {@link CORE_TRACKED} without a probe, because no unit test can run them
+ * to their event without AWS or a full app: `dev` and the `sandbox` commands send their
+ * event from the dev server and sandbox runners (covered by core's
+ * `dev-server-telemetry.test.ts` and `sandbox-telemetry.test.ts`), `deploy` and `destroy`
+ * need AWS before they finish, and the `vendorize` bin exits on a bad argument before
+ * its tracked function runs.
+ */
+const UNPROBED = ['dev', 'sandbox', 'sandbox deploy', 'sandbox preview', 'sandbox destroy', 'sandbox console', 'deploy', 'destroy', 'vendorize'];
+
+const CI_VARS = [
+	'CI',
+	'CONTINUOUS_INTEGRATION',
+	'BUILD_NUMBER',
+	'CODEBUILD_BUILD_ID',
+	'GITHUB_ACTIONS',
+	'GITLAB_CI',
+	'CIRCLECI',
+	'JENKINS_URL',
+	'TF_BUILD',
+	'BITBUCKET_BUILD_NUMBER',
+	'BUILDKITE',
+];
+
+describe('core tracks the commands the CLI leaves to it', () => {
+	const originalEnv = { ...process.env };
+	const originalArgv = [...process.argv];
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), 'blocks-core-tracked-'));
+		for (const name of CI_VARS) delete process.env[name];
+		delete process.env.CDK_DISABLE_CLI_TELEMETRY;
+		process.env.HOME = dir;
+		// Nothing leaves the machine: the send goes to a closed port, the file sink records it.
+		process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/metrics';
+		process.argv = [...originalArgv, `--telemetry-file=${join(dir, 'events.json')}`];
+	});
+
+	afterEach(() => {
+		process.env = { ...originalEnv };
+		process.argv = originalArgv;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	function events(): string[] {
+		const file = join(dir, 'events.json');
+		if (!existsSync(file)) return [];
+		const parsed = JSON.parse(readFileSync(file, 'utf-8'));
+		return (Array.isArray(parsed) ? parsed : [parsed]).map((e: { event: { command: string } }) => e.event.command);
+	}
+
+	it('probes every core-tracked command except the ones listed as unprobed', () => {
+		assert.deepEqual(
+			CORE_TRACKED.filter((path) => !Object.hasOwn(CORE_PROBES, path)),
+			UNPROBED,
+		);
+	});
+
+	for (const [path, probe] of Object.entries(CORE_PROBES)) {
+		it(`"${path}" sends one ${probe.event} event from core`, async () => {
+			await probe.run(dir);
+			assert.deepEqual(events(), [probe.event]);
+		});
+	}
 });
 
 describe('CLI telemetry through main', () => {
