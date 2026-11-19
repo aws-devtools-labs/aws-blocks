@@ -516,7 +516,10 @@ void main() {
         sessionStore: session,
         httpClient: MockClient((_) async => http.Response('{}', 500)),
       );
-      await expectLater(oidc.signOut(), throwsA(isA<OidcRequestException>()));
+      await expectLater(
+        oidc.signOut(),
+        throwsA(isA<ApiException>().having((e) => e.status, 'status', 500)),
+      );
       await session.flush();
       expect(await session.cookieHeaderFor(origin), 'blocks_sso=b');
 
@@ -581,7 +584,10 @@ void main() {
 
       // The backend refuses the sign-out; the client still signs out
       // locally, removing only the cookie its own sign-in set.
-      await expectLater(a.signOut(), throwsA(isA<OidcRequestException>()));
+      await expectLater(
+        a.signOut(),
+        throwsA(isA<ApiException>().having((e) => e.status, 'status', 500)),
+      );
       await session.flush();
       expect(await session.cookieHeaderFor(origin), 'b_session=v');
 
