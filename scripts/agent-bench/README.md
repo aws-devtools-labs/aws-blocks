@@ -50,8 +50,8 @@ point `BENCH_AGENT_USER` at another unprivileged account.
 | `BENCH_ROLE_ARN` | `agent-bench` environment secret | The OIDC role the `bench` and `summary` jobs assume (see *Security*). |
 | `BENCH_BUCKET` | `agent-bench` environment variable | The bucket that holds per-cell results and the baseline. |
 | `BENCH_MODEL` | `bench` job `env` in `agent-bench.yml` | Builder model id. Default `us.anthropic.claude-opus-4-8`. |
-| `BENCH_JUDGE_MODEL` | `bench` job `env` in `agent-bench.yml` | Judge model id. Default `us.anthropic.claude-opus-4-8`. Give the builder and the judge different ids to limit same-model self-evaluation bias. |
-| `BENCH_MIN_SCORE`, `BENCH_MAX_REGRESSION`, `BENCH_MAX_HARNESS_ERRORS` | repo/org variables | Opt-in merge gates (see *Gating*). Unset: the bench only reports. |
+| `BENCH_JUDGE_MODEL` | `bench` job `env` and `summary` roll-up step in `agent-bench.yml` | Both default to `us.anthropic.claude-opus-4-8`. Change both settings to use the same model for judging and analysis. |
+| `BENCH_MIN_SCORE`, `BENCH_MAX_REGRESSION`, `BENCH_MAX_HARNESS_ERRORS` | repo/org variables | Optional thresholds. An upstream failure with no artifacts can still fail the summary (see *Gating*). |
 | `BLOCKS_TELEMETRY_CANARY_ID` | workflow secret | Optional. Step 1 seeds the telemetry canary from it; unset skips the seed with a warning. |
 | `BENCH_AGENT_USER` | local env | The unprivileged account agent code runs as. Default `benchagent`. |
 | `BENCH_ALLOW_BARE_SHELL` | local env | `1` runs the agent's commands as your own user, so the agent can read your environment. Refused whenever `CI` or `GITHUB_ACTIONS` is set. |
@@ -123,8 +123,8 @@ The boundary, outermost first:
    *Run it*). The same-repo guard is enforced in
    [`pr-agent-bench.yml`](../../.github/workflows/pr-agent-bench.yml): fork PRs
    get no secrets or OIDC under `pull_request`, so an external contributor
-   cannot reach the role (push-to-`main` is same-repo by definition). The task
-   `PROMPT.md` files are in-repo and member-reviewed.
+   cannot reach the role through this workflow. The guard checks repository identity,
+   not review status: same-repo runs trust the harness and prompts at the selected revision.
 2. **Bedrock-only AWS session.**
    - The bench job's `Configure AWS credentials` step passes an inline session
      policy. The session every step up to the uploads runs with can only call
@@ -138,8 +138,8 @@ The boundary, outermost first:
    - The `summary` job holds the full role but runs no agent code.
    - The role is `blocks-github-bench` in E2E account 1
      ([`test-infra/github-oidc-stack.ts`](../../test-infra/github-oidc-stack.ts)):
-     Bedrock model invocation plus `s3:GetObject`/`s3:PutObject` on `bench/*` in
-     the bench bucket, nothing else.
+     Bedrock model invocation, `s3:GetObject`/`s3:PutObject` on `bench/*`, and
+     `s3:ListBucket` conditioned on the `bench/*` prefix.
    - Both jobs run in the `agent-bench` GitHub environment, and the role trusts
      only that environment's OIDC `sub`, so a token minted in a bench job can
      assume this role and no other. That trust policy, not the role's
@@ -430,10 +430,8 @@ Cost and score are derived from the published tokens via `steps/lib/scoring.mjs`
 
 ### Gating
 
-Observational by default: with all three gate variables unset the
-summary only reports the mean composite and never turns the check red. Each gate
-is opt-in via its own repo/org variable, and any one tripping exits the summary
-job non-zero:
+The summary reports scores without enforcing a floor or regression limit by default.
+Set any of these repo/org variables to enforce its threshold:
 
 - `BENCH_MIN_SCORE`: absolute floor. Fails when the mean composite across scored
   cells falls below it. Skipped (never fails) when no cell scored.
@@ -443,9 +441,9 @@ job non-zero:
 - `BENCH_MAX_HARNESS_ERRORS`: infra-failure ceiling. Fails when more than this
   many cells are `harness_error`. An unreadable or corrupt `result.json`
   artifact counts as one. Must be a whole number.
-- Always on, no variable: if the bench matrix did not succeed and produced zero
-  result artifacts (e.g. `build-blocks` failed so every cell was skipped), the
-  summary job fails.
+- Always on: if `build-blocks` or the bench matrix fails and produces zero
+  result artifacts, the summary fails even without thresholds. A skipped or
+  cancelled job alone does not trigger this rule.
 
 A negative or non-numeric value for any gate variable is treated as unset, as
 is a fractional `BENCH_MAX_HARNESS_ERRORS`. The
@@ -454,16 +452,15 @@ PR-vs-baseline results table is observational; the regression gate
 
 ### Check status
 
-A bench cell never turns the PR check red.
+Cell scores are advisory unless a summary threshold applies. Workflow failures are separate:
 
-- Every fallible cell step (`npm ci`, OIDC, `1-init`, `2-agent`,
-  `3-build-and-test`, `4-judge`) is `continue-on-error: true`, paired with an
+- The grading steps (`npm ci`, OIDC, `1-init`, `2-agent`,
+  `3-build-and-test`, `4-judge`) use `continue-on-error: true`, paired with an
   `if: steps.<prev>.outcome == 'success'` chain, so a failed step skips the
   later ones. An agent timeout skips tests and judge and scores composite 0,
   rather than scoring a partial app.
-- A cell's outcome lives in `result.json` and the run summary, not the check
-  status.
-- The summary job is green too, unless a gate is set and trips.
+- A graded cell's outcome lives in `result.json` and the run summary. Mandatory
+  preflight checks, such as verifying the isolation user has no sudo rights, can fail the job.
 - A new commit cancels the prior in-flight run via the workflow `concurrency`
   group.
 
@@ -503,8 +500,7 @@ The report is written to the GitHub Actions run summary
   `pr-agent-bench.yml` (a reusable workflow's token is capped down to the
   caller's).
 
-When the bench matrix produces no results, `summary.mjs`
-renders a "no results" note and still exits 0.
+With no results, the summary can still fail if an upstream job failed (see *Gating*).
 
 ### Baseline selection
 
@@ -554,9 +550,10 @@ The numbered scripts in `steps/` are the workflow's numbered steps. The
 | `package.json` | Workspace metadata; `private: true` |
 
 Failure handling: each successful step augments the baseline `result.json`
-that step 0 wrote. `finalize-result.mjs` stamps `status: scored` (all steps
-green), `status: error, failed_at: <step>` (a tracked step failed), or
-`failed_at: pre-oidc` (something before OIDC, e.g. `npm ci`, failed). The
+that step 0 wrote. `finalize-result.mjs` stamps `status: scored` when all tracked
+steps succeed. A failed or cancelled tracked step gets `status: error` or
+`status: cancelled` and its name in `failed_at`. An earlier failure such as
+`npm ci` gets `status: error, failed_at: pre-oidc`. The
 upload step runs whenever step 4c staged the cell (`if: always()` plus the
 staging gate), so the cell shows up in the summary table unless its files could
 not be safely staged.

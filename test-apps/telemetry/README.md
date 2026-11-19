@@ -4,6 +4,9 @@ Isolated end-to-end tests for the AWS CDK Blocks telemetry system.
 
 ## Running
 
+Use a disposable HOME and a dedicated E2E AWS account. The suite overwrites
+the telemetry installation ID and removes `$HOME/.cdk-blocks/telemetry` at exit.
+
 ```bash
 # From monorepo root (requires build first):
 npm run build
@@ -19,9 +22,7 @@ environment or from `~/.aws` (see [Concurrent groups](#concurrent-groups)).
 
 ## Isolation
 
-The suite shares no state with the other e2e test apps. Each captured event is
-written to a unique `--telemetry-file` path, so no test depends on another's
-file. The reader takes the first element of the array, so a command emitting
+Each test uses its own `--telemetry-file`. The reader takes the first element of the array, so a command emitting
 more than one event is asserted on its first. Multi-event ordering and length
 are covered by the unit suites (`packages/core/src/telemetry/telemetry.test.ts`,
 "keeps every event when one run emits several").
@@ -31,10 +32,8 @@ are covered by the unit suites (`packages/core/src/telemetry/telemetry.test.ts`,
 The suite runs four groups at the same time; inside each group the cases run
 in order:
 
-- **local commands**: every case that needs no AWS account, from this
-  directory with the real HOME (unless a case sets its own). They run in order
-  because several write the project config (`.cdk-blocks/config.json`) or the real
-  HOME's global config.
+- **local commands**: these run from this directory with the caller's HOME unless
+  a case sets its own. The CDK opt-out case temporarily changes `cdk.context.json`.
 - **CLI commands**: `help`, `docs`, `dev stop` and its `cleanup` alias,
   `generate client|spec|types`, `migrate`, `whoami`, `secret`, `config`, `db`,
   `sandbox deploy` and `sandbox preview`, plus the `blocks-generate-client` and
@@ -67,8 +66,7 @@ Each AWS group runs its commands in its own copy of the app under
   state that lives in the project root apart: `cdk.out` (two cdk processes on
   one `cdk.out` collide on its lock), `.cdk-blocks-sandbox/` and the generated
   client.
-- The HOME keeps the local group's global-config cases from disabling
-  telemetry for a cloud command. It is seeded with the pinned installation-id
+- Each group's HOME has its own pinned installation ID
   and links to the real `~/.aws`, `~/.npm`, `~/.npmrc` and `~/.cdk.json`
   (whose `profile` and `region` pick the deployment target).
 
@@ -104,16 +102,15 @@ random ID, and asserts it was created correctly.
 - **Per-command success + failure**: SUCCESS + FAIL events for `deploy`,
   `destroy`, `sandbox:deploy`, `sandbox:destroy`, and `dev`; `console` SUCCESS only;
   `create-blocks-app` and `vendorize` document the no-telemetry limitation for
-  their failure paths. FAIL paths clear the credential env vars so CDK fails
-  fast.
+  their failure paths. The cloud failure cases clear the three AWS session
+  environment variables, but can still find credentials through other providers.
 - **Network resilience**: broken endpoint is invisible to users, visible with
   NODE_DEBUG, and does not crash or delay the command.
-- **Disable mechanisms**: env var, global config, project config.
 - **Schema forward-compatibility**: payload is JSON-serializable with all
   required fields.
 - **Environment metadata**: nodeVersion, os, ci fields validated.
-- **CDK opt-out**: `CDK_DISABLE_CLI_TELEMETRY`, and `cli-telemetry: false` in
-  `cdk.context.json`, `cdk.json` or `~/.cdk.json`.
+- **CDK opt-out**: `CDK_DISABLE_CLI_TELEMETRY` set to `1`, `true` or `0`, and
+  `cli-telemetry: false` in the app's `cdk.context.json`.
 
 ## Design
 

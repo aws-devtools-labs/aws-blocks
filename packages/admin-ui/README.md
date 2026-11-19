@@ -13,7 +13,7 @@ node --input-type=module -e "import { dashboard } from 'aws-cdk-blocks/scripts';
 A fresh tab starts in **local**. Browse the app's blocks and local data without credentials or a deployed
 stack. Selecting a cloud stage enables AWS reads; the tab remembers that selection on reload.
 
-The launcher:
+The templates do not define an `npm run dashboard` script. The launcher:
 
 1. resolves `@aws-cdk-blocks/admin-ui` from the app, offering a one-time `npm install --save-dev` in an interactive terminal if it is missing (the package is not a dependency of core),
 2. generates a crypto-random session token for the process,

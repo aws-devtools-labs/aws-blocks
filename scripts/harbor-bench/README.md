@@ -66,11 +66,11 @@ triggered. It is reported, never required.
 
 ## Package provenance
 
-Each arm has a loopback registry (`registry.mjs`) that serves only that arm's `@aws-cdk-blocks/*`
-tarballs and logs requests. Third-party packages come from public npm. `provenance.py` requires
-that the scaffolder tarball was served and that every installed `@aws-cdk-blocks/*` package in the
-app has the arm's lockfile version, registry URL and integrity, was served, and matches the
-packed bytes. The backend must import `@aws-cdk-blocks/*` and expose an `ApiNamespace`.
+Each arm has a loopback registry (`registry.mjs`) that serves that arm's `aws-cdk-blocks`
+and `@aws-cdk-blocks/*` tarballs and logs requests. Third-party packages come from public
+npm. `provenance.py` checks that the scaffolder was served and verifies installed Blocks
+packages against the arm's registry and packed bytes. The backend can import the umbrella
+or scoped Blocks packages and must expose an `ApiNamespace`.
 
 When both arms pack byte-identical packages the run compares the harness with itself (A/A):
 any difference between arms is noise.
@@ -168,7 +168,7 @@ such as snapshots are unpacked and redacted per member. Symlinks and special fil
 Values are never printed. Other secrets the agent may have produced, or encodings of these
 values, are not detected.
 
-Only then does a fresh `configure-aws-credentials` assume the writer role (1 hour) and upload
+Only then does a fresh `configure-aws-credentials` assume the writer role (900 seconds) and upload
 with `aws s3 cp`. The role may write anywhere under `harbor/v1/`, and the bucket is unversioned,
 so an overwrite would destroy an earlier trace: each trial's session therefore carries an inline
 policy limiting it to its own `run`/`attempt`/`arm`/`trial` prefix. The bucket name is masked in
@@ -196,8 +196,10 @@ PATH="$PWD/.harbor-bench/venv/bin:$PATH" python3 scripts/harbor-bench/calibrate.
 session token); a profile without an expiry cannot flag trials that outlived their credentials.
 Local runs need no S3 bucket or other AWS resources beyond Bedrock access.
 
-`--dry-run` stops after preparing the work dirs and writing `plan.json`: no image build,
-credentials or model calls.
+`--dry-run` stops after preparing the work dirs and writing `plan.json`: it skips
+the Docker image build, AWS profile export and model calls. Without `--registry`,
+it still runs the selected revision's npm install, build and pack scripts on the
+host. Use a trusted revision or supply a trusted prepacked registry.
 
 A paid run writes `summary.md` and `summary.json`:
 

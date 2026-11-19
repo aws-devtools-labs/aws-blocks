@@ -35,8 +35,9 @@ Each stack outputs its VPC ID. Set the `VPC_TEST_VPC_ID` environment variable
 for the downstream test stack you're running:
 
 ```bash
+stack_name=BlocksTestVpc # Use BlocksComputeTestVpc for the compute smoke app.
 export VPC_TEST_VPC_ID=$(aws cloudformation describe-stacks \
-  --stack-name <BlocksTestVpc|BlocksComputeTestVpc> \
+  --stack-name "$stack_name" \
   --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' \
   --output text)
 ```
@@ -93,6 +94,7 @@ This stack creates, in each of them:
 The `blocks-github-e2e` role permits:
 
 - CDK deploys.
+- CloudFormation reads and Amplify backend deployments through the `AWSCloudFormationReadOnlyAccess` and `service-role/AmplifyBackendDeployFullAccess` managed policies.
 - E2E stack and bucket cleanup.
 - The `cleanup-stacks.yml` quota sweeps: REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies, orphaned Lambda/RDS log groups, orphaned E2E Cognito user pools.
 - The `cleanup-stacks.yml` describe-only check on Amplify sandbox tables a stuck delete left behind.

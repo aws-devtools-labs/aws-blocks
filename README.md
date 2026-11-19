@@ -4,7 +4,7 @@
 
 AWS CDK Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need and compose them; AWS CDK Blocks generates the AWS infrastructure (CDK constructs) for them. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
 
-Documentation: [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html), with the full Block catalog and the API reference of each Block.
+For an overview, see the [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html). For the Block catalog and APIs at this revision, see the [Blocks README](./packages/blocks/README.md).
 
 ## Getting started
 
