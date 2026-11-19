@@ -35,7 +35,7 @@ class DartCodeGenerator {
       buf.writeln(directive);
     }
     buf.writeln(
-      "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;",
+      "export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;",
     );
 
     // Export transferable types for consumer convenience. A transferable
@@ -45,7 +45,7 @@ class DartCodeGenerator {
     final transferableTags = _collectTransferableTags(model);
     if (transferableTags.isNotEmpty) {
       buf.writeln(
-        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;",
+        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, TransferableException, InvalidDescriptorException;",
       );
     }
 
@@ -1053,7 +1053,7 @@ class DartCodeGenerator {
     final buf = StringBuffer();
     final ids = _identifiers(
       namespaces.map((ns) => ns.name),
-      reserved: _objectMembers,
+      reserved: _facadeMembers,
       declared: declared,
     );
     // A namespace's field is public API, and so are the constructor's
@@ -1069,6 +1069,7 @@ class DartCodeGenerator {
       final ident = ids[ns.name]!;
       buf.writeln('  late final ${apiClasses[ns.name]} $ident;');
     }
+    buf.writeln('  late final BlocksClient _client;');
     buf.writeln();
     final hasDefault = servers.isNotEmpty;
     final defaultExpr = hasDefault
@@ -1087,12 +1088,24 @@ class DartCodeGenerator {
         '    final $client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);',
       );
     }
+    buf.writeln('    _client = $client;');
     for (final ns in namespaces) {
       final ident = ids[ns.name]!;
       final target = ctorParams.contains(ident) ? 'this.$ident' : ident;
       buf.writeln('    $target = ${apiClasses[ns.name]}($client);');
     }
     buf.writeln('  }');
+    buf.writeln();
+    buf.writeln(
+      '  /// Closes the client. A call after this throws a '
+      '[ClientClosedException],',
+    );
+    buf.writeln(
+      '  /// and so does an `OidcClient` one of its calls returned. '
+      'Closing twice',
+    );
+    buf.writeln('  /// does nothing more.');
+    buf.writeln('  void close() => _client.close();');
     buf.writeln('}');
     return buf.toString();
   }
@@ -2156,6 +2169,10 @@ Object? _blocksFrozen(Object? value) => switch (value) {
     'runtimeType',
     'toString',
   };
+
+  /// What the generated `Blocks` class declares besides its namespace
+  /// fields, so a namespace named like one gets a `$` instead.
+  static const _facadeMembers = {..._objectMembers, 'close'};
 
   /// What a model or union variant class declares or refers to besides its
   /// fields: `fromJson`, `toJson`, the `@override` annotation and the

@@ -95,7 +95,7 @@ describe('dev server pidfile after a concurrent start', () => {
 
   it('records the server that binds the port, so dev:stop stops it', async () => {
     const port = await getAvailablePort();
-    mkdirSync(join(tempDir, '.blocks-sandbox'), { recursive: true });
+    mkdirSync(join(tempDir, '.cdk-blocks-sandbox'), { recursive: true });
     writeFileSync(join(tempDir, 'backend.ts'), BACKEND);
     writeFileSync(join(tempDir, 'run-dev.ts'), `
 import { startDevServer } from ${JSON.stringify(join(__dirname, 'dev-server.js').replace(/\\/g, '/'))};

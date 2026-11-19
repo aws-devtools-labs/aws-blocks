@@ -297,7 +297,7 @@ aws-blocks/
 	blocks.spec.json        # all namespaces, all methods
 ```
 
-**Environment config** — the CLI populates the OpenRPC `servers` array with the API URL of the running dev server (`.blocks-sandbox/config.json`) or, with `BLOCKS_SPEC_STAGE=sandbox` or `production`, of that stage's last deploy (`.blocks-sandbox/config.<stage>.json`). A deploy never writes `config.json`, so a spec targets AWS only when you ask:
+**Environment config** — the CLI populates the OpenRPC `servers` array with the API URL of the running dev server (`.cdk-blocks-sandbox/config.json`) or, with `BLOCKS_SPEC_STAGE=sandbox` or `production`, of that stage's last deploy (`.cdk-blocks-sandbox/config.<stage>.json`). A deploy never writes `config.json`, so a spec targets AWS only when you ask:
 
 ```json
 {
@@ -335,7 +335,7 @@ The spec is a build input with the same trust as the backend source it is genera
 flowchart LR
   App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
   TS -- "npm run spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
-  Sandbox[.blocks-sandbox/config.json<br/>or config.&lt;stage&gt;.json] -- servers URL --> Spec
+  Sandbox[.cdk-blocks-sandbox/config.json<br/>or config.&lt;stage&gt;.json] -- servers URL --> Spec
   Spec -- local file read --> Dart[blocks_codegen]
   Spec -- local file read --> Swift[BlocksCodegen plugins]
   Spec -- local file read --> Kotlin[Gradle codegen task]

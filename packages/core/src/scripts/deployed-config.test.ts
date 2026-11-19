@@ -14,7 +14,7 @@ describe('deployed config — where a deploy records its API URL', () => {
   it('writes config.<stage>.json, never the dev server config.json', () => {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-deployed-config-'));
     try {
-      const out = join(dir, '.blocks-sandbox');
+      const out = join(dir, '.cdk-blocks-sandbox');
       writeDeployedConfig(out, 'production', 'https://p.example/aws-blocks/api');
       writeDeployedConfig(out, 'sandbox', 'https://s.example/aws-blocks/api');
       assert.deepStrictEqual(readdirSync(out).sort(), ['config.production.json', 'config.sandbox.json']);
@@ -46,7 +46,7 @@ describe('deployed config — where a deploy records its API URL', () => {
 
   it("moves an older deploy's config.json to its stage file, keeps a newer record, and leaves a dev server's alone", () => {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-legacy-config-'));
-    const out = join(dir, '.blocks-sandbox');
+    const out = join(dir, '.cdk-blocks-sandbox');
     const write = (name: string, body: unknown) => writeFileSync(join(out, name), JSON.stringify(body));
     const read = (name: string) => JSON.parse(readFileSync(join(out, name), 'utf-8'));
     try {

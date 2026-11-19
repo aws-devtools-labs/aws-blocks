@@ -38,6 +38,7 @@ import 'dart:io';
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:http/http.dart' as http;
+
 import 'harness.dart';
 
 // The generated enum of the providers `oidcAuthApi.getClient()` names.
@@ -65,7 +66,11 @@ class HttpRelayLauncher implements BrowserLauncher {
       uri.toString().split(RegExp('[?#]')).first;
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     var current = authorizeUrl;
     for (var hop = 0; hop < 10; hop++) {
       final req = http.Request('GET', current)..followRedirects = false;
@@ -331,6 +336,76 @@ void main() async {
     );
   } catch (e) {
     check(false, 'restore() / getAuthState after signOut(), threw: $e');
+  }
+
+  // Desktop sign-in through the runtime's own loopback listener. No
+  // launcher is passed, so signIn binds 127.0.0.1 and relays there. The
+  // "browser" is an HTTP client that follows the stub IdP's redirects; the
+  // last one lands on the real listener, which completes the sign-in.
+  group('OIDC: desktop loopback sign-in (real listener)');
+  try {
+    final loopbackSession = InMemorySessionStore();
+    final desktop = await oidcFor(loopbackSession);
+    Uri? landed;
+    desktop
+      ..signInTimeout = const Duration(seconds: 30)
+      ..openBrowser = (url) async {
+        var current = url;
+        for (var hop = 0; hop < 10; hop++) {
+          final req = http.Request('GET', current)..followRedirects = false;
+          final resp = await http.Response.fromStream(
+            await httpClient.send(req),
+          );
+          final location = resp.headers['location'];
+          if (resp.statusCode < 300 ||
+              resp.statusCode >= 400 ||
+              location == null) {
+            landed = current;
+            return;
+          }
+          current = current.resolve(location);
+        }
+      };
+    final signedIn = await desktop.signIn(_provider);
+    check(
+      landed?.host == '127.0.0.1' && landed?.path == '/oidc/callback',
+      'the relay redirect landed on the loopback listener '
+      '(${landed?.host}${landed?.path})',
+    );
+    final me = await Blocks(
+      baseUrl: rpcUrl,
+      sessionStore: loopbackSession,
+    ).api.oidcRequireAuth();
+    check(
+      me.userId == signedIn.userId,
+      'api.oidcRequireAuth succeeds after the loopback sign-in',
+    );
+    check(
+      await desktop.signOut() != null && await desktop.restore() == null,
+      'signOut() ends the loopback session',
+    );
+  } catch (e) {
+    check(false, 'desktop loopback sign-in threw: $e');
+  }
+
+  // The OidcClient a generated client returns stops when that client is
+  // closed, as its own calls do.
+  group('OIDC: Blocks.close() stops the OidcClient it returned');
+  final closing = Blocks(baseUrl: rpcUrl, sessionStore: InMemorySessionStore());
+  final hydrated = await closing.oidcAuthApi.getClient();
+  check(await hydrated.restore() == null, 'restore() works while open');
+  closing.close();
+  try {
+    await hydrated.restore();
+    check(false, 'restore() after close() throws');
+  } on ClientClosedException {
+    check(true, 'restore() after close() throws ClientClosedException');
+  }
+  try {
+    await closing.oidcAuthApi.getClient();
+    check(false, 'a call after close() throws');
+  } on ClientClosedException {
+    check(true, 'a call after Blocks.close() throws ClientClosedException');
   }
 
   httpClient.close();

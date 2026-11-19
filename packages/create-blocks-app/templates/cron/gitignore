@@ -1,7 +1,7 @@
 dist
 node_modules
 build-temp
-.blocks-sandbox
+.cdk-blocks-sandbox
 cdk.out/
 aws-blocks/client.js
 aws-blocks/blocks.spec.json

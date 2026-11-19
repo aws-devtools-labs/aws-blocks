@@ -12,7 +12,7 @@ class UnknownTransferable {
 
   UnknownTransferable._({required this.tag, required this.descriptor});
 
-  /// Throws a [FormatException] unless [json] is an object whose `__blocks` is
+  /// Throws a `TransferableException` unless [json] is an object whose `__blocks` is
   /// a non-empty string equal to [expectedTag].
   factory UnknownTransferable.fromJson(
     Object? json, {

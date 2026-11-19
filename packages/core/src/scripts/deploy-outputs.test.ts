@@ -19,8 +19,8 @@ describe('OUTPUTS_FILE — one document per stage', () => {
 		assert.deepStrictEqual(
 			{ ...OUTPUTS_FILE },
 			{
-				sandbox: '.blocks-sandbox/outputs.json',
-				production: '.blocks-sandbox/outputs.production.json',
+				sandbox: '.cdk-blocks-sandbox/outputs.json',
+				production: '.cdk-blocks-sandbox/outputs.production.json',
 			},
 		);
 	});

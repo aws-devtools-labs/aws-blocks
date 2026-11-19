@@ -54,7 +54,7 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 const outputsPath = join(
   __dirname,
   '..',
-  '.blocks-sandbox',
+  '.cdk-blocks-sandbox',
   ENV === 'production' ? 'outputs.production.json' : 'outputs.json',
 );
 

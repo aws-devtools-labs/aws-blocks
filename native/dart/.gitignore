@@ -5,7 +5,7 @@ pubspec.lock
 .packages
 build/
 .bb-data/
-.blocks-sandbox/
+.cdk-blocks-sandbox/
 node_modules/
 *.backup
 .npmrc

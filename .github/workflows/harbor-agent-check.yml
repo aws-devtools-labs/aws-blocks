@@ -23,7 +23,7 @@ concurrency:
 jobs:
   revisions:
     # Run the reviewed controller from main, never a PR-controlled privileged workflow.
-    if: github.repository == 'aws-devtools-labs/aws-blocks' && github.ref == 'refs/heads/main'
+    if: github.repository == 'aws/cdk-blocks' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

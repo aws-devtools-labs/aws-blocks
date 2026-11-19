@@ -100,10 +100,7 @@ void main() {
         );
         await _exchange(t.client);
 
-        await expectLater(
-          t.client.signOut(),
-          throwsA(isA<OidcRequestException>()),
-        );
+        await expectLater(t.client.signOut(), throwsA(isA<ApiException>()));
         await Future<void>.delayed(Duration.zero);
 
         expect(t.states.last, isA<OidcSignedOut>());
