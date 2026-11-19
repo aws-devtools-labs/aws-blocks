@@ -93,7 +93,9 @@ export class WafConstruct extends Construct {
       throw new HostingError('WafRegionError', {
         message: `WAF with CloudFront scope must be deployed in us-east-1, but the current region is ${region}.`,
         resolution:
-          'Either deploy to us-east-1, disable WAF (waf: { enabled: false }), or use a separate us-east-1 stack for WAF.',
+          'Deploy this stack to us-east-1, or create the CLOUDFRONT-scoped web ACL in a us-east-1 stack of your own ' +
+          'and pass its ARN as waf: { enabled: true, webAclArn } (an ARN is attached as is, from any region), ' +
+          'or disable WAF (waf: { enabled: false }).',
       });
     }
 

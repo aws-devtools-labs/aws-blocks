@@ -251,6 +251,12 @@ export interface HostingProps {
   /**
    * Framework type: `'nextjs'`, `'spa'`, or `'static'`.
    * Auto-detected from `package.json` when omitted.
+   *
+   * Also `'nitro'` (or `'nuxt'`), `'astro'` and `'sveltekit'`. Auto-detection
+   * reads the app's own `package.json`, first match wins: `next` → `'nextjs'`;
+   * `nuxt`, `nitropack`, `@solidjs/start`, `@analogjs/platform-server` or
+   * `@tanstack/start` → `'nitro'`; `astro` → `'astro'`; `@sveltejs/kit` →
+   * `'sveltekit'`; otherwise `'spa'`.
    */
   framework?: FrameworkType;
 
