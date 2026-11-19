@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fixture of `upgrade-sql-blocks.ts --scenario aurora`: the app on the last release of `Database` in
-// `@aws-cdk-blocks/bb-data`.
+// `@aws-blocks/bb-data`.
 
 import { ApiNamespace, Database, Scope, sql } from 'aws-cdk-blocks';
 

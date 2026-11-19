@@ -20,7 +20,7 @@ const isConfigError = (pattern: RegExp) => (e: unknown) => {
 	return true;
 };
 
-// The ledger table as `Database` of `@aws-cdk-blocks/bb-data` created it.
+// The ledger table as `Database` of `@aws-blocks/bb-data` created it.
 const EARLIER_LEDGER = `CREATE TABLE IF NOT EXISTS _migrations (
 	id SERIAL PRIMARY KEY,
 	name TEXT NOT NULL UNIQUE,

@@ -55,7 +55,7 @@ import {
 	type SUMMARY_WARNINGS,
 	TODO_TAG,
 	TODOS,
-	UMBRELLA_MODULE_RENAMES,
+	renameUmbrellaSpecifier,
 	UMBRELLA_MODULES,
 	umbrellaBlockFor,
 	unknownOldSubpath,
@@ -557,8 +557,10 @@ class FileMigrator {
 			const subpath = own(OLD_SUBPATHS, spec);
 			const oldBlock = own(OLD_MODULES, spec);
 			const umbrella = UMBRELLA_MODULES.has(spec);
-			const authCommonRenamed = AUTH_COMMON_MODULE_RENAMES.get(spec);
-			if (!subpath && !oldBlock && !umbrella && authCommonRenamed === undefined) {
+			// Any umbrella subpath, not just the root and /cdk, so its specifier is rewritten.
+			const renamed = renameUmbrellaSpecifier(spec) ?? AUTH_COMMON_MODULE_RENAMES.get(spec);
+			const specRenamed = renamed !== undefined && renamed !== spec;
+			if (!subpath && !oldBlock && !umbrella && !specRenamed) {
 				if (unknownOldSubpath(spec)) {
 					this.authTouching = true;
 					this.todo(stmt, IMPORT_TODOS.unknownSubpath);
@@ -580,12 +582,12 @@ class FileMigrator {
 				} else if (ts.isNamespaceImport(bindings)) {
 					// `import * as blocks from '@aws-blocks/blocks'`: its old members are
 					// renamed where they are used (`blocks.AuthCognito` → `blocks.Auth`),
-					// and an old-named specifier is rewritten to the renamed umbrella.
-					this.umbrellaNamespaces.add(bindings.name.text);
-					const renamedUmbrella = UMBRELLA_MODULE_RENAMES.get(spec);
-					if (renamedUmbrella && renamedUmbrella !== spec) {
+					// and an old-named specifier is rewritten to the renamed umbrella. Only
+					// the root and /cdk carry the old names, so only those become a namespace.
+					if (umbrella) this.umbrellaNamespaces.add(bindings.name.text);
+					if (specRenamed) {
 						this.authTouching = true;
-						this.importJobs.push({ decl: stmt, specs: [], newModule: renamedUmbrella });
+						this.importJobs.push({ decl: stmt, specs: [], newModule: renamed });
 					}
 				}
 				continue;
@@ -602,8 +604,12 @@ class FileMigrator {
 			});
 			for (const el of elements) {
 				const imported = (el.propertyName ?? el.name).text;
+				// Only the root and /cdk ever exported the old auth classes, so a subpath
+				// import gets its specifier rewritten but none of its names renamed.
 				const umbrellaBlock =
-					SHARED_FACTORY_NAMES.has(imported) && !oidcStyle ? undefined : umbrellaBlockFor(imported);
+					!umbrella || (SHARED_FACTORY_NAMES.has(imported) && !oidcStyle)
+						? undefined
+						: umbrellaBlockFor(imported);
 				const block = oldBlock ?? umbrellaBlock;
 				const rule = block ? own(NAME_RULES[block], imported) : undefined;
 				const s: ImportedSpec = {
@@ -632,8 +638,6 @@ class FileMigrator {
 			// An old-named umbrella or auth-common import is rewritten even when it carries
 			// no old auth name: the old package is gone after the upgrade, so leaving it
 			// would emit a file importing from both `@aws-blocks/*` and the renamed package.
-			const renamed = UMBRELLA_MODULE_RENAMES.get(spec) ?? AUTH_COMMON_MODULE_RENAMES.get(spec);
-			const specRenamed = renamed !== undefined && renamed !== spec;
 			if (oldBlock || touched || specRenamed) {
 				this.authTouching = true;
 				const newModule = oldBlock ? NEW_MODULE : specRenamed ? renamed : undefined;

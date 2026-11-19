@@ -294,9 +294,9 @@ What is different from a connection string:
 - **A paused cluster.** A statement outside a transaction waits up to 24 seconds for a cluster at a minimum capacity of 0 to resume. After that, and inside a transaction, it fails with `ConnectionFailed`.
 - **The command line.** `npm run db` works with a stored connection string. It has no command for a Data API source. A deploy applies the migration files.
 
-## Upgrade from `@aws-cdk-blocks/bb-data`
+## Upgrade from `@aws-blocks/bb-data`
 
-An app that deployed `Database` of `@aws-cdk-blocks/bb-data` has an Aurora PostgreSQL cluster in a VPC, with a credentials secret, and reaches it through the Data API. `LegacyDatabaseCluster` keeps that cluster in the stack as it is. A `Database` of this package then runs on it, with the tables and the `_migrations` table that are in it.
+An app that deployed `Database` of `@aws-blocks/bb-data` has an Aurora PostgreSQL cluster in a VPC, with a credentials secret, and reaches it through the Data API. `LegacyDatabaseCluster` keeps that cluster in the stack as it is. A `Database` of this package then runs on it, with the tables and the `_migrations` table that are in it.
 
 1. In `cdk-blocks/index.ts`, change the class on the line of the old `Database` to `LegacyDatabaseCluster`. Keep its id, its scope and the options that shaped the cluster. Add a `Database` with a new id, and give it the cluster and the `migrationsPath`:
 
@@ -308,7 +308,7 @@ An app that deployed `Database` of `@aws-cdk-blocks/bb-data` has an Aurora Postg
    const db = new Database(scope, 'main-db', { cluster, migrationsPath: './cdk-blocks/migrations' });
    ```
 
-   The options of `LegacyDatabaseCluster` are those of release 0.5.0: `minCapacity`, `maxCapacity`, `databaseName`, `removalPolicy`, `postgresVersion`, `subnets`, `storageEncryptionKeyArn` and `pointInTimeRecovery`. Give each one the value that the old `Database` had. It also reads the context key `@aws-cdk-blocks/bb-data:encryptStorageByDefault` of your `cdk.json`; keep that key.
+   The options of `LegacyDatabaseCluster` are those of release 0.5.0: `minCapacity`, `maxCapacity`, `databaseName`, `removalPolicy`, `postgresVersion`, `subnets`, `storageEncryptionKeyArn` and `pointInTimeRecovery`. Give each one the value that the old `Database` had. It also reads the context key `@aws-blocks/bb-data:encryptStorageByDefault` of your `cdk.json`; keep that key.
 
 2. Keep the migration files and their names. A file that is in the `_migrations` table does not run again, and the block does not check these files. Local mode runs every file again in a new PGlite database, each file in one transaction; a file with a statement that PostgreSQL refuses in a transaction, such as `CREATE INDEX CONCURRENTLY`, fails there.
 
@@ -387,7 +387,7 @@ On a `dsql` cluster the file resumes where it stopped. A failed index build or c
 
 On an existing database ([Existing database](#existing-database)) the files run as written: the block does not check them, because they may be older than the block, and PostgreSQL reports what it refuses. Each pending file is one transaction, and the file is recorded in that same transaction, so two runs at the same time cannot both apply it: one commits, and the other is rolled back and says so. The server ends a transaction that sits idle for a minute, so a run that stops in the middle of a file does not keep its locks. A deploy runs the files in a function outside any VPC, with the stored connection string; a failure stops the deploy and names the file, the statement, the SQLSTATE and the server's message. A file made by `pg_dump` runs too: its session settings are reset before the commit, and its `SET transaction_timeout` line is skipped on a server older than PostgreSQL 17. A file's own `SET` of a limit that the run applies is also skipped, so that the limit holds for the whole file: `idle_in_transaction_session_timeout` in every run, and `statement_timeout` and `transaction_timeout` in a deploy.
 
-An app that used `@aws-cdk-blocks/bb-data` with `fromExisting()` keeps its files and its `_migrations` table: point `migrationsPath` at the same directory (`./migrations`), and no file runs a second time. Its connection string is already in SSM as `/<stackName>-db-url`, which is what `name: 'db-url'` reads. A new stage needs `npm run db -- connect --stage <stage>` once: `sandbox` and `deploy` do not copy a `*_DB_URL` variable from the env file any more.
+An app that used `@aws-blocks/bb-data` with `fromExisting()` keeps its files and its `_migrations` table: point `migrationsPath` at the same directory (`./migrations`), and no file runs a second time. Its connection string is already in SSM as `/<stackName>-db-url`, which is what `name: 'db-url'` reads. A new stage needs `npm run db -- connect --stage <stage>` once: `sandbox` and `deploy` do not copy a `*_DB_URL` variable from the env file any more.
 ### Types and status from the command line
 
 For a block that provisions its cluster, name the block. These two commands need no AWS account and no connection string.
@@ -597,7 +597,7 @@ Per cluster, whether a block owns it or a `DatabaseCluster` declares it:
 - **IAM:** on `dsql`, the app's execution role gets `dsql:DbConnect` on the cluster and the migration Lambdas get `dsql:DbConnectAdmin`. On `aurora`, the execution role gets `rds-db:connect` for the app's database role and the migration Lambdas get it for `postgres`.
 - **Config:** `BLOCKS_{CLUSTER_ID}_ENDPOINT` and `BLOCKS_{CLUSTER_ID}_REGION` (the cluster's full id upper-cased, with `_` for other characters), injected through the config bucket.
 
-A `LegacyDatabaseCluster` declares what `Database` of `@aws-cdk-blocks/bb-data` 0.5.0 declared: an Aurora PostgreSQL Serverless v2 cluster with one writer instance and the Data API enabled, its credentials secret, a security group, and a VPC with two isolated subnets when the app provides none. The execution role gets the Data API actions on the cluster and the read of the secret, and the config has `BLOCKS_{CLUSTER_ID}_CLUSTER_ARN`, `_SECRET_ARN` and `_DATABASE`. A block on it has two migration Lambdas of its own, outside the VPC.
+A `LegacyDatabaseCluster` declares what `Database` of `@aws-blocks/bb-data` 0.5.0 declared: an Aurora PostgreSQL Serverless v2 cluster with one writer instance and the Data API enabled, its credentials secret, a security group, and a VPC with two isolated subnets when the app provides none. The execution role gets the Data API actions on the cluster and the read of the secret, and the config has `BLOCKS_{CLUSTER_ID}_CLUSTER_ARN`, `_SECRET_ARN` and `_DATABASE`. A block on it has two migration Lambdas of its own, outside the VPC.
 
 Per block: one CloudFormation custom resource that applies its migrations, and one S3 asset with the migration files when it has any. The migration Lambda also creates a per-cluster database role for the app, maps it to IAM (`AWS IAM GRANT` to the execution role on `dsql`; `GRANT rds_iam` on `aurora`, where the `rds-db:connect` grant decides who gets a token for it), and grants it `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE, SELECT` on its sequences. DDL needs the admin token, which only the migration Lambdas hold.
 

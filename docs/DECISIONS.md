@@ -410,7 +410,7 @@ earlier planning decisions and removed a released behavior:
   a production database.
 
 ### Compatibility
-- This removes behavior released in `@aws-cdk-blocks/bb-data` 0.13.3. The package is pre-1.0, and no
+- This removes behavior released in `@aws-blocks/bb-data` 0.13.3. The package is pre-1.0, and no
   known consumer relied on the headless pull, so it ships as a **minor** bump (new UX) rather than
   a major. (Per CONTRIBUTING "removing released behavior" escalation: rationale + no-consumer
   confirmation recorded here.)

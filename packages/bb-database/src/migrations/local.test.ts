@@ -14,7 +14,7 @@ const DATA_DIR = join(process.cwd(), '.bb-data', `local-schema-test-${process.pi
 
 installLocalTestHooks({ mockDataPrefix: 'local-schema-test' });
 
-// The ledger table as `DistributedDatabase` of `@aws-cdk-blocks/bb-distributed-data` created it, in `public`.
+// The ledger table as `DistributedDatabase` of `@aws-blocks/bb-distributed-data` created it, in `public`.
 const EARLIER_LEDGER = `CREATE TABLE IF NOT EXISTS _migrations (
 	id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
 	name TEXT NOT NULL UNIQUE,

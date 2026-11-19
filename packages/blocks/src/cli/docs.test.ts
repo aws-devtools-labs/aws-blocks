@@ -35,7 +35,7 @@ const FILES: Record<string, string> = {
 	'API.md': [
 		'```ts',
 		"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
-		"import { PutOptions as DTPutOptions } from '@aws-cdk-blocks/bb-distributed-table';",
+		"import { PutOptions as DTPutOptions } from '@aws-blocks/bb-distributed-table';",
 		"import { PutOptions as KVPutOptions } from '@aws-cdk-blocks/bb-kv-store';",
 		'export { DTPutOptions }',
 		'',
@@ -271,7 +271,7 @@ const FILES: Record<string, string> = {
 	),
 };
 
-const VENDORIZE = { '@aws-cdk-blocks/bb-kv-store': ['KVStore'], '@aws-cdk-blocks/bb-distributed-table': ['DistributedTable'] };
+const VENDORIZE = { '@aws-cdk-blocks/bb-kv-store': ['KVStore'], '@aws-blocks/bb-distributed-table': ['DistributedTable'] };
 
 /**
  * The installed package beside its docs, shaped like the real one: package.json `exports` with subpath entries (the
@@ -416,7 +416,7 @@ describe('npm run docs <block>', () => {
 			'DistributedTable',
 			'distributed-table',
 			'distributedtable',
-			'@aws-cdk-blocks/bb-distributed-table',
+			'@aws-blocks/bb-distributed-table',
 		]) {
 			assert.strictEqual(render([name]), expected, name);
 		}
@@ -575,14 +575,14 @@ describe('npm run docs <export or option>', () => {
 		// Types are not backend only: `import type` is erased, and TypeScript resolves the types entry, not the
 		// browser condition that `npm run test:e2e` runs under.
 		assert.deepStrictEqual(original.slice(0, 2), [
-			`PutOptions: type in @aws-cdk-blocks/bb-distributed-table. import type { DTPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}`,
+			`PutOptions: type in @aws-blocks/bb-distributed-table. import type { DTPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}`,
 			`PutOptions: interface in @aws-cdk-blocks/bb-kv-store. import type { KVPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}`,
 		]);
 		for (const name of ['DTPutOptions', 'dtputoptions']) {
 			const out = render([name]);
 			assert.ok(
 				out.startsWith(
-					`DTPutOptions: type PutOptions in @aws-cdk-blocks/bb-distributed-table. import type { DTPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}\n`,
+					`DTPutOptions: type PutOptions in @aws-blocks/bb-distributed-table. import type { DTPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}\n`,
 				),
 				out,
 			);
@@ -1009,7 +1009,7 @@ describe('npm run docs --exports', () => {
 			'Names you can import from aws-cdk-blocks in backend code containing "putoptions" or "error" or "authchange" (3): import { <name> } from \'aws-cdk-blocks\';',
 			'Browser code and tests (npm run test:e2e runs tsx -C browser) get no value from aws-cdk-blocks (import type of its types works); they import values from aws-cdk-blocks/client. Other entries as marked.',
 			'  ApiError       class in @aws-cdk-blocks/core; also from aws-cdk-blocks/client',
-			'  DTPutOptions   type in @aws-cdk-blocks/bb-distributed-table (PutOptions there)',
+			'  DTPutOptions   type in @aws-blocks/bb-distributed-table (PutOptions there)',
 			'  isBlocksError  only from aws-cdk-blocks/client',
 			'  KVPutOptions   interface in @aws-cdk-blocks/bb-kv-store (PutOptions there)',
 			'  onAuthChange   only from aws-cdk-blocks/ui',
@@ -1352,7 +1352,7 @@ describe('npm run docs --output json', () => {
 			{
 				name: 'DTPutOptions',
 				kind: 'type',
-				package: '@aws-cdk-blocks/bb-distributed-table',
+				package: '@aws-blocks/bb-distributed-table',
 				entry: 'aws-cdk-blocks',
 				import: "import type { DTPutOptions } from 'aws-cdk-blocks';",
 				original: 'PutOptions',

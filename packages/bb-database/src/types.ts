@@ -143,7 +143,7 @@ export interface LegacySubnetSelection {
 
 /**
  * Options of a `LegacyDatabaseCluster`: the options of `Database` in
- * `@aws-cdk-blocks/bb-data` 0.5.0 that shaped its Aurora cluster. Give each one
+ * `@aws-blocks/bb-data` 0.5.0 that shaped its Aurora cluster. Give each one
  * the value that the `Database` had. A different value changes the deployed
  * cluster, and some changes replace it.
  */

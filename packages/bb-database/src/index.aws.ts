@@ -72,10 +72,10 @@ export class DatabaseCluster extends Scope {
 }
 
 /**
- * The Aurora cluster of `Database` in `@aws-cdk-blocks/bb-data` 0.5.0; see the local entry for the full
+ * The Aurora cluster of `Database` in `@aws-blocks/bb-data` 0.5.0; see the local entry for the full
  * description. At runtime it names the deployed cluster, which each block reaches through the RDS Data API.
  *
- * @deprecated Only for an app that deployed `Database` of `@aws-cdk-blocks/bb-data`.
+ * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`.
  */
 export class LegacyDatabaseCluster extends Scope {
 	/** The engine of the cluster: Aurora PostgreSQL. */

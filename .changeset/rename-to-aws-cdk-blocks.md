@@ -35,10 +35,10 @@ No export or option moved. To upgrade, replace the dependency names in `package.
 ```diff
  {
    "dependencies": {
--    "@aws-blocks/blocks": "^0.9.0",
--    "@aws-blocks/core": "^0.9.0"
-+    "aws-cdk-blocks": "^0.10.0",
-+    "@aws-cdk-blocks/core": "^0.10.0"
+-    "@aws-blocks/blocks": "<your range>",
+-    "@aws-blocks/core": "<your range>"
++    "aws-cdk-blocks": "<your range>",
++    "@aws-cdk-blocks/core": "<your range>"
    }
  }
 ```
@@ -54,5 +54,7 @@ No export or option moved. To upgrade, replace the dependency names in `package.
 Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
 
 The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
+
+The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
 
 The old `@aws-blocks/*` packages stop receiving releases.

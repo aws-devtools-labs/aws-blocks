@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// The Aurora infrastructure of `Database` in `@aws-cdk-blocks/bb-data` 0.5.0, as that release declared it. FROZEN:
+// The Aurora infrastructure of `Database` in `@aws-blocks/bb-data` 0.5.0, as that release declared it. FROZEN:
 // a `LegacyDatabaseCluster` must give CloudFormation the resources that the earlier block gave it, with the
 // same logical ids and the same properties, so that a deploy changes nothing in a cluster that holds data.
 // Do not change a construct id, a property or a default here. The migration function of the earlier block is
@@ -59,7 +59,7 @@ export interface AuroraInfraConfig {
 	 * The type is `?: true` (not `boolean`) so an explicit `false` is
 	 * **unrepresentable** rather than merely discouraged: `StorageEncrypted: false`
 	 * would itself be a template change that replaces an existing cluster. The CDK
-	 * layer resolves this from the `@aws-cdk-blocks/bb-data:encryptStorageByDefault`
+	 * layer resolves this from the `@aws-blocks/bb-data:encryptStorageByDefault`
 	 * context flag; a supplied `storageEncryptionKey` forces encryption on.
 	 */
 	storageEncrypted?: true;
@@ -220,7 +220,7 @@ export function materializeLegacyAurora(
 	// existing (implicitly-unencrypted) deployment; leaving the property unset
 	// keeps those clusters untouched. A customer-managed key always forces
 	// encryption on; otherwise honor the caller-resolved opt-in (the CDK layer
-	// gates it behind the `@aws-cdk-blocks/bb-data:encryptStorageByDefault` flag).
+	// gates it behind the `@aws-blocks/bb-data:encryptStorageByDefault` flag).
 	const storageEncrypted = options.storageEncryptionKey || options.storageEncrypted ? true : undefined;
 
 	const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
@@ -237,7 +237,7 @@ export function materializeLegacyAurora(
 		enableDataApi: true,
 		// Storage encryption at rest. Resolved to `true` or left unset (never an
 		// explicit `false`): the CDK layer gates the opt-in behind the
-		// `@aws-cdk-blocks/bb-data:encryptStorageByDefault` context flag so NEW projects
+		// `@aws-blocks/bb-data:encryptStorageByDefault` context flag so NEW projects
 		// are encrypted by default while EXISTING, implicitly-unencrypted clusters
 		// are not forced into a destructive replacement by a template change. A
 		// customer-managed `storageEncryptionKey` always forces it on. When a key is

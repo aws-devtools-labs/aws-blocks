@@ -98,14 +98,35 @@ export const IMPORT_TODOS = {
  * Only old auth names are renamed on these imports: at the cutover release the
  * umbrella still re-exports `Auth` and its types.
  */
-export const UMBRELLA_MODULE_RENAMES: ReadonlyMap<string, string> = new Map([
-	['@aws-blocks/blocks', 'aws-cdk-blocks'],
-	['@aws-blocks/blocks/cdk', 'aws-cdk-blocks/cdk'],
-	['aws-cdk-blocks', 'aws-cdk-blocks'],
-	['aws-cdk-blocks/cdk', 'aws-cdk-blocks/cdk'],
+export const UMBRELLA_MODULES: ReadonlySet<string> = new Set([
+	'@aws-blocks/blocks',
+	'@aws-blocks/blocks/cdk',
+	'aws-cdk-blocks',
+	'aws-cdk-blocks/cdk',
 ]);
 
-export const UMBRELLA_MODULES: ReadonlySet<string> = new Set(UMBRELLA_MODULE_RENAMES.keys());
+const OLD_UMBRELLA = '@aws-blocks/blocks';
+const NEW_UMBRELLA = 'aws-cdk-blocks';
+
+/**
+ * `spec` rewritten to the renamed umbrella, or undefined when `spec` is not an
+ * umbrella specifier at all.
+ *
+ * A prefix rule rather than a list: the umbrella exports eleven subpaths
+ * (`./client`, `./ui`, `./server`, `./scripts`, `./lambda-handler`, `./utils`
+ * and the rest), and auth apps import from several of them, so listing a couple
+ * would leave a migrated file importing from both `aws-cdk-blocks` and
+ * `@aws-blocks/blocks/client`. A new subpath is covered without a change here.
+ *
+ * {@link UMBRELLA_MODULES} stays the narrower set, because only the root and
+ * `/cdk` ever exported the old auth classes, so only those get NAME rewriting.
+ */
+export function renameUmbrellaSpecifier(spec: string): string | undefined {
+	if (spec === OLD_UMBRELLA) return NEW_UMBRELLA;
+	if (spec.startsWith(`${OLD_UMBRELLA}/`)) return `${NEW_UMBRELLA}/${spec.slice(OLD_UMBRELLA.length + 1)}`;
+	if (spec === NEW_UMBRELLA || spec.startsWith(`${NEW_UMBRELLA}/`)) return spec;
+	return undefined;
+}
 
 /**
  * `auth-common` specifiers the codemod recognizes, each mapped to the specifier

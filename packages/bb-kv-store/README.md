@@ -229,7 +229,7 @@ The error has a `retriable` flag. It is true when a value check took part in a f
 
 A conditional write is atomic for its item. No other write to that item lands between the call's check and its write. On AWS, each call is one DynamoDB `PutItem` or `DeleteItem` with a condition expression. The local mock runs the check and the write with no `await` in between, so no other request runs between them.
 
-There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on `Database` (`@aws-cdk-blocks/bb-data`) or `DistributedDatabase` (`@aws-cdk-blocks/bb-distributed-data`).
+There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on `Database` (`@aws-blocks/bb-data`) or `DistributedDatabase` (`@aws-blocks/bb-distributed-data`).
 
 ## Read consistency
 

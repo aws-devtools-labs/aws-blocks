@@ -5,7 +5,7 @@
 
 feat(bb-kv-store): one KVStore block (folds DistributedTable in)
 
-AWS Blocks now ships one NoSQL block. `KVStore` takes over the data model of `DistributedTable`, and the `@aws-cdk-blocks/bb-distributed-table` package is removed from the umbrella and from the workspace. There is no shim.
+AWS Blocks now ships one NoSQL block. `KVStore` takes over the data model of `DistributedTable`, and the `@aws-blocks/bb-distributed-table` package is removed from the umbrella and from the workspace. There is no shim.
 
 A store has three forms, and the first two share one table:
 

@@ -105,7 +105,7 @@ const ownedClusterIds = new WeakMap<cdk.Stack, Map<string, string>>();
 
 /**
  * The logical id of the Aurora DSQL cluster that a `Database` owns: `<fullId>DsqlCluster`, without the characters
- * that a logical id cannot have. `DistributedDatabase` of `@aws-cdk-blocks/bb-distributed-data` declared its cluster
+ * that a logical id cannot have. `DistributedDatabase` of `@aws-blocks/bb-distributed-data` declared its cluster
  * as a child of the stack with that name. A `Database` with the id of a deployed `DistributedDatabase` is
  * therefore the same resource to CloudFormation, and a deploy keeps the cluster and its data.
  *

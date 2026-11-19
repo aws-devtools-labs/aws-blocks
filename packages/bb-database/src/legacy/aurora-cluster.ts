@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// How `Database` of `@aws-cdk-blocks/bb-data` 0.5.0 turned its options into the arguments of its infrastructure
+// How `Database` of `@aws-blocks/bb-data` 0.5.0 turned its options into the arguments of its infrastructure
 // function. FROZEN, like `aurora-infra.ts`: the same options must give the same template.
 
 import { type BuildingBlockScope, getVpcContext, registerConfig, type VpcContext } from '@aws-cdk-blocks/core/cdk';
@@ -89,7 +89,7 @@ export function legacyClusterInfra(
 	options: LegacyDatabaseClusterOptions = {},
 ): LegacyClusterInfra {
 	// The context key of the earlier package: an app that set it has an encrypted cluster, and must keep it.
-	const ctx = owner.node.tryGetContext('@aws-cdk-blocks/bb-data:encryptStorageByDefault');
+	const ctx = owner.node.tryGetContext('@aws-blocks/bb-data:encryptStorageByDefault');
 	const encryptByDefault = ctx === true || ctx === 'true';
 	const hasCmk = options.storageEncryptionKeyArn !== undefined;
 

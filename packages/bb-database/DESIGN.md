@@ -277,7 +277,7 @@ R4 is not met yet. Nothing stops a deploy that renames a `Database` or `Database
 
 The planned mechanism has three parts: a binding record in stack metadata, a marker in `.bb-data` for the dev server, and a guard that inspects a change set before `cdk deploy`.
 
-**The logical id of an owned cluster.** The cluster of a `Database` that owns it has the CloudFormation logical id `<fullId>DsqlCluster`, without the characters that a logical id cannot have. The id does not come from the construct path. `DistributedDatabase` of `@aws-cdk-blocks/bb-distributed-data` declared its cluster under that id. A `Database` with the id of a deployed `DistributedDatabase`, in the same scope and stack, is therefore the same resource to CloudFormation, and the deploy keeps the cluster. The runner reads the `_migrations` table of that block as it is: the table has an extra `id` column with a default. The database role has the same name in both blocks.
+**The logical id of an owned cluster.** The cluster of a `Database` that owns it has the CloudFormation logical id `<fullId>DsqlCluster`, without the characters that a logical id cannot have. The id does not come from the construct path. `DistributedDatabase` of `@aws-blocks/bb-distributed-data` declared its cluster under that id. A `Database` with the id of a deployed `DistributedDatabase`, in the same scope and stack, is therefore the same resource to CloudFormation, and the deploy keeps the cluster. The runner reads the `_migrations` table of that block as it is: the table has an extra `id` column with a default. The database role has the same name in both blocks.
 
 Two blocks whose ids give the same logical id fail at synth with an error that names both. A shared `DatabaseCluster` has the logical id of its construct path.
 
@@ -321,7 +321,7 @@ The one exception is the `search_path` that the application's statements get for
 - It runs `RESET ALL` before the commit, so the session settings of a `pg_dump` file do not stay on a pooled connection.
 - It writes the ledger row before the commit, in the same transaction. Of two runs at the same time, one commits. The other fails on the row and rolls back everything its copy of the file did.
 
-The runner uses the ledger table of `@aws-cdk-blocks/bb-data` as it is. That table is `_migrations` with an extra `id` column.
+The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table is `_migrations` with an extra `id` column.
 
 **Deploying migrations.** `src/deploy/external-infra.ts` creates two functions, a provider and a custom resource for each block that has migration files, outside any VPC. The files and the `ca` travel as one asset. The resources of two blocks on one database are not chained, so those blocks can migrate at the same time. The migration function runs again after a refusal that passes: a server that is full or starting, or a lookup or connect that timed out. It reports a refused login, a missing database and a certificate that does not verify at once.
 
@@ -345,9 +345,9 @@ The runner uses the ledger table of `@aws-cdk-blocks/bb-data` as it is. That tab
 - The service reports no changed rows for a statement with `RETURNING`. The engine counts the rows that such a statement returned.
 - A commit that fails is followed by a rollback. A commit that did not reach the server would otherwise leave the transaction open, with its locks, until the service ends it.
 - The service ends a statement after 45 seconds. The migration runner has no way around that limit, so a statement that needs longer is not for a migration file here.
-- Parameters and results have the forms that `Database` of `@aws-cdk-blocks/bb-data` gave them, so an app that moves from that block reads the same values.
+- Parameters and results have the forms that `Database` of `@aws-blocks/bb-data` gave them, so an app that moves from that block reads the same values.
 
-**The cluster of the earlier block.** `LegacyDatabaseCluster` declares the Aurora cluster of `Database` in `@aws-cdk-blocks/bb-data` 0.5.0. `src/legacy/aurora-infra.ts` is that release's infrastructure function, without its migration function, and `src/legacy/aurora-cluster.ts` is how that release turned its options into the function's arguments. Both files are frozen. The construct has the id and the scope of the earlier `Database`, so every logical id is the one in the deployed stack, and CloudFormation changes none of the resources.
+**The cluster of the earlier block.** `LegacyDatabaseCluster` declares the Aurora cluster of `Database` in `@aws-blocks/bb-data` 0.5.0. `src/legacy/aurora-infra.ts` is that release's infrastructure function, without its migration function, and `src/legacy/aurora-cluster.ts` is how that release turned its options into the function's arguments. Both files are frozen. The construct has the id and the scope of the earlier `Database`, so every logical id is the one in the deployed stack, and CloudFormation changes none of the resources.
 
 The cluster is a provisioned cluster to the block, of type `aurora`, with two differences. On AWS the engine is `DataApiEngine`, with the cluster ARN, the secret ARN and the database name from the config keys of the earlier block. The migration resources are those of an existing database, so the runner uses the ledger of the earlier block and applies no DSQL check. Locally the cluster is PGlite, as a `DatabaseCluster` of type `aurora` is.
 
@@ -466,7 +466,7 @@ An existing database:
 | Connection pool, IAM token passwords, result type parsers | `src/engines/pg-engine.ts` |
 | Engine interfaces and transaction handles | `src/engines/handle.ts` |
 | The engine of a database behind the RDS Data API | `src/engines/data-api-engine.ts` |
-| The cluster of `@aws-cdk-blocks/bb-data` 0.5.0 (frozen) | `src/legacy/aurora-infra.ts`, `src/legacy/aurora-cluster.ts` |
+| The cluster of `@aws-blocks/bb-data` 0.5.0 (frozen) | `src/legacy/aurora-infra.ts`, `src/legacy/aurora-cluster.ts` |
 | Local engine, schema and role switching, the `sys` stub | `src/engines/pglite-cluster.ts` |
 | Local rules by cluster type | `src/dialect/rules-engine.ts` |
 | DSQL rules: the linter wrapper, the block's own rule, statement classification, the transaction limits | `src/dialect/lint.ts`, `src/dialect/validation.ts` |

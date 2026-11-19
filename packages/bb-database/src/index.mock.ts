@@ -110,7 +110,7 @@ export class DatabaseCluster extends Scope {
 }
 
 /**
- * The Aurora cluster that `Database` of `@aws-cdk-blocks/bb-data` 0.5.0 provisioned, kept in the stack so that an
+ * The Aurora cluster that `Database` of `@aws-blocks/bb-data` 0.5.0 provisioned, kept in the stack so that an
  * app can move from that block to this one without a change to the cluster. Give it the id of that `Database`
  * and the options that the `Database` had, and pass it as the `cluster` of a `Database` with a new id. The
  * new `Database` uses the tables that are in the cluster, in the `public` schema, and the `_migrations` table
@@ -119,7 +119,7 @@ export class DatabaseCluster extends Scope {
  * On AWS the block reaches the cluster through the RDS Data API, as the earlier block did. Locally the cluster
  * is one PGlite under `.bb-data/{fullId}/pglite/`.
  *
- * @deprecated Only for an app that deployed `Database` of `@aws-cdk-blocks/bb-data`. It gets no new features. A
+ * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`. It gets no new features. A
  * new app uses `DatabaseCluster`.
  *
  * @example

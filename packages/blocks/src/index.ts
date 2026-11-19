@@ -206,9 +206,9 @@ export type {
  */
 export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-cdk-blocks/bb-database';
 /**
- * **The Aurora cluster of `Database` in `@aws-cdk-blocks/bb-data`, kept in the stack.**
+ * **The Aurora cluster of `Database` in `@aws-blocks/bb-data`, kept in the stack.**
  *
- * Use it only to move an app that deployed `Database` of `@aws-cdk-blocks/bb-data`
+ * Use it only to move an app that deployed `Database` of `@aws-blocks/bb-data`
  * to `Database` of this package without a change to its cluster: give it the
  * id and the options of that `Database`, and pass it as the `cluster` of a
  * `Database` with a new id. For a new cluster, use `DatabaseCluster`.
@@ -216,8 +216,8 @@ export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-cdk-blocks/
  * Package: `@aws-cdk-blocks/bb-database`
  * Full docs: `npm run docs bb-database`.
  *
- * @deprecated Only for an app that deployed `Database` of `@aws-cdk-blocks/bb-data`. The class is frozen and
- *   gets no new features. The steps are in the README section "Upgrade from `@aws-cdk-blocks/bb-data`".
+ * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`. The class is frozen and
+ *   gets no new features. The steps are in the README section "Upgrade from `@aws-blocks/bb-data`".
  */
 export { LegacyDatabaseCluster } from '@aws-cdk-blocks/bb-database';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-cdk-blocks/bb-email-client';

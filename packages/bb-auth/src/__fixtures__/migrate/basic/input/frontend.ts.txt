@@ -1,4 +1,4 @@
-import { hasAuthError } from 'aws-cdk-blocks/client';
+import { hasAuthError } from '@aws-blocks/blocks/client';
 import type { AuthState } from '@aws-blocks/blocks';
 
 export function message(state: AuthState): string {

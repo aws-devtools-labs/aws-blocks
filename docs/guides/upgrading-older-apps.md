@@ -13,7 +13,7 @@ Find your app's shape below and apply the edits. Every other file is unchanged.
 
 A deploy can fail with `CloudFormation cannot update a stack when a custom-named resource requires replacing` on the table of a `KVStore`. The cause is then the `KVStore` release, not the template. See [A `KVStore` from release 0.4.0 or earlier](#a-kvstore-from-release-040-or-earlier-custom-named-resource-requires-replacing).
 
-An app with a `DistributedDatabase` keeps its Aurora DSQL cluster when the block becomes a `Database`. See [A `DistributedDatabase`: keep its cluster with `Database`](#a-distributeddatabase-keep-its-cluster-with-database). An app with a `Database` of `@aws-cdk-blocks/bb-data` keeps its Aurora cluster with `LegacyDatabaseCluster`. See [A `Database` of `@aws-cdk-blocks/bb-data`](#a-database-of-aws-blocksbb-data-keep-its-cluster-with-legacydatabasecluster).
+An app with a `DistributedDatabase` keeps its Aurora DSQL cluster when the block becomes a `Database`. See [A `DistributedDatabase`: keep its cluster with `Database`](#a-distributeddatabase-keep-its-cluster-with-database). An app with a `Database` of `@aws-blocks/bb-data` keeps its Aurora cluster with `LegacyDatabaseCluster`. See [A `Database` of `@aws-blocks/bb-data`](#a-database-of-aws-blocksbb-data-keep-its-cluster-with-legacydatabasecluster).
 
 ## Rename `aws-blocks/` to `cdk-blocks/`
 
@@ -123,7 +123,7 @@ Keep the old table with `LegacyKVStore`, and migrate its items to a `KVStore` wi
 
 ## A `DistributedDatabase`: keep its cluster with `Database`
 
-This section is for an app that deployed a `DistributedDatabase` with `@aws-cdk-blocks/bb-distributed-data` and now deploys on a release where `aws-cdk-blocks` exports `Database` and no `DistributedDatabase`.
+This section is for an app that deployed a `DistributedDatabase` with `@aws-blocks/bb-distributed-data` and now deploys on a release where `aws-cdk-blocks` exports `Database` and no `DistributedDatabase`.
 
 A `Database` with no `cluster` option owns an Aurora DSQL cluster, as `DistributedDatabase` did. When the `Database` has the id of the `DistributedDatabase`, in the same scope and the same stack, it is the same cluster to CloudFormation. The deploy keeps the cluster and its rows.
 
@@ -144,11 +144,11 @@ A `Database` with no `cluster` option owns an Aurora DSQL cluster, as `Distribut
 
 4. Deploy. The migration functions of `DistributedDatabase` leave the stack, and those of `Database` take their place.
 
-This path is only for `DistributedDatabase`. For a `Database` of `@aws-cdk-blocks/bb-data`, see the next section.
+This path is only for `DistributedDatabase`. For a `Database` of `@aws-blocks/bb-data`, see the next section.
 
-## A `Database` of `@aws-cdk-blocks/bb-data`: keep its cluster with `LegacyDatabaseCluster`
+## A `Database` of `@aws-blocks/bb-data`: keep its cluster with `LegacyDatabaseCluster`
 
-This section is for an app that deployed `Database` with `@aws-cdk-blocks/bb-data` and now deploys on a release where `Database` comes from `@aws-cdk-blocks/bb-database`.
+This section is for an app that deployed `Database` with `@aws-blocks/bb-data` and now deploys on a release where `Database` comes from `@aws-cdk-blocks/bb-database`.
 
 The old `Database` owned an Aurora PostgreSQL cluster in a VPC. The new `Database` owns a different kind of cluster, so the same line of code would give you a new, empty database, and the deploy would delete the credentials secret of the old cluster. Keep the old cluster with `LegacyDatabaseCluster`, and run a `Database` with a new id on it:
 

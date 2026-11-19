@@ -690,7 +690,7 @@ describe('Database on a database that is reached through the RDS Data API (CDK)'
 
 	test('the context key of the earlier package keeps an encrypted cluster encrypted', () => {
 		const app = new cdk.App({
-			context: { 'aws:cdk:bundling-stacks': [], '@aws-cdk-blocks/bb-data:encryptStorageByDefault': true },
+			context: { 'aws:cdk:bundling-stacks': [], '@aws-blocks/bb-data:encryptStorageByDefault': true },
 		});
 		const stack = new StubBlocksStack(app, 'EncryptedLegacy');
 		new LegacyDatabaseCluster(
