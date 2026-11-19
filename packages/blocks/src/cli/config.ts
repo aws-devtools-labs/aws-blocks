@@ -121,7 +121,7 @@ function readRawDevConfig(root: string): Record<string, unknown> | undefined {
 }
 
 /**
- * Whether the app generates its own `aws-blocks/client.js` (`package.json#blocks.dev.generateClient: false`,
+ * Whether the app generates its own `cdk-blocks/client.js` (`package.json#blocks.dev.generateClient: false`,
  * which the Amplify overlay writes): the generic client would replace it.
  */
 export function keepsOwnClient(root: string): boolean {

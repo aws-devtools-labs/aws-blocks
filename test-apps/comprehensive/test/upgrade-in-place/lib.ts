@@ -192,7 +192,7 @@ function defaultSuffix(env: Readonly<Record<string, string | undefined>>, now: (
 	return `upgrade-${now().toString(36)}`;
 }
 
-/** The CloudFormation stack name for a suffix. Must match `app/aws-blocks/index.cdk.ts`. */
+/** The CloudFormation stack name for a suffix. Must match `app/cdk-blocks/index.cdk.ts`. */
 export function stackNameFor(suffix: string): string {
 	return `${STACK_NAME_PREFIX}${suffix}`;
 }

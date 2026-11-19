@@ -5,7 +5,7 @@
  * Compute E2E — one deployment of the compute app, every compute scenario.
  *
  * The harness deploys the app behind this leg's front door
- * (`COMPUTE_API_FRONT_DOOR`, see aws-blocks/index.cdk.ts), with or without
+ * (`COMPUTE_API_FRONT_DOOR`, see cdk-blocks/index.cdk.ts), with or without
  * `defaults.strictNamespacePlacement` (`COMPUTE_STRICT_NAMESPACE_PLACEMENT`), waits until the API
  * answers through it, and runs each scenario module against the same stack, the
  * way `comprehensive`'s e2e.test.ts does:
@@ -48,7 +48,7 @@ import { type ComputeTestContext, FRONT_DOORS, type FrontDoor, rpcCall } from '.
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isDeployed = ENV === 'sandbox' || ENV === 'production';
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
+const backendPath = join(__dirname, '..', 'cdk-blocks', 'index.cdk.ts');
 // Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
 // production run must not read the sandbox's.
 const outputsPath = join(

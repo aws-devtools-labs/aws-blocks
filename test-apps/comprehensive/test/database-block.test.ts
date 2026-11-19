@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { type ClusterKind, DatabaseErrors } from '@aws-blocks/bb-database';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 
 // Compile-time assertions. `Equal` is the standard invariant type-equality check;
 // `Expect` only accepts `true`, so an inexact type makes the harness `tsc --noEmit`
@@ -60,8 +60,8 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
           cdkBlocksDb('types', '--block', block, ...options, '--out', out);
           assert.strictEqual(
             readFileSync(out, 'utf-8'),
-            readFileSync(join('aws-blocks', `${block}.types.ts`), 'utf-8'),
-            `aws-blocks/${block}.types.ts is stale: run npm run db -- types --block ${block} ${options.join(' ')}`,
+            readFileSync(join('cdk-blocks', `${block}.types.ts`), 'utf-8'),
+            `cdk-blocks/${block}.types.ts is stale: run npm run db -- types --block ${block} ${options.join(' ')}`,
           );
         }
       } finally {

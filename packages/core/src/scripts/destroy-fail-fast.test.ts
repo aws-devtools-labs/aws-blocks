@@ -142,7 +142,7 @@ describe('destroy fails fast on a deterministic error', () => {
 	});
 
 	it('wires the classification into both destroy paths', () => {
-		const sandbox = sandboxDestroyDeps('/app/aws-blocks/index.cdk.ts', {}, {
+		const sandbox = sandboxDestroyDeps('/app/cdk-blocks/index.cdk.ts', {}, {
 			cfnFor: () => {
 				throw new Error('unused');
 			},
@@ -197,7 +197,7 @@ describe('destroy fails fast on a deterministic error', () => {
 		process.chdir(directory);
 		const seen: Array<{ region?: string; profile?: string; requireRegion?: boolean }> = [];
 		await assert.rejects(
-			runSandboxDestroy('aws-blocks/index.cdk.ts', {
+			runSandboxDestroy('cdk-blocks/index.cdk.ts', {
 				checkCredentials: async (options) => {
 					seen.push({
 						region: process.env.AWS_REGION,

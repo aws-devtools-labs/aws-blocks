@@ -4,7 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
-import type { api as apiType, protectedApi as protectedApiType } from 'aws-blocks';
+import type { api as apiType, protectedApi as protectedApiType } from 'cdk-blocks';
 import { callRpc, provisionConfirmedUser } from './test-support.js';
 
 /** The generated clients the suite calls, as a frontend imports them. */

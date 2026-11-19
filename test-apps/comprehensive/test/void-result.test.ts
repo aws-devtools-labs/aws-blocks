@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { testApiUrl } from './api-url.js';
 
 export function voidResultTests(getApi: () => typeof apiType) {

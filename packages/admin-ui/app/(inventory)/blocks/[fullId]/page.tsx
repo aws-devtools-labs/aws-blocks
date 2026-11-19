@@ -429,7 +429,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 						{data.dataErrorCode === 'BLOCK_NOT_FOUND' && (
 							<p>
 								<code className="font-mono">{fullId}</code> is not declared in this project. Nothing under{' '}
-								<code className="font-mono">aws-blocks/</code> creates it, so there is no store to read — check the id
+								<code className="font-mono">cdk-blocks/</code> creates it, so there is no store to read — check the id
 								against the <Link href="/blocks" className="hover:text-fg hover:underline">
 									blocks list
 								</Link>

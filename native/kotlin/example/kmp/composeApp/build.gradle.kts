@@ -71,7 +71,7 @@ extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
 }
 
 cdkBlocks {
-    apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
+    apiSpec = rootProject.file("../typescript/cdk-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {
         relayTo = "blocks.testapp://oidcRedirect"

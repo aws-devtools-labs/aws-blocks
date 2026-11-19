@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
 import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
+import type { api as apiType, authApi as authApiType, hello as helloType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -14,7 +14,7 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
-let app: typeof import('aws-blocks');
+let app: typeof import('cdk-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 let hello: typeof helloType;
@@ -63,9 +63,9 @@ test.before(async () => {
   process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
-  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
   // stale client that lacks namespaces exported since the last generation.
-  app = await import('aws-blocks');
+  app = await import('cdk-blocks');
   api = app.api;
   authApi = app.authApi;
   hello = app.hello;

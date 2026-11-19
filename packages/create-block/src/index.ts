@@ -606,7 +606,7 @@ function starterComprehensiveTest(className: string, pkgName: string): string {
 // SPDX-License-Identifier: Apache-2.0
 
 // TODO(author): flesh this out. Instantiate ${className} against the app's Scope
-// in test-apps/comprehensive/aws-blocks/index.ts, expose it via the ApiNamespace,
+// in test-apps/comprehensive/cdk-blocks/index.ts, expose it via the ApiNamespace,
 // and assert the end-to-end typed DX with ZERO type casts (see AGENTS.md).
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -933,7 +933,7 @@ function printNextSteps(mode: Mode, names: DerivedNames, targetRel: string): voi
 	if (mode === 'contributor') {
 		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
 		console.log(`  2. Add a real ${names.className} instance + assertions to test-apps/comprehensive`);
-		console.log(`     (aws-blocks/index.ts and test/${names.suffix}.test.ts — zero type casts).`);
+		console.log(`     (cdk-blocks/index.ts and test/${names.suffix}.test.ts — zero type casts).`);
 		console.log(`  3. Fill in the TODO summaries in packages/blocks/src/index.ts and the changeset.`);
 		console.log('  4. npm run build && npm run lint:deps && npm test && npm run test:e2e:local');
 	} else if (mode === 'customer') {

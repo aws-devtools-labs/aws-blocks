@@ -4,7 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import {
 	CognitoIdentityProviderClient,
 	AdminCreateUserCommand,

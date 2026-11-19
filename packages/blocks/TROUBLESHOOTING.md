@@ -31,7 +31,7 @@ curl -o /dev/null -w '%{http_code}\n' http://localhost:3000/config.json
 
 ## RPC Wire Protocol
 
-The typed client (`import { api } from 'aws-blocks'`) handles all RPC automatically. This section is for low-level troubleshooting only.
+The typed client (`import { api } from 'cdk-blocks'`) handles all RPC automatically. This section is for low-level troubleshooting only.
 
 **Format:** JSON-RPC 2.0 — every namespace is served at `POST /aws-blocks/api`. (The typed client posts to `/aws-blocks/api/<namespace>`, which works too; the namespace in the path must match the one in `method`.)
 
@@ -49,7 +49,7 @@ curl -X POST $(cat .cdk-blocks-sandbox/config.json | jq -r .apiUrl) \
 { "jsonrpc": "2.0", "method": "<exportName>.<methodName>", "params": [...args], "id": 1 }
 ```
 
-- `<exportName>` — the **export variable name** from `aws-blocks/index.ts` (e.g., `export const api = ...` → `api`; `export const authApi = ...` → `authApi`)
+- `<exportName>` — the **export variable name** from `cdk-blocks/index.ts` (e.g., `export const api = ...` → `api`; `export const authApi = ...` → `authApi`)
 - `<methodName>` — the function name inside the namespace
 - `params` — positional array of the function's arguments
 - Errors return HTTP 200 with a JSON-RPC `error` object (not a non-2xx HTTP status)
@@ -81,22 +81,22 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 | `-32600` `Invalid Request: the path addresses namespace "…" but the method is in namespace "…"` | The namespace after `/aws-blocks/api/` differs from the one in `method` (names are case-sensitive) | Use the same export name in both, or post to the bare `/aws-blocks/api` |
 | `-32600` `Invalid Request: an RPC call goes to /aws-blocks/api or /aws-blocks/api/<namespace>, not a deeper path` | Extra path segments after the namespace | Post to `/aws-blocks/api/<namespace>` exactly |
 | HTTP 200 but `{"error":...}` in body | Normal JSON-RPC error response | Read `error.message` — not a routing problem |
-| `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `aws-blocks/index.ts` |
+| `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `cdk-blocks/index.ts` |
 | `config.json` not found | No dev server has started in this app | Run `npm run dev`, or set `BLOCKS_API_URL` to the API you mean to call |
 | 404 on `/config.json` | Wrong path, the config is served from a dotted directory | Use `GET /.cdk-blocks-sandbox/config.json` |
 | Config body is `{"_placeholder":true}` | Build-time stub in the frontend build output; the real config is uploaded at deploy | Nothing to fix pre-deploy. If a deployed origin serves it, re-run the deploy |
 | HTTP 200 but `{"error":{"code":-32600}}` on a batch | JSON-RPC batching (a top-level JSON array body) is not supported | Send one call per request |
 
-## TypeScript errors in `aws-blocks/` from the frontend
+## TypeScript errors in `cdk-blocks/` from the frontend
 
-The frontend imports the backend (`import { api } from 'aws-blocks'`), so its `tsconfig` typechecks the backend unless the backend is a TypeScript project of its own, as in the Vite templates. [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has the steps for other apps.
+The frontend imports the backend (`import { api } from 'cdk-blocks'`), so its `tsconfig` typechecks the backend unless the backend is a TypeScript project of its own, as in the Vite templates. [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has the steps for other apps.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `TS2591: Cannot find name 'process'` (or `Buffer`) in `aws-blocks/`; `TS2307` for a `node:` import | The frontend `tsconfig` typechecks the backend source, and its `types` (such as `["vite/client"]`) leaves out Node | Reference the backend's project from that `tsconfig` and typecheck with `tsc -b --force` ([steps](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend)). In Next.js, leave `types` unset instead |
-| The same errors in `src/` | Browser code uses a Node global, which a Vite template's `tsconfig.app.json` leaves out on purpose | Move that code into `aws-blocks/`, or read build-time values with `import.meta.env` |
-| `TS6305: Output file '...' has not been built from source file '.../aws-blocks/index.ts'` | `tsc` ran without `-b`, so nothing built the referenced backend | Run `npm run typecheck` (`tsc -b --force`) |
-| `TS6307: File '...' is not listed within the file list of project '.../aws-blocks/tsconfig.json'` | The backend imports a `.json` file, or a file outside `aws-blocks/` | Add its folder to `include` in `aws-blocks/tsconfig.json`, for example `"data/**/*.json"`. For code the browser imports too, see the guide's note on shared code |
+| `TS2591: Cannot find name 'process'` (or `Buffer`) in `cdk-blocks/`; `TS2307` for a `node:` import | The frontend `tsconfig` typechecks the backend source, and its `types` (such as `["vite/client"]`) leaves out Node | Reference the backend's project from that `tsconfig` and typecheck with `tsc -b --force` ([steps](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend)). In Next.js, leave `types` unset instead |
+| The same errors in `src/` | Browser code uses a Node global, which a Vite template's `tsconfig.app.json` leaves out on purpose | Move that code into `cdk-blocks/`, or read build-time values with `import.meta.env` |
+| `TS6305: Output file '...' has not been built from source file '.../cdk-blocks/index.ts'` | `tsc` ran without `-b`, so nothing built the referenced backend | Run `npm run typecheck` (`tsc -b --force`) |
+| `TS6307: File '...' is not listed within the file list of project '.../cdk-blocks/tsconfig.json'` | The backend imports a `.json` file, or a file outside `cdk-blocks/` | Add its folder to `include` in `cdk-blocks/tsconfig.json`, for example `"data/**/*.json"`. For code the browser imports too, see the guide's note on shared code |
 | `TS2742: The inferred type of '...' cannot be named without a reference to '.pnpm/...'` (pnpm) | The backend's project writes declarations, and an inferred type comes from a package pnpm does not hoist | Annotate the export's type (for example `const blocksStack: BlocksStack = ...`), or set `node-linker=hoisted` in `.npmrc` |
 | `tsc -b --noEmit` fails with `TS6310` | The referenced backend has to write its declarations | Drop `--noEmit` and set `"noEmit": true` in the frontend `tsconfig` |
 

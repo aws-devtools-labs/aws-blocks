@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { WINDOWS_E2E_PURPOSE, addPurposeTag } from './_scaffold-tag.mjs';
 
 const repoFile = (rel) => fileURLToPath(new URL(`../../${rel}`, import.meta.url));
-const BACKEND_CDK_ENTRY = repoFile('packages/create-blocks-app/templates/backend/aws-blocks/index.cdk.ts');
+const BACKEND_CDK_ENTRY = repoFile('packages/create-blocks-app/templates/backend/cdk-blocks/index.cdk.ts');
 const CLEANUP_WORKFLOW = readFileSync(repoFile('.github/workflows/cleanup-stacks.yml'), 'utf-8');
 const WINDOWS_DRIVER = readFileSync(repoFile('scripts/ci/windows-template-e2e.mjs'), 'utf-8');
 

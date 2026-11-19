@@ -57,7 +57,7 @@ const val E2E_PASSWORD = "Passw0rd!"
 
 /**
  * The pre-provisioned, confirmed user a deployed backend signs in instead of signing up
- * (seeded by `test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts`).
+ * (seeded by `test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts`).
  * Defaults match that script; override with `COGNITO_TEST_USERNAME` / `COGNITO_TEST_PASSWORD`.
  */
 fun returningUser(): Pair<String, String> =

@@ -3,5 +3,5 @@ cdk.out/
 node_modules/
 dist/
 .env
-aws-blocks/client.js
+cdk-blocks/client.js
 .bb-data/

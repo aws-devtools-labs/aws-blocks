@@ -140,8 +140,8 @@ function baseSynth(): { dir: string; result: GuardSynthResult } {
 /** A fresh app dir holding BASE's committed baseline — the state after BASE was deployed. */
 function deployedAppDir(): string {
 	const dir = appDir();
-	mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
-	cpSync(join(baseSynth().dir, 'aws-blocks', 'baselines'), join(dir, 'aws-blocks', 'baselines'), { recursive: true });
+	mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
+	cpSync(join(baseSynth().dir, 'cdk-blocks', 'baselines'), join(dir, 'cdk-blocks', 'baselines'), { recursive: true });
 	return dir;
 }
 

@@ -35,7 +35,7 @@ function releaseLineProblem(name: string, range: string | undefined): string | n
   return rangeLine === line ? null : `${name}: "${range}" is not on the ${current.version} release line`;
 }
 
-/** Every package.json under `dir`, at any depth (templates nest an aws-blocks/ workspace). */
+/** Every package.json under `dir`, at any depth (templates nest a cdk-blocks/ workspace). */
 function findManifests(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (entry.name === 'node_modules') return [];
@@ -121,13 +121,13 @@ describe('create-blocks-app stamped package inventory', () => {
     }
   });
 
-  it('keeps @aws-blocks/* out of the aws-blocks/ workspace of every non-overlay template', () => {
-    // The add-to-existing path copies templates/<name>/aws-blocks/ verbatim and
+  it('keeps @aws-blocks/* out of the cdk-blocks/ workspace of every non-overlay template', () => {
+    // The add-to-existing path copies templates/<name>/cdk-blocks/ verbatim and
     // stamps only the root manifest, so a dependency declared there would ship as
     // `*`. (The Amplify overlay's workspace is stamped on its own path.)
     const templatesDir = join(PKG_DIR, 'templates');
     for (const name of readdirSync(templatesDir)) {
-      const workspace = join(templatesDir, name, 'aws-blocks', 'package.json');
+      const workspace = join(templatesDir, name, 'cdk-blocks', 'package.json');
       if (name === 'amplify' || !existsSync(workspace)) continue;
       const pkg = readManifest(workspace);
       const blocksDeps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).filter((d) => d.startsWith('@aws-blocks/'));

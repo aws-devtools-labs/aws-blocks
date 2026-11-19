@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 
 /**
- * Mirror of the cookie helpers in the demo template (aws-blocks/index.ts).
+ * Mirror of the cookie helpers in the demo template (cdk-blocks/index.ts).
  * The template's public setCookie API method writes a user-controlled value into
  * the Set-Cookie response header. The cookie name is fixed (callers can't pick
  * it, so they can't overwrite the auth session cookie), and the value is

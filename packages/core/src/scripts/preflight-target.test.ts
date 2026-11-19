@@ -96,7 +96,7 @@ mock.module(moduleUrl('run-command'), {
 const command = ${JSON.stringify(command)};
 const run = command === 'deploy'
   ? () => import(moduleUrl('deploy')).then(({ deploy }) => deploy({ projectRoot: process.cwd(), cdkAppPath: 'unused' }))
-  : () => import(moduleUrl('sandbox')).then(({ startSandbox }) => startSandbox({ backendPath: 'aws-blocks/index.cdk.ts', deployOnly: true }));
+  : () => import(moduleUrl('sandbox')).then(({ startSandbox }) => startSandbox({ backendPath: 'cdk-blocks/index.cdk.ts', deployOnly: true }));
 await assert.rejects(run, (error) => error === stop);
 assert.deepEqual(seen[0], ['sts', expectedRegion]);
 assert.deepEqual(seen.slice(1, 4).sort(), [['account', expectedRegion], ['freetier', expectedRegion], ['iam', expectedRegion]]);

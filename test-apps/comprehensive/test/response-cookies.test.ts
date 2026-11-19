@@ -4,7 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { testApiUrl } from './api-url.js';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { provisionConfirmedUser } from './test-support.js';
 
 /**

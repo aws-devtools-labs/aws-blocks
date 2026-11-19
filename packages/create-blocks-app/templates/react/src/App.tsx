@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { api, authApi } from 'aws-blocks';
+import { api, authApi } from 'cdk-blocks';
 import { AccountMenuBar, onAuthChange, StatusMessage, type AuthUserOf } from '@aws-blocks/blocks/ui';
 
 // Backend APIs are fully typed — hover over api.* for signatures.

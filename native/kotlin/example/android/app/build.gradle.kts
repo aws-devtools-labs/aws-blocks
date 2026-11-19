@@ -42,7 +42,7 @@ android {
 
 
 cdkBlocks {
-    apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
+    apiSpec = rootProject.file("../typescript/cdk-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {
         relayTo = "blocks.testapp://oidcRedirect"

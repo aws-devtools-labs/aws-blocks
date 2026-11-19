@@ -31,7 +31,7 @@ async function gotoHydrated(page: Page, url: string, opts?: { timeout?: number }
 /**
  * This run's test-support secret: `BLOCKS_TEST_SUPPORT_SECRET`, which the CI
  * workflow or the e2e `globalSetup` set before the deploy (see "Sandbox e2e
- * test support" in `aws-blocks/index.ts`). Never log it.
+ * test support" in `cdk-blocks/index.ts`). Never log it.
  */
 function readTestSupportSecret(): string {
   const value = process.env.BLOCKS_TEST_SUPPORT_SECRET;
@@ -69,7 +69,7 @@ let testSupportSecret = '';
 
 /**
  * Create a confirmed user through the backend's `testSupport.provisionUser`
- * RPC (sandbox only — see `aws-blocks/index.ts`). Cognito emails the sign-up
+ * RPC (sandbox only — see `cdk-blocks/index.ts`). Cognito emails the sign-up
  * code and a deployed run has no mailbox to read it from.
  */
 async function provisionUser(request: APIRequestContext, baseUrl: string, username: string, password: string) {

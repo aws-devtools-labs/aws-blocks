@@ -7,13 +7,13 @@
  * with the hint the `Authenticator` shows next to its disabled button, and a
  * browser that navigates to the sign-in route anyway gets an explanatory HTML
  * page instead of raw JSON. Local only — the `auth-social` block is not
- * deployed (see `aws-blocks/index.ts`).
+ * deployed (see `cdk-blocks/index.ts`).
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { AuthErrors } from '@aws-blocks/bb-auth';
-import type { authSocialApi as authSocialApiType } from 'aws-blocks';
+import type { authSocialApi as authSocialApiType } from 'cdk-blocks';
 import { testBaseUrl } from './api-url.js';
 
 const getBaseUrl = testBaseUrl;

@@ -6,7 +6,7 @@ export default defineConfig({
   root: 'src',
   resolve: {
     alias: {
-      'aws-blocks': '../aws-blocks/client.js',
+      'cdk-blocks': '../cdk-blocks/client.js',
     },
   },
 });

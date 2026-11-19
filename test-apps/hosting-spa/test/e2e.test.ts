@@ -41,7 +41,7 @@ test.beforeAll(async () => {
 /**
  * This run's test-support secret: `BLOCKS_TEST_SUPPORT_SECRET`, which the CI
  * workflow or the e2e `globalSetup` set before the deploy (see "Sandbox e2e
- * test support" in `aws-blocks/index.ts`). Never log it.
+ * test support" in `cdk-blocks/index.ts`). Never log it.
  */
 function readTestSupportSecret(): string {
   const value = process.env.BLOCKS_TEST_SUPPORT_SECRET;
@@ -65,7 +65,7 @@ async function callProvisionUser(request: APIRequestContext, secret: string, use
 
 /**
  * Create a confirmed user through the backend's `testSupport.provisionUser`
- * RPC (sandbox only — see `aws-blocks/index.ts`).
+ * RPC (sandbox only — see `cdk-blocks/index.ts`).
  */
 async function provisionUser(request: APIRequestContext, username: string, password: string) {
   const body = await callProvisionUser(request, testSupportSecret, username, password);

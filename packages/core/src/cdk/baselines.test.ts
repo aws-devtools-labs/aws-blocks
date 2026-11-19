@@ -88,11 +88,11 @@ after(() => {
 	else process.env.BLOCKS_TEST_REBASELINE = savedEnv;
 });
 
-/** A fresh app directory; the backend handler is `<app>/aws-blocks/index.handler.ts`. */
+/** A fresh app directory; the backend handler is `<app>/cdk-blocks/index.handler.ts`. */
 function appHandlerPath(): string {
 	const dir = mkdtempSync(join(tmpdir(), 'core-baselines-app-'));
 	tempDirs.push(dir);
-	return join(dir, 'aws-blocks', 'index.handler.ts');
+	return join(dir, 'cdk-blocks', 'index.handler.ts');
 }
 
 const GUARD = {
@@ -446,8 +446,8 @@ describe('claimBaseline', () => {
 
 	test('baselineDir is <dirname(backendHandlerPath)>/baselines/<stack>', () => {
 		assert.strictEqual(
-			baselineDir({ backendHandlerPath: '/app/aws-blocks/index.handler.ts', stack: 'Prod' }),
-			join('/app/aws-blocks', 'baselines', 'Prod'),
+			baselineDir({ backendHandlerPath: '/app/cdk-blocks/index.handler.ts', stack: 'Prod' }),
+			join('/app/cdk-blocks', 'baselines', 'Prod'),
 		);
 	});
 });

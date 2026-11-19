@@ -4,7 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
-import type { api as apiType } from '../aws-blocks/index.js';
+import type { api as apiType } from '../cdk-blocks/index.js';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';

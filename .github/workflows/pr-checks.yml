@@ -1385,7 +1385,7 @@ jobs:
         if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
         run: |
           cd ${{ matrix.app-dir }}
-          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
+          npx tsx test/sandbox-destroy.ts cdk-blocks/index.cdk.ts
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
@@ -1395,7 +1395,7 @@ jobs:
         if: always() && steps.aws-creds.outcome == 'success' && steps.destroy.outcome != 'success'
         run: |
           cd ${{ matrix.app-dir }}
-          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx test/sandbox-destroy.ts cdk-blocks/index.cdk.ts
 
   e2e-telemetry:
     name: Telemetry E2E
@@ -1454,8 +1454,8 @@ jobs:
         if: always() && steps.aws-creds.outcome == 'success'
         run: |
           cd test-apps/telemetry
-          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx aws-blocks/scripts/sandbox-destroy.ts
-          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx aws-blocks/scripts/destroy.ts
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx cdk-blocks/scripts/sandbox-destroy.ts
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx cdk-blocks/scripts/destroy.ts
 
   # Waits for the stack deletes that E2E Production starts in its last step
   # but no longer waits for, and for any stack the E2E Sandbox or E2E Compute

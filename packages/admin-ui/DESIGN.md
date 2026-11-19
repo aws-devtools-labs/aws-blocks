@@ -21,7 +21,7 @@ deliberately do not inherit.
 
 | Console capability | Here today | Verdict |
 | --- | --- | --- |
-| Block discovery by parsing `aws-blocks/**/*.ts` | absent | **Adopt**, with a generated type list |
+| Block discovery by parsing `cdk-blocks/**/*.ts` | absent | **Adopt**, with a generated type list |
 | Blocks grouped by category in the nav | absent | **Adopt** |
 | Local `.bb-data` browsing | absent | **Adopt** |
 | Cloud DynamoDB browsing, key names from `DescribeTable` | absent | **Adopt**, with real pagination |
@@ -34,7 +34,7 @@ deliberately do not inherit.
 | Resources grouped by causing block | partial (CDK path, unlabelled) | **Keep ours**, add block labels |
 | Per-resource AWS console deep links | absent (stack link only) | **Adopt** the type→URL map |
 | `doctor` — report detection, change nothing | absent | **Adopt** |
-| Project discovery walking up to `aws-blocks/index.ts` | absent (explicit root) | **Adopt** |
+| Project discovery walking up to `cdk-blocks/index.ts` | absent (explicit root) | **Adopt** |
 | Monorepo multi-candidate reporting | absent | **Adopt**, extended to ancestors |
 | First-free port from 4400 | absent (fixed 4400) | **Adopt**, fail loudly when exhausted |
 | `--profile` / `--region` | region only, display-only profile | **Adopt** real profile plumbing |

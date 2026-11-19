@@ -107,14 +107,14 @@ async function main() {
   // The prefix alone isn't enough: cleanup-stacks.yml only deletes a `bb-test-*`
   // stack whose `blocks:purpose` tag is an e2e marker. Tag the scaffold so a
   // stack a failed teardown leaves behind is reclaimed instead of skipped.
-  addPurposeTag(join(app, 'aws-blocks', 'index.cdk.ts'), WINDOWS_E2E_PURPOSE);
+  addPurposeTag(join(app, 'cdk-blocks', 'index.cdk.ts'), WINDOWS_E2E_PURPOSE);
 
   const inApp = { cwd: app, env };
   // The production preset retains the config access-log bucket on destroy (by
   // design, for customers). Make the production deploy below fully deletable,
   // keeping its other defaults, so this CI stack leaves nothing behind. Done up
   // front so a template change fails the run before anything is deployed.
-  makeProductionDeployDisposable(join(app, 'aws-blocks', 'index.cdk.ts'));
+  makeProductionDeployDisposable(join(app, 'cdk-blocks', 'index.cdk.ts'));
 
   // Phase 1: dev — ready when config.json's bound port answers HTTP.
   {

@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { api } from 'aws-blocks';
+import { api } from 'cdk-blocks';
 import { ClientGreeting } from './client';
 import { SectionBoundary } from './section-boundary';
 

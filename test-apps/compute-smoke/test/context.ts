@@ -22,7 +22,7 @@ export interface ComputeTestContext {
   apiUrl(): string;
   /**
    * The Hosting distribution's public URL (its `HostingUrl` output), deployed on
-   * the `cloudfront` leg only (see aws-blocks/index.cdk.ts). Set once the harness
+   * the `cloudfront` leg only (see cdk-blocks/index.cdk.ts). Set once the harness
    * has deployed.
    */
   hostingUrl(): string;

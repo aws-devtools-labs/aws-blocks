@@ -7,7 +7,7 @@ import { testBaseUrl } from './api-url.js';
 import { createHmac } from 'node:crypto';
 import { AuthErrors } from '@aws-blocks/bb-auth';
 import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { signInPoller } from './poll-for-signin.js';
 
 // The `oidc-auth*` instances were `AuthOIDC`; they are now the unified `Auth`
@@ -29,7 +29,7 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 /**
  * The stub IdP is sandbox-only: in production the comprehensive app configures
  * placeholder real providers instead (see `e2eOidcProvider()` in
- * `aws-blocks/index.ts`), so every suite that drives the stub sign-in flow is
+ * `cdk-blocks/index.ts`), so every suite that drives the stub sign-in flow is
  * skipped there. They still run in local and sandbox.
  */
 const stubSkip = ENV === 'production' && 'stub IdP is sandbox-only';
@@ -119,7 +119,7 @@ async function signInVia(
 }
 
 // Runs locally and against a sandbox alike: a sandbox deployment serves the
-// stub IdP too (see `e2eOidcProvider()` in `aws-blocks/index.ts`), as
+// stub IdP too (see `e2eOidcProvider()` in `cdk-blocks/index.ts`), as
 // `AuthOIDC`'s does. In production the app configures placeholder real
 // providers instead, so the suites that drive the stub are skipped there.
 export function oidcAuthTests(getApi: () => typeof apiType) {

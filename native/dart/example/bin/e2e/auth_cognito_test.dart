@@ -19,7 +19,7 @@ import 'harness.dart';
 ///
 ///   * DEPLOYED sandbox/prod — a returning-customer sign-in with a
 ///     PRE-PROVISIONED, CONFIRMED user. No emailed code is needed: the user is
-///     seeded out-of-band by `test-apps/native-bindings/aws-blocks/scripts/
+///     seeded out-of-band by `test-apps/native-bindings/cdk-blocks/scripts/
 ///     seed-cognito-user.ts` (AdminCreateUser + AdminSetUserPassword). This is
 ///     the real returning-customer path against a real Cognito pool.
 ///

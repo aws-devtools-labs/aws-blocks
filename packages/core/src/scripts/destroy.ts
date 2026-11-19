@@ -164,7 +164,7 @@ function assertAppDefinesStack(options: DestroyOptions, stackName: string, cdkEn
   const stacks = cdkListedStacks(out);
   if (stacks.some((s) => s === stackName || s.endsWith(` (${stackName})`))) return;
   throw new Error(
-    `The CDK app (aws-blocks/index.cdk.ts) defines ${stacks.length > 0 ? stacks.join(', ') : 'no stack'}, ` +
+    `The CDK app (cdk-blocks/index.cdk.ts) defines ${stacks.length > 0 ? stacks.join(', ') : 'no stack'}, ` +
       `not ${stackName}, the production stack that .blocks/config.json names; nothing was deleted. ` +
       `Set "stackId" in .blocks/config.json so that <stackId>-prod is the app's production stack, ` +
       `or name the stack in index.cdk.ts with getStackName().`,

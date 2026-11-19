@@ -5,4 +5,4 @@
 // ../../upgrade-in-place.ts as a child process (cwd = the app directory).
 import { destroy } from '@aws-blocks/blocks/scripts';
 
-await destroy({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: process.cwd() });
+await destroy({ cdkAppPath: 'cdk-blocks/index.cdk.ts', projectRoot: process.cwd() });

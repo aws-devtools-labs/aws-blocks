@@ -21,7 +21,15 @@ export const BLOCKS_SANDBOX_DIR = '.cdk-blocks-sandbox';
 export const LEGACY_SANDBOX_DIR = '.blocks-sandbox';
 
 /** Default backend entry point directory name. */
-export const BLOCKS_BACKEND_DIR = 'aws-blocks';
+export const BLOCKS_BACKEND_DIR = 'cdk-blocks';
+
+/**
+ * Backend directory of an app not yet migrated to {@link BLOCKS_BACKEND_DIR}.
+ * Read by `migrate`, which takes a pre-rename app as its input, so this is a
+ * fixed historical value: renaming it with the scaffolded directory stops
+ * migrate detecting the apps it exists to migrate.
+ */
+export const LEGACY_BLOCKS_BACKEND_DIR = 'aws-blocks';
 
 /**
  * Config key the deploy stamps this build's id under, inside the public runtime

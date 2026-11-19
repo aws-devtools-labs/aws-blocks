@@ -43,13 +43,13 @@ Commands:
       Record <file> as applied without running it, for a file that describes what the database already
       has (a schema dump). With --stage, on the database of that stage. Repeat the option for more files.
   types [--name <name>] [--schema <schema>] [--out <file>]
-      Write one Tables interface for Kysely (default aws-blocks/database.types.ts).
+      Write one Tables interface for Kysely (default cdk-blocks/database.types.ts).
   status [dir] [--name <name>] [--schema <schema>] [--stage sandbox|production]
       List the applied and the pending files of [dir].
 
 For a block that provisions its cluster (no connection string), name the block:
   types [dir] --block <id> [--type dsql|aurora] [--cluster <id>] [--schema <schema>] [--out <file>]
-      Write the Tables interface from the block's migration files (default aws-blocks/migrations/<id>).
+      Write the Tables interface from the block's migration files (default cdk-blocks/migrations/<id>).
       --type aurora, or --cluster with the id of its DatabaseCluster, for a block that is not on its own
       Aurora DSQL cluster.
   status [dir] --block <id> [--cluster <id>] [--schema <schema>]

@@ -75,7 +75,7 @@ String uniqueUsername(String label) =>
 
 /// The pre-provisioned, confirmed user a deployed backend signs in instead of
 /// signing up (seeded into every user pool of the stack by
-/// `test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts`). These
+/// `test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts`). These
 /// defaults MUST match that script. Override both sides with
 /// COGNITO_TEST_USERNAME / COGNITO_TEST_PASSWORD. Not a secret — a
 /// deterministic fixture for a throwaway test pool.

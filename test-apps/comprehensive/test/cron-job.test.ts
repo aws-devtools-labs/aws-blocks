@@ -4,7 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 
 export function cronJobTests(getApi: () => typeof apiType) {
   describe('CronJob BB', () => {

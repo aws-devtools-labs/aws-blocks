@@ -59,7 +59,7 @@ unchanged. You're only adjusting how each action renders.
 
 ```typescript
 import { Authenticator } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(Authenticator(authApi, {
   // Drop whole actions. Invite-only? Hide signUp. Names match AuthAction.name.
@@ -187,7 +187,7 @@ rendering. You call `getAuthState()` once, render, and submit with
 
 ```typescript
 import { submitAuthAction } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 async function renderAuth(root: HTMLElement, showError: (message?: string) => void) {
   const state = await authApi.getAuthState();
@@ -248,7 +248,7 @@ included:
 ```tsx
 import { useSyncExternalStore } from 'react';
 import { getAuthStateSnapshot, submitAuthAction, subscribeAuthState } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 const subscribe = (cb: () => void) => subscribeAuthState(authApi, cb);
 const getSnapshot = () => getAuthStateSnapshot(authApi);
@@ -396,7 +396,7 @@ No QR library ships with the block; pass `renderQrCode` to draw one:
 
 ```typescript
 import { MfaSettings } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 declare function qrCodeDataUrl(text: string): string; // from your QR library
 

@@ -380,7 +380,7 @@ export interface DevServerOptions {
    */
   typegen?: boolean;
   /**
-   * Regenerate `aws-blocks/client.js` from the backend at startup (local mode
+   * Regenerate `cdk-blocks/client.js` from the backend at startup (local mode
    * only; sandbox mode never does). Set `false` for an app that ships its own
    * client, such as the Amplify overlay, whose `client.js` reads
    * `amplify_outputs.json` and adds the Cognito token. When omitted, the dev
@@ -392,7 +392,7 @@ export interface DevServerOptions {
 
 /**
  * `package.json#blocks.dev.generateClient` in `root`: `false` keeps a
- * hand-written `aws-blocks/client.js`. `undefined` when the package.json, the
+ * hand-written `cdk-blocks/client.js`. `undefined` when the package.json, the
  * key or a boolean value is missing; a non-boolean value is warned about and
  * ignored, since it's an option the dev server can work without.
  */
@@ -1512,7 +1512,7 @@ export async function startDevServer(options: DevServerOptions) {
   if (!isSandbox) {
     const clientPath = join(dirname(resolvedPath), 'client.js');
     if ((options.generateClient ?? readDevGenerateClient(process.cwd())) === false) {
-      log.detail('📝 Keeping aws-blocks/client.js (generateClient is false).');
+      log.detail('📝 Keeping cdk-blocks/client.js (generateClient is false).');
     } else {
       log.progress('📝 Generating client code...');
       await writeClientCode(resolvedPath, clientPath);

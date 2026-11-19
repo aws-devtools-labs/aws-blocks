@@ -210,7 +210,7 @@ export async function runMigrate(options: MigrateOptions = {}): Promise<MigrateS
 		log('  1. In package.json, replace @aws-blocks/bb-auth-basic / -cognito / -oidc with @aws-blocks/bb-auth');
 		log('     (apps on @aws-blocks/blocks only need to update it), then npm install.');
 		log('  2. Resolve every TODO, then typecheck and run your tests.');
-		log('  3. Deploy this output with no other configuration change, then commit aws-blocks/baselines/ (the');
+		log('  3. Deploy this output with no other configuration change, then commit cdk-blocks/baselines/ (the');
 		log("     user pool's immutability baseline). Change the auth configuration only after that: from then on,");
 		log('     synth refuses a change that would delete the pool.');
 		if (blocks.has('basic'))

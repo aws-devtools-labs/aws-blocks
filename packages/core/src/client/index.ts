@@ -348,8 +348,8 @@ const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
  * import { ApiNamespaceClient } from '@aws-blocks/core/client';
  * export const api = ApiNamespaceClient('api');
  *
- * // Frontend usage — fully typed via the 'aws-blocks' types export
- * import { api } from 'aws-blocks';
+ * // Frontend usage — fully typed via the 'cdk-blocks' types export
+ * import { api } from 'cdk-blocks';
  * const user = await api.getUser('123');
  * ```
  *

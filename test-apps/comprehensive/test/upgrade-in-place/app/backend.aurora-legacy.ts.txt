@@ -8,7 +8,7 @@ import { ApiNamespace, Database, LegacyDatabaseCluster, Scope, sql } from '@aws-
 
 const scope = new Scope('upgrade');
 const cluster = new LegacyDatabaseCluster(scope, 'main');
-const main = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+const main = new Database(scope, 'main-db', { cluster, migrationsPath: './cdk-blocks/migrations' });
 
 export const api = new ApiNamespace(scope, 'api', () => ({
 	async dump() {

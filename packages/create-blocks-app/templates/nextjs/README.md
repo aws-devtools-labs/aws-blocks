@@ -21,7 +21,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: the `api` namespace (`greet`, `getServerTime`) |
+| `cdk-blocks/index.ts` | Backend: the `api` namespace (`greet`, `getServerTime`) |
 | `src/app/page.tsx` | Server Component — fetches on the server |
 | `src/app/client.tsx` | Client Component — calls the API from the browser |
 | `src/app/layout.tsx` | Root layout |
@@ -37,12 +37,12 @@ Open http://localhost:3000 after `npm run dev`.
   method (see the block's README).
 - **Standalone output** — `next.config.ts` sets `output: 'standalone'` so the
   build packages for Lambda deployment.
-- **One `tsconfig.json`**: it typechecks `src/` and `aws-blocks/` together,
+- **One `tsconfig.json`**: it typechecks `src/` and `cdk-blocks/` together,
   with Node types global, so `src/` can use `process` without an error, even in a
   Client Component. The Vite templates give the backend a TypeScript project of
   its own instead, but `next build` ignores project references when it
   type-checks ([vercel/next.js#67372](https://github.com/vercel/next.js/issues/67372)),
-  so it would check `aws-blocks/` with this `tsconfig.json` either way.
+  so it would check `cdk-blocks/` with this `tsconfig.json` either way.
 
 ## Commands
 
@@ -82,7 +82,7 @@ Your CloudFormation stack names are derived from the `stackId` in
 `.blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
@@ -90,5 +90,5 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). The backend lives in `aws-blocks/index.ts`; the frontend calls
+automatically). The backend lives in `cdk-blocks/index.ts`; the frontend calls
 it from `src/app/`. Test via `npm run test:e2e`.

@@ -183,7 +183,7 @@ The test app provisions its own endpoints via `provisionEndpoints: true`, testin
 
 ```
 test-apps/vpc-smoke/
-├── aws-blocks/
+├── cdk-blocks/
 │   ├── index.ts          # Instantiates KVStore, FileBucket, AsyncJob, AppSetting, Realtime, Auth, Database, Logger, Metrics, Tracer
 │   ├── index.cdk.ts      # Looks up persistent test VPC, passes vpc: { network: vpc, provisionEndpoints: true }
 │   └── index.handler.ts  # Re-exports BB instances

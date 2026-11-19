@@ -35,7 +35,7 @@ The dev server starts at:
 
 ```
 native-bindings/
-├── aws-blocks/
+├── cdk-blocks/
 │   ├── index.ts          ← Backend definition (all blocks + API methods)
 │   ├── client.js         ← Auto-generated client proxy
 │   ├── package.json

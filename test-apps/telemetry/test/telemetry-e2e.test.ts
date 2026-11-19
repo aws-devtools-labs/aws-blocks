@@ -202,7 +202,7 @@ function spawnDevServer(options: {
     const { port, home, telemetryFile, env = {} } = options;
     const output = { stdout: '', stderr: '' };
 
-    const child = spawn('npx', ['tsx', 'aws-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
+    const child = spawn('npx', ['tsx', 'cdk-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
       cwd: APP_ROOT,
       stdio: 'pipe',
       detached: true,
@@ -304,7 +304,7 @@ function assertNotDelivered(stderr: string): void {
  *
  * - `root` is a copy of the app. The CLI keeps its state under the project
  *   root (`cdk.out`, `.cdk-blocks-sandbox/` with the cdk assembly, outputs.json
- *   and the sandbox id, the generated `aws-blocks/client.js`, the project
+ *   and the sandbox id, the generated `cdk-blocks/client.js`, the project
  *   config), and two cdk processes in one `cdk.out` fail on its lock.
  * - `home` is its own HOME, seeded with the pinned installation-id. The local
  *   group writes `telemetry.enabled=false` to the real HOME's global config
@@ -320,7 +320,7 @@ interface CloudGroup {
 const CLOUD_GROUPS_DIR = join(APP_ROOT, '.e2e-groups');
 
 /** App entries a group copy needs. The generated client is left out. */
-const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'aws-blocks'];
+const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'cdk-blocks'];
 
 /**
  * App entries a group copy leaves out: the tests and docs, state the CLI, the
@@ -439,7 +439,7 @@ function writeSandboxId(projectRoot: string, sandboxId: string): void {
 }
 
 function prepareCloudGroup(group: CloudGroup, sandboxId: string): void {
-  const generatedClient = join(APP_ROOT, 'aws-blocks', 'client.js');
+  const generatedClient = join(APP_ROOT, 'cdk-blocks', 'client.js');
   for (const entry of APP_ENTRIES) {
     cpSync(join(APP_ROOT, entry), join(group.root, entry), {
       recursive: true,
@@ -697,7 +697,7 @@ function localCommandSuites(): void {
       // process, so PR #136's startup reclaim never resolves a listener to the
       // runner (or an ancestor) and can't group-kill the suite. We assert only
       // command=dev / state=FAIL — the specific error code/phase is irrelevant.
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: { PORT: '80' }, timeoutMs: 30_000,
       });
 
@@ -791,7 +791,7 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile,
         env: {
           PORT: String(port),
@@ -816,7 +816,7 @@ function localCommandSuites(): void {
       writeFileSync(contextFile, JSON.stringify({ 'cli-telemetry': false }));
 
       try {
-        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
           telemetryFile,
           env: { PORT: String(port), BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable' },
           timeoutMs: 12_000,
@@ -836,7 +836,7 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile,
         env: {
           PORT: String(port),
@@ -884,7 +884,7 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: {
           PORT: String(port),
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
@@ -901,7 +901,7 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: {
           PORT: String(port),
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
@@ -1091,7 +1091,7 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile,
         env: {
           PORT: String(port),
@@ -1144,7 +1144,7 @@ function localCommandSuites(): void {
       const port = getNextPort();
 
       // Use real HOME which has the pinned installation-id
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
       });
 
@@ -1172,7 +1172,7 @@ function sandboxLifecycleSuites(): void {
       tmpHome = createTmpDir('sandbox-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
@@ -1210,7 +1210,7 @@ function sandboxLifecycleSuites(): void {
       const firstCreate = spaceRestApiCall('create');
       releaseSandboxFirstCreate();
       await firstCreate;
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 300_000,
       });
 
@@ -1223,7 +1223,7 @@ function sandboxLifecycleSuites(): void {
 
       // Cleanup: destroy the sandbox stack
       await spaceRestApiCall('delete');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
@@ -1237,7 +1237,7 @@ function sandboxLifecycleSuites(): void {
       tmpHome = createTmpDir('sandbox-destroy-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 450_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
@@ -1255,14 +1255,14 @@ function sandboxLifecycleSuites(): void {
       // First deploy a sandbox
       const deployFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('create');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       // Then destroy it
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('delete');
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: DESTROY_TIMEOUT_MS,
       });
 
@@ -1285,13 +1285,13 @@ function sandboxLifecycleSuites(): void {
       // Deploy sandbox first to create outputs.json
       const deployFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('create');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       // Run console
       const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/console.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/console.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 15_000,
       });
 
@@ -1303,7 +1303,7 @@ function sandboxLifecycleSuites(): void {
 
       // Cleanup: destroy the sandbox
       await spaceRestApiCall('delete');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
@@ -1325,7 +1325,7 @@ function productionLifecycleSuites(): void {
       tmpHome = createTmpDir('deploy-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/deploy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
@@ -1349,7 +1349,7 @@ function productionLifecycleSuites(): void {
       await Promise.race([sandboxFirstCreate, sleep(120_000, undefined, { signal: cap.signal }).catch(() => {})]);
       cap.abort();
       await spaceRestApiCall('create');
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/deploy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 300_000,
       });
 
@@ -1361,7 +1361,7 @@ function productionLifecycleSuites(): void {
 
       // Cleanup: destroy the production stack
       await spaceRestApiCall('delete');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/destroy.ts'], {
         ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
@@ -1375,7 +1375,7 @@ function productionLifecycleSuites(): void {
       tmpHome = createTmpDir('destroy-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
@@ -1393,13 +1393,13 @@ function productionLifecycleSuites(): void {
       // Deploy first, then destroy
       const deployFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('create');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/deploy.ts'], {
         ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('delete');
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: DESTROY_TIMEOUT_MS,
       });
 

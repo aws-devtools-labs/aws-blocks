@@ -62,7 +62,7 @@ type Policy = 'equal' | 'superset' | 'skip';
 /**
  * Building Blocks (and {@link EXTRA_PACKAGES}): every condition must match `default` exactly.
  *
- * - `aws-runtime` and `cdk`: the same app module (`aws-blocks/index.ts`) is evaluated under
+ * - `aws-runtime` and `cdk`: the same app module (`cdk-blocks/index.ts`) is evaluated under
  *   default (local dev), `cdk` (synth) and `aws-runtime` (Lambda), so a missing name crashes
  *   that stage at import, and an extra name is untyped (types resolve to the mock) and
  *   untested locally.

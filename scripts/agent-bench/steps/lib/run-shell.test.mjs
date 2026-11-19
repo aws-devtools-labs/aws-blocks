@@ -122,13 +122,13 @@ describe('agent-bench judge spec-leak detection', () => {
 	it('flags test-spec CODE files + bench-tests/ but NOT the framework blocks.spec.json', () => {
 		const dir = mkdtempSync(join(tmpdir(), 'bench-leak-'));
 		try {
-			mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
+			mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
 			mkdirSync(join(dir, 'bench-tests'), { recursive: true });
 			mkdirSync(join(dir, 'src'), { recursive: true });
 			writeFileSync(join(dir, 'src', 'foo.spec.ts'), '');
 			writeFileSync(join(dir, 'src', 'bar.spec.tsx'), '');
 			writeFileSync(join(dir, 'src', 'util.spec.cjs'), '');
-			writeFileSync(join(dir, 'aws-blocks', 'blocks.spec.json'), '{}');
+			writeFileSync(join(dir, 'cdk-blocks', 'blocks.spec.json'), '{}');
 			writeFileSync(join(dir, 'bench-tests', 'e2e.spec.ts'), '');
 			writeFileSync(join(dir, 'src', 'app.ts'), '');
 

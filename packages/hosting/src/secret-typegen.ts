@@ -50,7 +50,7 @@ export const DEFAULT_TYPEGEN_MODULES = ['@aws-blocks/hosting'];
 export const DEFAULT_TYPEGEN_MODULE = DEFAULT_TYPEGEN_MODULES[0];
 
 /** Default globs scanned for `secret()` / `config()` calls, relative to `cwd`. */
-export const DEFAULT_TYPEGEN_INCLUDE = ['aws-blocks/**/*.{ts,tsx,mts,cts}', 'src/**/*.{ts,tsx,mts,cts}'];
+export const DEFAULT_TYPEGEN_INCLUDE = ['cdk-blocks/**/*.{ts,tsx,mts,cts}', 'src/**/*.{ts,tsx,mts,cts}'];
 
 /** Default output path (relative to `cwd`) for the generated augmentation. */
 export const DEFAULT_TYPEGEN_OUT = '.blocks/hosting-values.d.ts';
@@ -539,7 +539,7 @@ export async function generateHostingValuesDts(options: GenerateOptions = {}): P
 	return { ...scan, outFile, content, upToDate };
 }
 
-/** The non-glob directory prefix of an include glob (`aws-blocks/**` → `aws-blocks`). */
+/** The non-glob directory prefix of an include glob (`cdk-blocks/**` → `cdk-blocks`). */
 function staticDirOf(glob: string): string {
 	const dir: string[] = [];
 	for (const seg of glob.split('/')) {

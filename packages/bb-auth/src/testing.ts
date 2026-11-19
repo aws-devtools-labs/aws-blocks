@@ -147,7 +147,7 @@ function describeLastCodes(blocks: readonly LocalPoolDir[]): string {
  * ```ts
  * import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
  *
- * const alice = createTestClient(await import('aws-blocks'));
+ * const alice = createTestClient(await import('cdk-blocks'));
  * await alice.authApi.setAuthState({ action: 'signUp', username: 'alice@example.com', password });
  * const code = await getLastAuthCode('alice@example.com');
  * await alice.authApi.setAuthState({ action: 'confirmSignUp', username: 'alice@example.com', code });

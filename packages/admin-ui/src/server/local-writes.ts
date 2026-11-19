@@ -170,7 +170,7 @@ async function refuseWhenDevServerUp(context: LocalWriteContext): Promise<LocalW
 	if (!serverUp && status?.portSource === 'indeterminate') {
 		return refuse(
 			'LOCAL_SERVER_RUNNING',
-			`Could not determine the local dev server's port: aws-blocks/scripts/server.ts states no literal ` +
+			`Could not determine the local dev server's port: cdk-blocks/scripts/server.ts states no literal ` +
 				`port, so a server on a computed port (for example \`Number(process.env.PORT) || 3001\`) cannot be ` +
 				`ruled out. A write now could be overwritten by the running app. Stop the dev server, or make the ` +
 				'change through the RPC playground, then retry.',

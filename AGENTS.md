@@ -1,6 +1,6 @@
 # AGENTS.md — AWS Blocks (contributor guide)
 
-> **AWS Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `aws-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
+> **AWS Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `cdk-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
 
 ## How to work here
 You're an engineer working **on AWS Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS Blocks, this is the wrong doc → run `npm create @aws-blocks/blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
@@ -69,7 +69,7 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 
 ## How an app consumes a BB (the mental model authoring serves)
 ```ts
-// aws-blocks/index.ts — define backend + the API surface
+// cdk-blocks/index.ts — define backend + the API surface
 const scope = new Scope('app');
 const notes = new KVStore(scope, 'notes');
 const auth  = new Auth(scope, 'auth');
@@ -81,11 +81,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 }));
 
-// aws-blocks/index.handler.ts — Lambda entry (lazy import so config loads first)
+// cdk-blocks/index.handler.ts — Lambda entry (lazy import so config loads first)
 export const handler = createLambdaHandler(() => import('./index.js'));
 
 // frontend — typed import of the backend, no codegen
-import { api } from 'aws-blocks';
+import { api } from 'cdk-blocks';
 await api.addNote('hello');
 ```
 > A method that returns a live client object (rather than plain data) returns a Transferable — see `bb-realtime`, where `getChannel()` hands the client a channel it `subscribe()`s to (server-side `publish`/`subscribe`; client-side hydration via the registered client middleware).

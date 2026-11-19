@@ -938,7 +938,7 @@ final class OIDCClientTests: XCTestCase {
         await store.set("access_token", value: "legacy-access")
         await store.set("refresh_token", value: "legacy-refresh")
         await store.set("expires_at", value: "9999999999000")
-        let sso = makeClient(named: "aws-blocks/auth/sso", on: shared)
+        let sso = makeClient(named: "cdk-blocks/auth/sso", on: shared)
         let main = makeClient(named: "aws-blocks/auth", on: shared)
 
         let ssoToken = await sso.getAccessToken()
@@ -959,7 +959,7 @@ final class OIDCClientTests: XCTestCase {
         )
         let shared = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
         let auth = makeClient(named: "aws-blocks/auth", on: shared)
-        let sso = makeClient(named: "aws-blocks/auth/sso", on: shared)
+        let sso = makeClient(named: "cdk-blocks/auth/sso", on: shared)
 
         async let authToken = auth.getAccessToken()
         async let ssoToken = sso.getAccessToken()

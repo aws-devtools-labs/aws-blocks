@@ -65,7 +65,7 @@ function baseRepo(t, files = {}) {
 		"packages/core/package.json": pkgJson(SIBLING),
 		"packages/create-blocks-app/package.json": pkgJson(CREATE_APP),
 		"packages/create-blocks-app/templates/react/package.json": pkgJson("template-react"),
-		"packages/create-blocks-app/templates/amplify/aws-blocks/package.json": pkgJson("template-amplify"),
+		"packages/create-blocks-app/templates/amplify/cdk-blocks/package.json": pkgJson("template-amplify"),
 		"packages/internal-tool/package.json": pkgJson("@aws-blocks/internal-tool", { private: true }),
 		"test-apps/comprehensive/package.json": pkgJson("bb-test-comprehensive"),
 		".changeset/README.md": "# Changesets\n",
@@ -126,7 +126,7 @@ describe("generate-dependency-changeset", () => {
 	it("patches create-blocks-app for a nested template manifest", (t) => {
 		const { dir, base } = baseRepo(t);
 		commitBump(dir, {
-			"packages/create-blocks-app/templates/amplify/aws-blocks/package.json": bumped("template-amplify"),
+			"packages/create-blocks-app/templates/amplify/cdk-blocks/package.json": bumped("template-amplify"),
 		});
 
 		generate(dir, base);
