@@ -27,6 +27,14 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 
 export const GITHUB_REPO = 'aws/cdk-blocks';
+/**
+ * The repository's subject as GitHub actually mints it: the owner and repository
+ * carry their immutable database ids (`aws` is 2232217, `cdk-blocks` 1264419530).
+ * A subject built from the plain `aws/cdk-blocks` matches no token, which is how
+ * the repository move failed every job at "Configure AWS credentials". The ids
+ * never change, so this stays exact rather than becoming a wildcard.
+ */
+export const GITHUB_REPO_SUBJECT = 'repo:aws@2232217/cdk-blocks@1264419530';
 export const GITHUB_ENVIRONMENT = 'e2e';
 // The agent bench gets its own environment, so a token minted inside a bench
 // job (where an agent runs shell commands) can't assume the E2E role, and E2E
@@ -105,7 +113,7 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
     new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
       StringEquals: {
         'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-        'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${environment}`,
+        'token.actions.githubusercontent.com:sub': `${GITHUB_REPO_SUBJECT}:environment:${environment}`,
       },
     });
 
