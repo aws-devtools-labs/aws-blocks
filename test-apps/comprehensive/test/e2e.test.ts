@@ -18,8 +18,9 @@ import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
 import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
-import { distributedTableTests } from './distributed-table.test.js';
-import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
+import { legacyKvStoreTests, seedLegacyStore } from './legacy-kv-store.test.js';
+import { kvStoreDocumentsTests } from './kv-store-documents.test.js';
+import { kvStoreSecureDefaultsTests } from './kv-store-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
@@ -37,8 +38,6 @@ import { withAuthAnonymousTests } from './with-auth-anonymous.test.js';
 import { authTotpEnrolmentTests, type AuthTotpApis } from './auth-totp-enrolment.test.js';
 import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
-import { databaseTests } from './database.test.js';
-import { dsqlTests } from './dsql.test.js';
 import { databaseBlockTests } from './database-block.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
@@ -55,6 +54,7 @@ import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
 import { httpErrorStatusTests } from './http-error-status.test.js';
+import { voidResultTests } from './void-result.test.js';
 import { apiUrlStageTests } from './api-url-stage.test.js';
 import { authSocialLocalTests } from './auth-social-local.test.js';
 import { testApiUrl } from './api-url.js';
@@ -104,6 +104,8 @@ test.before(async () => {
   }
   
   if (ENV === 'local') {
+    // The data file of a store of a KVStore release up to 0.4.0, for the LegacyKVStore tests.
+    seedLegacyStore();
     console.log('🚀 Starting local dev server...');
     
     server = spawn('npm', ['run', 'dev:server'], {
@@ -269,6 +271,8 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 // Before any suite signs into `auth`: the signed-out call must stay signed out.
 httpErrorStatusTests(() => ({ api, strictStatusApi }));
 
+voidResultTests(() => api);
+
 // Local only: the `auth-social` block exists only in `npm run dev`.
 if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
 
@@ -336,18 +340,16 @@ test('Background suites - start Agent, AsyncJob, AsyncJob status', () => backgro
 // KVStore tests (separate file)
 kvStoreTests(() => api);
 
-// DistributedTable tests (separate file)
-distributedTableTests(() => api);
+// LegacyKVStore tests (separate file)
+legacyKvStoreTests(() => api);
 
-// DistributedTable secure-defaults deploy coverage (separate file)
-distributedTableSecureDefaultsTests(() => api);
+// KVStore with a declared key (documents) tests (separate file)
+kvStoreDocumentsTests(() => api);
+
+// KVStore secure-defaults deploy coverage (separate file)
+kvStoreSecureDefaultsTests(() => api);
 
 // Database tests (separate file)
-databaseTests(() => api);
-
-// DSQL Database tests (separate file)
-dsqlTests(() => api);
-
 databaseBlockTests(() => api);
 
 // AppSetting tests (separate file)

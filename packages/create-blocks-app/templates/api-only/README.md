@@ -5,24 +5,29 @@ backend behind a mobile app, a CLI, or a third-party client. Ships a public
 health check plus an auth-gated CRUD resource with per-user isolation.
 
 > "API-only" describes the interface — no web UI is served, clients talk to it
-> over JSON-RPC. It still owns backend state (here a `DistributedTable`); a real
+> over JSON-RPC. It still owns backend state (here a `KVStore`); a real
 > API almost always does.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template api-only`
 
 ## For Coding Agents
 
-**CRITICAL: Always read documentation from `node_modules/@aws-blocks/blocks/README.md` to understand the Building Block system and available APIs.**
+**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
 ## What ships
 
-- **Public** — `api.health()` returns `{ status, timestamp }` with no auth. A
-  liveness probe for load balancers and uptime monitors.
+- **Public** — `GET /healthz` is a `RawRoute` that answers a plain HTTP `GET`
+  with `{ status, timestamp }` and a `Cache-Control` header that includes
+  `no-store`, the shape load balancers and uptime monitors expect. Probe it
+  with `GET`: `HEAD` is not routed and returns 404. `api.health()` returns the
+  same over JSON-RPC for RPC clients. Neither needs auth.
 - **Protected** — `createItem` / `listItems` / `getItem` / `updateQuantity` /
   `setQuantity` / `deleteItem`, an auth-gated CRUD resource over a
-  `DistributedTable`. Every method calls `auth.requireAuth(context)`, so data is
+  `KVStore`. The store has a `schema` and a `key`, so it holds records you list
+  or query as a collection; a store fixes its key when you create it. Every
+  method calls `auth.requireAuth(context)`, so data is
   isolated per user, and writes use optimistic locking (`ifFieldEquals` on a
   version field). `setQuantity` is the raw compare-and-swap: pass the version you
   read, and a stale write is rejected with `ConditionalCheckFailedException`
@@ -47,7 +52,8 @@ Point any HTTP/JSON-RPC client at the RPC endpoint.
 - **Every `ApiNamespace` method is a public, internet-reachable endpoint.**
   Nothing is gated by default. When you add a method, start it with
   `await auth.requireAuth(context)` unless anyone on the internet may call it
-  signed out (like `health`). Scope what it touches to the caller: derive the
+  signed out (like `health`). The same holds for a `RawRoute` handler: `/healthz`
+  is public on purpose. Scope what it touches to the caller: derive the
   owner or prefix from the signed-in user (as `userPath` and the `owner` key do
   here), never from an id or owner the caller passes in.
 - **A presigned URL is a bearer credential.** Whoever holds the URL that
@@ -75,15 +81,30 @@ npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against the dev server
 npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
 npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
-npm run secret -- set KEY # Set a secret (also list, remove KEY)
-npm run config -- set KEY value # Set a config value (also list, remove KEY)
+npm run secret set KEY # Set a secret (also list, remove KEY)
+npm run config set KEY value # Set a config value (also list, remove KEY)
 npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
 ```
 
-Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
-`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
 The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+
+### Health probe (local dev)
+
+```bash
+curl -i http://localhost:3001/healthz
+# HTTP/1.1 200 OK
+# content-type: application/json
+# cache-control: no-store, no-cache, must-revalidate, proxy-revalidate
+# pragma: no-cache
+# expires: 0
+# …
+#
+# {"status":"ok","timestamp":...}
+```
+
+Use `GET` for health checks; `HEAD /healthz` is not routed and returns 404.
 
 ### RPC endpoint (local dev)
 
@@ -108,4 +129,4 @@ Your CloudFormation stack names derive from the `stackId` in
 This template is backend-only. The `backend` template's README documents adding a
 Vite/React frontend and `Hosting` — the same steps apply here.
 
-**Read `node_modules/@aws-blocks/blocks/README.md` for complete documentation.**
+**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more).**

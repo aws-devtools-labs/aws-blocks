@@ -14,7 +14,7 @@ import { basename } from 'node:path';
 export type OutputsStage = 'sandbox' | 'production';
 
 /** Directory holding per-deploy local state for every stage. */
-export const OUTPUTS_DIR = '.blocks-sandbox';
+export const OUTPUTS_DIR = '.cdk-blocks-sandbox';
 
 /**
  * Each stage's `cdk deploy --outputs-file` document, relative to the project root.

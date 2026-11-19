@@ -106,7 +106,7 @@ The wire format now carries `name` (the BB-level error name) alongside `message`
 
 ### Amendment (2026-09-30, default): message forwarding for branded BB errors
 
-An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatch`) forwarded a Building Block error's `name` over the wire but **dropped its `message`** for a generic `"Internal error"`. That contradicted this decision — the wire is supposed to carry `name` **alongside `message`** — and it was a DX regression, since a BB error's message is BB-authored on purpose ("Batch contains 150 payloads, exceeds the 100 limit"). The serializer now forwards **both** the `name` and the `message` for a branded BB error (an error stamped by `brandBlocksError` / minted via `blocksError`), bringing the code back in line with this decision. The safety net is unchanged: a raw driver/SDK exception is never branded, so it still collapses to a nameless generic `500` with no message, and `Error.cause` still never crosses the wire. The load-bearing invariant this rests on: **a branded error's message must never embed raw driver/SDK text** — the two re-tag / message-copy sites that used to inline driver text (`bb-kv-store` / `bb-distributed-table` item-too-large remaps, and the `bb-data` / `bb-distributed-data` engine re-tag paths) now author a stable BB message and keep the raw error only as `cause`. A repo-scan guard (`packages/blocks/src/brand-coverage.test.ts`) fails when a BB error producer is not made wire-safe.
+An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatch`) forwarded a Building Block error's `name` over the wire but **dropped its `message`** for a generic `"Internal error"`. That contradicted this decision — the wire is supposed to carry `name` **alongside `message`** — and it was a DX regression, since a BB error's message is BB-authored on purpose ("Batch contains 150 payloads, exceeds the 100 limit"). The serializer now forwards **both** the `name` and the `message` for a branded BB error (an error stamped by `brandBlocksError` / minted via `blocksError`), bringing the code back in line with this decision. The safety net is unchanged: a raw driver/SDK exception is never branded, so it still collapses to a nameless generic `500` with no message, and `Error.cause` still never crosses the wire. The load-bearing invariant this rests on: **a branded error's message must never embed raw driver/SDK text** — the two re-tag / message-copy sites that used to inline driver text (the `bb-kv-store` item-too-large remap, and the `bb-data` / `bb-distributed-data` engine re-tag paths) now author a stable BB message and keep the raw error only as `cause`. A repo-scan guard (`packages/blocks/src/brand-coverage.test.ts`) fails when a BB error producer is not made wire-safe.
 
 ## D-004: Auth-first naming convention for auth Building Blocks
 
@@ -430,10 +430,13 @@ earlier planning decisions and removed a released behavior:
 
 **Date**: 2026-06-19
 **Authors:** wirej
+**Status:** Amended by [D-030](#d-030-the-per-deploy-state-directory-is-renamed-and-its-served-url-path-renames-with-it) (2026-11-18, varshpam) — the sandbox identifier now lives in `.cdk-blocks-sandbox/sandbox-id.txt`. The stack-name scheme is unchanged, and `getSandboxId` copies an upgrading app's id forward from the old directory before its get-or-create path could mint a new one. The decision below is preserved as originally written.
 
 ### Decision
 
 CloudFormation stack names are derived from a `stackId` stored in `.blocks/config.json` (committed to the repo). The `stackId` is generated once at scaffold time as `<sanitizedName>.slice(0, 16)-<random(6)>`, producing names like `my-app-k7x2mf`.
+
+A sanitized name that starts with `aws` in any letter case gets the prefix `app-` before the cut, so `aws-blocks-demo` gives `app-aws-blocks-d-k7x2mf`. AWS Resource Groups refuses a group name that starts with `AWS`, and every stack names two groups after itself (`<stackName>-resources`, `<stackName>-settings`). A name that does not start with `aws` is not changed. A `stackId` written by hand is not changed either: a stack name that starts with `aws` is an error at synth (`cdk synth`, `cdk deploy`), with the two group names and the fix in the message. `cdk destroy` still runs, so a stack that an earlier deploy with such a name left behind can be removed.
 
 Stack name scheme:
 - **Production:** `<stackId>-prod` (e.g., `my-app-9f3a2b-prod`)
@@ -627,16 +630,16 @@ write-back/staging machinery.
   `packages/core/src/db-naming.ts`, `packages/core/src/scripts/ensure-secrets.ts`,
   `packages/bb-data/src/db-pull/generate.ts`.
 
-## D-015: `DistributedTable` reads default to `readValidation: 'coerce'` (not `'off'`)
+## D-015: `KVStore` reads default to `readValidation: 'coerce'` (not `'off'`)
 
 **Date**: 2026-08-03
 **Authors:** osama-rizk
 
 ### Context
 
-`DistributedTable.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
+`KVStore.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). (The decision was taken for `DistributedTable`, the schema-and-key table block; that block has since been folded into `KVStore`, whose `schema` + `key` form carries the same behaviour.) After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
 
-The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-distributed-table/DESIGN.md` (D-DT-10).
+The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-kv-store/DESIGN.md` and the "Reads and schema changes" section of `packages/bb-kv-store/README.md`.
 
 ### Decision
 
@@ -665,8 +668,8 @@ Most validators discard unrecognized keys when they produce their output (Zod `.
 ### References
 
 - Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
-- Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-10.
-- Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
+- Per-BB mechanics: `packages/bb-kv-store/DESIGN.md` (D-KV-10); user-facing modes in `packages/bb-kv-store/README.md` ("Reads and schema changes").
+- Code: `packages/bb-kv-store/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
 
 ## D-016: Off-region CloudFront alarm is always-on, with warn-and-skip when the account is unresolved
 
@@ -912,6 +915,7 @@ What the bound needs is an ordering rather than a margin: 64 characters sits bel
 
 **Date**: 2026-11-05
 **Authors:** phandpau
+**Status:** Amended by [D-030](#d-030-the-per-deploy-state-directory-is-renamed-and-its-served-url-path-renames-with-it) (2026-11-18, varshpam) — both outputs documents now live in `.cdk-blocks-sandbox/`. The closing note that renaming the directory would be "a separate, breaking change" is no longer pending: D-030 is that change. The per-stage split, the file names and the reasoning are unchanged. The decision below is preserved as originally written.
 
 ### Context
 `npm run deploy` and `npm run sandbox` both passed `--outputs-file .blocks-sandbox/outputs.json`, so one file held whichever stage deployed last.
@@ -966,7 +970,7 @@ Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured thr
 - **No Cognito resources unless something needs them.** A `store: 'builtin'` block creates no user pool.
 - **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
 - **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
-- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids, pool name and session format, so an app that switches keeps its user pool, its users and their signed-in sessions.
+- **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids for the user pool, the app client and the session secret, its pool name and its session format, so an app that switches keeps its user pool and its users. Signed-in sessions do not carry over: the session store is a new table, so each user signs in once (`packages/bb-auth/MIGRATION.md`).
 - **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
 
 ### Rationale
@@ -1511,3 +1515,49 @@ The bounds today:
 - `scripts/harbor-bench/README.md` ("Security boundaries")
 - `scripts/harbor-bench/task/task.toml`
 - `scripts/ci/harbor-approval-gate.test.mjs`, `scripts/ci/harbor-credentials.test.mjs`, `scripts/ci/harbor-packages-isolation.test.mjs`
+
+## D-030: The per-deploy state directory is renamed, and its served URL path renames with it
+
+**Date**: 2026-11-18
+**Authors:** varshpam
+
+### Context
+`.blocks-sandbox/` held an app's per-deploy state. The name was a wart — it holds state for every stage, not only the sandbox — and D-022 left renaming it open as "a separate, breaking change: the Hosting construct serves it as a public URL path."
+
+That clause is the whole difficulty. The directory name is also a public URL. The Hosting construct publishes `/<dir>/*` as a CloudFront static behaviour, uploads the resolved `config.json` to an S3 key under the same name, invalidates that path on redeploy, and the browser client fetches `/<dir>/config.json` to resolve its API URL; the dev server answers the same path locally so dev and deployed behave alike. Two committed Next.js route directories (`src/app/<dir>/config.json/route.ts`, in the `nextjs` template and its `hosting-ssr` test-app twin) encode the name twice over: the directory name sets the URL, and a separate literal inside the file sets the file it reads. A sweep that renames the disk paths and misses the published path leaves a deployed page requesting a path nothing serves.
+
+The name was also not centralized enough for the compiler to help. `BLOCKS_SANDBOX_DIR` (disk) and `BLOCKS_SANDBOX_PREFIX` (URL) existed as separate constants with few callers between them, while the great majority of references were hardcoded literals across templates, test apps, gitignores, `cdk.json` watch-excludes and CI workflows. Renaming the constants compiles clean while hundreds of literals still say the old name.
+
+A second hazard is `sandbox-id.txt`. `getSandboxId` is get-or-create, so an upgraded app that no longer finds that file mints a new id, deploys to a different CloudFormation stack, and leaves the customer's existing sandbox standing in their account — with `npm run sandbox:destroy` reporting nothing to delete, because it keys off the same missing file.
+
+### Decision
+The directory is `.cdk-blocks-sandbox/`, and the served path renames with it to `/.cdk-blocks-sandbox/config.json`. No compatibility shim and no dual publishing: the old path is not served.
+
+It is a **sibling** of `.cdk-blocks/`, not folded into it. Folding was the original proposal, and it is rejected here for a reason that only surfaced on inspection: both directories contain a file named `config.json`, and they are opposites. `.cdk-blocks/config.json` is committed and carries the app's stable `stackId` (D-012); the sandbox `config.json` is gitignored, account-specific, and rewritten by every dev server run. One directory cannot hold both under one name. Beyond the collision, D-022 had already rejected putting per-deploy state in the committed directory: it "would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record." With `sandbox-id.txt` among those files, a single missed ignore makes two developers share one sandbox stack — the orphaned-stack failure the copy-forward below exists to prevent. A sibling directory keeps one gitignore entry and no collision.
+
+Every coupled site moves as one unit, and the ones that publish the path now read `BLOCKS_SANDBOX_DIR` rather than repeating the literal: the CloudFront static behaviour, the S3 key prefix, the invalidation paths, and the build-output site that writes the placeholder into the static directory (a path on disk that becomes the S3 key, so both roles at once). The browser client fetches `BLOCKS_SANDBOX_PREFIX`, which a test pins to `BLOCKS_SANDBOX_DIR` served at the root, so the client and the edge cannot drift.
+
+State is copied forward, not abandoned. On the first `dev`, `deploy`, `sandbox` or `destroy` after upgrading — and inside `getSandboxId`, before its get-or-create path can run — each state file is copied from the old directory into the new one: `sandbox-id.txt`, `config.json`, `config.sandbox.json`, `config.production.json`, `outputs.json`, `outputs.production.json`, `last-deploy.json`, and the per-port `dev-server.<port>.pid` files. Copy, never move, so an older toolchain in the same checkout keeps working. The new location wins: a file already there is never overwritten. Per file, never per directory, because the directory also holds the CDK cloud assembly (`cdk.out/`, `sandbox-destroy.out/`), which is large and regenerable. And it fails loudly, naming the file and the orphaned stack, when the project directory is not writable — a copy that fails silently is exactly what mints a new sandbox id.
+
+The accepted cost: a frontend bundle deployed by an earlier version keeps requesting `/.blocks-sandbox/config.json` and cannot resolve its API URL until it is redeployed, and a browser or CloudFront cache can hold that request past the deploy. Preview customers are being asked to migrate, and the rename gives them other work in the same pass.
+
+### Rationale
+Renaming only the disk paths and leaving the URL would have been expressible — the two constants are already separate — but it would have left the published path permanently naming the old brand, and the four publishing sites were literals that no type would have kept honest.
+
+A source-scanning guard carries the invariant instead, because nothing at the type level goes red for a missed literal. It checks both directions: no live reference to the old name survives outside named historical records, and every coupled site carries the current name, pinned by content so a deleted edit fails as loudly as a stale one. It was written and watched fail across all its cases before the rename was made.
+
+### Alternatives Considered
+**Keep publishing the old URL while the directory moves on disk.** Rejected: expressible, but it makes the two constants permanently disagree, keeps the old brand in a public path indefinitely, and leaves a second path to support with no date for removing it.
+
+**Move both and ship a redirect or dual publishing.** Rejected: the static behaviour, the S3 key and the invalidation paths would each need two entries for a window nobody could close, and the preview customers affected are already being asked to migrate.
+
+**Consolidate only the non-served state and leave `config.json` where it is.** Rejected: it splits one directory's contents across two names by whether they happen to be served, which is invisible to anyone reading the app, and it does not achieve the rename.
+
+**Fold the state into `.cdk-blocks/`.** Rejected: the `config.json` collision above, and D-022's standing objection to per-deploy state in the committed directory.
+
+### References
+- `packages/core/src/common/constants.ts` (`BLOCKS_SANDBOX_DIR`, `LEGACY_SANDBOX_DIR`), `packages/core/src/constants.ts` (`BLOCKS_SANDBOX_PREFIX`)
+- `packages/core/src/scripts/migrate-sandbox-dir.ts`, `packages/core/src/scripts/migrate-sandbox-dir.test.ts`
+- `packages/blocks/src/sandbox-dir-coverage.test.ts` (the coupled-site guard)
+- `packages/core/src/hosting.ts` (static behaviour, S3 key prefix, invalidation paths, placeholder write)
+- D-012 (sandbox id and stack naming), D-022 (per-stage outputs, and the clause this change closes)

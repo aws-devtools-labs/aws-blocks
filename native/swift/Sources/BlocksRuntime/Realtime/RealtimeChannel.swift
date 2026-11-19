@@ -74,11 +74,6 @@ public final class RealtimeChannel<T> {
     /// `JSONDecoder` without a redundant `Data → String → Data` round trip.
     let deserializer: (Data) throws -> T
 
-    /// The descriptor's `wsUrl` and `connectToken` as the server sent them, before the localhost rewrite and the
-    /// connect-token query parameter. `nil` for a channel built with `init`. `encode(to:)` writes these back.
-    private var wireWsUrl: String?
-    private var wireConnectToken: String?
-
     private var closed = false
     private let lock = NSLock()
     private var activeListeners: [ChannelWebSocketDelegate] = []
@@ -132,15 +127,12 @@ public final class RealtimeChannel<T> {
         }
 
         let connectToken = json["connectToken"] as? String
-        let channel = RealtimeChannel(
+        return RealtimeChannel(
             channel: channelName,
             wsUrl: resolvedWsUrl(wsUrlStr, connectToken: connectToken, baseHost: baseHost),
             token: tokenValue,
             deserializer: deserializer
         )
-        channel.wireWsUrl = wsUrlStr
-        channel.wireConnectToken = connectToken
-        return channel
     }
 
     /// The URL to connect to: `wsUrl` with `localhost` rewritten to `baseHost`, then a non-empty `connectToken`
@@ -187,19 +179,12 @@ public final class RealtimeChannel<T> {
             messageDecoder.userInfo = userInfo
             return try messageDecoder.decode(T.self, from: data)
         }
-        self.wireWsUrl = wsUrl
-        self.wireConnectToken = connectToken
     }
 
-    /// Encodes the channel's descriptor, as the server's `toJSON()` sends it:
-    /// `{ "__blocks": "realtime/channel", "channel", "wsUrl", "connectToken"?, "token" }`.
+    /// Always throws `EncodingError.invalidValue`: transferables are read-only. The conformance exists so a
+    /// generated `Codable` model that holds a channel compiles.
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DescriptorKeys.self)
-        try container.encode("realtime/channel", forKey: .blocksType)
-        try container.encode(channel, forKey: .channel)
-        try container.encode(wireWsUrl ?? wsUrl, forKey: .wsUrl)
-        try container.encodeIfPresent(wireConnectToken, forKey: .connectToken)
-        try container.encode(token, forKey: .token)
+        throw TransferableDescriptor.readOnly(self, tag: "realtime/channel", encoder: encoder)
     }
 
     /// Appends `connectToken` to `wsUrl` as a `token` query parameter. Keeps any
@@ -317,7 +302,11 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
         let subscribeMsg = """
         {"action":"subscribe","channel":"\(channelName)","token":"\(channelToken)"}
         """
-        logger.debug("WS opened, sending: \(subscribeMsg)")
+        // The subscribe message carries the channel token, so the log names the channel only.
+        // Bound locally: os.Logger interpolation is an escaping autoclosure, and SwiftFormat
+        // (`--self init-only`) removes an explicit `self.` outside initializers.
+        let channel = channelName
+        logger.debug("WS opened, subscribing to channel \(channel)")
         webSocket.send(.string(subscribeMsg)) { error in
             if let error {
                 logger.error("Failed to send subscribe: \(error.localizedDescription)")
@@ -326,14 +315,15 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
     }
 
     func onMessage(_ webSocket: URLSessionWebSocketTask, text: String) {
-        logger.debug("WS message: \(text)")
+        // Message bodies are application data; log their size, not their content.
+        logger.debug("WS message: \(text.utf8.count) bytes")
         guard let payloadData = RealtimeFrame.payload(from: text, channel: channelName) else { return }
         onPayload(payloadData)
     }
 
     func onFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {
         logger.error("WS failure: \(error.localizedDescription)")
-        onError(RealtimeError.websocket("WebSocket failure", error))
+        onError(RealtimeError.connectionFailed("WebSocket failure", error))
     }
 
     func onClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {

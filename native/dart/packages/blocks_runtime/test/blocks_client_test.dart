@@ -227,7 +227,7 @@ void main() {
       final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
       await client.call('test', {});
       expect(sentHeaders!['x-blocks-user-agent'], blocksUserAgentToken);
-    }, testOn: 'vm'); // Web omits the header by design.
+    });
 
     test('throws BlocksRpcException on error response', () async {
       final mockClient = MockClient(
@@ -288,6 +288,35 @@ void main() {
       await client.call('test', {});
       expect(sentHeaders!['cookie'], 'token=xyz');
     });
+
+    for (final token in ['token', null]) {
+      test(
+        'with an auth provider, sends the cookie and '
+        '${token == null ? 'no bearer token when it has none' : 'its bearer token'}',
+        () async {
+          final store = InMemorySessionStore()..setCookies('session=s1');
+          Map<String, String>? sentHeaders;
+          final client = BlocksClient(
+            baseUrl: 'http://test',
+            client: MockClient((req) async {
+              sentHeaders = req.headers;
+              return http.Response(
+                jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+                200,
+              );
+            }),
+            sessionStore: store,
+            authProvider: _TokenAuthProvider(token),
+          );
+          await client.call('test', {});
+          expect(sentHeaders!['cookie'], 'session=s1');
+          expect(
+            sentHeaders!['authorization'],
+            token == null ? isNull : 'Bearer $token',
+          );
+        },
+      );
+    }
 
     Future<String?> cookieSentTo(
       String baseUrl,
@@ -406,6 +435,18 @@ void main() {
       expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
     });
   });
+}
+
+class _TokenAuthProvider implements AuthProvider {
+  _TokenAuthProvider(this.token);
+
+  final String? token;
+
+  @override
+  Future<String?> getAccessToken() async => token;
+
+  @override
+  Future<void> onAuthFailure() async {}
 }
 
 class _RefreshingAuthProvider implements AuthProvider {

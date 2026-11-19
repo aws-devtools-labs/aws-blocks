@@ -249,10 +249,8 @@ const replace = async (url, overrides) => {
 };
 await replace(moduleUrl('preflight-credentials'), { assertAwsCredentials: async () => {} });
 await replace(moduleUrl('ensure-secrets'), {
-  ensureSecrets: async () => ({ created: [], updated: [] }),
   loadProductionEnv: () => {},
 });
-await replace(moduleUrl('external-migrations-step'), { applyExternalMigrations: async () => {} });
 await replace(moduleUrl('deploy-client-codegen'), { generateDeployClient: async () => {} });
 await replace(new URL('../telemetry/trackCommand.js', scripts).href, { trackCommand: async (_name, fn) => fn() });
 await replace(moduleUrl('deploy-stream'), {
@@ -278,8 +276,8 @@ const { deploy } = await import(moduleUrl('deploy'));
 const local = { apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' };
 // LEGACY: the config.json a sandbox deploy from core 0.8.0 or earlier wrote, with the sandbox's AWS URL.
 const legacy = { apiUrl: 'https://stub.example/prod/aws-blocks/api', environment: 'sandbox' };
-mkdirSync('.blocks-sandbox', { recursive: true });
-writeFileSync('.blocks-sandbox/config.json', JSON.stringify(process.env.LEGACY ? legacy : local));
+mkdirSync('.cdk-blocks-sandbox', { recursive: true });
+writeFileSync('.cdk-blocks-sandbox/config.json', JSON.stringify(process.env.LEGACY ? legacy : local));
 await deploy({
   cdkAppPath: 'unused',
   projectRoot: process.cwd(),
@@ -292,12 +290,12 @@ assert.deepEqual(events, [
   'wait',
 ]);
 if (process.env.LEGACY) {
-  assert.ok(!existsSync('.blocks-sandbox/config.json'), 'the legacy config.json is gone');
-  assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.sandbox.json', 'utf-8')), legacy);
+  assert.ok(!existsSync('.cdk-blocks-sandbox/config.json'), 'the legacy config.json is gone');
+  assert.deepEqual(JSON.parse(readFileSync('.cdk-blocks-sandbox/config.sandbox.json', 'utf-8')), legacy);
 } else {
-  assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8')), local);
+  assert.deepEqual(JSON.parse(readFileSync('.cdk-blocks-sandbox/config.json', 'utf-8')), local);
 }
-assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.production.json', 'utf-8')), {
+assert.deepEqual(JSON.parse(readFileSync('.cdk-blocks-sandbox/config.production.json', 'utf-8')), {
   apiUrl: prod.ApiUrl,
   environment: 'production',
 });

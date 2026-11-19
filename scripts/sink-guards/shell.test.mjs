@@ -43,10 +43,12 @@ const ALLOWLIST = [
 	{ at: 'packages/core/src/scripts/cleanup.ts:22', reason: LSOF_CLEANUP },
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
-	{ at: 'packages/core/src/hosting.ts:1191', reason: `Hosting buildCommand. ${APP_COMMAND}` },
-	{ at: 'packages/hosting/src/build/runner.ts:61', reason: `Hosting buildCommand. ${APP_COMMAND}` },
-	{ at: 'packages/core/src/scripts/dev-server.ts:1282', reason: `Frontend dev command. ${APP_COMMAND}` },
-	{ at: 'packages/core/src/scripts/sandbox.ts:860', reason: `Sandbox dev-server command. ${APP_COMMAND}` },
+	{ at: 'packages/core/src/hosting.ts:1221', reason: `Hosting buildCommand. ${APP_COMMAND}` },
+	{ at: 'packages/core/src/scripts/dev-server.ts:1278', reason: `Frontend dev command. ${APP_COMMAND}` },
+	{
+		at: 'packages/core/src/scripts/run-command.ts:89',
+		reason: `spawnShellCommand, whose only caller is the sandbox dev-server command. ${APP_COMMAND}`,
+	},
 	{
 		at: 'packages/core/src/scripts/process-tree.ts:242',
 		reason: 'CIM query of Windows processes: the only interpolated values are pids through Math.trunc into a fixed Get-CimInstance -Filter template, run with -NoProfile -NonInteractive and an argv array.',

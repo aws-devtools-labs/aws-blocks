@@ -9,7 +9,7 @@ import { legacyDeployedStage } from '../client/legacy-config.js';
 export type DeployedStage = 'sandbox' | 'production';
 
 /**
- * The file, in `.blocks-sandbox/`, where a deploy of `stage` records its API
+ * The file, in `.cdk-blocks-sandbox/`, where a deploy of `stage` records its API
  * URL: `config.sandbox.json` or `config.production.json`.
  *
  * It is never `config.json`. Only a dev server writes that file, and it holds
@@ -48,7 +48,7 @@ export function migrateLegacyDeployedConfig(outDir: string): void {
       writeDeployedConfig(outDir, stage, config.apiUrl);
     }
     rmSync(legacy, { force: true });
-    console.error(`ℹ️  Moved the ${stage} API URL an older deploy wrote to .blocks-sandbox/config.json into ${deployedConfigFile(stage)}.`);
+    console.error(`ℹ️  Moved the ${stage} API URL an older deploy wrote to .cdk-blocks-sandbox/config.json into ${deployedConfigFile(stage)}.`);
   } catch {
     // No config.json, or one that does not parse: nothing a deploy wrote.
   }

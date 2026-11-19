@@ -3,10 +3,12 @@ package com.example.app
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.exceptions.TransportException
 import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.String
 import kotlin.collections.List
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.decodeFromJsonElement
 
 public class Api(
@@ -15,12 +17,14 @@ public class Api(
   public suspend fun listTags(): List<String> {
     val request = BlocksRequest(method = "api.listTags", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.listTags")
     return BlocksJson.decodeFromJsonElement(result)
   }
 
   public suspend fun listItems(): List<ListItems.Result> {
     val request = BlocksRequest(method = "api.listItems", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
+    if (result is JsonNull) throw TransportException("Unexpected null result for api.listItems")
     return BlocksJson.decodeFromJsonElement(result)
   }
 

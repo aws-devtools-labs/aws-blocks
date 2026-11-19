@@ -4,7 +4,7 @@ File storage backed by Amazon S3.
 
 **When to use:** You need to store, retrieve, or serve binary files — user uploads, generated reports, images, videos, or static assets.
 
-**When NOT to use:** If you need structured key-value data with conditional writes, use `KVStore`. If you need queryable records with indexes, use `DistributedTable`.
+**When NOT to use:** If you need structured key-value data with conditional writes, or queryable records with indexes, use `KVStore`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -157,10 +157,10 @@ FileBucket has no per-object permissions of its own. Every API method reads and 
 - Accept only a file *name* from the client and wrap it in `encodeURIComponent()`, so it stays a single path segment and can't add `/` to reach another prefix. FileBucket rejects `.`/`..` segments and other unsafe keys with `ValidationFailed`; see [Object keys](#object-keys).
 - For a resource shared between users (a document, a team folder), check that the caller may access it — for example by looking up an ownership record — before building its key.
 
-The examples below assume an auth block such as `AuthBasic` and a helper that builds the caller's keys:
+The examples below assume an auth block (`Auth` from `@aws-blocks/bb-auth`) and a helper that builds the caller's keys:
 
 ```typescript
-const auth = new AuthBasic(scope, 'auth');
+const auth = new Auth(scope, 'auth');
 const bucket = new FileBucket(scope, 'uploads');
 
 /** The caller's key for `name`, under a prefix only they can reach. */
@@ -437,6 +437,6 @@ Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. I
 
 The dev server enforces what an upload URL signs, as S3 does: an upload whose `Content-Type` (or, when `contentLength` was signed, size) differs from the signed value fails with `403 SignatureDoesNotMatch`. Local downloads are always served with `X-Content-Type-Options: nosniff` and a `Content-Disposition` — the one signed with `attachment`, or plain `attachment` otherwise — so files never display inline in local dev even though they can on AWS (see [Serving user uploads](#serving-user-uploads)).
 
-When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` continue to select the current file.
+When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` select the current file.
 
 

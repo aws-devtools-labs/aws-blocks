@@ -63,14 +63,14 @@ describe('getSandboxId', () => {
     const id = getSandboxId(tmpDir);
     assert.match(id, /^[a-z0-9]+-[a-f0-9]{6}$/);
     // Verify persisted
-    const stored = readFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'utf-8').trim();
+    const stored = readFileSync(join(tmpDir, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'utf-8').trim();
     assert.strictEqual(stored, id);
   });
 
   it('returns existing id on subsequent calls', () => {
     tmpDir = join(tmpdir(), `sandbox-id-test-idem-${Date.now()}`);
-    mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
-    writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'alice-abc123');
+    mkdirSync(join(tmpDir, '.cdk-blocks-sandbox'), { recursive: true });
+    writeFileSync(join(tmpDir, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'alice-abc123');
     assert.strictEqual(getSandboxId(tmpDir), 'alice-abc123');
   });
 });
@@ -93,8 +93,8 @@ describe('getStackName', () => {
     tmpDir = join(tmpdir(), `stack-name-sbx-${Date.now()}`);
     mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
     writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'my-app-k7x2mf' }));
-    mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
-    writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'alice-0d7e1c');
+    mkdirSync(join(tmpDir, '.cdk-blocks-sandbox'), { recursive: true });
+    writeFileSync(join(tmpDir, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'alice-0d7e1c');
     assert.strictEqual(getStackName({ sandbox: true, projectRoot: tmpDir }), 'my-app-k7x2mf-alice-0d7e1c');
   });
 
@@ -116,11 +116,11 @@ describe('getStackName sandbox id (get-or-create)', () => {
     tmpDir = join(tmpdir(), `stack-name-getorcreate-${Date.now()}`);
     mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
     writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'test-app' }));
-    // No .blocks-sandbox dir yet — getStackName creates the id rather than throwing.
+    // No .cdk-blocks-sandbox dir yet — getStackName creates the id rather than throwing.
     const name = getStackName({ sandbox: true, projectRoot: tmpDir });
     assert.match(name, /^test-app-[a-z0-9]+-[a-f0-9]{6}$/);
     // Persisted so later callers/processes resolve the identical name.
-    const stored = readFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'utf-8').trim();
+    const stored = readFileSync(join(tmpDir, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'utf-8').trim();
     assert.strictEqual(name, `test-app-${stored}`);
   });
 

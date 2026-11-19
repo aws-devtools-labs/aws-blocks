@@ -59,7 +59,7 @@ export function cliClientTests(getApi: () => typeof apiType) {
     });
 
     test('default export fails when CWD has no config.json', { timeout: 15_000 }, async () => {
-      // A fresh directory has no .blocks-sandbox/config.json.
+      // A fresh directory has no .cdk-blocks-sandbox/config.json.
       // The client's auto-discovery reads config.json relative to CWD, so it fails.
       const result = await runCli(`
         const { api } = await import(clientUrl);

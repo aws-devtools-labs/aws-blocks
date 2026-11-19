@@ -52,7 +52,10 @@ class _StoredCookie {
     value: json['value'] as String,
     host: json['host'] as String?,
     path: json['path'] as String? ?? '/',
-    secure: json['secure'] as bool? ?? false,
+    // [toJson] always writes `secure`, so a record without it did not come
+    // from this store; it is read as `Secure` rather than given the weaker
+    // default.
+    secure: json['secure'] as bool? ?? true,
     expiresAt: json['expiresAt'] as int?,
   );
 
@@ -61,10 +64,10 @@ class _StoredCookie {
 
   /// The host that set the cookie; `null` when it was stored without one.
   ///
-  /// A cookie read from the name → value map earlier versions wrote has no
-  /// host, because that format never recorded one. Such a cookie matches
-  /// every host until the server sets it again, when the new cookie replaces
-  /// it with a host-scoped one.
+  /// A cookie has no host when [setCookies] was called without a
+  /// `requestUri`. Such a cookie matches every host until the server sets it
+  /// again with a `requestUri`, when the new cookie replaces it with a
+  /// host-scoped one.
   final String? host;
   final String path;
   final bool secure;
@@ -143,8 +146,8 @@ class InMemorySessionStore implements SessionStore {
       if (parsed == null) continue;
       _cookies.remove(parsed.key);
       // As in the Kotlin runtime, a cookie replaces every stored cookie of the
-      // same name that would be sent on this request, including one persisted
-      // by an earlier version of this store without a host.
+      // same name that would be sent on this request, including one stored
+      // without a host because it was set without a `requestUri`.
       if (requestUri != null) {
         _cookies.removeWhere(
           (_, c) => c.name == parsed.name && c.matches(requestUri),
@@ -338,32 +341,26 @@ class PersistentSessionStore implements SessionStore {
   ///
   /// The cookies are stored as a JSON list of records carrying each cookie's
   /// host, `Path`, `Secure` flag and expiry. A JSON object of name → value is
-  /// the format earlier versions wrote; those cookies are kept, with no host,
-  /// `Path=/`, no `Secure` and no expiry — what those versions sent — until
-  /// the server sets them again. Having no host, they are sent to every host
-  /// in the meantime; the map format recorded none to scope them by.
+  /// the format earlier versions wrote. It recorded no host, `Path`,
+  /// `Secure` flag or scheme, so a cookie read from it could not be scoped to
+  /// the host that set it. Those cookies are not loaded: the stored map is
+  /// deleted and the user signs in again, as in the Swift and Kotlin runtimes.
   Future<void> load() async {
     final raw = await _store.get(_storageKey);
     if (raw == null || raw.isEmpty) return;
     try {
       final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        // The legacy name → value map: nothing is adopted (see above). It is
+        // removed now rather than on the next save, so it is not read again if
+        // no cookie is set before the app exits.
+        await _store.delete(_storageKey);
+        return;
+      }
       final restored = switch (decoded) {
         final List<dynamic> records => [
           for (final record in records)
             _StoredCookie.fromJson(record as Map<String, dynamic>),
-        ],
-        final Map<String, dynamic> legacy => [
-          for (final entry in legacy.entries)
-            _StoredCookie(
-              name: entry.key,
-              value: entry.value as String,
-              // The map format stored no host, so there is none to recover;
-              // the cookie applies to any host until the server sets it again.
-              host: null,
-              path: '/',
-              secure: false,
-              expiresAt: null,
-            ),
         ],
         _ => throw const FormatException('Unrecognized cookie payload'),
       };

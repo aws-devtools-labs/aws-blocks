@@ -2,32 +2,32 @@
 
 ## Finding the API URL
 
-Each target has its own file in `.blocks-sandbox/`:
+Each target has its own file in `.cdk-blocks-sandbox/`:
 
 ```bash
-cat .blocks-sandbox/config.json             # the running dev server (npm run dev, or the one npm run sandbox runs)
+cat .cdk-blocks-sandbox/config.json             # the running dev server (npm run dev, or the one npm run sandbox runs)
 # {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
-cat .blocks-sandbox/config.sandbox.json     # the last sandbox deploy
+cat .cdk-blocks-sandbox/config.sandbox.json     # the last sandbox deploy
 # {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"sandbox"}
-cat .blocks-sandbox/config.production.json  # the last production deploy
+cat .cdk-blocks-sandbox/config.production.json  # the last production deploy
 # {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"production"}
 ```
 
 Only a dev server writes `config.json`, and the Node.js client reads it, so a deploy never redirects local tests or scripts to AWS. In production with Hosting, browser requests go through CloudFront (same-origin at `/aws-blocks/api`), but `config.production.json` still contains the underlying API Gateway URL.
 
-### Over HTTP the config lives at `/.blocks-sandbox/config.json`
+### Over HTTP the config lives at `/.cdk-blocks-sandbox/config.json`
 
-The browser client fetches its config from the **dotted** path `/.blocks-sandbox/config.json`. `/config.json` is not a route in local dev or in production, so a 404 there tells you nothing:
+The browser client fetches its config from the **dotted** path `/.cdk-blocks-sandbox/config.json`. `/config.json` is not a route in local dev or in production, so a 404 there tells you nothing:
 
 ```bash
-curl http://localhost:3000/.blocks-sandbox/config.json
+curl http://localhost:3000/.cdk-blocks-sandbox/config.json
 # → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
 
 curl -o /dev/null -w '%{http_code}\n' http://localhost:3000/config.json
 # → 404   (expected, this path never existed)
 ```
 
-`{"_placeholder":true}` is also expected in one place: the Hosting construct writes that stub into the frontend build output during CDK synth so the static route exists while the real `apiUrl` is still an unresolved CloudFormation token, and the deploy uploads the resolved config over it. Seeing it in `dist/.blocks-sandbox/config.json`, or on the origin between synth and deploy, is not a broken config. A **deployed** origin still serving the stub after a successful deploy is a real bug.
+`{"_placeholder":true}` is also expected in one place: the Hosting construct writes that stub into the frontend build output during CDK synth so the static route exists while the real `apiUrl` is still an unresolved CloudFormation token, and the deploy uploads the resolved config over it. Seeing it in `dist/.cdk-blocks-sandbox/config.json`, or on the origin between synth and deploy, is not a broken config. A **deployed** origin still serving the stub after a successful deploy is a real bug.
 
 ## RPC Wire Protocol
 
@@ -37,7 +37,7 @@ The typed client (`import { api } from 'aws-blocks'`) handles all RPC automatica
 
 ```bash
 # "Is it alive?" check:
-curl -X POST $(cat .blocks-sandbox/config.json | jq -r .apiUrl) \
+curl -X POST $(cat .cdk-blocks-sandbox/config.json | jq -r .apiUrl) \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.ping","params":[],"id":1}'
 # → {"jsonrpc":"2.0","result":{"ok":true,"timestamp":...},"id":1}
@@ -83,7 +83,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 | HTTP 200 but `{"error":...}` in body | Normal JSON-RPC error response | Read `error.message` — not a routing problem |
 | `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `aws-blocks/index.ts` |
 | `config.json` not found | No dev server has started in this app | Run `npm run dev`, or set `BLOCKS_API_URL` to the API you mean to call |
-| 404 on `/config.json` | Wrong path, the config is served from a dotted directory | Use `GET /.blocks-sandbox/config.json` |
+| 404 on `/config.json` | Wrong path, the config is served from a dotted directory | Use `GET /.cdk-blocks-sandbox/config.json` |
 | Config body is `{"_placeholder":true}` | Build-time stub in the frontend build output; the real config is uploaded at deploy | Nothing to fix pre-deploy. If a deployed origin serves it, re-run the deploy |
 | HTTP 200 but `{"error":{"code":-32600}}` on a batch | JSON-RPC batching (a top-level JSON array body) is not supported | Send one call per request |
 
@@ -102,6 +102,12 @@ The frontend imports the backend (`import { api } from 'aws-blocks'`), so its `t
 
 ## Server won't start
 
+| Message | Cause | Fix |
+|---------|-------|-----|
+| `❌ a dev server of this app is already running on :3000 (pid …).` `Not starting a second one.` | Another dev server for this app is running (or still `starting`), on any port | Use the running server, or stop it with `npm run dev:stop` before starting another. For a nondefault port, pass the port shown in the message, for example `npm run dev:stop -- --port 4000`. |
+| `❌ port 3000 is in use by …` | A process that is not this app's dev server holds the port (or the frontend port), so the dev server doesn't start | Run the `kill …` the message prints (or find the holder with `lsof -i :3000`), or choose another port with `npm run dev -- --port 4000` (use `--frontend-port` for the frontend port) |
+| `⚠️  Port 3000 is still in use after N attempts to bind it.`, then `❌ port 3000 is still in use.` | Something took the port between the startup check and the bind, and kept it through the retries | As above: stop the process the message names, or choose another port with `--port` |
+
 ```bash
 # Check if port is already in use:
 lsof -i :3000
@@ -109,6 +115,27 @@ lsof -i :3000
 # Kill stale processes:
 pkill -f "tsx watch"
 ```
+
+## `Frontend server unavailable` (502)
+
+The dev server listens on one port (3000 by default). It answers the API (`POST /aws-blocks/api`), your `RawRoute`s and `/.cdk-blocks-sandbox/config.json` itself, and proxies every other request to the frontend dev server (Next.js or Vite) on the frontend port, 3100 by default (`package.json#blocks.dev.frontendPort`, or `--frontend-port`). The body `Frontend server unavailable` with status **502** means that proxy could not reach anything on the frontend port. The API is unaffected.
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Startup log `Frontend did not start: Frontend server on port 3100 did not start within 30000ms`, then `(API only — frontend unavailable)` | The frontend command failed or is still starting, or it listens on a different port | Read the frontend's error output above that line and fix it; the proxy reaches the frontend as soon as it listens on the frontend port |
+| `Frontend dev server exited (…) and exceeded 5 restarts within 10s — leaving it down.` | The frontend crashes on start (a build or config error) | Fix the error printed above it, then restart `npm run dev` |
+| Warning `the frontend command "…" does not contain the frontend port 3100` | A custom `blocks.dev.frontendCommand` starts the frontend on its own port, which `--frontend-port` does not change | Put the frontend port in the command, or remove `frontendCommand` so `npm run dev` detects Next.js or Vite and starts it on that port |
+
+Without a frontend (`--no-frontend`, `"frontend": false`, or no `next` / `vite` dependency) there is no proxy: those requests get an empty 404 instead.
+
+## Other dev-server responses
+
+| Response | Cause | Fix |
+|----------|-------|-----|
+| 403 `Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-blocks/core` README, "Local Development") |
+| 404 `The AWS Blocks JSON-RPC API expects POST, not GET.` | An RPC path was requested with another method, for example by opening it in a browser | Call it with `POST` (see [RPC Wire Protocol](#rpc-wire-protocol)) |
+| 403 `{"error":"Forbidden: cross-origin request rejected"}` | A `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` names another site | Call from a loopback origin or the host in `BLOCKS_DEV_HOST`; see the `@aws-blocks/core` README, "Local Development", for the allowed origins |
+| 415 `Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json` | A JSON-RPC call sent without `Content-Type: application/json` | Send that header (with `curl`, `-H 'Content-Type: application/json'`); the generated clients already do |
 
 ## Auth cookies not persisting
 

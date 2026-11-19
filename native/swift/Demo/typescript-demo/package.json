@@ -11,7 +11,6 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "spec": "blocks-generate-spec",
     "dev:server": "tsx watch aws-blocks/scripts/server.ts",
     "dev:client": "vite",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
@@ -25,7 +24,17 @@
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test": "npm run typecheck && npm run test:e2e",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
-    "vendorize": "blocks-vendorize"
+    "docs": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs",
+    "docs:search": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --search",
+    "docs:api": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --api",
+    "spec": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate spec",
+    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize",
+    "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
+    "whoami": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- whoami",
+    "telemetry": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- telemetry",
+    "migrate": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- migrate",
+    "help": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- help",
+    "generate-client": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
@@ -44,6 +53,6 @@
   "overrides": {
     "@aws-blocks/core": "0.27.1",
     "postcss": "^8.5.10",
-    "brace-expansion": "^5.0.6"
+    "brace-expansion": "^5.0.7"
   }
 }

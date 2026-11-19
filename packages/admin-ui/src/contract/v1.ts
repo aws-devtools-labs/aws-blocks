@@ -577,7 +577,7 @@ export interface BlockKeySchema {
  *
  * `unresolved` is not an error state: `AppSetting.fromExisting` REQUIRES an
  * explicit `name`, and the documented way to pass one is a variable holding a
- * name seeded outside the stack (`ensureSecrets`). So the most important
+ * name seeded outside the stack (`npm run db -- connect --stage`). So the most important
  * settings are exactly the ones whose path a source scan cannot name, and a
  * consumer must address those from the deployed stack instead of guessing
  * `/${fullId}`, which is the one answer that is certainly wrong when an
@@ -632,7 +632,7 @@ export interface ScopeInfo {
 
 /** A block declared in the app's `aws-blocks/` source. */
 export interface DiscoveredBlock {
-	/** Block class name, e.g. 'DistributedTable'. */
+	/** Block class name, e.g. 'KVStore'. */
 	type: string;
 	/** Second constructor argument, e.g. 'pages'. */
 	id: string;
@@ -746,6 +746,18 @@ export interface DataRecord {
 	 * on difference, so the common record carries nothing extra.
 	 */
 	valueAsStored?: unknown;
+	/**
+	 * When the store stops returning the record, in epoch seconds, as `KVStore`
+	 * reports it.
+	 *
+	 * Set only for a record of a local `KVStore` data file that keeps its expiry
+	 * outside the value (the attribute `_bkv_ttl`), where `value` alone would not
+	 * show it. A store whose `ttl` option names a field keeps the expiry in that
+	 * field of `value`, and a cloud record shows its attributes as stored, so
+	 * neither sets this. A record can be past its expiry and still be listed:
+	 * the store removes an expired record later.
+	 */
+	expiresAt?: number;
 	/** True when any part of `value` was replaced by the redaction marker. */
 	redacted: boolean;
 }

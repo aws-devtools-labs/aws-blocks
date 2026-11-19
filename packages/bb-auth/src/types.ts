@@ -223,6 +223,12 @@ export interface AuthCommonOptions {
 	 * `BlocksPresets.sandbox` destroys). Set `'retain'` explicitly for any pool
 	 * holding real users.
 	 *
+	 * The session table has one setting for removal and deletion protection
+	 * (`KVStore`'s `protection`). When this option or `deletionProtection` is
+	 * set, the table is retained and protected if deletion protection resolves
+	 * to on, retained if it resolves to off with `'retain'`, and deleted with
+	 * the stack if it resolves to off with `'destroy'`.
+	 *
 	 * @default the stack's `defaults.removalPolicy`
 	 */
 	removalPolicy?: 'destroy' | 'retain';
@@ -236,12 +242,47 @@ export interface AuthCommonOptions {
 	 * Changing an already-protected pool to `false` deactivates its protection on
 	 * the next deploy.
 	 *
+	 * On the session table, deletion protection also retains the table when the
+	 * block leaves the stack (see `removalPolicy`).
+	 *
 	 * @default the stack's `defaults.deletionProtection`
 	 */
 	deletionProtection?: boolean;
 
 	/** Optional logger. When omitted, a default `Logger` at `error` level is created. */
 	logger?: ChildLogger;
+
+	/**
+	 * Write an audit record for each session lifecycle event, so you can see
+	 * and alarm on auth activity. Off by default.
+	 *
+	 * - `true` writes them through a dedicated `info`-level `Logger`: one JSON
+	 *   line per event in the function's CloudWatch log group, whatever level
+	 *   `logger` is set to.
+	 * - A `ChildLogger` sends them to that logger instead, at `info`. It must
+	 *   accept `info`: a logger set to `warn` or `error` drops every record
+	 *   without an error.
+	 *
+	 * Each record's message is its `event`, and its fields are an
+	 * {@link AuthAuditRecord}: `auth.session.issued`, `auth.signin.failed`
+	 * (an email + password sign-in or challenge answer, a federated callback, a
+	 * `validateUser` or `onSignIn` rejection, or an insecure-transport refusal),
+	 * `auth.signout` and `auth.sessions.revoked` (a password reset or
+	 * `admin.revokeUserSessions` ending all the user's sessions; `deleteUser`
+	 * ending the current one). A record never holds a password, code, token,
+	 * session id, email or error message. It identifies the user by `sub`,
+	 * which on a Cognito-store session is the id CloudTrail records; a
+	 * password-reset record carries the pool `username` instead. Writing a
+	 * record is best-effort: an error from the logger never changes the result,
+	 * and the first one is logged once as a `warn`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const auth = new Auth(scope, 'auth', { audit: true });
+	 * // CloudWatch metric filter for failed sign-ins: { $.event = "auth.signin.failed" }
+	 * ```
+	 */
+	audit?: boolean | ChildLogger;
 
 	/**
 	 * @deprecated Replaced by `providers`: move each entry there, keyed as
@@ -1323,8 +1364,8 @@ export interface UserPoolOptions {
 	 * values; anything else is rejected with `InvalidParameterException`, by
 	 * the local runtime as by Cognito.
 	 *
-	 * ⚠️ **Not a profile database.** Keep profile data in `KVStore` or
-	 * `DistributedTable`, keyed on `user.userSub`.
+	 * ⚠️ **Not a profile database.** Keep profile data in a `KVStore`, keyed
+	 * on `user.userSub`.
 	 */
 	attributes?: readonly UserAttribute[];
 
@@ -1400,8 +1441,53 @@ export interface UserPoolOptions {
 
 /** Settings for {@link AuthCommonOptions.session}. */
 export interface SessionOptions {
-	/** Session record and cookie lifetime, in seconds. @default 34_560_000 (400 days) */
+	/**
+	 * Session record and cookie lifetime, in seconds. Every refresh re-stamps
+	 * it, so it is how long a session may sit unused. A session also ends when
+	 * its Cognito refresh token does ({@link SessionOptions.refreshTokenValiditySeconds}),
+	 * which is counted from sign-in.
+	 *
+	 * @default 2_592_000 (30 days; it was 400 days before)
+	 */
 	ttlSeconds?: number;
+	/**
+	 * Lifetime of the Cognito access token on the app clients this block
+	 * creates, in seconds: a whole number of minutes from 300 to 86_400. The
+	 * session refreshes it behind the scenes. Not available with `userPool`:
+	 * set it on your pool's own app client.
+	 *
+	 * @default 3600 (1 hour)
+	 */
+	accessTokenValiditySeconds?: number;
+	/** Lifetime of the Cognito ID token; same rules as `accessTokenValiditySeconds`. @default 3600 (1 hour) */
+	idTokenValiditySeconds?: number;
+	/**
+	 * Lifetime of the Cognito refresh token, in seconds: a whole number of
+	 * minutes from 3600 to 315_360_000 (10 years). It is the **absolute** limit
+	 * of a session: counted from sign-in, and neither a refresh nor rotation
+	 * extends it, so the user signs in again once it ends however recently they
+	 * were active. `ttlSeconds` is the idle limit. Must be at least the access
+	 * and ID token lifetimes.
+	 *
+	 * @default `ttlSeconds` (30 days)
+	 */
+	refreshTokenValiditySeconds?: number;
+	/**
+	 * Rotate the refresh token on every refresh: Cognito issues a new one and
+	 * revokes the previous one (after a 10-second grace period for a concurrent
+	 * retry), so a stolen refresh token stops working once the real session
+	 * refreshes. The block stores the new token itself.
+	 *
+	 * Cognito does not allow the `REFRESH_TOKEN_AUTH` flow on a client with
+	 * rotation on, so the clients lose that flow and the block refreshes with
+	 * `GetTokensFromRefreshToken`, which accepts the refresh tokens of existing
+	 * sessions. Another app that refreshes against the same client with
+	 * `REFRESH_TOKEN_AUTH` must switch to `GetTokensFromRefreshToken`, or set
+	 * this to `false`. Turning it off is an in-place update too.
+	 *
+	 * @default true
+	 */
+	refreshTokenRotation?: boolean;
 	/**
 	 * Set `true` only when the frontend and the API are on different registrable
 	 * domains. Switches the cookie to `SameSite=None; Secure; Partitioned`.
@@ -2027,6 +2113,96 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
  * over {@link AuthActionInputOf}, returning {@link AuthStateUser} users.
  */
 export type AuthStateApiOf<O extends AuthOptions> = AuthStateApi<AuthActionInputOf<O>, AuthStateUser<O>>;
+
+/** One provider's public authorize parameters, as `<base>/authorize-params/<id>` returns them. */
+export interface OidcProviderConfig {
+	/** The IdP's (or managed login's) authorization endpoint. */
+	authorizeUrl: string;
+	/** The client id the native client sends to the authorization endpoint. */
+	clientId: string;
+	/** The scopes to request. */
+	scopes: string[];
+	/** The provider kind on the wire: `'oidc-custom'`, `'oauth2-custom'`, `'stub'` or the managed-login kind. */
+	kind: string;
+}
+
+/**
+ * The `oidc/client` descriptor `getClient()` sends: the block's sign-in
+ * routes and the providers a native client can sign in with. The Swift,
+ * Kotlin and Dart SDKs hydrate it into their OIDC client, which the
+ * generated clients type by `P`.
+ */
+export interface OidcClientDescriptor<P extends string = string> {
+	/** The transferable tag the native SDKs hydrate. */
+	__blocks: 'oidc/client';
+	/** The providers a native client can sign in with here, in the block's provider order. */
+	providers: P[];
+	/** Each listed provider's authorize parameters, keyed by provider id. */
+	providerConfigs: Record<string, OidcProviderConfig>;
+	/** `redirects.callbackPath`: the IdP returns here, and a relay sign-in's `redirect_uri`. */
+	callbackPath: string;
+	/** `<base>/exchange`: code to session cookie. */
+	exchangePath: string;
+	/** `redirects.signOutPath`. */
+	signOutPath: string;
+	/** `<base>/signin`: the server-initiated sign-in routes (`<base>/signin/<id>`). */
+	signInBasePath: string;
+	/** `<base>/authorize-params`: the relay sign-in's parameters (`<base>/authorize-params/<id>`). */
+	authorizeParamsBasePath: string;
+	/** `<base>/session`: `{ user }` for a valid session cookie, else 401. What a native app restores on launch from. */
+	sessionPath: string;
+	/** `<base>/exchange/refresh`: renews bearer tokens from `{ refreshToken }`. Served only with `allowBearerAuth`. */
+	refreshPath: string;
+	/**
+	 * The name of the session cookie `/exchange` sets for this block (`auth_<fullId>`). A native client that
+	 * signs out locally after a failed sign-out removes only this cookie, so another block's session survives.
+	 * Always sent by this block; optional so a client reading an older backend's descriptor still works.
+	 */
+	sessionCookieName?: string;
+}
+
+/**
+ * What `getClient()` returns. On the server it serializes to its
+ * {@link OidcClientDescriptor}; a native SDK turns that into a live OIDC
+ * client whose `signIn` takes only `P`. A browser receives the plain
+ * descriptor: for a web frontend use `createAuthClient()` from
+ * `@aws-blocks/bb-auth/browser-client` instead.
+ */
+export interface OidcClientHandle<P extends string = string> {
+	/** See {@link OidcClientDescriptor.providers}. */
+	readonly providers: P[];
+	/** See {@link OidcClientDescriptor.providerConfigs}. */
+	readonly providerConfigs: Record<string, OidcProviderConfig>;
+	/** See {@link OidcClientDescriptor.callbackPath}. */
+	readonly callbackPath: string;
+	/** See {@link OidcClientDescriptor.exchangePath}. */
+	readonly exchangePath: string;
+	/** See {@link OidcClientDescriptor.signOutPath}. */
+	readonly signOutPath: string;
+	/** See {@link OidcClientDescriptor.signInBasePath}. */
+	readonly signInBasePath: string;
+	/** See {@link OidcClientDescriptor.authorizeParamsBasePath}. */
+	readonly authorizeParamsBasePath: string;
+	/** See {@link OidcClientDescriptor.sessionPath}. */
+	readonly sessionPath: string;
+	/** See {@link OidcClientDescriptor.refreshPath}. */
+	readonly refreshPath: string;
+	/** See {@link OidcClientDescriptor.sessionCookieName}. */
+	readonly sessionCookieName?: string;
+	/** @internal Transferable serialization. */
+	toJSON(): OidcClientDescriptor<P>;
+}
+
+/**
+ * The `createOidcApi()` surface of an `Auth` with options `O`: one method,
+ * `getClient()`, typed by the block's provider ids. Generic in `O` itself (not
+ * in the provider ids) so `Auth` stays a supertype of every configured
+ * instance, as the options-literal projections above require.
+ */
+export interface OidcClientApiOf<O extends AuthOptions> {
+	/** This block's OIDC client for the native SDKs, typed by its provider ids. */
+	getClient(): Promise<OidcClientHandle<ProviderIdOf<O>>>;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Users and sessions
@@ -3217,6 +3393,13 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	createApi(): AuthStateApiOf<O>;
 
 	/**
+	 * The native SDKs' OIDC client: one RPC method, `getClient()`, returning
+	 * the `oidc/client` transferable the Swift, Kotlin and Dart SDKs hydrate
+	 * into an OIDC client typed by this block's provider ids.
+	 */
+	createOidcApi(): OidcClientApiOf<O>;
+
+	/**
 	 * Define an API namespace that is deny by default: its `methods` run only
 	 * after the session check, and only its `public` methods are callable
 	 * without a signed-in user. Use it instead of `new ApiNamespace(...)` so a
@@ -3734,4 +3917,51 @@ export interface AuthClient<P extends string = string> {
 	 * to the provider's logout URL when there is one (see {@link SignOutResult}).
 	 */
 	signOut(options?: { endProviderSession?: boolean }): Promise<SignOutResult>;
+}
+
+/**
+ * The fields of one audit record (the `audit` option). A record is written
+ * as one log line whose message is its `event`, so a CloudWatch metric filter
+ * such as `{ $.event = "auth.signin.failed" }` counts it.
+ */
+export interface AuthAuditRecord {
+	/** What happened. */
+	event: 'auth.session.issued' | 'auth.signin.failed' | 'auth.signout' | 'auth.sessions.revoked';
+	/** The `Auth` block's `fullId`, so two blocks in one app can be told apart. */
+	block: string;
+	/** How the user signed in: `'password'` or the provider id. Absent when unknown. */
+	provider?: string;
+	/**
+	 * The user's id: the Cognito `sub`, or `<issuer>:<sub>` for a direct-federated
+	 * session (which CloudTrail never records). Absent when the event does not
+	 * know the user, such as a failed password sign-in, or when an admin revoke
+	 * could not look the user up.
+	 */
+	sub?: string;
+	/**
+	 * The pool username, only on a password-reset `auth.sessions.revoked` record:
+	 * the `cognito:username` the reset's sessions are keyed by (never the email
+	 * the user typed).
+	 */
+	username?: string;
+	/**
+	 * - `'success'`: the event completed (a session issued, ended or revoked).
+	 * - `'failure'`: a sign-in was refused; always on `auth.signin.failed`.
+	 * - `'incomplete'`: ending sessions failed part-way, so some may still be
+	 *   valid: a `signOut` that could not delete the server-side session, or an
+	 *   `auth.sessions.revoked` whose revocation threw (with `error`).
+	 */
+	outcome: 'success' | 'failure' | 'incomplete';
+	/**
+	 * Why: on `auth.signin.failed`, `'challenge'` (a wrong MFA, email or SMS code),
+	 * `'provider'` (the callback failed), `'validate-user'`, `'on-sign-in'` or
+	 * `'insecure-transport'` (refused because the session cookie could not be
+	 * sent securely); absent for a refused password. On `auth.sessions.revoked`,
+	 * `'password-reset'` or `'admin'` (every session of the user) or
+	 * `'account-deleted'` (the current session; the user's others end on their
+	 * next request, without a record).
+	 */
+	reason?: string;
+	/** The error name of a failure, such as `NotAuthorizedException`. Never its message. */
+	error?: string;
 }

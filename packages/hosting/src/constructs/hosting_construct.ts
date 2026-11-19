@@ -44,7 +44,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
-import { isSandboxDeploy } from './deploy_stage.js';
+import { isSandboxDeploy, PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID } from './deploy_stage.js';
 import type { ComputeResource, DeployManifest } from '../manifest/types.js';
 import {
   type EnvValue,
@@ -180,6 +180,15 @@ export type HostingConstructProps = {
    * us-east-1 synthesizes cleanly and then fails at deploy.
    */
   skipRegionValidation?: boolean;
+
+  /**
+   * Construct id (and so the name) of the `us-east-1` stack Lambda@Edge
+   * functions are hoisted into when this stack is in another region. Default:
+   * CDK's `edge-lambda-stack-<hash>`. AWS Blocks' `Hosting` sets `<app id>-edge`
+   * when the fronted backend has `defaults.appIdentity`, so a shared platform's deploy
+   * guard and execution policy see it as the app's own stack.
+   */
+  edgeStackId?: string;
 
   /**
    * Custom domain configuration.
@@ -812,7 +821,7 @@ export class HostingConstruct extends Construct {
 
     // A bare REST API URL carries its stage (`https://{id}.execute-api…/prod/`),
     // but an app links from the root (`/assets/…`, `/aws-blocks/api`,
-    // `/.blocks-sandbox/config.json`), and those miss the stage (403). A
+    // `/.cdk-blocks-sandbox/config.json`), and those miss the stage (403). A
     // custom domain's base-path mapping serves the stage at the domain root.
     // The door's effective settings: `frontDoor.features` plus the deprecated
     // top-level aliases (`domain`, `waf`, `cdn.*`, `logging`, `monitoring`,
@@ -944,6 +953,7 @@ export class HostingConstruct extends Construct {
           logRetention: props.compute?.logRetention,
           skipRegionValidation: props.skipRegionValidation,
           environment: props.compute?.environment,
+          edgeStackId: props.edgeStackId,
         });
         this.computeFunctions.set(name, edgeConstruct.function);
         continue;
@@ -2148,17 +2158,35 @@ export class HostingConstruct extends Construct {
                   resolution:
                     'Give the ALB door a `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront or stacked door.',
                 };
-          if (!isSandboxDeploy(this)) {
+          // `allowPlainHttp: true` (the ALB and custom doors) is the explicit
+          // opt-out for a trusted network path: a production deploy then warns
+          // instead (acknowledgeable). A sandbox deploy is unchanged.
+          const allowPlainHttp = (fd?.kind === 'alb' || fd?.kind === 'custom') && fd.allowPlainHttp === true;
+          const sandbox = isSandboxDeploy(this);
+          if (!sandbox && allowPlainHttp) {
+            Annotations.of(this).addWarningV2(
+              PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID,
+              `${message} \`allowPlainHttp: true\` lets this production deploy serve it anyway: sign-in, session cookies and every RPC ` +
+                'can be read or altered by anyone on the network path, and `Auth` issues a session cookie without `Secure`. ' +
+                'Keep it only when that path is a trusted network (an internal door reached only inside a private network, ' +
+                `or TLS ended upstream by a proxy or another load balancer). ${resolution} ` +
+                'If serving over plain HTTP is intended, acknowledge it with ' +
+                `\`Annotations.of(stack).acknowledgeWarning('${PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID}')\`.`,
+            );
+          } else if (!sandbox) {
             throw new HostingError('PlainHttpFrontDoorError', {
               message: `${message} A production deploy refuses to serve it.`,
-              resolution: `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns.`,
+              resolution:
+                `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns. Only if the network path is trusted ` +
+                '(a private network, or TLS ended upstream), set `allowPlainHttp: true` on the door to serve it anyway.',
             });
+          } else {
+            Annotations.of(this).addWarningV2(
+              PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
+              `${message} \`Auth\` drops \`Secure\` from its session cookie behind such a door so that sign-in still works. ` +
+                `This is allowed in a sandbox only; a production deploy fails synth unless the door sets \`allowPlainHttp: true\`. ${resolution}`,
+            );
           }
-          Annotations.of(this).addWarningV2(
-            PLAIN_HTTP_FRONT_DOOR_WARNING_ID,
-            `${message} \`Auth\` drops \`Secure\` from its session cookie behind such a door so that sign-in still works. ` +
-              `This is allowed in a sandbox only; a production deploy fails synth. ${resolution}`,
-          );
         }
       }
       this.distributionUrl = built.url;
@@ -3151,7 +3179,7 @@ const assertEdgeRoutesReachableByDoor = (
  * Fail synth for an API Gateway REST door with no custom domain (see the call
  * site). Making the stage the app's base path automatically is not possible:
  * each framework bakes its base path into the build from its own config, and
- * the AWS Blocks client fetches `/.blocks-sandbox/config.json` from the root.
+ * the AWS Blocks client fetches `/.cdk-blocks-sandbox/config.json` from the root.
  */
 const assertRestDoorAddressable = (
   frontDoor: HostingConstructProps['frontDoor'],
@@ -3162,7 +3190,7 @@ const assertRestDoorAddressable = (
   throw new HostingError('RestFrontDoorNeedsDomainError', {
     message:
       "frontDoor { kind: 'apiGateway', api: 'rest' } has no custom domain. A REST API's own URL carries the `/prod` " +
-      "stage path, so the app's root-relative links (its assets, `/aws-blocks/api`, `/.blocks-sandbox/config.json`) " +
+      "stage path, so the app's root-relative links (its assets, `/aws-blocks/api`, `/.cdk-blocks-sandbox/config.json`) " +
       'resolve outside the stage and get 403.',
     resolution:
       "Add `domain` (its base-path mapping serves the stage at the domain root), or use `api: 'http'` (the HTTP " +

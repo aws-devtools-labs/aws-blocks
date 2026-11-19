@@ -55,7 +55,7 @@
     "test": "node --test dist/index.test.js && node --conditions=cdk --test dist/index.cdk.test.js && node --test dist/agentcore-bundle.test.js && node --test dist/user-agent.test.js && node --test dist/untrusted.test.js && node --test dist/mantle.test.js && node --conditions=aws-runtime --test dist/session-bucket.aws.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-distributed-table": "^0.3.0",
+    "@aws-blocks/bb-kv-store": "^0.4.0",
     "@aws-blocks/bb-file-bucket": "^0.4.0",
     "@aws-blocks/bb-logger": "^0.3.0",
     "@aws-blocks/bb-realtime": "^0.5.0",

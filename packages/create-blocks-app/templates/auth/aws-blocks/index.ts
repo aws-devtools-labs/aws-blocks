@@ -1,9 +1,9 @@
-import { ApiNamespace, ApiError, Scope, KVStore, Auth, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, Auth } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
@@ -11,7 +11,7 @@ const scope = new Scope('my-app');
 const store = new KVStore(scope, 'app-store', {});
 
 // Auth: email + password sign-in with groups and a custom attribute.
-// Full API: node_modules/@aws-blocks/bb-auth/README.md
+// Full API: npm run docs Auth
 //
 // `users.signInWith: ['email']` makes the email address the sign-in name, so
 // users type one identifier on the sign-up and sign-in forms. Sign-up confirms
@@ -58,8 +58,9 @@ const auth = new Auth(scope, 'auth', {
   },
 });
 
-// DistributedTable: per-user todos, keyed by userSub (stable even if the
-// user changes their display name / username).
+// KVStore with a schema and a key: per-user todos, keyed by userSub (stable
+// even if the user changes their display name / username). A store fixes its
+// key when you create it.
 const todoSchema = z.object({
   userSub: z.string(),
   todoId: z.string(),
@@ -69,7 +70,7 @@ const todoSchema = z.object({
   createdAt: z.number()
 });
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userSub',
@@ -149,7 +150,7 @@ export const api = auth.protect(scope, 'api', {
       return { message: `Hello reader ${reader.username}` };
     },
 
-    // ── Todos (per-user DistributedTable) ────────────────────────────────
+    // ── Todos (per-user KVStore with a schema and a key) ─────────────────
     async createTodo(title: string, priority: number = 2) {
       const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
       const todo = {
@@ -160,13 +161,14 @@ export const api = auth.protect(scope, 'api', {
         priority,
         createdAt: Date.now(),
       };
-      await todos.put(todo);
+      await todos.put({ userSub: user.userSub, todoId: ulid }, todo);
       return todo;
     },
 
     async listTodos(sortBy?: 'priority' | 'title' | 'createdAt') {
       const list = await Array.fromAsync(
-        todos.query({ where: { userSub: { equals: user.userSub } } })
+        todos.query({ where: { userSub: { equals: user.userSub } } }),
+        (entry) => entry.value,
       );
       // Sort in the API (not via a secondary index) — a per-user todo list is
       // small, so an in-memory sort is simpler and avoids provisioning GSIs.
@@ -183,7 +185,7 @@ export const api = auth.protect(scope, 'api', {
       // signature doesn't declare, so spreading `updates` would let a caller rewrite
       // `userSub` / `todoId` and write into another user's partition.
       const { completed, priority, title } = updates ?? {};
-      await todos.put({
+      await todos.put({ userSub: user.userSub, todoId }, {
         ...existing,
         ...(completed !== undefined ? { completed } : {}),
         ...(priority !== undefined ? { priority } : {}),

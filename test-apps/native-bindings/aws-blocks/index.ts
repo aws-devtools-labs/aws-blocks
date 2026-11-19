@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Native-bindings test backend — exercises the blocks that native clients
-// (Swift, Kotlin, Dart) consume: auth (three `Auth` instances: email +
-// password, a Cognito-style configuration, and OIDC through the local stub
-// IdP), realtime, file storage, and key-value.
+// (Swift, Kotlin, Dart) consume: auth (four `Auth` instances: email +
+// password, a Cognito-style configuration, and two federated blocks through
+// the local stub IdP), realtime, file storage, and key-value.
 
 import {
   ApiNamespace,
@@ -13,7 +13,6 @@ import {
   Realtime,
   RealtimeChannel,
   FileBucket,
-  DistributedTable,
 } from '@aws-blocks/blocks';
 import { Auth, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
 import type { AuthenticatedUser, AuthOptions, CodeDeliveryPurpose, SignInResult } from '@aws-blocks/bb-auth';
@@ -114,12 +113,37 @@ const oidcAuth = new Auth(scope, 'auth-oidc', {
       e2eIdpIssuer && e2eIdpClientId
         ? { type: 'oidc', issuer: e2eIdpIssuer, clientId: e2eIdpClientId }
         : stubIdp({ onAuthorize: (req) => req.users[0] }),
+    // A second provider, so the suites cover a block with more than one:
+    // `getAuthState()` lists one `signIn:<id>` action per provider. Always the
+    // stub, also when `google` federates a real IdP. It is an OIDC stub (ID
+    // token, logout URL), not the bare OAuth 2.0 `github()` provider.
+    github2: stubIdp({ onAuthorize: (req) => req.users[0] }),
   },
   redirects: {
     allowedRelayOrigins: [relayOrigin('nativebindings://auth'), relayOrigin('com.example.nativebindings://auth')],
   },
   onSignIn: async (user) => {
     lastOidcSignIn = { userId: user.userId, email: user.attributes.email ?? null, provider: user.signInProvider };
+  },
+});
+
+// --- Auth: a second federated block on its own routes ---------------------------
+// Two blocks with `providers` can't share sign-in routes, so this one moves them
+// under `/aws-blocks/auth/sso/`. Its callback is `return`, not `callback`, so a
+// native client that ignores the `callbackPath` from `getClient()` and assumes
+// the default name fails here. Its stub is keyed `corp`, because a stub IdP's
+// routes are keyed by provider key alone and `auth-oidc` already serves
+// `google` and `github2`. It shares `auth-oidc`'s relay origins, so one native
+// app reaches both blocks.
+const ssoAuth = new Auth(scope, 'auth-sso', {
+  store: 'builtin',
+  providers: {
+    corp: stubIdp({ onAuthorize: (req) => req.users[0] }),
+  },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/sso/return',
+    signOutPath: '/aws-blocks/auth/sso/signout',
+    allowedRelayOrigins: [relayOrigin('nativebindings://auth'), relayOrigin('com.example.nativebindings://auth')],
   },
 });
 
@@ -144,7 +168,7 @@ const realtime = new Realtime(scope, 'collab', {
   },
 });
 
-// --- DistributedTable (Todos) ------------------------------------------------
+// --- KVStore with a schema and a key (Todos) ---------------------------------
 // Per-user todos: the partition key is the owner's `userSub` (stable for the
 // user's lifetime), and every todo method reads and writes only the caller's
 // partition, so one user can never list, read or change another user's todos.
@@ -166,7 +190,7 @@ export interface Todo {
   createdAt: number;
 }
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userSub',
@@ -244,7 +268,14 @@ function oidcUserInfo(user: AuthenticatedUser): OidcUserInfo {
 
 export const authBasicApi = authBasic.createApi();
 export const authCognitoApi = authCognito.createApi();
-export const oidcAuthApi = oidcAuth.createApi();
+// The native SDKs' OIDC client (`getClient()` → the `oidc/client` transferable),
+// under the export name the native suites have always used.
+export const oidcAuthApi = oidcAuth.createOidcApi();
+// The OIDC block's sign-in state machine, for the web demo's Authenticator.
+export const oidcAuthStateApi = oidcAuth.createApi();
+// The second federated block's OIDC client and state machine, the same pair.
+export const ssoOidcApi = ssoAuth.createOidcApi();
+export const ssoAuthStateApi = ssoAuth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
@@ -461,6 +492,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // --------------------------------------------------------------------------
+  // Auth: the second federated block (`auth-sso`, routes under /aws-blocks/auth/sso/)
+  // --------------------------------------------------------------------------
+
+  async ssoRequireAuth(): Promise<OidcUserInfo> {
+    return oidcUserInfo(await ssoAuth.requireAuth(context));
+  },
+
+  async ssoGetCurrentUser(): Promise<OidcUserInfo | null> {
+    const user = await ssoAuth.getCurrentUser(context);
+    return user ? oidcUserInfo(user) : null;
+  },
+
+  // --------------------------------------------------------------------------
   // Realtime
   // --------------------------------------------------------------------------
 
@@ -474,7 +518,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // --------------------------------------------------------------------------
-  // Todos (DistributedTable) — gated on the email + password block
+  // Todos (KVStore with a schema and a key) — gated on the email + password block
   // --------------------------------------------------------------------------
 
   async createTodo(title: string, priority: number = 2): Promise<Todo> {
@@ -488,7 +532,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       priority,
       createdAt: Date.now(),
     };
-    await todos.put(todo);
+    await todos.put({ userSub: user.userSub, todoId: ulid }, todo);
     return todo;
   },
 
@@ -503,7 +547,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } else {
       iterator = todos.query({ where });
     }
-    return await Array.fromAsync(iterator);
+    return await Array.fromAsync(iterator, (entry) => entry.value);
   },
 
   async getTodo(todoId: string): Promise<Todo | null> {
@@ -519,7 +563,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // signature doesn't declare, so spreading `updates` would let a caller rewrite
     // `userSub` / `todoId` and write into another user's partition.
     const { completed, priority, title } = updates ?? {};
-    await todos.put({
+    await todos.put({ userSub: user.userSub, todoId }, {
       ...existing,
       ...(completed !== undefined ? { completed } : {}),
       ...(priority !== undefined ? { priority } : {}),
@@ -590,6 +634,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async echoArgs(first: string, middle?: string, last?: string) {
     return { first, middle: middle ?? null, last: last ?? null };
   },
+
+  /**
+   * Returns nothing. The server answers `"result": null`; a response with no `result` field
+   * made the Kotlin and Swift clients throw "Missing result field" on every void call
+   * (native e2e: Swift `RpcWireE2ETests`, Kotlin `RpcWireE2ETest`, Dart `rpc_wire_test.dart`).
+   */
+  async voidResult(): Promise<void> {},
 
   /**
    * A rest parameter typed as a tuple, as `...args: Parameters<typeof table.put>` forwards a

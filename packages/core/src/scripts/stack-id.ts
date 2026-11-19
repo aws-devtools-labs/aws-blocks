@@ -5,6 +5,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
+import { migrateLegacySandboxDir } from './migrate-sandbox-dir.js';
 
 interface BlocksConfig {
   stackId?: string;
@@ -45,17 +47,21 @@ export function getStackId(projectRoot?: string): string {
 
 /**
  * Get or create a per-machine sandbox identifier.
- * Stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
+ * Stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored).
  * Format: `<username(8)>-<random(6)>` — identifies the developer's sandbox.
  *
  * Get-or-create (lazy init): returns the existing id, or generates and persists
  * one on first call. The file is the shared sync point — once written, every
- * later caller and every process reads the same id, so the secret writer
- * (`ensureSecrets`) and synth derive identical names.
+ * later caller and every process reads the same id, so the scripts and synth
+ * derive identical names.
  */
 export function getSandboxId(projectRoot?: string): string {
   const root = projectRoot || process.cwd();
-  const filePath = join(root, '.blocks-sandbox', 'sandbox-id.txt');
+  // Before the get-or-create below can mint a NEW id: an app upgrading across the
+  // directory rename still has its id under the old name (D-030). Minting here
+  // would deploy to a different stack and orphan the customer's existing sandbox.
+  migrateLegacySandboxDir(root);
+  const filePath = join(root, BLOCKS_SANDBOX_DIR, 'sandbox-id.txt');
   if (existsSync(filePath)) return readFileSync(filePath, 'utf-8').trim();
   const dir = dirname(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -77,10 +83,9 @@ export function getSandboxId(projectRoot?: string): string {
  *
  * This function reads committed config (`.blocks/config.json`, throws if absent
  * — D-012) and resolves the sandbox id via {@link getSandboxId} (get-or-create):
- * the first caller materializes `.blocks-sandbox/sandbox-id.txt`, every later
+ * the first caller materializes `.cdk-blocks-sandbox/sandbox-id.txt`, every later
  * caller reads the same value. Because that file persists and is shared across
- * processes, the secret writer (`ensureSecrets`) and synth resolve identical
- * names. Production does not use the sandbox id.
+ * processes, the scripts and synth resolve identical names. Production does not use the sandbox id.
  */
 export function getStackName(opts: { sandbox: boolean; projectRoot?: string }): string {
   const base = getStackId(opts.projectRoot);

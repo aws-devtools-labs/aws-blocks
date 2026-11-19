@@ -8,7 +8,7 @@ import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { EventSourceMapping, registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { resolvePerInstanceConcurrency } from '@aws-blocks/core';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
@@ -239,7 +239,7 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		// Same child id and options as the runtime entry points, so the provisioned
 		// table is the one JobStatusTracker resolves at request time.
 		if (options.trackStatus) {
-			new DistributedTable(this, STATUS_TABLE_ID, statusTableOptions as never);
+			new KVStore(this, STATUS_TABLE_ID, statusTableOptions);
 		}
 	}
 

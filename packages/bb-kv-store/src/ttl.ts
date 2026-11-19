@@ -8,20 +8,34 @@
  */
 import { blocksError } from '@aws-blocks/core';
 import { KVStoreErrors } from './errors.js';
-import type { PutOptions } from './types.js';
+import type { Expiry } from './types.js';
 
 /**
- * DynamoDB attribute that holds the expiry timestamp. Fixed rather than
- * configurable: a KVStore item's shape is owned by the block (`pk` + `value`),
- * so there is no customer-defined attribute to point TTL at.
+ * Every top-level attribute name that starts with this prefix belongs to the
+ * block. `put` rejects an object value that has such a field. A value that an app
+ * builds from request input must not be able to set the key or the expiry of
+ * an item. The prefix stands for "Blocks key-value".
  */
-export const TTL_ATTRIBUTE = 'ttl';
+export const RESERVED_PREFIX = '_bkv_';
+
+/** Partition key attribute of a store with no declared `key` (a string key). */
+export const PK_ATTRIBUTE = '_bkv_pk';
+
+/** Attribute that holds a value that is not an object (a string, a number, an array, ...). */
+export const VALUE_ATTRIBUTE = '_bkv_value';
+
+/**
+ * DynamoDB attribute that holds the expiry timestamp when the store does not
+ * name a field of the value with the `ttl` option. TTL is always on for a table
+ * the block creates, on this attribute or on the named field.
+ */
+export const TTL_ATTRIBUTE = '_bkv_ttl';
 
 /**
  * Epoch *seconds* above which a value is almost certainly epoch milliseconds
- * (1e11 seconds is the year 5138). Writing milliseconds into a DynamoDB TTL
- * attribute silently means "never expires", which is the exact failure mode
- * TTL is meant to prevent — so we reject it instead.
+ * (1e11 seconds is the year 5138). Milliseconds written into a DynamoDB TTL
+ * attribute mean "never expires", with no error. That is the exact failure that
+ * TTL is meant to prevent, so we reject the value.
  */
 const MAX_PLAUSIBLE_EPOCH_SECONDS = 1e11;
 
@@ -29,23 +43,24 @@ function invalidTtl(message: string): never {
 	throw blocksError(KVStoreErrors.ValidationFailed, message);
 }
 
-/** Current time as Unix epoch seconds — the unit DynamoDB TTL expects. */
+/** Current time as Unix epoch seconds, the unit DynamoDB TTL expects. */
 export function nowEpochSeconds(): number {
 	return Math.floor(Date.now() / 1000);
 }
 
 /**
- * Resolve `ttlSeconds` / `expiresAt` to an absolute Unix epoch-seconds value,
+ * Resolve `ttlSeconds` or `expiresAt` to an absolute Unix epoch-seconds value,
  * or `undefined` when the caller asked for no expiry.
  *
- * `expiresAt` accepts any point in time, including one already past — that
- * reads as "expire immediately", so there is no lower bound beyond being a
- * finite time. Only the epoch-milliseconds guard caps the upper end.
- * `ttlSeconds` is a duration rather than an instant, so it must be positive.
+ * `expiresAt` accepts any point in time, including one already past, which reads
+ * as "expire immediately". So there is no lower bound beyond being a finite
+ * time. Only the epoch-milliseconds guard caps the upper end. `ttlSeconds` is a
+ * duration rather than an instant, so it must be positive.
  *
- * @throws {KVStoreErrors.ValidationFailed} If both options are set, or either is not a usable time.
+ * @throws {KVStoreErrors.ValidationFailed} If both options are set, or either is
+ *   not a usable time.
  */
-export function resolveTtlEpochSeconds(options?: PutOptions<unknown>): number | undefined {
+export function resolveTtlEpochSeconds(options?: Expiry): number | undefined {
 	const ttlSeconds = options?.ttlSeconds;
 	const expiresAt = options?.expiresAt;
 	if (ttlSeconds === undefined && expiresAt === undefined) return undefined;
@@ -69,13 +84,15 @@ export function resolveTtlEpochSeconds(options?: PutOptions<unknown>): number | 
 		invalidTtl(`put: \`expiresAt\` must be a Date or a Unix epoch time in seconds (received ${String(expiresAt)})`);
 	}
 	if (expiresAt >= MAX_PLAUSIBLE_EPOCH_SECONDS) {
-		invalidTtl('put: `expiresAt` looks like epoch milliseconds; DynamoDB TTL expects seconds — pass a Date or divide by 1000');
+		invalidTtl(
+			'put: `expiresAt` looks like epoch milliseconds; DynamoDB TTL expects seconds — pass a Date or divide by 1000',
+		);
 	}
 	return Math.floor(expiresAt);
 }
 
 /**
- * Whether a stored `ttl` attribute has passed. Non-numeric / absent values are
+ * Whether a stored TTL attribute has passed. Non-numeric / absent values are
  * never expired, matching DynamoDB (it ignores items whose TTL attribute is
  * missing or not a Number).
  */

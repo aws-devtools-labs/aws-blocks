@@ -45,7 +45,7 @@ Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxi
 6. **Upload source** — uploads the staged `bench-app` copy as
    `bench-source-<task>-<template>` for post-run auditing (deps/build output,
    VCS and anything credential-shaped — `node_modules`, `.git`, `dist`,
-   `.blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
+   `.cdk-blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
    - **6b. Upload trace** (best-effort) — the agent trace, run metrics and
      command log written by step 2; on a wall-clock timeout step 2 emits no
      trace, so nothing uploads
@@ -215,11 +215,11 @@ dimensions* below — there is no per-task dimension to author.
 | `auth-notes` | `demo` | Auth (email + password, emailed sign-up code) + KVStore |
 | `file-gallery` | `bare` | FileBucket |
 | `async-word-counter` | `bare` | AsyncJob + KVStore |
-| `collab-presence-board` | `default` | Realtime + DistributedTable |
+| `collab-presence-board` | `default` | Realtime + KVStore (schema + key) |
 | `cognito-profile` | `auth` | Auth (email + password sign-up confirmed with an emailed code; profile + session) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
-| `oidc-dsql-notes` | `react` | Auth (`store: 'builtin'`, stub IdP) + DistributedDatabase |
+| `oidc-dsql-notes` | `react` | Auth (`store: 'builtin'`, stub IdP) + Database (Aurora DSQL) |
 | `email-digest` | `demo` | CronJob + EmailClient + KVStore |
 | `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 

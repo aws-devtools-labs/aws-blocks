@@ -35,7 +35,11 @@ class FakeLauncher implements BrowserLauncher {
   FakeLauncher({this.onLaunch});
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     capturedAuthorizeUrl = authorizeUrl;
     capturedScheme = callbackScheme;
     if (onLaunch == null) {
@@ -135,7 +139,7 @@ void main() {
     });
   });
 
-  group('signInRelay', () {
+  group('signIn', () {
     test(
       'fetches authorize params and builds the correct authorize URL',
       () async {
@@ -180,7 +184,7 @@ void main() {
           },
         );
 
-        final user = await client.signInRelay(
+        final user = await client.signIn(
           'google',
           launcher: launcher,
           relayTo: _relayTo,
@@ -244,7 +248,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       expect(exchangeBody!['iss'], 'https://idp.example.com');
       expect(exchangeBody!['code'], 'c');
@@ -302,7 +306,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       // Auth routes resolve at the origin (.../prod), NOT under /aws-blocks/api.
       expect(
@@ -376,7 +380,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       expect(
         authParamsUrls.single,
@@ -433,11 +437,7 @@ void main() {
           },
         );
 
-        await client.signInRelay(
-          'google',
-          launcher: launcher,
-          relayTo: _relayTo,
-        );
+        await client.signIn('google', launcher: launcher, relayTo: _relayTo);
         expect(exchangeBody!.containsKey('iss'), isFalse);
       },
     );
@@ -470,7 +470,8 @@ void main() {
 
         final client = buildClient(httpClient: httpClient, store: store);
         final states = <OidcAuthState>[];
-        client.authStateChanges.listen(states.add);
+        // Skip the state a new listener gets first: these tests check changes.
+        client.authStateChanges.skip(1).listen(states.add);
 
         final launcher = FakeLauncher(
           onLaunch: (authorizeUrl, scheme) {
@@ -481,7 +482,7 @@ void main() {
           },
         );
 
-        final user = await client.signInRelay(
+        final user = await client.signIn(
           'google',
           launcher: launcher,
           relayTo: _relayTo,
@@ -505,11 +506,7 @@ void main() {
         final launcher = FakeLauncher(onLaunch: (_, __) => Uri.parse(_relayTo));
 
         expect(
-          () => client.signInRelay(
-            'unknown',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('unknown', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcUnknownProviderException>().having(
               (e) => e.provider,
@@ -545,8 +542,7 @@ void main() {
       );
 
       expect(
-        () =>
-            client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+        () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
         throwsA(
           isA<OidcCallbackException>().having(
             (e) => e.message,
@@ -590,11 +586,7 @@ void main() {
         );
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcCallbackException>().having(
               (e) => e.message,
@@ -627,22 +619,108 @@ void main() {
         });
         final client = buildClient(httpClient: httpClient);
         final launcher = FakeLauncher(
-          onLaunch: (_, __) => Uri.parse(
-            '$_relayTo?error=access_denied&error_description=User+cancelled',
+          onLaunch: (url, __) => Uri.parse(
+            '$_relayTo?error=access_denied&error_description=User+cancelled'
+            '&state=${Uri.encodeComponent(url.queryParameters['state']!)}',
           ),
         );
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcCallbackException>().having(
               (e) => e.message,
               'message',
               contains('access_denied'),
+            ),
+          ),
+        );
+      },
+    );
+
+    for (final (label, state) in [
+      ('no state', null),
+      ('a state from another sign-in', 'forged.sig'),
+    ]) {
+      test(
+        'an IdP error with $label fails the state check, not the IdP error',
+        () async {
+          final httpClient = MockClient((req) async {
+            if (req.url.path.contains('/auth/authorize-params/')) {
+              final csrf = (jsonDecode(req.body) as Map)['csrf'] as String;
+              return http.Response(
+                jsonEncode({
+                  'authorizeUrl': 'https://idp.example.com/authorize',
+                  'clientId': 'cid',
+                  'scopes': ['openid'],
+                  'kind': 'oidc-builtin',
+                  'state': makeStateEnvelope(csrf: csrf),
+                }),
+                200,
+              );
+            }
+            return http.Response('{}', 200);
+          });
+          final client = buildClient(httpClient: httpClient);
+          final launcher = FakeLauncher(
+            onLaunch: (_, __) => Uri.parse(
+              '$_relayTo?error=access_denied'
+              '${state == null ? '' : '&state=$state'}',
+            ),
+          );
+
+          await expectLater(
+            client.signIn('google', launcher: launcher, relayTo: _relayTo),
+            throwsA(
+              isA<OidcCallbackException>().having(
+                (e) => e.message,
+                'message',
+                allOf(
+                  matches(RegExp('state', caseSensitive: false)),
+                  isNot(contains('access_denied')),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    test(
+      'an IdP error with an undecodable state envelope fails the state check',
+      () async {
+        // authorize-params issues a state whose envelope isn't valid, and the
+        // callback echoes it with an IdP error. The CSRF check runs before
+        // the error is read, so the error never reaches the caller.
+        const undecodable = 'not-base64-json.sig';
+        final httpClient = MockClient((req) async {
+          if (req.url.path.contains('/auth/authorize-params/')) {
+            return http.Response(
+              jsonEncode({
+                'authorizeUrl': 'https://idp.example.com/authorize',
+                'clientId': 'cid',
+                'scopes': ['openid'],
+                'kind': 'oidc-builtin',
+                'state': undecodable,
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 200);
+        });
+        final client = buildClient(httpClient: httpClient);
+        final launcher = FakeLauncher(
+          onLaunch: (_, __) =>
+              Uri.parse('$_relayTo?error=access_denied&state=$undecodable'),
+        );
+
+        await expectLater(
+          client.signIn('google', launcher: launcher, relayTo: _relayTo),
+          throwsA(
+            isA<OidcCallbackException>().having(
+              (e) => e.message,
+              'message',
+              isNot(contains('access_denied')),
             ),
           ),
         );
@@ -668,11 +746,7 @@ void main() {
         final launcher = FakeLauncher(onLaunch: (_, __) => Uri.parse(_relayTo));
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(isA<OidcCallbackException>()),
         );
       },
@@ -700,8 +774,7 @@ void main() {
       );
 
       expect(
-        () =>
-            client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+        () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
         throwsA(isA<OidcCancelledException>()),
       );
     });
@@ -734,11 +807,7 @@ void main() {
         );
 
         expect(
-          () => client.signInRelay(
-            'google',
-            launcher: launcher,
-            relayTo: _relayTo,
-          ),
+          () => client.signIn('google', launcher: launcher, relayTo: _relayTo),
           throwsA(
             isA<OidcCallbackException>().having(
               (e) => e.message,
@@ -801,7 +870,7 @@ void main() {
         },
       );
 
-      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+      await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       expect(session.cookies['blocks_session'], 'sess-abc-123');
       expect(session.cookieHeader, contains('blocks_session=sess-abc-123'));
@@ -857,7 +926,7 @@ void main() {
             );
           },
         );
-        await oidc.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+        await oidc.signIn('google', launcher: launcher, relayTo: _relayTo);
 
         // Now a BlocksClient sharing the same SessionStore makes an RPC call.
         String? sentCookie;
@@ -880,11 +949,17 @@ void main() {
       },
     );
 
-    test('signOut clears the session cookie', () async {
+    test('signOut clears the session cookie the server expires', () async {
       final session = InMemorySessionStore();
       session.setCookies('blocks_session=live; Path=/');
 
-      final httpClient = MockClient((_) async => http.Response('{}', 200));
+      final httpClient = MockClient(
+        (_) async => http.Response(
+          '{}',
+          200,
+          headers: {'set-cookie': 'blocks_session=; Path=/; Max-Age=0'},
+        ),
+      );
       final client = OidcClient(
         exchangePath: '/auth/exchange',
         refreshPath: '/auth/refresh',

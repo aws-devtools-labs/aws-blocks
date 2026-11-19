@@ -140,7 +140,7 @@ test.beforeAll(async () => {
     // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
     const outputs = JSON.parse(
-      readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'),
+      readFileSync(join(projectRoot, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8'),
     );
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const hostingKey = Object.keys(stackOutputs).find((k) =>
@@ -181,7 +181,7 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
   });
 
   test('2. config.json is served with apiUrl', async ({ request }) => {
-    const resp = await request.get(`${hostingUrl}/.blocks-sandbox/config.json`);
+    const resp = await request.get(`${hostingUrl}/.cdk-blocks-sandbox/config.json`);
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
@@ -427,6 +427,18 @@ test.describe('SSR origin regression coverage', () => {
     const body = await resp.json();
     expect(body.bytes).toBe(buf.length);
     expect(body.sha256).toBe(expectedSha);
+  });
+
+  test('Binary response (image/png from a server route) arrives byte for byte', async ({ request }) => {
+    // The same 1×1 PNG that server/api/probe/image.get.ts returns.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const resp = await request.get(`${hostingUrl}/api/probe/image`);
+    expect(resp.status()).toBe(200);
+    expect(resp.headers()['content-type']).toBe('image/png');
+    expect(Buffer.compare(await resp.body(), png)).toBe(0);
   });
 
   test('Streaming handler paces chunk generation server-side (200ms × 4 gaps ≈ 800ms span)', async ({

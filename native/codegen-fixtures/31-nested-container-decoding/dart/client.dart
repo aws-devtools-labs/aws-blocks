@@ -30,7 +30,7 @@ class SignInOption {
   Map<String, dynamic> toJson() {
     return {
       'label': label,
-      'client': client.toJson(),
+      'client': client,
     };
   }
 
@@ -208,10 +208,10 @@ class Board {
   Map<String, dynamic> toJson() {
     return {
       'title': title,
-      'channels': channels.map((e) => e.toJson()).toList(),
-      if (tagFeeds != null) 'tagFeeds': tagFeeds?.map((e) => e.toJson()).toList(),
-      'feedsByRoom': feedsByRoom.map((k, v) => MapEntry(k, v.toJson())),
-      'downloads': downloads.map((e) => e.toJson()).toList(),
+      'channels': channels,
+      if (tagFeeds != null) 'tagFeeds': tagFeeds,
+      'feedsByRoom': feedsByRoom,
+      'downloads': downloads,
       'layout': layout.toJson(),
     };
   }
@@ -258,7 +258,7 @@ class LoginMenu {
     return {
       'primary': primary.toJson(),
       'options': options.map((e) => e.toJson()).toList(),
-      if (fallback != null) 'fallback': fallback?.toJson(),
+      if (fallback != null) 'fallback': fallback,
     };
   }
 
@@ -278,9 +278,9 @@ class LoginMenu {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<Board> getBoard() async {
     final result = await _client.call('api.getBoard', const <dynamic>[]);
@@ -319,11 +319,11 @@ class ApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    api = ApiApi(client);
+    api = Api(client);
   }
 }
 

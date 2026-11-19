@@ -18,7 +18,7 @@ const SERVING_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * Playwright `globalSetup`: deploy the sandbox once per run (sandbox mode only).
- * The deployed stack's outputs land in `.blocks-sandbox/outputs.json`, which the
+ * The deployed stack's outputs land in `.cdk-blocks-sandbox/outputs.json`, which the
  * spec's `beforeAll` reads. See `sandbox-lifecycle.ts` for why this is not a hook.
  *
  * The deploy returns at CREATE_COMPLETE, which can come before CloudFront serves
@@ -37,7 +37,7 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
 
 /** The deployed hosting URL, read from the stack outputs the same way the spec's `beforeAll` does. */
 function readHostingUrl(): string {
-  const outputs = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
+  const outputs = JSON.parse(readFileSync(join(projectRoot, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8'));
   const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
   const hostingKey = Object.keys(stackOutputs).find((k) => k.startsWith('HostingHostingUrl'));
   const url = hostingKey ? stackOutputs[hostingKey] : '';

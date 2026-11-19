@@ -91,8 +91,8 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
             "public final nonisolated class Todos: Sendable {",
             "public final nonisolated class Blocks: Sendable {",
             "public nonisolated enum Servers {",
-            "public nonisolated struct Todo: Codable {",
-            "public nonisolated enum Status: String, Codable {"
+            "public nonisolated struct Todo: Codable, Sendable {",
+            "public nonisolated enum Status: String, Codable, Sendable {"
         ])
         let members = (output.api + output.models).split(separator: "\n").filter { $0.hasPrefix(" ") && $0.contains("nonisolated") }
         XCTAssertEqual(members, [], "members inherit nonisolated from their type")
@@ -213,7 +213,9 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
     // A namespace class named like any type the generated files name unqualified would shadow it.
     func testReservedClassNamesCoverEveryTypeGeneratedCodeNamesUnqualified() throws {
         let fixtures = swiftPackageURL.deletingLastPathComponent().appendingPathComponent("codegen-fixtures")
+        // A fixture whose Swift golden is a codegen error (a transferable parameter) generates no code to scan.
         let specs = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
+            .filter { !FileManager.default.fileExists(atPath: $0.appendingPathComponent("swift/codegen-error.txt").path) }
             .map { $0.appendingPathComponent("spec.json") }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
             .map { try String(contentsOf: $0) }

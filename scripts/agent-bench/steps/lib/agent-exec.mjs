@@ -29,8 +29,9 @@ if (mode === 'preflight') {
 	if (phase.error) fail(phase.error);
 	process.stderr.write(`[agent-exec] agent isolation: ${phase.isolated ? 'ACTIVE' : 'BARE (local dev opt-in)'}\n`);
 } else if (mode === 'run') {
-	const sep = rest.indexOf('--');
-	if (sep < 1 || sep !== rest.length - 2) fail('usage: run <cwd> [K=V …] -- <command>');
+	// The first `--` must be the second-to-last arg: `run <cwd> [K=V …] -- <command>`.
+	const sep = rest.length - 2;
+	if (sep < 1 || rest[sep] !== '--' || rest.slice(0, sep).includes('--')) fail('usage: run <cwd> [K=V …] -- <command>');
 	const cwd = rest[0];
 	/** @type {Record<string, string>} */
 	const overrides = {};

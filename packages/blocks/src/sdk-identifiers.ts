@@ -18,9 +18,7 @@ import type { AsyncJob } from '@aws-blocks/bb-async-job';
 import type { Auth } from '@aws-blocks/bb-auth';
 import type { CronJob } from '@aws-blocks/bb-cron-job';
 import type { Dashboard } from '@aws-blocks/bb-dashboard';
-import type { Database } from '@aws-blocks/bb-data';
-import type { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
-import type { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import type { Database, DatabaseCluster } from '@aws-blocks/bb-database';
 import type { FileBucket } from '@aws-blocks/bb-file-bucket';
 import type { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import type { KVStore } from '@aws-blocks/bb-kv-store';
@@ -47,8 +45,7 @@ import { getSdkIdentifiers as _getSdkIdentifiers } from '@aws-blocks/core';
  * const { tableName } = getSdkIdentifiers(store); // ← typed as { tableName: string }
  * ```
  */
-export function getSdkIdentifiers(bb: KVStore<any>): { tableName: string };
-export function getSdkIdentifiers(bb: DistributedTable<any, any, any>): { tableName: string };
+export function getSdkIdentifiers(bb: KVStore<any, any, any, any>): { tableName: string };
 export function getSdkIdentifiers(bb: FileBucket<any>): { bucketName: string };
 export function getSdkIdentifiers(bb: AsyncJob<any>): { queueUrl: string };
 export function getSdkIdentifiers(bb: AppSetting<any>): { parameterName: string };
@@ -64,8 +61,15 @@ export function getSdkIdentifiers(bb: Auth<any>): {
 	hostedUiDomain?: string;
 	hostedUiClientId?: string;
 };
-export function getSdkIdentifiers(bb: Database): { clusterArn: string; secretArn: string; databaseName: string };
-export function getSdkIdentifiers(bb: DistributedDatabase): { clusterEndpoint: string };
+// `Database` always registers the cluster it runs on and its schema. The endpoint and region exist
+// only in Lambda: the local build runs on PGlite and has neither.
+export function getSdkIdentifiers(bb: Database): {
+	clusterId: string;
+	schemaName: string;
+	clusterEndpoint?: string;
+	region?: string;
+};
+export function getSdkIdentifiers(bb: DatabaseCluster): { clusterEndpoint: string; region?: string };
 export function getSdkIdentifiers(bb: KnowledgeBase): { kbId: string };
 export function getSdkIdentifiers(bb: InstanceType<typeof Realtime>): { wsUrl: string; callbackUrl: string };
 export function getSdkIdentifiers(bb: Agent): {

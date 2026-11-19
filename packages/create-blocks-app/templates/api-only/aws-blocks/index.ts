@@ -5,7 +5,7 @@
  * are building a backend for a mobile app, a CLI, or a third-party client.
  *
  * It ships a public health check plus an auth-gated CRUD resource (items) over a
- * DistributedTable, with per-user isolation and optimistic locking, and
+ * KVStore, with per-user isolation and optimistic locking, and
  * auth-gated presigned file URLs scoped to each user's own files. Point any
  * client at the RPC endpoint; there is no web UI to serve.
  *
@@ -14,17 +14,17 @@
  * Use Building Blocks for cloud persistence and other common cloud abstractions.
  * They work locally with automatic mocks and deploy to AWS with zero configuration.
  *
- * For the full list of blocks and how to use them, see:
- *   node_modules/@aws-blocks/blocks/README.md
+ * Building Block docs: npm run docs lists the blocks;
+ * npm run docs <Block>... prints their docs (--help for more)
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, Auth, DistributedTable, FileBucket } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, Auth, KVStore, FileBucket, RawRoute } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-// Email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Email + password sign-in (npm run docs Auth).
 // Sign-up confirms the email address with a 6-digit code; once the caller
 // submits it they are signed in automatically. On AWS, Cognito emails the code.
 const auth = new Auth(scope, 'auth', {
@@ -42,6 +42,8 @@ export const authApi = auth.createApi();
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 // Zod schema = runtime validation + TypeScript types + DynamoDB table shape.
+// The `key` names the fields that identify an item. A store fixes its key when
+// you create it, so declare it up front for any records you list or query.
 const itemSchema = z.object({
   owner: z.string(),        // partition key — the owner's userSub (per-user isolation)
   itemId: z.string(),       // sort key — unique within a user
@@ -51,7 +53,7 @@ const itemSchema = z.object({
   createdAt: z.number(),
 });
 
-const items = new DistributedTable(scope, 'items', {
+const items = new KVStore(scope, 'items', {
   schema: itemSchema,
   key: { partitionKey: 'owner', sortKey: 'itemId' }, // owner + itemId together identify one item
   // Another grouping or sort order is an index (an object keyed by name), not a different key:
@@ -75,10 +77,24 @@ const ALLOWED_UPLOAD_TYPES = new Set(['text/plain', 'application/json', 'applica
 /** FileBucket path under the signed-in user's own prefix (`/` in a user id is encoded). */
 const userPath = (userSub: string, path: string) => `users/${encodeURIComponent(userSub)}/${path}`;
 
+// ─── Health probe ────────────────────────────────────────────────────────────
+// Public — no auth. Load balancers and uptime monitors send a plain `GET` and
+// can't speak JSON-RPC, so the probe is a RawRoute (full HTTP control) rather
+// than an API method. It touches no data. `npm run docs RawRoute`
+// prints its docs, with path parameters and wildcards.
+// RawRoute responses are JSON and `no-store` by default, so a probe never sees a cached "ok".
+new RawRoute(scope, 'healthz', {
+  method: 'GET',
+  path: '/healthz',
+  handler: async (context) => {
+    context.response.send({ status: 'ok', timestamp: Date.now() });
+  },
+});
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
-  /** Public — no auth. A liveness probe for load balancers and uptime checks. */
+  /** Public — no auth. The liveness check for RPC clients; probes that send a plain GET use `/healthz` above. */
   async health() {
     return { status: 'ok' as const, timestamp: Date.now() };
   },
@@ -116,7 +132,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       version: 1,
       createdAt: Date.now(),
     };
-    await items.put(item);
+    await items.put({ owner: user.userSub, itemId }, item);
     return item;
   },
 
@@ -127,6 +143,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // `index: 'byCreatedAt', order: 'desc'` ('asc' | 'desc').
     return await Array.fromAsync(
       items.query({ where: { owner: { equals: user.userSub } } }),
+      (entry) => entry.value,
     );
   },
 
@@ -151,6 +168,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
+      { owner: user.userSub, itemId },
       { ...item, quantity, version: item.version + 1 },
       { ifFieldEquals: { version: item.version } },
     );
@@ -161,7 +179,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    * Compare-and-swap: update the quantity only if the item is still at
    * `expectedVersion`. If another writer moved on first, the `ifFieldEquals`
    * precondition fails and the block throws `ConditionalCheckFailedException`
-   * (HTTP 409) — catch it with `isBlocksError(e, DistributedTableErrors.ConditionalCheckFailed)`,
+   * (HTTP 409) — catch it with `isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)`,
    * re-read, and retry. This is the raw optimistic-lock primitive `updateQuantity`
    * builds on, exposed so a client can implement its own retry policy.
    */
@@ -170,6 +188,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const item = await items.get({ owner: user.userSub, itemId });
     if (!item) throw new ApiError('Item not found', 404, { name: 'ItemNotFoundException' });
     await items.put(
+      { owner: user.userSub, itemId },
       { ...item, quantity, version: expectedVersion + 1 },
       { ifFieldEquals: { version: expectedVersion } },
     );

@@ -49,11 +49,13 @@ const BLOCKS = {
 	sms: `{ mfa: { mode: 'optional', types: ['SMS'] } }`,
 	passkey: `{ users: { authFlow: 'USER_AUTH' }, passkeys: ${JSON.stringify(passkeys)}, featurePlan: 'essentials' }`,
 	federated: `{ store: 'builtin', providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)} } } }`,
-	mixed: `{ providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)}, clientSecret: ${oktaSecret} } }, redirects: ${JSON.stringify(mixedRedirects)} }`,
+	mixed: `{ providers: { entra: { type: 'oidc', ...${JSON.stringify(okta)}, clientSecret: ${oktaSecret} } }, redirects: ${JSON.stringify(mixedRedirects)} }`,
 	attributes: `{ users: { groups: ['admins'], attributes: [{ name: 'department' }] } }`,
 } as const;
 type Block = keyof typeof BLOCKS;
 const NAMES = Object.keys(BLOCKS) as Block[];
+/** The blocks whose `createOidcApi()` the spec carries: two with a provider, and one with none. */
+const OIDC_BLOCKS = ['federated', 'mixed', 'password'] as const satisfies readonly Block[];
 /** The blocks with email + password, which have `signIn`. */
 const PASSWORD_BLOCKS = NAMES.filter((b) => b !== 'federated');
 
@@ -65,7 +67,7 @@ const OPTIONS: Record<Block, AuthOptions> = {
 	passkey: { users: { authFlow: 'USER_AUTH' }, passkeys, featurePlan: 'essentials' },
 	federated: { store: 'builtin', providers: { okta: { type: 'oidc', ...okta } } },
 	mixed: {
-		providers: { okta: { type: 'oidc', ...okta, clientSecret: { fullId: 'okta-secret', get: async () => 's' } } },
+		providers: { entra: { type: 'oidc', ...okta, clientSecret: { fullId: 'okta-secret', get: async () => 's' } } },
 		redirects: mixedRedirects,
 	},
 	attributes: { users: { groups: ['admins'], attributes: [{ name: 'department' }] } },
@@ -79,6 +81,7 @@ const scope = new Scope('shape');
 ${NAMES.map((b) => `const ${b}Options = ${BLOCKS[b]} as const;\nconst ${b} = new Auth(scope, '${b}', ${b}Options);`).join('\n')}
 
 ${NAMES.map((b) => `export const ${b}Api = ${b}.createApi();`).join('\n')}
+${OIDC_BLOCKS.map((b) => `export const ${b}OidcApi = ${b}.createOidcApi();`).join('\n')}
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 ${PASSWORD_BLOCKS.map((b) => `	async ${b}SignIn(username: string, pw: string) { return ${b}.signIn(username, pw, context); },`).join('\n')}
@@ -102,7 +105,11 @@ const METHODS = [
 function inProcessBackend(): Record<string, unknown> {
 	const scope = new Scope('shape');
 	const backend: Record<string, unknown> = {};
-	for (const b of NAMES) backend[`${b}Api`] = new Auth(scope, b, OPTIONS[b]).createApi();
+	for (const b of NAMES) {
+		const auth = new Auth(scope, b, OPTIONS[b]);
+		backend[`${b}Api`] = auth.createApi();
+		if ((OIDC_BLOCKS as readonly Block[]).includes(b)) backend[`${b}OidcApi`] = auth.createOidcApi();
+	}
 	const unused = async () => null;
 	backend.api = new ApiNamespace(scope, 'api', () => Object.fromEntries(METHODS.map((m) => [m, unused])));
 	return backend;
@@ -166,6 +173,22 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		}
 	});
 
+	test("createOidcApi().getClient() is the oidc/client transferable, typed by each block's own provider ids", () => {
+		// What the native generators read: Swift/Kotlin turn the enum into `<Namespace>.GetClient.Provider`, Dart into `<Api class>GetClientProvider`.
+		const typed = (id: string) => ({
+			'x-blocks-transferable': 'oidc/client',
+			'x-blocks-type-args': [{ type: 'string', enum: [id] }],
+		});
+		// The two blocks configure different provider ids, so each namespace's enum is its own block's.
+		assert.deepStrictEqual(method('federatedOidcApi.getClient').result.schema, typed('okta'));
+		assert.deepStrictEqual(method('mixedOidcApi.getClient').result.schema, typed('entra'));
+		// No provider: no enum, so the native client is the untyped one (`OidcClient<AnyProvider>`, `OIDCClient<String>`, Dart's `OidcClient`).
+		assert.deepStrictEqual(method('passwordOidcApi.getClient').result.schema, {
+			'x-blocks-transferable': 'oidc/client',
+		});
+		assert.deepStrictEqual(method('federatedOidcApi.getClient').params, []);
+	});
+
 	test('signIn results carry every sign-in step, for every block with email + password', () => {
 		const nextSteps = PASSWORD_BLOCKS.map((b) => {
 			const arms = resolve(method(`api.${b}SignIn`).result.schema).oneOf ?? [];
@@ -200,7 +223,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		const providers = (b: Block) => [...(user(b).properties?.signInProvider?.enum ?? [])].sort();
 		for (const b of shared) assert.deepStrictEqual(providers(b), ['password'], b);
 		assert.deepStrictEqual(providers('federated'), ['okta'], "a `store: 'builtin'` block has no password users");
-		assert.deepStrictEqual(providers('mixed'), ['okta', 'password']);
+		assert.deepStrictEqual(providers('mixed'), ['entra', 'password']);
 		const groups = user('attributes').properties?.groups as { items?: Schema } | undefined;
 		assert.deepStrictEqual(groups?.items?.enum, ['admins']);
 	});

@@ -71,6 +71,26 @@ function KeyCell({ record, keyFields }: { record: DataRecord; keyFields: string[
 	);
 }
 
+/**
+ * The expiry of a record whose store keeps it outside the value. A store stops
+ * returning a record at its expiry and removes it later, so a record that is
+ * listed can already be past it.
+ */
+function ExpiryBadge({ expiresAt }: { expiresAt: number }) {
+	const at = new Date(expiresAt * 1000);
+	// A number that is not a date (out of range) is shown as stored.
+	const when = Number.isFinite(at.getTime()) ? at.toLocaleString() : String(expiresAt);
+	const expired = at.getTime() <= Date.now();
+	return (
+		<Badge
+			variant={expired ? 'warning' : 'outline'}
+			title={`${expired ? 'Expired' : 'Expires'} ${when}. The store does not return a record after its expiry.`}
+		>
+			{expired ? 'expired' : `expires ${when}`}
+		</Badge>
+	);
+}
+
 /** The open record editor: what it writes, and which row it was opened from. */
 interface EditorState {
 	writeMode: WriteMode;
@@ -578,6 +598,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 																masked
 															</Badge>
 														)}
+														{record.expiresAt !== undefined && <ExpiryBadge expiresAt={record.expiresAt} />}
 													</div>
 												</TableCell>
 												<TableCell className="align-top">

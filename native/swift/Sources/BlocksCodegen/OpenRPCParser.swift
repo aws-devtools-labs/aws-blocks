@@ -74,10 +74,14 @@ public struct OpenRPCParser {
         // Parse methods
         let methods = spec.methods.map { method -> RPCMethod in
             let params = method.params.map { param -> ContentDescriptor in
-                ContentDescriptor(
+                let schema = mapTypeRef(param.schema)
+                let isUnion: Bool
+                if case .union = schema { isUnion = true } else { isUnion = false }
+                return ContentDescriptor(
                     name: param.name,
-                    schema: mapTypeRef(param.schema),
-                    required: param.required ?? false
+                    schema: schema,
+                    required: param.required ?? false,
+                    typeName: isUnion ? param.typeName : nil
                 )
             }
 

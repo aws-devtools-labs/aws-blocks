@@ -2,12 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { isWireSafeError } from '@aws-blocks/core';
-import { type DatabaseEngine, type SqlQuery, type TransactionHandle, unwrapQuery } from '@aws-blocks/data-common/core';
+import type { DatabaseEngine, TransactionHandle } from '../common/engine.js';
+import { type SqlQuery, unwrapQuery } from '../common/sql.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { AUTOCOMMIT_CONFLICT_BACKOFF_MS, DEFAULT_MAX_RETRIES } from '../constants.js';
+import {
+	AUTOCOMMIT_CONFLICT_BACKOFF_MS,
+	DEFAULT_MAX_RETRIES,
+	TRANSACTION_CONFLICT_BACKOFF_BASE_MS,
+	TRANSACTION_CONFLICT_BACKOFF_CAP_MS,
+} from '../constants.js';
 import { type RowCountingEngine, withTransaction } from '../engines/handle.js';
 import {
 	asError,
+	configError,
 	DatabaseErrors,
 	isKnownDatabaseErrorName,
 	isSerializationConflict,
@@ -20,14 +27,44 @@ import { currentTransactionScope, runInTransactionScope, TransactionScope } from
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * @internal The wait in milliseconds before `transaction()` retry number `retry` (0 for the first retry) after
+ * a conflict: a whole number drawn uniformly from 0 to `min(cap, base * 2^retry)`, both included ("full
+ * jitter"). `random` returns a number in [0, 1), as `Math.random` does.
+ */
+export function conflictRetryDelayMs(retry: number, random: () => number = Math.random): number {
+	const ceiling = Math.min(TRANSACTION_CONFLICT_BACKOFF_CAP_MS, TRANSACTION_CONFLICT_BACKOFF_BASE_MS * 2 ** retry);
+	return Math.floor(random() * (ceiling + 1));
+}
+
 interface DatabaseCoreOptions {
 	engine: () => Promise<RowCountingEngine>;
+	/** Tests only: stands in for the wait between conflict retries. */
+	sleep?: (ms: number) => Promise<void>;
+	/** Tests only: the random source of the `transaction()` wait, a number in [0, 1). */
+	random?: () => number;
 }
 
 export class DatabaseCore {
 	private engine: Promise<RowCountingEngine> | null = null;
 
 	constructor(private readonly options: DatabaseCoreOptions) {}
+
+	/** Resolves after `ms`, or as soon as `signal` aborts. */
+	private async wait(ms: number, signal?: AbortSignal): Promise<void> {
+		const slept = (this.options.sleep ?? sleep)(ms);
+		if (!signal) return slept;
+		let onAbort = () => {};
+		const aborted = new Promise<void>((resolve) => {
+			onAbort = resolve;
+		});
+		signal.addEventListener('abort', onAbort, { once: true });
+		try {
+			await Promise.race([slept, aborted]);
+		} finally {
+			signal.removeEventListener('abort', onAbort);
+		}
+	}
 
 	/** @internal */
 	getEngine(): Promise<RowCountingEngine> {
@@ -63,7 +100,7 @@ export class DatabaseCore {
 				return await fn();
 			} catch (e) {
 				if (!isSerializationConflict(e) || attempt >= AUTOCOMMIT_CONFLICT_BACKOFF_MS.length) throw e;
-				await sleep(AUTOCOMMIT_CONFLICT_BACKOFF_MS[attempt]);
+				await this.wait(AUTOCOMMIT_CONFLICT_BACKOFF_MS[attempt]);
 			}
 		}
 	}
@@ -101,15 +138,22 @@ export class DatabaseCore {
 		return this.withConflictRetry(() => engine.execute(sql, params));
 	}
 
+	// The failed attempt has rolled back and freed its connection before the wait.
 	async transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		const engine = await this.getEngine();
-		const maxAttempts = options?.retryOnConflict ? (options.maxRetries ?? DEFAULT_MAX_RETRIES) + 1 : 1;
-		for (let attempt = 1; ; attempt++) {
+		const maxRetries = options?.retryOnConflict ? (options.maxRetries ?? DEFAULT_MAX_RETRIES) : 0;
+		if (!Number.isInteger(maxRetries) || maxRetries < 0) {
+			throw configError(`transaction(): 'maxRetries' must be a whole number of 0 or more, got ${maxRetries}.`);
+		}
+		const signal = options?.signal;
+		for (let retry = 0; ; retry++) {
 			try {
 				return await runTransaction(this, engine, fn);
 			} catch (e) {
-				if (isSerializationConflict(e) && attempt < maxAttempts) continue;
-				throw e;
+				if (!isSerializationConflict(e) || retry >= maxRetries || signal?.aborted) throw e;
+				await this.wait(conflictRetryDelayMs(retry, this.options.random), signal);
+				// The caller gave up during the wait: a re-run now would commit work that nobody waits for.
+				if (signal?.aborted) throw e;
 			}
 		}
 	}

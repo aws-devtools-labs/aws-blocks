@@ -18,7 +18,7 @@
  *   report as warnings.
  *
  * The level is read from the environment on every call, so a caller (the
- * `cdk-blocks` CLI) can set it at any point before invoking a script, and spawned
+ * task runner) can set it at any point before invoking a script, and spawned
  * children inherit it.
  */
 export type BlocksLogLevel = 'legacy' | 'quiet' | 'normal' | 'verbose' | 'debug';
@@ -51,7 +51,7 @@ export function isCuratedLevel(level: BlocksLogLevel): boolean {
 export const BLOCKS_LOG_STREAM_ENV = 'BLOCKS_LOG_STREAM';
 
 /**
- * True when progress goes to stderr. The `cdk-blocks` CLI sets `BLOCKS_LOG_STREAM=stderr`
+ * True when progress goes to stderr. The task runner sets `BLOCKS_LOG_STREAM=stderr`
  * so that stdout carries only results; without it the legacy streams are unchanged.
  * Results (`BLOCKS_DEPLOYED`, final URLs, the deployment target) stay on stdout either way.
  */
@@ -101,7 +101,7 @@ export const log = {
 
 /**
  * Write errors that mean the reader of stdout/stderr is gone: a closed pipe (`EPIPE`), a hung-up terminal (`EIO`).
- * The `cdk-blocks` CLI keeps its own copy, because it must not load this entry on every command; a test of
+ * The task runner keeps its own copy, because it must not load this entry on every command; a test of
  * `@aws-blocks/blocks` fails when the two differ.
  */
 export const CLOSED_OUTPUT_CODES: readonly string[] = ['EPIPE', 'EIO', 'ERR_STREAM_DESTROYED'];

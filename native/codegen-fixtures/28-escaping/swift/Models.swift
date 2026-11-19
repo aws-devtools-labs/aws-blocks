@@ -2,7 +2,7 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum Kind: String, Codable {
+public nonisolated enum WidgetKind: String, Codable, Sendable {
     case cost_ = "cost$"
     case a_b = "a$b"
     case x__y = "x$$y"
@@ -10,12 +10,12 @@ public nonisolated enum Kind: String, Codable {
     case d__e = "d_$e"
 }
 
-public nonisolated struct Widget: Codable {
+public nonisolated struct Widget: Codable, Sendable {
     public let code: String
     public let count: Int?
     public let flag: Bool?
     public let id: String
-    public let kind: Kind
+    public let kind: WidgetKind
     public let limit: Int?
     public let note_: String?
     public let ratio: Double?
@@ -46,7 +46,7 @@ public nonisolated struct Widget: Codable {
         try c.encodeIfPresent(self.scale, forKey: .scale)
     }
 
-    public init(code: String, count: Int? = 7, flag: Bool? = true, id: String, kind: Kind, limit: Int? = 99999999999, note_: String? = "a/b é $x ${y} \"q\" 'q' \\ \\(z) */ end", ratio: Double? = 1.5, scale: Double? = 3) throws {
+    public init(code: String, count: Int? = 7, flag: Bool? = true, id: String, kind: WidgetKind, limit: Int? = 99999999999, note_: String? = "a/b é $x ${y} \"q\" 'q' \\ \\(z) */ end", ratio: Double? = 1.5, scale: Double? = 3) throws {
         guard code.range(of: "^a'b\"c\\$d[${x}]+$", options: .regularExpression) != nil else { throw CodegenError.validation("code must match pattern ^a'b\"c\\$d[${x}]+$") }
         self.code = code
         self.count = count

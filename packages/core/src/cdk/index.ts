@@ -43,6 +43,7 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
 import { claimScopeFullId, type ScopeFullIdClaims } from '../common/scope-fullid-claims.js';
+import { ensureResourceNameCheck } from './resource-name-check.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
@@ -63,6 +64,8 @@ export {
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
+	BLOCKS_APP_TAG_KEY,
+	type BlocksAppIdentity,
 	type BlocksDefaults,
 	BlocksPresets,
 	type BlocksSecretsStore,
@@ -232,7 +235,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Initialize VPC context before the default compute is created and before
 		// BBs are constructed, so both can discover it: the default compute
 		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
-		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
+		// the VPC, and BBs read it to co-locate their resources.
 		if (this._vpcOptions) {
 			initializeVpc(this, this._vpcOptions);
 		}
@@ -400,7 +403,19 @@ export class Scope extends Construct {
 	 * 'service-sessions'` collide and would get resources with one physical name.
 	 * A future release will make this a synth error.
 	 *
-	 * @param id - This scope's construct id, unique among its siblings.
+	 * The id is also part of the physical name of each resource created under
+	 * this scope (`fullId` joins the ids and does not escape them), and each
+	 * service accepts its own characters. Lowercase letters, digits and hyphens
+	 * are accepted in every name. `cdk synth` fails when a resource under a scope
+	 * has a name its service rejects, naming the id, the characters and what the
+	 * service accepts: `new Scope('@acme/shop')` with a `KVStore` under it fails,
+	 * because a DynamoDB table name allows only letters, digits, `_`, `.` and `-`.
+	 * The id is not rejected when the scope is constructed: the same id deploys
+	 * when the blocks under it name nothing from it, or name only resources that
+	 * accept it.
+	 *
+	 * @param id - This scope's construct id, unique among its siblings. Use
+	 *   lowercase letters, digits and hyphens.
 	 * @param options - Parent scope, Building Block metadata and compute.
 	 */
 	constructor(id: string, options?: ScopeOptions) {
@@ -417,6 +432,9 @@ export class Scope extends Construct {
 		);
 		const collision = claimScopeFullId(claims, this, computeScopeFullId(this));
 		if (collision) cdk.Annotations.of(this).addWarningV2('blocks:scope:fullIdCollision', collision);
+		// The names derived from this id are only known once the blocks under it
+		// exist, so they are checked when the tree is validated at synth.
+		ensureResourceNameCheck(this);
 		// An official Building Block (its `bbName` is one of OFFICIAL_BB_NAMES) marks
 		// the roles it creates as AWS Blocks' own for the service-principal trust
 		// check (see isAppOwnedRole in blocks-roles.ts). A plain `new Scope(...)`

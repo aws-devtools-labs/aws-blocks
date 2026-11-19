@@ -1120,7 +1120,7 @@ function sharedRequiredProperties(members: JsonSchema[]): string[] {
 }
 
 /**
- * The `.blocks-sandbox/` file whose `apiUrl` {@link writeSpec} puts in the
+ * The `.cdk-blocks-sandbox/` file whose `apiUrl` {@link writeSpec} puts in the
  * spec's `servers`: `config.sandbox.json` / `config.production.json` for
  * `stage` `sandbox` / `production` (what a deploy of that stage records, see
  * `deployedConfigFile`), else the dev server's `config.json`.
@@ -1146,7 +1146,7 @@ export async function writeSpec(
 	// or from the deployed stage that BLOCKS_SPEC_STAGE names (config.<stage>.json,
 	// which only a deploy writes), so a spec never targets AWS by accident.
 	const projectRoot = dirname(dirname(foundationPath));
-	const configPath = join(projectRoot, '.blocks-sandbox', specConfigFile(process.env.BLOCKS_SPEC_STAGE));
+	const configPath = join(projectRoot, '.cdk-blocks-sandbox', specConfigFile(process.env.BLOCKS_SPEC_STAGE));
 	if (existsSync(configPath)) {
 		try {
 			const config = JSON.parse(readFileSync(configPath, 'utf-8'));

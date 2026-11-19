@@ -1,8 +1,8 @@
-# Task: OIDC Notes (DistributedDatabase)
+# Task: OIDC Notes (Database on Aurora DSQL)
 
 Build a personal notes app gated by OIDC sign-in. A visitor signs in through an OIDC provider, then creates notes that belong to them and persist in a distributed SQL database across reloads.
 
-The core of this task is **using the framework**: notes are added and listed through an **`api` namespace** whose methods run **on the server**, derive the caller from the **OIDC auth session**, and persist through the **`DistributedDatabase`** block. The page is a thin client over that API; the OIDC sign-in itself is a browser redirect flow.
+The core of this task is **using the framework**: notes are added and listed through an **`api` namespace** whose methods run **on the server**, derive the caller from the **OIDC auth session**, and persist through the **`Database`** block on its default Aurora DSQL cluster. The page is a thin client over that API; the OIDC sign-in itself is a browser redirect flow.
 
 ## Setup (do this first)
 
@@ -19,7 +19,7 @@ Replace the scaffold's starter todo demo with your OIDC-gated notes app.
 
 ### The `api` namespace (primary surface)
 
-Expose an **`api` namespace** (the framework's server-side RPC surface — a `POST /aws-blocks/api` JSON-RPC endpoint) whose note methods derive the current user from the **OIDC session** (the sign-in cookie) — never from a client-supplied id — and persist through a **`DistributedDatabase`** table (create a `.sql` migration under `aws-blocks/dsql-migrations/`):
+Expose an **`api` namespace** (the framework's server-side RPC surface — a `POST /aws-blocks/api` JSON-RPC endpoint) whose note methods derive the current user from the **OIDC session** (the sign-in cookie) — never from a client-supplied id — and persist through a **`Database`** table on the block's default Aurora DSQL cluster (create a `.sql` migration under `aws-blocks/migrations/<block id>/`):
 
 1. **`api.addNote(text)`** — inserts a note for the current user and returns the created row `{ id, text }`. Text is stored **verbatim** via **parameterized** SQL — a note containing a single quote such as `' OR '1'='1` round-trips intact (never breaks or injects into the query) and is never HTML-processed. There is **no deduplication** (adding the same text twice creates two rows). A blank/whitespace-only or non-string `text` is rejected with a JSON-RPC **error** envelope (no row inserted).
 2. **`api.listNotes()`** — returns the current user's notes as `[{ id, text }]` in **oldest-first** creation order, backed by a stored timestamp / sequential id plus an explicit `ORDER BY` (identical on every call, never relying on unspecified row order).

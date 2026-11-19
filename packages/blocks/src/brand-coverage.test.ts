@@ -59,10 +59,6 @@ const packagesDir = join(fileURLToPath(import.meta.url), '..', '..', '..', '..',
  * entry is a documented exception, not a place to hide a real miss.
  */
 const FILE_ALLOWLIST: Record<string, string> = {
-	// Host-side migration step (D-009): runs as a pre-`cdk deploy` subprocess, its
-	// errors surface to the operator's terminal, never through the RPC serializer,
-	// so the wire-safe brand is irrelevant here.
-	'bb-data/src/migrations/external-migrations.ts': 'host-side migration CLI — errors go to the operator, not the RPC wire',
 	// The `bb-auth` codemod (`npx @aws-blocks/bb-auth migrate`): a CLI that rewrites the
 	// app's source files. Its errors are codemod bugs reported in the terminal, never
 	// thrown from an API method, so they never reach the RPC serializer.
@@ -179,7 +175,7 @@ const SITE_WINDOW = 8;
  * adding an entry — every entry is a documented exception, not a hiding place.
  */
 const SITE_ALLOWLIST: Record<string, string> = {
-	'bb-agent/src/providers/throwing.ts:cause.name = \'AccessDeniedException\'':
+	'bb-agent/src/providers/throwing.ts:cause.name = \'ResourceNotFoundException\'':
 		'Test-only provider imitating a raw AWS SDK error as the cause of a model failure. It must stay unbranded: ' +
 		'bb-agent classifies it server-side and only its own composed, branded ModelUnavailable error crosses the wire.',
 };

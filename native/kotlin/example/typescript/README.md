@@ -1,6 +1,6 @@
 # Shared Example Backend
 
-The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `aws-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npx blocks-generate-spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
+The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `aws-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
 
 > **Upgrading a deployed stack:** todos are now keyed on the owner's `userSub` instead of `userId`. A table's key can't change in place, so a stack deployed from an earlier version of this example fails to update — destroy it (`npm run sandbox:destroy`) and deploy again. Existing todos are not carried over.
 
@@ -16,22 +16,22 @@ npm run dev
 npm run sandbox
 
 # Regenerate the spec — run this after dev or sandbox, whichever you want the apps to target
-npx blocks-generate-spec                            # the dev server (.blocks-sandbox/config.json)
-BLOCKS_SPEC_STAGE=sandbox npx blocks-generate-spec  # the deployed sandbox (.blocks-sandbox/config.sandbox.json)
+npm run spec                            # the dev server (.cdk-blocks-sandbox/config.json)
+BLOCKS_SPEC_STAGE=sandbox npm run spec  # the deployed sandbox (.cdk-blocks-sandbox/config.sandbox.json)
 ```
 
-The dev server writes `.blocks-sandbox/config.json` with its own URL, and a sandbox deploy records the deployed API in `.blocks-sandbox/config.sandbox.json`. `blocks-generate-spec` copies one `apiUrl` into the spec's `servers` array: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one. So the spec describes **one** server:
+The dev server writes `.cdk-blocks-sandbox/config.json` with its own URL, and a sandbox deploy records the deployed API in `.cdk-blocks-sandbox/config.sandbox.json`. `blocks-generate-spec` copies one `apiUrl` into the spec's `servers` array: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one. So the spec describes **one** server:
 
 | Generated with | Generated `Servers` entry | URL |
 |---|---|---|
-| `npx blocks-generate-spec` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
-| `BLOCKS_SPEC_STAGE=sandbox npx blocks-generate-spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
+| `npm run spec` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
+| `BLOCKS_SPEC_STAGE=sandbox npm run spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
 
 To switch the apps between local and sandbox, regenerate the spec the other way.
 
 ### Inside the AWS Blocks repository
 
-`npm install` fetches `@aws-blocks/blocks` from npm. To run this backend against the packages in your checkout instead (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
+`npm install` fetches `@aws-blocks/blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
 
 ```bash
 mkdir -p node_modules && ln -sfn ../aws-blocks node_modules/aws-blocks
@@ -66,7 +66,7 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
-`Auth` serves the sign-in routes at fixed paths under `/aws-blocks/auth/` (`authorize-params/google`, `callback`, `exchange`, `signout`), and the Kotlin apps build their client from those paths with `OidcClient.forAuth(...)`. They keep the session cookie the exchange sets. `allowBearerAuth: true` additionally lets a native client that holds the provider's access token call the API with `Authorization: Bearer <token>` and renew it at `/aws-blocks/auth/exchange/refresh`, as the Swift and Dart SDKs do.
+The backend exports `oidcAuthApi = auth.createOidcApi()`, and the Kotlin apps get their OIDC client from `oidcAuthApi.getClient()`: it carries the block's sign-in routes and providers, and the generated client types `signIn` by them (`OidcAuthApi.GetClient.Provider.Google`). They keep the session cookie the exchange sets, and that cookie is what keeps them signed in: the Kotlin client asks the exchange for no bearer tokens. `allowBearerAuth: true` only matters to a client that holds the provider's access token itself and calls the API with `Authorization: Bearer <token>`.
 
 Sign-in talks to real Google in every environment, including `npm run dev` — there is no fake-user fallback. Until both values are set, Google rejects the sign-in. Setting them is a two-part job: create an OAuth client at Google, then provide its two values.
 
@@ -88,9 +88,9 @@ The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, 
 | Local (`npm run dev`) | `http://localhost:3001/aws-blocks/auth/callback` |
 | Sandbox (`npm run sandbox`) | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/auth/callback` |
 
-Read the sandbox host out of `.blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
+Read the sandbox host out of `.cdk-blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
 
-> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
+> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/aws-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
 
 ### 3. Provide the client ID and secret
 
@@ -112,7 +112,7 @@ The dev server re-reads the file on every request, so no restart is needed. `.bb
 
 #### Sandbox (`npm run sandbox`)
 
-A `secret: true` `AppSetting` is an SSM **SecureString** parameter at `/<stack-name>-<scope-id>-<setting-id>`, so with the stack name from `.blocks-sandbox/outputs.json` (its single top-level key, `typescript-stack-<sandbox-id>`) the parameter is:
+A `secret: true` `AppSetting` is an SSM **SecureString** parameter at `/<stack-name>-<scope-id>-<setting-id>`, so with the stack name from `.cdk-blocks-sandbox/outputs.json` (its single top-level key, `typescript-stack-<sandbox-id>`) the parameter is:
 
 ```
 /typescript-stack-<sandbox-id>-my-app-google-client-secret
@@ -123,7 +123,7 @@ The first `npm run sandbox` **creates the parameter with a random placeholder va
 The same thing from the CLI:
 
 ```bash
-STACK=typescript-stack-$(cat .blocks-sandbox/sandbox-id.txt)
+STACK=typescript-stack-$(cat .cdk-blocks-sandbox/sandbox-id.txt)
 aws ssm put-parameter --name "/$STACK-my-app-google-client-secret" \
   --type SecureString --value 'GOCSPX-your-secret-here' --overwrite
 ```

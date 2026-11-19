@@ -12,15 +12,15 @@
  * 5. A vendorized block that ships deploy-time Lambdas still synthesizes, and
  *    the Lambda code assets it emits exist on disk: `Auth` (the user-pool
  *    immutability guard + the Cognito IdP registration, carrying the edited
- *    vendorized source), `DistributedTable` with a GSI (the GSI manager),
- *    `Database` and `DistributedDatabase` (the migration Lambda)
+ *    vendorized source), `KVStore` with a GSI (the GSI manager),
+ *    `Database` (the migration Lambdas)
  *
  * Note: In the monorepo, root workspaces take priority over nested ones,
  * so we verify vendorize correctness by directly importing the vendorized
  * path and running a standalone CDK synth against it.
  */
 import { execFileSync, execSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, describe, after } from 'node:test';
@@ -166,16 +166,19 @@ new Auth(scope, 'auth-federated', {
   });
 
   // Same shape as Auth: `build:lambda` writes `dist/gsi-manager-lambda/`, which a
-  // vendorized copy doesn't have. Any table with an index creates the GSI manager.
-  test('vendorized DistributedTable with a GSI synthesizes its GSI-manager Lambdas', () => {
-    const tableDir = vendorizeWithoutDist('@aws-blocks/bb-distributed-table', 'bb-distributed-table');
+  // vendorized copy doesn't have. Any store with an index creates the GSI manager.
+  test('vendorized KVStore with a GSI synthesizes its GSI-manager Lambdas', () => {
+    // The tests above vendorized bb-kv-store: src/ only, no dist/.
+    const storeDir = join(VENDOR_DIR, 'bb-kv-store');
+    assert.ok(existsSync(join(storeDir, 'src/index.cdk.ts')));
+    assert.ok(!existsSync(join(storeDir, 'dist')), 'vendorize copies src/ only — no build output');
     const probe = synthProbe(
-      'distributed-table',
+      'kv-store',
       `import { Scope } from '@aws-blocks/blocks';
-import { DistributedTable } from '${join(tableDir, 'src/index.cdk.ts')}';
+import { KVStore } from '${join(storeDir, 'src/index.cdk.ts')}';
 import { z } from 'zod';
-const scope = new Scope('vendorized-table');
-new DistributedTable(scope, 'items', {
+const scope = new Scope('vendorized-store');
+new KVStore(scope, 'items', {
   schema: z.object({ pk: z.string(), sk: z.string(), ts: z.number() }),
   key: { partitionKey: 'pk', sortKey: 'sk' },
   indexes: { byTs: { partitionKey: 'pk', sortKey: 'ts' } },
@@ -186,37 +189,32 @@ new DistributedTable(scope, 'items', {
     assert.match(probe.handlerOf(/^BlocksGsiIsComplete/), /isCompleteHandler/);
   });
 
-  // `Database` / `DistributedDatabase` point their `NodejsFunction` at the
-  // compiled `migration-lambda.js` next to the CDK module; a vendorized copy has
-  // only `migration-lambda.ts` there.
-  test('vendorized Database synthesizes its migration Lambda', () => {
-    const dataDir = vendorizeWithoutDist('@aws-blocks/bb-data', 'bb-data');
+  // `Database` resolves its migration Lambda entry with `deployTimeLambdaEntry`:
+  // the compiled `deploy/migration-lambda.js` when the block is installed, and
+  // `deploy/migration-lambda.ts` in a vendorized copy, which has no `dist/`. The
+  // migration files are not in the Lambda's code: each block ships them as its
+  // own S3 file asset (`migrations.json`).
+  test('vendorized Database synthesizes its migration Lambdas', () => {
+    const databaseDir = vendorizeWithoutDist('@aws-blocks/bb-database', 'bb-database');
     const probe = synthProbe(
-      'data',
+      'database',
       `import { Scope } from '@aws-blocks/blocks';
-import { Database } from '${join(dataDir, 'src/index.cdk.ts')}';
-const scope = new Scope('vendorized-data');
-new Database(scope, 'db', { migrationsPath: '${join(APP_ROOT, 'aws-blocks/migrations')}' });
+import { Database } from '${join(databaseDir, 'src/index.cdk.ts')}';
+const scope = new Scope('vendorized-database');
+// Owns an Aurora DSQL cluster → the migration provider's onEvent and isComplete Lambdas.
+new Database(scope, 'db', { migrationsPath: '${join(APP_ROOT, 'aws-blocks/migrations/dbx')}' });
 `,
     );
-    const { handler, assetDir } = probe.assetOf(/MigrationFn/);
-    assert.match(handler, /MIGRATIONS_DIR/, 'the migration asset holds the migration handler');
-    assert.ok(existsSync(join(assetDir, 'migrations')), 'the migrations are copied into the asset');
-  });
+    assert.match(probe.handlerOf(/MigrationFn/), /migrationsKey/, 'the onEvent asset holds the migration handler');
+    assert.match(probe.handlerOf(/MigrationIsCompleteFn/), /migrationsKey/, 'the isComplete asset holds the migration handler');
 
-  test('vendorized DistributedDatabase synthesizes its migration Lambda', () => {
-    const dsqlDir = vendorizeWithoutDist('@aws-blocks/bb-distributed-data', 'bb-distributed-data');
-    const probe = synthProbe(
-      'distributed-data',
-      `import { Scope } from '@aws-blocks/blocks';
-import { DistributedDatabase } from '${join(dsqlDir, 'src/index.cdk.ts')}';
-const scope = new Scope('vendorized-dsql');
-new DistributedDatabase(scope, 'dsql', { migrationsPath: '${join(APP_ROOT, 'aws-blocks/dsql-migrations')}' });
-`,
+    const fileAssets = readdirSync(probe.outDir)
+      .filter((file) => /^asset\.[0-9a-f]+\.json$/.test(file))
+      .map((file) => JSON.parse(readFileSync(join(probe.outDir, file), 'utf-8')) as Record<string, unknown>);
+    assert.ok(
+      fileAssets.some((files) => '001_create_dbx_items.sql' in files && '002_index_dbx_items.sql' in files),
+      "the block's migration files are synthesized as a file asset",
     );
-    const { handler, assetDir } = probe.assetOf(/DsqlMigrationFn/);
-    assert.match(handler, /MIGRATIONS_DIR/, 'the migration asset holds the migration handler');
-    assert.ok(existsSync(join(assetDir, 'migrations')), 'the migrations are copied into the asset');
   });
 });
 
@@ -234,6 +232,8 @@ interface Probe {
   assetOf(logicalId: RegExp): { handler: string; assetDir: string };
   /** Shorthand for `assetOf(logicalId).handler`. */
   handlerOf(logicalId: RegExp): string;
+  /** The probe's cdk.out directory, for assets that are not Lambda code. */
+  outDir: string;
 }
 
 /**
@@ -291,5 +291,5 @@ await BlocksStack.create(app, 'VendorizedProbe', {
     assert.ok(existsSync(handler), `${entry[0]}'s code asset is missing on disk: ${handler}`);
     return { handler: readFileSync(handler, 'utf-8'), assetDir };
   };
-  return { assetOf, handlerOf: (logicalId) => assetOf(logicalId).handler };
+  return { assetOf, handlerOf: (logicalId) => assetOf(logicalId).handler, outDir: out };
 }

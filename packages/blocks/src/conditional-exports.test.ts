@@ -107,28 +107,7 @@ type KnownGap =
  * The single allowlist of known parity gaps. Shrink it; never grow it without a reason.
  * A stale entry (the gap is gone, or the package no longer exists) fails the test.
  */
-const KNOWN_GAPS: readonly KnownGap[] = [
-	// ── Real gaps whose fix is not a trivially-safe re-export. ──
-	{
-		pkg: '@aws-blocks/bb-data',
-		condition: 'browser',
-		kind: 'missing',
-		symbols: ['PgClientEngine', 'RLSEnabledDatabase', 'createKyselyAdapter', 'sql'],
-		reason:
-			"Server-only: re-exporting would pull `pg` and '@aws-blocks/data-common' (node:fs migrations, " +
-			'PGlite) into browser bundles. Needs purpose-built browser stubs (`sql` is a tagged template ' +
-			'with helper properties) — follow-up, not a re-export.',
-	},
-	{
-		pkg: '@aws-blocks/bb-distributed-data',
-		condition: 'browser',
-		kind: 'missing',
-		symbols: ['createKyselyAdapter', 'sql'],
-		reason:
-			"Server-only: re-exporting would pull '@aws-blocks/data-common' (node:fs migrations, PGlite) " +
-			'into browser bundles. Needs purpose-built browser stubs — follow-up, not a re-export.',
-	},
-];
+const KNOWN_GAPS: readonly KnownGap[] = [];
 
 // ── Discovery ───────────────────────────────────────────────────────────────
 
@@ -250,8 +229,7 @@ test('discovery sanity check', () => {
 	assert.ok(packages.length >= 8, `Expected ≥8 BB packages, found ${packages.length}: ${packages.join(', ')}`);
 	for (const expected of [
 		'@aws-blocks/bb-kv-store',
-		'@aws-blocks/bb-distributed-table',
-		'@aws-blocks/bb-data',
+		'@aws-blocks/bb-database',
 		'@aws-blocks/auth-common',
 	]) {
 		assert.ok(packages.includes(expected), `Expected to discover ${expected}`);
@@ -323,7 +301,7 @@ const serverConditions: ServerCondition[] = ['aws-runtime', 'cdk'];
 test('bb-* discovery floor', () => {
 	// The browser checks below cover every bb-* package, so a floor keeps the set
 	// from shrinking quietly (e.g. if a directory is renamed out of the bb- prefix).
-	assert.ok(buildingBlocks.length >= 21, `Expected ≥21 bb-* packages, found ${buildingBlocks.length}`);
+	assert.ok(buildingBlocks.length >= 19, `Expected ≥19 bb-* packages, found ${buildingBlocks.length}`);
 });
 
 // ── BB packages: browser (auto-discovered) ──────────────────────────────────
@@ -521,8 +499,8 @@ for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 // throwing, still passes the parity test above. Under cdk, calling a runtime-only
 // instance method must throw `synthGuard`'s error. Skipped:
 // - statics: they are synth-time helpers (`fromExisting()`, `fromKmsKey()`, ...);
-// - classes the cdk entry re-exports unchanged from the runtime (e.g. bb-data's
-//   `PgClientEngine`): same declaration as the default entry, so not a construct;
+// - classes the cdk entry re-exports unchanged from the runtime:
+//   same declaration as the default entry, so not a construct;
 // - methods the construct inherits from outside its package (core's `Scope`);
 // - SYNTH_SAFE_METHODS below.
 
@@ -530,6 +508,8 @@ for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 const SYNTH_SAFE_METHODS = new Set([
 	// Synth-time wiring: `createApi()` builds the RPC namespace the backend module exports.
 	'Auth.prototype.createApi',
+	// Synth-time wiring: `createOidcApi()` builds the native OIDC client's RPC namespace, like `createApi()`.
+	'Auth.prototype.createOidcApi',
 	// Synth-time wiring: `protect()` builds the RPC namespace the backend module exports
 	// (its methods are `synthGuard`ed; see the bb-auth CDK test).
 	'Auth.prototype.protect',

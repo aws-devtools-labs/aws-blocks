@@ -200,6 +200,11 @@ The object-map format qualifies; the pair format does not, because there the key
 key is its key attribute values and a Cognito record's key is a username, both data rather than
 field names, so a user called `auth-admin` must not have their whole record masked.
 
+The string key of a `KVStore` with no declared key qualifies too. It was a property name of the object
+map that the store's file was before it had a version, and it often names the value (`'github-token'`),
+so the masking that applied to that store still applies. The declared key fields of a `KVStore` are
+user data and do not qualify.
+
 **D14 — The key schema travels from discovery to the reader.** A `.bb-data` pair store writes its key
 as `JSON.stringify([pk, sk])`, so the field names exist only in the block's source. Discovery already
 resolves them, so `readData` passes the discovered `keySchema` through and the reader maps
@@ -207,6 +212,16 @@ resolves them, so `readData` passes the discovered `keySchema` through and the r
 `keyValues` is empty — which also blocks Stage 5, since an edit or delete addresses a record by
 exactly those fields. Arity mismatch or a missing schema yields no `keyValues` at all rather than a
 partial one: a half-filled key is worse than none.
+
+The `KVStore` data file (`store.json`, `{ "version": 2, "items": [...] }`) needs the schema for another
+reason. Each item is the stored DynamoDB item, so a declared key is in the item as ordinary fields, and
+only the schema says which fields are the key. A store with no declared key has one string key in
+`_bkv_pk`, reported under the field name `key`. A value that is not an object is in `_bkv_value`. An
+expiry that is not a field of the value is in `_bkv_ttl`, and reaches the browser as
+`DataRecord.expiresAt`. `kv-store-file.ts` owns that layout for the reader and the writer, as
+`pair-key.ts` owns the pair key. A store directory that has both `store.json` and `data.json` is read
+from `store.json`, the order the `KVStore` mock uses. A local write goes to a `store.json` only for a
+store with declared key fields, and keeps the key attributes and the expiry of the item it replaces.
 
 **D15 — The unlock window is absolute, and says so.** The reference documents its unlock as "15 idle
 minutes" while measuring from a timestamp it never refreshes, so the two disagree and the intent is
@@ -268,8 +283,8 @@ a counter rather than the reference's `Date.now()`, which repeats within a milli
 
 **D23 — The endpoint is derived server-side and never accepted from a request.** Resolution takes a
 stage and a mode; the URL comes from the app's own server script (local) or the deployed stack's
-`ApiUrl` output (cloud), with the stage's `.blocks-sandbox/config.<stage>.json` only as a fallback because
-that file can be stale from a previous deploy. (`.blocks-sandbox/config.json` holds a dev server's local
+`ApiUrl` output (cloud), with the stage's `.cdk-blocks-sandbox/config.<stage>.json` only as a fallback because
+that file can be stale from a previous deploy. (`.cdk-blocks-sandbox/config.json` holds a dev server's local
 URL and is never read for a deployed stage.) The dashboard is an authenticated server running on the developer's
 machine with their AWS credentials, so a caller-supplied endpoint would make it a request forger. The
 reference console takes `endpoint` as a parameter and validates nothing, which is survivable only
@@ -537,9 +552,9 @@ classes real copy means a per-class blurb in core's own docs, not a table of das
 **D48 — The generated description is not truncated.** It is stored as the full first sentence, and every
 consumer clamps it for display (CSS `line-clamp`, full text in a `title`). Truncating in the generator
 would bake one layout's constraint into shared data and destroy the text a tooltip needs, irreversibly.
-The generator instead *warns* above 200 characters — above the longest real blurb (`bb-data` at 162), so it
+The generator instead *warns* above 200 characters — above the longest real blurb (`bb-auth` at 159), so it
 fires only when a README's opening sentence is prose rather than a blurb. Markdown is stripped on the way
-in, because a nav card renders plain text and `bb-data`'s blurb genuinely ends in `` `fromExisting()` ``.
+in, because a nav card renders plain text and `bb-auth`'s blurb genuinely starts with `` `Auth` ``.
 Single-underscore emphasis is left alone: `_foo_` and `some_field_name` are indistinguishable by regex, and
 mangling an identifier is the worse failure.
 
@@ -797,7 +812,7 @@ built and are not in the code: an optional `local` member on `EnvironmentsRespon
 CloudFormation vocabulary for local — did land, by the client-side union above. The liveness feature does
 not exist at all: the local card states what local READS, never that a dev server is currently up, and a
 missing dev server or an absent `.bb-data` store stays a per-block fact the data pages report. The
-observation that killed the config-file approach: when this was decided, `.blocks-sandbox/config.json` was
+observation that killed the config-file approach: when this was decided, `.cdk-blocks-sandbox/config.json` was
 written by `dev-server.ts` *and* by `deploy.ts`/`sandbox.ts`, so its presence could not tell a local run
 from a deployed one. (A deploy now records its URL in `config.<stage>.json`; only a dev server writes
 `config.json`.)

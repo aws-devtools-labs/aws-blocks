@@ -29,7 +29,7 @@ internal class IosOidcLauncher : OidcPlatformLauncher {
     ): OidcRedirectSession {
         if (configuredRelayTo.isEmpty()) {
             error(
-                "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
+                "OIDC is not configured. Add oidc { relayTo = \"...\" } to your cdkBlocks block " +
                     "to enable this method.",
             )
         }

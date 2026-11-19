@@ -69,8 +69,8 @@ export {
 export { registerSharedConfig } from './config-registry.js';
 export { getBlocksRoot, getOrCreateOnRoot } from './root-registry.js';
 
-// Shared DynamoDB protection resolver for the two Blocks-provisioned DynamoDB
-// tables (bb-kv-store, bb-distributed-table). Framework-internal: a refactor
+// Shared DynamoDB protection resolver for the Blocks-provisioned DynamoDB
+// table (bb-kv-store). Framework-internal: a refactor
 // seam, not a customer-facing surface, so it lives here rather than on the
 // public `@aws-blocks/core/cdk` barrel (which `@aws-blocks/blocks` re-exports).
 export {
@@ -98,10 +98,10 @@ export {
 // Deploy-time Lambdas that ship in the block's npm package and still work when
 // the block is vendorized (`src/` only): the bundled asset when installed, the
 // TypeScript source bundled at synth otherwise. Used by first-party blocks
-// (bb-auth, bb-distributed-table, bb-data, bb-distributed-data).
+// (bb-auth, bb-kv-store, bb-database).
 export { type DeployTimeLambda, deployTimeLambdaCode, deployTimeLambdaEntry } from './lambda-code.js';
 // Scopes the Step Functions trust of a custom-resource Provider's waiter role,
-// which the synth-time service-principal trust check requires (bb-distributed-table,
+// which the synth-time service-principal trust check requires (bb-kv-store,
 // bb-database), and builds the aws:SourceAccount / aws:SourceArn conditions blocks
 // put on the service-principal trusts they create (bb-knowledge-base, bb-agent,
 // bb-cron-job, bb-container-compute, bb-auth).
@@ -113,8 +113,8 @@ export {
 // Marks a construct (and every role under it) as created by AWS Blocks, for the
 // service-principal trust check's ownership split. Used by first-party blocks
 // that add constructs at stack scope on a block's behalf (bb-app-setting,
-// bb-distributed-table, bb-distributed-data) or carry no official bbName at
-// synth (bb-database).
+// bb-kv-store) or carry no official bbName at synth (the
+// `DatabaseCluster` of bb-database).
 export { markAddedChildrenBlocksOwned, markBlocksOwned } from './blocks-roles.js';
 // The service-agnostic half of the above: the `encryption` option parser, also
 // used by bb-file-bucket (S3) so every Blocks storage resource accepts the same

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { type BuildingBlockScope, blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaEntry, scopeProviderWaiterTrust } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
+import { CfnCluster } from 'aws-cdk-lib/aws-dsql';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -35,7 +36,7 @@ const REMOVAL_POLICY_MAP = {
 	snapshot: cdk.RemovalPolicy.SNAPSHOT,
 } as const;
 
-function hashMigrations(files: Record<string, string>): string {
+export function hashMigrations(files: Record<string, string>): string {
 	const hash = createHash('sha256');
 	for (const file of Object.keys(files).sort()) {
 		hash.update(file);
@@ -60,7 +61,7 @@ interface AttachedBlock {
 // Every function on the app's execution role waits for the cluster's migrations, so new code never runs
 // against the old schema. An aspect, because those functions (default compute, job handlers) may be
 // constructed later; the per-block resources are chained, so the last one implies all of them.
-class FunctionsWaitForMigrations implements cdk.IAspect {
+export class FunctionsWaitForMigrations implements cdk.IAspect {
 	private readonly roleArn: string;
 
 	constructor(
@@ -98,9 +99,10 @@ interface ClusterResource {
 // DSQL maps the app's database role to the execution role itself, with `AWS IAM GRANT` (migration-lambda.ts),
 // so one `dsql:DbConnect` grant on the cluster covers it.
 function dsqlCluster(owner: BuildingBlockScope, stack: cdk.Stack): ClusterResource {
-	const resource = new cdk.CfnResource(owner, 'DsqlCluster', {
-		type: 'AWS::DSQL::Cluster',
-		properties: { DeletionProtectionEnabled: owner.defaults.deletionProtection },
+	// The typed L1 is taggable, so `Tags.of()` tags (the `app` tag among them) reach the cluster in the template.
+	// Same construct id as the raw `CfnResource` it replaced, so the logical id, and the cluster, stay the same.
+	const resource = new CfnCluster(owner, 'DsqlCluster', {
+		deletionProtectionEnabled: owner.defaults.deletionProtection,
 	});
 	const clusterArn = stack.formatArn({ service: 'dsql', resource: 'cluster', resourceName: resource.ref });
 	return {
@@ -182,8 +184,7 @@ export class ClusterInfra {
 
 	private readonly appRole: iam.IRole;
 	private readonly cluster: ClusterResource;
-	private readonly migrationFn: lambda.NodejsFunction;
-	private readonly isCompleteFn: lambda.NodejsFunction;
+	private readonly migrationFunctions: lambda.NodejsFunction[];
 	private readonly provider: cr.Provider;
 	private lastCustomResource: cdk.CfnResource | undefined;
 
@@ -213,76 +214,99 @@ export class ClusterInfra {
 		};
 		new cdk.CfnOutput(props.owner, cluster.outputId, { value: cluster.endpoint });
 
-		// The code is bundled now, before any block attaches, so migrations travel
-		// as per-block S3 assets instead (see attach()).
-		const logGroup = new LogGroup(props.owner, 'MigrationLogs', {
-			retention: defaults.logRetention,
-			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		const { functions, provider } = migrationProvider(props.owner, {
+			[CLUSTER_ENV.kind]: options.type,
+			[CLUSTER_ENV.endpoint]: cluster.endpoint,
+			[CLUSTER_ENV.region]: stack.region,
 		});
-		const migrationFunction = (id: string, handler: 'handler' | 'isComplete') =>
-			new lambda.NodejsFunction(props.owner, id, {
-				entry: deployTimeLambdaEntry({ moduleUrl: import.meta.url, source: './migration-lambda' }),
-				handler,
-				runtime: DEFAULT_NODE_RUNTIME,
-				timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),
-				logGroup,
-				environment: {
-					[CLUSTER_ENV.kind]: options.type,
-					[CLUSTER_ENV.endpoint]: cluster.endpoint,
-					[CLUSTER_ENV.region]: stack.region,
-				},
-				bundling: blocksNodejsBundling(),
-			});
-		this.migrationFn = migrationFunction('MigrationFn', 'handler');
-		this.isCompleteFn = migrationFunction('MigrationIsCompleteFn', 'isComplete');
-		for (const fn of [this.migrationFn, this.isCompleteFn]) fn.addToRolePolicy(cluster.adminConnect);
+		this.migrationFunctions = functions;
+		this.provider = provider;
+		for (const fn of functions) fn.addToRolePolicy(cluster.adminConnect);
 		this.appRole.grantPrincipal.addToPrincipalPolicy(cluster.appConnect);
-		// Index builds and constraint validations are DSQL jobs; isComplete polls them until the provider's
-		// total timeout, not one invocation's. That timeout stays under the CustomResource's serviceTimeout.
-		this.provider = new cr.Provider(props.owner, 'MigrationProvider', {
-			onEventHandler: this.migrationFn,
-			isCompleteHandler: this.isCompleteFn,
-			queryInterval: cdk.Duration.seconds(MIGRATION_POLL_INTERVAL_SECONDS),
-			totalTimeout: cdk.Duration.minutes(MIGRATION_TOTAL_TIMEOUT_MINUTES),
-		});
-		scopeProviderWaiterTrust(this.provider);
 		cdk.Aspects.of(stack).add(new FunctionsWaitForMigrations(stack, this.appRole, () => this.lastCustomResource));
 	}
 
 	attach(block: AttachedBlock): void {
-		const asset = block.migrations ? this.migrationsAsset(block.scope, block.migrations) : undefined;
-		if (asset) {
-			asset.grantRead(this.migrationFn);
-			asset.grantRead(this.isCompleteFn);
-		}
-		const resource = new cdk.CustomResource(block.scope, 'Migrations', {
-			serviceToken: this.provider.serviceToken,
-			serviceTimeout: cdk.Duration.seconds(MIGRATION_SERVICE_TIMEOUT_SECONDS),
-			properties: {
-				migrationsHash: block.migrations ? hashMigrations(block.migrations) : 'no-migrations',
-				...(asset ? { migrationsBucket: asset.s3BucketName, migrationsKey: asset.s3ObjectKey } : {}),
-				schemaName: block.schemaName,
-				blockFullId: block.fullId,
-				dbRole: this.dbRole,
-				// Properties (not just env) so CloudFormation re-runs the resource when the app role is replaced and
-				// the IAM mapping must be re-issued, and when the cluster itself is replaced and is empty again.
-				appRoleArn: this.appRole.roleArn,
-				clusterEndpoint: this.cluster.endpoint,
-			},
+		const asset = block.migrations ? migrationsAsset(block.scope, block.migrations) : undefined;
+		if (asset) for (const fn of this.migrationFunctions) asset.grantRead(fn);
+		const cfn = migrationResource(block.scope, this.provider, {
+			migrationsHash: block.migrations ? hashMigrations(block.migrations) : 'no-migrations',
+			...(asset ? { migrationsBucket: asset.s3BucketName, migrationsKey: asset.s3ObjectKey } : {}),
+			schemaName: block.schemaName,
+			blockFullId: block.fullId,
+			dbRole: this.dbRole,
+			// Properties (not just env) so CloudFormation re-runs the resource when the app role is replaced and
+			// the IAM mapping must be re-issued, and when the cluster itself is replaced and is empty again.
+			appRoleArn: this.appRole.roleArn,
+			clusterEndpoint: this.cluster.endpoint,
 		});
-		const cfn = resource.node.defaultChild as cdk.CfnResource;
-		// aws-cdk-lib renders the Duration as a string, and CloudFormation's validator warns about a non-numeric value.
-		cfn.addPropertyOverride('ServiceTimeout', MIGRATION_SERVICE_TIMEOUT_SECONDS);
 		cfn.addResourceDependency(this.cluster.resource);
 		// Chained so two blocks' migrations on one cluster never run concurrently.
 		if (this.lastCustomResource) cfn.addResourceDependency(this.lastCustomResource);
 		this.lastCustomResource = cfn;
 	}
+}
 
-	private migrationsAsset(scope: Construct, files: Record<string, string>): Asset {
-		const dir = mkdtempSync(join(tmpdir(), 'bb-database-migrations-'));
-		const path = join(dir, 'migrations.json');
-		writeFileSync(path, JSON.stringify(files));
-		return new Asset(scope, 'MigrationFiles', { path });
-	}
+/**
+ * The two functions that run a block's migrations during a deploy, and the provider that calls them. Used by
+ * every kind of cluster; `environment` tells the handler which kind it is and where the cluster is.
+ */
+export function migrationProvider(
+	owner: BuildingBlockScope,
+	environment: Record<string, string>,
+): { functions: lambda.NodejsFunction[]; provider: cr.Provider } {
+	// The code is bundled now, before any block attaches, so migrations travel as per-block S3 assets instead.
+	const logGroup = new LogGroup(owner, 'MigrationLogs', {
+		retention: owner.defaults.logRetention,
+		removalPolicy: cdk.RemovalPolicy.DESTROY,
+	});
+	const migrationFunction = (id: string, handler: 'handler' | 'isComplete') =>
+		new lambda.NodejsFunction(owner, id, {
+			entry: deployTimeLambdaEntry({ moduleUrl: import.meta.url, source: './migration-lambda' }),
+			handler,
+			runtime: DEFAULT_NODE_RUNTIME,
+			timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),
+			logGroup,
+			environment,
+			bundling: blocksNodejsBundling(),
+		});
+	const functions = [
+		migrationFunction('MigrationFn', 'handler'),
+		migrationFunction('MigrationIsCompleteFn', 'isComplete'),
+	];
+	// Index builds and constraint validations are DSQL jobs; isComplete polls them until the provider's
+	// total timeout, not one invocation's. That timeout stays under the CustomResource's serviceTimeout.
+	const provider = new cr.Provider(owner, 'MigrationProvider', {
+		onEventHandler: functions[0],
+		isCompleteHandler: functions[1],
+		queryInterval: cdk.Duration.seconds(MIGRATION_POLL_INTERVAL_SECONDS),
+		totalTimeout: cdk.Duration.minutes(MIGRATION_TOTAL_TIMEOUT_MINUTES),
+	});
+	scopeProviderWaiterTrust(provider);
+	return { functions, provider };
+}
+
+/** What a migration function reads from S3: `payload` as one JSON file. */
+export function migrationsAsset(scope: Construct, payload: unknown): Asset {
+	const dir = mkdtempSync(join(tmpdir(), 'bb-database-migrations-'));
+	const path = join(dir, 'migrations.json');
+	writeFileSync(path, JSON.stringify(payload));
+	return new Asset(scope, 'MigrationFiles', { path });
+}
+
+/** The custom resource that runs a block's migrations; CloudFormation re-runs it when a property changes. */
+export function migrationResource(
+	scope: Construct,
+	provider: cr.Provider,
+	properties: Record<string, unknown>,
+): cdk.CfnResource {
+	const resource = new cdk.CustomResource(scope, 'Migrations', {
+		serviceToken: provider.serviceToken,
+		serviceTimeout: cdk.Duration.seconds(MIGRATION_SERVICE_TIMEOUT_SECONDS),
+		properties,
+	});
+	const cfn = resource.node.defaultChild as cdk.CfnResource;
+	// aws-cdk-lib renders the Duration as a string, and CloudFormation's validator warns about a non-numeric value.
+	cfn.addPropertyOverride('ServiceTimeout', MIGRATION_SERVICE_TIMEOUT_SECONDS);
+	return cfn;
 }

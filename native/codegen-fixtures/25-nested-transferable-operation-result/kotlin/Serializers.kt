@@ -2,8 +2,10 @@ package com.example.app
 
 import com.aws.blocks.kotlin.json.BlocksJson
 import com.aws.blocks.kotlin.realtime.RealtimeChannel
+import java.lang.UnsupportedOperationException
 import kotlin.Int
 import kotlin.String
+import kotlin.Unit
 import kotlin.collections.List
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -11,7 +13,6 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
-import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.decodeFromJsonElement
 
 public object RealtimeChannelApiGetSessionResultChannelSerializer : KSerializer<RealtimeChannel<Api.GetSession.Result.Channel>> {
@@ -23,9 +24,7 @@ public object RealtimeChannelApiGetSessionResultChannelSerializer : KSerializer<
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Api.GetSession.Result.Channel>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Channel>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Channel>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelListStringSerializer : KSerializer<RealtimeChannel<List<String>>> {
@@ -37,9 +36,7 @@ public object RealtimeChannelListStringSerializer : KSerializer<RealtimeChannel<
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<List<String>>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<String>>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<String>>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelListIntSerializer : KSerializer<RealtimeChannel<List<Int>>> {
@@ -51,9 +48,7 @@ public object RealtimeChannelListIntSerializer : KSerializer<RealtimeChannel<Lis
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<List<Int>>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<Int>>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<List<Int>>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelApiGetSessionResultInnerChannelSerializer : KSerializer<RealtimeChannel<Api.GetSession.Result.Inner.Channel>> {
@@ -65,9 +60,7 @@ public object RealtimeChannelApiGetSessionResultInnerChannelSerializer : KSerial
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Api.GetSession.Result.Inner.Channel>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Inner.Channel>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Inner.Channel>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelApiGetSessionResultEventMessageChannelSerializer : KSerializer<RealtimeChannel<Api.GetSession.Result.Event.Message.Channel>> {
@@ -79,9 +72,7 @@ public object RealtimeChannelApiGetSessionResultEventMessageChannelSerializer : 
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Api.GetSession.Result.Event.Message.Channel>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Event.Message.Channel>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Event.Message.Channel>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelApiGetSessionResultEventPresenceChannelSerializer : KSerializer<RealtimeChannel<Api.GetSession.Result.Event.Presence.Channel>> {
@@ -93,9 +84,7 @@ public object RealtimeChannelApiGetSessionResultEventPresenceChannelSerializer :
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Api.GetSession.Result.Event.Presence.Channel>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Event.Presence.Channel>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetSession.Result.Event.Presence.Channel>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }
 
 public object RealtimeChannelApiGetOtherSessionResultChannelSerializer : KSerializer<RealtimeChannel<Api.GetOtherSession.Result.Channel>> {
@@ -107,7 +96,5 @@ public object RealtimeChannelApiGetOtherSessionResultChannelSerializer : KSerial
     return RealtimeChannel.fromJson(element) { BlocksJson.decodeFromJsonElement<Api.GetOtherSession.Result.Channel>(it) }
   }
 
-  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetOtherSession.Result.Channel>) {
-    (encoder as JsonEncoder).encodeJsonElement(value.toJson())
-  }
+  override fun serialize(encoder: Encoder, `value`: RealtimeChannel<Api.GetOtherSession.Result.Channel>): Unit = throw UnsupportedOperationException("Transferables are read-only")
 }

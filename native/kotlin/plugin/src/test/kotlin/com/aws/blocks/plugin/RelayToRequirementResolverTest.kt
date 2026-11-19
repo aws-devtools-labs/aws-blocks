@@ -9,7 +9,7 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
 private val android = TargetPlatform(KotlinPlatformType.androidJvm)
 private val desktop = TargetPlatform(KotlinPlatformType.jvm)
 private val browser = TargetPlatform(KotlinPlatformType.js)
-private val metadata = TargetPlatform(KotlinPlatformType.common)
+private val common = TargetPlatform(KotlinPlatformType.common)
 private val ios = TargetPlatform(KotlinPlatformType.native, KonanTarget.IOS_ARM64)
 private val iosSimulator = TargetPlatform(KotlinPlatformType.native, KonanTarget.IOS_SIMULATOR_ARM64)
 private val macos = TargetPlatform(KotlinPlatformType.native, KonanTarget.MACOS_ARM64)
@@ -31,7 +31,7 @@ class RelayToRequirementResolverTest : FunSpec({
 
     test("the metadata target does not stop a set from being Required") {
         // KMP always adds a metadata target, so counting it would make Required unreachable.
-        relayToRequirementFor(listOf(metadata, android, ios)) shouldBe RelayToRequirement.Required
+        relayToRequirementFor(listOf(common, android, ios)) shouldBe RelayToRequirement.Required
     }
 
     test("a mix of scheme-registering and other targets is Recommended") {
@@ -47,7 +47,7 @@ class RelayToRequirementResolverTest : FunSpec({
     }
 
     test("a target set with nothing but metadata is NotNeeded") {
-        relayToRequirementFor(listOf(metadata)) shouldBe RelayToRequirement.NotNeeded
+        relayToRequirementFor(listOf(common)) shouldBe RelayToRequirement.NotNeeded
     }
 
     test("an empty target set is NotNeeded") {

@@ -40,6 +40,7 @@ import {
 	encryptAutoSignInPayload,
 	readAutoSignInCookie,
 	readSessionCookie,
+	sessionCookieName,
 	setAutoSignInCookie,
 	setSessionCookie,
 	signSessionId,
@@ -58,6 +59,7 @@ import type {
 	NativeSignInOutcome,
 	PoolBearerVerifier,
 	PoolTokens,
+	PublicAuthorizeParams,
 	ResolvedProvider,
 } from './engines/types.js';
 import { fabricateCodeDelivery, isAccountStateAnswer } from './enumeration.js';
@@ -71,7 +73,7 @@ import {
 } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
-import type { FederationRouteHost } from './federation-routes.js';
+import { type FederationRouteHost, federationRoutePaths } from './federation-routes.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import {
 	handlePreSignUpTrigger,
@@ -118,6 +120,7 @@ import type {
 	ApiMethods,
 	AttrOf,
 	AuthActionInputOf,
+	AuthAuditRecord,
 	AuthenticatedUser,
 	AuthOptions,
 	AuthSession,
@@ -139,6 +142,10 @@ import type {
 	MfaPreferenceInput,
 	MfaSetting,
 	MfaTypeOf,
+	OidcClientApiOf,
+	OidcClientDescriptor,
+	OidcClientHandle,
+	OidcProviderConfig,
 	PasskeyDescription,
 	PasskeyGate,
 	PasswordGate,
@@ -175,6 +182,11 @@ const MFA_SETTINGS: readonly MfaSetting[] = ['ENABLED', 'DISABLED', 'PREFERRED',
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers (exported for tests and for the CDK layer to share the rules)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** An error's name for a log or audit record: never its message, which can quote user input. */
+function errorName(e: unknown): string {
+	return e instanceof Error ? e.name : typeof e;
+}
 
 /**
  * Every configured federated provider, in declaration order (social, OIDC,
@@ -380,6 +392,10 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 
 	/** Logger for detail that must not reach a client. */
 	protected readonly log: ChildLogger;
+	/** Where audit records go, or `null` when the `audit` option is off. */
+	private readonly audit: ChildLogger | null;
+	/** Whether a failed audit write has already been logged (once per block). */
+	private auditSinkWarned = false;
 
 	private readonly config: ResolvedAuthOptions;
 	private readonly sessions: SessionStore;
@@ -420,6 +436,9 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		const config = resolveOptions(options ?? {}, id);
 		this.config = config;
 		this.log = config.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// `audit: true` gets its own `info` logger, so records are written however
+		// quiet `logger` is.
+		this.audit = config.audit === true ? new Logger(this, 'audit', { level: 'info' }) : config.audit || null;
 		this.sessionTtlSeconds = config.session?.ttlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
 		this.crossDomain = config.session?.crossDomain ?? false;
 		this.sessions = new SessionStore(this, this.sessionTtlSeconds);
@@ -633,8 +652,9 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			secret = await this.sessionSecret();
 		} catch (e) {
 			this.log.error('[bb-auth] sign-out: the session secret is unavailable; the session was not invalidated', {
-				error: e instanceof Error ? e.name : typeof e,
+				error: errorName(e),
 			});
+			this.auditEvent({ event: 'auth.signout', outcome: 'incomplete', error: errorName(e) });
 			throw signOutIncomplete();
 		}
 		const sessionId = verifySessionId(raw, secret);
@@ -668,14 +688,28 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				});
 			}
 		}
+		const who = record ? identityOf(record) : undefined;
 		try {
 			await this.sessions.delete(sessionId);
 		} catch (e) {
 			this.log.error('[bb-auth] sign-out: the session delete failed; the session was not invalidated', {
-				error: e instanceof Error ? e.name : typeof e,
+				error: errorName(e),
+			});
+			this.auditEvent({
+				event: 'auth.signout',
+				provider: who?.signInProvider,
+				sub: who?.userSub,
+				outcome: 'incomplete',
+				error: errorName(e),
 			});
 			throw signOutIncomplete();
 		}
+		this.auditEvent({
+			event: 'auth.signout',
+			provider: who?.signInProvider,
+			sub: who?.userSub,
+			outcome: 'success',
+		});
 	}
 
 	/**
@@ -713,6 +747,84 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			setAuthState: async (input: AuthActionInput): Promise<AuthState<AuthStateUser<O>>> =>
 				this.dispatch(input, context),
 		}));
+	}
+
+	/**
+	 * The native SDKs' OIDC client, as one RPC method: `getClient()` returns
+	 * the `oidc/client` transferable that the Swift, Kotlin and Dart SDKs
+	 * hydrate into their `OidcClient`. It carries this block's sign-in routes
+	 * (so a second block with its own `redirects.callbackPath` just works)
+	 * and the providers a native client can sign in with here, and the
+	 * generated client types `signIn` by this block's provider ids.
+	 *
+	 * It adds no sign-in protocol: the client signs in through the relay
+	 * routes the block already serves (`authorize-params`, `callback`,
+	 * `exchange`, `signout`). Export it only if a native app signs in with a
+	 * federated provider. A web frontend uses the `signIn:<id>` actions of
+	 * {@link createApi}, or `createAuthClient()` on another origin.
+	 *
+	 * `getClient()` is public, like `getAuthState()`: it returns only what the
+	 * `authorize-params` routes already serve to anyone. A provider that is
+	 * unavailable in this runtime (managed login in `npm run dev`), or whose
+	 * discovery fails, is left out (logged at warn), so the others stay usable.
+	 *
+	 * @example
+	 * ```ts
+	 * export const authApi = auth.createApi();
+	 * export const oidcAuthApi = auth.createOidcApi();
+	 * // Swift: let oidc = try await blocks.oidcAuthApi.getClient()
+	 * //        try await oidc.signIn(provider: .google, relayTo: "myapp://auth", launcher: launcher)
+	 * ```
+	 */
+	createOidcApi(): OidcClientApiOf<O> {
+		return new ApiNamespace(this, 'oidc', (context: BlocksContext) => ({
+			getClient: async (): Promise<OidcClientHandle<ProviderIdOf<O>>> => this.oidcClientHandle(context),
+		}));
+	}
+
+	/** `createOidcApi().getClient()`: the descriptor, from the same paths the routes are mounted at. */
+	private async oidcClientHandle(context: BlocksContext): Promise<OidcClientHandle<ProviderIdOf<O>>> {
+		const paths = federationRoutePaths(this.config);
+		// The provider map is keyed by `ProviderIdOf<O>` at the type level only.
+		const providers: ProviderIdOf<O>[] = [];
+		const providerConfigs: Record<string, OidcProviderConfig> = {};
+		for (const { provider, engine } of this.providers.values()) {
+			if (engine.unavailable || !engine.authorizeParams) continue;
+			let params: PublicAuthorizeParams;
+			try {
+				params = await engine.authorizeParams(context);
+			} catch (e) {
+				// One provider whose discovery fails must not cost the app every other sign-in button:
+				// leave it out, as an unavailable provider is.
+				this.log.warn('[bb-auth] getClient: a provider could not be described; leaving it out', {
+					provider: provider.id,
+					error: e instanceof Error ? e.name : typeof e,
+				});
+				continue;
+			}
+			providers.push(provider.id as ProviderIdOf<O>);
+			providerConfigs[provider.id] = {
+				authorizeUrl: params.authorizeUrl,
+				clientId: params.clientId,
+				scopes: [...params.scopes],
+				kind: params.kind,
+			};
+		}
+		const descriptor: OidcClientDescriptor<ProviderIdOf<O>> = {
+			__blocks: 'oidc/client',
+			providers,
+			providerConfigs,
+			callbackPath: paths.callback,
+			exchangePath: paths.exchange,
+			signOutPath: paths.signOut,
+			signInBasePath: paths.signInBase,
+			authorizeParamsBasePath: paths.authorizeParamsBase,
+			sessionPath: paths.session,
+			refreshPath: paths.refreshCompat,
+			sessionCookieName: sessionCookieName(this.fullId),
+		};
+		const { __blocks: _tag, ...fields } = descriptor;
+		return { ...fields, toJSON: () => descriptor };
 	}
 
 	/**
@@ -1003,7 +1115,16 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 					: {}),
 			});
 		} catch (e) {
-			throw this.mapError(e, 'challenge');
+			const mapped = this.mapError(e, 'challenge');
+			// A wrong MFA / email / SMS code: the case an alarm on brute-forced codes needs.
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: 'password',
+				outcome: 'failure',
+				reason: 'challenge',
+				error: mapped.name,
+			});
+			throw mapped;
 		}
 		return this.completeNativeSignIn(outcome, context);
 	}
@@ -1101,14 +1222,29 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			throw this.mapError(e, 'confirmCode', username);
 		}
 		// The password changed: end every session issued before it (#912).
+		let canonical: string | undefined;
 		try {
-			await this.sessions.revokeSessionsOf(await native.signOutEverywhere(username));
+			canonical = await native.signOutEverywhere(username);
+			await this.sessions.revokeSessionsOf(canonical);
 		} catch (e) {
 			this.log.error('[bb-auth] password reset: the password changed but ending the other sessions failed', {
-				error: e instanceof Error ? e.name : typeof e,
+				error: errorName(e),
+			});
+			this.auditEvent({
+				event: 'auth.sessions.revoked',
+				username: canonical,
+				outcome: 'incomplete',
+				reason: 'password-reset',
+				error: errorName(e),
 			});
 			throw this.mapError(e);
 		}
+		this.auditEvent({
+			event: 'auth.sessions.revoked',
+			username: canonical,
+			outcome: 'success',
+			reason: 'password-reset',
+		});
 	}
 
 	/**
@@ -1216,10 +1352,18 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * @throws {ApiError} 400 `InvalidParameterException` for a directly federated user (no pool record to delete).
 	 */
 	async deleteUser(context: BlocksContext): Promise<void> {
-		const account = await this.account(context, 'pool');
+		const { session } = await this.requireSession(context);
+		const account = this.accountOf(session, 'pool');
 		await this.onAccount(account, context, (n, t) => n.deleteUser(t));
 		await this.sessions.delete(account.sessionId);
 		clearSessionCookie(context, this.fullId, this.crossDomain);
+		this.auditEvent({
+			event: 'auth.sessions.revoked',
+			provider: session.identity.signInProvider,
+			sub: session.identity.userSub,
+			outcome: 'success',
+			reason: 'account-deleted',
+		});
 	}
 
 	// ── MFA ─────────────────────────────────────────────────────────────────
@@ -1510,6 +1654,8 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 						resolveSignInMode(this.config.users?.signInWith),
 						this.config.users?.caseSensitive !== false,
 					),
+				auditEnabled: this.audit !== null,
+				audit: (record) => this.auditEvent(record),
 				validateNewUser: (login, attributes) => this.validateSignUp(login, attributes, undefined),
 			}),
 		);
@@ -1588,7 +1734,15 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		try {
 			identity = await (obtain ? obtain(engine) : engine.completeSignIn(context));
 		} catch (e) {
-			throw this.mapError(e);
+			const mapped = this.mapError(e);
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: providerId,
+				outcome: 'failure',
+				reason: 'provider',
+				error: mapped.name,
+			});
+			throw mapped;
 		}
 		const user = await this.issueSession(
 			context,
@@ -1703,7 +1857,15 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				...(bridgeSession ? { bridgeSession } : {}),
 			});
 		} catch (e) {
-			throw this.mapError(e, 'signIn', username);
+			const mapped = this.mapError(e, 'signIn', username);
+			// No username: a failed attempt's login is whatever the caller typed.
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: 'password',
+				outcome: 'failure',
+				error: mapped.name,
+			});
+			throw mapped;
 		}
 		return this.completeNativeSignIn(outcome, context);
 	}
@@ -1782,13 +1944,21 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		record: SessionRecord,
 		idpClaims?: Record<string, unknown>,
 	): Promise<AuthenticatedUser<O>> {
+		const identity = identityOf(record);
 		try {
 			assertSessionCookieTransport(context, this.crossDomain);
 		} catch (e) {
 			await this.revokeUpstream(record, context, false).catch(() => undefined);
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: identity.signInProvider,
+				sub: identity.userSub,
+				outcome: 'failure',
+				reason: 'insecure-transport',
+				error: errorName(e),
+			});
 			throw e;
 		}
-		const identity = identityOf(record);
 		const claims = idpClaims ?? ('kind' in record ? {} : (decodeJwtPayload(record.idToken) ?? {}));
 		try {
 			await this.runValidateUser({
@@ -1802,6 +1972,14 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		} catch (e) {
 			// Rejected: revoke what the engine issued, best-effort.
 			await this.revokeUpstream(record, context, false).catch(() => undefined);
+			this.auditEvent({
+				event: 'auth.signin.failed',
+				provider: identity.signInProvider,
+				sub: identity.userSub,
+				outcome: 'failure',
+				reason: 'validate-user',
+				error: errorName(e),
+			});
 			throw e;
 		}
 		const sessionId = await this.sessions.create(record);
@@ -1819,10 +1997,52 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			} catch (e) {
 				await this.sessions.delete(sessionId);
 				clearSessionCookie(context, this.fullId, this.crossDomain);
-				throw this.mapError(e);
+				const mapped = this.mapError(e);
+				this.auditEvent({
+					event: 'auth.signin.failed',
+					provider: identity.signInProvider,
+					sub: identity.userSub,
+					outcome: 'failure',
+					reason: 'on-sign-in',
+					error: mapped.name,
+				});
+				throw mapped;
 			}
 		}
+		this.auditEvent({
+			event: 'auth.session.issued',
+			provider: identity.signInProvider,
+			sub: identity.userSub,
+			outcome: 'success',
+		});
 		return user;
+	}
+
+	/**
+	 * Write one audit record (the `audit` option), leaving out fields the event
+	 * does not know. Best-effort: a logger that throws never changes the result.
+	 */
+	private auditEvent(record: Omit<AuthAuditRecord, 'block'>): void {
+		if (!this.audit) return;
+		const fields = Object.fromEntries(
+			Object.entries({ ...record, block: this.fullId }).filter(([, v]) => v !== undefined),
+		);
+		try {
+			this.audit.info(record.event, fields);
+		} catch (e) {
+			// Best-effort by contract, but say so once, so a broken sink is not
+			// mistaken for a quiet day.
+			if (!this.auditSinkWarned) {
+				this.auditSinkWarned = true;
+				try {
+					this.log.warn('[bb-auth] audit: writing a record failed; records may be missing', {
+						error: errorName(e),
+					});
+				} catch {
+					// The block logger can be the same broken sink.
+				}
+			}
+		}
 	}
 
 	private async runValidateUser(candidate: UserCandidate): Promise<void> {

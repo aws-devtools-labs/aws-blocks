@@ -8,7 +8,7 @@
  *
  * A configuration with no pool-backed sign-in method — a `store: 'builtin'`
  * block (no email + password, no social, SAML or Cognito-federated OIDC
- * provider) — synthesizes no Cognito resources, only `sessions` and
+ * provider) — synthesizes no Cognito resources, only the session store and
  * `session-secret`.
  * Enabling one later must create `pool` / `client` under the frozen ids:
  * additive, never a replacement.
@@ -24,8 +24,12 @@ import type { CfnResourceJson, CfnTemplateJson } from './test-support/cdk-synth.
 import {
 	BLOCK_PATH_PREFIX,
 	diffIdentity,
+	expectedAuthIdentity,
 	expectedConfigKeys,
+	LEGACY_SESSIONS_LOGICAL_ID,
+	SESSION_STORE_TABLE_PATH,
 	type SynthesizedAuth,
+	sessionStoreIdOf,
 	synthIdentity,
 	type VariantIdentity,
 } from './test-support/identity.js';
@@ -100,9 +104,9 @@ function poolOf(template: CfnTemplateJson): CfnResourceJson {
 
 function sessionsTableOf(template: CfnTemplateJson): CfnResourceJson {
 	const table = Object.values(template.Resources).find(
-		(r) => r.Metadata?.['aws:cdk:path'] === `${BLOCK_PATH_PREFIX}sessions/table/Resource`,
+		(r) => r.Metadata?.['aws:cdk:path'] === SESSION_STORE_TABLE_PATH,
 	);
-	assert.ok(table, 'sessions table is missing');
+	assert.ok(table, 'the session store table is missing');
 	return table;
 }
 
@@ -110,9 +114,10 @@ const removalWarnings = (s: SynthesizedAuth) =>
 	s.warnings.filter((w) => w.message.includes('@aws-blocks/bb-auth:RemovalPolicyUnset'));
 
 describe('Auth — conditional provisioning', () => {
-	test('default: pool, client, sessions and session-secret (the AuthCognito identity)', () => {
+	test('default: pool, client and session-secret keep the AuthCognito identity; the session store is the new table', () => {
 		const { identity } = synth(CONFIGS.default);
-		assert.deepStrictEqual(diffIdentity(FIXTURE_DEFAULT, identity), []);
+		assert.deepStrictEqual(diffIdentity(expectedAuthIdentity(FIXTURE_DEFAULT, identity), identity), []);
+		assert.strictEqual(identity.resources[LEGACY_SESSIONS_LOGICAL_ID], undefined);
 	});
 
 	describe("store: 'builtin' (direct OIDC only): no Cognito resources at all", () => {
@@ -120,10 +125,11 @@ describe('Auth — conditional provisioning', () => {
 			assert.deepStrictEqual(cognitoResources(synth(CONFIGS.directOnly).template), []);
 		});
 
-		test('provisions exactly `sessions` and `session-secret`', () => {
+		test('provisions exactly the session store and `session-secret`', () => {
 			const { identity } = synth(CONFIGS.directOnly);
+			const storeId = sessionStoreIdOf(identity);
 			assert.deepStrictEqual(identity.resources, {
-				authsessionstable46C26735: FIXTURE_DEFAULT.resources.authsessionstable46C26735,
+				[storeId]: expectedAuthIdentity(FIXTURE_DEFAULT, identity).resources[storeId],
 				BlocksSecretsBulk: FIXTURE_DEFAULT.resources.BlocksSecretsBulk,
 			});
 		});
@@ -138,15 +144,15 @@ describe('Auth — conditional provisioning', () => {
 			assert.deepStrictEqual(removalWarnings(synth(CONFIGS.directOnly)), []);
 		});
 
-		test('with an OAuth 2.0 provider (github()) too: still only `sessions` and `session-secret`', () => {
+		test('with an OAuth 2.0 provider (github()) too: still only the session store and `session-secret`', () => {
 			const s = synthIdentity(CONFIGS.directAndOauth2, undefined, [
 				"import { github } from '@aws-blocks/bb-auth';",
 			]);
 			assert.deepStrictEqual(cognitoResources(s.template), []);
-			assert.deepStrictEqual(Object.keys(s.identity.resources).sort(), [
-				'BlocksSecretsBulk',
-				'authsessionstable46C26735',
-			]);
+			assert.deepStrictEqual(
+				Object.keys(s.identity.resources).sort(),
+				['BlocksSecretsBulk', sessionStoreIdOf(s.identity)].sort(),
+			);
 			assert.deepStrictEqual(s.identity.configKeys, {});
 			assert.deepStrictEqual(cognitoIamActions(s.template), []);
 		});
@@ -164,7 +170,7 @@ describe('Auth — conditional provisioning', () => {
 					? [...[bulk.physicalName].flat(), TEST_SECRET_PARAMETER].sort()
 					: bulk.physicalName;
 				assert.deepStrictEqual(identity.resources.BlocksSecretsBulk?.physicalName, expectedBulkNames);
-				const diff = diffIdentity(FIXTURE_DEFAULT, {
+				const diff = diffIdentity(expectedAuthIdentity(FIXTURE_DEFAULT, identity), {
 					...identity,
 					resources: { ...identity.resources, BlocksSecretsBulk: bulk },
 				});
@@ -212,7 +218,7 @@ describe('Auth — conditional provisioning', () => {
 		test('pool, client and the declared group under the frozen ids', () => {
 			const { identity } = synth(CONFIGS.mixed);
 			const paths = Object.values(identity.resources).map((r) => r.path);
-			for (const p of ['pool/Resource', 'client/Resource', 'group-admins', 'sessions/table/Resource']) {
+			for (const p of ['pool/Resource', 'client/Resource', 'group-admins', 'session-store/table/Resource']) {
 				assert.ok(paths.includes(`${BLOCK_PATH_PREFIX}${p}`), `missing ${p}`);
 			}
 			assert.ok(identity.resources.authpoolBA1CDCB6, 'pool logical id is the frozen one');
@@ -234,7 +240,7 @@ describe('Auth — conditional provisioning', () => {
 		}
 		// …and what is added is exactly AuthCognito's pool + client (same logical ids,
 		// paths and names), so the result is indistinguishable from the default.
-		assert.deepStrictEqual(diffIdentity(FIXTURE_DEFAULT, after), []);
+		assert.deepStrictEqual(diffIdentity(expectedAuthIdentity(FIXTURE_DEFAULT, after), after), []);
 		const added = Object.keys(after.resources).filter((id) => !(id in before.resources));
 		assert.deepStrictEqual(added.sort(), ['authclientB98ED767', 'authpoolBA1CDCB6']);
 	});
@@ -321,7 +327,8 @@ describe('Auth — pool durability follows the stack defaults', () => {
 
 	test('identity is unchanged by the preset (the preset touches durability only)', () => {
 		for (const preset of ['sandbox', 'production'] as const) {
-			assert.deepStrictEqual(diffIdentity(FIXTURE_DEFAULT, synth(CONFIGS.default, preset).identity), [], preset);
+			const { identity } = synth(CONFIGS.default, preset);
+			assert.deepStrictEqual(diffIdentity(expectedAuthIdentity(FIXTURE_DEFAULT, identity), identity), [], preset);
 		}
 	});
 });

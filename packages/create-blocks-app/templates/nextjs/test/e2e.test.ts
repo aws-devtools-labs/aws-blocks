@@ -87,7 +87,7 @@ test('home page loads', async () => {
 });
 
 test('app: server serves its Blocks config', async () => {
-  const configUrl = `${baseUrl.replace(/\/$/, '')}/.blocks-sandbox/config.json`;
+  const configUrl = `${baseUrl.replace(/\/$/, '')}/.cdk-blocks-sandbox/config.json`;
   const response = await fetch(configUrl);
   assert.ok(response.ok, `expected ${configUrl} to respond ok`);
 });
@@ -95,7 +95,7 @@ test('app: server serves its Blocks config', async () => {
 // Validate the sample API in a freshly scaffolded app. When you replace it,
 // update or delete this test to exercise your own methods instead.
 test('greet returns message and timestamp', async () => {
-  const configUrl = `${baseUrl.replace(/\/$/, '')}/.blocks-sandbox/config.json`;
+  const configUrl = `${baseUrl.replace(/\/$/, '')}/.cdk-blocks-sandbox/config.json`;
   const response = await fetch(configUrl);
   assert.ok(response.ok, `expected ${configUrl} to respond ok`);
   const config = await response.json();

@@ -32,7 +32,8 @@ import {
 } from './cdk/api-front-door.js';
 import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
-import { coverBlocksRoot, forEachBlocksKmsKey, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { coverBlocksRoot, coverHosting, forEachBlocksKmsKey, forEachBlocksRole, snapshotForHosting } from './cdk/blocks-roles.js';
+import { applyAppIdentity } from './cdk/app-identity.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { addServicePrincipalTrustCheck } from './cdk/service-principal-trust.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
@@ -220,7 +221,7 @@ describe('Hosting', () => {
 
       // The static file should be a placeholder (not the real config) since CDK tokens
       // are only resolved at deploy time, not synth time.
-      const configPath = path.join(tmpDir, '.hosting', 'static', '.blocks-sandbox', 'config.json');
+      const configPath = path.join(tmpDir, '.hosting', 'static', '.cdk-blocks-sandbox', 'config.json');
       assert.ok(fs.existsSync(configPath), 'placeholder config.json should exist in static assets');
 
       const placeholder = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -232,7 +233,7 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
 
       // BucketDeployment creates a Custom::CDKBucketDeployment resource.
-      // Verify the destination key prefix ends with .blocks-sandbox.
+      // Verify the destination key prefix ends with .cdk-blocks-sandbox.
       const customResources = template.findResources('Custom::CDKBucketDeployment');
       const crKeys = Object.keys(customResources);
       assert.ok(crKeys.length >= 1, 'Should have at least one BucketDeployment custom resource');
@@ -242,9 +243,9 @@ describe('Hosting', () => {
           | Record<string, unknown>
           | undefined;
         const prefix = props?.DestinationBucketKeyPrefix as string | undefined;
-        return typeof prefix === 'string' && prefix.endsWith('.blocks-sandbox');
+        return typeof prefix === 'string' && prefix.endsWith('.cdk-blocks-sandbox');
       });
-      assert.ok(hasBlocksSandboxPrefix, 'BucketDeployment should target .blocks-sandbox prefix');
+      assert.ok(hasBlocksSandboxPrefix, 'BucketDeployment should target .cdk-blocks-sandbox prefix');
     });
 
     it('throws when build output directory does not exist', () => {
@@ -2288,7 +2289,7 @@ describe('Hosting', () => {
   describe('config.json deploy ordering (P0.4)', () => {
     it('BlocksConfigDeployment depends on the asset deployments', () => {
       // The asset deployments upload the whole static dir — including the
-      // placeholder `.blocks-sandbox/config.json` — to the same key the
+      // placeholder `.cdk-blocks-sandbox/config.json` — to the same key the
       // resolved config writes to. Without an ordering dependency the
       // placeholder can clobber the real config. The previous
       // `tryFindChild('AssetDeployment')` never matched the real child ids
@@ -2510,16 +2511,16 @@ describe('Hosting', () => {
       const includes = (p: Record<string, unknown>) => (p.Include as string[] | undefined) ?? [];
       const excludes = (p: Record<string, unknown>) => (p.Exclude as string[] | undefined) ?? [];
 
-      // A deployment must upload `.blocks-sandbox/config.json` with the
+      // A deployment must upload `.cdk-blocks-sandbox/config.json` with the
       // no-cache directive (this is the placeholder upload).
       const noCacheDeploy = deployments.find(
 				(p) =>
-					includes(p).includes('.blocks-sandbox/config.json') &&
+					includes(p).includes('.cdk-blocks-sandbox/config.json') &&
 					cc(p) === 'no-cache, no-store, must-revalidate',
       );
       assert.ok(
         noCacheDeploy,
-				'placeholder .blocks-sandbox/config.json must be uploaded with ' +
+				'placeholder .cdk-blocks-sandbox/config.json must be uploaded with ' +
 					'"no-cache, no-store, must-revalidate"',
       );
 
@@ -2530,13 +2531,13 @@ describe('Hosting', () => {
         return (
           typeof directive === 'string' &&
           directive.includes('s-maxage=31536000') &&
-          !excludes(p).includes('.blocks-sandbox/config.json')
+          !excludes(p).includes('.cdk-blocks-sandbox/config.json')
         );
       });
       assert.strictEqual(
         leaks.length,
         0,
-        'no mutable-tier deployment may apply s-maxage=31536000 to ' + '.blocks-sandbox/config.json',
+        'no mutable-tier deployment may apply s-maxage=31536000 to ' + '.cdk-blocks-sandbox/config.json',
       );
     });
 
@@ -2554,7 +2555,7 @@ describe('Hosting', () => {
       Template.fromStack(stack).hasResourceProperties(
         'Custom::CDKBucketDeployment',
         Match.objectLike({
-          Include: Match.arrayWith(['.blocks-sandbox/config.json']),
+          Include: Match.arrayWith(['.cdk-blocks-sandbox/config.json']),
           SystemMetadata: Match.objectLike({
             'cache-control': 'no-cache, no-store, must-revalidate',
           }),
@@ -2562,11 +2563,11 @@ describe('Hosting', () => {
       );
     });
 
-    it('invalidates the post-rewrite cache key (/builds/<id>/.blocks-sandbox/*)', () => {
+    it('invalidates the post-rewrite cache key (/builds/<id>/.cdk-blocks-sandbox/*)', () => {
       // The viewer-request skew-protection function rewrites the URI to
-      // `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the cache
+      // `/builds/<buildId>/.cdk-blocks-sandbox/config.json` BEFORE the cache
       // lookup, so the real edge cache key lives under `/builds/<id>/`.
-      // Invalidating only `/.blocks-sandbox/*` never matches it.
+      // Invalidating only `/.cdk-blocks-sandbox/*` never matches it.
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'InvalidationPathStack');
@@ -2577,7 +2578,7 @@ describe('Hosting', () => {
       Template.fromStack(stack).hasResourceProperties(
         'Custom::CDKBucketDeployment',
         Match.objectLike({
-          DistributionPaths: Match.arrayWith([Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$')]),
+          DistributionPaths: Match.arrayWith([Match.stringLikeRegexp('^/builds/.+/\\.cdk-blocks-sandbox/\\*$')]),
         }),
       );
     });
@@ -2656,6 +2657,58 @@ describe('Hosting', () => {
         ),
         'the cross-region export writer role is among the checked roles',
       );
+    });
+
+    it('defaults.appIdentity: the us-east-1 edge stack is named <id>-edge, and its roles are bounded and tagged', () => {
+      const app = new App();
+      const stack = new Stack(app, 'appa', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+      (backend as unknown as { defaults: Record<string, unknown> }).defaults.appIdentity = { id: 'appa' };
+      applyAppIdentity(backend as unknown as Construct);
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+      const edgeStack = stacks.find((c) => c.node.id === 'appa-edge');
+      assert.ok(edgeStack, `edge stack not named appa-edge: ${stacks.map((s) => s.node.id)}`);
+      assert.ok(!stacks.some((c) => c.node.id.startsWith('edge-lambda-stack')), 'no CDK-named edge stack');
+      // Role coverage finds the edge stack through EdgeFunction's private `_edgeFunction`: pin it.
+      // EdgeFunctions (bundlers may suffix the class name, e.g. `EdgeFunction2`).
+      const edgeFns = app.node.findAll().filter((n) => n.constructor.name.startsWith('EdgeFunction'));
+      assert.ok(edgeFns.length > 0, 'an EdgeFunction');
+      for (const fn of edgeFns) {
+        const real = (fn as unknown as { _edgeFunction?: Construct })._edgeFunction;
+        assert.ok(real, 'aws-cdk-lib no longer keeps the cross-region function in EdgeFunction._edgeFunction');
+        assert.strictEqual(Stack.of(real).node.id, 'appa-edge');
+      }
+      const roles = Object.values(Template.fromStack(edgeStack).findResources('AWS::IAM::Role'));
+      assert.ok(roles.length > 0, 'the edge stack should hold the Lambda@Edge role');
+      for (const r of roles) {
+        assert.strictEqual(r.Properties?.PermissionsBoundary, BOUNDARY_ARN);
+        assert.ok(
+          (r.Properties?.Tags as { Key: string; Value: string }[] | undefined)?.some((t) => t.Key === 'app' && t.Value === 'appa'),
+          'edge role tagged app=appa',
+        );
+      }
+    });
+
+    it('without EdgeFunction._edgeFunction, only a CDK- or app-named dependency stack is the edge stack (no appIdentity)', () => {
+      for (const edgeId of ['edge-lambda-stack-c8abc123', 'appa-edge']) {
+        const app = new App();
+        const env = { account: '123456789012' };
+        const stack = new Stack(app, 'appa', { env: { ...env, region: 'eu-west-1' } });
+        const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+        // A real edge stack, and an unrelated dependency that happens to hold a child with the same id.
+        const edge = new Stack(app, edgeId, { env: { ...env, region: 'us-east-1' } });
+        const decoy = new Stack(app, 'unrelated', { env: { ...env, region: 'us-east-1' } });
+        new Construct(edge, 'EdgeFn');
+        new Construct(decoy, 'EdgeFn');
+        stack.addDependency(edge);
+        stack.addDependency(decoy);
+        const hosting = new Construct(stack, 'Hosting');
+        const before = snapshotForHosting(hosting);
+        // Stands in for an EdgeFunction from a CDK version without the private `_edgeFunction`.
+        const fn = new Construct(hosting, 'EdgeFn');
+        const covered = coverHosting(hosting, backend as unknown as Construct, before, [fn]);
+        assert.deepStrictEqual(covered.map((s) => s.node.id), [edgeId], edgeId);
+      }
     });
 
     it('a second role visitor (e.g. tenant tagging) reaches exactly the same roles, prepare-time ones included', () => {
@@ -2739,7 +2792,7 @@ describe('Hosting', () => {
       });
     });
 
-    it('publishes the resolved config.json to the website bucket root (.blocks-sandbox), and the build only there', () => {
+    it('publishes the resolved config.json to the website bucket root (.cdk-blocks-sandbox), and the build only there', () => {
       createSpaBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'NoneConfigStack', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: 'none' });
@@ -2751,7 +2804,7 @@ describe('Hosting', () => {
       const config = deployments.find(([id]) => id.includes('BlocksConfigDeployment'));
       assert.ok(config);
       assert.deepStrictEqual(config[1].Properties.DestinationBucketName, { Ref: website });
-      assert.strictEqual(config[1].Properties.DestinationBucketKeyPrefix, '.blocks-sandbox');
+      assert.strictEqual(config[1].Properties.DestinationBucketKeyPrefix, '.cdk-blocks-sandbox');
       // The build is uploaded to the website bucket only: nothing reads a private copy.
       for (const [id, d] of deployments) {
         assert.deepStrictEqual(d.Properties.DestinationBucketName, { Ref: website }, `${id} writes to the website bucket`);
@@ -3148,6 +3201,21 @@ describe('Hosting', () => {
       assert.strictEqual(warnings.length, 1);
     });
 
+    it('outside a sandbox, `allowPlainHttp: true` synthesizes the plain-HTTP ALB door with an acknowledgeable production warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `AlbAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb', allowPlainHttp: true } });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction'));
+      };
+      const found = synthProd(false);
+      assert.strictEqual(found.length, 1);
+      assert.match(JSON.stringify(found[0].entry.data), /session cookie without `Secure`/);
+      assert.strictEqual(synthProd(true).length, 0, 'acknowledged on the stack');
+    });
+
     it('static SPA → an ALB + listener + Lambda target groups (asset-proxy + API-forwarder), NO CloudFront', () => {
       createSpaBuildOutput(tmpDir);
       // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
@@ -3539,7 +3607,7 @@ describe('Hosting', () => {
       // The budget goes to S3: the API paths no static route can shadow are left
       // to the router default (which reaches them), not given behaviors.
       assert.ok(!edge.behaviors.some(([p]) => p === '/aws-blocks/*'));
-      assert.strictEqual(edge.behaviors[0][0], '/.blocks-sandbox/*');
+      assert.strictEqual(edge.behaviors[0][0], '/.cdk-blocks-sandbox/*');
       const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedEdgeBehaviorLimit'));
       assert.strictEqual(warnings.length, 1);
       assert.doesNotMatch(String(warnings[0]?.entry.data), /raise the quota/);
@@ -3763,6 +3831,40 @@ describe('Hosting', () => {
             frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
           }),
         (e: Error) => e.name === 'OriginSecretOverPlainHttpError',
+      );
+    });
+
+    it('`allowPlainHttp: true` lets an internet-facing router without a certificate synthesize outside a sandbox, with one acknowledgeable warning', () => {
+      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const synthProd = (acknowledge: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `StackedAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true },
+        });
+        if (acknowledge) cdk.Annotations.of(stack).acknowledgeWarning(ID);
+        const count = (code: string) => Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(code));
+        return { allowed: count('PlainHttpAllowedInProduction'), sandboxOnly: [...count('StackedRouterPlainHttp'), ...count('OriginSecretOverPlainHttp')] };
+      };
+      const { allowed, sandboxOnly } = synthProd(false);
+      assert.strictEqual(allowed.length, 1);
+      assert.match(JSON.stringify(allowed[0].entry.data), /origin secret crosses the edge → router hop in cleartext/);
+      assert.strictEqual(sandboxOnly.length, 0, 'one warning id to acknowledge, not the sandbox ones');
+      assert.strictEqual(synthProd(true).allowed.length, 0, 'acknowledged on the stack');
+      // A non-boolean fails synth.
+      createSpaBuildOutput(tmpDir);
+      const bad = new Stack(new App(), 'StackedAllowPlainHttpBad', { env: { account: '111111111111', region: 'us-east-1' } });
+      assert.throws(
+        () =>
+          new Hosting(bad, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            // @ts-expect-error -- a string instead of a boolean (plain JavaScript can pass one).
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: 'true' },
+          }),
+        (e: Error) => e.name === 'InvalidFrontDoorOptionError' && /frontDoor\.allowPlainHttp/.test(e.message),
       );
     });
 
@@ -4231,6 +4333,41 @@ describe('Hosting — skipping the frontend build', () => {
     synth({ reuseFrontendBuild: 'true' });
     assert.ok(built(), 'buildCommand should run when dist/ is missing');
   });
+});
+
+// A deploy synthesizes with `NODE_OPTIONS=--conditions=cdk`. `buildCommand`
+// must run without that condition, so a build that loads `@aws-blocks/*`
+// doesn't get their CDK constructs, but with the user's other NODE_OPTIONS.
+describe('Hosting — buildCommand environment', () => {
+  let tmpDir: string;
+  const savedNodeOptions = process.env.NODE_OPTIONS;
+  // Records the NODE_OPTIONS it sees, then writes the SPA output a real build would.
+  const BUILD = `node -e "const f=require('fs');f.writeFileSync('node-options.json',JSON.stringify(process.env.NODE_OPTIONS??null));f.mkdirSync('dist',{recursive:true});f.writeFileSync('dist/index.html','<html></html>')"`;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-buildenv-'));
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'buildenv', dependencies: { react: '^18' } }));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = savedNodeOptions;
+  });
+
+  const buildNodeOptions = (parentNodeOptions: string): string | null => {
+    process.env.NODE_OPTIONS = parentNodeOptions;
+    new Hosting(new Stack(new App(), 'BuildEnvStack'), 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: BUILD });
+    return JSON.parse(fs.readFileSync(path.join(tmpDir, 'node-options.json'), 'utf-8'));
+  };
+
+  for (const condition of ['--conditions=cdk', '--conditions cdk', '-C cdk', '--conditions="cdk"']) {
+    it(`removes \`${condition}\` and keeps the other NODE_OPTIONS entries`, () => {
+      assert.strictEqual(
+        buildNodeOptions(`--max-old-space-size=4096 ${condition} --conditions=development`),
+        '--max-old-space-size=4096 --conditions=development',
+      );
+    });
+  }
 });
 
 // A destroy reuses a build only when the adapter will too: `Hosting` must check

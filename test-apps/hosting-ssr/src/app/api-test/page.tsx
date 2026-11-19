@@ -13,7 +13,7 @@ export default function ApiTestPage() {
   const [config, setConfig] = useState<unknown>(null);
 
   useEffect(() => {
-    fetch('/.blocks-sandbox/config.json').then(r => r.json()).then(setConfig).catch(() => setConfig({ error: 'config.json not reachable' }));
+    fetch('/.cdk-blocks-sandbox/config.json').then(r => r.json()).then(setConfig).catch(() => setConfig({ error: 'config.json not reachable' }));
   }, []);
 
   return (

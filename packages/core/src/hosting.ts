@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, join, relative, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
+  appBuildEnv,
   detectFramework,
   type FrameworkAdapterFn,
   getAdapter,
@@ -46,6 +47,8 @@ import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint, publicHostStamp, registerPublicHosts } from './cdk/api-front-door.js';
 import { type ApiDirectRoute, addDirectApiBehaviors } from './cdk/api-direct-routes.js';
 import { registerSharedConfig } from './cdk/config-registry.js';
+import { resolveAppIdentity, tagAppResources } from './cdk/app-identity.js';
+import { isSandboxContext } from './cdk/stack-metadata.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
 import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
@@ -219,7 +222,7 @@ export interface BlocksStackApi {
  * Wraps the L3 {@link HostingConstruct} with Blocks conventions:
  *   • Runs the build command during CDK synth (optional)
  *   • Auto-detects the framework (Next.js / SPA / static)
- *   • Deploys `.blocks-sandbox/config.json` for client-side config loading
+ *   • Deploys `.cdk-blocks-sandbox/config.json` for client-side config loading
  *   • Injects `BLOCKS_API_URL` + `BLOCKS_CONFIG` env vars into compute functions
  *   • When `api` is provided, adds CloudFront behaviors to proxy API traffic
  *     through the same domain (single-origin architecture)
@@ -294,7 +297,7 @@ export interface HostingProps {
    * Additional backend configuration to include in config.json.
    * Merged with apiUrl to produce the final config.
    *
-   * ⚠️ WARNING: These values will be publicly accessible at /.blocks-sandbox/config.json
+   * ⚠️ WARNING: These values will be publicly accessible at /.cdk-blocks-sandbox/config.json
    * and in the BLOCKS_CONFIG Lambda environment variable. Do NOT include secrets,
    * API keys, or sensitive configuration here.
    */
@@ -569,7 +572,10 @@ export interface HostingProps {
    * and `features.domain` for HTTPS at your domain. Without them it serves
    * plain HTTP, which with an API is sandbox-only: a production deploy fails
    * synth (`PlainHttpFrontDoorError`), and a sandbox deploy (`sandboxMode`
-   * context) warns (`@aws-blocks/hosting:PlainHttpFrontDoor`).
+   * context) warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). Only on a
+   * trusted network path, `allowPlainHttp: true` opts a production deploy out
+   * (with the `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning, and
+   * `Auth`'s session cookie without `Secure`).
    *
    * Pass `{ kind: 'apiGateway', … }` to serve behind an Amazon API Gateway
    * instead — the serverless, no-VPC, scale-to-zero sibling of the ALB door.
@@ -593,7 +599,8 @@ export interface HostingProps {
    * `certificate` and `features.router.domain`, else plain HTTP; a plain-HTTP
    * hop to an internet-facing router fails synth outside a sandbox deploy
    * (`OriginSecretOverPlainHttpError`), so the header's secret never crosses
-   * the internet unencrypted.
+   * the internet unencrypted (unless the door sets `allowPlainHttp: true`, for a
+   * trusted path only).
    *
    * Pass `{ kind: 'custom', door }` to bring your own door, written as one
    * function: `defineFrontDoor({ service, build(scope, input) })` from
@@ -863,9 +870,34 @@ export interface CloudFrontOverRouterFrontDoor {
    * deploy fails synth (`OriginSecretOverPlainHttpError`), and a sandbox
    * deploy (`sandboxMode` context) warns
    * (`@aws-blocks/hosting:StackedRouterPlainHttp`,
-   * `@aws-blocks/hosting:OriginSecretOverPlainHttp`).
+   * `@aws-blocks/hosting:OriginSecretOverPlainHttp`), unless
+   * {@link CloudFrontOverRouterFrontDoor.allowPlainHttp}.
    */
   certificate?: import('aws-cdk-lib/aws-certificatemanager').ICertificate;
+  /**
+   * Let a production deploy reach an internet-facing router without a
+   * `certificate` over plain HTTP :80: the explicit opt-out of
+   * `OriginSecretOverPlainHttpError`.
+   *
+   * Dangerous: the origin secret (the `x-blocks-origin-verify` header the
+   * router requires) crosses the edge → router hop in cleartext, so anyone who
+   * reads it on that path can reach the router directly, past the edge and its
+   * web ACL; and the requests on that hop (sign-in, session cookies, every RPC)
+   * can be read or altered there. (The browser still reaches the edge over
+   * HTTPS, so `Auth`'s session cookie keeps `Secure`.)
+   *
+   * Legitimate only when the path between CloudFront and the router is
+   * trusted, for example when TLS is ended in front of the router by another
+   * layer you control. Use it in production only then; `internal: true` (a VPC
+   * origin, on the AWS network) or a router `certificate` avoids the need.
+   *
+   * Outside a sandbox, synth warns
+   * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`).
+   * A sandbox deploy is unchanged (it always only warns).
+   * @default false
+   */
+  allowPlainHttp?: boolean;
   /**
    * The settings the app asks each layer for: the CloudFront `edge` (a
    * CLOUDFRONT-scoped web ACL, the CSP header) and the ALB `router` (a REGIONAL
@@ -1180,21 +1212,16 @@ export class Hosting extends Construct {
     if (props.buildCommand && !skipBuildCommand) {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
-      // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
-      // from breaking frontend builds (e.g., Next.js webpack module resolution).
-      const nodeOptions = (process.env.NODE_OPTIONS || '')
-        .split(/\s+/)
-        .filter((opt) => opt !== '--conditions=cdk')
-        .join(' ');
-      const buildEnv = { ...process.env, NODE_OPTIONS: nodeOptions };
+      // Remove the synth's `cdk` export condition from NODE_OPTIONS: a build
+      // that inherits it resolves `@aws-blocks/*` to their CDK constructs (and
+      // breaks e.g. Next.js webpack module resolution). The framework adapter's
+      // own build of the app gets the same environment (see `appBuildEnv`).
+      const buildEnv = appBuildEnv(apiUrl ? { BLOCKS_API_URL: apiUrl } : {});
       try {
         execSync(props.buildCommand, {
           cwd: root,
           stdio: 'inherit',
-          env: {
-            ...buildEnv,
-            ...(apiUrl ? { BLOCKS_API_URL: apiUrl } : {}),
-          },
+          env: buildEnv,
         });
       } catch (error) {
         throw new Error(
@@ -1301,11 +1328,11 @@ export class Hosting extends Construct {
 
     // ── 5. Write placeholder config.json into static assets ─────────
     //    A placeholder is needed so the L3 construct sees
-    //    .blocks-sandbox/ in the static directory during bundling.
+    //    .cdk-blocks-sandbox/ in the static directory during bundling.
     //    The real config with resolved CDK tokens is deployed in
     //    step 8 via BucketDeployment + Source.jsonData().
     const staticDir = manifest.staticAssets.directory;
-    const blocksSandboxDir = join(staticDir, '.blocks-sandbox');
+    const blocksSandboxDir = join(staticDir, BLOCKS_SANDBOX_DIR);
     mkdirSync(blocksSandboxDir, { recursive: true });
     writeFileSync(join(blocksSandboxDir, 'config.json'), JSON.stringify({ _placeholder: true }));
 
@@ -1322,11 +1349,11 @@ export class Hosting extends Construct {
       ? existingNoCachePaths
       : [...existingNoCachePaths, configNoCachePath];
 
-    // ── 5b. Inject static route for .blocks-sandbox config ──────────
-    //    Insert a static route for /.blocks-sandbox/* so CloudFront
+    // ── 5b. Inject static route for .cdk-blocks-sandbox config ──────────
+    //    Insert a static route for /.cdk-blocks-sandbox/* so CloudFront
     //    serves config.json from S3 instead of routing to compute.
     const blocksConfigRoute: RouteBehavior = {
-      pattern: '/.blocks-sandbox/*',
+      pattern: `/${BLOCKS_SANDBOX_DIR}/*`,
       target: 'static',
     };
     // Insert before any catch-all route
@@ -1425,7 +1452,14 @@ export class Hosting extends Construct {
         : {}),
     };
 
-    const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
+    // On a shared app platform (`defaults.appIdentity` on the fronted backend), name the
+    // us-east-1 Lambda@Edge stack after the app, so the platform's deploy guard
+    // and execution policy treat it as the app's own stack.
+    const appIdentity = resolveAppIdentity(isBlocksBackendRoot(props.api) ? props.api : this);
+    const hosting = new HostingConstruct(this, 'Hosting', {
+      ...hostingProps,
+      ...(appIdentity ? { edgeStackId: `${appIdentity.id}-edge` } : {}),
+    });
 
     // ── 7. Front door: API proxy / stacked edge ──────────────────
     // The public origin the app is served from. Defaults to the L3's front-door
@@ -1447,8 +1481,11 @@ export class Hosting extends Construct {
       // A plain-HTTP hop to an internet-facing router fails synth in
       // `addCloudFrontOverAlb` outside a sandbox (the edge refuses to send the
       // origin-verify secret over it), so only a sandbox deploy reaches this warning.
+      // With `allowPlainHttp: true` a production deploy reaches it too; the edge
+      // then emits `@aws-blocks/hosting:PlainHttpAllowedInProduction` instead, so
+      // there is one warning to acknowledge.
       const edge = this.addCloudFrontOverAlb(hosting, props);
-      if (hosting.frontDoor.originHandle.protocol === 'http' && !cfOverRouter.internal) {
+      if (hosting.frontDoor.originHandle.protocol === 'http' && !cfOverRouter.internal && isSandboxContext(this)) {
         cdk.Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:StackedRouterPlainHttp',
           "The stacked door's edge reaches its internet-facing ALB router over plain HTTP: requests (cookies, " +
@@ -1536,11 +1573,11 @@ export class Hosting extends Construct {
     if (buildId) {
       // The S3-website door serves from its OWN public bucket at ROOT (no
       // `builds/<id>/` prefix, and NOT the private assets bucket). Publish
-      // config.json there, at the root `.blocks-sandbox/` path the SPA fetches,
+      // config.json there, at the root `.cdk-blocks-sandbox/` path the SPA fetches,
       // so the cross-origin client can read its absolute API URL. Every other
       // door serves the private assets bucket under `builds/<id>/`.
       const configBucket = hosting.websiteBucket ?? hosting.bucket;
-      const configKeyPrefix = hosting.websiteBucket ? '.blocks-sandbox' : `builds/${buildId}/.blocks-sandbox`;
+      const configKeyPrefix = hosting.websiteBucket ? BLOCKS_SANDBOX_DIR : `builds/${buildId}/${BLOCKS_SANDBOX_DIR}`;
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
         sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props, buildId))],
         destinationBucket: configBucket,
@@ -1555,15 +1592,15 @@ export class Hosting extends Construct {
           ? {
               distribution: publicDistribution,
               // The skew-protection viewer-request CloudFront function rewrites
-              // the URI to `/builds/<buildId>/.blocks-sandbox/config.json`
+              // the URI to `/builds/<buildId>/.cdk-blocks-sandbox/config.json`
               // BEFORE the cache lookup, so the real edge cache key lives under
-              // `/builds/<id>/`. Invalidating only `/.blocks-sandbox/*` never
+              // `/builds/<id>/`. Invalidating only `/.cdk-blocks-sandbox/*` never
               // matches that key and is a no-op for config.json. Invalidate the
               // post-rewrite key too. (The primary guard against staleness is
               // step 5a's no-cache placeholder; this is defense-in-depth so a
               // post-deploy invalidation actually clears any edge entry at its
               // real key.)
-              distributionPaths: [`/builds/${buildId}/.blocks-sandbox/*`, '/.blocks-sandbox/*'],
+              distributionPaths: [`/builds/${buildId}/${BLOCKS_SANDBOX_DIR}/*`, `/${BLOCKS_SANDBOX_DIR}/*`],
             }
           : {}),
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
@@ -1571,9 +1608,9 @@ export class Hosting extends Construct {
 
       // Ensure the config deployment runs AFTER the hosting construct's
       // asset deployments. Those deployments upload the whole static dir —
-      // which includes the *placeholder* `.blocks-sandbox/config.json`
+      // which includes the *placeholder* `.cdk-blocks-sandbox/config.json`
       // (`{_placeholder:true}`) written during synth — to the same
-      // `builds/<id>/.blocks-sandbox/config.json` key this deployment writes
+      // `builds/<id>/.cdk-blocks-sandbox/config.json` key this deployment writes
       // the resolved config to. Without an ordering dependency the
       // placeholder can land last and clobber the real config.
       //
@@ -1636,6 +1673,26 @@ export class Hosting extends Construct {
         props.api.publishPublicOrigin?.();
         registerSharedConfig(configOwner, 'BLOCKS_PUBLIC_ORIGIN', publicUrl);
       }
+      // BLOCKS_ALLOW_PLAIN_HTTP: the door's `allowPlainHttp: true` opt-out, for
+      // `Auth`. Outside a sandbox `Auth` refuses to issue a session cookie over a
+      // plain-HTTP public origin (it couldn't carry `Secure`); this entry, and
+      // only the exact value `'true'`, lets it drop `Secure` instead. Registered
+      // only for a production deploy of an ALB or custom door that serves the
+      // app over plain HTTP and opted out (synth already failed for one that
+      // didn't), so every other deploy's config is unchanged and `Auth` fails
+      // closed. The stacked door's public origin is its HTTPS edge: its opt-out
+      // is for the edge → router hop only, and needs no entry. An opted-out door
+      // that serves HTTPS (an ALB with a `certificate`, a custom door returning an
+      // `https://` url) registers nothing either, so `Auth` keeps `Secure`: keep the
+      // `servesPlainHttp` check, `doorAllowsPlainHttp` alone is not enough.
+      const door = nonStacked(props.frontDoor);
+      const doorAllowsPlainHttp =
+        typeof door === 'object' && (door.kind === 'alb' || door.kind === 'custom') && door.allowPlainHttp === true;
+      const servesPlainHttp =
+        hosting.distributionUrl.startsWith('http://') || hosting.frontDoor.originHandle.protocol === 'http';
+      if (doorAllowsPlainHttp && !cfOverRouter && servesPlainHttp && !isSandboxContext(this)) {
+        registerSharedConfig(configOwner, 'BLOCKS_ALLOW_PLAIN_HTTP', 'true');
+      }
       // CORS_HOSTING_ORIGINS: registered RAW (the unresolved front-door URL token —
       // the CloudFront domain, or the composed edge's) — never escaped here at synth.
       // `publicUrl` is a CDK token whose real value only exists post-deploy, so
@@ -1672,7 +1729,7 @@ export class Hosting extends Construct {
 
     // Surface this deploy's build id so a post-deploy liveness poll can confirm
     // the new build is served (matched against the config at
-    // `/.blocks-sandbox/config.json`). Gated on a build id existing, like the
+    // `/.cdk-blocks-sandbox/config.json`). Gated on a build id existing, like the
     // config deployment above.
     if (manifest.buildId) {
       new cdk.CfnOutput(this, 'HostingBuildId', {
@@ -1717,7 +1774,11 @@ export class Hosting extends Construct {
     // Duck-typed (`edgeArn`) rather than `instanceof`, which fails across
     // duplicate aws-cdk-lib copies (hosting's vs core's).
     const edgeFunctions = [...hosting.computeFunctions.values()].filter((fn) => 'edgeArn' in fn);
-    coverHosting(this, boundaryOwner, childrenBefore, edgeFunctions);
+    const helperStacks = coverHosting(this, boundaryOwner, childrenBefore, edgeFunctions);
+    // On a shared app platform, Hosting's resources — here and in the separate
+    // us-east-1 stacks — are the app's own: tag them `app=<id>` like the backend's,
+    // so the platform's tag-scoped execution policy and boundary see them as its.
+    if (appIdentity) tagAppResources([this, ...helperStacks], appIdentity.id);
   }
 
   /**
@@ -1769,8 +1830,9 @@ export class Hosting extends Construct {
       throw new Error('Composed CF → ALB door: the ALB router was not provisioned by the hosting construct.');
     }
     // The edge layer's settings: `frontDoor.features.edge`.
-    const edge =
-      typeof props.frontDoor === 'object' && props.frontDoor !== null && props.frontDoor.kind === 'stacked' ? props.frontDoor.features?.edge : undefined;
+    const stacked =
+      typeof props.frontDoor === 'object' && props.frontDoor !== null && props.frontDoor.kind === 'stacked' ? props.frontDoor : undefined;
+    const edge = stacked?.features?.edge;
     const { result } = buildFrontDoor(
       this,
       cloudFrontEdgeDoor,
@@ -1787,6 +1849,8 @@ export class Hosting extends Construct {
         },
         contentSecurityPolicy: edge?.contentSecurityPolicy,
         webAclArn: edge?.waf?.webAclArn,
+        // The stacked door's opt-out of `OriginSecretOverPlainHttpError`: the edge enforces it.
+        allowPlainHttp: stacked?.allowPlainHttp === true,
       },
       { wiringCheck: false },
     );
@@ -2103,11 +2167,24 @@ function toL3FrontDoor(frontDoor: HostingFrontDoor<HostingDomain> | null | undef
   }
   switch (frontDoor.kind) {
     case 'alb':
-      return { kind: 'alb', vpc: frontDoor.vpc, internal: frontDoor.internal, certificate: frontDoor.certificate, features };
+      return {
+        kind: 'alb',
+        vpc: frontDoor.vpc,
+        internal: frontDoor.internal,
+        certificate: frontDoor.certificate,
+        ...(frontDoor.allowPlainHttp !== undefined ? { allowPlainHttp: frontDoor.allowPlainHttp } : {}),
+        features,
+      };
     case 'apiGateway':
       return { kind: 'apiGateway', api: frontDoor.api, certificate: frontDoor.certificate, features };
     case 'custom':
-      return { kind: 'custom', door: frontDoor.door, wiringCheck: frontDoor.wiringCheck, features };
+      return {
+        kind: 'custom',
+        door: frontDoor.door,
+        wiringCheck: frontDoor.wiringCheck,
+        ...(frontDoor.allowPlainHttp !== undefined ? { allowPlainHttp: frontDoor.allowPlainHttp } : {}),
+        features,
+      };
     default:
       throw new HostingError('UnsupportedFrontDoorError', {
         message: `Unknown front door ${JSON.stringify(frontDoor)}.`,
@@ -2117,7 +2194,7 @@ function toL3FrontDoor(frontDoor: HostingFrontDoor<HostingDomain> | null | undef
 }
 
 /** The options the stacked door takes besides `kind`. */
-const STACKED_OPTION_KEYS = new Set(['kind', 'edge', 'router', 'vpc', 'internal', 'certificate', 'features']);
+const STACKED_OPTION_KEYS = new Set(['kind', 'edge', 'router', 'vpc', 'internal', 'certificate', 'allowPlainHttp', 'features']);
 /** The keys of the stacked door's `features.edge`. */
 const STACKED_EDGE_KEYS = new Set(['waf', 'contentSecurityPolicy']);
 
@@ -2142,7 +2219,7 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
     if (raw[key] !== undefined && !STACKED_OPTION_KEYS.has(key)) {
       throw option(
         `\`frontDoor.${key}\` is not an option of the 'stacked' front door.`,
-        'Remove it. The stacked door takes: frontDoor.edge, frontDoor.router, frontDoor.vpc, frontDoor.internal, frontDoor.certificate, and `frontDoor.features`.',
+        'Remove it. The stacked door takes: frontDoor.edge, frontDoor.router, frontDoor.vpc, frontDoor.internal, frontDoor.certificate, frontDoor.allowPlainHttp, and `frontDoor.features`.',
       );
     }
   }
@@ -2154,6 +2231,9 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
   }
   if (raw.internal !== undefined && typeof raw.internal !== 'boolean') {
     throw option(`\`frontDoor.internal\` must be true or false (got ${JSON.stringify(raw.internal)}).`, 'Pass a boolean.');
+  }
+  if (raw.allowPlainHttp !== undefined && typeof raw.allowPlainHttp !== 'boolean') {
+    throw option(`\`frontDoor.allowPlainHttp\` must be true or false (got ${JSON.stringify(raw.allowPlainHttp)}).`, 'Pass a boolean.');
   }
   if (door.certificate && !door.features?.router?.domain) {
     throw new HostingError('StackedRouterCertificateNeedsDomainError', {

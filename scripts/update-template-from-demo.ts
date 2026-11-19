@@ -51,7 +51,7 @@ async function main() {
       recursive: true,
       filter: (src) => {
         const rel = src.replace(appDir, '');
-        return !rel.match(/^(\/node_modules|\/\.blocks-sandbox|\/cdk\.out|\/dist|\/build|\/package-lock\.json)/);
+        return !rel.match(/^(\/node_modules|\/\.cdk-blocks-sandbox|\/cdk\.out|\/dist|\/build|\/package-lock\.json)/);
       }
     });
     

@@ -115,23 +115,20 @@ export type {
 	MetricsSource,
 } from '@aws-blocks/bb-dashboard';
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
-export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
-export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 export type {
-	DeleteOptions as DTDeleteOptions,
-	DistributedTableOptions,
-	ExternalKmsKeyRef as DTExternalKmsKeyRef,
-	GetOptions as DTGetOptions,
-	PutOptions as DTPutOptions,
-	QueryOptions as DTQueryOptions,
-	ReadValidationMode,
-	ScanOptions as DTScanOptions,
-	TableKey,
-	TableKeyConfig,
-} from '@aws-blocks/bb-distributed-table';
-export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+	ClusterKind,
+	ClusterType,
+	ConnectionStringSource,
+	DatabaseClusterOptions,
+	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+	ScopedDatabase,
+	SqlQuery,
+	Transaction,
+	TransactionOptions,
+} from '@aws-blocks/bb-database';
+export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
@@ -163,15 +160,34 @@ export type {
 	WaitUntilSyncedOptions,
 } from '@aws-blocks/bb-knowledge-base';
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
+// A type keeps its own name. It gets the block prefix only when another block
+// in this file exports a type with the same name (`PutOptions` and
+// `ScanOptions` are also names of `FileBucket`).
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
+	Entry,
 	ExternalKmsKeyRef,
 	ExternalTableRef,
+	GetOptions,
+	IndexConfig,
+	KeyConfig,
+	KeyOf,
 	KVStoreOptions,
+	LegacyKVStoreDeleteOptions,
+	LegacyKVStoreOptions,
+	LegacyKVStorePutOptions,
+	PutBatchEntry,
 	PutOptions as KVPutOptions,
+	QueryOptions,
+	ReadValidationMode,
+	Results,
+	ScanOptions as KVScanOptions,
+	SortCondition,
+	ValueOf,
+	Where,
 } from '@aws-blocks/bb-kv-store';
-export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+export { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-blocks/bb-kv-store';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
 export type {

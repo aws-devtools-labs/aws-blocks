@@ -78,6 +78,12 @@ describe('create-blocks-app template .gitignore covers secrets', () => {
         assert.strictEqual(checkIgnore(path).status, 1, `${name}/gitignore must not ignore ${path}`);
       }
     });
+
+    // Adding AWS Blocks to an existing project ignores `node_modules` too; keep the two in step.
+    it(`template "${name}" ignores node_modules`, () => {
+      copyFileSync(join(templateDir, 'gitignore'), join(repo, '.gitignore'));
+      assert.strictEqual(checkIgnore('node_modules/pkg/index.js').status, 0);
+    });
   }
 });
 
@@ -184,10 +190,10 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       '.gitignore': 'node_modules\n.env\n',
     });
     try {
-      assert.match(stdout, /MODIFY {2}\.gitignore .*secret and key-material patterns/);
+      assert.match(stdout, /MODIFY {2}\.gitignore .*node_modules if missing, and secret and key-material patterns/);
       const modified = stdout.split('\n').find((line) => line.includes('Modified .gitignore'));
       assert.ok(modified, `no "Modified .gitignore" line in:\n${stdout}`);
-      for (const entry of ['.blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
+      for (const entry of ['.cdk-blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
         assert.ok(modified.includes(entry), `"${modified}" does not list ${entry}`);
       }
       assert.ok(!/[(,] ?\.env[,)]/.test(modified), `"${modified}" lists .env, which the project already ignores`);
@@ -229,6 +235,122 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       }
     });
   }
+
+  // The scaffold adds dependencies, so the next `npm install` creates
+  // `node_modules`; without a line for it, `git add -A` stages the directory.
+  const withoutNodeModules: Record<string, Record<string, string>> = {
+    'a project with no .gitignore': { 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }) },
+    'a project whose .gitignore has no node_modules line': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'dist\n*.log\n',
+    },
+    'an Amplify Gen 2 project': {
+      'package.json': JSON.stringify({ name: 'amplify-app', version: '1.0.0' }),
+      'amplify/backend.ts': 'export const backend = defineBackend({});',
+    },
+    // Neither a line for one package's `node_modules` nor `dist/*` covers the root one.
+    'a project whose .gitignore only ignores a nested node_modules': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'packages/site/node_modules\ndist/*\n',
+    },
+    // Only literal lines count as covering it. Git reads `[!n]` as "not n", `n*x*s`
+    // does not match, and leading spaces are part of the pattern.
+    'a project whose .gitignore has [!n]ode_modules': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '[!n]ode_modules\n',
+    },
+    'a project whose .gitignore has n*x*s': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'n*x*s\n',
+    },
+    'a project whose .gitignore has node_modules after leading spaces': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '  node_modules\n',
+    },
+    // Git strips trailing spaces only; a trailing tab is part of the pattern.
+    'a project whose .gitignore has node_modules before a trailing tab': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'node_modules\t\n',
+    },
+    // A negation that reverses no earlier line is no choice about node_modules.
+    'a project whose .gitignore only has !node_modules/*': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '!node_modules/*\n',
+    },
+  };
+  for (const [label, files] of Object.entries(withoutNodeModules)) {
+    it(`ignores node_modules in ${label}`, () => {
+      const dir = addBlocks(files);
+      try {
+        assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), []);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  // An explicit `!node_modules` (vendored dependencies) is the project's choice: git
+  // applies the last matching line, so appending `node_modules` would reverse it. The
+  // same goes for `!node_modules/*` after `node_modules/*`, which leaves the directory
+  // itself included, so git re-includes its contents.
+  const unignoring = [
+    'node_modules\n!node_modules\n',
+    '!node_modules\n',
+    'node_modules/*\n!node_modules/*\n',
+    'node_modules/**\n!node_modules/**\n',
+  ];
+  for (const gitignore of unignoring) {
+    it(`adds no node_modules line when the existing .gitignore is ${JSON.stringify(gitignore)}`, () => {
+      const { dir, stdout } = runAddBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': gitignore });
+      try {
+        const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+        assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), gitignore.trimEnd().split('\n'));
+        assert.match(stdout, /Left node_modules as your \.gitignore configures it/);
+        assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), ['node_modules/pkg/index.js'], 'git agrees it is un-ignored');
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  const covering = ['node_modules', 'node_modules/', '/node_modules', '/node_modules/', 'node_modules/*', 'node_modules/**', '**/node_modules'];
+  for (const line of covering) {
+    it(`adds no node_modules line when the existing .gitignore has ${line}`, () => {
+      const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': `${line}\n` });
+      try {
+        const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+        assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), [line]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  // Git can't re-include a file whose parent directory is excluded, so `!node_modules/*`
+  // after `node_modules` leaves it ignored: no line, and no "un-ignored" note.
+  it('treats node_modules followed by !node_modules/* as ignored', () => {
+    const gitignore = 'node_modules\n!node_modules/*\n';
+    const { dir, stdout } = runAddBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': gitignore });
+    try {
+      const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+      assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), gitignore.trimEnd().split('\n'));
+      assert.doesNotMatch(stdout, /Left node_modules/);
+      assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('adds no node_modules line to a CRLF .gitignore that has one', () => {
+    const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': 'node_modules\r\n' });
+    try {
+      const gitignore = readFileSync(join(dir, '.gitignore'), 'utf-8');
+      assert.deepStrictEqual(gitignore.split('\r\n').filter((l) => l.includes('node_modules')), ['node_modules']);
+      assert.ok(!/(^|[^\r])\n/.test(gitignore), 'the .gitignore has a bare \\n line ending');
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });
 
 /** `source` with `/* … *\/` and `// …` comments removed, so a doc comment can't satisfy a check on the code. */
@@ -265,21 +387,27 @@ describe('create-blocks-app template key-value methods require auth', () => {
   }
 });
 
-describe('create-blocks-app auth template defines its signed-in methods with auth.protect', () => {
-  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'auth', 'aws-blocks', 'index.ts'), 'utf-8'));
-  const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
+describe('create-blocks-app auth templates define their signed-in methods with auth.protect', () => {
+  const protectedMethods: Record<string, string[]> = {
+    auth: ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo'],
+    'auth-oidc': ['getValue', 'setValue', 'whoAmI'],
+  };
+  for (const [name, methodNames] of Object.entries(protectedMethods)) {
+    const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts'), 'utf-8'));
+    const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
 
-  it('the template\'s api namespace is auth.protect(...)', () => {
-    assert.ok(protect, 'auth template: export const api = auth.protect(scope, \'api\', { ... }) not found');
-  });
-
-  const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
-  for (const method of ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo']) {
-    it(`auth template ${method} is a protected method (in methods, not public)`, () => {
-      assert.strictEqual(parts.length, 2, 'auth template: a single `methods: (context, user) => ({` factory');
-      assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
-      assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+    it(`the ${name} template's api namespace is auth.protect(...)`, () => {
+      assert.ok(protect, `${name} template: export const api = auth.protect(scope, 'api', { ... }) not found`);
     });
+
+    const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
+    for (const method of methodNames) {
+      it(`${name} template ${method} is a protected method (in methods, not public)`, () => {
+        assert.strictEqual(parts.length, 2, `${name} template: a single \`methods: (context, user) => ({\` factory`);
+        assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
+        assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+      });
+    }
   }
 });
 
@@ -454,6 +582,9 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
   for (const name of templateNames) {
     const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
+    // A template whose only RPC surface is `auth.protect` has no ApiNamespace to
+    // check here; the auth.protect test above checks which of its methods are public.
+    if (apiMethods(backend).length === 0 && /export const api = auth\.protect\(/.test(readFileSync(backend, 'utf-8'))) continue;
 
     it(`template "${name}" gates every API method that is not listed in UNGATED`, () => {
       const methods = apiMethods(backend);
@@ -487,6 +618,93 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
     it(`template "${name}" never spreads or Object.assigns a caller's argument into an object`, () => {
       const spreads = apiMethods(backend).flatMap(argumentSpreads);
       assert.deepStrictEqual(spreads, [], `${name}: copy the fields a caller may set instead of spreading the argument`);
+    });
+  }
+});
+
+/**
+ * Template RawRoutes whose handler does not start with `requireAuth`/`requireRole`,
+ * keyed `<METHOD> <path>`, each with its reason. A RawRoute is a public,
+ * internet-reachable endpoint just like an ApiNamespace method, so listing one
+ * here is the same security decision as listing a method in UNGATED.
+ */
+const PUBLIC_ROUTES: Record<string, Record<string, string>> = {
+  'api-only': { 'GET /healthz': 'public: liveness probe for load balancers, touches no data' },
+};
+
+interface TemplateRoute {
+  /** `<METHOD> <path>` */
+  name: string;
+  body?: ts.Block;
+}
+
+/** Every `new RawRoute(scope, '<id>', { method, path, handler })` in `file`. */
+function rawRoutes(file: string): TemplateRoute[] {
+  const sourceFile = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true);
+  const routes: TemplateRoute[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isNewExpression(node) && node.expression.getText(sourceFile) === 'RawRoute') {
+      const options = node.arguments?.[2];
+      assert.ok(options && ts.isObjectLiteralExpression(options), `${file}: RawRoute options must be an object literal`);
+      const property = (key: string) =>
+        options.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(sourceFile) === key);
+      const literal = (key: string) => {
+        const p = property(key);
+        assert.ok(
+          p && ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer),
+          `${file}: RawRoute ${key} must be a string literal`,
+        );
+        return p.initializer.text;
+      };
+      const body = handlerBody(options, sourceFile);
+      routes.push({ name: `${literal('method')} ${literal('path')}`, body });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return routes;
+}
+
+/**
+ * The block body of a RawRoute `handler` written inline as an arrow function,
+ * a function expression or a method shorthand. A concise-arrow or referenced
+ * handler has no inline block to check, so it returns undefined and is
+ * reported as ungated.
+ */
+function handlerBody(options: ts.ObjectLiteralExpression, sourceFile: ts.SourceFile): ts.Block | undefined {
+  const handler = options.properties.find((p) => p.name?.getText(sourceFile) === 'handler');
+  if (handler && ts.isMethodDeclaration(handler)) return handler.body;
+  if (!handler || !ts.isPropertyAssignment(handler)) return undefined;
+  const fn = handler.initializer;
+  if ((ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body)) return fn.body;
+  return undefined;
+}
+
+/** Every `.ts` file under a template's `aws-blocks/` directory, skipping `node_modules`. */
+function templateBackendFiles(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf-8' })
+    .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
+    .map((f) => join(dir, f));
+}
+
+describe('create-blocks-app template RawRoutes require auth unless listed as public', () => {
+  for (const name of templateNames) {
+    const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
+    if (!existsSync(dir)) continue;
+
+    it(`template "${name}" gates every RawRoute that is not listed in PUBLIC_ROUTES`, () => {
+      const allowed = PUBLIC_ROUTES[name] ?? {};
+      const ungated = templateBackendFiles(dir)
+        .flatMap(rawRoutes)
+        .filter((r) => !r.body || !gatesFirst(r.body))
+        .map((r) => r.name);
+      assert.deepStrictEqual(
+        ungated.filter((r) => !(r in allowed)),
+        [],
+        `${name}: start these handlers with \`await auth.requireAuth(context)\`, or list them in PUBLIC_ROUTES with the reason they are safe to call signed out`,
+      );
+      const stale = Object.keys(allowed).filter((r) => !ungated.includes(r));
+      assert.deepStrictEqual(stale, [], `${name}: remove these from PUBLIC_ROUTES (gated or no longer present)`);
     });
   }
 });
@@ -552,9 +770,7 @@ describe('create-blocks-app template methods that return a presigned URL require
   for (const name of templateNames) {
     const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
     if (!existsSync(dir)) continue;
-    const files = readdirSync(dir, { recursive: true, encoding: 'utf-8' })
-      .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
-      .map((f) => join(dir, f));
+    const files = templateBackendFiles(dir);
     callsPerTemplate[name] = files.reduce((total, file) => total + presignedUrlCalls(file).length, 0);
 
     it(`template "${name}" signs URLs only inside API methods that gate first`, () => {
@@ -604,6 +820,45 @@ describe('ungatedPresignedUrlCalls', () => {
         'api.publicSigner → files.putUrl (listed in UNGATED)',
         "api.indexed → files['getFileHandle'] (does not start with requireAuth/requireRole)",
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('rawRoutes', () => {
+  it('passes gated handlers and flags ungated, concise-arrow and referenced handlers', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cba-rawroutes-'));
+    const file = join(dir, 'index.ts');
+    writeFileSync(
+      file,
+      `const probe = async (context) => context.response.send({});
+      new RawRoute(scope, 'gated', { method: 'GET', path: '/gated', handler: async (context) => { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-method', { method: 'GET', path: '/gated-method', async handler(context) { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-function', { method: 'GET', path: '/gated-function', handler: async function (context) { await auth.requireRole(context, 'admin'); context.response.send({}); } });
+      new RawRoute(scope, 'open', { method: 'POST', path: '/open', handler: async (context) => { context.response.send({}); } });
+      new RawRoute(scope, 'open-method', { method: 'POST', path: '/open-method', async handler(context) { context.response.send({}); } });
+      new RawRoute(scope, 'concise', { method: 'GET', path: '/concise', handler: async (context) => context.response.send({}) });
+      new RawRoute(scope, 'referenced', { method: 'GET', path: '/referenced', handler: probe });`,
+    );
+    try {
+      const routes = rawRoutes(file);
+      assert.deepStrictEqual(
+        routes.map((r) => r.name),
+        [
+          'GET /gated',
+          'GET /gated-method',
+          'GET /gated-function',
+          'POST /open',
+          'POST /open-method',
+          'GET /concise',
+          'GET /referenced',
+        ],
+      );
+      assert.deepStrictEqual(
+        routes.filter((r) => !r.body || !gatesFirst(r.body)).map((r) => r.name),
+        ['POST /open', 'POST /open-method', 'GET /concise', 'GET /referenced'],
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -20,6 +20,7 @@ classes now take the `BlocksClient` to run on, so `Api()` becomes `blocks.api`, 
 A namespace named `types`, `serializers` or `servers` would be generated into a file this generator
 emits itself, so its API now takes an `Api` suffix — `blocks.typesApi` — and code generation warns.
 
-The RPC path from `x-blocks-endpoint` is now appended to the generated `Servers` constants rather
-than to the server each API class was handed. A spec that declares no server at all now falls back
-to `http://localhost:3001/aws-blocks/api` rather than to the bare origin, where no RPC is served.
+The RPC path now reaches the client through the generated `Servers` constants rather than being
+appended to the server each API class was handed. A spec that declares no server at all now falls
+back to `http://localhost:3001/aws-blocks/api` rather than to the bare origin, where no RPC is
+served.

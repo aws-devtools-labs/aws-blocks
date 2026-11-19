@@ -4,13 +4,13 @@ This directory contains the E2E test suite for the Dart native SDK. It runs
 against the **`test-apps/native-bindings`** backend, which exercises the blocks
 native clients consume (three `Auth` blocks — email + password, a
 Cognito-style configuration and OIDC through the local stub IdP — plus realtime,
-file, KV, and a DistributedTable-backed todo list).
+file, KV, and a todo list backed by a KVStore with a `schema` and a `key`).
 
 ## Structure
 
 - `bin/e2e/` — Test suites:
   - `kv_store_test.dart` — KV store round-trips
-  - `todos_test.dart` — DistributedTable todos (auth-gated behind the email + password `Auth` block)
+  - `todos_test.dart` — KVStore todos (auth-gated behind the email + password `Auth` block)
   - `file_bucket_test.dart` — presigned upload/download + server-side put/get
   - `realtime_test.dart` — cursor channel publish/subscribe
   - `auth_basic_test.dart` — email + password `Auth` (signUp → emailed code → confirm, which signs the user in → signIn)
@@ -53,8 +53,9 @@ confirmed user instead. Seed it into the stack's user pools first:
 ## OIDC suite
 
 `oidc_test.dart` validates the server-relay sign-in + cookie-persistence flow
-headlessly against `Auth`'s stub IdP. It builds the `OidcClient` from the auth
-block's fixed `/aws-blocks/auth/*` routes, with no server-supplied descriptor.
+headlessly against `Auth`'s stub IdP. It signs in with the `OidcClient` the
+backend's `oidcAuthApi.getClient()` returns (`Auth.createOidcApi()`), which carries
+the block's `/aws-blocks/auth/*` routes.
 
 The stub IdP runs only locally and on sandbox deployments. The native-bindings
 test app always deploys as a sandbox, so its deployed backend serves the stub

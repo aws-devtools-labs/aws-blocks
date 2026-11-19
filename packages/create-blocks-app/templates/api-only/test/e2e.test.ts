@@ -19,9 +19,9 @@ let authApi: typeof authApiType;
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
 // The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
 // API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
-// a deploy, which records its URL in .blocks-sandbox/config.<stage>.json, never redirects these tests.
+// a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
-const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
 
 /**
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
@@ -124,6 +124,39 @@ test('health: public liveness check', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
+const healthzUrl = `http://localhost:${serverPort}/healthz`;
+
+// The RawRoute probe a load balancer hits: a plain GET, no RPC envelope, no auth.
+test('healthz: plain GET answers 200 with an uncached JSON body', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  const res = await fetch(healthzUrl);
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /^application\/json/);
+  assert.match(res.headers.get('cache-control') ?? '', /no-store/);
+  const body = await res.json();
+  assert.strictEqual(body.status, 'ok');
+  assert.ok(typeof body.timestamp === 'number');
+});
+
+// Probes often append a cache-buster or a trailing slash; both still reach the route.
+test('healthz: query string and trailing slash still match the route', async () => {
+  for (const url of [`${healthzUrl}?probe=uptime&t=${Date.now()}`, `${healthzUrl}/`]) {
+    const res = await fetch(url);
+    assert.strictEqual(res.status, 200, `${url} should reach /healthz`);
+    assert.strictEqual((await res.json()).status, 'ok');
+  }
+});
+
+// The route is registered for GET only, and nothing else lives under it.
+test('healthz: other methods and sub-paths are not routed', async () => {
+  const post = await fetch(healthzUrl, { method: 'POST', body: '{}' });
+  assert.ok([404, 405].includes(post.status), `POST /healthz must not reach the GET handler (got ${post.status})`);
+  await post.body?.cancel();
+  const nested = await fetch(`${healthzUrl}/deep`);
+  assert.strictEqual(nested.status, 404, '/healthz/deep is not a registered route');
+  await nested.body?.cancel();
+});
+
 // A presigned URL is a bearer credential, so only a signed-in caller gets one.
 test('files: signed-out callers cannot mint presigned URLs', async () => {
   await authApi.setAuthState({ action: 'signOut' });
@@ -205,7 +238,7 @@ test('items: auth-gated CRUD round-trip', async () => {
 // When you replace the sample API, update or delete this test.
 test('items: optimistic-lock conflict rejects a stale write', async () => {
   // isBlocksError is client-safe (the browser bundle re-exports it); the error
-  // name is asserted as a literal string because DistributedTableErrors is a
+  // name is asserted as a literal string because KVStoreErrors is a
   // server-only value and is not present in the client bundle this test runs in.
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
   const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';

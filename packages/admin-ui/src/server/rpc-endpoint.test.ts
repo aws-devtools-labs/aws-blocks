@@ -31,7 +31,7 @@ afterEach(() => {
 function deployedProject(extra: Record<string, string> = {}): string {
 	return makeProject({
 		'.blocks/config.json': JSON.stringify({ stackId: 'blocks-app' }),
-		'.blocks-sandbox/sandbox-id.txt': 'alice-abc123\n',
+		'.cdk-blocks-sandbox/sandbox-id.txt': 'alice-abc123\n',
 		...extra,
 	});
 }
@@ -99,7 +99,7 @@ describe('resolveRpcEndpoint — local mode', () => {
 
 	it('consults no cloud source at all, even when both would answer', async () => {
 		const root = deployedProject({
-			'.blocks-sandbox/config.json': JSON.stringify({ apiUrl: 'https://stale.example.com/x' }),
+			'.cdk-blocks-sandbox/config.json': JSON.stringify({ apiUrl: 'https://stale.example.com/x' }),
 		});
 		const result = assertOk(
 			await resolveRpcEndpoint({ projectRoot: root, stage: 'sandbox', mode: 'local', ...forbiddenSeams }),
@@ -150,8 +150,8 @@ describe('resolveRpcEndpoint — cloud mode precedence', () => {
 
 	it("reads the stage's own config file, never the dev server's config.json", async () => {
 		const root = deployedProject({
-			'.blocks-sandbox/config.json': JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'sandbox' }),
-			'.blocks-sandbox/config.production.json': JSON.stringify({
+			'.cdk-blocks-sandbox/config.json': JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'sandbox' }),
+			'.cdk-blocks-sandbox/config.production.json': JSON.stringify({
 				apiUrl: 'https://prod.example.com/aws-blocks/api',
 				environment: 'production',
 			}),
@@ -316,7 +316,7 @@ describe('resolveRpcEndpoint — validation of the resolved value', () => {
 		for (const url of ['file:///etc/passwd', 'ftp://files.example.com/x', 'data:text/plain,x']) {
 			const message = assertNoEndpoint(await resolveWithApiUrl(root, url));
 			assert.match(message, /only http and https/);
-			assert.match(message, new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+			assert.ok(message.includes(url), `expected ${JSON.stringify(message)} to name ${url}`);
 		}
 	});
 

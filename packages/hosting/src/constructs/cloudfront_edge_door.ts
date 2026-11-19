@@ -54,7 +54,7 @@ import { Annotations, Duration } from 'aws-cdk-lib';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
 import { HostingError } from '../hosting_error.js';
-import { isSandboxDeploy } from './deploy_stage.js';
+import { isSandboxDeploy, PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID } from './deploy_stage.js';
 import {
   AllowedMethods,
   type BehaviorOptions,
@@ -88,6 +88,15 @@ export type CloudFrontEdgeDoorInput = DoorInput & {
   contentSecurityPolicy?: string;
   /** BYO CLOUDFRONT-scoped web ACL ARN for the edge. */
   webAclArn?: string;
+  /**
+   * The stacked door's `allowPlainHttp`: outside a sandbox, send the router's
+   * required headers (its origin-verify secret) over a plain-HTTP hop to an
+   * internet-facing router instead of failing synth
+   * (`OriginSecretOverPlainHttpError`), with the
+   * `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning. Only for a
+   * trusted network path. @default false
+   */
+  allowPlainHttp?: boolean;
 };
 
 /** The edge's result: the {@link FrontDoorResult} plus the distribution it built. */
@@ -113,9 +122,14 @@ export type CloudFrontEdgeDoorResult = FrontDoorResult & {
  * router rejects every request without the header, so dropping it would
  * leave the sandbox unreachable.
  *
- * @throws HostingError('OriginSecretOverPlainHttpError') for that hop outside a sandbox.
+ * With the stacked door's `allowPlainHttp: true`, a production deploy sends
+ * the headers anyway and warns
+ * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledgeable): the
+ * explicit opt-out for a trusted network path between the edge and the router.
+ *
+ * @throws HostingError('OriginSecretOverPlainHttpError') for that hop outside a sandbox, without `allowPlainHttp`.
  */
-const assertSecretHopEncrypted = (scope: Construct, handle: DoorUpstream['originHandle']): void => {
+const assertSecretHopEncrypted = (scope: Construct, handle: DoorUpstream['originHandle'], allowPlainHttp: boolean): void => {
   if (handle.protocol === 'https' || handle.privateLoadBalancer) return;
   const headers = Object.keys(handle.customHeaders ?? {}).join(', ');
   const message =
@@ -124,10 +138,25 @@ const assertSecretHopEncrypted = (scope: Construct, handle: DoorUpstream['origin
   const resolution =
     'Give the router a `certificate` and `features.router.domain` so the edge → router hop is HTTPS :443, or set ' +
     '`internal: true` so the edge reaches the router through a CloudFront VPC origin on the AWS network.';
-  if (!isSandboxDeploy(scope)) {
+  const sandbox = isSandboxDeploy(scope);
+  if (!sandbox && allowPlainHttp) {
+    Annotations.of(scope).addWarningV2(
+      PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID,
+      `${message} \`allowPlainHttp: true\` lets this production deploy send them anyway: the origin secret crosses the ` +
+        'edge → router hop in cleartext, so anyone who reads it on that path can reach the router directly, past the edge ' +
+        "(and its web ACL), and the requests on that hop (sign-in, cookies, every RPC) can be read or altered. Keep it only " +
+        'when that path is trusted. ' +
+        `${resolution} If the plain-HTTP hop is intended, acknowledge it with ` +
+        `\`Annotations.of(stack).acknowledgeWarning('${PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID}')\`.`,
+    );
+    return;
+  }
+  if (!sandbox) {
     throw new HostingError('OriginSecretOverPlainHttpError', {
       message: `${message} A production deploy refuses to send it.`,
-      resolution: `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns.`,
+      resolution:
+        `${resolution} A sandbox deploy (\`sandboxMode\` context) only warns. Only if the path between the edge and ` +
+        'the router is trusted, set `allowPlainHttp: true` on the stacked door to send it anyway.',
     });
   }
   Annotations.of(scope).addWarningV2(
@@ -143,7 +172,8 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
   /**
    * @throws Error when there is no `upstream` door to front.
    * @throws HostingError('OriginSecretOverPlainHttpError') when the router requires headers (its origin-verify
-   *   secret) over a plain-HTTP hop to an internet-facing router, outside a sandbox deploy.
+   *   secret) over a plain-HTTP hop to an internet-facing router, outside a sandbox deploy (unless
+   *   `allowPlainHttp: true`, which warns instead).
    */
   build(scope, input) {
     const router = input.upstream;
@@ -159,7 +189,7 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     // secret). Over plain HTTP to an internet-facing router they would cross
     // the internet in cleartext, so that hop fails synth (see
     // `assertSecretHopEncrypted`). A router that requires none has nothing to protect.
-    if (Object.keys(handle.customHeaders ?? {}).length > 0) assertSecretHopEncrypted(scope, handle);
+    if (Object.keys(handle.customHeaders ?? {}).length > 0) assertSecretHopEncrypted(scope, handle, input.allowPlainHttp === true);
     const customHeaders = handle.customHeaders ? { ...handle.customHeaders } : undefined;
     const protocolPolicy = https ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY;
     const routerPort = https ? 443 : 80;

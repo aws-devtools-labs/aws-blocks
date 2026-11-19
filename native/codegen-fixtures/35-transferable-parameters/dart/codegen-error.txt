@@ -1,0 +1,9 @@
+Transferable types (realtime/channel) cannot be serialized: they are read-only. Method 'api.relay', parameter 'feed'.
+Transferable types (realtime/channel) cannot be serialized: they are read-only. Method 'api.relayIfAny', parameter 'feed'.
+Transferable types (realtime/channel) cannot be serialized: they are read-only. Method 'api.relayOrNull', parameter 'feed'.
+Transferable types (realtime/channel) cannot be serialized: they are read-only. Method 'api.relayAll', parameter 'feeds'.
+Transferable types (realtime/channel) cannot be serialized: they are read-only. Method 'api.relayAll', parameter 'byRoom'.
+Transferable types (realtime/channel) cannot be serialized: they are read-only. Method 'api.relayInline', parameter 'feed'.
+Transferable types (file-bucket/download) cannot be serialized: they are read-only. Method 'api.share', parameter 'download'.
+Transferable types (file-bucket/upload) cannot be serialized: they are read-only. Method 'api.share', parameter 'upload'.
+Transferable types (realtime/channel) cannot be serialized: they are read-only. Method 'api.forward', parameter 'bundle' (field Bundle.feed).

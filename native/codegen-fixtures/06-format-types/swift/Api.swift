@@ -17,13 +17,13 @@ public final nonisolated class Api: Sendable {
     public func getEvent(id: UUID) async throws -> GetEvent.Result {
         let request = BlocksRequest(method: "api.getEvent", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getEvent") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getEvent") }
         return try client.makeDecoder().decode(GetEvent.Result.self, from: result)
     }
 
     public enum GetEvent {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let createdAt: Date
             public let date: String
             public let email: String

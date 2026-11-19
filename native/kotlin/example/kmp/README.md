@@ -25,7 +25,7 @@ From the `example/typescript/aws-blocks` directory, run the following to start t
 ```bash
 npm install
 npm run dev
-npx blocks-generate-spec
+npm run spec
 ```
 
 This produces the `blocks.spec.json` file that the Gradle plugin reads at build time.
@@ -62,7 +62,7 @@ iosApp/             - Xcode project that hosts the Compose framework
 The app applies the `com.aws.blocks.kotlin` plugin in `composeApp/build.gradle.kts`:
 
 ```kotlin
-awsBlocks {
+cdkBlocks {
     apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {

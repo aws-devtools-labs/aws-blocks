@@ -3,7 +3,7 @@ import { api, authApi } from 'aws-blocks';
 import { AccountMenuBar, onAuthChange, StatusMessage, type AuthUserOf } from '@aws-blocks/blocks/ui';
 
 // Backend APIs are fully typed — hover over api.* for signatures.
-// Full docs: node_modules/@aws-blocks/blocks/README.md
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 
 type Todo = { todoId: string; title: string; completed: boolean; priority: number; version: number };
 // The signed-in user (groups, attributes, userSub), typed by the backend's `authApi`.
@@ -143,7 +143,7 @@ export function App() {
         This starter app demonstrates:
         {' '}<strong>authentication</strong> with cross-tab coordination,
         {' '}<strong>real-time sync</strong> across browser tabs,
-        and <strong>todos stored in a distributed table</strong> with per-user isolation.
+        and <strong>todos stored in a KVStore</strong> with per-user isolation.
       </p>
       {!user && <p>Sign in to get started. New accounts confirm their email with a 6-digit code — locally, it is printed in the <code>npm run dev</code> terminal.</p>}
       {user && <TodoApp />}

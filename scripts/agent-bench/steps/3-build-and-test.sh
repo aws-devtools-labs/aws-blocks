@@ -165,12 +165,12 @@ EOF
 # Discovery uses TWO independent paths over a 90-iteration window (either confirms), sharing ONE
 # readiness bar — the app root `/` answers non-5xx (`< 500`). They differ only in how the port is found:
 # Path A parses it from the framework banner `AWS Blocks local server running on http://localhost:<port>`;
-# Path B probes the candidate ports for `/.blocks-sandbox/config.json` (served by our front door the
+# Path B probes the candidate ports for `/.cdk-blocks-sandbox/config.json` (served by our front door the
 # moment it binds), which finds the port independent of banner text/parse timing — its drift-proof win.
 # config.json is a discovery signal only (it answers before the proxied app on :3100 is up), so Path B
 # still confirms readiness with the same root `/` probe. If neither confirms, APP_BASE_URL stays empty
 # and we proceed (the cell fails honestly rather than hanging). See the inline block at the launch site.
-agent_run -- 'rm -f .blocks-sandbox/dev-server.*.pid' || true
+agent_run -- 'rm -f .cdk-blocks-sandbox/dev-server.*.pid' || true
 
 # The front-door ports the dev server may bind (3000/3001 only, never :3100). Single source of truth:
 # the free-port loop below AND the readiness probe further down both read $DEV_PORTS, so changing
@@ -191,7 +191,7 @@ done
 # selector_contract + functional_completeness in scoring.mjs — a flaky miss was punishing apps that
 # were actually up). Both paths use the SAME readiness bar — the app root `/` answers non-5xx (`< 500`)
 # — and differ only in how they find the port. Path A: parse the port from the startup banner. Path B:
-# probe the candidate ports for `/.blocks-sandbox/config.json`, which OUR front door serves the moment
+# probe the candidate ports for `/.cdk-blocks-sandbox/config.json`, which OUR front door serves the moment
 # it binds; a hit identifies our port WITHOUT depending on the banner text or grep/parse timing (its
 # win — it survives a banner-string change or a slow/garbled log write). config.json is a PORT-DISCOVERY
 # signal, not a readiness one: it answers 200 before spawnFrontend() brings up the proxied app on :3100
@@ -232,7 +232,7 @@ for i in $(seq 1 90); do
   # our app is on this port), confirm readiness with Path A's own root probe (`/` returns `< 500`)
   # before accepting. Banner-text drift stays covered; the gate is never weaker than Path A.
   for p in $DEV_PORTS; do
-    ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.blocks-sandbox/config.json") || ccode=000
+    ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.cdk-blocks-sandbox/config.json") || ccode=000
     if [ "$ccode" != "000" ] && [ "$ccode" -lt 400 ]; then
       rcode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}") || rcode=000
       if [ "$rcode" != "000" ] && [ "$rcode" -lt 500 ]; then
@@ -355,45 +355,8 @@ else
   echo "::warning::dev server never came up (dead-server/backend-crash) — skipped Playwright to avoid masking it as invalid-URL test failures; tests stay at pessimistic defaults"
 fi
 
-# The dev server must be gone before the scan below and before the evidence leaves this step.
+# The dev server must be gone before the evidence leaves this step.
 agent_reap
-
-# Causal data-layer scan — runs AFTER Playwright so dev.log is complete through the end of the tests.
-# When a mock Database's eager migration run dies on a PGlite WASM init trap, bb-data KEEPS THE DEV
-# SERVER ALIVE (the front door still serves, so the dead-server branch above never fires) but logs a
-# fixed UNAVAILABLE sentinel; every DB-backed query then rejects. Without this scan such a cell would
-# be `scored` with failing DB tests and counted against the agent — an INFRA memory crash blamed on
-# the framework. BUT the fix that keeps the server alive also lets the data layer HEAL: ensureMigrations
-# re-runs the idempotent migrations on the next query, and on success logs a RECOVERED marker. So the
-# bare presence of the unavailable sentinel is NOT proof the layer was down when the tests ran — it may
-# have recovered on the first request (boot-time trap), or trapped again mid-tests. We make the flag
-# CAUSAL: set data_layer_unavailable ONLY when the LAST unavailable sentinel in dev.log is not followed
-# by a recovery marker — i.e. the data layer was still wedged when Playwright finished. Both are fixed
-# literals (not a fuzzy trap regex over arbitrary log lines), kept in sync with @aws-blocks/data-common.
-DATA_LAYER_SENTINEL='[bb-data] PGlite init trap: data layer unavailable'
-DATA_LAYER_RECOVERED='[bb-data] PGlite init trap: data layer recovered'
-if [ -f "${CELL_TMP}/dev.log" ] && grep -qF "$DATA_LAYER_SENTINEL" "${CELL_TMP}/dev.log" 2>/dev/null; then
-  DEV_LOG_PATH="${CELL_TMP}/dev.log" DL_SENTINEL="$DATA_LAYER_SENTINEL" DL_RECOVERED="$DATA_LAYER_RECOVERED" \
-  RESULT_PATH="${RESULT_PATH:-/tmp/result.json}" node -e '
-    const fs = require("fs");
-    const log = fs.readFileSync(process.env.DEV_LOG_PATH, "utf-8");
-    // Compare the LAST occurrence of each marker by byte offset. The data layer was down when the
-    // tests finished iff an unavailable sentinel exists and no recovery marker came AFTER it.
-    const lastDown = log.lastIndexOf(process.env.DL_SENTINEL);
-    const lastUp = log.lastIndexOf(process.env.DL_RECOVERED);
-    const wedged = lastDown !== -1 && lastUp < lastDown;
-    if (wedged) {
-      console.log("[data-layer] data layer wedged by a PGlite init trap and NOT recovered by test end (infra) — excluding cell");
-      const p = process.env.RESULT_PATH;
-      let r = {};
-      try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
-      r.data_layer_unavailable = true;
-      fs.writeFileSync(p, JSON.stringify(r, null, 2));
-    } else {
-      console.log("[data-layer] PGlite init trap recovered before test end — data layer up, cell counts normally");
-    }
-  ' || echo "::warning::failed to evaluate data_layer_unavailable on result.json"
-fi
 
 # Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step (CELL_TMP is
 # per-run scratch) — mirror how the trace/metrics already land at /tmp. All three are runner-owned

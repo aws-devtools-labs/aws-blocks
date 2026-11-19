@@ -3,9 +3,8 @@
 
 import { readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
+import { loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
-import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
@@ -18,6 +17,8 @@ import { createCdkOutput } from './cdk-output.js';
 import { BACKEND_OUTPUT_KEY, OUTPUTS_FILE } from './deploy-outputs.js';
 import { ignoreClosedOutput, log } from './log.js';
 import { migrateLegacyDeployedConfig, writeDeployedConfig } from './deployed-config.js';
+import { migrateLegacySandboxDir } from './migrate-sandbox-dir.js';
+import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -33,14 +34,14 @@ export interface DeployOptions {
   waitLiveTimeoutSec?: number;
   /**
    * Called with the outputs of the deployed stack as soon as the deploy has read
-   * them from `.blocks-sandbox/outputs.production.json`, before the liveness wait.
+   * them from `.cdk-blocks-sandbox/outputs.production.json`, before the liveness wait.
    * A launcher that reports the result records them here, rather than reading that
    * file after the wait: a second production deploy of the same app rewrites it
    * with only its own stack, and can do so during the wait. A sandbox deploy no
    * longer can, since each stage now writes its own document.
    */
   onDeployed?: (deployed: DeployedStack) => void;
-  /** How the user runs the deploy, in the guidance (for example `cdk-blocks deploy`). Default: `npm run deploy`. */
+  /** How the user runs the deploy, in the guidance. Default: `npm run deploy`. */
   invocation?: string;
 }
 
@@ -251,7 +252,8 @@ export async function deploy(options: DeployOptions) {
 async function runDeploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     log.progress('🏗️  Preparing deployment...');
-    migrateLegacyDeployedConfig(join(options.projectRoot, '.blocks-sandbox'));
+    migrateLegacySandboxDir(options.projectRoot);
+    migrateLegacyDeployedConfig(join(options.projectRoot, BLOCKS_SANDBOX_DIR));
 
     // Resolve the liveness-wait config: an explicit option wins, else read the
     // flags from argv so the thin template wrapper needs no arg plumbing. Only
@@ -279,18 +281,6 @@ async function runDeploy(options: DeployOptions) {
       checkBootstrap: true,
     });
 
-    // Provision secrets for production. projectRoot must match the root cdk
-    // synth uses (passed as --context below) so the written parameter name
-    // equals the one the app resolves at synth.
-    const secrets = await ensureSecrets('production', options.projectRoot);
-    if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      log.progress(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
-    }
-
-    // Apply external-database migrations to the production database before
-    // deploying. No-op unless this app uses an external DB and has ./migrations.
-    await applyExternalMigrations({ stage: 'production' });
-    
     // Generate client code FIRST (before cdk deploy triggers the Vite build).
     // This also populates the BB registry for telemetry — from a child process,
     // never by importing the backend here: an in-process import loads the local
@@ -392,7 +382,7 @@ async function runDeploy(options: DeployOptions) {
     options.onDeployed?.({ stack, apiUrl, hostingUrl });
     
     // Record the API URL for explicit production targets, never in the dev server's config.json (see deployedConfigFile).
-    writeDeployedConfig(join(options.projectRoot, '.blocks-sandbox'), 'production', apiUrl);
+    writeDeployedConfig(join(options.projectRoot, '.cdk-blocks-sandbox'), 'production', apiUrl);
 
     console.log('\n✅ Deployment complete!');
     console.log(`\n📡 API URL: ${apiUrl}`);

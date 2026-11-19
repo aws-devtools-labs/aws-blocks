@@ -329,9 +329,10 @@ npm install --save-dev @opennextjs/aws@~4.1.14
   Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
   `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
   for the Lambda@Edge function, so bootstrap `us-east-1` too
-  (`npx cdk bootstrap aws://<account>/us-east-1`). Tearing down a sandbox that
-  has more than one stack is tracked in
-  [#958](https://github.com/aws-devtools-labs/aws-blocks/pull/958) and
+  (`npx cdk bootstrap aws://<account>/us-east-1`). `npm run sandbox:destroy`
+  deletes every stack the sandbox deploys, the `us-east-1` support stack
+  included. `npm run destroy` passes no stack selection, so the CDK CLI refuses
+  to destroy an app with more than one top-level stack; that is tracked in
   [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
 
 ## Architecture
@@ -476,6 +477,16 @@ IPX image optimizer gets a REST API of its own with either compute type, so
 with `compute.type: 'web-function'` everything below, including the
 `serverOrigin` settings, applies to that image REST API.
 
+The REST API invokes the server the way it was built. A streaming server
+(Next.js through OpenNext, Nitro's `aws-lambda` preset with
+`nitro.awsLambda.streaming: true`, any Lambda Web Adapter server) gets a
+response-streaming integration (`ResponseTransferMode: STREAM`). A buffered
+Lambda handler (Nitro's `aws-lambda` preset with `awsLambda.streaming` off,
+which is Nitro's default) gets a plain Lambda proxy integration, which reads
+the `{ statusCode, headers, body }` object the handler returns. A buffered
+response is sent whole once the handler returns, and Lambda limits it to 6 MB;
+turn streaming on for larger responses or to send the page as it renders.
+
 - **Origin-verify secret.** The REST API's resource policy denies any request
   whose `Referer` header is not a secret that CloudFront adds as an origin
   custom header (a viewer's own `Referer` is replaced). The secret is random:
@@ -503,7 +514,7 @@ with `compute.type: 'web-function'` everything below, including the
   rate rule, since they all come from edge IPs and the distribution's own web
   ACL already rate-limits viewers. It follows `waf.enabled` because each web
   ACL costs money: a monthly charge, a charge per request it evaluates (every
-  uncached SSR request is now evaluated by two web ACLs), and the CloudWatch
+  uncached SSR request is evaluated by two web ACLs), and the CloudWatch
   Logs ingestion of the requests it blocks or counts. A `waf.webAclArn` of your
   own adds nothing to the stage.
 - **Access logs (opt-in).** `serverOrigin: { accessLogging: true }` writes JSON
@@ -553,7 +564,8 @@ of 403s while the distribution propagates; rotate in a quiet window.
 
 The stacked door's CloudFront edge sends its own origin-verify header to the
 ALB router. It never sends it over plain HTTP to an internet-facing router in
-a production deploy: see [the edge → router hop](#the-stacked-door).
+a production deploy, unless the door sets `allowPlainHttp: true`: see
+[the edge → router hop](#the-stacked-door).
 
 ## Front doors
 
@@ -578,28 +590,84 @@ locked origin requires on every request, so it only answers its own door.
 | Door | Viewer TLS | Origin-hop TLS | Secret header |
 |---|---|---|---|
 | CloudFront (default) | HTTPS (HTTP redirects to HTTPS; TLS 1.2+ with a custom `domain`) | HTTPS: S3 through origin access control, Lambda function URLs through origin access control, and the API Gateway REST APIs in front of the server and the image optimizer | `Referer` carrying a Secrets Manager secret, which each server-origin REST API's resource policy requires (plus the `x-blocks-front-door` marker); over HTTPS only |
-| `stacked` (CloudFront edge over an ALB router) | HTTPS at the edge (HTTP redirects to HTTPS) | Static routes: HTTPS to S3 (origin access control). Edge → router: HTTPS :443 with a router `certificate` and `features.router.domain`; otherwise plain HTTP :80, through a CloudFront VPC origin on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox | `x-blocks-origin-verify` carrying a Secrets Manager secret, which every listener rule requires; never sent over plain HTTP to an internet-facing router in a production deploy (`OriginSecretOverPlainHttpError`) |
-| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443); otherwise plain HTTP :80, which with an API is sandbox-only (`PlainHttpFrontDoorError` outside a sandbox) | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
+| `stacked` (CloudFront edge over an ALB router) | HTTPS at the edge (HTTP redirects to HTTPS) | Static routes: HTTPS to S3 (origin access control). Edge → router: HTTPS :443 with a router `certificate` and `features.router.domain`; otherwise plain HTTP :80, through a CloudFront VPC origin on the AWS network with `internal: true`, else to the ALB's public addresses, which fails synth outside a sandbox unless `allowPlainHttp: true` | `x-blocks-origin-verify` carrying a Secrets Manager secret, which every listener rule requires; never sent over plain HTTP to an internet-facing router in a production deploy (`OriginSecretOverPlainHttpError`), unless the door sets `allowPlainHttp: true` |
+| `alb` | HTTPS with `certificate` and `features.domain` (port 80 redirects to 443); otherwise plain HTTP :80, which with an API is sandbox-only (`PlainHttpFrontDoorError` outside a sandbox) unless `allowPlainHttp: true` | None on the network: the ALB invokes its Lambda targets through the Lambda service, and the asset proxy reads S3 over HTTPS | None: the standalone ALB door is public by design |
 | `apiGateway`, `api: 'http'` | HTTPS only (the `execute-api` endpoint, or a custom `domain`) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
 | `apiGateway`, `api: 'rest'` | HTTPS only, at the required custom `domain` (TLS 1.2) | None on the network: API Gateway invokes Lambda through the Lambda service | None |
 | `'none'` | None: S3 website endpoints are HTTP only | None: the website bucket serves the files itself | None: the bucket is public read |
 
-A bring-your-own door (`{ kind: 'custom', door }`) decides all three itself.
+A bring-your-own door (`{ kind: 'custom', door }`) decides all three itself
+(an `http://` URL with an API is sandbox-only unless `allowPlainHttp: true`).
 
 **Sandbox-only options.** Some plain-HTTP shapes synthesize only in a sandbox
 deploy (the `sandboxMode` context the sandbox scripts pass); a production
 deploy fails synth, and a sandbox deploy warns:
 
-| Shape | Production synth | Sandbox synth |
-|---|---|---|
-| `{ kind: 'alb' }` without `certificate` + `features.domain`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
-| `{ kind: 'custom', door }` whose URL is `http://`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
-| `stacked` with an internet-facing router and no router `certificate` + `features.router.domain` | Fails: `OriginSecretOverPlainHttpError` | Warns: `@aws-blocks/hosting:OriginSecretOverPlainHttp` and `@aws-blocks/hosting:StackedRouterPlainHttp` |
+| Shape | Production synth | Production synth with `allowPlainHttp: true` | Sandbox synth |
+|---|---|---|---|
+| `{ kind: 'alb' }` without `certificate` + `features.domain`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
+| `{ kind: 'custom', door }` whose URL is `http://`, with an API | Fails: `PlainHttpFrontDoorError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction`; `Auth` issues its session cookie without `Secure` | Warns: `@aws-blocks/hosting:PlainHttpFrontDoor` |
+| `stacked` with an internet-facing router and no router `certificate` + `features.router.domain` | Fails: `OriginSecretOverPlainHttpError` | Warns: `@aws-blocks/hosting:PlainHttpAllowedInProduction` (the origin secret crosses the edge → router hop in cleartext) | Warns: `@aws-blocks/hosting:OriginSecretOverPlainHttp` and `@aws-blocks/hosting:StackedRouterPlainHttp` |
+
+> [!WARNING]
+> `allowPlainHttp: true` turns off a production safeguard. Sign-in, session
+> cookies and every RPC (and, on the stacked door, the router's origin secret)
+> travel in cleartext, and `Auth`'s session cookie has no `Secure`: anyone who
+> can read or alter traffic on that path can steal a session. Use it in
+> production only when the whole network path is trusted. It changes nothing
+> in a sandbox deploy, which already only warns. See
+> [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production).
 
 `'none'` is not sandbox-only: it serves static sites with no same-origin API,
 and warns in every stage (`@aws-blocks/hosting:PlainHttpFrontDoor`, see
 [the `'none'` door](#the-none-door)). An ALB door without a certificate and
 without an API synthesizes in every stage.
+
+### Running a plain-HTTP door in production
+
+Some deploys legitimately serve plain HTTP in production: an `internal` ALB
+reached only inside a trusted private network, or a door whose TLS is ended
+upstream by a corporate proxy or another load balancer. For those, set
+`allowPlainHttp: true` on the door (default `false`):
+
+```ts
+import { Annotations } from 'aws-cdk-lib';
+
+// An internal ALB reached only inside your network (`vpc`: your ec2.IVpc with private subnets).
+new Hosting(stack, 'Hosting', {
+  root: '.',
+  api: stack,
+  frontDoor: { kind: 'alb', internal: true, vpc, allowPlainHttp: true },
+});
+// Or: { kind: 'custom', door, allowPlainHttp: true }
+// Or: { kind: 'stacked', edge: 'cloudfront', router: 'alb', allowPlainHttp: true }
+
+// After reviewing the warning, acknowledge it:
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction');
+```
+
+What it exposes:
+
+- **`alb` and `custom` doors:** the browser reaches the door over plain HTTP, so
+  the pages, sign-in, session cookies and every RPC can be read or altered on
+  the network path. `Hosting` registers `BLOCKS_ALLOW_PLAIN_HTTP` in the
+  backend's config, so `Auth` issues its same-origin session cookie without
+  `Secure` (a browser drops a `Secure` cookie set over HTTP) instead of refusing
+  sign-in with `InsecureTransportException`.
+- **`stacked` door:** the browser still reaches the CloudFront edge over HTTPS,
+  so the session cookie keeps `Secure`. The edge → router hop is plain HTTP to
+  the router's public addresses: the `x-blocks-origin-verify` origin secret
+  crosses it in cleartext, so anyone who reads it there can reach the router
+  directly, past the edge and its web ACL. Prefer `internal: true` (a VPC
+  origin, on the AWS network) or a router `certificate`.
+
+A production synth with the option emits one warning,
+`@aws-blocks/hosting:PlainHttpAllowedInProduction`, that names what is exposed;
+acknowledge it with
+`Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`.
+A sandbox deploy behaves as without the option. A value other than `true` or
+`false` fails synth with `InvalidFrontDoorOptionError`. The option has no
+effect on a door that serves HTTPS, or on `'none'`, which takes no options.
 
 `frontDoor` is checked at synth: an unknown door (`'alb'` as a string,
 `{ kind: 'ALB' }`), an option the kind doesn't take, or a value of the wrong
@@ -621,10 +689,12 @@ Some apps need the CloudFront door:
   `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
   middleware (and any route gating it does) skipped.
 - A streaming server handler answers only through a door that streams: the
-  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Behind the HTTP
-  API the Next.js and Nitro adapters build a buffered server instead (see
-  "The server behind the HTTP API"). The ALB door and the stacked door (its
-  router is an ALB) invoke the server without streaming, so with Next.js
+  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Both also serve a
+  buffered handler (Nitro's `aws-lambda` preset with `awsLambda.streaming`
+  off): they invoke the server with or without streaming, as it was built.
+  Behind the HTTP API the Next.js and Nitro adapters build a buffered server
+  instead (see "The server behind the HTTP API"). The ALB door and the stacked
+  door (its router is an ALB) invoke the server without streaming, so with Next.js
   through OpenNext, or Nitro with `awsLambda.streaming: true` on the
   `aws-lambda` preset, synth fails with `StreamingServerNeedsStreamingDoorError`
   instead of deploying an app whose pages never answer. Behind the HTTP API it
@@ -705,7 +775,9 @@ Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/
 into behaviors). A door served over plain HTTP with an API (an ALB without a
 certificate) would send sign-in, cookies and every RPC unencrypted, so a
 production deploy fails synth (`PlainHttpFrontDoorError`), and a sandbox deploy
-warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). `'none'` warns with the same id
+warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). Only for a trusted network
+path, `allowPlainHttp: true` opts a production deploy out (see
+[Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)). `'none'` warns with the same id
 whether or not the app has an API: the S3 website can't serve over TLS, so the
 pages and scripts themselves can be read or altered in transit (see
 [the `'none'` door](#the-none-door)).
@@ -718,8 +790,11 @@ session it carries cross the network in clear text. Outside a sandbox `Auth`
 refuses to issue the session instead: sign-in fails with
 `InsecureTransportException` (`AuthErrors.InsecureTransport`, HTTP 500) before
 any session is stored, and no `Set-Cookie` line is written. Sign-out and account
-deletion still clear the cookie (a `Max-Age=0` cookie carries no value).
-Use a plain-HTTP door in a sandbox only: for anything else, give the ALB door a
+deletion still clear the cookie (a `Max-Age=0` cookie carries no value). With
+the door's `allowPlainHttp: true`, `Auth` issues the cookie without `Secure` in
+production too, as in a sandbox.
+Use a plain-HTTP door in a sandbox only, unless the network path is trusted
+and the door opts out: for anything else, give the ALB door a
 `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
 or stacked door. The stacked door's edge is HTTPS, so its session cookies keep
 `Secure`. Its edge → router hop is plain HTTP unless the router has a
@@ -897,7 +972,10 @@ region is pinned to one with a Lambda Web Adapter layer
 (`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
 `@aws-blocks/hosting/adapters`). Otherwise, including a stack with no `env`,
 Nitro keeps the `aws-lambda` preset, which
-the HTTP API serves while `awsLambda.streaming` is off. A route served by
+the HTTP API serves while `awsLambda.streaming` is off. The CloudFront door
+serves that buffered build too, so a Nuxt app that leaves
+`awsLambda.streaming` off works behind both doors (for example the HTTP API
+for a preview stack and CloudFront for production). A route served by
 a compute other than the server (for example a Next.js `runtime: 'edge'` route
 built as a regional function) gets its own route to that function. A
 Lambda@Edge compute behind any door other than CloudFront fails synth
@@ -975,7 +1053,11 @@ else is a 404. The proxy never fetches a remote URL.
   `internal: true`. A sandbox deploy (the `sandboxMode` context the sandbox
   scripts pass) still synthesizes, and warns
   (`@aws-blocks/hosting:StackedRouterPlainHttp` and
-  `@aws-blocks/hosting:OriginSecretOverPlainHttp`). The router's `x-forwarded-proto`
+  `@aws-blocks/hosting:OriginSecretOverPlainHttp`). Only when the path between
+  CloudFront and the router is trusted, `allowPlainHttp: true` on the stacked
+  door lets a production deploy send the secret over that hop, with the
+  `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning (see
+  [Running a plain-HTTP door in production](#running-a-plain-http-door-in-production)). The router's `x-forwarded-proto`
   is `http` on a plain-HTTP hop. A certificate without a router domain fails
   synth (`StackedRouterCertificateNeedsDomainError`).
 - There is no custom domain or skew protection on the edge yet.
@@ -1255,7 +1337,7 @@ back, then expired by an S3 lifecycle rule.
 
 > **Cleanup caveat:** a build is tagged superseded only during a normal deploy
 > cutover (an `Update` that flips `meta.b`). Builds that become stale outside
-> that path — every build already present before upgrading to this version, or
+> that path — every build uploaded by a hosting release that didn't tag builds, or
 > builds left by an aborted/rolled-back deploy — are never tagged, so the
 > lifecycle rule never expires them and they accumulate until you remove them
 > manually. This is safe (nothing deletes the live build), just not
@@ -1316,15 +1398,15 @@ new HostingConstruct(stack, 'Hosting', {
 > `LoggingV2RegionUnresolved` warning instead. `skipRegionValidation` skips this
 > check along with the WAF, ACM and Lambda Web Adapter Region checks.
 
-> **Entry point:** `version`, `partitioning` and `format` are available on
-> `HostingConstruct` from `@aws-blocks/hosting`. The `Hosting` block in
-> `@aws-blocks/core` currently accepts only `logging.enabled` and
-> `logging.retentionDays`, so it always uses v1.
+> **Entry point:** `version`, `partitioning` and `format` are set through
+> `frontDoor.features.logging`, on `HostingConstruct` from `@aws-blocks/hosting`
+> and on the `Hosting` block in `@aws-blocks/core`. Core's deprecated top-level
+> `logging` prop accepts only `enabled` and `retentionDays`, so it always uses v1.
 
 ## SSR caching & cache-key credentials
 
-`frontDoor.features.ssrDefaultTtl` (CloudFront door; formerly
-`cdn.ssrDefaultTtl`) enables CloudFront edge caching of SSR responses that carry
+`frontDoor.features.ssrDefaultTtl` (CloudFront door; `cdn.ssrDefaultTtl` is its
+deprecated alias) enables CloudFront edge caching of SSR responses that carry
 no explicit `Cache-Control` header. Those responses are then shared at the edge,
 and the SSR cache key does **not** include `Authorization` or session cookies by
 default — so one cached entry would answer requests regardless of their
@@ -1546,8 +1628,9 @@ unique when several hosting constructs share a stage) pinned to
 > will never fire if the app deploys outside `us-east-1`. See D-016.
 
 Off-region placement is **always on**; there is no opt-out. The
-CloudFront 5xx alarm is the whole point of `monitoring`, and a
-silently-missing alarm is exactly the bug this fixes (#481).
+CloudFront 5xx alarm is the whole point of `monitoring`, and an alarm
+placed in a region where CloudFront metrics never arrive would silently
+never fire.
 
 Subscribe with endpoint subscriptions (`EmailSubscription` /
 `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):
