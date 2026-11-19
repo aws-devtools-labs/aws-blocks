@@ -311,4 +311,57 @@ void describe('watchHostingValues()', () => {
 			stop();
 		}
 	});
+
+	void it('does not start watching when the signal is aborted during the first scan', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const controller = new AbortController();
+		const logs: string[] = [];
+		await watchHostingValues({
+			cwd,
+			signal: controller.signal,
+			// The first scan writes the file and logs it; abort there, as Ctrl-C would mid-scan.
+			log: (m) => {
+				logs.push(m);
+				if (m.includes('regenerated')) controller.abort();
+			},
+			error: () => {},
+		});
+		assert.ok(controller.signal.aborted, 'the first scan should have aborted the signal');
+		assert.ok(!logs.some((m) => m.includes('watching')), `watcher started after abort: ${logs.join('\n')}`);
+	});
+});
+
+void describe('runTypegenCli() --watch', () => {
+	/** Resolve to `'timeout'` if `p` has not settled within `ms`. */
+	const within = <T>(p: Promise<T>, ms: number): Promise<T | 'timeout'> =>
+		Promise.race([p, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), ms).unref())]);
+
+	void it('resolves 0 when the signal is aborted during the first scan', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const controller = new AbortController();
+		const run = runTypegenCli(['--watch', '--cwd', cwd], {
+			signal: controller.signal,
+			log: (m) => {
+				if (m.includes('regenerated')) controller.abort();
+			},
+			error: () => {},
+		});
+		assert.strictEqual(await within(run, 3000), 0);
+	});
+
+	void it('resolves 0 when the signal is already aborted', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const run = runTypegenCli(['--watch', '--cwd', cwd], {
+			signal: AbortSignal.abort(),
+			log: () => {},
+			error: () => {},
+		});
+		assert.strictEqual(await within(run, 3000), 0);
+	});
 });
