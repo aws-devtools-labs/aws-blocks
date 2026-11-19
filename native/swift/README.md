@@ -6,11 +6,11 @@ A Swift Package and code generator that produces type-safe Swift client code fro
 
 ### 1. Add the package dependency
 
-In your `Package.swift`:
+In your `Package.swift`, pinned to the minor version, since until 1.0 a minor release can break the API:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aws/cdk-blocks-swift.git", from: "1.0.0"),
+    .package(url: "https://github.com/aws/cdk-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
 ],
 targets: [
     .target(
@@ -24,6 +24,8 @@ targets: [
     ),
 ]
 ```
+
+SwiftPM takes `package:` from the URL, so if you are moving from `aws-blocks-swift`, change the URL and every `package:` together, in every `Package.swift` that uses the SDK. An Xcode project only needs the new URL.
 
 ### 2. Drop your spec next to the target
 
