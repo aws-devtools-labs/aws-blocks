@@ -469,6 +469,7 @@ void main() {
         _method('api.name'),
         _method('runtimeType.ping'),
         _method('toString.ping'),
+        _method('close.ping'),
       ],
       servers: [
         {'name': 'toString', 'url': 'https://a.example'},
@@ -489,6 +490,12 @@ void main() {
       expect(blocks, contains(r'  late final ToStringApi toString$;'));
       expect(blocks, contains(r'    runtimeType$ = RuntimeTypeApi(client);'));
       expect(blocks, contains('  late final Api api;'));
+    });
+
+    test('a namespace named `close` is escaped, so close() stays', () {
+      final blocks = _decl(output, 'Blocks');
+      expect(blocks, contains(r'  late final CloseApi close$;'));
+      expect(blocks, contains('  void close() => _client.close();'));
     });
 
     test('a server name is escaped, and the default reads it', () {

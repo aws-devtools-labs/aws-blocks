@@ -10,11 +10,12 @@ import XCTest
 
 final class UserAgentHeaderTests: XCTestCase {
 
-    private final class NoopWebSocketDelegate: WebSocketDelegate {
-        func onOpen(_ webSocket: URLSessionWebSocketTask) {}
-        func onMessage(_ webSocket: URLSessionWebSocketTask, text: String) {}
-        func onFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {}
-        func onClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {}
+    private final class NoopWebSocketDelegate: RealtimeSocketListener {
+        let channel = "c"
+        let unsubscribesOnLeave = true
+        let subscribeFrame = "subscribe"
+        func onMessage(_ text: String) {}
+        func onFailure(_ error: Error) {}
     }
 
     /// True if the head has a header whose name equals `name` (case-insensitive) and value
@@ -76,8 +77,8 @@ final class UserAgentHeaderTests: XCTestCase {
         let session = WebSocketSession()
         let delegate = NoopWebSocketDelegate()
         let wsUrl = "ws://127.0.0.1:\(listener.port)/ws"
-        _ = try session.acquire(wsUrl: wsUrl, token: "tok", listener: delegate)
-        defer { session.release(wsUrl: wsUrl, token: "tok", listener: delegate) }
+        _ = try session.acquire(wsUrl: wsUrl, listener: delegate)
+        defer { session.release(wsUrl: wsUrl, listener: delegate) }
 
         let head = listener.waitForRequestHead()
         XCTAssertTrue(
@@ -95,8 +96,8 @@ final class UserAgentHeaderTests: XCTestCase {
         let session = WebSocketSession(session: bareSession)
         let delegate = NoopWebSocketDelegate()
         let wsUrl = "ws://127.0.0.1:\(listener.port)/ws"
-        _ = try session.acquire(wsUrl: wsUrl, token: "tok", listener: delegate)
-        defer { session.release(wsUrl: wsUrl, token: "tok", listener: delegate) }
+        _ = try session.acquire(wsUrl: wsUrl, listener: delegate)
+        defer { session.release(wsUrl: wsUrl, listener: delegate) }
 
         let head = listener.waitForRequestHead()
         XCTAssertTrue(

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { type BuildingBlockScope, blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaEntry, scopeProviderWaiterTrust } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
+import { CfnCluster } from 'aws-cdk-lib/aws-dsql';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -98,9 +99,10 @@ interface ClusterResource {
 // DSQL maps the app's database role to the execution role itself, with `AWS IAM GRANT` (migration-lambda.ts),
 // so one `dsql:DbConnect` grant on the cluster covers it.
 function dsqlCluster(owner: BuildingBlockScope, stack: cdk.Stack): ClusterResource {
-	const resource = new cdk.CfnResource(owner, 'DsqlCluster', {
-		type: 'AWS::DSQL::Cluster',
-		properties: { DeletionProtectionEnabled: owner.defaults.deletionProtection },
+	// The typed L1 is taggable, so `Tags.of()` tags (the `app` tag among them) reach the cluster in the template.
+	// Same construct id as the raw `CfnResource` it replaced, so the logical id, and the cluster, stay the same.
+	const resource = new CfnCluster(owner, 'DsqlCluster', {
+		deletionProtectionEnabled: owner.defaults.deletionProtection,
 	});
 	const clusterArn = stack.formatArn({ service: 'dsql', resource: 'cluster', resourceName: resource.ref });
 	return {

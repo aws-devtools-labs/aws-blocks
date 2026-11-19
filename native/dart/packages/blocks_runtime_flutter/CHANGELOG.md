@@ -1,5 +1,20 @@
 ## Unreleased
 
+### Breaking
+
+- Requires the `blocks_runtime` release whose `BrowserLauncher.launch` takes
+  a `cancel` parameter.
+- `FlutterBrowserLauncher` no longer waits forever when the user closes the
+  browser. When the app comes back to the foreground and no redirect arrives
+  within `resumeGracePeriod` (2 seconds by default), the launch throws
+  `OidcCancelledException`. Pass `resumeGracePeriod: null` to keep waiting.
+  It also throws `OidcCancelledException` once its new optional `timeout`
+  passes, or when the `cancel` future passed to `signIn` or `signInDirect`
+  completes.
+- `FlutterBrowserLauncher` throws a `StateError` when no browser could be
+  opened. It used to wait forever.
+- `FlutterBrowserLauncher` listens for the redirect before it opens the
+  browser, so a redirect that arrives at once is no longer missed.
 - **Behavior change:** this package is now a Dart plugin. On Android, iOS,
   macOS, Linux and Windows, Flutter registers a `PersistentSessionStore` over
   `FlutterSecureStore` as the default session store before `main`, so every

@@ -85,7 +85,7 @@ const SANDBOX_DESTROY =
 
 describe('destroy selects the stacks its deploy creates', { skip }, () => {
   it('destroySandbox runs `cdk destroy --all`, like the sandbox deploy', () => {
-    const deployArgs = buildSandboxDeployArgs({ outDir: '.blocks-sandbox', projectRoot: '/app' });
+    const deployArgs = buildSandboxDeployArgs({ outDir: '.cdk-blocks-sandbox', projectRoot: '/app' });
     assert.ok(deployArgs.includes('--all'), `expected --all in the sandbox deploy: ${deployArgs.join(' ')}`);
     const argv = recordDestroyArgv('./sandbox.js', SANDBOX_DESTROY);
     assert.ok(argv.includes('destroy'), `expected a cdk destroy, got: ${argv.join(' ')}`);
@@ -97,7 +97,7 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     const projectRoot = `projectRoot=${realpathSync(root)}`;
     assert.strictEqual(argv[argv.indexOf(projectRoot) - 1], '--context', `expected --context ${projectRoot} in: ${argv.join(' ')}`);
     // The retry reads the stacks this attempt selected from the assembly it synthesized.
-    assert.strictEqual(argv[argv.indexOf('--output') + 1], '.blocks-sandbox/sandbox-destroy.out', `expected --output in: ${argv.join(' ')}`);
+    assert.strictEqual(argv[argv.indexOf('--output') + 1], '.cdk-blocks-sandbox/sandbox-destroy.out', `expected --output in: ${argv.join(' ')}`);
     // A destroy doesn't deploy the frontend, so Hosting reuses an existing build.
     assert.strictEqual(argv[argv.indexOf('reuseFrontendBuild=true') - 1], '--context', `expected --context reuseFrontendBuild=true in: ${argv.join(' ')}`);
     // The --app command names no path: the backend entry reaches CDK in its environment.
@@ -106,12 +106,12 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
   });
 
   it('destroySandbox clears a stale assembly first and removes the one CDK wrote after a successful destroy', () => {
-    const assemblyDir = join(root, '.blocks-sandbox', 'sandbox-destroy.out');
+    const assemblyDir = join(root, '.cdk-blocks-sandbox', 'sandbox-destroy.out');
     mkdirSync(assemblyDir, { recursive: true });
     writeFileSync(join(assemblyDir, 'stale.json'), '{}');
     const argv = recordDestroyArgv('./sandbox.js', SANDBOX_DESTROY);
     // CDK ran in the project root, where the relative `--output` and the cleanup point at the same directory ...
-    assert.ok(argv.includes('.blocks-sandbox/sandbox-destroy.out'), argv.join(' '));
+    assert.ok(argv.includes('.cdk-blocks-sandbox/sandbox-destroy.out'), argv.join(' '));
     const cdk = readFileSync(cdkLog, 'utf-8');
     assert.match(cdk, new RegExp(`^cwd=${realpathSync(root)}$`, 'm'));
     // ... the stale file was gone before CDK wrote there ...

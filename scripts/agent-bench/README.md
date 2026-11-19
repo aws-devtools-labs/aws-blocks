@@ -45,7 +45,7 @@ Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxi
 6. **Upload source** — uploads the staged `bench-app` copy as
    `bench-source-<task>-<template>` for post-run auditing (deps/build output,
    VCS and anything credential-shaped — `node_modules`, `.git`, `dist`,
-   `.blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
+   `.cdk-blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
    - **6b. Upload trace** (best-effort) — the agent trace, run metrics and
      command log written by step 2; on a wall-clock timeout step 2 emits no
      trace, so nothing uploads

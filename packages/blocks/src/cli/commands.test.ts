@@ -54,8 +54,8 @@ function escapeRegExp(text: string): string {
 }
 
 function withSandboxId(root: string): string {
-	mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-	writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
+	mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
+	writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
 	return root;
 }
 
@@ -508,9 +508,9 @@ describe('lifecycle commands', () => {
 			assert.strictEqual(run.code, 0, run.stderr);
 			assert.deepStrictEqual(run.spawned, []);
 			assert.deepStrictEqual(run.prompts, []);
-			assert.match(run.stdout, /^No sandbox on this machine \(\.blocks-sandbox\/sandbox-id\.txt is missing\); nothing to delete\./);
+			assert.match(run.stdout, /^No sandbox on this machine \(\.cdk-blocks-sandbox\/sandbox-id\.txt is missing\); nothing to delete\./);
 			assert.doesNotMatch(run.stdout, /destroyed/);
-			assert.ok(!existsSync(join(root, '.blocks-sandbox', 'sandbox-id.txt')));
+			assert.ok(!existsSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt')));
 		}
 	});
 
@@ -604,7 +604,7 @@ describe('lifecycle commands', () => {
 		const opened: unknown[] = [];
 		const core = { openConsole: async (options: unknown) => void opened.push(options) };
 		const root = withSandboxId(fixtureApp());
-		const sandboxFile = join(root, '.blocks-sandbox');
+		const sandboxFile = join(root, '.cdk-blocks-sandbox');
 		// A production deploy after the sandbox deploy left only its own stack in outputs.json.
 		writeFileSync(join(sandboxFile, 'outputs.json'), JSON.stringify({ 'demo-prod': { ApiUrl: 'https://p' } }));
 		const last: Partial<LastDeploy> = { stack: 'demo-jdoe-abc123', apiUrl: 'https://s', url: null, region: 'eu-west-1' };
@@ -640,7 +640,7 @@ describe('lifecycle commands', () => {
 		// A sandbox that the old npm-script wrappers deployed records no last-deploy.json, and a production
 		// deploy then rewrote outputs.json with its own stack alone.
 		const root = withSandboxId(fixtureApp());
-		writeFileSync(join(root, '.blocks-sandbox', 'outputs.json'), JSON.stringify({ 'demo-prod': { ApiUrl: 'https://p' } }));
+		writeFileSync(join(root, '.cdk-blocks-sandbox', 'outputs.json'), JSON.stringify({ 'demo-prod': { ApiUrl: 'https://p' } }));
 		writeFileSync(join(root, '.env.local'), 'AWS_REGION=ap-south-1\n');
 		const live = await runCli(['sandbox', 'console'], { cwd: root, core: withLookup(true) });
 		assert.strictEqual(live.code, 0, live.stderr);
@@ -662,14 +662,14 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(opened, []);
 		// A recorded sandbox opens without a lookup.
 		lookups.splice(0);
-		writeFileSync(join(root, '.blocks-sandbox', 'outputs.json'), JSON.stringify({ 'demo-jdoe-abc123': {} }));
+		writeFileSync(join(root, '.cdk-blocks-sandbox', 'outputs.json'), JSON.stringify({ 'demo-jdoe-abc123': {} }));
 		assert.strictEqual((await runCli(['sandbox', 'console'], { cwd: root, core: withLookup(false) })).code, 0);
 		assert.deepStrictEqual(lookups, []);
 	});
 
 	it('forgets the deleted sandbox in last-deploy.json, outputs.json and config.json, and keeps the rest', async () => {
 		const root = withSandboxId(fixtureApp());
-		const dir = join(root, '.blocks-sandbox');
+		const dir = join(root, '.cdk-blocks-sandbox');
 		const write = (name: string, value: unknown) => writeFileSync(join(dir, name), JSON.stringify(value));
 		const read = (name: string) => JSON.parse(readFileSync(join(dir, name), 'utf-8')) as unknown;
 		const entry = (stack: string) => ({ stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' });
@@ -712,7 +712,7 @@ describe('lifecycle commands', () => {
 
 	it("forgets the deleted production stack in its own outputs document and in a pre-split one, and leaves the sandbox's entry alone", async () => {
 		const root = withSandboxId(fixtureApp());
-		const dir = join(root, '.blocks-sandbox');
+		const dir = join(root, '.cdk-blocks-sandbox');
 		// Named from core's own map, so renaming the document there without
 		// updating the CLI fails here instead of silently leaving a dead stack
 		// recorded for anything that reads it.
@@ -1396,9 +1396,9 @@ describe('destroy safety', () => {
 	it('says when CDK deployed another stack than the one .blocks/config.json names', async () => {
 		const root = fixtureApp();
 		const record = (stack: string) => () => {
-			mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+			mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
 			const entry: LastDeploy = { stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' };
-			writeFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), JSON.stringify({ production: entry }));
+			writeFileSync(join(root, '.cdk-blocks-sandbox', 'last-deploy.json'), JSON.stringify({ production: entry }));
 			return undefined;
 		};
 		const other = await runCli(['-q', 'deploy'], { cwd: root, env: AWS_ENV, onSpawn: record('my-blocks-stack-prod') });
@@ -1870,8 +1870,8 @@ describe('whoami with the real credential chain', () => {
 describe('JSON output', () => {
 	it('prints whoami as one JSON document', async () => {
 		const root = fixtureApp();
-		mkdirSync(join(root, '.blocks-sandbox'));
-		writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
+		mkdirSync(join(root, '.cdk-blocks-sandbox'));
+		writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
 		const run = await runCli(['whoami', '--output', 'json'], {
 			cwd: root,
 			core: { readAwsIdentity: async () => IDENTITY },
@@ -1915,10 +1915,10 @@ describe('JSON output', () => {
 		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no \.blocks\/config\.json\)/);
 	});
 
-	/** Write `.blocks-sandbox/last-deploy.json`, as the deploy runners do. */
+	/** Write `.cdk-blocks-sandbox/last-deploy.json`, as the deploy runners do. */
 	const writeLastDeploy = (root: string, file: Partial<Record<'production' | 'sandbox', LastDeploy>>) => {
-		mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-		writeFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), JSON.stringify(file));
+		mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
+		writeFileSync(join(root, '.cdk-blocks-sandbox', 'last-deploy.json'), JSON.stringify(file));
 	};
 	const prodUrl = 'https://prod.execute-api.us-east-1.amazonaws.com/';
 	const sandboxUrl = 'https://sandbox.execute-api.us-east-1.amazonaws.com/';
@@ -1957,11 +1957,11 @@ describe('JSON output', () => {
 				// After the runner recorded, a sandbox deploy rewrote outputs.json with its own stack
 				// only, as CDK does, and a dev server rewrote the shared config.json.
 				writeFileSync(
-					join(root, '.blocks-sandbox', 'outputs.json'),
+					join(root, '.cdk-blocks-sandbox', 'outputs.json'),
 					JSON.stringify({ 'demo-jdoe-abc123': { ApiUrl: sandboxUrl } }),
 				);
 				writeFileSync(
-					join(root, '.blocks-sandbox', 'config.json'),
+					join(root, '.cdk-blocks-sandbox', 'config.json'),
 					JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }),
 				);
 				return { code: 0 };
@@ -1985,7 +1985,7 @@ describe('JSON output', () => {
 			onSpawn: () => {
 				writeLastDeploy(root, { production: PROD, sandbox: SANDBOX });
 				writeFileSync(
-					join(root, '.blocks-sandbox', 'outputs.json'),
+					join(root, '.cdk-blocks-sandbox', 'outputs.json'),
 					JSON.stringify({ 'demo-prod': { ApiUrl: prodUrl } }),
 				);
 				return { code: 0 };
@@ -2026,7 +2026,7 @@ describe('JSON output', () => {
 				onSpawn: () => {
 					writeLastDeploy(root, operation === 'npm run deploy' ? { sandbox: SANDBOX } : { production: PROD });
 					writeFileSync(
-						join(root, '.blocks-sandbox', 'outputs.json'),
+						join(root, '.cdk-blocks-sandbox', 'outputs.json'),
 						JSON.stringify({
 							'demo-prod': { ApiUrl: prodUrl },
 							'demo-jdoe-abc123': { ApiUrl: sandboxUrl },
@@ -2040,7 +2040,7 @@ describe('JSON output', () => {
 			assert.match(
 				run.stderr,
 				new RegExp(
-					`^Error: ${operation} finished, but recorded no result in \\.blocks-sandbox[\\\\/]last-deploy\\.json`,
+					`^Error: ${operation} finished, but recorded no result in \\.cdk-blocks-sandbox[\\\\/]last-deploy\\.json`,
 					'm',
 				),
 			);
@@ -2049,14 +2049,14 @@ describe('JSON output', () => {
 
 	it('prints no result after an interrupted or failed deploy, even with old result files', async () => {
 		const root = fixtureApp();
-		mkdirSync(join(root, '.blocks-sandbox'));
-		writeFileSync(join(root, '.blocks-sandbox', 'config.json'), JSON.stringify({ apiUrl: 'https://old/' }));
+		mkdirSync(join(root, '.cdk-blocks-sandbox'));
+		writeFileSync(join(root, '.cdk-blocks-sandbox', 'config.json'), JSON.stringify({ apiUrl: 'https://old/' }));
 		writeFileSync(
-			join(root, '.blocks-sandbox', 'outputs.json'),
+			join(root, '.cdk-blocks-sandbox', 'outputs.json'),
 			JSON.stringify({ 'demo-prod': { ApiUrl: 'https://old/' } }),
 		);
 		writeLastDeploy(root, { production: PROD, sandbox: SANDBOX });
-		const lastDeploy = () => JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), 'utf-8'));
+		const lastDeploy = () => JSON.parse(readFileSync(join(root, '.cdk-blocks-sandbox', 'last-deploy.json'), 'utf-8'));
 		const lookups: string[] = [];
 		const core = {
 			readAwsIdentity: async () => {
@@ -2252,8 +2252,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { mock } from 'node:test';
 
 const outputs = (stacks) => {
-  mkdirSync('.blocks-sandbox', { recursive: true });
-  writeFileSync('.blocks-sandbox/outputs.json', JSON.stringify(stacks));
+  mkdirSync('.cdk-blocks-sandbox', { recursive: true });
+  writeFileSync('.cdk-blocks-sandbox/outputs.json', JSON.stringify(stacks));
 };
 // Imports are dynamic: mock.module applies only to modules imported after it.
 const real = await import(${JSON.stringify(coreUrl)});
@@ -2290,7 +2290,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 	}
 
 	const lastDeploy = (root: string) =>
-		JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), 'utf-8')) as Record<
+		JSON.parse(readFileSync(join(root, '.cdk-blocks-sandbox', 'last-deploy.json'), 'utf-8')) as Record<
 			string,
 			LastDeploy
 		>;
@@ -2306,8 +2306,8 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 
 	it('npm run sandbox:deploy: its own stack, next to the production entry', () => {
 		const root = fixtureApp();
-		mkdirSync(join(root, '.blocks-sandbox'));
-		writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
+		mkdirSync(join(root, '.cdk-blocks-sandbox'));
+		writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
 		runRunner(root, 'deploy', { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root });
 		runRunner(root, 'sandbox', { backendPath: join(root, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
 		assert.deepStrictEqual(lastDeploy(root), {
@@ -2435,8 +2435,8 @@ describe('npm run dev:stop', () => {
 
 	it('without --port, stops the only dev server recorded on another port, and lists several', async () => {
 		const cwd = fixtureApp();
-		mkdirSync(join(cwd, '.blocks-sandbox'));
-		writeFileSync(join(cwd, '.blocks-sandbox', 'dev-server.4000.pid'), '');
+		mkdirSync(join(cwd, '.cdk-blocks-sandbox'));
+		writeFileSync(join(cwd, '.cdk-blocks-sandbox', 'dev-server.4000.pid'), '');
 		const one = stopCore();
 		const run = await runCli(['dev', 'stop'], { cwd, core: one.core });
 		assert.strictEqual(run.code, 0, run.stderr);
@@ -2446,7 +2446,7 @@ describe('npm run dev:stop', () => {
 		const explicit = stopCore();
 		await runCli(['dev', 'stop', '--port', '3000'], { cwd, core: explicit.core });
 		assert.deepStrictEqual(explicit.stops, [3000]);
-		writeFileSync(join(cwd, '.blocks-sandbox', 'dev-server.4001.pid'), '');
+		writeFileSync(join(cwd, '.cdk-blocks-sandbox', 'dev-server.4001.pid'), '');
 		const several = stopCore();
 		const listed = await runCli(['dev', 'stop'], { cwd, core: several.core });
 		assert.strictEqual(listed.code, 0, listed.stderr);
@@ -2459,7 +2459,7 @@ describe('npm run dev:stop', () => {
 
 	it('npm run dev claims the session before it starts anything, and releases it after', async () => {
 		const cwd = fixtureApp({ blocks: { dev: { port: 41966 } } });
-		const pidfile = join(cwd, '.blocks-sandbox', 'dev-server.41966.pid');
+		const pidfile = join(cwd, '.cdk-blocks-sandbox', 'dev-server.41966.pid');
 		let during: DevServerPidRecord | null = null;
 		const run = await runCli(['dev'], {
 			cwd,
@@ -2510,7 +2510,7 @@ describe('npm run dev:stop', () => {
 					`^Error: a dev server of this app is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npm run dev:stop -- --port 41966\\n`,
 				),
 			);
-			assert.ok(!existsSync(join(cwd, '.blocks-sandbox', 'dev-server.41967.pid')), 'the refused start leaves no record');
+			assert.ok(!existsSync(join(cwd, '.cdk-blocks-sandbox', 'dev-server.41967.pid')), 'the refused start leaves no record');
 		} finally {
 			other.kill('SIGKILL');
 		}
