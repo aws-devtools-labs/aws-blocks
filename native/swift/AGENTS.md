@@ -136,6 +136,18 @@ Generated structs, enums and unions conform to `Sendable` when everything they s
 
 `WebSocketSession` guards the process-wide connection pool with an `NSLock`. `SessionGate` guards each client's `URLSession` with an `OSAllocatedUnfairLock`, and every request goes through `SessionGate.send(_:)`: a task created on an invalidated `URLSession` terminates the process. `BlocksClient.baseHost` is computed over an `OSAllocatedUnfairLock`, not a stored `static var`: apps set it, and a Swift 6 app target rejects references to mutable stored statics. `BlocksClient` keeps the one move of tokens saved under the unscoped OIDC keys in an `OSAllocatedUnfairLock`, so every `OIDCClient` on it waits for that move: `TokenStore` has no compare-and-set, so a marker in the store can't replace it. Generated code never forms a realtime message decoder: it decodes `RealtimeChannel<M>` through `Decodable`, because a closure formed in an app target with `MainActor` default isolation traps when the socket task calls it in Swift 6 mode.
 
+## Versioning
+
+Since 1.0.0 the package follows semantic versioning, and apps depend on it with `from: "1.0.0"`, which takes every release below 2.0.0. Pick the changeset bump (`"aws-blocks-swift": major | minor | patch` in `.changeset/`) by what an app on the previous release sees:
+
+| Bump | When |
+|---|---|
+| `major` | An app's code stops compiling or behaves differently: a removed or renamed public symbol or generated type, a changed signature or return type, a new case an exhaustive `switch` must handle, a raised minimum Swift toolchain or Xcode, or a changed default path or wire format. |
+| `minor` | A backward-compatible addition, or a deprecation. |
+| `patch` | A fix that changes no public API. |
+
+Nothing checks this: `changeset-guard.ts block-major` reads only the root `.changeset/`. Flag a `major` changeset for maintainer review, and remove a deprecated API only in a `major` release.
+
 ## Common Workflows
 
 ### After changing the parser (`OpenRPCParser.swift` / `SpecTypes.swift`)

@@ -6,6 +6,21 @@
 
 - First stable release. The public API now follows semantic versioning: breaking changes ship only in a new major version.
 
+  Moving from 0.1.1 takes code changes. Each one is described in its entry below:
+
+  - The package moved to `https://github.com/aws/cdk-blocks-swift.git` and is named `cdk-blocks-swift`. Depend on it with `from: "1.0.0"`, and change `package:` in every `.product(...)` and `.plugin(...)`.
+  - Building needs Xcode 26 or a Swift 6.2 toolchain.
+  - `RPCError` and `RawRouteError` are removed: catch `ApiError` and `TransportError`. `FileBucketError` is replaced by `FileTransferError`, and a bad transferable descriptor throws `TransferableError`.
+  - `OIDCClient` is generic over its providers. Write `OIDCClient<String>`, or the generated `Provider` enum, where code names it.
+  - `OIDCClient` signs in with a session cookie, so `getAccessToken()` returns `nil` after a sign-in.
+  - `restore()` now returns `OIDCUser?` and `signOut()` returns the logout `URL?`. Both throw, so call them with `try`.
+  - Enums and unions a response can carry are open. An exhaustive `switch` needs a `case .unknown` branch, and an open enum's `init(rawValue:)` no longer returns an optional.
+  - An enum or union on a model is named after the model and the property (`Order.status` is `OrderStatus`), and the Cognito user types are renamed the same way.
+  - `format: date` is a `String`, not a `Date`.
+  - Generated API classes are `final`, so subclass mocks no longer compile. Inject a `URLSession` through `Blocks(server:session:)` instead.
+  - Codegen refuses a spec with an operation that takes a transferable parameter.
+  - Generated clients call `/cdk-blocks/api/<namespace>`, so a proxy in front of the API must forward `/cdk-blocks/api/*`.
+
 ### Minor Changes
 
 - [#1656](https://github.com/aws/cdk-blocks/pull/1656) [`1de6ea4`](https://github.com/aws/cdk-blocks/commit/1de6ea444d382abf59dbb5bf096aa2ab19880fbc) Thanks [@cadivus](https://github.com/cadivus)! - Generated clients and the codegen defaults use the new `/cdk-blocks/api` and `/cdk-blocks/auth/*` paths. Raw routes and auth requests resolve against the API origin cut at a `cdk-blocks` or legacy `aws-blocks` path segment, so a server URL configured with the old `/aws-blocks/api` path keeps working.
@@ -22,7 +37,7 @@
   server needs no call-site change. `Blocks(server: Servers.sandbox)` pins one server of a
   multi-server spec, and `Blocks(tokenStore:)` or `Blocks(server:session:tokenStore:)` passes a
   persistent `TokenStore` or a `URLSession` you own. A `BlocksServer` URL is the full RPC URL, ending
-  in `/aws-blocks/api`.
+  in `/cdk-blocks/api`.
 
   **`Api()` and `Api(server:)` are deprecated.** They still compile, with a warning, and each still
   builds its own client; they will be removed in the next breaking release. Migrate by holding one
@@ -49,8 +64,7 @@
 
   Every `OIDCClient` from one `Blocks` shares its token store, so each now keys its tokens by its
   exchange path, e.g. `/auth/exchange#refresh_token`, and two `oidc/client` namespaces keep separate
-  sessions. Tokens saved under the old unscoped keys, such as `refresh_token`, move to the first
-  `OIDCClient` that uses the store.
+  sessions.
 
   `BlocksServer` (now also `Equatable`) and `BlocksClient` are `Sendable`, so generated code compiles
   in Swift 6 language mode.
@@ -58,7 +72,7 @@
 - [#1652](https://github.com/aws/cdk-blocks/pull/1652) [`61aa1d0`](https://github.com/aws/cdk-blocks/commit/61aa1d0f59b81c54a6657ea448f6e1d752f811c6) Thanks [@ekjotmultani](https://github.com/ekjotmultani)! - The Swift package is now published from `https://github.com/aws/cdk-blocks-swift.git`, and its package name is `cdk-blocks-swift`. Update the dependency URL, and change `package: "aws-blocks-swift"` to `package: "cdk-blocks-swift"` in your `.product(...)` and `.plugin(...)` references:
 
   ```swift
-  .package(url: "https://github.com/aws/cdk-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
+  .package(url: "https://github.com/aws/cdk-blocks-swift.git", from: "1.0.0"),
   // ...
   .product(name: "BlocksRuntime", package: "cdk-blocks-swift"),
   .plugin(name: "BlocksCodegenBuildPlugin", package: "cdk-blocks-swift"),
@@ -210,8 +224,8 @@
 - [#944](https://github.com/aws/cdk-blocks/pull/944) [`b6b8ade`](https://github.com/aws/cdk-blocks/commit/b6b8ade77e95dc094a3f85f0f9499ca33d293f98) Thanks [@Simone319](https://github.com/Simone319)! - feat(swift): call each API namespace at its own path
 
   `BlocksClient` now POSTs a call to `{url}/{namespace}` — for example
-  `…/aws-blocks/api/reports` for `reports.build` — instead of the shared
-  `/aws-blocks/api`, the same path the TypeScript client uses. The backend's API
+  `…/cdk-blocks/api/reports` for `reports.build` — instead of the shared
+  `/cdk-blocks/api`, the same path the TypeScript client uses. The backend's API
   gateway routes by path, so a namespace that runs on its own compute is now served
   by that compute when called from Swift too; until now every Swift call ran on the
   app's default compute. The JSON-RPC body is unchanged.
@@ -219,7 +233,8 @@
   Deploy the backend with `@aws-blocks/core` 0.8.0 or later, or any `@aws-cdk-blocks/core`, before shipping an app
   built with this version: an older backend serves only `/aws-blocks/api` and
   rejects the per-namespace path. If you run your own proxy in front of the API,
-  make it forward the whole `/aws-blocks/api/*` subtree.
+  make it forward the whole `/cdk-blocks/api/*` subtree, plus `/aws-blocks/api/*` for apps built
+  before 1.0.0.
 
 - [#1259](https://github.com/aws/cdk-blocks/pull/1259) [`5f55dac`](https://github.com/aws/cdk-blocks/commit/5f55dac366a4a2fe4008869b9d97bb8ac51162c8) Thanks [@harsh62](https://github.com/harsh62)! - Generated Swift clients compile when two properties would declare the same nested type
 
@@ -249,7 +264,7 @@
 
 - [#1478](https://github.com/aws/cdk-blocks/pull/1478) [`c98b0ac`](https://github.com/aws/cdk-blocks/commit/c98b0ac131a1947f58eaff22eb6c2b20a25ec66f) Thanks [@ekjotmultani](https://github.com/ekjotmultani)! - fix(swift)!: ask the server for no bearer tokens on the OIDC code exchange
 
-  **Breaking (pre-1.0):** `OIDCClient` signs in with a session cookie, so its code exchange now sends
+  **Breaking:** `OIDCClient` signs in with a session cookie, so its code exchange now sends
   `tokens: false`, and a backend with bearer auth enabled no longer mints access and refresh tokens
   for it. After a sign-in, `getAccessToken()` returns `nil`: before, a directly federated sign-in on a
   backend with `allowBearerAuth` gave it a token, which an app could send as a bearer token. Requests
@@ -277,10 +292,10 @@
 
 - [#1478](https://github.com/aws/cdk-blocks/pull/1478) [`c98b0ac`](https://github.com/aws/cdk-blocks/commit/c98b0ac131a1947f58eaff22eb6c2b20a25ec66f) Thanks [@ekjotmultani](https://github.com/ekjotmultani)! - fix(swift): `OIDCClient.restore()` reads the server's session
 
-  **Source-breaking (pre-1.0):** `restore()` is now `@discardableResult func restore() async throws -> OIDCUser?`.
+  **Source-breaking:** `restore()` is now `@discardableResult func restore() async throws -> OIDCUser?`.
   Call it with `try`. It reads `GET <sessionPath>` with the session cookie, plus the stored access
   token when there is one that hasn't expired. `sessionPath` is the descriptor's `sessionPath`, or
-  `session` beside the block's callback route (`/aws-blocks/auth/session` by default) when the
+  `session` beside the block's callback route (`/cdk-blocks/auth/session` by default) when the
   descriptor names none. On 200 it emits `.signedIn` with the server's user and returns it. On 401 it
   clears stored tokens, emits `.signedOut` and returns `nil`. On 404 (the backend's `Auth` block has
   no federated providers, so it serves no session route) it throws an `ApiError` with `status` 404
@@ -296,7 +311,7 @@
 
 - [#1478](https://github.com/aws/cdk-blocks/pull/1478) [`c98b0ac`](https://github.com/aws/cdk-blocks/commit/c98b0ac131a1947f58eaff22eb6c2b20a25ec66f) Thanks [@ekjotmultani](https://github.com/ekjotmultani)! - fix(swift): `OIDCClient.signOut()` returns the identity provider's logout URL and reports failures
 
-  **Source-breaking (pre-1.0):** `signOut()` is now `@discardableResult func signOut() async throws -> URL?`.
+  **Source-breaking:** `signOut()` is now `@discardableResult func signOut() async throws -> URL?`.
   Call it with `try`. It POSTs `<signOutPath>?format=json` and returns the provider's logout URL, or
   `nil` when there is none, or when a custom block's route answers with an empty 2xx body. Open that
   URL in the browser, such as with `UIApplication.shared.open`, to end the provider's own session; the
@@ -337,7 +352,7 @@
   does, so a hand-built `.unknown("a")` isn't equal to `.a`. An enum that only parameters use stays a
   closed `String` enum.
 
-  **Breaking in source (pre-1.0).** An exhaustive `switch` over an open enum needs a
+  **Breaking in source.** An exhaustive `switch` over an open enum needs a
   `case .unknown` (or `default`) branch. `init(rawValue:)` no longer returns an optional, so
   `if let` or `guard let` on it stops compiling. The enum declares `RawRepresentable, Codable,
 Hashable` instead of a `String` raw type; `.rawValue` still returns the wire string.
@@ -360,7 +375,7 @@ Hashable` instead of a `String` raw type; `.rawValue` still returns the wire str
   parameters use, unions with a boolean discriminator or a bare value arm, and a union embedded in
   another arm's object stay closed.
 
-  **Breaking in source (pre-1.0).** An exhaustive `switch` over an open union needs a
+  **Breaking in source.** An exhaustive `switch` over an open union needs a
   `case .unknown` (or `default`) branch.
 
 - [#1259](https://github.com/aws/cdk-blocks/pull/1259) [`5f55dac`](https://github.com/aws/cdk-blocks/commit/5f55dac366a4a2fe4008869b9d97bb8ac51162c8) Thanks [@harsh62](https://github.com/harsh62)! - Generated types now have a `public init`, so you can construct them from another module
@@ -421,9 +436,7 @@ Hashable` instead of a `String` raw type; `.rawValue` still returns the wire str
 
   The package now declares `swift-tools-version: 6.2`, so building it needs Xcode 26 or a Swift 6.2
   toolchain; Xcode 15 and 16 can no longer resolve it. Apps can still build in Swift 5 or Swift 6
-  language mode. A dependency declared with `from: "0.1.0"` picks this release up on the next
-  `swift package update`; declare it with `.upToNextMinor(from:)` to take breaking 0.x releases
-  deliberately.
+  language mode. An app moves to this release by changing its requirement to `from: "1.0.0"`.
 
   Every top-level generated type (`Blocks`, the namespace classes, `Servers` and the models) is now
   `nonisolated`. Generated code compiles in the app's target, so under Xcode 26's default `MainActor`
@@ -440,13 +453,6 @@ Hashable` instead of a `String` raw type; `.rawValue` still returns the wire str
   An `OIDCClient` signs in through the `BlocksClient` that fetched it, so it decodes only with a decoder that carries that client. The new `BlocksClient.makeDecoder()` returns one, and a generated operation whose result holds an OIDC client at any depth now uses it. Every other operation still decodes with `JSONDecoder()`. If you decode such a type yourself, use `client.makeDecoder()`, or set `decoder.userInfo[.blocksClient]`. Without the client, decoding throws `DecodingError.dataCorrupted`.
 
   Decoding a transferable whose descriptor names a different type, or that lacks a required field, throws a `DecodingError`. `RealtimeChannel.fromJSON` still traps on a malformed descriptor, as before.
-
-- [#1478](https://github.com/aws/cdk-blocks/pull/1478) [`c98b0ac`](https://github.com/aws/cdk-blocks/commit/c98b0ac131a1947f58eaff22eb6c2b20a25ec66f) Thanks [@ekjotmultani](https://github.com/ekjotmultani)! - fix(swift): make transferables read-only again
-
-  `RealtimeChannel`, `FileDownloadHandle`, `FileUploadHandle` and `OIDCClient` stay `Codable`, so a
-  generated model that holds one compiles, but encoding one now throws `EncodingError.invalidValue`
-  ("Transferables are read-only"), as on Kotlin and Dart. Transferables only travel from the server
-  to the client.
 
 - [#807](https://github.com/aws/cdk-blocks/pull/807) [`26bf320`](https://github.com/aws/cdk-blocks/commit/26bf32022054483f639ac5d883caa454c14ff13c) Thanks [@VarshithaPamisetty](https://github.com/VarshithaPamisetty)! - feat(swift): emit typed transferable results for declared native bindings
 
@@ -571,7 +577,7 @@ Hashable` instead of a `String` raw type; `.rawValue` still returns the wire str
   realtime result at the top level now hydrates the same way, so a channel descriptor without
   `channel`, `wsUrl` or `token` throws `DecodingError` instead of trapping, and a descriptor that isn't
   an object throws `DecodingError` instead of `RPCError`. A file descriptor without `url` throws
-  `FileBucketError.invalidURL`, as `fromJSON` does.
+  `TransferableError.invalidDescriptor`, as `fromJSON` does.
 
   The three types also conform to `Encodable`, so the generated `Codable` conformances compile, but
   encoding one throws `EncodingError`: transferables are read-only, as on Kotlin.
@@ -620,7 +626,7 @@ Hashable` instead of a `String` raw type; `.rawValue` still returns the wire str
 
   `exchange` now refuses a provider the client wasn't built with, throwing `OIDCError.unknownProvider`
   before any request, as `signIn` already did. Raw routes are requested at the client URL cut before
-  its first `aws-blocks` path segment, which keeps an API Gateway stage prefix as it was written,
+  its first `cdk-blocks` or legacy `aws-blocks` path segment, which keeps an API Gateway stage prefix as it was written,
   percent-encoding included, and an IPv6 host's brackets. A URL with no such segment now drops its
   trailing `/`.
 
@@ -629,7 +635,7 @@ Hashable` instead of a `String` raw type; `.rawValue` still returns the wire str
   A 0.x version stored OIDC tokens under unscoped keys, for the `Auth` block's default routes. Before,
   the first `OIDCClient` on a `BlocksClient` to touch the token store took them, so a client for a
   second block (such as one on `/aws-blocks/auth/sso/*`) could take the default block's session. Now
-  only a client whose `exchangePath` is `/aws-blocks/auth/exchange` takes them; a client for any other
+  only a client whose `exchangePath` is `/cdk-blocks/auth/exchange`, or its `/aws-blocks/` twin, takes them; a client for any other
   block leaves them in place.
 
 - [#1478](https://github.com/aws/cdk-blocks/pull/1478) [`c98b0ac`](https://github.com/aws/cdk-blocks/commit/c98b0ac131a1947f58eaff22eb6c2b20a25ec66f) Thanks [@ekjotmultani](https://github.com/ekjotmultani)! - fix(swift): store a correct token expiry and send the provider on OIDC refresh
