@@ -47,13 +47,13 @@ describe('S3WebsiteConstruct — static/SPA', () => {
     });
   });
 
-  it('publishes the static dir, pruning what the build no longer ships, and EXCLUDES the .cdk-blocks-sandbox placeholder', () => {
-    // The build ships a placeholder .cdk-blocks-sandbox/config.json; the real config
+  it('publishes the static dir, pruning what the build no longer ships, and EXCLUDES the published placeholder and the private state directory', () => {
+    // The build ships a placeholder .blocks-sandbox/config.json; the real config
     // is written by the separate BlocksConfigDeployment. An excluded key is
     // outside the deployment's filter, so prune never deletes the real config.
     t.hasResourceProperties('Custom::CDKBucketDeployment', {
       Prune: true,
-      Exclude: Match.arrayWith(['.cdk-blocks-sandbox/*', '*.html', '**/*.html']),
+      Exclude: Match.arrayWith(['.blocks-sandbox/*', '.cdk-blocks-sandbox/*', '*.html', '**/*.html']),
     });
     for (const d of Object.values(t.findResources('Custom::CDKBucketDeployment'))) {
       assert.equal(d.Properties.Prune, true);

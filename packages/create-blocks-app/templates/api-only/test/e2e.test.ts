@@ -21,7 +21,7 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 // API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
 // a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
-const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 /**
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email

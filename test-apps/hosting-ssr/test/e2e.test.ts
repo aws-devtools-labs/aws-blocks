@@ -51,7 +51,7 @@ async function callProvisionUser(
   username: string,
   password: string,
 ) {
-  const config = await (await request.get(`${baseUrl}/.cdk-blocks-sandbox/config.json`)).json();
+  const config = await (await request.get(`${baseUrl}/.blocks-sandbox/config.json`)).json();
   const resp = await request.post(new URL(config.apiUrl, baseUrl).href, {
     headers: { 'Content-Type': 'application/json' },
     data: JSON.stringify({
@@ -133,7 +133,7 @@ test.describe('Blog with Auth — SSR Hosting', () => {
   });
 
   test('2. config.json is served with apiUrl', async ({ request }) => {
-    const resp = await request.get(`${hostingUrl}/.cdk-blocks-sandbox/config.json`);
+    const resp = await request.get(`${hostingUrl}/.blocks-sandbox/config.json`);
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();

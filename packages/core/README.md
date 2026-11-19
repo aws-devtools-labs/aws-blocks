@@ -210,14 +210,14 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 `id` is `null` in that response because an array body has no `id` to echo. Send one call per request. Body that isn't valid JSON at all returns `-32700 Parse error`, also with HTTP `200`.
 
-#### Runtime config (`/.cdk-blocks-sandbox/config.json`)
+#### Runtime config (`/.blocks-sandbox/config.json`)
 
 The generated client does not hardcode the API URL; it resolves one at first call, in this order:
 
 1. `BLOCKS_API_URL` env var (set by the Hosting construct on SSR compute, and by `npm run dev` on the frontend command it runs).
 2. `BLOCKS_CONFIG` env var (the whole config as JSON).
 3. Node.js 22.3 or later only: the file `.cdk-blocks-sandbox/config.json`, read from the **process working directory**. Only a dev server writes it, with its own local URL. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
-4. Browser only: `fetch('/.cdk-blocks-sandbox/config.json')`.
+4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
 
 Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and the dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
 
@@ -227,25 +227,25 @@ An app deployed with an older version still has the deploy's URL in `config.json
 
 Two things about that path burn time when debugging:
 
-- The directory is **dotted**: `/.cdk-blocks-sandbox/config.json`. `/config.json` is not a route: locally the dev server only answers `GET /.cdk-blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.cdk-blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
-- `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.cdk-blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
+- The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.
+- `{"_placeholder":true}` is a **valid, expected** body in the frontend build output. The Hosting construct writes that stub into the static assets directory during CDK synth so the file exists as a static route while the real `apiUrl` is still an unresolved CloudFormation token; the deploy then uploads the resolved config over it. Finding the stub in `dist/.blocks-sandbox/config.json` (or on the origin between synth and deploy) is the design working, not a broken config.
 
 What you should see instead, per environment:
 
 ```bash
 # Local dev / sandbox: served by the dev server itself, Cache-Control: no-store
-curl http://localhost:3000/.cdk-blocks-sandbox/config.json
+curl http://localhost:3000/.blocks-sandbox/config.json
 # → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
 
 # After a deploy: the URL the deploy recorded (never config.json), and the config uploaded to the origin
 cat .cdk-blocks-sandbox/config.production.json
 # → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
 #   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /aws-blocks/api instead)
-curl https://<your-cloudfront-domain>/.cdk-blocks-sandbox/config.json
+curl https://<your-cloudfront-domain>/.blocks-sandbox/config.json
 # → {"apiUrl":"/aws-blocks/api","__blocksBuildId":"<build id>"}
 ```
 
-The deployed file is public on purpose, in every stage, production included: a browser has no other way to learn the API URL, and `cdk-blocks deploy --wait-live` polls it for `__blocksBuildId` to know the new build is live. Keep serving it; removing the `/.cdk-blocks-sandbox/*` route breaks every deployed page. The name says `sandbox` for historical reasons, not because only a sandbox serves it. Hosting writes only values the browser receives anyway:
+The deployed file is public on purpose, in every stage, production included: a browser has no other way to learn the API URL, and `cdk-blocks deploy --wait-live` polls it for `__blocksBuildId` to know the new build is live. Keep serving it; removing the `/.blocks-sandbox/*` route breaks every deployed page. The name says `sandbox` for historical reasons, not because only a sandbox serves it. Hosting writes only values the browser receives anyway:
 
 - `apiUrl`, only when Hosting has an `api`: the same-origin `/aws-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
 - `__blocksBuildId`: an opaque id for the deploy (a timestamp plus random characters, or a hash of the build's content with `buildId: 'fixed'`).

@@ -2506,12 +2506,12 @@ void describe('stripBakedBasePath', () => {
       { pattern: 'app/_next/*', target: 's3' },
       { pattern: '/*', target: 'default' }, // catch-all is not under basePath
       // a blocks-injected relative route must be untouched
-      { pattern: '/.cdk-blocks-sandbox/*', target: 'static' },
+      { pattern: '/.blocks-sandbox/*', target: 'static' },
     ];
     stripBakedBasePath(m);
     assert.deepStrictEqual(
       m.routes.map((r) => r.pattern),
-      ['/_next/image*', '/_next/data/*', '/_next/*', '/*', '/.cdk-blocks-sandbox/*'],
+      ['/_next/image*', '/_next/data/*', '/_next/*', '/*', '/.blocks-sandbox/*'],
     );
   });
 

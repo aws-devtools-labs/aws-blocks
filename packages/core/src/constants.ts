@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { BLOCKS_SANDBOX_SERVED_DIR } from './common/constants.js';
+
 /**
  * Reserved namespace for AWS-managed framework features.
  * No user routes can be registered under this path.
@@ -85,8 +87,12 @@ export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
  * which only serves its own static dir (Next.js `public/`, etc.) and would 404
  * on a project-root file. Keeping this symmetric with production is what makes
  * the browser client work the same in `dev`, `sandbox`, and deployed.
+ *
+ * Built from {@link BLOCKS_SANDBOX_SERVED_DIR}, which is NOT the on-disk directory
+ * name: this is a public URL an already-deployed frontend asks for, so it did not
+ * follow the CDK Blocks rename of the private state directory (D-031).
  */
-export const BLOCKS_SANDBOX_PREFIX = '/.cdk-blocks-sandbox';
+export const BLOCKS_SANDBOX_PREFIX = `/${BLOCKS_SANDBOX_SERVED_DIR}`;
 
 /**
  * Header name carrying the native-client token on the RPC hop. A custom header,

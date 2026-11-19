@@ -167,7 +167,7 @@ async function resolveApiUrl(): Promise<string> {
     'Blocks API URL not configured. Ensure:\n' +
     '1. A dev server is running (`npm run dev` writes .cdk-blocks-sandbox/config.json), OR\n' +
     '2. BLOCKS_API_URL is set (Hosting sets it on SSR functions), OR\n' +
-    '3. config.json is served at /.cdk-blocks-sandbox/config.json (the dev server and Hosting serve it)' +
+    `3. config.json is served at ${BLOCKS_SANDBOX_PREFIX}/config.json (the dev server and Hosting serve it)` +
     (configFileNeedsNewerNode
       ? `\nNode.js ${process.versions.node} cannot read .cdk-blocks-sandbox/config.json from the working directory; ` +
         'that needs Node.js 22.3 or later. Upgrade Node.js or set BLOCKS_API_URL.'

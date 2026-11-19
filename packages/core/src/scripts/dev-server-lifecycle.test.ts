@@ -513,7 +513,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     const dev = startDev(makeApp(), { port, host });
     await waitFor('the server', () => dev.out.stdout.includes('local server running'), [dev]);
     assert.ok(dev.out.stdout.includes(`running on http://${host}:${port}`), dev.out.stdout);
-    const config = await fetch(`http://${host}:${port}/.cdk-blocks-sandbox/config.json`).then((r) => r.json());
+    const config = await fetch(`http://${host}:${port}/.blocks-sandbox/config.json`).then((r) => r.json());
     assert.deepStrictEqual(config, { apiUrl: `http://${host}:${port}/aws-blocks/api`, environment: 'local' });
     const page = `http://${host}:5173`;
     const response = await fetch(`http://${host}:${port}/aws-blocks/api`, { method: 'OPTIONS', headers: { Origin: page } });
@@ -529,7 +529,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     const dev = startDev(dir, { port, host: '0.0.0.0' });
     await waitFor('the server', () => dev.out.stdout.includes('local server running'), [dev]);
     // A page opened at the machine address calls the API at that address, not at localhost.
-    const config = await fetch(`http://${lan}:${port}/.cdk-blocks-sandbox/config.json`).then((r) => r.json());
+    const config = await fetch(`http://${lan}:${port}/.blocks-sandbox/config.json`).then((r) => r.json());
     assert.deepStrictEqual(config, { apiUrl: '/aws-blocks/api', environment: 'local' });
     // Node.js readers of the file need an origin, so the file keeps the absolute URL.
     assert.deepStrictEqual(JSON.parse(readFileSync(join(dir, '.cdk-blocks-sandbox', 'config.json'), 'utf-8')), {
