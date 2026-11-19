@@ -10,14 +10,12 @@ import assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { spawn } from './spawn.js';
-import {
-  sveltekitAdapter,
-  bareServerImports,
-  buildViteBridgeSource,
-  SVELTEKIT_BUNDLE_PLUGIN_NAME,
-} from './sveltekit.js';
+import { sveltekitAdapter } from './sveltekit.js';
+import { unresolvedServerImports, withViteBundlePreload } from './sveltekit-server-deps.js';
+import { withBuildProfile } from './shared/build_profile.js';
 
 /** A project with SvelteKit 2 + adapter-node "installed" and an adapter-node `build/` tree. */
 const scaffold = (dir: string, opts: { adapterWired?: boolean; viteConfig?: string } = {}): void => {
@@ -79,7 +77,7 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
       () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
       (err: Error) =>
         err.name === 'SvelteKitUnbundledDependencyError' &&
-        err.message.includes('@aws-blocks/blocks (imported from build/server/chunks/_page.server.ts.js)'),
+        err.message.includes('@aws-blocks/blocks/server (imported from build/server/chunks/_page.server.ts.js)'),
     );
   });
 
@@ -120,114 +118,279 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
     assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
   });
 
-  void it('deploys a server whose dependency is shipped under build/node_modules', () => {
+  /** Ship a package under `build/<at>/node_modules/<name>` with the given files (`package.json` included). */
+  const ship = (at: string, name: string, files: Record<string, string>): void => {
+    const pkgDir = path.join(tmp, 'build', at, 'node_modules', name);
+    for (const [rel, content] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(pkgDir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(pkgDir, rel), content);
+    }
+  };
+
+  const rejects = (...named: string[]) => (err: Error) =>
+    err.name === 'SvelteKitUnbundledDependencyError' && named.every((n) => err.message.includes(n));
+
+  void it('does not check a build reused for a destroy, so a stale build/ cannot block stack deletion', () => {
     scaffold(tmp);
     writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
-    const shipped = path.join(tmp, 'build', 'node_modules', '@aws-blocks', 'blocks');
-    fs.mkdirSync(shipped, { recursive: true });
-    fs.writeFileSync(path.join(shipped, 'package.json'), '{}');
+    assert.doesNotThrow(() => withBuildProfile({ reuseBuild: 'if-present' }, () => sveltekitAdapter({ projectDir: tmp })));
+  });
+
+  void it('still checks a build reused for a deploy', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    assert.throws(
+      () => withBuildProfile({ reuseBuild: 'required' }, () => sveltekitAdapter({ projectDir: tmp })),
+      rejects('@aws-blocks/blocks/server'),
+    );
+  });
+
+  void it('does not read import text inside strings or templates as imports', () => {
+    scaffold(tmp);
+    writeServerChunk(
+      tmp,
+      [
+        `const sample = "import('example-package')";`,
+        "const tpl = `import x from 'left-pad'; export * from \"right-pad\"`;",
+        "const re = /import\\('regex-package'\\)/;",
+        'export { sample, tpl, re };',
+        '',
+      ].join('\n'),
+    );
     assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
   });
 
-  for (const adapterWired of [true, false]) {
-    void it(`builds through the Vite bundling bridge and restores vite.config.ts (${adapterWired ? 'app wires adapter-node' : 'transparent bridge'})`, () => {
-      scaffold(tmp, { adapterWired, viteConfig: VITE_CONFIG });
-      const viteConfigPath = path.join(tmp, 'vite.config.ts');
-      let duringBuild = '';
-      let backupDuringBuild = '';
-      mock.method(spawn, 'sync', () => {
-        duringBuild = fs.readFileSync(viteConfigPath, 'utf-8');
-        backupDuringBuild = fs.readFileSync(path.join(tmp, 'vite.config.blocks-original.ts'), 'utf-8');
-      });
-      sveltekitAdapter({ projectDir: tmp });
-      assert.match(duringBuild, /import userConfig from '\.\/vite\.config\.blocks-original\.ts';/);
-      assert.ok(duringBuild.includes(SVELTEKIT_BUNDLE_PLUGIN_NAME), 'the bundling plugin is in the build config');
-      assert.equal(backupDuringBuild, VITE_CONFIG, 'the original is parked unchanged');
-      assert.equal(fs.readFileSync(viteConfigPath, 'utf-8'), VITE_CONFIG, 'vite.config.ts is restored');
-      assert.ok(!fs.existsSync(path.join(tmp, 'vite.config.blocks-original.ts')), 'no backup left');
-    });
-  }
+  void it('finds static imports after another statement on the same line, as minified output has them', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, 'const a=1;import{b}from"left-pad";import"side-effect-pkg";export{a,b};\n');
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('left-pad', 'side-effect-pkg'));
+  });
 
-  void it('restores vite.config.ts when the build fails', () => {
+  void it('rejects a dependency whose copy in build/node_modules has no module for the import', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    ship('', '@aws-blocks/blocks', { 'package.json': '{}' });
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('@aws-blocks/blocks/server'));
+  });
+
+  void it('rejects a subpath that the package exports do not provide', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    ship('', '@aws-blocks/blocks', {
+      'package.json': JSON.stringify({ type: 'module', exports: { '.': './index.js' } }),
+      'index.js': 'export {};\n',
+      'server.js': 'export const withAuth = 1;\n',
+    });
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('@aws-blocks/blocks/server'));
+  });
+
+  void it('deploys a dependency resolved through its exports map', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    ship('', '@aws-blocks/blocks', {
+      'package.json': JSON.stringify({
+        type: 'module',
+        exports: { './server': { types: './dist/server.d.ts', import: './dist/server.js', require: './dist/server.cjs' } },
+      }),
+      'dist/server.js': "import { helper } from './helper.js';\nexport const withAuth = helper;\n",
+      'dist/helper.js': 'export const helper = 1;\n',
+    });
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('deploys a dependency shipped in a node_modules next to the importing chunk', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    ship('server', '@aws-blocks/blocks', {
+      'package.json': JSON.stringify({ type: 'module', exports: { './server': './server.js' } }),
+      'server.js': 'export const withAuth = 1;\n',
+    });
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('rejects a shipped dependency that itself imports a package build/ does not have', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    ship('', '@aws-blocks/blocks', {
+      'package.json': JSON.stringify({ type: 'module', exports: { './server': './server.js' } }),
+      'server.js': "import { jwtVerify } from 'jose';\nexport const withAuth = jwtVerify;\n",
+    });
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      rejects('jose (imported from build/node_modules/@aws-blocks/blocks/server.js)'),
+    );
+  });
+
+  void it('deploys a server whose optional dynamic imports fall back when the package is absent', () => {
+    scaffold(tmp);
+    writeServerChunk(
+      tmp,
+      [
+        'let impl;',
+        "try { impl = await import('optional-peer'); } catch { impl = { render: () => 'fallback' }; }",
+        "const other = await import('other-peer').catch(() => null);",
+        "const third = await import('third-peer').then((m) => m, () => null);",
+        'export const render = () => impl.render(other, third);',
+        '',
+      ].join('\n'),
+    );
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('rejects a dynamic import that a finally, not a catch, surrounds', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "try { await import('cookie'); } finally { console.log('x'); }\n");
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('cookie'));
+  });
+
+  void it('checks the require calls of a shipped CommonJS dependency, except a guarded optional one', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import ws from 'ws';\nexport default ws;\n");
+    ship('', 'ws', {
+      'package.json': JSON.stringify({ main: 'index.js' }),
+      'index.js': "let bu;\ntry { bu = require('bufferutil'); } catch { bu = null; }\nmodule.exports = require('./lib/websocket');\n",
+      'lib/websocket.js': "const { EventEmitter } = require('events');\nmodule.exports = class extends EventEmitter {};\n",
+    });
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+    fs.appendFileSync(path.join(tmp, 'build', 'node_modules', 'ws', 'lib', 'websocket.js'), "require('utf-8-validate');\n");
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('utf-8-validate'));
+  });
+
+  /**
+   * Every path under `dir` with its content, except `build/` (the output the
+   * build writes) and `node_modules/.cache` (where reading svelte.config caches).
+   */
+  const projectSnapshot = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const walk = (rel: string): void => {
+      for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+        const child = path.join(rel, entry.name);
+        if (child === 'build' || child === path.join('node_modules', '.cache')) continue;
+        if (entry.isDirectory()) walk(child);
+        else out[child] = fs.readFileSync(path.join(dir, child), 'utf-8');
+      }
+    };
+    walk('');
+    return out;
+  };
+
+  void it('never writes to the project for the bundling, so overlapping builds keep vite.config.ts', () => {
     scaffold(tmp, { viteConfig: VITE_CONFIG });
-    mock.method(spawn, 'sync', () => {
+    const before = projectSnapshot(tmp);
+    const seen: { during: Record<string, string>; nodeOptions: string }[] = [];
+    let depth = 0;
+    mock.method(spawn, 'sync', (_bin: string, _args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      depth++;
+      // A second build of the same app starts while the first one runs.
+      if (depth === 1) sveltekitAdapter({ projectDir: tmp });
+      seen.push({ during: projectSnapshot(tmp), nodeOptions: opts.env.NODE_OPTIONS ?? '' });
+    });
+    sveltekitAdapter({ projectDir: tmp });
+    assert.equal(seen.length, 2);
+    for (const { during } of seen) assert.deepEqual(during, before, 'the project is untouched while a build runs');
+    assert.deepEqual(projectSnapshot(tmp), before);
+    const preloads = seen.map(({ nodeOptions }) => /--import=(\S+)/.exec(nodeOptions)?.[1]);
+    assert.ok(preloads[0] && preloads[1], 'each build loads the bundling preload');
+    assert.notEqual(preloads[0], preloads[1], 'each build has its own preload');
+    for (const preload of preloads) {
+      assert.ok(!fs.existsSync(new URL(preload ?? '')), 'the preload is removed after the build');
+    }
+  });
+
+  void it('removes the preload when the build fails', () => {
+    scaffold(tmp, { viteConfig: VITE_CONFIG });
+    let preload = '';
+    mock.method(spawn, 'sync', (_bin: string, _args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      preload = /--import=(\S+)/.exec(opts.env.NODE_OPTIONS ?? '')?.[1] ?? '';
       throw new Error('vite build failed');
     });
     assert.throws(() => sveltekitAdapter({ projectDir: tmp }), /SvelteKitBuildError/);
+    assert.ok(preload, 'the build ran with the preload');
+    assert.ok(!fs.existsSync(new URL(preload)));
     assert.equal(fs.readFileSync(path.join(tmp, 'vite.config.ts'), 'utf-8'), VITE_CONFIG);
-    assert.ok(!fs.existsSync(path.join(tmp, 'vite.config.blocks-original.ts')));
-  });
-
-  void it('refuses a leftover Vite bridge backup before touching anything', () => {
-    scaffold(tmp, { viteConfig: VITE_CONFIG });
-    const backup = path.join(tmp, 'vite.config.blocks-original.mjs');
-    fs.writeFileSync(backup, '// parked by a crashed run\n');
-    let built = false;
-    mock.method(spawn, 'sync', () => {
-      built = true;
-    });
-    assert.throws(() => sveltekitAdapter({ projectDir: tmp }), /SvelteKitBridgeCollisionError/);
-    assert.equal(built, false);
-    assert.equal(fs.readFileSync(path.join(tmp, 'vite.config.ts'), 'utf-8'), VITE_CONFIG);
-    assert.equal(fs.readFileSync(backup, 'utf-8'), '// parked by a crashed run\n');
   });
 });
 
-void describe('buildViteBridgeSource', () => {
+/** Vite from the monorepo's install; the real-build tests skip when it is absent. */
+const viteBin = ((): string | undefined => {
+  try {
+    return path.join(path.dirname(createRequire(import.meta.url).resolve('vite/package.json')), 'bin', 'vite.js');
+  } catch {
+    return undefined;
+  }
+})();
+
+void describe('withViteBundlePreload — a real `vite build`', { skip: viteBin ? false : 'vite is not installed' }, () => {
   let tmp: string;
   beforeEach(() => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sveltekit-vite-bridge-'));
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sveltekit-vite-preload-'));
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'p', type: 'module', dependencies: { 'dep-a': '*', 'dep-b': '*' } }),
+    );
+    for (const name of ['dep-a', 'dep-b', 'cfg-helper']) {
+      const dir = path.join(tmp, 'node_modules', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, type: 'module', exports: './index.js' }));
+      fs.writeFileSync(path.join(dir, 'index.js'), `export const value = 'from-${name}';\n`);
+    }
+    fs.writeFileSync(
+      path.join(tmp, 'entry.js'),
+      "import { value as a } from 'dep-a';\nimport { value as b } from 'dep-b';\nexport const x = a + b;\n",
+    );
   });
   afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  type Plugin = { name: string; apply?: string; config?: () => unknown };
-  type ViteConfig = { plugins?: Plugin[]; ssr?: unknown; base?: string };
+  /** A config in the app's own style: it imports a package, and the `.ts` one annotates its parameter. */
+  const config = (ts: boolean): string =>
+    `import { value } from 'cfg-helper';\n` +
+    `export default (${ts ? '{ mode }: { mode: string }' : '{ mode }'}) => ({\n` +
+    `  define: { __MODE__: JSON.stringify(mode + value) },\n` +
+    `  build: { ssr: 'entry.js', outDir: 'out' },\n` +
+    `  ssr: { external: ['dep-b'] },\n` +
+    `});\n`;
 
-  const loadBridge = async (original: string): Promise<(env: unknown) => Promise<ViteConfig>> => {
-    fs.writeFileSync(path.join(tmp, 'original.mjs'), original);
-    fs.writeFileSync(path.join(tmp, 'bridge.mjs'), buildViteBridgeSource('original.mjs'));
-    const mod = (await import(pathToFileURL(path.join(tmp, 'bridge.mjs')).href)) as {
-      default: (env: unknown) => Promise<ViteConfig>;
-    };
-    return mod.default;
+  const build = (args: string[] = []): string => {
+    const result = withViteBundlePreload(process.env, (env) =>
+      spawnSync(process.execPath, [viteBin ?? '', 'build', ...args], { cwd: tmp, env, encoding: 'utf-8' }),
+    );
+    assert.equal(result.status, 0, `vite build failed: ${String(result.stderr)}`);
+    return fs.readFileSync(path.join(tmp, 'out', 'entry.js'), 'utf-8');
   };
 
-  for (const [label, original] of [
-    ['an object', "export default { base: '/x', plugins: [{ name: 'user' }], ssr: { external: ['sharp'] } };\n"],
-    ['a function of the config env', "export default (env) => ({ base: env.mode === 'production' ? '/x' : '/', plugins: [{ name: 'user' }], ssr: { external: ['sharp'] } });\n"],
-    ['a promise', "export default Promise.resolve({ base: '/x', plugins: [{ name: 'user' }], ssr: { external: ['sharp'] } });\n"],
-  ] as const) {
-    void it(`keeps the app's config (${label}) and appends a build-only plugin that sets ssr.noExternal`, async () => {
-      const bridge = await loadBridge(original);
-      const config = await bridge({ command: 'build', mode: 'production' });
-      assert.equal(config.base, '/x');
-      assert.deepEqual(config.ssr, { external: ['sharp'] });
-      assert.deepEqual(config.plugins?.map((p) => p.name), ['user', SVELTEKIT_BUNDLE_PLUGIN_NAME]);
-      const plugin = config.plugins?.[1];
-      assert.equal(plugin?.apply, 'build');
-      assert.deepEqual(plugin?.config?.(), { ssr: { noExternal: true } });
+  for (const file of ['vite.config.ts', 'vite.config.mjs']) {
+    void it(`bundles the server's dependencies with the app's ${file}, which stays untouched`, () => {
+      fs.writeFileSync(path.join(tmp, file), config(file.endsWith('.ts')));
+      const listing = fs.readdirSync(tmp).sort();
+      const output = build();
+      assert.ok(output.includes('from-dep-a'), 'dep-a is bundled');
+      assert.ok(!/from ['"]dep-a['"]/.test(output), 'no import of dep-a is left');
+      assert.match(output, /from ['"]dep-b['"]/, 'an explicit ssr.external stays an import');
+      assert.equal(fs.readFileSync(path.join(tmp, file), 'utf-8'), config(file.endsWith('.ts')));
+      assert.deepEqual(fs.readdirSync(tmp).sort(), [...listing, 'out'].sort(), 'the build adds nothing but its output');
     });
   }
 
-  void it('works for a config without plugins', async () => {
-    const bridge = await loadBridge('export default {};\n');
-    const config = await bridge({ command: 'build', mode: 'production' });
-    assert.deepEqual(config.plugins?.map((p) => p.name), [SVELTEKIT_BUNDLE_PLUGIN_NAME]);
+  void it('wraps the config that the build command names with --config', () => {
+    fs.writeFileSync(path.join(tmp, 'custom.config.ts'), config(true));
+    const output = build(['--config', 'custom.config.ts']);
+    assert.ok(output.includes('from-dep-a'));
+    assert.match(output, /from ['"]dep-b['"]/);
   });
 });
 
-void describe('bareServerImports', () => {
-  void it('skips client assets, prerendered pages and node_modules', () => {
+void describe('unresolvedServerImports', () => {
+  void it('skips client assets and prerendered pages', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sveltekit-bare-'));
     try {
-      for (const rel of ['client/_app/a.js', 'prerendered/b.js', 'node_modules/x/index.js']) {
+      for (const rel of ['client/_app/a.js', 'prerendered/b.js']) {
         fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
         fs.writeFileSync(path.join(dir, rel), "import 'left-pad';\n");
       }
       fs.writeFileSync(path.join(dir, 'index.js'), "import {\n  a,\n  b,\n} from '@scope/pkg/sub';\n");
-      assert.deepEqual([...bareServerImports(dir)], [['@scope/pkg', 'index.js']]);
+      assert.deepEqual([...unresolvedServerImports(dir)], [['@scope/pkg/sub', 'index.js']]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

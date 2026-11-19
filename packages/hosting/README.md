@@ -634,20 +634,25 @@ each package in your `dependencies` (for example `@aws-blocks/blocks`, whose
 find in `node_modules` at runtime. So the deploy builds the server with its
 dependencies bundled:
 
-- While the build runs, `vite.config.ts` (or `.js`, `.mjs`, `.mts`) is replaced
-  by a config that imports yours and adds one build-only Vite plugin, which sets
-  `ssr.noExternal: true`. Your file is restored when the build ends, also when it
-  fails. Your own adapter-node setup and the adapter's transparent build are
-  treated the same.
-- A package that you list in `ssr.external` stays an import. After the build,
-  synth fails with `SvelteKitUnbundledDependencyError` when the server in
-  `build/` imports a package that `build/` can't resolve, and names each one
-  with the file that imports it. Remove it from `ssr.external`, or, for a
-  CommonJS `vite.config.cjs`/`.cts` (which the deploy doesn't replace), set
-  `ssr: { noExternal: true }` yourself.
-- If a run is stopped before the restore, the next deploy fails with
-  `SvelteKitBridgeCollisionError` and leaves your files alone: rename
-  `vite.config.blocks-original.*` back to `vite.config.*`.
+- The build runs with a Node.js preload (`NODE_OPTIONS=--import=…`) that hands
+  `vite build` a config in a temporary directory: it imports your
+  `vite.config.*` (or the file your build command names with `--config`) and
+  adds one build-only Vite plugin, which sets `ssr.noExternal: true`. Nothing in
+  your project is written or renamed, so builds that overlap are safe and a
+  `cdk watch` sees no change. Your own adapter-node setup and the adapter's
+  transparent build are treated the same.
+- After the build, synth resolves every module the server in `build/` loads,
+  the way Node.js does from the importing file and only inside `build/`
+  (`exports`, `main`, and the target file has to exist), and also checks the
+  files those resolve to. It fails with `SvelteKitUnbundledDependencyError`,
+  naming each missing module with the file that imports it, for example a
+  package you list in `ssr.external`. Remove it from `ssr.external`, or, for a
+  CommonJS `vite.config.cjs`/`.cts` (which the preload doesn't wrap), set
+  `ssr: { noExternal: true }` yourself. A dynamic `import()` or `require()`
+  that the code handles failing (in a `try` with a `catch`, or with a
+  `.catch()`) is optional and doesn't fail synth.
+- `npm run destroy` skips this check, so a build left from before can't block
+  deleting the stack.
 
 ## SSR compute: Lambda or Lambda Web Functions
 
