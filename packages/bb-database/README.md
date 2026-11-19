@@ -126,7 +126,7 @@ The options of `DatabaseCluster.fromExisting()` are under [Existing database](#e
 
 ## Errors
 
-Query and transaction failures carry a `DatabaseErrors` name. Match them with `isBlocksError(e, DatabaseErrors.X)` on the server or the client. Only the name and a message free of row values cross the wire; the driver error stays on the server.
+Match query and transaction failures with `isBlocksError(e, DatabaseErrors.X)` on the server or the client. The driver error stays on the server. Result-validation messages include the first issue's path, which can contain data-dependent keys; do not put sensitive identifiers in those paths.
 
 ```ts
 import { isBlocksError } from '@aws-cdk-blocks/core';
@@ -432,8 +432,8 @@ MigrationValidationError: Migration validation failed for Aurora DSQL (cluster k
 ### On an `aurora` cluster
 
 - Write the migrations as you would for any PostgreSQL 17.
-- Each file runs in one transaction, so it applies entirely or not at all.
-- The only check is for the two DSQL-only forms, `ASYNC` and `sys.wait_for_job()`. A file that carries them is stopped at `npm run dev` and at `cdk synth` with a message that names the file and what to change.
+- Each file runs in one transaction, so it applies entirely or not at all. Omit transaction controls such as `BEGIN` and `COMMIT`: the migration runner owns that transaction and rejects files that try to control it.
+- `npm run dev` and `cdk synth` reject the DSQL-only forms `ASYNC` and `sys.wait_for_job()` with a message naming the file and what to change.
 - A statement PostgreSQL refuses inside a transaction block (`CREATE INDEX CONCURRENTLY`, `VACUUM`, `ALTER SYSTEM`, `CREATE DATABASE`) stops the file at construction with a message that names it. Drop `CONCURRENTLY`, and keep the rest out of migrations.
 
 ### How migrations deploy

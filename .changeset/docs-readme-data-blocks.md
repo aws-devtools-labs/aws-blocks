@@ -31,7 +31,7 @@ docs(bb-kv-store, bb-database, bb-file-bucket, bb-app-setting, bb-secret): the R
 
 **`AppSetting`**
 
-- Corrected: `value` is required unless `secret: true`. A missing parameter throws `ParameterNotFound` on AWS only; an empty `secret: true` value throws on AWS and locally. A `secret: true` value is not checked against the 4 KB limit.
+- Corrected: `value` is required unless `secret: true`. A missing parameter throws `ParameterNotFound` on AWS only; an empty `secret: true` value throws on AWS and locally. The block skips its own size check for secrets; Parameter Store still enforces its tier's limit.
 - Added: `AppSetting.fromExisting` does not create the parameter or grant write access. The mock permits `put()`; on AWS, it can overwrite the parameter if another policy allows the write. For an imported SecureString, the external owner manages re-encryption.
 - Added: a section on `secret: true`: the first deploy stores a random value; set the real one with `put()` or in the console; `get()` parses the stored text as JSON, so a console value such as `12345` comes back as a number.
 

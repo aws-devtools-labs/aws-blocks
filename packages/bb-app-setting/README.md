@@ -78,22 +78,21 @@ import { AppSettingErrors } from '@aws-cdk-blocks/bb-app-setting';
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `AppSettingErrors.ValidationFailed` | `ValidationFailedException` | `put()`: the value fails the schema, or its JSON form is over 4 KB (4,096 bytes; a `secret: true` value is not checked). Constructor: the options are an invalid combination. |
+| `AppSettingErrors.ValidationFailed` | `ValidationFailedException` | `put()`: the value fails the schema, or a non-secret value's JSON exceeds 4 KB (4,096 bytes). The block skips the size check for secrets; SSM still enforces the [parameter tier's limit](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-advanced-parameters.html). Constructor: the options are an invalid combination. |
 | `AppSettingErrors.ParameterNotFound` | `ParameterNotFoundException` | `get()`: the parameter does not exist or has no value (AWS), or a `secret: true` value is an empty string (AWS and local). |
 
 ## Secret values (`secret: true`)
 
 ```typescript
-const stripeKey = new AppSetting(scope, 'stripeKey', {
-  secret: true,
-});
+import { createHmac } from 'node:crypto';
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async charge(amount: number) {
-    const key = await stripeKey.get(); // decrypted from SSM SecureString
-    // use key...
-  },
-}));
+const signingKey = new AppSetting(scope, 'prototype-signing-key', { secret: true });
+
+// In a server-side handler, after authorizing the operation:
+async function signForPrototype(payload: string) {
+  const key = await signingKey.get();
+  return createHmac('sha256', key).update(payload).digest('hex');
+}
 ```
 
 - The first deploy stores a random value (32 random bytes, base64url). Later deploys keep the stored value.
@@ -103,10 +102,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 ## Existing parameter (`fromExisting`)
 
-`AppSetting.fromExisting` reads a parameter that something else creates, for example a connection string stored by `npm run db -- connect --stage`.
+`AppSetting.fromExisting` reads a parameter that something else creates. For example, `npm run db -- connect --stage production` stores the default connection string at `/<stackName>-db-url`. Use the parameter name printed by the command; for a stack named `my-app`:
 
 ```typescript
-const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: '/my-app/db-url', secret: true });
+const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: '/my-app-db-url', secret: true });
 ```
 
 - The stack does not create, seed, tag or delete the parameter.

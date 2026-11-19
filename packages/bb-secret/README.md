@@ -13,13 +13,12 @@ A single application secret backed by AWS Secrets Manager.
 ```typescript
 const stripeKey = new Secret(scope, 'stripe-api-key');
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async charge(amount: number) {
-    const key = await stripeKey.get();
-    if (key === null) throw new Error('Stripe key not configured');
-    // use key...
-  },
-}));
+// In a server-side billing job, never an API method that returns the key.
+async function withStripeKey<T>(charge: (key: string) => Promise<T>): Promise<T> {
+  const key = await stripeKey.get();
+  if (key === null) throw new Error('Stripe key not configured');
+  return charge(key);
+}
 ```
 
 The secret starts empty. Set the value after deploy: see [Managing secret values](#managing-secret-values).
@@ -89,14 +88,16 @@ import { SecretErrors } from '@aws-cdk-blocks/bb-secret';
 Use `generate: true` for a JWT/session signing key or HMAC key that nobody needs to read.
 
 ```typescript
+import { createHmac } from 'node:crypto';
+
 const signingKey = new Secret(scope, 'session-signing-key', { generate: true });
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async issueToken(userId: string) {
-    const key = await signingKey.get(); // random value, created on first deploy
-    // sign(userId, key)...
-  },
-}));
+// Sign a server-generated webhook body before sending it to its recipient.
+async function signWebhook(body: string): Promise<string> {
+  const key = await signingKey.get();
+  if (key === null) throw new Error('Signing key not configured');
+  return createHmac('sha256', key).update(body).digest('hex');
+}
 ```
 
 > Without `generate: true`, a BB-created secret starts **empty**: `get()` returns `null` until a value is set. Don't combine `generate` with `schema` — a random string isn't valid JSON.
@@ -130,7 +131,7 @@ const legacy = new Secret(scope, 'legacy-key', {
 const value = await legacy.get();
 ```
 
-AWS CDK Blocks will not create, seed, or delete the referenced secret — it only reads its value (and writes it when `allowRuntimeWrite: true`) and grants the app access.
+The stack does not create, seed, tag or delete the referenced secret. It grants Secrets Manager access for reads and, with `allowRuntimeWrite: true`, writes. Importing the ARN does not grant access to a customer-managed KMS key: authorize the app's role to decrypt with that key, and to generate a data key if it writes new values.
 
 ## Managing secret values
 
@@ -228,7 +229,7 @@ function matches(payload: string, signature: string, key: string | null): boolea
   return expected.length === given.length && timingSafeEqual(expected, given);
 }
 
-// Call from your request handlers. Signatures made with the previous key stay valid until the next rotation.
+// Check the current and previous keys visible to this verifier.
 async function isValidSignature(payload: string, signature: string): Promise<boolean> {
   const current = await signingKey.get();
   const previous = await signingKey.get({ version: 'previous' }); // null until the first rotation
@@ -240,6 +241,7 @@ async function isValidSignature(payload: string, signature: string): Promise<boo
 - A repeated delivery carries the same `scheduledTime`, and a `KVStore` `put()` with `ifNotExists` is one conditional write, so only one delivery of a tick gets past it.
 - If the secret's `put()` then fails, that tick is skipped rather than retried and the next tick rotates. Until then the current and previous keys both stay valid.
 - The `rotations` store holds only the tick's timestamp, one small item per tick.
+- Each warm verifier caches the two reads separately. After another instance rotates, it may reject the newest key or keep accepting the retired key for up to `cacheTtlSeconds` (300 seconds by default). Set `cacheTtlSeconds: 0` to fetch the stages on each verification instead.
 
 Keep the old key as this previous version — `put()` retains it for you. Don't pack `{ current, previous }` into one JSON value (the secret's value is then no longer the key, and every reader has to unpack it), and don't copy old keys into a `KVStore`, table or second `Secret` (that spreads key material into stores without the secret's access controls).
 

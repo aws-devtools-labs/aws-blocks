@@ -271,7 +271,7 @@ There is no transaction across items. A batch call is not atomic on AWS. After a
 
 There is no atomic increment. To keep a counter that several writers change, use one of:
 
-- A loop. `get()` the item. `put()` the new value with `ifNotExists: true` if `get()` returned `null`, and otherwise with `ifValueEquals` or `ifFieldEquals` on the value you read. Retry on `KVStoreErrors.ConditionalCheckFailed`. Give such a counter no expiry: `get()` returns `null` for an expired item that a condition still sees (see [Expiry](#expiry)).
+- A loop. `get()` the item and compute the new value. Use `put()` with `ifNotExists: true` if the item was absent, or compare the value you read with `ifValueEquals` or `ifFieldEquals`. On `KVStoreErrors.ConditionalCheckFailed`, start again at `get()`; even if a competing writer created the item (`retriable: false`), you can now read and increment it. Do not repeat the stale `put()`. Give the counter no expiry: `get()` hides expired items that conditions still see (see [Expiry](#expiry)).
 - One item per event. Aggregate the items with `query()`.
 
 ## Read consistency
