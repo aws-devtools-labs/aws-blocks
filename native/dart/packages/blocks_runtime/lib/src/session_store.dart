@@ -565,7 +565,8 @@ final class PersistentSessionStore implements SessionStore {
 
   /// Queues a write of the current cookies behind any write in progress.
   void _persist() {
-    _writes = _writes.then((_) => _writeIfChanged());
+    // An error here would skip every later write and make [flush] throw.
+    _writes = _writes.then((_) => _writeIfChanged()).catchError((_, _) {});
   }
 
   Future<void> _writeIfChanged() async {
@@ -627,6 +628,12 @@ final class PersistentSessionStore implements SessionStore {
       error: error,
       stackTrace: stackTrace,
     );
-    writeSessionWarning('blocks_runtime: $_message ($error)');
+    // Standard error can be a closed pipe, such as a CLI piped into `head`.
+    // The warning is best effort and must not throw out of a write.
+    try {
+      writeSessionWarning('blocks_runtime: $_message ($error)');
+    } on Object {
+      // Nothing else to report it to.
+    }
   }
 }
