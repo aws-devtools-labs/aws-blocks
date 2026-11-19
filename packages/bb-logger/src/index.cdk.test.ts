@@ -19,10 +19,10 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { Logger } from './index.cdk.js';
-import type { LogEntry } from './types.js';
+import type { LogEntry, LoggingOptions } from './types.js';
 
 /** A spy compute that fails the test if the Logger ever pokes it. The new model
  * forbids the Logger from touching the compute — logging is always on. */
@@ -135,6 +135,21 @@ describe('Logger CDK logging during synth', () => {
 		assert.deepStrictEqual(stdout.map((e) => e.message), ['shown']);
 	});
 
+	test('an unknown level (e.g. from config) falls back to info instead of dropping everything', () => {
+		const { parent } = setup();
+		// Simulates a level read from an env var / JSON, which the LogLevel type can't check.
+		const level: LoggingOptions['level'] = JSON.parse('"verbose"');
+		const { stdout, stderr } = captureOutput(() => {
+			const log = new Logger(parent, 'app', { level });
+			log.debug('hidden');
+			log.info('shown');
+			log.error('boom');
+		});
+		assert.deepStrictEqual(stdout.map((e) => e.level), ['warn', 'info']);
+		assert.strictEqual(stdout[0].configuredLevel, 'verbose');
+		assert.strictEqual(stderr.length, 1);
+	});
+
 	test('child() merges context', () => {
 		const { parent } = setup();
 		const log = new Logger(parent, 'app', { defaultContext: { service: 'api' } });
@@ -143,5 +158,45 @@ describe('Logger CDK logging during synth', () => {
 		assert.strictEqual(stdout[0].service, 'api');
 		assert.strictEqual(stdout[0].requestId, 'r1');
 		assert.strictEqual(stdout[0].step, 2);
+	});
+});
+
+// An unknown level is also reported as a CDK warning, so it shows up in the
+// synth warnings rather than only as a JSON line in the synth output.
+describe('Logger CDK unknown-level annotation', () => {
+	const unknownLevelWarning = Match.stringLikeRegexp('Unknown log level "verbose"; using \'info\'');
+	const anyUnknownLevelWarning = Match.stringLikeRegexp('Unknown log level');
+
+	test('an unknown level adds a synth warning', () => {
+		const { stack, parent } = setup();
+		const level: LoggingOptions['level'] = JSON.parse('"verbose"');
+		captureOutput(() => new Logger(parent, 'app', { level, defaultContext: { service: 'api' } }));
+		Annotations.fromStack(stack).hasWarning('*', unknownLevelWarning);
+	});
+
+	test('the JSON warn line still carries defaultContext', () => {
+		const { parent } = setup();
+		const level: LoggingOptions['level'] = JSON.parse('"verbose"');
+		const { stdout } = captureOutput(() => new Logger(parent, 'app', { level, defaultContext: { service: 'api' } }));
+		assert.strictEqual(stdout.length, 1);
+		assert.strictEqual(stdout[0].level, 'warn');
+		assert.strictEqual(stdout[0].service, 'api');
+	});
+
+	test('a level JSON.stringify cannot encode still adds a warning without throwing', () => {
+		// A bigint makes JSON.stringify throw; the constructor must not.
+		const { stack, parent } = setup();
+		const level: LoggingOptions['level'] = JSON.parse('10', () => BigInt(10));
+		captureOutput(() => new Logger(parent, 'app', { level }));
+		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unknown log level 10; using'));
+	});
+
+	test('a valid level, an alias, or no level adds no warning', () => {
+		const levels: LoggingOptions['level'][] = ['warn', JSON.parse('"WARNING"'), undefined, JSON.parse('""')];
+		for (const level of levels) {
+			const { stack, parent } = setup();
+			captureOutput(() => new Logger(parent, 'app', { level }));
+			Annotations.fromStack(stack).hasNoWarning('*', anyUnknownLevelWarning);
+		}
 	});
 });

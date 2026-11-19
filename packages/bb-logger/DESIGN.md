@@ -82,6 +82,22 @@ Priority order (highest wins):
 1. Constructor `options.level`
 2. Default: `'info'`
 
+The constructor resolves `options.level` once (`resolveLevel` in `emitter.ts`).
+The `LogLevel` type only checks literals, so a value read from config can be
+anything at runtime. It is trimmed and lower-cased. `undefined`, `null` and an
+empty string mean "not set" and use `'info'` silently. The aliases `'warning'`,
+`'trace'` and `'fatal'` then map to `'warn'`, `'debug'` and `'error'`, also
+silently. Any other value also gets `'info'`, and that Logger writes one `warn`
+line with `configuredLevel` / `effectiveLevel` (plus its `defaultContext`). It
+does not throw: a bad logging setting should not stop the app from starting.
+Child loggers inherit the resolved level.
+
+`resolveLevel` returns `{ level, unknown }`. The CDK `Logger` uses `unknown` to
+also add a synth warning (`@aws-blocks/bb-logger:unknownLevel`) via
+`Annotations.of(this).addWarningV2`, so the problem is listed with the other
+`cdk synth` warnings. `cdk synth --strict` turns that warning into an error;
+acknowledge it by its id to opt out.
+
 ## Mock Implementation
 
 The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts`) directly. Both environments use the same code: write structured JSON to `process.stdout` / `process.stderr`. There is no mock-specific behavior because the logging mechanism (stdout/stderr → CloudWatch) is provided by the Lambda runtime, not by the BB.

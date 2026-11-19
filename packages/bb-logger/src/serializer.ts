@@ -18,6 +18,11 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 	error: 3,
 };
 
+/** Whether `value` is one of the known {@link LogLevel} names (exact, lower-case). */
+export function isLogLevel(value: unknown): value is LogLevel {
+	return typeof value === 'string' && Object.hasOwn(LEVEL_PRIORITY, value);
+}
+
 /**
  * Check whether a message at `messageLevel` should be emitted given `configuredLevel`.
  */

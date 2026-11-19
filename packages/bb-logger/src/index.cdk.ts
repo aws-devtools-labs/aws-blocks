@@ -3,13 +3,27 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { Scope } from '@aws-blocks/core/cdk';
-import { ChildLoggerImpl, writeLog } from './emitter.js';
+import * as cdk from 'aws-cdk-lib';
+import { ChildLoggerImpl, DEFAULT_LOG_LEVEL, resolveLevel, writeLog } from './emitter.js';
 import type { ChildLogger, LoggingOptions, LogLevel } from './types.js';
 import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { LoggingErrors } from './errors.js';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from './types.js';
+
+/**
+ * Quote a configured level for the synth warning. JSON.stringify returns
+ * `undefined` for functions/symbols and throws on bigint, and a bad level must
+ * never break synth, so fall back to String().
+ */
+function describeLevel(value: unknown): string {
+	try {
+		return JSON.stringify(value) ?? String(value);
+	} catch {
+		return String(value);
+	}
+}
 
 /**
  * CDK construct for Logger.
@@ -36,7 +50,16 @@ export class Logger extends Scope implements ChildLogger {
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
 		super(id, { parent: scope, bbName: BB_NAME });
 		this.loggerName = id;
-		this.level = options?.level ?? 'info';
+		const { level, unknown } = resolveLevel(options?.level, id, options?.defaultContext);
+		this.level = level;
+		// Also surface an unknown level at synth time: the JSON warn line resolveLevel writes is
+		// easy to miss in synth output, a CDK warning is listed with the others.
+		if (unknown) {
+			cdk.Annotations.of(this).addWarningV2(
+				'@aws-blocks/bb-logger:unknownLevel',
+				`Unknown log level ${describeLevel(options?.level)}; using '${DEFAULT_LOG_LEVEL}'`,
+			);
+		}
 		this.defaultContext = options?.defaultContext ?? {};
 	}
 
