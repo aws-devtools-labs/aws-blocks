@@ -75,7 +75,7 @@ class SchemaNestedNameCollisionTest : FunSpec({
         val source = generate("Holder" to obj("kind" to enumOf("a", "b"), "KIND" to obj("k" to STRING)))
         source shouldContain "public val kind: Kind,"
         source shouldContain "public val KIND: Kind_2,"
-        source shouldContain "public enum class Kind {"
+        source shouldContain "public sealed class Kind {"
         source shouldContain "public data class Kind_2("
     }
 
@@ -85,7 +85,7 @@ class SchemaNestedNameCollisionTest : FunSpec({
         source shouldContain "public data class Meta_2("
         source shouldContain "public val kind: Kind_2,"
         source shouldContain "public val Kind: String,"
-        source shouldContain "public enum class Kind_2 {"
+        source shouldContain "public sealed class Kind_2 {"
     }
 
     test("a deeper scope is allocated on its own, and a renamed type's children nest under it") {
@@ -121,11 +121,11 @@ class SchemaNestedNameCollisionTest : FunSpec({
 
     test("enum values that camel-case alike get distinct constants") {
         val source = generate("Task" to obj("state" to enumOf("in-progress", "in_progress", "done")))
-        source shouldContain "@SerialName(\"in-progress\")\n    InProgress,"
+        source shouldContain "public data object InProgress : State() {\n      override val `value`: String = \"in-progress\""
         // An enum numbers its constants without the underscore, as it does for any two values
         // that reduce to one name.
-        source shouldContain "@SerialName(\"in_progress\")\n    InProgress2,"
-        source shouldContain "@SerialName(\"done\")\n    Done,"
+        source shouldContain "public data object InProgress2 : State() {\n      override val `value`: String = \"in_progress\""
+        source shouldContain "public data object Done : State() {\n      override val `value`: String = \"done\""
     }
 
     test("schema names that collide with nothing are unchanged") {

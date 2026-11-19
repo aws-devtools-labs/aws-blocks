@@ -31,6 +31,14 @@ public final nonisolated class Api: Sendable {
 
     public enum CognitoConfirmSignIn {
 
+        public struct SignedIn: Codable, Sendable {
+            public let user: AuthenticatedUser
+
+            public init(user: AuthenticatedUser) {
+                self.user = user
+            }
+        }
+
         public struct ContinueSignIn: Codable, Sendable {
             public let nextStep: NextStep
 
@@ -75,10 +83,50 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable, Sendable {
-                    case sms = "SMS"
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable, Sendable {
+                    case sms
+                    case totp
+                    case email
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "SMS": self = .sms
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .sms: return "SMS"
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.sms, .sms): return true
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .sms: hasher.combine(0)
+                        case .totp: hasher.combine(1)
+                        case .email: hasher.combine(2)
+                        case .unknown(let value):
+                            hasher.combine(3)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -91,9 +139,45 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable, Sendable {
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable, Sendable {
+                    case totp
+                    case email
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .totp: hasher.combine(0)
+                        case .email: hasher.combine(1)
+                        case .unknown(let value):
+                            hasher.combine(2)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -145,11 +229,55 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AvailableChallenge: String, Codable, Sendable {
-                    case password = "PASSWORD"
-                    case emailOtp = "EMAIL_OTP"
-                    case smsOtp = "SMS_OTP"
-                    case webAuthn = "WEB_AUTHN"
+                public enum AvailableChallenge: RawRepresentable, Codable, Hashable, Sendable {
+                    case password
+                    case emailOtp
+                    case smsOtp
+                    case webAuthn
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "PASSWORD": self = .password
+                        case "EMAIL_OTP": self = .emailOtp
+                        case "SMS_OTP": self = .smsOtp
+                        case "WEB_AUTHN": self = .webAuthn
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .password: return "PASSWORD"
+                        case .emailOtp: return "EMAIL_OTP"
+                        case .smsOtp: return "SMS_OTP"
+                        case .webAuthn: return "WEB_AUTHN"
+                        case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.password, .password): return true
+                        case (.emailOtp, .emailOtp): return true
+                        case (.smsOtp, .smsOtp): return true
+                        case (.webAuthn, .webAuthn): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .password: hasher.combine(0)
+                        case .emailOtp: hasher.combine(1)
+                        case .smsOtp: hasher.combine(2)
+                        case .webAuthn: hasher.combine(3)
+                        case .unknown(let value):
+                            hasher.combine(4)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -224,59 +352,82 @@ public final nonisolated class Api: Sendable {
                 case confirmSignInWithWebAuthn(ConfirmSignInWithWebAuthn)
                 case resetPassword
                 case confirmSignUp(ConfirmSignUp)
+                case unknown(JSONValue)
 
                 enum CodingKeys: String, CodingKey {
                     case name
                 }
 
                 public func encode(to encoder: Encoder) throws {
-                    var container = encoder.container(keyedBy: CodingKeys.self)
                     switch self {
                     case .confirmSignInWithSmsCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_SMS_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithTotpCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_TOTP_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithEmailCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_EMAIL_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSetupSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithTotpSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_TOTP_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithEmailSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_EMAIL_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithNewPasswordRequired(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithFirstFactorSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithPassword(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_PASSWORD", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorEmailOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorSmsOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithWebAuthn(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_WEB_AUTHN", forKey: .name)
                         try params.encode(to: encoder)
                     case .resetPassword:
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("RESET_PASSWORD", forKey: .name)
                     case .confirmSignUp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_UP", forKey: .name)
                         try params.encode(to: encoder)
+                    case .unknown(let value):
+                        try value.encode(to: encoder)
                     }
+                }
+
+                public var unknownDiscriminator: String? {
+                    guard case .unknown(.dictionary(let object)) = self,
+                          case .string(let tag)? = object["name"] else { return nil }
+                    return tag
                 }
 
                 public init(from decoder: Decoder) throws {
@@ -299,48 +450,50 @@ public final nonisolated class Api: Sendable {
                     case "RESET_PASSWORD": self = .resetPassword
                     case "CONFIRM_SIGN_UP": self = .confirmSignUp(try ConfirmSignUp(from: decoder))
                     default:
-                        throw DecodingError.dataCorruptedError(forKey: .name, in: container, debugDescription: "Unknown value: \(disc)")
+                        self = .unknown(try JSONValue(from: decoder))
                     }
                 }
             }
         }
 
-        public struct SignedIn: Codable, Sendable {
-            public let user: AuthenticatedUser
-
-            public init(user: AuthenticatedUser) {
-                self.user = user
-            }
-        }
-
         public enum Result: Codable, Sendable {
-            case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
+            case continueSignIn(ContinueSignIn)
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case status
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
-                case .continueSignIn(let params):
-                    try container.encode("continueSignIn", forKey: .status)
-                    try params.encode(to: encoder)
                 case .signedIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("signedIn", forKey: .status)
                     try params.encode(to: encoder)
+                case .continueSignIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode("continueSignIn", forKey: .status)
+                    try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
+            }
+
+            public var unknownDiscriminator: String? {
+                guard case .unknown(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["status"] else { return nil }
+                return tag
             }
 
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .status)
                 switch disc {
-                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 case "signedIn": self = .signedIn(try SignedIn(from: decoder))
+                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }
@@ -348,6 +501,14 @@ public final nonisolated class Api: Sendable {
 
     public enum CognitoSignIn {
 
+        public struct SignedIn: Codable, Sendable {
+            public let user: AuthenticatedUser
+
+            public init(user: AuthenticatedUser) {
+                self.user = user
+            }
+        }
+
         public struct ContinueSignIn: Codable, Sendable {
             public let nextStep: NextStep
 
@@ -392,10 +553,50 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable, Sendable {
-                    case sms = "SMS"
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable, Sendable {
+                    case sms
+                    case totp
+                    case email
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "SMS": self = .sms
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .sms: return "SMS"
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.sms, .sms): return true
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .sms: hasher.combine(0)
+                        case .totp: hasher.combine(1)
+                        case .email: hasher.combine(2)
+                        case .unknown(let value):
+                            hasher.combine(3)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -408,9 +609,45 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AllowedMFAType: String, Codable, Sendable {
-                    case totp = "TOTP"
-                    case email = "EMAIL"
+                public enum AllowedMFAType: RawRepresentable, Codable, Hashable, Sendable {
+                    case totp
+                    case email
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "TOTP": self = .totp
+                        case "EMAIL": self = .email
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .totp: return "TOTP"
+                        case .email: return "EMAIL"
+                        case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.totp, .totp): return true
+                        case (.email, .email): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .totp: hasher.combine(0)
+                        case .email: hasher.combine(1)
+                        case .unknown(let value):
+                            hasher.combine(2)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -462,11 +699,55 @@ public final nonisolated class Api: Sendable {
                     self.session = session
                 }
 
-                public enum AvailableChallenge: String, Codable, Sendable {
-                    case password = "PASSWORD"
-                    case emailOtp = "EMAIL_OTP"
-                    case smsOtp = "SMS_OTP"
-                    case webAuthn = "WEB_AUTHN"
+                public enum AvailableChallenge: RawRepresentable, Codable, Hashable, Sendable {
+                    case password
+                    case emailOtp
+                    case smsOtp
+                    case webAuthn
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "PASSWORD": self = .password
+                        case "EMAIL_OTP": self = .emailOtp
+                        case "SMS_OTP": self = .smsOtp
+                        case "WEB_AUTHN": self = .webAuthn
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .password: return "PASSWORD"
+                        case .emailOtp: return "EMAIL_OTP"
+                        case .smsOtp: return "SMS_OTP"
+                        case .webAuthn: return "WEB_AUTHN"
+                        case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.password, .password): return true
+                        case (.emailOtp, .emailOtp): return true
+                        case (.smsOtp, .smsOtp): return true
+                        case (.webAuthn, .webAuthn): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .password: hasher.combine(0)
+                        case .emailOtp: hasher.combine(1)
+                        case .smsOtp: hasher.combine(2)
+                        case .webAuthn: hasher.combine(3)
+                        case .unknown(let value):
+                            hasher.combine(4)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
 
@@ -541,59 +822,82 @@ public final nonisolated class Api: Sendable {
                 case confirmSignInWithWebAuthn(ConfirmSignInWithWebAuthn)
                 case resetPassword
                 case confirmSignUp(ConfirmSignUp)
+                case unknown(JSONValue)
 
                 enum CodingKeys: String, CodingKey {
                     case name
                 }
 
                 public func encode(to encoder: Encoder) throws {
-                    var container = encoder.container(keyedBy: CodingKeys.self)
                     switch self {
                     case .confirmSignInWithSmsCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_SMS_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithTotpCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_TOTP_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithEmailCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_EMAIL_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSetupSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithTotpSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_TOTP_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithEmailSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_EMAIL_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithNewPasswordRequired(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithFirstFactorSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithPassword(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_PASSWORD", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorEmailOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorSmsOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithWebAuthn(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_WEB_AUTHN", forKey: .name)
                         try params.encode(to: encoder)
                     case .resetPassword:
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("RESET_PASSWORD", forKey: .name)
                     case .confirmSignUp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_UP", forKey: .name)
                         try params.encode(to: encoder)
+                    case .unknown(let value):
+                        try value.encode(to: encoder)
                     }
+                }
+
+                public var unknownDiscriminator: String? {
+                    guard case .unknown(.dictionary(let object)) = self,
+                          case .string(let tag)? = object["name"] else { return nil }
+                    return tag
                 }
 
                 public init(from decoder: Decoder) throws {
@@ -616,48 +920,50 @@ public final nonisolated class Api: Sendable {
                     case "RESET_PASSWORD": self = .resetPassword
                     case "CONFIRM_SIGN_UP": self = .confirmSignUp(try ConfirmSignUp(from: decoder))
                     default:
-                        throw DecodingError.dataCorruptedError(forKey: .name, in: container, debugDescription: "Unknown value: \(disc)")
+                        self = .unknown(try JSONValue(from: decoder))
                     }
                 }
             }
         }
 
-        public struct SignedIn: Codable, Sendable {
-            public let user: AuthenticatedUser
-
-            public init(user: AuthenticatedUser) {
-                self.user = user
-            }
-        }
-
         public enum Result: Codable, Sendable {
-            case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
+            case continueSignIn(ContinueSignIn)
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case status
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
-                case .continueSignIn(let params):
-                    try container.encode("continueSignIn", forKey: .status)
-                    try params.encode(to: encoder)
                 case .signedIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("signedIn", forKey: .status)
                     try params.encode(to: encoder)
+                case .continueSignIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode("continueSignIn", forKey: .status)
+                    try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
+            }
+
+            public var unknownDiscriminator: String? {
+                guard case .unknown(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["status"] else { return nil }
+                return tag
             }
 
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .status)
                 switch disc {
-                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 case "signedIn": self = .signedIn(try SignedIn(from: decoder))
+                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }

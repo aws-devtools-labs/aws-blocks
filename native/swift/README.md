@@ -10,20 +10,22 @@ In your `Package.swift`, pinned to the minor version, since until 1.0 a minor re
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aws-devtools-labs/aws-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
+    .package(url: "https://github.com/aws/cdk-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
 ],
 targets: [
     .target(
         name: "MyApp",
         dependencies: [
-            .product(name: "BlocksRuntime", package: "aws-blocks-swift"),
+            .product(name: "BlocksRuntime", package: "cdk-blocks-swift"),
         ],
         plugins: [
-            .plugin(name: "BlocksCodegenBuildPlugin", package: "aws-blocks-swift"),
+            .plugin(name: "BlocksCodegenBuildPlugin", package: "cdk-blocks-swift"),
         ],
     ),
 ]
 ```
+
+SwiftPM takes `package:` from the URL, so if you are moving from `aws-blocks-swift`, change the URL and every `package:` together, in every `Package.swift` that uses the SDK. An Xcode project only needs the new URL.
 
 ### 2. Drop your spec next to the target
 
@@ -135,7 +137,7 @@ func run(_ action: AuthAction, _ input: AuthApi.SetAuthState.Input?) async throw
 - **Schema constraints emit runtime validation.** `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `multipleOf`, `minItems`, `maxItems` all generate `precondition` checks at construct time.
 - **`const` literals** are first-class single-value enums. A literal keeps its JSON type: a boolean discriminator (`{ isUpdated: true } | { isUpdated: false, … }`) encodes and decodes a JSON boolean, a numeric one a number. Outside a discriminator, a boolean or numeric literal is a `Bool`, `Double` or `Int`. A union alternative that is one literal (TypeScript's `"auto" | number` or `false | { … }`) is a case with no payload that encodes as that value and matches only it.
 - **Schema-qualified names.** An enum or union declared for a component schema's property is named after the schema and the property (`AuthAction.capability` → `AuthActionCapability`, `Order.status` → `OrderStatus`), as on Dart, so it doesn't take a generic name like `Status` or `Kind` that your app declares too. The prefix is always added (`User.userType` → `UserUserType`), and an enum or union on a discriminated variant's field is named after the variant and its union (`Notification.payload`'s `email` arm's `priority` → `EmailNotificationPayloadPriority`), also as on Dart.
-- **One input type for every Auth block.** A union parameter the spec names (`x-blocks-type-name`, which the backend writes for a TypeScript type alias like the `Auth` block's `AuthActionInput`) is declared once at the top level, with its variants nested inside it (`AuthActionInput.SignIn`). Every namespace whose parameter has that shape takes the same type, so one sign-in screen serves two Auth blocks: `try await blocks.authApi.setAuthState(input: input)` and `try await blocks.adminAuthApi.setAuthState(input: input)`. The names each operation declared before (`AuthApi.SetAuthState.Input`, `AuthApi.SetAuthState.SignIn`) stay as deprecated typealiases. A parameter whose name another type already has or whose shape differs from the first one's keeps its own nested `Input`, and codegen prints a `swift:` warning that names it. So does, without a warning, one whose union has an arm that isn't a discriminated object (that arm's case is named after the union, `to_Variant2`), or whose operation declares another type of that name (`figure: { label }` beside `input: Figure`).
+- **One input type for every Auth block.** A union parameter the spec names (`x-blocks-type-name`, which the backend writes for a TypeScript type alias like the `Auth` block's `AuthActionInput`) is declared once at the top level, with its variants nested inside it (`AuthActionInput.SignIn`). Every namespace whose parameter has that shape takes the same type, so one sign-in screen serves two Auth blocks: `try await blocks.authApi.setAuthState(input: input)` and `try await blocks.adminAuthApi.setAuthState(input: input)`. The names each operation declared before (`AuthApi.SetAuthState.Input`, `AuthApi.SetAuthState.SignIn`) stay as deprecated typealiases. A parameter whose name another type already has, or whose shape differs from that of the parameter whose `<namespace>.<method>` and parameter name sort first, keeps its own nested `Input`, and codegen prints a `swift:` warning that names it. So does, without a warning, one whose union has an arm that isn't a discriminated object (that arm's case is named after the union, `to_Variant2`), or whose operation declares another type of that name (`figure: { label }` beside `input: Figure`).
 - **`Sendable` models.** Generated structs, enums and unions are `Sendable` when everything they store is, so a Swift 6 actor can keep or return an `AuthState`. A type that stores a `RealtimeChannel` isn't `Sendable`, and neither is a type that stores one of those.
 - **Default values** from the spec become Swift initializer defaults.
 - **Public initializers.** Every generated struct has a `public init` with its properties sorted by name (`SignIn(password:username:)`, `AuthUser(displayName:userId:username:)`), not in the order the backend declares them, then an open record's `attributes:` or a hybrid arm's `challenge:`; optional and nullable properties default to `nil`. Dart and Kotlin keep declaration order; Swift keeps sorted labels so code written against earlier releases still compiles. You can construct models and operation inputs from another module, a test target or a SwiftUI preview: `Note(id: "n1", title: "Hello")`.

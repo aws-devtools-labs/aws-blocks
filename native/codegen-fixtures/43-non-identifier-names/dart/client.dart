@@ -5,11 +5,27 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
 
 // --- Models ---
 
-enum SampleType$XKind {
+sealed class SampleType$XKind {
+  static const aB = SampleType$XKindKnown.aB;
+  static const cD = SampleType$XKindKnown.cD;
+  static const xY = SampleType$XKindKnown.xY;
+  static const newLine = SampleType$XKindKnown.newLine;
+  static const $X = SampleType$XKindKnown.$X;
+  static const Z = SampleType$XKindKnown.Z;
+  static const $ = SampleType$XKindKnown.$;
+  static const $1st = SampleType$XKindKnown.$1st;
+  static const SpAce = SampleType$XKindKnown.SpAce;
+  static const values = SampleType$XKindKnown.values;
+
+  String toJson();
+  static SampleType$XKind fromJson(String json) => SampleType$XKindKnown._jsonMap[json] ?? SampleType$XKindUnknown(json);
+}
+
+enum SampleType$XKindKnown implements SampleType$XKind {
   aB,
   cD,
   xY,
@@ -21,7 +37,7 @@ enum SampleType$XKind {
   SpAce
 ;
 
-  static const _jsonMap = <String, SampleType$XKind>{
+  static const _jsonMap = <String, SampleType$XKindKnown>{
     'a"b': aB,
     'c;d': cD,
     'x`y': xY,
@@ -32,7 +48,7 @@ enum SampleType$XKind {
     '1st': $1st,
     ' sp ace': SpAce,
   };
-  static const _toJsonMap = <SampleType$XKind, String>{
+  static const _toJsonMap = <SampleType$XKindKnown, String>{
     aB: 'a"b',
     cD: 'c;d',
     xY: 'x`y',
@@ -43,8 +59,27 @@ enum SampleType$XKind {
     $1st: '1st',
     SpAce: ' sp ace',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static SampleType$XKind fromJson(String json) => _jsonMap[json]!;
+}
+
+final class SampleType$XKindUnknown implements SampleType$XKind {
+  final String value;
+
+  const SampleType$XKindUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SampleType$XKindUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'SampleType\$XKindUnknown' '($value)';
 }
 
 
@@ -304,11 +339,18 @@ class Servers {
 class Blocks {
   late final Api api;
   late final NsApi ns;
+  late final BlocksClient _client;
 
   Blocks({String? baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl ?? Servers.mainValX1, sessionStore: sessionStore);
+    _client = client;
     api = Api(client);
     ns = NsApi(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 

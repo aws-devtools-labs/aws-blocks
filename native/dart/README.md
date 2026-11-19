@@ -31,6 +31,10 @@ final channel = await blocks.api.getCursorChannel();
 channel.subscribe().listen((cursor) {
   print('${cursor.userId} moved to (${cursor.x}, ${cursor.y})');
 });
+
+// Done with the backend: free the HTTP client. Later calls throw
+// ClientClosedException.
+blocks.close();
 ```
 
 ## Packages
@@ -209,7 +213,7 @@ Future<void> run(AuthAction action, Map<String, String> values) async {
 - On launch, call `getAuthState()`. It works for every `Auth` block. `oidc.restore()` returns the same user, but only a block with sign-in providers serves its session route; any other answers 404.
 - Disable an action that carries `unavailable`, and show its text.
 - Never submit a `signOut` action that has a `url` through `setAuthState`: that drops the identity provider's logout URL. Call `oidc.signOut()` instead.
-- `signOut()` returns the identity provider's logout URL, or null. The SDK doesn't open it. Whatever the outcome, it signs out locally: it clears this block's tokens and session cookie and emits `OidcSignedOut`. A 503 `SignOutIncompleteException`, any other failed status, a transport error or a cancelled request then throws.
+- `signOut()` returns the identity provider's logout URL, or null. The SDK doesn't open it. Whatever the outcome, it signs out locally: it clears this block's tokens and session cookie and emits `OidcSignedOut`. Then a 503 `SignOutIncompleteException` throws an `ApiException` with that `name`, so `isBlocksError(e, 'SignOutIncompleteException')` is true; any other failed status throws an `ApiException` with the status and the server's error name; a request with no response throws a `TransportException`; and a cancelled request passes its own error through.
 - Hide actions whose `capability` is `webauthn-get` or `webauthn-create` (passkeys). This SDK doesn't run WebAuthn ceremonies.
 - New actions can appear in a later version of the block. Render or skip actions you don't know by `name`, and don't fail on them.
 - For `relayTo` on mobile, prefer a verified App Link (Android) or Universal Link (iOS) over a bare custom scheme. Another app can register the same custom scheme and receive the relay redirect; with a custom scheme, PKCE is what stops it from using the code, because only this app holds the verifier.
@@ -252,6 +256,8 @@ On desktop, a call without a `launcher` binds `127.0.0.1` on a port the operatin
 
 **Realtime subscriptions** — if your backend has realtime channels (e.g., cursor tracking, live updates), the generated client gives you typed `Stream<T>` subscriptions over WebSocket.
 
+A subscription's stream closes normally only when you cancel it or call `close()`. Any other end, such as the channel token expiring after about an hour or the socket closing, emits a `RealtimeException` and then closes the stream. The SDK doesn't reconnect or renew by itself: call the API method that returned the channel again and subscribe to the new handle.
+
 **Auth flows**: each auth action's input is its own class in a sealed union, so a misspelled field or action doesn't compile. `AuthState.state` is an enum, and its actions arrive at runtime, so render them by name and skip the ones you don't know.
 
 **File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
@@ -273,7 +279,21 @@ The enum is named `<Api class><Method>Provider`. Each value carries the name the
 
 **Declared native packages** — when `x-blocks-native-bindings` binds the tag and its package has a `dart` field, the client imports the declared library and returns that type via `<Type>.fromBlocksDescriptor`. See [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 
-**Errors and HTTP status** — a JSON-RPC error is thrown as a `BlocksRpcException` (with `code` and `data`) whatever the HTTP status, so a backend namespace created with `httpErrorStatus: true` (which answers a 4xx `ApiError` with that HTTP status) decodes the same. One difference to plan for: when the client has an `authProvider` (bearer tokens), any HTTP 401 makes it call `onAuthFailure()` (a token refresh) and run the method **once more**. Without `httpErrorStatus` an `ApiError` 401 arrives as HTTP 200 and is not retried; with it, a method that rejects with 401 after a side effect runs twice, so put the guard first on the backend: call `auth.requireAuth(context)` before anything else in the method, or wrap the method with `auth.protect` (`Auth`), which runs the guard before any of the method's code. A method that can still answer 401 after a write should be idempotent.
+**Errors**: every error the runtime throws is a `BlocksException`, the same taxonomy as the Kotlin and Swift clients:
+
+| Type | When | Fields |
+|---|---|---|
+| `ApiException` | The server considered the request and said no: a JSON-RPC error at any HTTP status, or an auth route refusing a request | `message` (the server's), `status`, `name`, `retriable` |
+| `TransportException` | No usable JSON-RPC result came back: no response (refused connection, DNS, TLS, timeout), a non-2xx with no JSON-RPC error, or a body that is not a JSON-RPC envelope | `message`, `statusCode` (null when no response arrived), `cause` |
+| `ClientClosedException` | A call after `Blocks.close()` (or `BlocksClient.close()`), including a call of an `OidcClient` one of its calls returned | `message` |
+| `TransferableException` | A `__blocks` descriptor could not be hydrated; `InvalidDescriptorException` names the `blocksType` and `missingField` | `message` |
+| `FileTransferException` | A file upload or download failed | `message`, `statusCode`, `cause` |
+| `RealtimeException` (sealed) | `RealtimeChannelClosedException` on a subscribe after close, `RealtimeConnectionException` when the WebSocket fails or closes, `RealtimeSubscriptionEndedException` when the server ends or refuses one channel's subscription (`code` is `token_expired`, `access_revoked`, `principal_mismatch` or null) | `message`, `cause`; `channel` and `code` on `RealtimeSubscriptionEndedException` |
+| `OidcException` (sealed) | The OIDC sign-in flow itself failed (callback, cancelled, unknown provider, exchange) | `message`, `cause` |
+
+Match a server error by name with `isBlocksError(e, 'ConditionalCheckFailedException')`, as on the server and in the TypeScript client. Don't branch on `status == 500`: a named error thrown without a status arrives as a 500 with its name intact. JSON-RPC's reserved codes are reported as 500, and when the server sends no name for one, the client fills in its name (`ParseError`, `InvalidRequest`, `MethodNotFound`, `InvalidParams` or `InternalError`). A method with no return value gets an envelope with no `result` and returns null.
+
+**HTTP status**: a JSON-RPC error is an `ApiException` whatever the HTTP status, so a backend namespace created with `httpErrorStatus: true` (which answers a 4xx `ApiError` with that HTTP status) decodes the same. One difference to plan for: when the client has an `authProvider` (bearer tokens), any HTTP 401 makes it call `onAuthFailure()` (a token refresh) and run the method **once more**. Without `httpErrorStatus` an `ApiError` 401 arrives as HTTP 200 and is not retried; with it, a method that rejects with 401 after a side effect runs twice, so put the guard first on the backend: call `auth.requireAuth(context)` before anything else in the method, or wrap the method with `auth.protect` (`Auth`), which runs the guard before any of the method's code. A method that can still answer 401 after a write should be idempotent.
 
 **No Flutter dependency** — `blocks_runtime` is pure Dart. Works in CLI apps, server-side Dart, or Flutter.
 

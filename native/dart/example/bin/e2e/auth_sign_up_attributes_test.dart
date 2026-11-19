@@ -58,7 +58,7 @@ void _roundTripFlat() {
     'toJson() puts the attributes flat beside username and password '
     '(got: $encoded)',
   );
-  final decoded = AuthBasicApiSetAuthStateInput.fromJson(wire);
+  final decoded = AuthActionInput.fromJson(wire);
   check(
     decoded == signUp,
     'fromJson() of the flat wire form gives the same SignUpInput '

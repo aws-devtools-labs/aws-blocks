@@ -62,11 +62,13 @@ const NODE_CONNECT_REFUSED_CODES = new Set([
 	'EADDRNOTAVAIL',
 ]);
 const TLS_ERROR_CODE = /^(?:ERR_TLS_|ERR_SSL_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_|CERT_|HOSTNAME_MISMATCH)/;
-const PG_INVALID_AUTHORIZATION_CLASS = '28';
-const PG_REFUSED_CODES = new Set(['3D000', '53300', '57P03']);
+export const PG_INVALID_AUTHORIZATION_CLASS = '28';
+/** `cannot_connect_now`: the server is starting, or a paused cluster resumes. */
+export const PG_CANNOT_CONNECT_NOW = '57P03';
+const PG_REFUSED_CODES = new Set(['3D000', '53300', PG_CANNOT_CONNECT_NOW]);
 // Of the refusals, the ones that pass: the server is full or still starting, or the address did not answer or
 // resolve this time.
-const REFUSED_FOR_NOW_CODES = new Set(['53300', '57P03', 'EAI_AGAIN', 'ETIMEDOUT']);
+const REFUSED_FOR_NOW_CODES = new Set(['53300', PG_CANNOT_CONNECT_NOW, 'EAI_AGAIN', 'ETIMEDOUT']);
 const PG_PROGRAM_LIMIT_EXCEEDED = '54000';
 const DSQL_STALE_SCHEMA_CACHE = 'OC001';
 const DSQL_STALE_SCHEMA_CACHE_MESSAGE = /\bOC001\b/;

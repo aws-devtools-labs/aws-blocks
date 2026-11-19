@@ -33,6 +33,9 @@ export class DatabaseCluster {
 	}
 }
 
+/** @deprecated See the server entry points. */
+export class LegacyDatabaseCluster {}
+
 export function sql(): never {
 	return serverOnly('sql');
 }
@@ -44,6 +47,7 @@ export type {
 	ClusterRef,
 	ClusterType,
 	ConnectionStringSource,
+	DataApiOptions,
 	DatabaseBlockOptions,
 	DatabaseClusterLike,
 	DatabaseClusterOptions,
@@ -52,6 +56,8 @@ export type {
 	ExistingClusterOptions,
 	ExistingClusterRef,
 	ExistingDatabaseOptions,
+	LegacyDatabaseClusterOptions,
+	LegacySubnetSelection,
 	OwnedDatabaseOptions,
 	QueryOptions,
 	ScopedDatabase,

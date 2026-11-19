@@ -199,6 +199,28 @@ The `AWSBLOCKS-NATIVE-` numbers are one namespace shared by the Dart, Swift and 
 | `AWSBLOCKS-NATIVE-005` | A binding whose `tag` is a built-in transferable tag (`realtime/channel`, `file-bucket/download`, `file-bucket/upload`, `oidc/client`), which cannot be re-bound; the binding is skipped. | — | Yes | — | live |
 | `AWSBLOCKS-NATIVE-006` | An opt-out that names a package the spec does not declare; nothing is opted out for it. | Yes | Yes | Yes | live |
 
+#### Open enums: values a client doesn't know
+
+A string enum that a response can carry is generated *open*: a value the client was generated without decodes instead of failing, keeps the string as the server sent it, and encodes back as that string. A server can add a value (a new auth state, field type or action capability) without breaking clients already shipped. "Response" is decided per generator from the spec: an enum is open when a method's result reaches it at any depth, through models, union arms, lists, maps, optionals, tuples and a transferable's type arguments. An `oidc/client`'s type argument is the set of providers a caller may pass, so it is not a response position. A component enum is open when a result reaches that component, even if parameters use it too; an inline type that only shares its name doesn't count. An enum used in both positions is open in both, so a client can send back a value it received and didn't know: it re-encodes as the server sent it, and the server still validates it. Only an enum that parameters alone use stays closed. There is no spec marker for this; position is enough.
+
+| SDK | Open enum `X` | Unknown value | Exhaustive match |
+|---|---|---|---|
+| Dart | `sealed class X`; known values are the constants of `enum XKnown implements X`, which `X.a` and `X.values` alias | `XUnknown(value)` | `switch` needs an `XUnknown()` case |
+| Swift | `enum X: RawRepresentable, Codable, Hashable` with a non-failable `init(rawValue:)` | `case unknown(String)` | `switch` needs `.unknown` |
+| Kotlin | `sealed class X` with a string serializer; known values are `data object`s named as enum constants, listed in `X.entries` | `X.Unknown(value)` | `when` needs `is X.Unknown` |
+
+When a spec value already takes the fallback's name, the spec value keeps it and the fallback steps aside: Swift `unknownValue`, Kotlin `UnknownValue` (and a value named `companion` makes Kotlin name the companion object `Known`). In Dart a spec value can't take the fallback's name; when another type of the library already has the name `XKnown` or `XUnknown`, the generated class takes a trailing `$` (`XUnknown$`). Decoding maps a known string to its known case, so a hand-built unknown case holding a known string (`X.Unknown("a")`) is not equal to that case. A union without a discriminator decodes by trying each arm in turn, and an open enum would accept every string, so an enum arm accepts only the values it declares: Swift checks the decoded value against them, Kotlin matches the arm by its literal values, and Dart types such a union `dynamic`. An inline enum arm stays closed in Swift. Every type an object arm of such a union reaches, at any depth, is closed in Swift and Kotlin, even where it also appears elsewhere in a result: open, an enum inside the first arm with matching keys would take an object meant for a later arm and drop that arm's fields. Dart keeps such a type open where another result reaches it, since its union is `dynamic` and never decodes the arms.
+
+Unions follow the same rule. A union with a JSON string discriminator whose arms are all objects, when a method's result reaches it, gets one extra arm for an object whose discriminator names no arm. That arm holds the object as the server sent it and encodes it back as equal JSON: Dart `XUnknown` (with `json`, a copy from `toJson()`, and `discriminator`), Swift `case unknown(JSONValue)` (with the union's `unknownDiscriminator`), Kotlin `X.Unknown(json: JsonObject)` (with `discriminator`; Kotlin generates the union's serializer for this, since kotlinx's sealed-class serializer can't fall back). An arm tagged `unknown` keeps its own name, so the fallback steps aside: Swift `unknownValue`, Kotlin `UnknownValue`. An exhaustive match over such a union needs the fallback case. An unknown arm's JSON can carry fields that a generated type would never expose, so don't log or display it whole; read the fields you need. These stay closed: a union only parameters use, one with a boolean discriminator (`true`/`false` is already exhaustive), one with a bare value arm or no discriminator (there is no tag to call unknown), and a union embedded in another arm's object, which shares that object.
+
+| SDK | Unknown arm of `X` | Its tag | Hand-built without a tag |
+|---|---|---|---|
+| Dart | `XUnknown(json)` | `discriminator` (`String`) | `discriminator` throws |
+| Swift | `case unknown(JSONValue)` | `unknownDiscriminator` on `X` (`String?`) | `unknownDiscriminator` is `nil` |
+| Kotlin | `X.Unknown(json: JsonObject)` | `discriminator` (`String`) | `discriminator` throws |
+
+Decoding only builds the unknown arm for an object whose tag is a string, so the last column applies to an arm an app builds itself.
+
 ---
 
 ## Authoring progression: plain TypeScript → Zod

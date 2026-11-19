@@ -60,15 +60,15 @@ const SETS_PARAMETER = /^\s*SET\s+(?:SESSION\s+|LOCAL\s+)?([a-z_]+)\s*(?:=|\bTO\
 
 /** What the kind of cluster adds to each transaction of a file. */
 interface TransactionRules {
-	/** One query sent after BEGIN, before the file's first statement. */
-	settings?: string;
+	/** The settings sent after BEGIN, before the file's first statement. */
+	settings: string[];
 	/** Why a statement of the file is not sent, for a statement that is not: the text that follows "skipped". */
 	skips(sql: string): string | undefined;
 	/** The file is recorded in its own transaction, not in one after it. */
 	recordsInFile: boolean;
 }
 
-const NO_RULES: TransactionRules = { skips: () => undefined, recordsInFile: false };
+const NO_RULES: TransactionRules = { settings: [], skips: () => undefined, recordsInFile: false };
 
 async function transactionRules(
 	engine: DatabaseEngine,
@@ -76,7 +76,10 @@ async function transactionRules(
 	options: RunPlanOptions,
 ): Promise<TransactionRules> {
 	if (plan.kind === 'aurora' && options.boundToInvocation) {
-		return { ...NO_RULES, settings: `SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}` };
+		return {
+			...NO_RULES,
+			settings: [`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`],
+		};
 	}
 	if (plan.kind !== 'external') return NO_RULES;
 	const rows = await engine.query<{ server_version_num: string }>('SHOW server_version_num');
@@ -98,8 +101,7 @@ async function transactionRules(
 		}
 	}
 	return {
-		// One query: the settings are a round trip each otherwise, on every file.
-		settings: settings.join('; '),
+		settings,
 		skips: (sql) => {
 			if (serverVersion < PG_17 && SETS_TRANSACTION_TIMEOUT.test(sql))
 				return 'the server is older than PostgreSQL 17';
@@ -444,7 +446,12 @@ export async function runMigrationPlan(
 				if (step.transactional) {
 					if (!handle) {
 						handle = await engine.beginTransaction();
-						if (rules.settings) await engine.executeInTransaction(handle, rules.settings);
+						// One query, so the settings cost one round trip per file, unless the engine takes one
+						// statement in a call.
+						const { settings } = rules;
+						for (const text of engine.oneStatementPerCall ? settings : [settings.join('; ')]) {
+							if (text) await engine.executeInTransaction(handle, text);
+						}
 					}
 					const skipped = rules.skips(step.sql);
 					if (skipped) {

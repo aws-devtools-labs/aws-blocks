@@ -7,6 +7,8 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
+import 'blocks_exception.dart';
+import 'client_lifetime.dart';
 import 'browser_launcher.dart';
 import 'loopback_session.dart';
 import 'oidc_auth_state.dart';
@@ -15,6 +17,7 @@ import 'oidc_types.dart';
 import 'response_url.dart';
 import 'session_store.dart';
 import 'token_store.dart';
+import 'transport.dart';
 
 /// OIDC client implementing PKCE-based auth with token management.
 ///
@@ -172,6 +175,16 @@ class OidcClient implements AuthProvider {
   OidcAuthState _authState = OidcLoading();
   Completer<void>? _refreshCompleter;
 
+  /// The closed state of the `BlocksClient` this client was hydrated from,
+  /// when it was (see [fromJson]); null for any other client.
+  ClientLifetime? _lifetime;
+
+  /// Throws a [ClientClosedException] when the `BlocksClient` this client
+  /// was hydrated from has been closed.
+  void _ensureOpen() {
+    if (_lifetime?.isClosed ?? false) throw const ClientClosedException();
+  }
+
   OidcClient({
     required this.exchangePath,
     required this.refreshPath,
@@ -287,7 +300,9 @@ class OidcClient implements AuthProvider {
   /// completes, even if [launcher] doesn't.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
-  /// [provider], or [providerConfigs] has no entry for it.
+  /// [provider], or [providerConfigs] has no entry for it. The code exchange
+  /// throws as [exchange] does: a [TransportException] when no response
+  /// arrived or it could not be read.
   ///
   /// Signing in with an `Auth` block uses [signIn].
   Future<OidcUser> signInDirect(
@@ -297,6 +312,7 @@ class OidcClient implements AuthProvider {
     Future<void>? cancel,
   }) async {
     await _ready;
+    _ensureOpen();
     final config = providerConfigs[provider];
     if (!providers.contains(provider) || config == null) {
       throw OidcUnknownProviderException(provider);
@@ -411,7 +427,8 @@ class OidcClient implements AuthProvider {
   /// [provider]. With a [launcher], throws a [StateError] when [relayTo] is
   /// missing; without one, throws a [StateError] on a platform with no
   /// loopback sign-in (mobile or the web). Both are thrown before any request
-  /// is sent.
+  /// is sent. A request to the authorize-params or exchange route that gets
+  /// no response, or one that can't be read, throws a [TransportException].
   Future<OidcUser> signIn(
     String provider, {
     BrowserLauncher? launcher,
@@ -419,6 +436,7 @@ class OidcClient implements AuthProvider {
     Future<void>? cancel,
   }) async {
     await _ready;
+    _ensureOpen();
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
     }
@@ -559,11 +577,13 @@ class OidcClient implements AuthProvider {
     final url = Uri.parse(
       '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}',
     );
-    final (:response, url: responseUrl) = await postWithResponseUrl(
-      _httpClient,
-      url,
-      headers: _jsonHeaders(url),
-      body: jsonEncode({'csrf': csrf, 'relayTo': relayTo}),
+    final (:response, url: responseUrl) = await guardRequest(
+      () => postWithResponseUrl(
+        _httpClient,
+        url,
+        headers: _jsonHeaders(url),
+        body: jsonEncode({'csrf': csrf, 'relayTo': relayTo}),
+      ),
     );
     sessionStore.setCookies(
       response.headers['set-cookie'],
@@ -622,7 +642,11 @@ class OidcClient implements AuthProvider {
   /// it has them enabled.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
-  /// [provider], before anything is sent.
+  /// [provider], before anything is sent. Throws [OidcExchangeException]
+  /// when the backend refused the code, with the [ApiException] as its
+  /// `cause`, or answered with a body that is not a JSON object, with a
+  /// [TransportException] as its `cause`. Throws a [TransportException] when
+  /// no response arrived or it could not be read, as every other call does.
   Future<OidcUser> exchange({
     required String code,
     required String verifier,
@@ -633,28 +657,31 @@ class OidcClient implements AuthProvider {
     String? iss,
   }) async {
     await _ready;
+    _ensureOpen();
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
     }
     final url = Uri.parse('$_authBaseUrl$exchangePath');
-    final (:response, url: responseUrl) = await postWithResponseUrl(
-      _httpClient,
-      url,
-      headers: _jsonHeaders(url),
-      body: jsonEncode({
-        'code': code,
-        'verifier': verifier,
-        'callbackUrl': callbackUrl,
-        'provider': provider,
-        'state': state,
-        'nonce': nonce,
-        // RFC 9207 issuer forwarding — only sent when the relay callback
-        // provided it.
-        'iss': ?iss,
-        // The client signs in with the session cookie, so ask the backend
-        // not to mint bearer tokens it would never use.
-        'tokens': false,
-      }),
+    final (:response, url: responseUrl) = await guardRequest(
+      () => postWithResponseUrl(
+        _httpClient,
+        url,
+        headers: _jsonHeaders(url),
+        body: jsonEncode({
+          'code': code,
+          'verifier': verifier,
+          'callbackUrl': callbackUrl,
+          'provider': provider,
+          'state': state,
+          'nonce': nonce,
+          // RFC 9207 issuer forwarding, only sent when the relay callback
+          // provided it.
+          'iss': ?iss,
+          // The client signs in with the session cookie, so ask the backend
+          // not to mint bearer tokens it would never use.
+          'tokens': false,
+        }),
+      ),
     );
 
     _generation++;
@@ -670,12 +697,20 @@ class OidcClient implements AuthProvider {
     await _rememberSessionCookies(before);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw OidcExchangeException(
-        'Exchange failed: HTTP ${response.statusCode}',
-      );
+      final refused = _routeError(response, 'Exchange failed');
+      throw OidcExchangeException(refused.message, refused);
     }
 
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final json = _jsonObject(response);
+    if (json == null) {
+      throw OidcExchangeException(
+        'Exchange response was not a JSON object',
+        TransportException(
+          'Exchange response was not a JSON object',
+          statusCode: response.statusCode,
+        ),
+      );
+    }
 
     // Bearer tokens are only present when the backend has `allowBearerAuth`
     // enabled. The default (cookie) flow returns just `{user}`, so store tokens
@@ -711,9 +746,10 @@ class OidcClient implements AuthProvider {
   ///   has one, the rotated refresh token.
   /// - 400 or 401: the refresh token is no longer valid. Clears the stored
   ///   tokens and emits [OidcSignedOut].
-  /// - Any other status throws an [OidcRequestException], and a transport
-  ///   failure throws the HTTP client's error. Both keep the tokens and the
-  ///   state, so a later call can try again.
+  /// - Any other status throws an [ApiException] with the status and the
+  ///   server's error name. A 200 the client can't read, or no response at
+  ///   all, throws a [TransportException]. All of them keep the tokens and
+  ///   the state, so a later call can try again.
   ///
   /// With no refresh token stored, emits [OidcSignedOut]. When a sign-in or
   /// sign-out finishes while the request is in flight, the response is
@@ -721,6 +757,7 @@ class OidcClient implements AuthProvider {
   /// sign-in's.
   Future<void> refresh() async {
     await _ready;
+    _ensureOpen();
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
@@ -738,10 +775,15 @@ class OidcClient implements AuthProvider {
       }
 
       final provider = await tokenStore.get(_key('provider'));
-      final response = await _httpClient.post(
-        Uri.parse('$_authBaseUrl$refreshPath'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refreshToken': refreshToken, 'provider': ?provider}),
+      final response = await guardRequest(
+        () => _httpClient.post(
+          Uri.parse('$_authBaseUrl$refreshPath'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'refreshToken': refreshToken,
+            'provider': ?provider,
+          }),
+        ),
       );
 
       // A sign-in or sign-out finished meanwhile: its tokens are newer.
@@ -753,22 +795,23 @@ class OidcClient implements AuthProvider {
         return;
       }
       if (status != 200) {
-        throw OidcRequestException(
-          'Token refresh failed: HTTP $status',
-          statusCode: status,
-          errorName: _errorName(response),
-        );
+        throw _routeError(response, 'Token refresh failed');
       }
 
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      await tokenStore.set(_key('access_token'), json['accessToken'] as String);
+      final json = _jsonObject(response);
+      final accessToken = json?['accessToken'];
+      if (json == null || accessToken is! String) {
+        throw TransportException(
+          "Refresh response missing 'accessToken'",
+          statusCode: status,
+        );
+      }
+      await tokenStore.set(_key('access_token'), accessToken);
       await _storeExpiry(json);
       // The backend rotates the refresh token: the old one no longer works.
-      if (json['refreshToken'] != null) {
-        await tokenStore.set(
-          _key('refresh_token'),
-          json['refreshToken'] as String,
-        );
+      final rotated = json['refreshToken'];
+      if (rotated is String) {
+        await tokenStore.set(_key('refresh_token'), rotated);
       }
     } catch (e, stackTrace) {
       // The callers that joined this refresh fail with it too, instead of
@@ -801,11 +844,14 @@ class OidcClient implements AuthProvider {
   ///
   /// - 2xx: returns the `logoutUrl` the server sent.
   /// - 503 with `SignOutIncompleteException`: the server cleared the cookie
-  ///   but couldn't remove its session. Throws an [OidcRequestException] with
-  ///   that [OidcRequestException.errorName].
-  /// - Any other status throws an [OidcRequestException], and a transport
-  ///   failure or a cancelled request rethrows the HTTP client's error. The
-  ///   server may still hold the session; signing in again replaces it.
+  ///   but couldn't remove its session. Throws an [ApiException] with that
+  ///   [ApiException.name], so `isBlocksError(e,
+  ///   'SignOutIncompleteException')` is true.
+  /// - Any other status throws an [ApiException] with the status and the
+  ///   server's error name, and a request that got no response, or one that
+  ///   could not be read, throws a [TransportException]. A cancellation, or
+  ///   any other error the runtime already reports, passes through as it is.
+  ///   The server may still hold the session; signing in again replaces it.
   ///
   /// A [restore] or a token refresh still in flight when the sign-out
   /// finishes doesn't apply its result.
@@ -819,18 +865,17 @@ class OidcClient implements AuthProvider {
   /// before this version keeps its cookie after a failed sign-out.
   Future<Uri?> signOut() async {
     await _ready;
+    _ensureOpen();
     final url = Uri.parse('$_authBaseUrl$signOutPath?format=json');
     final http.Response response;
     try {
       // Carries the session cookie via _jsonHeaders so the backend can
       // invalidate the server-side session.
-      response = await _httpClient.post(
-        url,
-        headers: _jsonHeaders(url),
-        body: '{}',
+      response = await guardRequest(
+        () => _httpClient.post(url, headers: _jsonHeaders(url), body: '{}'),
       );
     } catch (e, stackTrace) {
-      // A transport failure or a cancelled request.
+      // No response, a cancellation, or a bug: sign out locally all the same.
       await _signOutLocally(url);
       Error.throwWithStackTrace(e, stackTrace);
     }
@@ -839,19 +884,14 @@ class OidcClient implements AuthProvider {
 
     final status = response.statusCode;
     if (status >= 200 && status < 300) return _logoutUrl(response.body);
-    final name = _errorName(response);
-    if (status == 503 && name == 'SignOutIncompleteException') {
-      throw OidcRequestException(
+    if (status == 503 && _errorName(response) == 'SignOutIncompleteException') {
+      throw const ApiException(
         'Signed out locally, but the backend could not remove its session',
-        statusCode: status,
-        errorName: name,
+        status: 503,
+        name: 'SignOutIncompleteException',
       );
     }
-    throw OidcRequestException(
-      'Sign-out failed: HTTP $status',
-      statusCode: status,
-      errorName: name,
-    );
+    throw _routeError(response, 'Sign-out failed');
   }
 
   /// The [tokenStore] key, under this block's prefix, of the names of the
@@ -933,17 +973,19 @@ class OidcClient implements AuthProvider {
   /// - 401: clears the stored tokens, emits [OidcSignedOut] and returns null.
   /// - 404: the block serves no session route: an `Auth` block with no
   ///   sign-in providers, or a custom block that doesn't serve one. Throws an
-  ///   [OidcRequestException] that says so.
+  ///   [ApiException] with status 404 that says so.
   /// - A 200 whose body isn't a JSON object with a `user` the client can
-  ///   read throws an [OidcRequestException] and leaves the state as is.
-  /// - Any other status throws an [OidcRequestException], and a transport
-  ///   failure throws the HTTP client's error. Neither changes the state.
+  ///   read throws a [TransportException] and leaves the state as is.
+  /// - Any other status throws an [ApiException] with the status and the
+  ///   server's error name, and no response at all throws a
+  ///   [TransportException]. Neither changes the state.
   ///
   /// When a sign-in or sign-out finishes while the request is in flight,
   /// the response is ignored and [restore] returns the current state's user,
   /// or null, so a late answer never undoes the newer state.
   Future<OidcUser?> restore() async {
     await _ready;
+    _ensureOpen();
     final generation = _generation;
     final url = Uri.parse('$_authBaseUrl$sessionPath');
     final storedToken = await tokenStore.get(_key('access_token'));
@@ -951,12 +993,14 @@ class OidcClient implements AuthProvider {
         ? storedToken
         : null;
     final cookie = sessionStore.cookieHeaderFor(url);
-    final response = await _httpClient.get(
-      url,
-      headers: {
-        'cookie': ?cookie,
-        if (accessToken != null) 'authorization': 'Bearer $accessToken',
-      },
+    final response = await guardRequest(
+      () => _httpClient.get(
+        url,
+        headers: {
+          'cookie': ?cookie,
+          if (accessToken != null) 'authorization': 'Bearer $accessToken',
+        },
+      ),
     );
     // A sign-in or sign-out finished while this was in flight: its state is
     // newer, so don't apply this response's cookies, user or sign-out.
@@ -969,14 +1013,14 @@ class OidcClient implements AuthProvider {
         try {
           json = jsonDecode(response.body);
         } on FormatException {
-          throw OidcRequestException(
+          throw const TransportException(
             'Malformed session response: not JSON',
             statusCode: 200,
           );
         }
         final userJson = json is Map<String, dynamic> ? json['user'] : null;
         if (userJson is! Map<String, dynamic>) {
-          throw OidcRequestException(
+          throw const TransportException(
             "Session response missing 'user' field",
             statusCode: 200,
           );
@@ -988,7 +1032,7 @@ class OidcClient implements AuthProvider {
           // type; report it as the malformed response it is.
           // ignore: avoid_catching_errors
         } on TypeError {
-          throw OidcRequestException(
+          throw const TransportException(
             'Malformed session response: unreadable user',
             statusCode: 200,
           );
@@ -1000,19 +1044,45 @@ class OidcClient implements AuthProvider {
         _emit(OidcSignedOut());
         return null;
       case 404:
-        throw OidcRequestException(
+        throw ApiException(
           'GET $url returned 404: the block serves no session route. An '
           'Auth block with no sign-in providers has none, and a custom '
           'block has one only if it serves GET $sessionPath',
-          statusCode: 404,
-          errorName: _errorName(response),
+          status: 404,
+          name: _errorName(response),
         );
       default:
-        throw OidcRequestException(
-          'Session request failed: HTTP ${response.statusCode}',
-          statusCode: response.statusCode,
-          errorName: _errorName(response),
-        );
+        throw _routeError(response, 'Session request failed');
+    }
+  }
+
+  /// The [ApiException] for an auth route that refused a request: the
+  /// response's status and error name, and a message that starts with
+  /// [context] and ends with the server's own message when it sent one.
+  static ApiException _routeError(http.Response response, String context) {
+    final json = _jsonObject(response);
+    final detail = switch ((json?['error'], json?['message'])) {
+      (final String e, _) when e.isNotEmpty => e,
+      (_, final String m) when m.isNotEmpty => m,
+      _ => null,
+    };
+    final status = response.statusCode;
+    return ApiException(
+      detail == null
+          ? '$context: HTTP $status'
+          : '$context: HTTP $status: $detail',
+      status: status,
+      name: _errorName(response),
+    );
+  }
+
+  /// The response's body as a JSON object, or null when it is not one.
+  static Map<String, dynamic>? _jsonObject(http.Response response) {
+    try {
+      final json = jsonDecode(response.body);
+      return json is Map<String, dynamic> ? json : null;
+    } on FormatException {
+      return null;
     }
   }
 
@@ -1060,14 +1130,21 @@ class OidcClient implements AuthProvider {
   /// [OidcClient]).
   ///
   /// Only `exchangePath` is required: a descriptor without it, or with a
-  /// non-string one, throws a [FormatException] naming the field. The session
-  /// and refresh routes come from the descriptor's `sessionPath` and
-  /// `refreshPath` when it sends them, and otherwise from the directory of
-  /// `exchangePath`, as `Auth` mounts them; so do `signOutPath`,
-  /// `callbackPath` and `authorizeParamsBasePath`. Missing `providers` or
-  /// `providerConfigs` mean none, and a provider config without a `kind` gets
-  /// an empty one. `sessionCookieName`, when sent, is the block's session
-  /// cookie, which [signOut] removes when the server couldn't.
+  /// non-string one, throws an `InvalidDescriptorException` naming the
+  /// field. The session and refresh routes come from the descriptor's
+  /// `sessionPath` and `refreshPath` when it sends them, and otherwise from
+  /// the directory of `exchangePath`, as `Auth` mounts them; so do
+  /// `signOutPath`, `callbackPath` and `authorizeParamsBasePath`. Missing
+  /// `providers` or `providerConfigs` mean none, and a provider config
+  /// without a `kind` gets an empty one. `sessionCookieName`, when sent, is
+  /// the block's session cookie, which [signOut] removes when the server
+  /// couldn't.
+  ///
+  /// A [descriptor] taken as is from a `BlocksClient.call` result, with no
+  /// [httpClient] passed, as a generated client hydrates one, ties this
+  /// client to that `BlocksClient`: once it is closed, every call here
+  /// throws a [ClientClosedException], and this client's own HTTP client is
+  /// closed too. Any other client is closed only by its owner.
   static OidcClient fromJson(
     Map<String, dynamic> descriptor, {
     required String baseUrl,
@@ -1096,7 +1173,7 @@ class OidcClient implements AuthProvider {
     final providerConfigs = configsJson.map(
       (k, v) => MapEntry(k, ProviderConfig.fromJson(v as Map<String, dynamic>)),
     );
-    return OidcClient(
+    final client = OidcClient(
       exchangePath: exchangePath,
       refreshPath:
           descriptor['refreshPath'] as String? ?? '$exchangePath/refresh',
@@ -1117,6 +1194,18 @@ class OidcClient implements AuthProvider {
       sessionStore: sessionStore,
       httpClient: httpClient,
     ).._keyPrefix = '$base/';
+    // A descriptor from a `BlocksClient` result, hydrated without an HTTP
+    // client of the caller's, as a generated client does: this client lives
+    // as long as that one. Its calls throw `ClientClosedException` once that
+    // client is closed, and its own HTTP client is closed with it.
+    final lifetime = httpClient == null
+        ? descriptorLifetimes[descriptor]
+        : null;
+    if (lifetime != null) {
+      client._lifetime = lifetime;
+      lifetime.closeWith(client._httpClient);
+    }
+    return client;
   }
 
   /// [path] up to its last `/`, or `''` when it has none.
