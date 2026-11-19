@@ -60,6 +60,10 @@ void main() async {
       (Platform.environment['BLOCKS_URL'] ??
               'http://localhost:3001/aws-blocks/api')
           .trim();
+  // A deployed API Gateway URL has a stage segment (`/prod`) before
+  // `/aws-blocks`; locally it is empty. The auth routes and the stub IdP sit
+  // under the same prefix, so every expected path below starts with it.
+  final stagePath = _stagePath(rpcUrl);
 
   if (!isLocalEndpoint() && Platform.environment['RUN_OIDC'] != '1') {
     group('OIDC: getClient() across two federated blocks');
@@ -78,6 +82,7 @@ void main() async {
   await _signInRestoreSignOut(
     label: 'auth-oidc via github2',
     rpcUrl: rpcUrl,
+    stagePath: stagePath,
     launcher: launcher,
     provider: OidcAuthApiGetClientProvider.github2,
     client: (blocks) => blocks.oidcAuthApi.getClient(),
@@ -93,9 +98,10 @@ void main() async {
   await _signInRestoreSignOut(
     label: 'auth-sso via corp',
     rpcUrl: rpcUrl,
+    stagePath: stagePath,
     launcher: launcher,
     provider: SsoOidcApiGetClientProvider.corp,
-    expectedCallbackPath: '/aws-blocks/auth/sso/return',
+    expectedCallbackPath: '$stagePath/aws-blocks/auth/sso/return',
     client: (blocks) => blocks.ssoOidcApi.getClient(),
     state: (blocks) async =>
         (await blocks.ssoAuthStateApi.getAuthState()).state,
@@ -218,6 +224,7 @@ Future<void> _signInRestoreSignOut<P extends OidcProvider>({
   required Future<AuthStateState> Function(Blocks blocks) state,
   required Future<({String userId, String provider})> Function(Blocks blocks)
   requireAuth,
+  required String stagePath,
   String? expectedCallbackPath,
 }) async {
   final id = provider.providerName;
@@ -291,7 +298,7 @@ Future<void> _signInRestoreSignOut<P extends OidcProvider>({
     await oidc.restore();
     final logoutUrl = await oidc.signOut();
     check(
-      logoutUrl?.path == '/aws-blocks/auth/idp/$id/logout',
+      logoutUrl?.path == '$stagePath/aws-blocks/auth/idp/$id/logout',
       "signOut() returns the stub IdP's logout URL (got: ${logoutUrl?.path})",
     );
     check(
@@ -314,4 +321,16 @@ Future<void> _signInRestoreSignOut<P extends OidcProvider>({
   } catch (e) {
     check(false, 'sign out threw: $e');
   }
+}
+
+/// The API Gateway stage segment of [rpcUrl], such as `/prod`: everything in
+/// its path before the first `/aws-blocks`, as `oidc_test.dart` derives it.
+/// Empty for a local dev server.
+String _stagePath(String rpcUrl) {
+  final path = Uri.parse(rpcUrl).path;
+  final idx = path.indexOf('/aws-blocks');
+  return (idx >= 0 ? path.substring(0, idx) : path).replaceAll(
+    RegExp(r'/+$'),
+    '',
+  );
 }
