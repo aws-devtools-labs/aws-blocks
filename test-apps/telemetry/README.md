@@ -80,7 +80,6 @@ random ID, and asserts it was created correctly.
   their failure paths.
 - **Network resilience**: broken endpoint is invisible to users, visible with
   NODE_DEBUG, and does not crash or delay the command.
-- **Disable mechanisms**: env var, global config, project config.
 - **Schema forward-compatibility**: payload is JSON-serializable with all
   required fields.
 - **Environment metadata**: nodeVersion, os, ci fields validated.
