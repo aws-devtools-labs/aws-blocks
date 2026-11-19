@@ -155,7 +155,7 @@ No `fromExisting()` — wrapping an existing EventBridge schedule is not support
 
 - **Rate schedules** — `setInterval` with the computed interval in milliseconds when it fits a timer (`MAX_TIMEOUT_MS`, 2^31-1 ms, about 24.8 days); a longer interval waits in `setTimeout` steps toward an absolute fire time, fires, then schedules the first slot still in the future on the same cadence, so slots missed during a clock jump (for example sleep) are not run. Timers on both paths are `unref()`'d to avoid blocking process exit.
 - **Cron schedules** — `setTimeout` to the next fire time, computed via `nextCronTime()`. After each fire, the next timeout is scheduled recursively.
-- **Timezone support** — `Intl.DateTimeFormat` with the specified timezone extracts local time components for cron matching.
+- **Timezone support** — Each search for the next cron occurrence reuses one `Intl.DateTimeFormat` with the specified timezone to extract local time components. Without a timezone, the mock reads UTC components directly.
 - **Console logging** — logs `[CronJob:{id}] triggered at {timestamp}` on each fire, and `[CronJob:{id}] registered (disabled)` when `enabled: false`.
 - **Error handling** — handler errors are caught and logged with a warning that AWS would retry.
 - **Validation** — `parseSchedule()` validates cron/rate expressions; `validateTimezone()` validates IANA timezone strings.

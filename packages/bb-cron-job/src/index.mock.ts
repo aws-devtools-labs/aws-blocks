@@ -209,9 +209,16 @@ function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date 
 	// Work in the target timezone by converting to local components
 	const candidate = new Date(after.getTime() + 60_000); // start 1 minute ahead
 	candidate.setSeconds(0, 0);
+	const formatter = timezone
+		? new Intl.DateTimeFormat('en-US', {
+				timeZone: timezone,
+				hour: 'numeric', minute: 'numeric', day: 'numeric', month: 'numeric', weekday: 'short',
+				hour12: false,
+			})
+		: undefined;
 
 	for (let i = 0; i < 525_600; i++) { // max 1 year of minutes
-		const { minute, hour, day, month, dow } = getComponents(candidate, timezone);
+		const { minute, hour, day, month, dow } = getComponents(candidate, formatter);
 
 		if (
 			fields.minute.includes(minute) &&
@@ -229,15 +236,11 @@ function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date 
 	return null;
 }
 
-function getComponents(date: Date, timezone?: string): { minute: number; hour: number; day: number; month: number; dow: number } {
-	if (!timezone) {
+function getComponents(date: Date, formatter?: Intl.DateTimeFormat): { minute: number; hour: number; day: number; month: number; dow: number } {
+	if (!formatter) {
 		return { minute: date.getUTCMinutes(), hour: date.getUTCHours(), day: date.getUTCDate(), month: date.getUTCMonth(), dow: date.getUTCDay() };
 	}
-	const parts = new Intl.DateTimeFormat('en-US', {
-		timeZone: timezone,
-		hour: 'numeric', minute: 'numeric', day: 'numeric', month: 'numeric', weekday: 'short',
-		hour12: false,
-	}).formatToParts(date);
+	const parts = formatter.formatToParts(date);
 
 	const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0', 10);
 	const dowStr = parts.find(p => p.type === 'weekday')?.value ?? 'Sun';
