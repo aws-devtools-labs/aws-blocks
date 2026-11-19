@@ -45,8 +45,9 @@ native/dart/run-e2e.sh --blocks-url https://xxx.execute-api.us-west-2.amazonaws.
 Locally the backend reads each sign-up code back (`basicGetLastCode` /
 `cognitoGetLastCode`), so the suites run the full sign-up flow. Against a
 deployed backend Cognito emails the code, so those legs print `⊘ SKIP` and the
-suites sign in a pre-provisioned, confirmed user instead. Seed it into the
-stack's user pools first, with `STACK_NAME` and `REGION` set to the deployed stack and region:
+suites sign in a pre-provisioned, confirmed user instead. Seed only a disposable
+native-bindings test stack; the command can reset the test account's password.
+Set `STACK_NAME` and `REGION` to that stack and region:
 
 ```bash
 (cd test-apps/native-bindings && BLOCKS_STACK_NAME="$STACK_NAME" AWS_REGION="$REGION" npm run seed:cognito)
@@ -63,3 +64,5 @@ Against a deployed backend the suite runs with `RUN_OIDC=1` (the deployed
 sandbox's stub IdP, or a real, auto-approving IdP — `NATIVE_E2E_OIDC_ISSUER` /
 `NATIVE_E2E_OIDC_CLIENT_ID`, see `test-apps/native-bindings/README.md`) and
 prints `⊘ SKIP` otherwise.
+
+The sandbox stub lets anyone sign in as its test users. Use only disposable test data.

@@ -4,7 +4,7 @@ The AWS CDK Blocks backend that both Kotlin example apps ([`../android`](../andr
 
 ## Running
 
-From `native/kotlin/example/typescript`, follow the [checkout setup](#inside-the-aws-cdk-blocks-repository) before running these commands. Skip `npm install` in this directory: the example needs `Auth` and `createOidcApi()` from the checkout.
+From `native/kotlin/example/typescript`, follow the [checkout setup](#inside-the-aws-cdk-blocks-repository) before running these commands.
 
 ```bash
 # Local: API on :3001, web client on :3000
@@ -27,16 +27,14 @@ The spec holds one server: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox`
 
 A deployed sandbox whose todos table is keyed on `userId` cannot be updated in place: destroy it (`npm run sandbox:destroy`) and deploy again. Its todos are lost.
 
+Use disposable test data only. The demo's shared key-value methods do not require sign-in.
+
 ### Inside the AWS CDK Blocks repository
 
-`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-cdk-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `cdk-blocks` package needs a link:
+To use the framework from this checkout, run `npm ci` and `npm run build` at the repository root. Skip `npm install` in the example so Node uses the root dependencies. If you already installed dependencies in the example, remove its local `node_modules` first. From `native/kotlin/example/typescript`, link the app's own backend package:
 
 ```bash
 mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
-
-npm run dev:server   # the dev server on :3001
-node ../../../../node_modules/@aws-cdk-blocks/core/dist/scripts/generate-spec-cli.js   # the spec (after the dev server has run once)
-npm test             # typecheck + test:e2e; starts its own dev server, so stop the one above first
 ```
 
 ## Configuring OIDC
@@ -144,14 +142,6 @@ A `secret: true` `AppSetting` is an SSM **SecureString** parameter at `/<stack-n
 ```
 
 The first `npm run sandbox` **creates the parameter with a random placeholder value**, so you are editing an existing parameter rather than creating one. In the AWS console: **Systems Manager → Parameter Store**, filter by the stack name, select the parameter, **Edit**, paste the value, **Save**. Leave the type as `SecureString`.
-
-The same thing from the CLI:
-
-```bash
-STACK=typescript-stack-$(cat .cdk-blocks-sandbox/sandbox-id.txt)
-aws ssm put-parameter --name "/$STACK-my-app-google-client-secret" \
-  --type SecureString --value 'GOCSPX-your-secret-here' --overwrite
-```
 
 Notes:
 

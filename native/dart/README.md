@@ -90,7 +90,7 @@ dependencies:
 
 dev_dependencies:
   blocks_codegen: ^0.2.0
-  build_runner: ^2.16.2
+  build_runner: ^2.14.0
 ```
 
 `blocks_runtime_flutter` keeps the session in the platform's secure storage (see [Sessions](#sessions)). A pure Dart program needs only `blocks_runtime`.
@@ -108,7 +108,7 @@ The builder turns every `*.spec.json` file in the package into a `*.blocks.dart`
 
 ### 5. Use it
 
-For the `test-apps/native-bindings` spec, the generated `api` namespace includes these KV methods:
+The `api-only` template exposes a public `health` RPC:
 
 ```dart
 import 'blocks.blocks.dart';
@@ -133,155 +133,20 @@ Before you run the app:
   <true/>
   ```
 
-- **Android emulator:** `localhost` is the emulator itself. `BlocksConfig.rewriteLocalhost(Servers.local, host: '10.0.2.2')` gives the URL of the dev server on the host machine, to pass as `baseUrl`.
+- **Android emulator:** keep `localhost:3001` and run `adb reverse tcp:3001 tcp:3001`. See [Configuration](#configuration) for when a host rewrite works instead.
 
 ## Using Auth
 
-An `Auth` block's `createApi()` export (here `authApi`) is a state machine: `getAuthState()` returns the current `state`, the signed-in `user` and the `actions` the user can take next, and `setAuthState(input: ...)` submits one of them. Use it for everything except the federated sign-in buttons: whether the user is signed in, email and password sign-in, sign-up, confirmation codes, MFA steps and `unavailable` actions. Its result is the next state: the confirmation, MFA and password-reset steps only appear there, never in `getAuthState()`, which returns only `signedIn` or `signedOut`. Call `getAuthState()` on launch and after a federated sign-in or sign-out.
+Use an `Auth` block's `createApi()` state machine for password sign-in, sign-up and challenges. Call `getAuthState()` on launch and after a federated sign-in or sign-out.
 
-Federated sign-in and sign-out go through the `OidcClient` the block's `createOidcApi()` export (here `oidcApi`) returns from `getClient()`. Render one sign-in button per provider in that client's `providers`, and have it call `oidc.signIn(provider)`. Don't render the state machine's `signIn:<id>` actions as buttons: their `url` starts a browser-cookie flow whose cookie never reaches the app, and the client already lists the providers it can sign in with. A provider whose discovery failed on the server is left out of `providers`, so it gets no button. Call `getClient()` once per block and keep that client for the app's lifetime.
+- For federated sign-in, keep the `OidcClient` returned by `createOidcApi()`'s `getClient()`. Render its `providers`, not the state machine's `signIn:<id>` actions: those URLs start a browser session whose cookie never reaches the app.
+- When a `signOut` action carries a URL, call `oidc.signOut()` rather than `setAuthState`. Open the returned logout URL, if present, to end the identity provider's session too.
 
-```ts
-// cdk-blocks/index.ts
-export const authApi = auth.createApi();
-export const oidcApi = auth.createOidcApi();
-```
-
-The sample below is a `ChangeNotifier` a Flutter widget can listen to. It opens the identity provider's logout URL with `url_launcher`, so add that package to your app's `dependencies` too.
-
-An `Auth` block on the default store signs in through its `providers` only once it is deployed. To sign in through a provider while running locally, give the provider to a `store: 'builtin'` block with `stubIdp()`, and export that block's `createOidcApi()`; the `Auth` block's README has the details.
-
-```dart
-import 'package:blocks_runtime/blocks_runtime.dart';
-import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
-import 'package:flutter/foundation.dart';
-import 'package:url_launcher/url_launcher.dart';
-
-import 'blocks.blocks.dart'; // the generated client
-
-/// The app's sign-in state, driven by an `Auth` block's two exports.
-class AuthModel extends ChangeNotifier {
-  AuthModel(this.blocks);
-
-  final Blocks blocks;
-
-  // Listed in the block's redirects.allowedRelayOrigins.
-  static const relayTo = 'com.example.app://auth';
-
-  AuthState? state;
-  TypedOidcClient<OidcApiGetClientProvider>? oidc;
-  String? error;
-
-  /// On launch: the state of the session the store kept, and the block's
-  /// OIDC client. Both calls throw when the backend can't be reached, so show
-  /// the error and offer a retry.
-  Future<void> load() async {
-    try {
-      state = await blocks.authApi.getAuthState();
-      oidc = await blocks.oidcApi.getClient();
-    } on BlocksException catch (e) {
-      error = 'Could not reach the server: ${e.message}';
-    }
-    notifyListeners();
-  }
-
-  /// The federated sign-in buttons: one per provider the client can sign in
-  /// with, as the generated enum.
-  List<OidcApiGetClientProvider> get signInButtons => [
-    for (final name in oidc?.providers ?? const <String>[])
-      ?OidcApiGetClientProvider.fromProviderName(name),
-  ];
-
-  /// What a federated sign-in button runs. On iOS and Android the browser
-  /// returns through [relayTo]; on macOS, Linux and Windows the client signs
-  /// in through a loopback listener and needs no launcher.
-  Future<void> signInWith(OidcApiGetClientProvider provider) async {
-    error = null;
-    final mobile =
-        defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.android;
-    try {
-      await oidc!.signIn(
-        provider,
-        launcher: mobile ? FlutterBrowserLauncher() : null,
-        relayTo: relayTo,
-      );
-    } on OidcCancelledException {
-      // The user closed the browser, or the sign-in timed out.
-      return;
-    }
-    state = await blocks.authApi.getAuthState();
-    notifyListeners();
-  }
-
-  /// Runs [action] with the [values] the user typed into its fields. Render
-  /// every action but the `signIn:<id>` ones, which [signInButtons] replaces,
-  /// and render an action that carries `unavailable` disabled, with that
-  /// text, so it never gets here.
-  Future<void> run(AuthAction action, Map<String, String> values) async {
-    error = null;
-    if (action.name == 'signOut' && action.url != null) {
-      // A federated sign-out. Never submit it through setAuthState, which
-      // drops the IdP's logout URL. Open that URL to end the IdP's session
-      // too.
-      final logoutUrl = await oidc!.signOut();
-      if (logoutUrl != null) await launchUrl(logoutUrl);
-      state = await blocks.authApi.getAuthState();
-    } else {
-      // A plain action. Its result is the next state, such as
-      // confirmingSignUp after a sign-up.
-      final next = await blocks.authApi.setAuthState(
-        input: switch (action.name) {
-          'signIn' => SignInInput(
-            username: values['username']!,
-            password: values['password']!,
-          ),
-          'signUp' => SignUpInput(
-            username: values['username']!,
-            password: values['password']!,
-            // Every other field the action lists goes in
-            // additionalProperties.
-            additionalProperties: {
-              for (final MapEntry(:key, :value) in values.entries)
-                if (key != 'username' && key != 'password') key: value,
-            },
-          ),
-          'confirmSignUp' => ConfirmSignUpInput(
-            username: values['username']!,
-            code: values['code']!,
-          ),
-          // Offered after confirmSignUp when the block signs the user in
-          // automatically: submit it to finish signing in.
-          'autoSignIn' => AutoSignInInput(username: values['username']!),
-          'signOut' => const SignOutInput(),
-          // ...one case for each other action the block offers.
-          _ => throw UnsupportedError(action.name),
-        },
-      );
-      // Either way, show the error, if any: a wrong password, for example.
-      error = next.error;
-      // A retriable failure, such as a wrong confirmation code, keeps the
-      // current state and form. Anything else, including a failed sign-in,
-      // is the next state.
-      if (next.retriable != true) state = next;
-    }
-    // Render state?.state, state?.user, state?.actions and error.
-    notifyListeners();
-  }
-}
-```
-
-- The client `getClient()` returns shares the generated client's session store and token store, so the session cookie the sign-in sets is the one every RPC call sends. It carries the block's own routes, including a custom `redirects.callbackPath` or `redirects.signOutPath`, and keeps its tokens under keys of its own block, so several `Auth` blocks can share one token store and one session store.
-- When the spec names the block's providers, `getClient()` returns a `TypedOidcClient` whose `signIn` takes the generated provider enum (`OidcApiGetClientProvider` for `oidcApi.getClient`), so a provider the block doesn't have doesn't compile. `providers` holds the names the server described; `fromProviderName` turns each into the enum value, as above. A spec that names no providers returns a plain `OidcClient`, whose `signIn` takes the name.
-- A retriable failure comes back as `{state: signedOut, actions: [], retriable: true, error, errorName}`. It doesn't mean the user was signed out: keep the current form and show `error`. A wrong confirmation or MFA code, a password that fails the policy, an invalid field and a server fault are retriable. A wrong password is not: it comes back as a signed-out state with the sign-in actions and an `error` to show.
-- A confirmation step lives only in the app: `getAuthState()` can't bring it back after the app is killed. To let the user finish confirming a sign-up, save the username when you get `confirmingSignUp`, and after a restart show the code form and submit `ConfirmSignUpInput` with it, or `ResendSignUpCodeInput` for a new code. An interrupted MFA or new-password challenge can't be resumed: sign in again.
-- On launch, call `getAuthState()`. It works for every `Auth` block. `oidc.restore()` returns the same user, but only a block with sign-in providers serves its session route; any other answers 404.
-- Disable an action that carries `unavailable`, and show its text.
-- Never submit a `signOut` action that has a `url` through `setAuthState`: that drops the identity provider's logout URL. Call `oidc.signOut()` instead.
-
-Register the backend's callback with the identity provider, not an address in the app: every platform's `signIn` sends the IdP the backend's HTTPS callback as its `redirect_uri`, and the backend relays the result to the app. That callback is the client's `baseUrl` with its final `/cdk-blocks/api` replaced by the block's `redirects.callbackPath`, `/cdk-blocks/auth/callback` unless you set one. A deployed API keeps its stage: for `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api`, register `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/auth/callback`. If the IdP asks for a sign-out URL, register the same prefix followed by the block's `redirects.postSignOutPath` (`/` by default), here `https://abc123.execute-api.us-west-2.amazonaws.com/prod/`.
+See [Using Auth in `blocks_runtime`](packages/blocks_runtime/README.md#using-auth) for the Flutter sample, retriable errors, restoring sessions and handling passkeys.
 
 ### Federated sign-in on each platform
+
+See the [platform setup and cancellation rules](packages/blocks_runtime/README.md#federated-sign-in-on-each-platform) in the runtime README.
 
 ## Configuration
 
@@ -410,7 +275,9 @@ Handle SDK failures by `BlocksException` subtype:
 
 ### HTTP status
 
-**No Flutter dependency**: `blocks_runtime` is pure Dart. Works in CLI apps, server-side Dart, or Flutter.
+- A JSON-RPC error is an `ApiException` regardless of the HTTP status. A 401 encoded in an HTTP 200 response is not retried.
+- On an HTTP 401, a `BlocksClient` with an `authProvider` awaits `onAuthFailure()` and, if that succeeds, retries once. Without a provider there is no retry. Generated `Blocks` does not set one; see [`BlocksClient`](packages/blocks_runtime/README.md#blocksclient) for custom configuration.
+- On the backend, check authorization before side effects. If a method can still return HTTP 401 after a write, make it idempotent before using this retry behavior.
 
 ## Project structure
 

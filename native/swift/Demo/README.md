@@ -19,34 +19,31 @@ This folder contains a TypeScript backend and a Swift iOS app that demonstrates 
 
 ## 1. Start the TypeScript Backend
 
+Use the packages from the framework checkout. From the repository root, run `npm ci` and `npm run build`. Skip `npm install` in `typescript-demo`; if you already ran it there, remove that directory's `node_modules` so it does not shadow the checkout's packages.
+
+From `native/swift/Demo`, link the demo's own backend package and start the server:
+
 ```bash
 cd typescript-demo
-npm install
+mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
 npm run dev
 ```
 
-The server starts at `http://localhost:3001`. It serves the Blocks API (JSON-RPC) and the web frontend. Sign-up sends a verification code; locally no email is sent, and the dev-server console prints the code instead.
-
-`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block, the published package can't build this backend. Inside the AWS CDK Blocks repository, run it against the packages in your checkout instead:
-
-1. Build the repository (`npm run build` at its root).
-2. Skip `npm install`. If you already ran it, remove `typescript-demo/node_modules`, which would shadow the checkout's packages.
-3. Link the app's own `cdk-blocks` package (below), then `npm run dev`. Node resolves `@aws-cdk-blocks/*` and the tools from the repository's root `node_modules`.
-
-```bash
-mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
-```
+The Blocks API runs on `http://localhost:3001`. The dev-server console prints sign-up verification codes instead of sending email.
 
 ## 2. Generate the Spec File
 
+In a second terminal, from `native/swift/Demo/typescript-demo`, run:
+
 ```bash
-cd typescript-demo
 npm run spec
 ```
 
 This produces `typescript-demo/cdk-blocks/blocks.spec.json`.
 
 ## 3. Copy the Spec to the Swift Demo
+
+From `native/swift/Demo`:
 
 ```bash
 cp typescript-demo/cdk-blocks/blocks.spec.json swift-demo/blocks.spec.json
@@ -77,6 +74,8 @@ Other ways to generate the code:
 3. Build and run (Cmd+R)
 
 `AppState` builds one `Blocks()` for the app's lifetime; it uses the first server in the spec. To switch backends, repeat steps 2-4. The dev server binds loopback by default, so run the app in the Simulator; a physical device needs a deployed backend: run `npm run deploy`, then `BLOCKS_SPEC_STAGE=production npm run spec` in place of step 2, then steps 3-4.
+
+Use disposable test data only. The demo's shared key-value and file APIs do not require sign-in.
 
 A deployed stack whose todos table is keyed on `userId` cannot be updated in place: destroy it (`npm run sandbox:destroy`, or `npm run destroy` for a deployed app) and deploy again. Its todos are lost.
 

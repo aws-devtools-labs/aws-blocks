@@ -177,7 +177,7 @@ Every exception in this table extends `BlocksException`.
 
 | Exception | Thrown when |
 |---|---|
-| `ApiException` | The server answers with a JSON-RPC error. `status` is the HTTP status and `name` the server's error name; match a named error with `e.isBlocksError("<name>")`. |
+| `ApiException` | The server answers with a JSON-RPC error, even on HTTP 200. `status` comes from the positive RPC error code, or is 500 for a reserved code. Match the error's `name` with `e.isBlocksError("<name>")`. |
 | `TransportException` | The request produced no usable JSON-RPC result: the connection failed, the response was not a JSON-RPC envelope (for example a gateway's own error), or a method with a non-null return type got no `result`. `statusCode` is `null` when no response arrived. |
 | `ClientClosedException` | The request goes through a `Blocks` instance that is closed. |
 | `OidcUnknownProviderException` | `signIn` or `exchange` gets a provider the backend has not configured. `provider` is its name. |

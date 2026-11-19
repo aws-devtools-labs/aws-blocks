@@ -30,10 +30,12 @@ The generated `Blocks` class takes only `baseUrl` and `sessionStore` and builds 
 final client = BlocksClient(
   baseUrl: 'https://your-api.example.com/cdk-blocks/api',
   tokenStore: tokenStore,
-  authProvider: oidc, // An OidcClient for a backend with bearer auth enabled.
+  authProvider: bearerProvider, // An AuthProvider that supplies a bearer token.
 );
 final authApi = AuthApi(client);
 ```
+
+The built-in `OidcClient` sign-in flow requests a session cookie, not bearer tokens. For that flow, use the same `SessionStore` for sign-in and RPC calls; the generated `Blocks` does this automatically.
 
 `PersistentSessionStore(store: tokenStore)` is a `SessionStore` that persists cookies through a `TokenStore`. It loads saved cookies before the first request automatically.
 

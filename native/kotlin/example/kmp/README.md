@@ -20,15 +20,7 @@ A Compose Multiplatform app demonstrating the AWS CDK Blocks Kotlin plugin acros
 
 ## Prerequisites
 
-From the `example/typescript/cdk-blocks` directory, run the following to start the backend and generate the spec file:
-
-```bash
-npm install
-npm run dev
-npm run spec
-```
-
-This produces the `blocks.spec.json` file that the Gradle plugin reads at build time.
+Follow the shared [backend setup](../typescript/README.md#running) to start the backend and generate `cdk-blocks/blocks.spec.json`, which the Gradle plugin reads at build time.
 
 ## Configuring OIDC
 

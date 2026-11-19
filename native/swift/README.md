@@ -61,9 +61,7 @@ _ = try await blocks.authApi.setAuthState(input: .signUp(.init(
 
 When the spec names the input type (`x-blocks-type-name`), the input is the shared `AuthActionInput` (`AuthActionInput.SignIn`); without the hint it is `AuthApi.SetAuthState.Input`. `.signIn(.init(…))` compiles with both.
 
-`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/cdk-blocks/api"))`. Pass `session:` a `URLSession` you own. A signed-in session is a cookie the runtime keeps in the Keychain, so it survives app restarts with no setup. `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there. An `OIDCClient` sign-in asks for no bearer tokens (`tokens: false`), so its `getAccessToken()` returns `nil` afterwards: requests carry the session cookie.
-
-Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a `View` initializer or a `@State` default. Each `blocks.<namespace>` is a stored, `Sendable` wrapper over the same client. `close()` makes later calls throw `ClientClosedError`, lets calls in flight finish, then releases the instance's `URLSession`; an instance that is never closed releases it once nothing references it. That session carries RPC and OIDC calls; realtime channels and file transfers use a shared one and keep working. Generated types are `nonisolated`, so they behave the same under Xcode's default `MainActor` isolation: create, call and close `Blocks` from any actor or task. A file that imports two generated modules names the one it means: `FeatureA.Blocks()`.
+Create one `Blocks()` in app-scoped state. See [Configuration](#configuration) for server selection, session ownership and what `close()` releases.
 
 ## Using `Auth`
 
@@ -226,7 +224,7 @@ The sheet opens the provider's sign-in page; the backend's callback receives the
   - `WebAuthenticationSessionLauncher` accepts only a custom scheme. `ASWebAuthenticationSession` hands the redirect to its own session, not to whichever app registered the scheme.
   - With a launcher of your own that opens the redirect through the system, another app that registered the scheme could receive the relayed `code`. PKCE keeps that app from exchanging it, because the verifier never leaves your app.
   - A verified Universal Link (an `https` URL on a domain your app has an associated domain for) opens only your app. It needs a launcher of your own: for example `ASWebAuthenticationSession` with an `.https(host:path:)` callback (iOS 17.4 and later).
-  - Either way, list the URL in the backend's `redirects.allowedRelayOrigins`.
+  - Allowlist only the origin in the backend. For example, pass `https://app.example.com/auth/callback` as `relayTo`, but configure `redirects.allowedRelayOrigins` with `relayOrigin('https://app.example.com')`.
 
 ## Configuration
 
