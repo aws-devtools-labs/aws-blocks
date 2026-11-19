@@ -758,14 +758,29 @@ describe('ContainerCompute — API ingress', () => {
 		assert.deepStrictEqual(await ruleIdOn('preview'), await ruleIdOn('render'));
 	});
 
+	test('a rule keeps the logical ID and priority it had under the pre-rename /aws-blocks prefix', async () => {
+		const { stack, computes } = await stackWith(['render'], 'ApiIngressLegacyIdentity');
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		ingress.routePath('/cdk-blocks/api/render');
+		const rules = Object.entries(Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+		assert.strictEqual(rules.length, 1);
+		const [[id, rule]] = rules;
+		// Same ID and priority a deploy before the rename created for `/aws-blocks/api/render`,
+		// so the upgrade updates the rule's path in place instead of replacing it.
+		assert.match(id, /Routeawsblocksapirender/);
+		assert.strictEqual(rule.Properties.Priority, 43785);
+		assert.deepStrictEqual(rule.Properties.Conditions[0].PathPatternConfig.Values, ['/cdk-blocks/api/render']);
+	});
+
 	test('two paths that map to one rule priority fail synth, naming both and their computes', async () => {
 		const { computes } = await stackWith(['render', 'preview']);
 		const [render, preview] = computes.map((c) => c.apiIngress());
 		assert.ok(render?.kind === 'load-balancer' && preview?.kind === 'load-balancer');
-		render.routePath('/cdk-blocks/api/orders112');
+		render.routePath('/cdk-blocks/api/orders428');
 		assert.throws(
-			() => preview.routePath('/cdk-blocks/api/orders1050'),
-			/'\/cdk-blocks\/api\/orders112' \(compute 'ApiIngressrenderpreview\/render'\) and '\/cdk-blocks\/api\/orders1050' \(compute 'ApiIngressrenderpreview\/preview'\) map to the same load balancer rule priority/,
+			() => preview.routePath('/cdk-blocks/api/orders842'),
+			/'\/cdk-blocks\/api\/orders428' \(compute 'ApiIngressrenderpreview\/render'\) and '\/cdk-blocks\/api\/orders842' \(compute 'ApiIngressrenderpreview\/preview'\) map to the same load balancer rule priority/,
 		);
 	});
 
