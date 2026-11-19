@@ -412,7 +412,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 ## Local development
 
-- Mock data is stored under `.bb-data/{fullId}/`.
+- Mock data is stored under `.cdk-blocks/local/data/{fullId}/`.
 - Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`.
 - Version-aware operations are available locally, with the historical delete-marker limitation described under [Versioned Bucket](#versioned-bucket).
 - Lifecycle rules and `corsRules` have no effect locally (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).

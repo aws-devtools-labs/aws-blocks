@@ -146,7 +146,7 @@ The declaration never holds the value: the constructor takes none, and a secret 
 
 ### Settings route and console
 
-Every AWS CDK Blocks app exposes a built-in `/cdk-blocks/settings` route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.bb-data/settings.json`, where secret values live next to settings (plaintext, dev-only).
+Every AWS CDK Blocks app exposes a built-in `/cdk-blocks/settings` route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.cdk-blocks/local/data/settings.json`, where secret values live next to settings (plaintext, dev-only).
 
 ### Well-known `name` and the `aws` CLI
 
@@ -272,11 +272,11 @@ For anything deeper than the current/previous pair (full history, custom staging
 
 ## Local development
 
-- The mock stores the current value as plaintext in the shared `.bb-data/settings.json` (the same file `AppSetting` uses) and logs a one-time warning. Never use real credentials in local development.
+- The mock stores the current value as plaintext in the shared `.cdk-blocks/local/data/settings.json` (the same file `AppSetting` uses) and logs a one-time warning. Never use real credentials in local development.
 - The key in that file is the secret's `name` when you pass one, otherwise its `fullId` (for example `new Secret(new Scope('my-app'), 'stripe-key')` is stored under `my-app-stripe-key`).
-- The previous value (for `get({ version: 'previous' })` / `listVersions()`) is kept in `.bb-data/secret-versions.json` — current + previous only.
-- The mock has no cache: every `get()` reads `.bb-data/settings.json` again, so a value written to that file reaches the next call without a restart.
-- Wipe with `rm -rf .bb-data`.
+- The previous value (for `get({ version: 'previous' })` / `listVersions()`) is kept in `.cdk-blocks/local/data/secret-versions.json` — current + previous only.
+- The mock has no cache: every `get()` reads `.cdk-blocks/local/data/settings.json` again, so a value written to that file reaches the next call without a restart.
+- Wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 
 To simulate an externally set secret in a local test, add the value under that key, keeping the entries already in the file — for the secret declared with `{ name: 'my-app/stripe-key' }` above:
 

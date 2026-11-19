@@ -98,7 +98,7 @@ async function signForPrototype(payload: string) {
 - The first deploy stores a random value (32 random bytes, base64url). Later deploys keep the stored value.
 - Set the real value with `put()`, or in the AWS console: the deployed app's `/cdk-blocks/settings` route redirects to the stack's settings resource group, which lists the parameter.
 - `get()` parses the stored text as JSON and falls back to the raw text. A console value that is valid JSON (`12345`, `true`) is returned as a number or boolean: set such a value with `put()`, which stores it as a JSON string (shown in the console with double quotes).
-- Locally the value is a random string in `.bb-data/settings.json`. Edit the file to change it; the next `get()` reads it.
+- Locally the value is a random string in `.cdk-blocks/local/data/settings.json`. Edit the file to change it; the next `get()` reads it.
 
 ## Existing parameter (`fromExisting`)
 
@@ -111,7 +111,7 @@ const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: '/my-app-db-url',
 - The stack does not create, seed, tag or delete the parameter.
 - The construct grants `ssm:GetParameter` and, with `secret: true`, `kms:Decrypt`. It does not grant or deny `ssm:PutParameter`. Do not call `put()` on an imported setting: the mock permits it, and on AWS it can overwrite the parameter if another policy grants write access.
 - The parameter must exist before the app runs. If it does not, the deploy succeeds and `get()` throws `ParameterNotFound`.
-- Locally the value is the entry under the setting's `fullId` in `.bb-data/settings.json`: a random string with `secret: true`, an empty string otherwise. Edit the file to set it.
+- Locally the value is the entry under the setting's `fullId` in `.cdk-blocks/local/data/settings.json`: a random string with `secret: true`, an empty string otherwise. Edit the file to set it.
 
 ## Examples
 
@@ -158,4 +158,4 @@ const apiUrl = new AppSetting(scope, 'apiUrl', {
 
 ## Local development
 
-Local values are in the shared `.bb-data/settings.json` (the file `Secret` uses too), keyed by the setting's `fullId`. A `secret: true` setting gets a random value locally (no KMS encryption in mock mode).
+Local values are in the shared `.cdk-blocks/local/data/settings.json` (the file `Secret` uses too), keyed by the setting's `fullId`. A `secret: true` setting gets a random value locally (no KMS encryption in mock mode).

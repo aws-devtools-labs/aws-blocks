@@ -489,8 +489,8 @@ npm run db -- migrate --mark-applied 000_baseline.sql              # record a fi
 
 | Command | Block | What it does |
 |---|---|---|
-| `types [dir] --block <id> [--type dsql\|aurora] [--cluster <id>] [--schema <schema>] [--out <file>]` | provisions its cluster | Writes one `Tables` interface for Kysely from the block's migration files (`cdk-blocks/migrations/<id>`, or `dir` for a block with `migrationsPath`). It does not read `.bb-data/` and does not touch a running dev server. Pass `--type aurora` for a block on an `aurora` cluster. Run it again after you add a file. |
-| `status [dir] --block <id> [--cluster <id>] [--schema <schema>]` | provisions its cluster | Lists the applied and the pending files in the block's local database under `.bb-data/`. For a block on a `DatabaseCluster`, pass the cluster's id as `--cluster`. It reads a copy of the database, so it is safe while `npm run dev` runs; it then shows what the dev server had written to disk. It does not read a deployed stage. |
+| `types [dir] --block <id> [--type dsql\|aurora] [--cluster <id>] [--schema <schema>] [--out <file>]` | provisions its cluster | Writes one `Tables` interface for Kysely from the block's migration files (`cdk-blocks/migrations/<id>`, or `dir` for a block with `migrationsPath`). It does not read `.cdk-blocks/local/data/` and does not touch a running dev server. Pass `--type aurora` for a block on an `aurora` cluster. Run it again after you add a file. |
+| `status [dir] --block <id> [--cluster <id>] [--schema <schema>]` | provisions its cluster | Lists the applied and the pending files in the block's local database under `.cdk-blocks/local/data/`. For a block on a `DatabaseCluster`, pass the cluster's id as `--cluster`. It reads a copy of the database, so it is safe while `npm run dev` runs; it then shows what the dev server had written to disk. It does not read a deployed stage. |
 | `connect [--name <name>] [--stage sandbox\|production] [--ca <file>] [--value-stdin] [--check-only]` | existing database | Checks the database and stores its connection string. See [`connect`](#connect). |
 | `migrate [dir] [--types <file> \| --no-types]` | existing database | Applies the pending files of `dir` (default `./migrations`) to the database of the local value, with the code a deploy uses, then writes the types file. Shows the host and asks first; `--yes` skips the question. It does not take `--stage`: the deploy migrates a stage. |
 | `migrate [dir] --mark-applied <file> [--stage sandbox\|production]` | existing database | Records `<file>` as applied without running it, on the database of the local value or of a stage. For a file that describes what the database already has; see [Starting from the schema you have](#starting-from-the-schema-you-have). Repeat the option for more files. Shows the host and asks first. |
@@ -687,7 +687,7 @@ The migration Lambda also creates a per-cluster database role for the app:
 
 ## Local development
 
-Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS. The data directory is `.bb-data/{fullId}/pglite/` for a block that owns its cluster, and `.bb-data/{clusterFullId}/pglite/` for a `DatabaseCluster`.
+Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.cdk-blocks/local/data/`, with one schema per block, as on AWS. The data directory is `.cdk-blocks/local/data/{fullId}/pglite/` for a block that owns its cluster, and `.cdk-blocks/local/data/{clusterFullId}/pglite/` for a `DatabaseCluster`.
 
 A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text) and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). An `aurora` cluster is PostgreSQL on both sides and needs neither. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them.
 
