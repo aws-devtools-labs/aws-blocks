@@ -590,7 +590,12 @@ describe('lifecycle commands', () => {
 		await runCli(['--profile', 'prod', 'whoami'], {
 			cwd: root,
 			env: AWS_ENV,
-			core: { readAwsIdentity: async ({ invocation }) => (seen.push(invocation), IDENTITY) },
+			core: {
+				readAwsIdentity: async ({ invocation }) => {
+					seen.push(invocation);
+					return IDENTITY;
+				},
+			},
 		});
 		assert.deepStrictEqual(seen, ['npm run whoami -- --profile prod']);
 	});
@@ -650,7 +655,13 @@ describe('lifecycle commands', () => {
 		const lookups: unknown[] = [];
 		const noId = await runCli(['sandbox', 'console'], {
 			cwd: fixtureApp(),
-			core: { ...core, deployedStackExists: async (options) => (lookups.push(options), true) },
+			core: {
+				...core,
+				deployedStackExists: async (options) => {
+					lookups.push(options);
+					return true;
+				},
+			},
 		});
 		assert.strictEqual(noId.code, 1);
 		assert.match(noId.stderr, /^Error: no sandbox on this machine/);
@@ -662,7 +673,10 @@ describe('lifecycle commands', () => {
 		const lookups: { stackName: string; region?: string; projectRoot?: string; env?: NodeJS.ProcessEnv }[] = [];
 		const withLookup = (exists: boolean | undefined) => ({
 			openConsole: async (options: unknown) => void opened.push(options),
-			deployedStackExists: async (options: (typeof lookups)[number]) => (lookups.push(options), exists),
+			deployedStackExists: async (options: (typeof lookups)[number]) => {
+				lookups.push(options);
+				return exists;
+			},
 		});
 		// A sandbox that the old npm-script wrappers deployed records no last-deploy.json, and a production
 		// deploy then rewrote outputs.json with its own stack alone.
