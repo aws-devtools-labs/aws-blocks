@@ -987,7 +987,7 @@ With `stackId` set to the app id below, production is named `<id>-prod` and a sa
 }
 ```
 
-**`.blocks/config.json`.** Set `stackId` to the app id, so Hosting's `secret()` and `config()` values are named `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, the app's own:
+**`.cdk-blocks/config.json`.** Set `stackId` to the app id, so Hosting's `secret()` and `config()` values are named `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, the app's own:
 
 ```json
 { "stackId": "<id>" }
@@ -1012,7 +1012,7 @@ This app shares one AWS account with other apps. The platform rejects a deploy t
 
 - Build with Building Blocks only. Don't write IAM policies, roles or grants (`addToPrincipalPolicy`, `grant*` on raw CDK constructs), and don't attach managed policies.
 - Never reference another app's resources. Don't call `fromExisting(...)` with a name or ARN that isn't this app's, and don't name resources yourself: the Building Blocks name them, and every name starts with this app's id.
-- Don't edit the platform's files: `cdk-blocks/index.cdk.ts`, `cdk.json`, `.blocks/config.json` and the deploy workflow. They set this app's identity and permissions boundary. Ask a platform reviewer instead.
+- Don't edit the platform's files: `cdk-blocks/index.cdk.ts`, `cdk.json`, `.cdk-blocks/config.json` and the deploy workflow. They set this app's identity and permissions boundary. Ask a platform reviewer instead.
 - Check before you push: `APP_ID=<this app's id> npm run check:iam` runs the pipeline's synth, which fails on any IAM violation (don't set `reportOnly`). The report is `cdk.out/<stack>.blocks-iam.json`; its `violations` say what to fix.
 ```
 
@@ -1036,7 +1036,7 @@ The tag-scoped types are the ones marked "tag" in the [per-service rules](#the-s
    ```
 
    Compare with `aws cloudformation list-stack-resources --stack-name "$STACK" --region "$REGION"`, which lists every resource in the stack, and tag any tag-scoped one the first command missed with its service's own tag command. Tag IAM roles with `aws iam tag-role --role-name <role> --tags Key=app,Value=<id>` (the execution policy manages the app's roles by their `<id>-…` name, and the deploy adds the tag, so this is optional).
-3. **Set `stackId` in `.blocks/config.json` to the id**, if it isn't already. Hosting's `secret()` and `config()` values move to `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, so set each value again (`npm run secret -- set …`, `npm run config -- set …`) before deploying; the old ones stay where they were until you delete them. If `index.cdk.ts` builds the stack name from `stackId` (`getStackName()`, `<stackId>-prod`), changing it renames the stack: see step 1.
+3. **Set `stackId` in `.cdk-blocks/config.json` to the id**, if it isn't already. Hosting's `secret()` and `config()` values move to `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, so set each value again (`npm run secret -- set …`, `npm run config -- set …`) before deploying; the old ones stay where they were until you delete them. If `index.cdk.ts` builds the stack name from `stackId` (`getStackName()`, `<stackId>-prod`), changing it renames the stack: see step 1.
 4. **Expect replacements on the first deploy.**
    - AWS CDK Blocks renames the CloudFront Functions and KeyValueStores it creates to `<id>-<region>-…`, and a new name replaces the resource.
    - CloudFormation then tries to delete the old ones. The old Functions fail to delete (`DELETE_FAILED`, skipped; the stack still reaches `UPDATE_COMPLETE`), because their names (`<region>…`) are outside the app's prefix, and so can the old KeyValueStores still associated with them. An admin deletes them once: `aws cloudfront delete-function --name <name> --if-match <ETag from describe-function>`, then `aws cloudfront delete-key-value-store --name <name> --if-match <ETag from describe-key-value-store>`.
