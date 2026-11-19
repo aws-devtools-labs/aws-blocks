@@ -22,6 +22,12 @@ on the reserved `.invalid` domain, which SES can never verify, so every send
 from it fails on AWS. Synth warns
 (`@aws-cdk-blocks/bb-email-client:UnverifiableSender`) until you do.
 
+This is a demo, not a production authorization model. Use only dummy values
+with the API-key rotation example. Before exposing the app to real users,
+remove the RPC methods that return credentials, restrict shared settings and
+key rotation to trusted operators, and restrict who can send email and to whom.
+Being signed in is not sufficient authorization for these operations.
+
 ## Project Structure
 
 | Path | Purpose |

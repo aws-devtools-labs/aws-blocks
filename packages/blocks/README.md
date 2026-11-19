@@ -87,7 +87,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-> **Security:** every `ApiNamespace` method is a public internet endpoint with **no auth by default**. Gate a method by calling `auth.requireAuth(context)` (or `auth.requireRole(...)`) at the top. The local mock enforces nothing either — an ungated method passes every local check and still ships callable by anyone.
+> **Security:** every `ApiNamespace` method is a public internet endpoint with **no auth by default**. Start protected methods with `await auth.requireAuth(context)` or `await auth.requireRole(...)`. Test that signed-out calls fail; without a guard the local mock and deployed backend both allow the call.
 
 On the frontend, `aws-cdk-blocks/ui` gives you provider-agnostic auth components, or drive `authApi` yourself:
 
@@ -234,7 +234,9 @@ Test helpers come from `aws-cdk-blocks/utils`. The entry is Node only: tests and
 - `defaults.allowedOrigins` covers the API only — a FileBucket whose presigned URLs or file handles are fetched from the browser needs its own `corsRules` listing your frontend origins (including `http://localhost:3000` for a local frontend against a sandbox), or uploads/downloads fail with a CORS error once deployed
 - For cross-domain deployments, pass `session: { crossDomain: true }` to `Auth` (enables `SameSite=None; Secure; Partitioned`)
 - Enable `frontDoor: { features: { monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] } } }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only; the top-level `monitoring` prop is its deprecated alias)
-- WAF is off by default. For a public-facing app, turn it on with `apiWaf: { enabled: true }` on `BlocksStack` or `BlocksBackend`. When a `Hosting` CloudFront distribution serves the API, set `frontDoor: { features: { waf: { enabled: true } } }` on `Hosting` instead (`npm run docs core` has the options). API Gateway throttling is on by default, from `defaults.throttling`
+- WAF is off by default. On the default `apiFrontDoor: 'apigateway'` tier, set `apiWaf: { enabled: true }` on `BlocksStack` or `BlocksBackend` to protect the gateway stage.
+- To protect traffic through a `Hosting` CloudFront distribution, set `frontDoor: { features: { waf: { enabled: true } } }` on `Hosting`. This does not cover direct calls to the gateway. On the `'cloudfront'` tier, put the ACL on Hosting when it serves the API; otherwise configure the managed distribution with `apiWaf`. See `npm run docs core` for regional requirements and rate limits.
+- API Gateway throttling is on by default (`defaults.throttling`). It does not cover container routes served directly by CloudFront.
 - Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
 
 ### IAM hardening
@@ -250,7 +252,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 ```
 
-Every synth writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json`; it isn't deployed, so CI can diff it to catch permission growth. The report, the boundary's scope on an embedded `BlocksBackend`, CDK's `@aws-cdk/core:permissionsBoundary` context and sharing one AWS account across many apps are in the `@aws-cdk-blocks/core` README (`npm run docs core`).
+Every synth writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth. See `npm run docs core` for permissions boundary scope and shared-account guidance.
 
 ## VPC Support
 
@@ -292,7 +294,7 @@ Before they deploy, `npm run sandbox` and `npm run deploy` print the deployment 
 ### CDK bootstrap
 
 - With verified credentials, `npm run sandbox`, `npm run sandbox:deploy` and `npm run deploy` check that CDK is bootstrapped in the account and Region. They read the SSM parameter `/cdk-bootstrap/<qualifier>/version`, where the qualifier is `@aws-cdk/core:bootstrapQualifier` from the `cdk.json` context, or CDK's default.
-- When the parameter does not exist, they stop before synthesizing and print the command that bootstraps the account and Region: `npx cdk bootstrap aws://<account-id>/<region> --app=`. Run it from the project directory; `--app=` keeps CDK from synthesizing the app first.
+- When the parameter does not exist, deploy stops before synthesizing. Copy the bootstrap command it prints, including `--profile` if present, and run it from the project directory. `--app=` keeps CDK from synthesizing the app first.
 - Bootstrapping is needed once per account and Region. It creates the `CDKToolkit` CloudFormation stack, including IAM roles that CDK deploys with, so the commands never bootstrap for you.
 - Any other result of the read, such as a denied read or a timeout, does not stop the deploy.
 
@@ -373,9 +375,9 @@ Importing `aws-cdk-blocks` through its default (Node) entry declares the default
 
 The runner collects usage data to improve AWS CDK Blocks and prints a notice the first time it does.
 
-- To opt out everywhere, set `AWS_BLOCKS_DISABLE_TELEMETRY` to `1`, `true` or `yes`, or run `npm run telemetry disable -- --global` inside an AWS CDK Blocks app.
-- Without `--global`, the task opts out the current app only.
-- Pass `--telemetry-file <path>` to see the exact events a run sends.
+- Telemetry follows the CDK CLI setting. Set `CDK_DISABLE_CLI_TELEMETRY=1` to opt out for commands that inherit it, or set `cli-telemetry: false` in the `context` of `~/.cdk.json` for a user-wide default.
+- For one app, run `npx cdk cli-telemetry --disable` from the app directory, or set `cli-telemetry: false` in the `context` of its `cdk.json`. DNS filtering and `--no-version-reporting` stop CDK's own telemetry only. See [CDK telemetry opt-out](https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out).
+- Pass `--telemetry-file <path>` to inspect the events a run records when telemetry is enabled.
 
 An event can include:
 
@@ -386,7 +388,7 @@ An event can include:
 - the AWS CDK Blocks and CDK versions, the framework, and the template name and version
 - the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent)
 
-Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code. As with any HTTPS request, the collection endpoint also receives your IP address. It is not stored, except in logs of requests that the endpoint's firewall blocks. Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years.
+The runner does not collect source files or ask for personal identifiers. The package manager user agent and template metadata are included as supplied: keep personal information, paths and secrets out of custom values. The collection endpoint receives your IP address; it is stored only in logs of requests blocked by the firewall. Events are kept for up to 1 year, and request logs for up to 10 years.
 
 ### Output and exit codes
 

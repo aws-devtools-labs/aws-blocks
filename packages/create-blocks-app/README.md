@@ -10,7 +10,7 @@ npx @aws-cdk-blocks/create-blocks-app [directory] [--template <name>] [--skip-in
 
 | Argument or option | Default | Meaning |
 |---|---|---|
-| `directory` | `.` | The target directory |
+| `directory` | omitted | The target directory. Without it, the CLI checks the current directory for an existing app; in an empty directory it creates `blocks-demo-apps/template-<name>`. Pass `.` to scaffold in place. |
 | `--template <name>` | `default` | For a new project, the starter app. For an existing project, the `cdk-blocks/` workspace to copy |
 | `--skip-install` | | Skip installing dependencies |
 | `-y`, `--yes` | | Skip confirmation prompts |
@@ -86,12 +86,12 @@ Run `npm run help` for the task list or `npm run help sandbox destroy` for one t
 
 | Mode | Scripts added | `blocks.dev` |
 |---|---|---|
-| New app | Every Blocks task | `{ "frontendPort": 3100 }`. No template sets `frontendCommand`: `npm run dev` starts the frontend dev server it detects from the app's dependencies |
-| New app from a backend-only template (`api-only`, `backend`, `cron`, `observability`, `sql`) | Every Blocks task | `{ "port": 3001, "frontend": false }`: `npm run dev` runs the backend only, even when the project has `vite` or `next` installed |
+| New app | The selected template's scripts | `{ "frontendPort": 3100 }` for frontend templates. `npm run dev` detects the frontend from the app's dependencies |
+| New app from a backend-only template (`api-only`, `backend`, `cron`, `observability`, `sql`) | The selected template's scripts, without `sandbox:preview` | `{ "port": 3001, "frontend": false }`: `npm run dev` runs the backend only |
 | Existing project | The template's Blocks tasks, such as `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy` and `dev:stop`, plus `dev:server` for the `dev` task | Only the template's `port` and `"frontend": false`, unless your `package.json` already has `blocks.dev`. A backend-only template in a Vite or Next.js project runs the backend only; any other template runs the project's own Vite or Next.js dev server |
 | Amplify Gen 2 project | `blocks:dev` for the `dev` task, `blocks:stop`, and `blocks:generate-client`, which runs the overlay's own `cdk-blocks/scripts/generate-client.ts`: its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json` | `{ "port": 3001, "frontend": false, "generateClient": false }`: the Amplify app runs its own frontend and keeps its own client |
 
-In an existing project, a task whose script name is already taken is added as `blocks:<name>`, and the CLI prints the renames. Find a Blocks task in `package.json` under `scripts` by its `aws-cdk-blocks/run` entry and trailing command, then use that script name in the examples.
+In an existing project, the CLI preserves existing scripts and avoids their `pre` and `post` hooks. It tries `blocks:<name>` for a conflicting unprefixed name, then numbered variants if needed. Use the name printed by the CLI, or find the `aws-cdk-blocks/run` entry with the task's trailing command in `package.json`.
 
 An app whose scripts run `cdk-blocks/scripts/*.ts` wrappers: update `aws-cdk-blocks`, then run `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate` from the app root to switch its scripts to this form and delete the wrappers it generated. See [Migrating an existing app](https://github.com/aws/cdk-blocks/tree/main/packages/blocks#migrating-an-existing-app).
 

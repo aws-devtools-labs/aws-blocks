@@ -16,11 +16,11 @@ docs(blocks,create-blocks-app,create-block): the guide and the scaffolder README
 
 **`@aws-cdk-blocks/create-blocks-app`**
 
-- Corrected in the README: the link to the guide's migration section; the backend-only templates include `observability`; the Amplify overlay's `blocks.dev` includes `generateClient: false`; an existing project gets every Blocks task, and a task whose script name is taken is added as `blocks:<name>`; the CLI is released with every `aws-cdk-blocks` release at the same version number.
+- Corrected in the README: migration link, mode-specific scripts and dev settings, script collision handling, and linked release cadence.
 - Added to the README: a table of the argument and options, including `--skip-install` and `-y`/`--yes`, and a table of the scripts and `blocks.dev` value per mode.
 - Moved: the contributor notes on template registration and dependency ranges are in `DESIGN.md` in the repository.
 - Removed from the README: the listings of `cdk-blocks/index.ts` and `cdk-blocks/index.cdk.ts`, the full script list, and the dev server, `destroy` and output-format text that the guide states.
-- The `AGENTS.md` copied into every scaffolded app gains three sentences: update `test/e2e.test.ts` when the API changes and never delete `test/` or the `test:e2e` script; get `npm run test:e2e` passing before every `npm run deploy`; add a functional check to `test/e2e.test.ts` instead of calling the local API with curl or fetch.
+- The scaffolded `AGENTS.md` asks agents to run the e2e test before deploying, check frontend changes in a browser, and add local API checks to the e2e suite rather than using ad hoc curl or fetch calls.
 - Template READMEs, corrected: the "Adding a Frontend Later" recipe in `backend`, `cron` and `observability` lists the dependency versions of the `react` template; `api-only` and `sql` point to `npm run docs Hosting` instead of a README the app does not contain; `default` names the sections of its test file; `nextjs` says `await auth.requireAuth(context)`.
 - Template READMEs, removed: the command tables, the stack naming section, the dev server settings and the paragraphs on storage, start files and JSON-RPC, which the app's `AGENTS.md` and `npm run help` state. `auth-oidc` and `demo` have a "Before deploying to production" section.
 

@@ -53,31 +53,12 @@ A sandbox stack's name ends in an identifier that is per machine, stored in `.cd
 
 This template is backend-only. To add a frontend:
 
-1. **React/Vite frontend:**
+1. Generate a reference app in a **separate directory** using the same CLI version as this app:
    ```bash
-   npm create vite@latest src -- --template react-ts
+   npx @aws-cdk-blocks/create-blocks-app ../react-reference --template react --skip-install
    ```
-   Then add a build script and the frontend dev server to `package.json`. Replace
-   `"blocks": { "dev": { "port": 3001, "frontend": false } }` with the frontend settings, so `npm run dev`
-   starts Vite behind the dev server and serves both on http://localhost:3000:
-   ```json
-   {
-     "scripts": {
-       "build": "tsc && vite build"
-     },
-     "blocks": {
-       "dev": { "frontendPort": 3100 }
-     },
-     "dependencies": {
-       "react": "^19.3.1",
-       "react-dom": "^19.3.1"
-     },
-     "devDependencies": {
-       "@vitejs/plugin-react": "^4.7.0",
-       "vite": "^6.4.5"
-     }
-   }
-   ```
+   Use its root `index.html`, `vite.config.ts`, React entry point and TypeScript project layout (including `cdk-blocks/tsconfig.json`). Replace the sample React component with your own; keep this app's backend and tests.
+   Merge the reference app's frontend dependencies, `build` and `typecheck` scripts, and `blocks.dev` settings into your root `package.json`, then run `npm install`. Vite serves the root `index.html`; `npm run dev` proxies it on http://localhost:3000.
 
 2. **Import APIs in your frontend:**
    ```ts
