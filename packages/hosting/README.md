@@ -1165,7 +1165,7 @@ const flags = await getConfig('FEATURE_FLAGS'); // SSM
 declared keys with no call-site change:
 
 ```bash
-npx hosting-typegen           # scan secret()/config() calls → .blocks/hosting-values.d.ts
+npx hosting-typegen           # scan secret()/config() calls → .cdk-blocks/hosting-values.d.ts
 npx hosting-typegen --watch   # regenerate on every save (run alongside your dev server)
 npx hosting-typegen --check   # CI: fail if that file is stale
 ```
@@ -1186,7 +1186,7 @@ Add the generated file to your `tsconfig.json` `include`. Do not edit it by
 hand: the tool regenerates it.
 
 ```jsonc
-{ "include": ["src", "cdk-blocks", ".blocks/**/*.d.ts"] }
+{ "include": ["src", "cdk-blocks", ".cdk-blocks/**/*.d.ts"] }
 ```
 
 The file is safe to delete (the keys fall back to `string`) and safe to
