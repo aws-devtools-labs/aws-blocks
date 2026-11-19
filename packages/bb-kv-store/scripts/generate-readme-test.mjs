@@ -19,7 +19,9 @@
  * - `import { a, b } from 'module'` lines move to the top of the file. The
  *   package's own name resolves to the mock entry. `@aws-cdk-blocks/bb-auth`
  *   depends on this package, so it cannot be imported here: `Auth` gets a
- *   declared stand-in with the one method the README calls.
+ *   declared stand-in with the one method the README calls. Names imported
+ *   from the umbrella `aws-cdk-blocks`, which also depends on this
+ *   package, resolve one by one to the module the umbrella re-exports them from.
  * - A leading `export ` is dropped, because the code is inside a function.
  * - A line of the form `// <code>;   compile error...` is a claim that `<code>`
  *   does not compile. It becomes `<code>` under `// @ts-expect-error`, so the
@@ -45,6 +47,35 @@ const MIN_CLAIMS = 4;
 
 /** Module specifiers the generated file resolves differently from an app. */
 const MODULE_ALIASES = { '@aws-cdk-blocks/bb-kv-store': './index.mock.js' };
+
+/**
+ * The README imports from the umbrella, as an app does, but the umbrella depends on
+ * this package, so the generated file cannot import it. Each name is resolved where
+ * the umbrella re-exports it from: a name this package exports (from the mock entry
+ * or `types.ts`) to the mock entry, a name with a stand-in to the stand-in, and every
+ * other name to `@aws-cdk-blocks/core`, which the umbrella re-exports whole. A name
+ * resolved to the wrong module fails the build.
+ */
+const UMBRELLA = 'aws-cdk-blocks';
+const UMBRELLA_STAND_INS = { Auth: '@aws-cdk-blocks/bb-auth' };
+const ownNames = new Set(
+	['index.mock.ts', 'types.ts'].flatMap((file) => {
+		const source = readFileSync(join(pkgDir, 'src', file), 'utf8');
+		const declared = [...source.matchAll(/^export (?:declare )?(?:abstract )?(?:class|const|function|type|interface|enum) (\w+)/gm)];
+		const listed = [...source.matchAll(/^export (?:type )?\{([^}]+)\} from /gm)].flatMap((match) =>
+			match[1].split(',').map((name) => [null, name.trim().split(/\s+as\s+/).pop()]),
+		);
+		return [...declared, ...listed].map((match) => match[1]);
+	}),
+);
+
+/** Where one name imported from `specifier` resolves in the generated file. */
+function resolveImport(specifier, name) {
+	if (specifier !== UMBRELLA) return MODULE_ALIASES[specifier] ?? specifier;
+	if (UMBRELLA_STAND_INS[name]) return UMBRELLA_STAND_INS[name];
+	if (ownNames.has(name)) return MODULE_ALIASES['@aws-cdk-blocks/bb-kv-store'];
+	return '@aws-cdk-blocks/core';
+}
 
 /** Modules that cannot be imported from this package, and the declaration that stands in for what the README uses. */
 const STAND_INS = {
@@ -82,14 +113,16 @@ for (const [index, block] of blocks.entries()) {
 		const named = line.match(/^import \{ ([^}]+) \} from '([^']+)';$/);
 		if (named) {
 			const [, names, specifier] = named;
-			if (STAND_INS[specifier]) {
-				if (!standIns.includes(specifier)) standIns.push(specifier);
-				continue;
+			for (const name of names.split(',').map((n) => n.trim())) {
+				const module = resolveImport(specifier, name);
+				if (STAND_INS[module]) {
+					if (!standIns.includes(module)) standIns.push(module);
+					continue;
+				}
+				const set = imports.get(module) ?? new Set();
+				set.add(name);
+				imports.set(module, set);
 			}
-			const module = MODULE_ALIASES[specifier] ?? specifier;
-			const set = imports.get(module) ?? new Set();
-			for (const name of names.split(',')) set.add(name.trim());
-			imports.set(module, set);
 			continue;
 		}
 		if (/^import\b/.test(line)) fail(`snippet ${index + 1}: unsupported import form: ${line}`);
