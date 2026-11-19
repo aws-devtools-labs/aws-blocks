@@ -799,6 +799,15 @@ describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
     );
   });
 
+  it('answers 404 for the root path, which the REST API root sends to the handler', async () => {
+    let result: any;
+    await captureErrors(async () => {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/', body: null }));
+    });
+    assert.strictEqual(result.statusCode, 404);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Not Found' });
+  });
+
   it('does not log when a RawRoute matches', async () => {
     registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
 

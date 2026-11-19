@@ -216,6 +216,12 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	// sibling `/aws-blocks/{proxy+}`, so the subtree needs its own proxy.
 	apiResource.addProxy({ defaultIntegration, anyMethod: true });
 
+	// A proxy mounted on the root also adds its `ANY` to the root itself, but
+	// without the proxy's integration: a MOCK with no request template, which
+	// answers `GET /` with a 500. Give the root the function first (the proxy
+	// skips a method the root already has); it answers 404 for `/`, like any
+	// path with no route.
+	restApi.root.addMethod('ANY', defaultIntegration);
 	restApi.root.addProxy({ defaultIntegration, anyMethod: true });
 
 	// Fan out: route each non-default compute's namespaces to its own ingress.
