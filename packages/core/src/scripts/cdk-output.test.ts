@@ -143,6 +143,23 @@ describe('createCdkProgressReporter', () => {
     assert.strictEqual(out.text(), '   Synthesizing app...\n');
   });
 
+  it("drops OpenNext's expected wrapper/converter ERROR on a Next.js build, and keeps other OpenNext errors", () => {
+    const out = collectingSink();
+    const err = collectingSink();
+    const reporter = createCdkProgressReporter(out, err);
+    for (const line of [
+      '\u001b[31mERROR\u001b[39m Wrapper aws-lambda-streaming and converter aws-apigw-v1 are not compatible. For the wrapper aws-lambda-streaming you should only use the following converters: aws-apigw-v2',
+      'ERROR Wrapper aws-lambda-streaming and converter aws-apigw-v1 are not compatible.',
+      'For the wrapper aws-lambda-streaming you should only use the following converters: aws-apigw-v2',
+      'ERROR Could not build the server function',
+    ]) {
+      reporter.line(line, 'stderr');
+    }
+    reporter.finish(true);
+    assert.strictEqual(err.text(), 'ERROR Could not build the server function\n');
+    assert.strictEqual(out.text(), '');
+  });
+
   it('redraws one progress line in place on a TTY and clears it before the next full line', () => {
     const out = collectingSink();
     const reporter = createCdkProgressReporter(out, collectingSink(), { isTty: true, now: () => 0 });

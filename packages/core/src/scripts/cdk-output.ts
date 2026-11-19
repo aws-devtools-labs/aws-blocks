@@ -107,6 +107,24 @@ const NOISE_LINE =
   /NodeVersionSupportWarning|trace-warnings|^\(node:\d+\)|AWS SDK for JavaScript|^\s*More information can be found|require node >=|security updates please upgrade|versions published after/;
 
 /**
+ * OpenNext's build validation reports the wrapper/converter pair the Next.js
+ * adapter configures on purpose (`aws-lambda-streaming` with `aws-apigw-v1`, for
+ * the streaming REST API integration behind the CloudFront door) as an `ERROR`,
+ * on every healthy build; the adapter patches the bundle afterwards (see
+ * `patchStreamingWrapperForApiGateway` in `@aws-blocks/hosting`). At `normal` the
+ * adapter's own line explaining it is condensed away, so the `ERROR` would stand
+ * alone: it is dropped too. Any other OpenNext error still prints.
+ */
+const EXPECTED_OPENNEXT_LINE =
+  /Wrapper aws-lambda-streaming and converter aws-apigw-v1 are not compatible|^For the wrapper aws-lambda-streaming you should only use the following converters: aws-apigw-v2\s*$/;
+
+/** An ANSI color code (OpenNext colors its `ERROR` label). */
+const ANSI_COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
+/** `line` without ANSI color codes. */
+const withoutAnsi = (line: string): string => line.replace(ANSI_COLOR, '');
+
+/**
  * A line that reports a failure or rollback. Shown verbatim at `normal`:
  * hiding a failure reason would be worse than any amount of noise.
  */
@@ -263,7 +281,7 @@ export function createCdkProgressReporter(
         };
         return;
       }
-      if (line.trim() === '' || NOISE_LINE.test(line)) return;
+      if (line.trim() === '' || NOISE_LINE.test(line) || EXPECTED_OPENNEXT_LINE.test(withoutAnsi(line).trim())) return;
       const event = parseCdkEventLine(line);
       if (isCdkFailureLine(line) || (event && isRollbackStatus(event.status))) {
         milestone(from === 'stderr' ? stderr : stdout, line.trim());
