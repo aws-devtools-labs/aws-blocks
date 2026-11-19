@@ -605,6 +605,21 @@ The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`.
 - **Destroy.** `npm run destroy` and `npm run sandbox:destroy` reuse the build output already on disk and build only when there is none, for example on a fresh clone. Each framework adapter checks the output it deploys: a Next.js destroy reuses the `.open-next/` output of an earlier deploy, and with only `.next/` (after a plain `next build`) OpenNext still builds. An exported `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
 - **A deploy with `BLOCKS_SKIP_FRONTEND_BUILD=1`**, for example `BLOCKS_SKIP_FRONTEND_BUILD=1 npm run deploy`, deploys what is already in the build output directory. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with a message naming the variable. The build bakes in `BLOCKS_API_URL`, so only reuse a build made for the same backend; a deploy never reuses one on its own.
 
+Files whose name carries a content hash are uploaded with `Cache-Control: public, max-age=31536000, immutable`, and everything else is revalidated on each load. The framework adapter names the hashed paths: `assets/*` for a Vite SPA, `_next/static/*`, `_nuxt/*` and `_astro/*` for Next.js, Nuxt and Astro. A bundler that writes hashed files elsewhere, such as Bun (`bun build ./index.html`) or Parcel at the build root (`index-a1b2c3d4.js`), needs them listed in `immutablePaths`, as globs relative to the build output directory:
+
+```ts
+new Hosting(blocksStack, 'Hosting', {
+  root: join(__dirname, '..'),
+  framework: 'spa',
+  buildCommand: 'bun run build',
+  buildOutputDir: 'dist',
+  immutablePaths: ['*-????????.js', '*-????????.css'],
+  api: blocksStack,
+});
+```
+
+List only files whose name changes when their content does: a browser keeps an `immutable` file for a year without asking again. A pattern that is absolute, contains `..`, or matches HTML (`*`, `**`, `*.html`, `index.html`) fails synth with `InvalidImmutablePathError`.
+
 `buildRetentionDays` (default 30) is how many days superseded builds are kept for rollback. It maps to the hosting construct's `storage.buildRetentionDays` and must be ≥ `skewProtection.maxAge` in days. The [`@aws-cdk-blocks/hosting` README](../hosting/README.md) has the retention and cleanup rules.
 
 ### Front door and its settings

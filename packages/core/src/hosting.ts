@@ -264,6 +264,36 @@ export interface HostingProps {
   customAdapter?: FrameworkAdapterFn;
 
   /**
+   * Build-output paths whose file names carry a content hash, so they can be
+   * cached for a year with `immutable` (`Cache-Control: public,
+   * max-age=31536000, immutable`). Globs relative to the build output
+   * directory, added to the ones the framework adapter already marks
+   * (`assets/*` for a Vite SPA, `_next/static/*`, `_nuxt/*`, `_astro/*`).
+   *
+   * Set it when your bundler writes hashed files somewhere else: Bun
+   * (`bun build ./index.html`) and Parcel write them at the build root, for
+   * example `index-a1b2c3d4.js`. Every other file is revalidated on each load.
+   * Name only files whose name changes when their content does: a browser
+   * keeps a file marked `immutable` for a year without asking again.
+   *
+   * A pattern is relative (no leading `/`, no `..`) and can't match the
+   * HTML entry point (`index.html`, `*.html`, `*` or `**`): synth fails with
+   * `InvalidImmutablePathError`.
+   *
+   * @example
+   * ```ts
+   * new Hosting(stack, 'Web', {
+   *   root,
+   *   framework: 'spa',
+   *   buildCommand: 'bun run build',
+   *   buildOutputDir: 'dist',
+   *   immutablePaths: ['*-????????.js', '*-????????.css', 'chunk-*.js'],
+   * });
+   * ```
+   */
+  immutablePaths?: string[];
+
+  /**
    * URL prefix the whole site is served under (Next.js `basePath`, Astro
    * `base`, Nuxt `app.baseURL`). When set, CloudFront behaviors are prefixed
    * with it and the bare root issues a 308 redirect to `/<basePath>/`.
@@ -988,6 +1018,63 @@ export function frontendReuseMarker(
   return expectedOutputDir;
 }
 
+/**
+ * Whether the glob `pattern` (`*` and `?` within a path segment, `**` across
+ * segments, everything else literal) matches `path`, the way the asset upload
+ * reads `immutablePaths`.
+ */
+function globMatches(pattern: string, path: string): boolean {
+  let source = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*' && pattern[i + 1] === '*') {
+      source += '.*';
+      i++;
+      if (pattern[i + 1] === '/') i++;
+    } else if (c === '*') {
+      source += '[^/]*';
+    } else if (c === '?') {
+      source += '[^/]';
+    } else {
+      source += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${source}$`).test(path);
+}
+
+/**
+ * Check the `immutablePaths` an app adds: relative globs that can't reach the
+ * HTML entry point, which must always be revalidated (it names the build's
+ * hashed files). Returns the patterns, each trimmed.
+ *
+ * @throws HostingError('InvalidImmutablePathError') for an empty, absolute or
+ *   `..` pattern, or one that would cover HTML.
+ */
+export function validateImmutablePaths(patterns: readonly string[]): string[] {
+  return patterns.map((raw) => {
+    const pattern = typeof raw === 'string' ? raw.trim() : '';
+    const reason =
+      pattern === ''
+        ? 'is empty'
+        : pattern.startsWith('/')
+          ? 'starts with `/` (patterns are relative to the build output directory)'
+          : pattern.split('/').includes('..')
+            ? 'contains `..`'
+            : /\.html?$/i.test(pattern) || globMatches(pattern, 'index.html')
+              ? 'would cover HTML pages, which must be revalidated on every load'
+              : undefined;
+    if (reason) {
+      throw new HostingError('InvalidImmutablePathError', {
+        message: `immutablePaths entry ${JSON.stringify(raw)} ${reason}.`,
+        resolution:
+          'List only build-output files whose name carries a content hash, as globs relative to the build ' +
+          "output directory (e.g. `'*-????????.js'` or `'static/*'`).",
+      });
+    }
+    return pattern;
+  });
+}
+
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
   sveltekit: 'build',
@@ -1303,6 +1390,13 @@ export class Hosting extends Construct {
     //    is provided rather than reverse-engineered from framework/bundler
     //    internals (which drift across versions). When the prop is omitted,
     //    the adapter's detected `manifest.basePath` (if any) stands.
+    // ── 4b''. Extra content-hashed paths: the app's own, on top of the adapter's.
+    if (props.immutablePaths !== undefined && props.immutablePaths.length > 0) {
+      const extra = validateImmutablePaths(props.immutablePaths);
+      const own = manifest.staticAssets.immutablePaths ?? [];
+      manifest.staticAssets.immutablePaths = [...own, ...extra.filter((p) => !own.includes(p))];
+    }
+
     if (props.basePath !== undefined) {
       const normalized = normalizeBasePath(props.basePath);
       if (normalized) {

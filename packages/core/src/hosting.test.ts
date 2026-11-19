@@ -38,7 +38,7 @@ import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { addServicePrincipalTrustCheck } from './cdk/service-principal-trust.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
-import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
+import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps, validateImmutablePaths } from './hosting.js';
 import { buildEventUrl } from './lambda-handler.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
@@ -162,6 +162,50 @@ describe('Hosting', () => {
 			}
 		});
 	});
+
+  // ── immutablePaths ───────────────────────────────────────────
+
+  describe('immutablePaths', () => {
+    /** The `Include` lists of the asset uploads whose files get the immutable `Cache-Control`. */
+    const immutableIncludes = (template: Template): string[][] =>
+      Object.values(template.findResources('Custom::CDKBucketDeployment'))
+        .map((r) => r.Properties as { Include?: string[]; SystemMetadata?: Record<string, string> })
+        .filter((p) => (p.SystemMetadata?.['cache-control'] ?? '').includes('immutable'))
+        .map((p) => p.Include ?? []);
+
+    it('adds the app\'s hashed paths to the adapter\'s (a Bun or Parcel build writes them at the root)', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'ImmutablePathsStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, immutablePaths: ['*-????????.js', '*-????????.css'] });
+
+      const includes = immutableIncludes(Template.fromStack(stack));
+      assert.strictEqual(includes.length, 1, JSON.stringify(includes));
+      assert.deepStrictEqual(includes[0], ['assets/*', '*-????????.js', '*-????????.css']);
+    });
+
+    it('keeps the adapter\'s paths alone when immutablePaths is not set', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'NoImmutablePathsStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      assert.deepStrictEqual(immutableIncludes(Template.fromStack(stack)), [['assets/*']]);
+    });
+
+    for (const bad of ['', '/assets/*', '../x/*', '*', '**', '**/*', 'index.html', '*.html', 'pages/*.htm', 'index.*']) {
+      it(`fails synth with InvalidImmutablePathError for ${JSON.stringify(bad)}`, () => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), 'BadImmutablePathStack');
+        assert.throws(
+          () => new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, immutablePaths: [bad] }),
+          (e: Error) => e.name === 'InvalidImmutablePathError',
+        );
+      });
+    }
+
+    it('accepts a pattern under a directory, which cannot reach the root index.html', () => {
+      assert.deepStrictEqual(validateImmutablePaths(['static/*', '**/*.js', ' chunk-*.js ']), ['static/*', '**/*.js', 'chunk-*.js']);
+    });
+  });
 
   // ── SPA tests ────────────────────────────────────────────────
 
