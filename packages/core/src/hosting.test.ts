@@ -2409,6 +2409,40 @@ describe('Hosting', () => {
       }
     });
 
+    it("falls back to the API's execute-api URL with frontDoor: 'none' when it has no publicApiUrl", () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ShopWebsiteDirectStack', { env: { account: ACCOUNT, region: REGION } });
+      const apiUrl = `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`;
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: { apiUrl }, frontDoor: 'none' });
+
+      const { config, raw } = servedConfig(app, stack);
+      // The page calls this URL directly, so the region it carries is already in its requests.
+      assert.deepStrictEqual(config, { apiUrl, [BLOCKS_BUILD_ID_CONFIG_KEY]: buildIdOutput(stack) });
+      for (const secretish of [ACCOUNT, 'ShopWebsiteDirectStack', 'arn:']) {
+        assert.ok(!raw.includes(secretish), `served config must not contain ${secretish}: ${raw}`);
+      }
+    });
+
+    it('holds the same-origin API prefix behind a non-CloudFront door too', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App({ context: { sandboxMode: 'true' } });
+      const stack = new Stack(app, 'ShopAlbStack', { env: { account: ACCOUNT, region: REGION } });
+      const api: BlocksStackApi = {
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+      };
+      new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: { kind: 'alb' } });
+
+      const { config, raw } = servedConfig(app, stack);
+      assert.deepStrictEqual(config, {
+        apiUrl: BLOCKS_RPC_PREFIX,
+        [BLOCKS_BUILD_ID_CONFIG_KEY]: buildIdOutput(stack),
+      });
+      for (const secretish of [ACCOUNT, REGION, 'ShopAlbStack', 'execute-api', 'arn:']) {
+        assert.ok(!raw.includes(secretish), `served config must not contain ${secretish}: ${raw}`);
+      }
+    });
+
     it('adds nothing but the backendConfig the app chose to publish', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
