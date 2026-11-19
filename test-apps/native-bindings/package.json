@@ -23,11 +23,11 @@
     "deploy:sandbox": "tsx cdk-blocks/scripts/deploy-sandbox.ts",
     "destroy": "npm run sandbox:destroy",
     "seed:cognito": "tsx cdk-blocks/scripts/seed-cognito-user.ts",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "@aws-blocks/bb-auth": "*",
-    "@aws-blocks/blocks": "*",
+    "@aws-cdk-blocks/bb-auth": "*",
+    "aws-cdk-blocks": "*",
     "zod": "^4.6.7"
   },
   "devDependencies": {

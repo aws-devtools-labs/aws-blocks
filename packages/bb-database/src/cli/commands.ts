@@ -90,14 +90,14 @@ function writeCaModule(name: string, pem: string): string {
 }
 
 async function stackNameFor(stage: Stage): Promise<string> {
-	const { getStackName } = await import('@aws-blocks/core/scripts');
+	const { getStackName } = await import('@aws-cdk-blocks/core/scripts');
 	return getStackName({ sandbox: stage === 'sandbox', projectRoot: process.cwd() });
 }
 
 async function ssmClient() {
 	const [{ SSMClient }, { resolveDeploymentTarget }] = await Promise.all([
 		import('@aws-sdk/client-ssm'),
-		import('@aws-blocks/core/scripts'),
+		import('@aws-cdk-blocks/core/scripts'),
 	]);
 	const target = await resolveDeploymentTarget({ projectRoot: process.cwd() });
 	return new SSMClient({ region: target.region ?? undefined, profile: target.profile });

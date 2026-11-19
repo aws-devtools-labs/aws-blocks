@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/core": minor
-"@aws-blocks/blocks": minor
-"@aws-blocks/hosting": minor
+"@aws-cdk-blocks/core": minor
+"aws-cdk-blocks": minor
+"@aws-cdk-blocks/hosting": minor
 ---
 
 feat(core): `defaults.appIdentity` — an app identity for running many apps in one AWS account
@@ -48,7 +48,7 @@ from the platform; to AWS Blocks it is just a string.
   route or deployment attached to an API outside the app's own template, or a
   stack or block outside the prefix. Synth fails on any violation
   unless `reportOnly: true`.
-- **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-blocks/hosting`):
+- **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-cdk-blocks/hosting`):
   the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
   Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has
   `defaults.appIdentity`, so a shared platform's execution policy and deploy guard see it as

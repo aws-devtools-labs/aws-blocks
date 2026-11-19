@@ -1,4 +1,4 @@
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { AuthBasic, type AuthBasicUser } from './barrel.js';
 
 const scope = new Scope('app');

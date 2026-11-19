@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth` — default entry (local dev + tests) and the `types`
+ * `@aws-cdk-blocks/bb-auth` — default entry (local dev + tests) and the `types`
  * entry every condition type-checks against.
  *
  * `Auth` is the real engine-agnostic `AuthBase` (sessions,
@@ -15,8 +15,8 @@
  * (a `'cognito'` block's social, SAML and OIDC `providers`) answer an actionable 501.
  */
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { AuthBase, type AuthLayer, defineAuthLayer } from './auth-base.js';
 import { MockPoolBearerVerifier } from './bearer-mock.js';
 import { DirectFederationEngine, isStubProvider } from './engines/federation-direct.js';
@@ -152,8 +152,8 @@ const MOCK_LAYER: AuthLayer = {
 };
 
 /**
- * The unified auth Building Block, published as `@aws-blocks/bb-auth` and exported
- * from `@aws-blocks/blocks`. See the package README.
+ * The unified auth Building Block, published as `@aws-cdk-blocks/bb-auth` and exported
+ * from `aws-cdk-blocks`. See the package README.
  *
  * Locally, `Auth` runs a complete user pool with no AWS account. Every
  * verification code is written to `.bb-data/<fullId>/last-code.json` and

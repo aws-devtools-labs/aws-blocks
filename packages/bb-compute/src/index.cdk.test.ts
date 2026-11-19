@@ -16,9 +16,9 @@ import { join } from 'node:path';
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-cdk-blocks/core/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import { ContainerCompute } from '@aws-cdk-blocks/bb-container-compute/cdk';
 import { Compute } from './index.cdk.js';
 
 /** A minimal stub compute so BlocksStack.create wires a default without pulling the real one. */

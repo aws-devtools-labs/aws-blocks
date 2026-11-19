@@ -5,8 +5,8 @@
 // Any manual changes will be overwritten on the next build.
 // ============================================================
 
-import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';
-import '@aws-blocks/bb-file-bucket/middleware';
+import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from 'aws-cdk-blocks/client';
+import '@aws-cdk-blocks/bb-file-bucket/middleware';
 
 export const api = __BLOCKS_ApiNamespaceClient__('api');
 

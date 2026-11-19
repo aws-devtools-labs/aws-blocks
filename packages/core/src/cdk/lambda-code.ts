@@ -5,7 +5,7 @@
  * Locating a Building Block's own deploy-time Lambda handlers (custom-resource
  * handlers, migration runners, …) in both layouts a block's CDK code runs from:
  *
- * - **Installed** (`node_modules/@aws-blocks/bb-x/dist/…`): the package's build
+ * - **Installed** (`node_modules/@aws-cdk-blocks/bb-x/dist/…`): the package's build
  *   output is there — a pre-built `build:lambda` bundle, or the tsc-compiled
  *   `.js` handler.
  * - **Vendorized** (`vendor/bb-x/src/…`, made by `blocks-vendorize`): only `src/`

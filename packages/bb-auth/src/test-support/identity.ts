@@ -117,9 +117,9 @@ export function synthIdentity(
 ): SynthesizedAuth {
 	const result = synthUnderCdkConditions({
 		imports: [
-			"import { Auth } from '@aws-blocks/bb-auth';",
+			"import { Auth } from '@aws-cdk-blocks/bb-auth';",
 			// For provider secrets, which must be real `secret: true` AppSettings.
-			"import { AppSetting } from '@aws-blocks/bb-app-setting';",
+			"import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';",
 			...extraImports,
 		].join('\n'),
 		build: `const auth = ${construct};\nreport.fullId = auth.fullId;`,

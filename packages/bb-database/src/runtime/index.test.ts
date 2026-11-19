@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { TransactionHandle } from '../common/engine.js';
 import { sql } from '../common/sql.js';
 import { DatabaseErrors, serializationConflict } from '../errors.js';

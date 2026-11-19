@@ -4,7 +4,7 @@
 /**
  * Checks that every asset directory a publishable package's compiled code loads
  * with `Code.fromAsset(join(__dirname, '<dir>'))`, or names as the `bundleDir` of a
- * `deployTimeLambdaCode` spec (`@aws-blocks/core/cdk/internal`), is in that package's npm
+ * `deployTimeLambdaCode` spec (`@aws-cdk-blocks/core/cdk/internal`), is in that package's npm
  * pack listing. A `bundleDir` is relative to the calling module, like `__dirname`.
  *
  * Such a directory comes from a package-local bundle step (esbuild into

@@ -17,8 +17,8 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
-import { BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { BLOCKS_AUTH_PREFIX } from '@aws-cdk-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import {
 	AUTH_ROUTE_PREFIX,
@@ -92,10 +92,10 @@ function synth(construct: string, options: SynthOptions = {}): CdkSynthResult {
 	if (hit) return hit;
 	const result = synthUnderCdkConditions({
 		imports: [
-			"import { Auth } from '@aws-blocks/bb-auth';",
-			"import { AppSetting } from '@aws-blocks/bb-app-setting';",
-			"import { Secret } from '@aws-blocks/bb-secret';",
-			"import { registerConfig } from '@aws-blocks/core/cdk';",
+			"import { Auth } from '@aws-cdk-blocks/bb-auth';",
+			"import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';",
+			"import { Secret } from '@aws-cdk-blocks/bb-secret';",
+			"import { registerConfig } from '@aws-cdk-blocks/core/cdk';",
 		].join('\n'),
 		build: `${SECRETS}\n${options.before ?? ''}\nconst auth = ${construct};\n${options.after ?? ''}\nreport.fullId = auth.fullId;`,
 		apiUrl: options.apiUrl,

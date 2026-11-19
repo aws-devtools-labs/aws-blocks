@@ -345,7 +345,7 @@ const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
  *
  * ```typescript
  * // Generated client.js
- * import { ApiNamespaceClient } from '@aws-blocks/core/client';
+ * import { ApiNamespaceClient } from '@aws-cdk-blocks/core/client';
  * export const api = ApiNamespaceClient('api');
  *
  * // Frontend usage — fully typed via the 'cdk-blocks' types export
@@ -379,7 +379,7 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
     options?.retryStaleConnection === false
       ? (url, init) => (contextFetch() ?? fetch)(url, init)
       : (url, init) => fetchWithStaleConnectionRetry(url, init, contextFetch());
-  // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
+  // The namespace this client calls, the same in every tab: `@aws-cdk-blocks/auth-common` tags its
   // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
   const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;
   return new Proxy({} as any, {

@@ -12,8 +12,8 @@ import {
 	CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, blocksError, installClientUserAgent } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, blocksError, installClientUserAgent } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { validatePresignedUrlExpiry } from './presigned-url.js';
 import type {
@@ -22,8 +22,8 @@ import type {
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { VERSION_NOT_FOUND_MESSAGE, assertValidKey, assertValidPrefix, presignedUploadUnsupportedMessage } from './validation.js';
 import {
 	resolvePresignedUpload, resolvePutUpload, uploadConstraintsFrom, validateUploadConstraintOptions,
@@ -81,7 +81,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
-		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
+		this.registerClientMiddleware('@aws-cdk-blocks/bb-file-bucket/middleware');
 		this.objectLocked = !options?.bucket && options?.objectLock !== undefined;
 		// Upload constraints are enforced here at runtime (not by S3 bucket
 		// configuration), so validate their shape and keep them for every bucket,

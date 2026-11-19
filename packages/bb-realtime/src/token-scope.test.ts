@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { createHmac } from 'node:crypto';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Realtime, RealtimeErrors } from './index.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';

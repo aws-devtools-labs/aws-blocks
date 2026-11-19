@@ -5,8 +5,8 @@
 // Auth (email + password) + notes CRUD + public stats
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { ApiNamespace, Compute, Scope, KVStore, ApiError, RawRoute } from '@aws-blocks/blocks';
-import { Auth } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Compute, Scope, KVStore, ApiError, RawRoute } from 'aws-cdk-blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('hosting-spa-test');
 

@@ -19,7 +19,7 @@ To run it on every build, add it to your app's `package.json`:
 ```json
 {
   "scripts": {
-    "spec": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate spec",
+    "spec": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate spec",
     "build": "npm run spec && tsc && vite build"
   }
 }

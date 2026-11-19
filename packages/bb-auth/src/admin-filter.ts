@@ -23,7 +23,7 @@
  * @internal
  */
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import type { AdminUserFilter } from './types.js';
 

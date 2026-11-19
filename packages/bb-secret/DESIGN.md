@@ -1,6 +1,6 @@
 # Secret — Design
 
-**Package:** `@aws-blocks/bb-secret`
+**Package:** `@aws-cdk-blocks/bb-secret`
 **Type:** Primitive (new infrastructure)
 **AWS Service:** AWS Secrets Manager
 
@@ -238,7 +238,7 @@ README's "Managing secret values" for the three approaches (auto-generated, the
 CI/CD). The CDK construct's job is name + IAM grant + runtime ARN registration;
 it never carries the value.
 
-## Framework keys (`@aws-blocks/bb-secret/internal`)
+## Framework keys (`@aws-cdk-blocks/bb-secret/internal`)
 
 Some blocks generate a signing key for their own use: `Auth`
 (`session-secret`) and `Realtime` (`token-secret`). They create it with
@@ -267,7 +267,7 @@ path, change `fullId`, and rename the SSM parameter. The function creates the
 - `'ssm'`: `new AppSetting(scope, id, { secret: true })`. When the stack looks
   like production (`sandboxMode` context not `'true'`, `removalPolicy` `RETAIN`,
   or `deletionProtection` on), synth emits the warning
-  `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`.
+  `@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`.
 
 **Runtime.** On every `get()`, the AWS entry checks `process.env` (where the
 handler loaded the config) for the key's Secret ARN (`BLOCKS_SECRET_ARN_<FULLID>`).
@@ -282,7 +282,7 @@ code can cold-start while S3 still serves the previous config, which has no ARN,
 and the loader caches that for the container's life. That code tries SSM, and
 the read fails (the same deploy removed the SSM grant and the parameter). So
 when an SSM read fails, `get()` calls `refreshConfig()` from
-`@aws-blocks/core/internal`, which re-reads the config from S3 and merges it
+`@aws-cdk-blocks/core/internal`, which re-reads the config from S3 and merges it
 into `process.env` (new keys are added, keys an earlier config load set are
 updated, real environment variables are never touched). Then `get()` decides
 again: if the ARN is now present it reads Secrets Manager, otherwise it

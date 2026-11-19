@@ -20,14 +20,14 @@ import type { DefaultComputeFactory } from './compute/default-compute-factory.js
 import { BlocksPresets, BlocksStack, Scope } from './index.js';
 import { HTTP_ERROR_STATUS_EXPORTS } from '../rpc-dispatch.js';
 
-// A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
-// @aws-blocks/blocks), which core's own tests can't depend on. Use an
+// A real app gets its default compute from @aws-cdk-blocks/bb-lambda-compute (via
+// aws-cdk-blocks), which core's own tests can't depend on. Use an
 // equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
 // via apiHandler(), so create() can build the default + the shared REST API
 // gateway and the handler/gateway/apiUrl accessors have something real to
 // resolve to. It is passed to each create() via the internal
 // `defaultComputeFactory` option (see makeStack / makeBackend), exactly as
-// @aws-blocks/blocks injects LambdaCompute.
+// aws-cdk-blocks injects LambdaCompute.
 class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly logGroup: cdk.aws_logs.LogGroup;
@@ -86,7 +86,7 @@ const deploymentTypeBackendPath = join(__dirname, '__fixtures__', 'deployment-ty
 const httpErrorStatusBackendPath = join(__dirname, '__fixtures__', 'http-error-status-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
-// @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
+// aws-cdk-blocks injects LambdaCompute — so tests don't repeat it.
 const makeStack = (scope: Construct, id: string, backendCDKPath: string) =>
 	BlocksStack.create(scope, id, {
 		backendHandlerPath: handlerPath,
@@ -631,7 +631,7 @@ describe('create() without defaults (apps from older templates)', () => {
 		assert.ok(!(e instanceof TypeError), `expected a Blocks error, got ${e.name}: ${e.message}`);
 		assert.match(e.message, /requires a `defaults` field/);
 		assert.match(e.message, /defaults: sandboxMode \? BlocksPresets\.sandbox : BlocksPresets\.production/);
-		assert.match(e.message, /import \{ BlocksPresets \} from '@aws-blocks\/blocks\/cdk'/);
+		assert.match(e.message, /import \{ BlocksPresets \} from 'aws-cdk-blocks\/cdk'/);
 		assert.match(e.message, /docs\/guides\/upgrading-older-apps\.md/);
 		return true;
 	};

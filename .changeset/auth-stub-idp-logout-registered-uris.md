@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-auth": patch
+"aws-cdk-blocks": patch
 ---
 
 feat(bb-auth): the stub IdP has an end-session endpoint that redirects only to registered URIs

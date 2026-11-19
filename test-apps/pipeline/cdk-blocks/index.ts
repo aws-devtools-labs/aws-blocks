@@ -4,7 +4,7 @@
 // Realistic CDK backend for pipeline synth test.
 // Exercises the full BlocksStack import path with actual Building Blocks.
 
-import { Scope, RawRoute } from '@aws-blocks/core/cdk';
+import { Scope, RawRoute } from '@aws-cdk-blocks/core/cdk';
 
 const scope = new Scope('pipeline-app');
 

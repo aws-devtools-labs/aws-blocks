@@ -13,7 +13,7 @@
  * @internal
  */
 import { createHash, createHmac } from 'node:crypto';
-import { installClientUserAgent } from '@aws-blocks/core';
+import { installClientUserAgent } from '@aws-cdk-blocks/core';
 import type { ModelConfig } from './types.js';
 
 /**

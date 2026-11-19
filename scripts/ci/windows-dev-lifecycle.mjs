@@ -72,7 +72,7 @@ function listening(port) {
 /** Check the Windows `dev task` lifecycle in `app`; throws on the first failure. */
 export async function checkDevLifecycle(app, env, logDir) {
 	// Use the package bootstrap directly so the hard-kill target is the session owner, not npm or cmd.exe.
-	const task = ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--'];
+	const task = ['--input-type=module', '-e', "import 'aws-cdk-blocks/run'", '--'];
 	const pidfile = join(app, '.cdk-blocks-sandbox', `dev-server.${PORT}.pid`);
 	const record = () => {
 		try {

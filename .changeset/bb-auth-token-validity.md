@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-auth": minor
+"@aws-cdk-blocks/bb-auth": minor
 ---
 
 feat(bb-auth): explicit token lifetimes and refresh-token rotation on the app clients, and a 30-day default session

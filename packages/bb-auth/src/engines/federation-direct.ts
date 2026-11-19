@@ -34,8 +34,8 @@
  */
 
 import crypto from 'node:crypto';
-import { ApiError, type BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals, getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import { ApiError, type BlocksContext } from '@aws-cdk-blocks/core';
+import { constantTimeEquals, getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 import { createRemoteJWKSet, type JWTPayload, jwtVerify } from 'jose';
 import { AuthErrors } from '../errors.js';
 import { safeRedirectPath, signInRedirectPath } from '../redirect-path.js';

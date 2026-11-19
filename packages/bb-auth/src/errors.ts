@@ -1,18 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { AuthErrors } from '@aws-blocks/auth-common';
+import { AuthErrors } from '@aws-cdk-blocks/auth-common';
 
-export type { AuthErrorName } from '@aws-blocks/auth-common';
+export type { AuthErrorName } from '@aws-cdk-blocks/auth-common';
 /**
  * The `Auth` Building Block throws the canonical AWS Blocks auth error
- * vocabulary from `@aws-blocks/auth-common`. It is re-exported here, not
+ * vocabulary from `@aws-cdk-blocks/auth-common`. It is re-exported here, not
  * redefined, so there is exactly one source of truth for every error `name`.
  *
  * Match a thrown error with `isAuthError(e, AuthErrors.X)` (or `isBlocksError`
- * from `@aws-blocks/core`); both work the same server- and client-side.
+ * from `@aws-cdk-blocks/core`); both work the same server- and client-side.
  */
-export { AuthErrors, isAuthError } from '@aws-blocks/auth-common';
+export { AuthErrors, isAuthError } from '@aws-cdk-blocks/auth-common';
 
 /**
  * The HTTP status `Auth` uses for each error name. Carried over from

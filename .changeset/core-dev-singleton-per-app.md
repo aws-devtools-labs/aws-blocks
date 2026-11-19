@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(core,blocks): one `npm run dev` per app, whatever its port
@@ -10,4 +10,4 @@ A second `npm run dev` of the same app on another port (`npm run dev -- --port 4
 - A dev server, or a `npm run dev` claiming its session, that finds a live dev-server pidfile of the app on another port now refuses to start, removes the record it wrote, and exits 1 with `a dev server of this app is already running on :<port> (pid <pid>)`. The pidfiles stay per port, with the same exclusive claim; each start writes its record before it reads the others', so of two starts on two ports at the same moment at least one refuses.
 - The hint names the running server's port, `npm run dev:stop -- --port <port>`, and no longer suggests another `--port`, which would not help.
 - `claimDevPidfile()` and `claimDevSession()` return that port as `port` when they refuse. New export from the dev-server module: `devStopCommand(port)`.
-- `npm run sandbox`, when it will start a dev server (neither `sandbox deploy` nor `sandbox preview`), refuses before the synth and the deploy while a dev session of the app runs or is starting on any port, with `A dev server of this app is already <running|starting> on :<port> (pid <pid>)` and the `dev stop --port` command. Before, it deployed, then its dev server was refused and the sandbox ended. New exports: `liveDevSession()` from `@aws-blocks/core/scripts/dev-pidfile`, and `assertNoRunningDevServer()` from the sandbox module.
+- `npm run sandbox`, when it will start a dev server (neither `sandbox deploy` nor `sandbox preview`), refuses before the synth and the deploy while a dev session of the app runs or is starting on any port, with `A dev server of this app is already <running|starting> on :<port> (pid <pid>)` and the `dev stop --port` command. Before, it deployed, then its dev server was refused and the sandbox ended. New exports: `liveDevSession()` from `@aws-cdk-blocks/core/scripts/dev-pidfile`, and `assertNoRunningDevServer()` from the sandbox module.

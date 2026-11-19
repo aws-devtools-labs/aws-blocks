@@ -8,7 +8,7 @@
 // every namespace cdk-blocks/index.ts exports.
 // ============================================================
 
-import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from 'aws-cdk-blocks/client';
 
 export const authApi = __BLOCKS_ApiNamespaceClient__('authApi');
 export const api = __BLOCKS_ApiNamespaceClient__('api');

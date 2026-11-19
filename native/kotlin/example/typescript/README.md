@@ -1,6 +1,6 @@
 # Shared Example Backend
 
-The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `cdk-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
+The AWS CDK Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `cdk-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
 
 > **Upgrading a deployed stack:** todos are now keyed on the owner's `userSub` instead of `userId`. A table's key can't change in place, so a stack deployed from an earlier version of this example fails to update — destroy it (`npm run sandbox:destroy`) and deploy again. Existing todos are not carried over.
 
@@ -29,15 +29,15 @@ The dev server writes `.cdk-blocks-sandbox/config.json` with its own URL, and a 
 
 To switch the apps between local and sandbox, regenerate the spec the other way.
 
-### Inside the AWS Blocks repository
+### Inside the AWS CDK Blocks repository
 
-`npm install` fetches `@aws-blocks/blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
+`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-cdk-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
 
 ```bash
 mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
 
 npm run dev:server   # the dev server on :3001
-node ../../../../node_modules/@aws-blocks/core/dist/scripts/generate-spec-cli.js   # the spec (after the dev server has run once)
+node ../../../../node_modules/@aws-cdk-blocks/core/dist/scripts/generate-spec-cli.js   # the spec (after the dev server has run once)
 npm test             # typecheck + test:e2e; starts its own dev server, so stop the one above first
 ```
 
@@ -139,7 +139,7 @@ Notes:
 To exercise sign-in without any Google setup, swap the provider for the stub IdP in `cdk-blocks/index.ts`:
 
 ```typescript
-import { Auth, stubIdp, relayOrigin } from '@aws-blocks/blocks';
+import { Auth, stubIdp, relayOrigin } from 'aws-cdk-blocks';
 
 const auth = new Auth(scope, 'auth', {
   store: 'builtin',

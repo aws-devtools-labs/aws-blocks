@@ -7,8 +7,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
-import { type ClusterKind, DatabaseErrors } from '@aws-blocks/bb-database';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
+import { type ClusterKind, DatabaseErrors } from '@aws-cdk-blocks/bb-database';
 import type { api as apiType } from 'cdk-blocks';
 
 // Compile-time assertions. `Equal` is the standard invariant type-equality check;
@@ -41,7 +41,7 @@ type _DbxKyselyRow = Expect<Equal<DbxKyselyRow, { id: string; name: string; valu
 
 /** Run the installed database task from the app directory and parse its structured result. */
 function cdkBlocksDb(...args: string[]): unknown {
-  const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--', 'db', ...args, '--', '--output', 'json'], {
+  const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', "import 'aws-cdk-blocks/run'", '--', 'db', ...args, '--', '--output', 'json'], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });

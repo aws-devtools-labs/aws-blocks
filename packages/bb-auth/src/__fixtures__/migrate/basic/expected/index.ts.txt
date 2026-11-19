@@ -1,5 +1,4 @@
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
-import { Auth, AuthErrors, type AuthenticatedUser } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, Auth, AuthErrors, type AuthenticatedUser } from 'aws-cdk-blocks';
 
 const scope = new Scope('app');
 // TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.

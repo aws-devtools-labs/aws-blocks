@@ -18,7 +18,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { CLIENT_ERROR_MESSAGES, passwordPolicyMessage } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
 import { Auth as AwsAuth } from './index.aws.js';

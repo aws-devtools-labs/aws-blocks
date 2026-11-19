@@ -14,7 +14,7 @@
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
+import { BlocksPresets, BlocksStack } from 'aws-cdk-blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

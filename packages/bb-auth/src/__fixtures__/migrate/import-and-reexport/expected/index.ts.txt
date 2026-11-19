@@ -1,9 +1,9 @@
-import { Auth, AuthErrors, type AuthenticatedUser } from '@aws-blocks/bb-auth';
-import { Scope } from '@aws-blocks/core';
+import { Auth, AuthErrors, type AuthenticatedUser } from '@aws-cdk-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
 
-export { Auth, AuthErrors } from '@aws-blocks/bb-auth';
-export type { AuthenticatedUser } from '@aws-blocks/bb-auth';
-export * from '@aws-blocks/bb-auth';
+export { Auth, AuthErrors } from '@aws-cdk-blocks/bb-auth';
+export type { AuthenticatedUser } from '@aws-cdk-blocks/bb-auth';
+export * from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('app');
 export const auth = new Auth(scope, 'auth', { emailPassword: { autoSignIn: false } });

@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { CLOSED_OUTPUT_CODES } from '@aws-blocks/core/scripts';
+import { CLOSED_OUTPUT_CODES } from '@aws-cdk-blocks/core/scripts';
 import { CLI_CLOSED_OUTPUT_CODES } from './closed-output.js';
 
 describe('the write errors the CLI drops', () => {

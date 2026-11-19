@@ -46,7 +46,7 @@
 import crypto from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { WRONG_CODE_MESSAGE } from '../enumeration.js';
 import { AuthErrors } from '../errors.js';
 import { decodeJwtPayload } from '../sessions.js';

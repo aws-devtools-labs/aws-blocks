@@ -119,7 +119,7 @@ export type { SkewProtectionConfig } from './skew_protection.js';
 const CFN_MAX_RESOURCES_PER_STACK = 500;
 const CFN_RESOURCE_WARNING_THRESHOLD = 450;
 /** Stable id of the plain-HTTP front-door warning; also the `acknowledgeWarning` id. */
-const PLAIN_HTTP_FRONT_DOOR_WARNING_ID = '@aws-blocks/hosting:PlainHttpFrontDoor';
+const PLAIN_HTTP_FRONT_DOOR_WARNING_ID = '@aws-cdk-blocks/hosting:PlainHttpFrontDoor';
 
 // ---- Public types ----
 
@@ -546,14 +546,14 @@ export type HostingConstructProps = {
    * Omit for the CloudFront default (backward-compatible).
    *
    * (`StackedRouterDoorOptions` is the stacked door's router, which only the
-   * `@aws-blocks/core` `Hosting` builds — not an option for apps.)
+   * `@aws-cdk-blocks/core` `Hosting` builds — not an option for apps.)
    */
   frontDoor?: HostingFrontDoor | StackedRouterDoorOptions;
   /**
    * The backend API a non-CloudFront door proxies same-origin, so the browser
    * reaches it on the app's own origin (session cookies flow, no CORS): the
    * ALB through a forwarder Lambda, API Gateway natively, a bring-your-own
-   * door as `input.origins.api`. The `@aws-blocks/core` `Hosting` sets it from
+   * door as `input.origins.api`. The `@aws-cdk-blocks/core` `Hosting` sets it from
    * its `api` prop. The CloudFront door (whose API behaviors the core
    * `Hosting` adds) and `'none'` (the client calls the API cross-origin)
    * ignore it.
@@ -776,7 +776,7 @@ export class HostingConstruct extends Construct {
    *
    * On every door, the resources the door's `onUpload` declared (e.g. a
    * `cf.invalidate`) also wait for it, as they wait for the asset uploads —
-   * the `@aws-blocks/core` `Hosting` registers its resolved runtime-config
+   * the `@aws-cdk-blocks/core` `Hosting` registers its resolved runtime-config
    * upload here, so an invalidation never runs before the real
    * `config.json` is in place.
    */
@@ -1617,7 +1617,7 @@ export class HostingConstruct extends Construct {
         securityHeadersPolicy = f.responseHeadersPolicy;
         if (removeOriginHeaders.length > 0) {
           Annotations.of(this).addWarningV2(
-            '@aws-blocks/hosting:WebFunctionHeaderNotStripped',
+            '@aws-cdk-blocks/hosting:WebFunctionHeaderNotStripped',
             `cdn.responseHeadersPolicy is your own policy, so Hosting can't remove ${removeOriginHeaders.join(', ')} ` +
               "(internal Web Function log stream name) from responses. Make sure the policy's removeHeaders includes it " +
               '(a shared policy like this avoids one Hosting-created policy per stack).',
@@ -1784,7 +1784,7 @@ export class HostingConstruct extends Construct {
 
         if (!regionResolved && this._distribution) {
           Annotations.of(this).addWarningV2(
-            '@aws-blocks/hosting:CloudFrontAlarmRegionUnresolved',
+            '@aws-cdk-blocks/hosting:CloudFrontAlarmRegionUnresolved',
             `The hosting stack is environment-agnostic (region is an ` +
               `unresolved token), so the CloudFront 5xx alarm is created ` +
               `locally. AWS/CloudFront metrics only publish in us-east-1, so ` +
@@ -1836,7 +1836,7 @@ export class HostingConstruct extends Construct {
             // The operator is told, in build output, exactly what is missing
             // and how to get it (set env: { account, region }).
             Annotations.of(this).addWarningV2(
-              '@aws-blocks/hosting:CloudFrontAlarmSkippedNoAccount',
+              '@aws-cdk-blocks/hosting:CloudFrontAlarmSkippedNoAccount',
               `Skipping the off-region CloudFront 5xx alarm: the stack's ` +
                 `region is '${region}' but its account is unresolved, and a ` +
                 `us-east-1 support stack cannot be synthesized without a ` +
@@ -2583,7 +2583,7 @@ export class HostingConstruct extends Construct {
     // resources that must run after them (e.g. a CloudFront invalidation via
     // `cf.invalidate`). Like the door itself, it only declares resources.
     // What it declares is recorded, so an upload declared after this construct
-    // (the `@aws-blocks/core` `Hosting` uploads the resolved runtime config
+    // (the `@aws-cdk-blocks/core` `Hosting` uploads the resolved runtime config
     // later, via `addBuildAssetDependency`) is ordered before it too.
     if (onUpload) {
       const uploads: readonly BucketDeployment[] = [...buildAssetDeployments];
@@ -2643,7 +2643,7 @@ export class HostingConstruct extends Construct {
           .filter((c) => CfnResource.isCfnResource(c)).length;
         if (resourceCount >= CFN_RESOURCE_WARNING_THRESHOLD) {
           Annotations.of(this).addWarningV2(
-            '@aws-blocks/hosting:CfnResourceCount',
+            '@aws-cdk-blocks/hosting:CfnResourceCount',
             `This stack synthesizes ~${resourceCount} CloudFormation resources, ` +
               `approaching the hard limit of ${CFN_MAX_RESOURCES_PER_STACK} per ` +
               `stack. Large hosting deploys (many routes, header rules, or asset ` +
@@ -2699,7 +2699,7 @@ export class HostingConstruct extends Construct {
     if (result.resource !== resource && !sharing) this.ssrCacheGuardBundles.set(bundle, { name, key });
     if (result.skipped !== undefined) {
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:SsrCacheGuardNotInstalled',
+        '@aws-cdk-blocks/hosting:SsrCacheGuardNotInstalled',
         `The SSR cache guard is not installed in front of compute '${name}': ${result.skipped}. ` +
           'Its responses are cached as their Cache-Control says, so routes that set cookies or depend on ' +
           "the request's cookies or Authorization should send `Cache-Control: private`, or list those " +
@@ -2724,7 +2724,7 @@ export class HostingConstruct extends Construct {
     for (const [key, hint] of ignored) {
       if (compute[key] === undefined) continue;
       Annotations.of(this).addWarningV2(
-        `@aws-blocks/hosting:WebFunctionIgnores-${key}`,
+        `@aws-cdk-blocks/hosting:WebFunctionIgnores-${key}`,
         `compute.${key} does not apply to compute.type 'web-function' and is ignored (${hint}).`,
       );
     }
@@ -3245,7 +3245,7 @@ const assertAlbCertificateHasDomain = (
  * plain number. Without this coercion the value flows into
  * aws-cdk-lib's Lambda construct and crashes synth deep in framework
  * code with `props.timeout.toSeconds is not a function` — surfaced
- * by the AWS Blocks bug-bash repro (`@aws-blocks/blocks` Hosting
+ * by the AWS Blocks bug-bash repro (`aws-cdk-blocks` Hosting
  * wrapper passing `timeout: 30` straight through). Normalize once
  * here so both shapes work and the type stays well-defined inside
  * the L3.

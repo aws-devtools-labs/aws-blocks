@@ -17,7 +17,7 @@ import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 // The request base URL store (see `buildEventBaseUrl`, which the dispatcher puts
-// in it) lives with `getRequestBaseUrl()`, shared across copies of `@aws-blocks/core`.
+// in it) lives with `getRequestBaseUrl()`, shared across copies of `@aws-cdk-blocks/core`.
 export { requestBaseUrl } from './common/request-base-url.js';
 
 // The request-scoped stores and the forwarded-host gate live in request-context.ts
@@ -306,7 +306,7 @@ export function computeHttpDeadlineMs(context?: LambdaContext): number {
  */
 export interface LambdaContext {
   getRemainingTimeInMillis(): number;
-  /** The invocation's request id; Building Blocks read it with `currentRequestId()` from `@aws-blocks/core/bb-utils`. */
+  /** The invocation's request id; Building Blocks read it with `currentRequestId()` from `@aws-cdk-blocks/core/bb-utils`. */
   awsRequestId?: string;
 }
 

@@ -1,14 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, isSandboxContext, synthGuard } from '@aws-cdk-blocks/core/cdk';
 import {
 	deployTimeLambdaCode,
 	markAddedChildrenBlocksOwned,
 	resolveDynamoDbProtection,
 	scopeProviderWaiterTrust,
-} from '@aws-blocks/core/cdk/internal';
+} from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, type ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
@@ -94,7 +94,7 @@ export class KVStore<
 			);
 			if (ignoredForExisting.length > 0) {
 				Annotations.of(this).addWarningV2(
-					'@aws-blocks/bb-kv-store:IgnoredOptionsForExistingTable',
+					'@aws-cdk-blocks/bb-kv-store:IgnoredOptionsForExistingTable',
 					`Ignoring ${ignoredForExisting.join(', ')} because this table is wrapped via fromExisting() — ` +
 						`the existing table owns its own durability/encryption configuration.`,
 				);
@@ -139,17 +139,17 @@ export class KVStore<
 		const protectionValue = config.protection as string | undefined;
 		if (protectionValue !== undefined && !(PROTECTION_VALUES as readonly string[]).includes(protectionValue)) {
 			Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-kv-store:UnknownProtection',
+				'@aws-cdk-blocks/bb-kv-store:UnknownProtection',
 				`Unrecognized protection '${String(protectionValue)}' (expected 'disposable', 'retained', ` +
 					`or 'locked') — falling back to the stack defaults.`,
 			);
 		}
 
 		// PITR + encryption resolve through the one helper in
-		// @aws-blocks/core/cdk/internal shared by every Blocks-provisioned
+		// @aws-cdk-blocks/core/cdk/internal shared by every Blocks-provisioned
 		// DynamoDB table, so blocks can't drift.
 		const protection = resolveDynamoDbProtection(this, config, this.defaults, {
-			warningPrefix: '@aws-blocks/bb-kv-store',
+			warningPrefix: '@aws-cdk-blocks/bb-kv-store',
 			fromKmsKeyHint: 'KVStore.fromKmsKey',
 		});
 

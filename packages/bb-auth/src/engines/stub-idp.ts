@@ -71,8 +71,8 @@ import {
 } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { type JWK, jwtVerify, SignJWT } from 'jose';
 import { escapeHtml } from '../federation-routes.js';
 import type { StubIdpSettings, StubUser } from '../types.js';

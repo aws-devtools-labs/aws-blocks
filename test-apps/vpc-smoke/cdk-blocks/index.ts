@@ -7,17 +7,17 @@
  * each BB's basic operation (for the smoke test to call via RPC).
  */
 
-import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import { AsyncJob } from '@aws-blocks/bb-async-job';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Realtime } from '@aws-blocks/bb-realtime';
-import { Auth } from '@aws-blocks/bb-auth';
-import { Database, sql } from '@aws-blocks/bb-database';
-import { Logger } from '@aws-blocks/bb-logger';
-import { Metrics } from '@aws-blocks/bb-metrics';
-import { Tracer } from '@aws-blocks/bb-tracer';
+import { ApiNamespace, Scope } from '@aws-cdk-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Realtime } from '@aws-cdk-blocks/bb-realtime';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { Database, sql } from '@aws-cdk-blocks/bb-database';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import { Metrics } from '@aws-cdk-blocks/bb-metrics';
+import { Tracer } from '@aws-cdk-blocks/bb-tracer';
 import { z } from 'zod';
 
 const scope = new Scope('vpc-smoke');

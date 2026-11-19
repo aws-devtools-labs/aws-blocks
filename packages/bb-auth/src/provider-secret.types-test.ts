@@ -17,10 +17,10 @@
  * @internal
  */
 
-import type { AppSetting } from '@aws-blocks/bb-app-setting';
-import type { KVStore } from '@aws-blocks/bb-kv-store';
-import type { Secret, WritableSecret } from '@aws-blocks/bb-secret';
-import type { Scope, ScopeParent } from '@aws-blocks/core';
+import type { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import type { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import type { Secret, WritableSecret } from '@aws-cdk-blocks/bb-secret';
+import type { Scope, ScopeParent } from '@aws-cdk-blocks/core';
 import type { AuthOptions, ProviderSecretRef } from './index.mock.js';
 import { Auth, customOauth2, github } from './index.mock.js';
 

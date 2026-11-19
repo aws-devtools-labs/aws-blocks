@@ -22,7 +22,7 @@ export interface ScopeOptions {
    * scopes, unless one of them sets its own. Omit to inherit the parent scope's
    * compute, and ultimately the app's default compute.
    *
-   * Pass a `Compute` block (from `@aws-blocks/blocks`) to place a whole part of
+   * Pass a `Compute` block (from `aws-cdk-blocks`) to place a whole part of
    * the backend at once — every `ApiNamespace`, `AsyncJob` and `CronJob`
    * created under it:
    *
@@ -70,7 +70,7 @@ export type ScopeParent = Scope | { id: string };
  * Create a scope at the top of your backend file:
  * 
  * ```typescript
- * import { Scope } from '@aws-blocks/core';
+ * import { Scope } from '@aws-cdk-blocks/core';
  * 
  * const scope = new Scope('my-app');
  * ```
@@ -78,7 +78,7 @@ export type ScopeParent = Scope | { id: string };
  * Then instantiate Building Blocks within that scope:
  * 
  * ```typescript
- * import { KVStore } from '@aws-blocks/bb-kv-store';
+ * import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
  * 
  * const store = new KVStore(scope, 'user-prefs', {});
  * ```
@@ -94,10 +94,10 @@ export type ScopeParent = Scope | { id: string };
  * 
  * Each Building Block has comprehensive docstrings with use-cases, scaling characteristics, performance metrics, and best practices. Import and explore:
  * 
- * - **`ApiNamespace`** from `@aws-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
- * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Key-value and document storage, with optional schemas, keys, indexes, and queries (DynamoDB)
- * - **`Auth`** from `@aws-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
- * - **`Database`** from `@aws-blocks/bb-database` - SQL database on PostgreSQL (Aurora DSQL, or Aurora PostgreSQL Serverless v2)
+ * - **`ApiNamespace`** from `@aws-cdk-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
+ * - **`KVStore`** from `@aws-cdk-blocks/bb-kv-store` - Key-value and document storage, with optional schemas, keys, indexes, and queries (DynamoDB)
+ * - **`Auth`** from `@aws-cdk-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
+ * - **`Database`** from `@aws-cdk-blocks/bb-database` - SQL database on PostgreSQL (Aurora DSQL, or Aurora PostgreSQL Serverless v2)
  * 
  * Read each Building Block's class and method docstrings for detailed documentation.
  * 
@@ -397,7 +397,7 @@ export class Scope {
    * - `['bb', 'ParentBB/parentVersion']` — if this BB is nested inside another BB
    * - `['bb', 'SelfBB/selfVersion']` — the current BB
    *
-   * @param coreVersion - The version of @aws-blocks/core
+   * @param coreVersion - The version of @aws-cdk-blocks/core
    * @returns Array of [key, value] pairs for customUserAgent
    *
    * @example
@@ -628,7 +628,7 @@ export interface BlocksStackProps extends StackProps {
    * policy, deletion protection, …). Start from `BlocksPresets.sandbox` or
    * `BlocksPresets.production` and override individual fields as needed. Any
    * field a block also exposes as a per-block option is overridden by that
-   * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
+   * option. See `BlocksDefaults` in `@aws-cdk-blocks/core/cdk`.
    */
   defaults: BlocksDefaults;
   /**

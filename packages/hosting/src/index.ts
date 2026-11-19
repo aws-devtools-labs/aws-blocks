@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/hosting` — the **CDK-free value API**: the two intent functions
+ * `@aws-cdk-blocks/hosting` — the **CDK-free value API**: the two intent functions
  * (`secret()` → Secrets Manager, `config()` → SSM) and the runtime resolvers
  * (`getSecret`/`getConfig`). Safe to import from application/runtime code (SSR
  * routes, Lambda, the edge runtime) — it pulls in no CDK, no `fast-glob`, and no
  * `node:fs`.
  *
  * Build-time tooling lives elsewhere so it never enters a runtime bundle: the CDK
- * construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI +
- * typegen engines on `@aws-blocks/hosting/scripts`.
+ * construct + resolution engine on `@aws-cdk-blocks/hosting/constructs`, and the CLI +
+ * typegen engines on `@aws-cdk-blocks/hosting/scripts`.
  *
  * @module
  */

@@ -81,7 +81,7 @@ export function buildFrontDoor<TInput extends DoorInput, TResult extends FrontDo
   if (!door || typeof door.service !== 'string' || door.service.length === 0 || typeof door.build !== 'function') {
     throw new HostingError('InvalidPropsError', {
       message: 'frontDoor.door is not a front door: it needs a non-empty `service` id and a `build(scope, input)` function.',
-      resolution: 'Define the door with `defineFrontDoor({ service, build })` from @aws-blocks/hosting/constructs.',
+      resolution: 'Define the door with `defineFrontDoor({ service, build })` from @aws-cdk-blocks/hosting/constructs.',
     });
   }
   const wiring = startWiringRecord(input);
@@ -135,7 +135,7 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
       );
     } else if (missing.length > 0) {
       Annotations.of(scope).addWarningV2(
-        '@aws-blocks/hosting:FrontDoorApiPathUnwired',
+        '@aws-cdk-blocks/hosting:FrontDoorApiPathUnwired',
         `Front door '${service}' did not wire these API paths, so requests to them won't reach the backend: ` +
           `${missing.join(', ')}. Use cf.apiBehaviors(origins.api), or cf.recordWired(origins.api, paths) for paths wired by hand.`,
       );
@@ -147,14 +147,14 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
   if (input.app.errorPages && !wiring.rules.has('errorPages')) unwiredRules.push('app.errorPages (cf.errorPages)');
   if (unwiredRules.length > 0) {
     Annotations.of(scope).addWarningV2(
-      '@aws-blocks/hosting:FrontDoorRuleUnwired',
+      '@aws-cdk-blocks/hosting:FrontDoorRuleUnwired',
       `Front door '${service}' did not wire the app's ${unwiredRules.join(', ')}, so they won't apply. ` +
         'Wire them with the named helpers, or declare hand-wired ones with cf.recordWired(app.redirects) (etc.).',
     );
   }
   if (wiring.behaviors.size > MAX_ADDITIONAL_BEHAVIORS) {
     Annotations.of(scope).addWarningV2(
-      '@aws-blocks/hosting:FrontDoorBehaviorLimit',
+      '@aws-cdk-blocks/hosting:FrontDoorBehaviorLimit',
       `Front door '${service}' asked the cf.* helpers for ${wiring.behaviors.size} cache behaviors; a CloudFront ` +
         `distribution allows ${MAX_ADDITIONAL_BEHAVIORS} besides its default by default, so the deploy fails unless the ` +
         'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/aws-blocks/`.',

@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-auth": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(bb-auth): the stub IdP accepts only its registered client and redirect URIs

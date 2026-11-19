@@ -49,8 +49,8 @@
 import crypto from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-import { isBlocksError, type ScopeParent } from '@aws-blocks/core';
+import { KVStore, KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
+import { isBlocksError, type ScopeParent } from '@aws-cdk-blocks/core';
 import { SESSION_STORE_ID } from './session-store-id.js';
 import { type SignInMode, sameSignInName, signsInWithAttribute } from './sign-in-mode.js';
 import type { JWT } from './types.js';

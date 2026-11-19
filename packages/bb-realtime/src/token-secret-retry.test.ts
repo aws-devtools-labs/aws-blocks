@@ -13,8 +13,8 @@
  */
 import assert from 'node:assert';
 import { after, mock, test } from 'node:test';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { RealtimeErrors } from './errors.js';
 import { Realtime } from './index.aws.js';

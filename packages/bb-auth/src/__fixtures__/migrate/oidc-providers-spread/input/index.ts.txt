@@ -1,6 +1,6 @@
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { AuthOIDC, google, stubIdp } from '@aws-blocks/bb-auth-oidc';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
 
 const scope = new Scope('app');
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });

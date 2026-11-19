@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
-import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { type ChildLogger, Logger } from '@aws-cdk-blocks/bb-logger';
+import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-cdk-blocks/core';
 import type { SqlQuery } from './common/sql.js';
 import {
 	CONNECTION_SETTING_ID,

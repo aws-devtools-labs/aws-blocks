@@ -1,7 +1,7 @@
 import '@aws-blocks/bb-auth-oidc/middleware';
 import { AuthOIDCErrors, relayOrigin, type OIDCUser } from '@aws-blocks/bb-auth-oidc/client';
 import { AuthOIDCClient, handle401 } from '@aws-blocks/bb-auth-oidc/client';
-import { isBlocksError } from '@aws-blocks/core/client';
+import { isBlocksError } from '@aws-cdk-blocks/core/client';
 
 export const origin = relayOrigin('myapp://callback');
 export function name(user: OIDCUser): string {

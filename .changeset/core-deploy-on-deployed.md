@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 feat(core): report the deployed stack's outputs from `deploy()` before the liveness wait

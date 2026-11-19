@@ -29,8 +29,8 @@ async function loadClientGreeting(): Promise<ComponentType> {
 		'cdk-blocks': pathToFileURL(join(workDir, 'cdk-blocks.mjs')).href,
 		react: import.meta.resolve('react'),
 		'react/jsx-runtime': import.meta.resolve('react/jsx-runtime'),
-		'@aws-blocks/blocks/theme': import.meta.resolve('@aws-blocks/blocks/theme'),
-		'@aws-blocks/blocks/ui': import.meta.resolve('@aws-blocks/blocks/ui'),
+		'aws-cdk-blocks/theme': import.meta.resolve('aws-cdk-blocks/theme'),
+		'aws-cdk-blocks/ui': import.meta.resolve('aws-cdk-blocks/ui'),
 	};
 	const { outputText } = ts.transpileModule(readFileSync(clientSource, 'utf8'), {
 		compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },

@@ -1,11 +1,11 @@
 ---
-"@aws-blocks/core": minor
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": minor
+"aws-cdk-blocks": patch
 ---
 
 feat(core): honor `BLOCKS_LOG_LEVEL` and `BLOCKS_LOG_STREAM` in the lifecycle scripts
 
-`deploy`, `destroy`, `startSandbox`, `destroySandbox` and `startDevServer` from `@aws-blocks/core/scripts` now read `BLOCKS_LOG_LEVEL`:
+`deploy`, `destroy`, `startSandbox`, `destroySandbox` and `startDevServer` from `@aws-cdk-blocks/core/scripts` now read `BLOCKS_LOG_LEVEL`:
 
 - unset (or any unrecognised value): output is unchanged.
 - `quiet`: errors and final results only.
@@ -17,4 +17,4 @@ The `BLOCKS_DEPLOYED …` line, the deployment-target summary, the API and front
 
 The external-database migration step and the dev server's `secret()`/`config()` type generation follow the level as well: at `quiet` the migration's output and warnings (its stdout and stderr) are hidden, and printed to stderr only if the migration fails; type-generation notices are hidden at `quiet` and `normal`.
 
-`BLOCKS_LOG_STREAM=stderr` moves progress to stderr: progress steps, CDK milestones, raw CDK output, streamed CloudFormation events, migration output and type-generation notices go to stderr, and stdout keeps only the results (the deployment target, `BLOCKS_DEPLOYED` and the final URLs). `blocks-generate-spec` follows it too: its progress lines go to stderr, and stdout keeps the `✅ OpenRPC spec written to …` line. Without the variable, the streams are unchanged. `@aws-blocks/core/scripts` exports `log`, the logger these scripts print progress with.
+`BLOCKS_LOG_STREAM=stderr` moves progress to stderr: progress steps, CDK milestones, raw CDK output, streamed CloudFormation events, migration output and type-generation notices go to stderr, and stdout keeps only the results (the deployment target, `BLOCKS_DEPLOYED` and the final URLs). `blocks-generate-spec` follows it too: its progress lines go to stderr, and stdout keeps the `✅ OpenRPC spec written to …` line. Without the variable, the streams are unchanged. `@aws-cdk-blocks/core/scripts` exports `log`, the logger these scripts print progress with.

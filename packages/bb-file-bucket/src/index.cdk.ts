@@ -6,9 +6,9 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import { Annotations, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
-import { resolveKmsEncryption } from '@aws-blocks/core/cdk/internal';
-import type { ScopeParent } from '@aws-blocks/core';
+import { BuildingBlockScope, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import { resolveKmsEncryption } from '@aws-cdk-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { FileBucketOptions, CorsRule, ExternalBucketRef, ExternalKmsKeyRef } from './types.js';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
@@ -26,7 +26,7 @@ export type {
 } from './types.js';
 
 /** Annotation-ID prefix for this block's synth warnings (matches the sibling storage blocks). */
-const WARNING_PREFIX = '@aws-blocks/bb-file-bucket';
+const WARNING_PREFIX = '@aws-cdk-blocks/bb-file-bucket';
 
 const httpMethodMap: Record<string, s3.HttpMethods> = {
 	GET: s3.HttpMethods.GET,
@@ -252,7 +252,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.bucket.grantReadWrite(this.executionRole);
 	}
 
-	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-cdk-blocks/core/cdk`).
 	put(..._args: unknown[]): never { return synthGuard('FileBucket', 'put'); }
 	get(..._args: unknown[]): never { return synthGuard('FileBucket', 'get'); }
 	delete(..._args: unknown[]): never { return synthGuard('FileBucket', 'delete'); }

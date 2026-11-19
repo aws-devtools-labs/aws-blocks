@@ -27,12 +27,12 @@ const SCRIPTS_DIR = import.meta.dirname;
 const GUARD_SRC = join(SCRIPTS_DIR, "changeset-guard.ts");
 const REPO_ROOT = join(SCRIPTS_DIR, "..");
 
-const UMBRELLA = "@aws-blocks/blocks";
-const SIBLING = "@aws-blocks/core";
-const OTHER_SIBLING = "@aws-blocks/bb-kv-store";
+const UMBRELLA = "aws-cdk-blocks";
+const SIBLING = "@aws-cdk-blocks/core";
+const OTHER_SIBLING = "@aws-cdk-blocks/bb-kv-store";
 // In the workspace but not re-exported by the umbrella, so releasing it alone
 // must never trigger the umbrella requirement.
-const NON_SIBLING = "@aws-blocks/create-blocks-app";
+const NON_SIBLING = "@aws-cdk-blocks/create-blocks-app";
 
 // Keeps the fixture repo free of the host's git config (signing hooks, aliases,
 // templates) so the tests behave the same on a laptop and on a runner.
@@ -158,8 +158,8 @@ describe("verify-umbrella: a sibling release needs the umbrella entry", () => {
 
 		const { status, output } = guard(dir, "verify-umbrella");
 		assert.equal(status, 1, output);
-		assert.match(output, /releases package\(s\) that @aws-blocks\/blocks re-exports/);
-		assert.match(output, /@aws-blocks\/core/);
+		assert.match(output, /releases package\(s\) that aws-cdk-blocks re-exports/);
+		assert.match(output, /@aws-cdk-blocks\/core/);
 	});
 
 	it("passes when the same changeset bumps the umbrella too", (t) => {
@@ -213,9 +213,9 @@ describe("verify-umbrella: withdrawing the umbrella entry", () => {
 
 		const { status, output } = guard(dir, "verify-umbrella");
 		assert.equal(status, 1, output);
-		assert.match(output, /removes the @aws-blocks\/blocks entry from/);
+		assert.match(output, /removes the aws-cdk-blocks entry from/);
 		assert.match(output, /\.changeset\/pending-umbrella\.md/);
-		assert.match(output, /@aws-blocks\/core/);
+		assert.match(output, /@aws-cdk-blocks\/core/);
 	});
 
 	it("fails when the PR strips the umbrella line out of an existing changeset", (t) => {
@@ -229,7 +229,7 @@ describe("verify-umbrella: withdrawing the umbrella entry", () => {
 
 		const { status, output } = guard(dir, "verify-umbrella");
 		assert.equal(status, 1, output);
-		assert.match(output, /removes the @aws-blocks\/blocks entry from/);
+		assert.match(output, /removes the aws-cdk-blocks entry from/);
 		assert.match(output, /\.changeset\/pending-cli\.md/);
 	});
 
@@ -317,7 +317,7 @@ describe("verify-umbrella: withdrawing the umbrella entry", () => {
 
 		const { status, output } = guard(dir, "verify-umbrella");
 		assert.equal(status, 1, output);
-		assert.match(output, /releases package\(s\) that @aws-blocks\/blocks re-exports/);
+		assert.match(output, /releases package\(s\) that aws-cdk-blocks re-exports/);
 		assert.doesNotMatch(output, /fatal|ENOENT/);
 	});
 });
@@ -327,12 +327,12 @@ describe("verify-umbrella: fails loudly instead of asserting nothing", () => {
 		const dir = baseRepo(t);
 		commitPr(dir, {
 			".changeset/ship-core.md": changeset({ [SIBLING]: "patch" }),
-			"packages/blocks/package.json": '{ "name": "@aws-blocks/blocks", oops\n',
+			"packages/blocks/package.json": '{ "name": "aws-cdk-blocks", oops\n',
 		});
 
 		const { status, output } = guard(dir, "verify-umbrella");
 		assert.equal(status, 1, output);
-		assert.match(output, /Cannot parse @aws-blocks\/blocks's package\.json/);
+		assert.match(output, /Cannot parse aws-cdk-blocks's package\.json/);
 		assert.doesNotMatch(output, /No changeset here releases/);
 	});
 
@@ -345,10 +345,10 @@ describe("verify-umbrella: fails loudly instead of asserting nothing", () => {
 
 		const { status, output } = guard(dir, "verify-umbrella");
 		assert.equal(status, 1, output);
-		assert.match(output, /Cannot read @aws-blocks\/blocks's package\.json/);
+		assert.match(output, /Cannot read aws-cdk-blocks's package\.json/);
 	});
 
-	it("fails when the umbrella declares no @aws-blocks/* dependencies", (t) => {
+	it("fails when the umbrella declares no @aws-cdk-blocks/* dependencies", (t) => {
 		const dir = baseRepo(t);
 		commitPr(dir, {
 			".changeset/ship-core.md": changeset({ [SIBLING]: "patch" }),
@@ -359,7 +359,7 @@ describe("verify-umbrella: fails loudly instead of asserting nothing", () => {
 
 		const { status, output } = guard(dir, "verify-umbrella");
 		assert.equal(status, 1, output);
-		assert.match(output, /declares no @aws-blocks\/\* dependencies/);
+		assert.match(output, /declares no @aws-cdk-blocks\/\* dependencies/);
 	});
 
 	it("fails when the umbrella has no dependencies block at all", (t) => {
@@ -382,7 +382,7 @@ describe("verify-coverage", () => {
 
 		const { status, output } = guard(dir, "verify-coverage");
 		assert.equal(status, 1, output);
-		assert.match(output, /@aws-blocks\/core/);
+		assert.match(output, /@aws-cdk-blocks\/core/);
 	});
 
 	it("passes when every changed package is covered", (t) => {
@@ -410,18 +410,18 @@ describe("verify-coverage", () => {
 
 	it("ignores private packages, which are never published", (t) => {
 		const dir = baseRepo(t, {
-			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+			"packages/bb-private/package.json": pkgJson("@aws-cdk-blocks/bb-private", { private: true }),
 		});
 		commitPr(dir, { "packages/bb-private/src/index.ts": "export const a = 1;\n" });
 
 		const { status, output } = guard(dir, "verify-coverage");
 		assert.equal(status, 0, output);
-		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
+		assert.doesNotMatch(output, /@aws-cdk-blocks\/bb-private/);
 	});
 
 	it("still fails for a public package changed alongside a private one", (t) => {
 		const dir = baseRepo(t, {
-			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+			"packages/bb-private/package.json": pkgJson("@aws-cdk-blocks/bb-private", { private: true }),
 		});
 		commitPr(dir, {
 			"packages/bb-private/src/index.ts": "export const a = 1;\n",
@@ -430,8 +430,8 @@ describe("verify-coverage", () => {
 
 		const { status, output } = guard(dir, "verify-coverage");
 		assert.equal(status, 1, output);
-		assert.match(output, /@aws-blocks\/core/);
-		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
+		assert.match(output, /@aws-cdk-blocks\/core/);
+		assert.doesNotMatch(output, /@aws-cdk-blocks\/bb-private/);
 	});
 
 	describe("Dependabot manifest bumps, whose changeset the release job writes", () => {
@@ -456,7 +456,7 @@ describe("verify-coverage", () => {
 
 			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "dependabot[bot]" });
 			assert.equal(status, 1, output);
-			assert.match(output, /@aws-blocks\/core/);
+			assert.match(output, /@aws-cdk-blocks\/core/);
 		});
 
 		it("checks the same manifest bump from anyone else", (t) => {
@@ -465,8 +465,8 @@ describe("verify-coverage", () => {
 
 			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "octocat" });
 			assert.equal(status, 1, output);
-			assert.match(output, /@aws-blocks\/core/);
-			assert.match(output, /@aws-blocks\/create-blocks-app/);
+			assert.match(output, /@aws-cdk-blocks\/core/);
+			assert.match(output, /@aws-cdk-blocks\/create-blocks-app/);
 		});
 	});
 
@@ -518,11 +518,11 @@ describe("validate-structure", () => {
 
 	it("fails on a package name that is not in the workspace", (t) => {
 		const dir = baseRepo(t);
-		commitPr(dir, { ".changeset/typo.md": changeset({ "@aws-blocks/kv-store": "patch" }) });
+		commitPr(dir, { ".changeset/typo.md": changeset({ "@aws-cdk-blocks/kv-store": "patch" }) });
 
 		const { status, output } = guard(dir, "validate-structure");
 		assert.equal(status, 1, output);
-		assert.match(output, /unknown package "@aws-blocks\/kv-store"/);
+		assert.match(output, /unknown package "@aws-cdk-blocks\/kv-store"/);
 	});
 
 	it("fails on an invalid bump type", (t) => {
@@ -726,9 +726,8 @@ describe("the real umbrella package.json", () => {
 		const raw = readFileSync(join(REPO_ROOT, "packages", "blocks", "package.json"), "utf-8");
 		const deps = JSON.parse(raw).dependencies;
 		assert.equal(typeof deps, "object");
-		const siblings = Object.keys(deps).filter(
-			(name) => name.startsWith("@aws-blocks/") && name !== UMBRELLA,
-		);
+		// The umbrella is unscoped, so it cannot appear in its own scoped sibling set.
+		const siblings = Object.keys(deps).filter((name) => name.startsWith("@aws-cdk-blocks/"));
 		assert.ok(siblings.length > 0, "the umbrella must re-export at least one sibling");
 		assert.ok(siblings.includes(SIBLING), `expected ${SIBLING} among ${siblings.join(", ")}`);
 	});

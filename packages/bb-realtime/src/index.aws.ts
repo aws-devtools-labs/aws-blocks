@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @aws-blocks/bb-realtime — AWS runtime.
+ * @aws-cdk-blocks/bb-realtime — AWS runtime.
  *
  * Used inside Lambda (resolved via `aws-runtime` condition in package.json).
  * Server-side publish() queries the connections KVStore for channel
@@ -16,8 +16,8 @@
  * inline — no separate Lambdas needed.
  */
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, isBlocksError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, isBlocksError } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
 import {
@@ -25,8 +25,8 @@ import {
 	PostToConnectionCommand,
 	GoneException,
 } from '@aws-sdk/client-apigatewaymanagementapi';
-import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal';
-import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+import { type FrameworkKey, frameworkKey } from '@aws-cdk-blocks/bb-secret/internal';
+import { KVStore, KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
 import { type ConnectionRecord, connectionsTableOptions } from './connections.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
@@ -435,7 +435,7 @@ export const Realtime: {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 
 		this._customUserAgent = this.buildUserAgentChain();
-		this.registerClientMiddleware('@aws-blocks/bb-realtime/aws-middleware');
+		this.registerClientMiddleware('@aws-cdk-blocks/bb-realtime/aws-middleware');
 		this.registerLambdaEventHandler('blocks.websocket', this.fullId, handleWebSocketEvent);
 
 		const wsUrl = process.env.BLOCKS_RT_WS_URL ?? '';

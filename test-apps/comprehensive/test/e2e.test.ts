@@ -13,7 +13,7 @@ import type {
   isolatedApi as isolatedApiType,
   strictStatusApi as strictStatusApiType,
 } from 'cdk-blocks';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
 import { codePoller } from './poll-for-code.js';
@@ -225,7 +225,7 @@ test.after(async (t) => {
   // live sockets, and the other module's reset is a harmless no-op over an empty
   // pool. Doing this as a dynamic (not top-level) import keeps the inactive
   // module out of the response-hydration chain during the tests themselves.
-  for (const spec of ['@aws-blocks/bb-realtime/mock-middleware', '@aws-blocks/bb-realtime/aws-middleware']) {
+  for (const spec of ['@aws-cdk-blocks/bb-realtime/mock-middleware', '@aws-cdk-blocks/bb-realtime/aws-middleware']) {
     try {
       const mw = await import(spec);
       (mw as { __resetConnectionsForTest?: () => void }).__resetConnectionsForTest?.();

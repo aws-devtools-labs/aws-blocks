@@ -29,7 +29,7 @@
  *                   `changeset version`.
  *
  *   verify-umbrella Exit non-zero if this PR releases a package the umbrella
- *                   `@aws-blocks/blocks` re-exports without any pending
+ *                   `aws-cdk-blocks` re-exports without any pending
  *                   changeset bumping the umbrella too. Caret ranges keep the
  *                   sibling's new version in range, so `changeset version`
  *                   leaves the umbrella alone while its packed content still
@@ -69,8 +69,10 @@ const ROOT = resolve(import.meta.dirname, "..");
 const PACKAGES_DIR = join(ROOT, "packages");
 const CHANGESET_DIR = join(ROOT, ".changeset");
 const NATIVE_DIR = join(ROOT, "native");
-const SCOPE = "@aws-blocks/";
-const UMBRELLA_PKG = "@aws-blocks/blocks";
+const SCOPE = "@aws-cdk-blocks/";
+const UMBRELLA_PKG = "aws-cdk-blocks";
+// The umbrella publishes unscoped, so a scope test alone would stop covering it.
+const isReleasedPackage = (name: string): boolean => name.startsWith(SCOPE) || name === UMBRELLA_PKG;
 
 // changesets/action opens its "Version Packages" PR with this title.
 const RELEASE_PR_TITLE_PREFIX = "chore: version packages";
@@ -112,15 +114,17 @@ function readJson(path: string, label: string): Record<string, unknown> {
 	}
 }
 
-/** The `@aws-blocks/*` bumps declared in one changeset's frontmatter. */
+/** The monorepo bumps declared in one changeset's frontmatter. */
 function parseEntries(file: string, content: string): Entry[] {
 	const entries: Entry[] = [];
 	const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
 	if (!frontmatterMatch) return entries;
 
 	for (const line of frontmatterMatch[1].split("\n")) {
+		// The umbrella publishes unscoped, so it has to be matched by name. Anchored at the line
+		// start so a key like `my-aws-cdk-blocks` or `@other/aws-cdk-blocks` is not read as it.
 		const entryMatch = line.match(
-			/['"]?(@aws-blocks\/[^'":\s]+)['"]?\s*:\s*['"]?(major|minor|patch)['"]?/,
+			/^\s*['"]?(@aws-cdk-blocks\/[^'":\s]+|aws-cdk-blocks)['"]?\s*:\s*['"]?(major|minor|patch)['"]?/,
 		);
 		if (entryMatch) {
 			entries.push({ file, pkg: entryMatch[1], type: entryMatch[2] as BumpType });
@@ -141,7 +145,7 @@ function parseChangesets(): Entry[] {
 	);
 }
 
-/** Package names (@aws-blocks/*) covered by any changeset entry. */
+/** Package names (@aws-cdk-blocks/*) covered by any changeset entry. */
 function getCoveredPackages(): Set<string> {
 	return new Set(parseChangesets().map((e) => e.pkg));
 }
@@ -173,7 +177,7 @@ function getChangedFiles(): string[] {
 	return changedFilesCache;
 }
 
-/** Publishable @aws-blocks/* packages with file changes vs origin/main. */
+/** Publishable @aws-cdk-blocks/* packages with file changes vs origin/main. */
 function getChangedPackages(): Set<string> {
 	const packages = new Set<string>();
 	for (const file of getChangedFiles()) {
@@ -186,7 +190,7 @@ function getChangedPackages(): Set<string> {
 		const pkgJson = readJson(pkgJsonPath, `packages/${match[1]}/package.json`);
 		// Private packages are never published, so a changeset for them would describe a release that can't happen.
 		if (pkgJson.private === true) continue;
-		if (typeof pkgJson.name === "string" && pkgJson.name.startsWith(SCOPE)) {
+		if (typeof pkgJson.name === "string" && isReleasedPackage(pkgJson.name)) {
 			packages.add(pkgJson.name);
 		}
 	}
@@ -240,7 +244,7 @@ function verifyCoverage(): number {
 }
 
 /**
- * The `@aws-blocks/*` packages the umbrella re-exports, read from its own
+ * The `@aws-cdk-blocks/*` packages the umbrella re-exports, read from its own
  * dependencies. Releasing any of them can change what the umbrella's tarball
  * ships without touching a single file the umbrella owns, which is why a file
  * diff can't be the signal here.
@@ -260,10 +264,9 @@ function getUmbrellaSiblings(): Set<string> {
 		);
 	}
 
+	// The umbrella is unscoped, so it cannot appear in its own scoped sibling set.
 	const siblings = new Set(
-		Object.keys(deps as Record<string, unknown>).filter(
-			(name) => name.startsWith(SCOPE) && name !== UMBRELLA_PKG,
-		),
+		Object.keys(deps as Record<string, unknown>).filter((name) => name.startsWith(SCOPE)),
 	);
 
 	if (siblings.size === 0) {
@@ -320,7 +323,7 @@ function parseChangesetAtMergeBase(file: string): Entry[] {
 
 /**
  * Changesets this PR takes the umbrella entry away from: they declared
- * `@aws-blocks/blocks` at the merge base and no longer do, whether the line was
+ * `aws-cdk-blocks` at the merge base and no longer do, whether the line was
  * deleted or the whole file was. Coverage can be withdrawn as easily as it can
  * be forgotten, and the release aborts either way.
  */

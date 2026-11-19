@@ -1,4 +1,4 @@
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 import { auth } from './auth.js';
 
 // A direct signUp() that relied on AuthCognito's default (false) now signs the

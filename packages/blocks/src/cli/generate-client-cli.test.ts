@@ -4,7 +4,7 @@
 /**
  * `npm run generate-client` runs `blocks-generate-client`. In an app that does not
  * install `tsx` itself (pnpm, or npm without hoisting), it loads the worker with
- * the `tsx` that `@aws-blocks/blocks` depends on.
+ * the `tsx` that `aws-cdk-blocks` depends on.
  */
 
 import assert from 'node:assert';

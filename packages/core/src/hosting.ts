@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
-import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
+import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-cdk-blocks/hosting/constructs';
 import {
   appBuildEnv,
   detectFramework,
@@ -15,7 +15,7 @@ import {
   normalizeBasePath,
   withBuildProfile,
   withComputeTarget,
-} from '@aws-blocks/hosting/adapters';
+} from '@aws-cdk-blocks/hosting/adapters';
 import {
   buildFrontDoor,
   cf,
@@ -39,7 +39,7 @@ import {
   type SkewProtectionConfig,
   type WebFunctionConstruct,
   type WebFunctionOptions,
-} from '@aws-blocks/hosting/constructs';
+} from '@aws-cdk-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
@@ -225,7 +225,7 @@ export interface BlocksStackApi {
  *   • Deploys `.blocks-sandbox/config.json` for client-side config loading
  *     (public in every stage, production included: it holds only `apiUrl`,
  *     the build id and `backendConfig`; see "Runtime config" in the
- *     `@aws-blocks/core` README)
+ *     `@aws-cdk-blocks/core` README)
  *   • Injects `BLOCKS_API_URL` + `BLOCKS_CONFIG` env vars into compute functions
  *   • When `api` is provided, adds CloudFront behaviors to proxy API traffic
  *     through the same domain (single-origin architecture)
@@ -575,9 +575,9 @@ export interface HostingProps {
    * and `features.domain` for HTTPS at your domain. Without them it serves
    * plain HTTP, which with an API is sandbox-only: a production deploy fails
    * synth (`PlainHttpFrontDoorError`), and a sandbox deploy (`sandboxMode`
-   * context) warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). Only on a
+   * context) warns (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`). Only on a
    * trusted network path, `allowPlainHttp: true` opts a production deploy out
-   * (with the `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning, and
+   * (with the `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` warning, and
    * `Auth`'s session cookie without `Secure`).
    *
    * Pass `{ kind: 'apiGateway', … }` to serve behind an Amazon API Gateway
@@ -607,7 +607,7 @@ export interface HostingProps {
    *
    * Pass `{ kind: 'custom', door }` to bring your own door, written as one
    * function: `defineFrontDoor({ service, build(scope, input) })` from
-   * `@aws-blocks/hosting/constructs`. Hosting calls `build` once at synth with
+   * `@aws-cdk-blocks/hosting/constructs`. Hosting calls `build` once at synth with
    * everything it built (the `DoorInput`), and uses the `url` it returns as the
    * app's address (`HostingUrl`, `BLOCKS_PUBLIC_ORIGIN`, CORS). The door's
    * routing is checked (see `wiringCheck`); the features it applies are not.
@@ -872,8 +872,8 @@ export interface CloudFrontOverRouterFrontDoor {
    * internet-facing ALB it reaches the ALB's public addresses: a production
    * deploy fails synth (`OriginSecretOverPlainHttpError`), and a sandbox
    * deploy (`sandboxMode` context) warns
-   * (`@aws-blocks/hosting:StackedRouterPlainHttp`,
-   * `@aws-blocks/hosting:OriginSecretOverPlainHttp`), unless
+   * (`@aws-cdk-blocks/hosting:StackedRouterPlainHttp`,
+   * `@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp`), unless
    * {@link CloudFrontOverRouterFrontDoor.allowPlainHttp}.
    */
   certificate?: import('aws-cdk-lib/aws-certificatemanager').ICertificate;
@@ -895,8 +895,8 @@ export interface CloudFrontOverRouterFrontDoor {
    * origin, on the AWS network) or a router `certificate` avoids the need.
    *
    * Outside a sandbox, synth warns
-   * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
-   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`).
+   * (`@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`).
    * A sandbox deploy is unchanged (it always only warns).
    * @default false
    */
@@ -971,7 +971,7 @@ function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly strin
 /**
  * The path whose existence means a reusable build exists, for a destroy's
  * `if-present` reuse. It must be the marker the framework adapter itself checks
- * (see `shouldSkipBuild` in `@aws-blocks/hosting`), or `Hosting` could skip
+ * (see `shouldSkipBuild` in `@aws-cdk-blocks/hosting`), or `Hosting` could skip
  * `buildCommand` while the adapter still runs its full build. The built-in
  * Next.js adapter deploys the OpenNext output, not `.next`; every other
  * framework (and a custom adapter) is keyed on the build output dir.
@@ -1216,7 +1216,7 @@ export class Hosting extends Construct {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
       // Remove the synth's `cdk` export condition from NODE_OPTIONS: a build
-      // that inherits it resolves `@aws-blocks/*` to their CDK constructs (and
+      // that inherits it resolves `@aws-cdk-blocks/*` to their CDK constructs (and
       // breaks e.g. Next.js webpack module resolution). The framework adapter's
       // own build of the app gets the same environment (see `appBuildEnv`).
       const buildEnv = appBuildEnv(apiUrl ? { BLOCKS_API_URL: apiUrl } : {});
@@ -1485,12 +1485,12 @@ export class Hosting extends Construct {
       // `addCloudFrontOverAlb` outside a sandbox (the edge refuses to send the
       // origin-verify secret over it), so only a sandbox deploy reaches this warning.
       // With `allowPlainHttp: true` a production deploy reaches it too; the edge
-      // then emits `@aws-blocks/hosting:PlainHttpAllowedInProduction` instead, so
+      // then emits `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` instead, so
       // there is one warning to acknowledge.
       const edge = this.addCloudFrontOverAlb(hosting, props);
       if (hosting.frontDoor.originHandle.protocol === 'http' && !cfOverRouter.internal && isSandboxContext(this)) {
         cdk.Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:StackedRouterPlainHttp',
+          '@aws-cdk-blocks/hosting:StackedRouterPlainHttp',
           "The stacked door's edge reaches its internet-facing ALB router over plain HTTP: requests (cookies, " +
             'sign-in) cross to the ALB\'s public addresses unencrypted. Give the router a ' +
             '`certificate` and `features.router.domain` for HTTPS :443, or use `internal: true` (a VPC origin, on the ' +

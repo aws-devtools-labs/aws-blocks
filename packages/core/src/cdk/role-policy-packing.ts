@@ -76,11 +76,11 @@ import { attributeRoleStatements } from './iam-report.js';
 /**
  * CDK context key that raises the managed-policies-per-role limit the quota check
  * enforces, for accounts whose IAM "Managed policies per role" quota was raised.
- * Named like other Blocks context keys (`@aws-blocks/<package>:<option>`).
+ * Named like other Blocks context keys (`@aws-cdk-blocks/<package>:<option>`).
  *
  * @internal
  */
-export const MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY = '@aws-blocks/core:managedPoliciesPerRoleQuota';
+export const MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY = '@aws-cdk-blocks/core:managedPoliciesPerRoleQuota';
 
 /** IAM's default "Managed policies per role" quota. */
 const DEFAULT_MANAGED_POLICIES_PER_ROLE = 20;
@@ -315,7 +315,7 @@ function warnReplacementHeadroom(role: iam.Role, overflowCount: number): void {
 	if (attached > quota || attached + overflowCount <= quota) return;
 	headroomWarned.add(role);
 	cdk.Annotations.of(role).addWarningV2(
-		'@aws-blocks/core:overflowPolicyReplacementQuota',
+		'@aws-cdk-blocks/core:overflowPolicyReplacementQuota',
 		`AWS Blocks: the IAM role ${role.node.path} carries ${attached} managed policies, ${overflowCount} of them ` +
 			`overflow policies, against a quota of ${quota} per role. A deploy that changes an overflow policy ` +
 			'attaches the new copy before it deletes the old one, so a deploy that replaces every overflow policy ' +

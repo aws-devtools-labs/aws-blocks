@@ -10,7 +10,7 @@
 //   const result = await api.greet('World');
 // ============================================================
 
-import { ApiNamespaceClient, registerMiddleware } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient, registerMiddleware } from 'aws-cdk-blocks/client';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import outputs from '../amplify_outputs.json';
 

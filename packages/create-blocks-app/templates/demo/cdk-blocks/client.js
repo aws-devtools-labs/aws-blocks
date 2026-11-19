@@ -5,7 +5,7 @@
 // Any manual changes will be overwritten on the next build.
 // ============================================================
 
-import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from 'aws-cdk-blocks/client';
 
 export const hello = __BLOCKS_ApiNamespaceClient__('hello');
 export const authApi = __BLOCKS_ApiNamespaceClient__('authApi');

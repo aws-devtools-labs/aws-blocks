@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { AsyncJob, AsyncJobErrors, BatchSubmitFailedError } from './index.aws.js';
 
 /**

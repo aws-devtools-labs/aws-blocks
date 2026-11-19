@@ -2,7 +2,7 @@
 
 Design document for Tracer. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-tracer`
+**Package:** `@aws-cdk-blocks/bb-tracer`
 **Type:** Composite (no new infrastructure)
 **AWS Service:** AWS X-Ray (via Lambda's built-in X-Ray integration)
 

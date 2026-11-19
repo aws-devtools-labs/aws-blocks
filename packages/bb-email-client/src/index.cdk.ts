@@ -4,8 +4,8 @@
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Annotations, Stack } from 'aws-cdk-lib';
-import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
+import { BuildingBlockScope, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { IConstruct } from 'constructs';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -23,12 +23,12 @@ import { reservedDomainOf, resolveMaxBatchSize } from './validation.js';
  * Acknowledge it with `Annotations.of(scope).acknowledgeWarning(id)` when the
  * sender is deliberate (for example a stack that never sends).
  */
-const UNVERIFIABLE_SENDER_WARNING_ID = '@aws-blocks/bb-email-client:UnverifiableSender';
+const UNVERIFIABLE_SENDER_WARNING_ID = '@aws-cdk-blocks/bb-email-client:UnverifiableSender';
 /**
  * Synth warning id for a `replyTo` address on a reserved domain: replies to it
  * can never be delivered. Acknowledge it the same way.
  */
-const UNDELIVERABLE_REPLY_TO_WARNING_ID = '@aws-blocks/bb-email-client:UndeliverableReplyTo';
+const UNDELIVERABLE_REPLY_TO_WARNING_ID = '@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo';
 
 /**
  * Flag a sender or reply-to address on a reserved domain. A warning, not an
@@ -105,7 +105,7 @@ export class EmailClient extends BuildingBlockScope {
 		}));
 	}
 
-	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-cdk-blocks/core/cdk`).
 	send(..._args: unknown[]): never { return synthGuard('EmailClient', 'send'); }
 	sendBatch(..._args: unknown[]): never { return synthGuard('EmailClient', 'sendBatch'); }
 }

@@ -5,8 +5,8 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { testBaseUrl } from './api-url.js';
 import { createHmac } from 'node:crypto';
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import { isBlocksError } from '@aws-blocks/core';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { api as apiType } from 'cdk-blocks';
 import { signInPoller } from './poll-for-signin.js';
 

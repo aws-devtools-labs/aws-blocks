@@ -22,8 +22,8 @@
  * @internal
  */
 
-import type { BlocksAuth } from '@aws-blocks/auth-common';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { BlocksAuth } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 import type {
 	AdminActionGate,
 	AdminDisabled,

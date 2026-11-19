@@ -10,8 +10,8 @@
  * @internal
  */
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 import { AuthBase, defineAuthLayer } from './auth-base.js';
 import type {
 	AuthLayer,

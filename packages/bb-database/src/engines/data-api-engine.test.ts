@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { ExecuteStatementCommandOutput } from '@aws-sdk/client-rds-data';
 import { DatabaseErrors } from '../errors.js';
 import { type DataApiClient, DataApiEngine, fromField, namedParameters, toField } from './data-api-engine.js';

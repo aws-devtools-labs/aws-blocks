@@ -10,8 +10,8 @@
  * reference resolves) but provisions nothing and pulls in no CDK. `setEnv` is a
  * no-op — configuration is injected at synth.
  */
-import { Scope } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { ContainerComputeProps } from './types.js';
 
 export type { ContainerComputeProps } from './types.js';

@@ -86,7 +86,7 @@ void describe('appBuildEnv', () => {
   });
 
   void it('a Node.js child started with the result does not resolve packages through the cdk condition', () => {
-    // A package with a `cdk` export condition, like every `@aws-blocks/*` package.
+    // A package with a `cdk` export condition, like every `@aws-cdk-blocks/*` package.
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-app-build-env-'));
     try {
       const pkgDir = path.join(projectDir, 'node_modules', 'probe');

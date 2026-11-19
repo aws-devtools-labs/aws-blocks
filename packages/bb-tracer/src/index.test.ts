@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { rmSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { Tracer } from './index.mock.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 

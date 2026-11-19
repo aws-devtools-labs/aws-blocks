@@ -1,12 +1,12 @@
 ---
-'@aws-blocks/bb-auth': minor
+'@aws-cdk-blocks/bb-auth': minor
 ---
 
-Add `npx @aws-blocks/bb-auth users`, a supported way to make the first admin. `users add-to-group <user> <group>` puts a user into one of the groups the `Auth` block declares in `users.groups`; `remove-from-group` and `list-groups` are also available.
+Add `npx @aws-cdk-blocks/bb-auth users`, a supported way to make the first admin. `users add-to-group <user> <group>` puts a user into one of the groups the `Auth` block declares in `users.groups`; `remove-from-group` and `list-groups` are also available.
 
 ```sh
-npx @aws-blocks/bb-auth users add-to-group you@example.com admin                    # the local pool in .bb-data/
-npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes # the deployed pool
+npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin                    # the local pool in .bb-data/
+npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes # the deployed pool
 ```
 
 - Without `--stage` or `--stack`, the command edits the local pool. It refuses while the dev server is running, because the server would write its in-memory copy back over the change.

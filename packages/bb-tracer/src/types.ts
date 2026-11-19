@@ -5,7 +5,7 @@
  * Shared types for Tracer BB. Imported by mock, aws, cdk, and browser entry points.
  * This file has zero runtime dependencies — types only.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 /** Valid annotation value types for X-Ray indexing. */
 export type AnnotationValue = string | number | boolean;

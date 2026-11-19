@@ -18,7 +18,7 @@ import { test, describe, mock, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { EmailClient as AwsEmailClient, EmailErrors } from './index.aws.js';
 import { EmailClient as MockEmailClient } from './index.mock.js';
 import type { EmailMessage, EmailOptions } from './types.js';

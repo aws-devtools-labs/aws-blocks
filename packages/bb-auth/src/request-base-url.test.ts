@@ -12,8 +12,8 @@
 import assert from 'node:assert';
 import type { AsyncLocalStorage } from 'node:async_hooks';
 import { afterEach, describe, test } from 'node:test';
-import type { BlocksContext } from '@aws-blocks/core';
-import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 import { appBaseUrl, computeCallbackUrl } from './engines/federation-direct.js';
 import { stubIssuerPath, stubIssuerUrl } from './engines/stub-idp-routes.js';
 

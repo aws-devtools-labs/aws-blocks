@@ -10,7 +10,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { Auth } from './index.mock.js';
 import { Browser, captureLogger } from './test-support/aws-harness.js';
 

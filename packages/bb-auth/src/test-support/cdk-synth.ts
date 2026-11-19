@@ -64,7 +64,7 @@ export interface CdkSynthResult {
 }
 
 export interface CdkSynthOptions {
-	/** ES-module import lines for the probe (e.g. `import { Auth } from '@aws-blocks/bb-auth';`). */
+	/** ES-module import lines for the probe (e.g. `import { Auth } from '@aws-cdk-blocks/bb-auth';`). */
 	imports: string;
 	/**
 	 * Script body run after the harness stack exists. In scope: `stack` (a plain
@@ -129,7 +129,7 @@ export function synthUnderCdkConditions(options: CdkSynthOptions): CdkSynthResul
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME, BlocksPresets } from '@aws-blocks/core/cdk';
+import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME, BlocksPresets } from '@aws-cdk-blocks/core/cdk';
 ${options.imports}
 
 // Path metadata on, as the CDK CLI does, so each resource names its construct path.

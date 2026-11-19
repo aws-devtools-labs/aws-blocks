@@ -4,12 +4,12 @@
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { ReceiveMessageCommand, DeleteMessageCommand, ChangeMessageVisibilityCommand } from '@aws-sdk/client-sqs';
 import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-blocks/core';
-import { getConfigSync, getContainerComputeId, isContainerRuntime, registerContainerPoller } from '@aws-blocks/core';
-import { dispatchJobToWorker, isJobWorker } from '@aws-blocks/core';
-import { EventSourceMapping, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-cdk-blocks/core';
+import { getConfigSync, getContainerComputeId, isContainerRuntime, registerContainerPoller } from '@aws-cdk-blocks/core';
+import { dispatchJobToWorker, isJobWorker } from '@aws-cdk-blocks/core';
+import { EventSourceMapping, sanitizeConfigKey } from '@aws-cdk-blocks/core/bb-utils';
 import { registerAsyncJob } from './job-registry.js';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type {
 	AsyncJobContext,
@@ -23,8 +23,8 @@ import type {
 import { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {

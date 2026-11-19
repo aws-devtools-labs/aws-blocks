@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/blocks": patch
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/core": patch
+"aws-cdk-blocks": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 When AWS denies the credential check before `npm run deploy` and `npm run sandbox`, for example when a profile's role cannot be assumed, the warning now says so instead of reporting an unverified check, and says whether an AWS Organizations policy (a service control policy or a resource control policy) explicitly denied the request. It still does not stop the command, and it never includes the error's account IDs, ARNs or policy IDs.

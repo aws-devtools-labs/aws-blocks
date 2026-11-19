@@ -1,4 +1,4 @@
-# AWS Blocks App (React)
+# AWS CDK Blocks App (React)
 
 Real-time todo app with React, authentication, per-user data isolation, and live sync across tabs.
 

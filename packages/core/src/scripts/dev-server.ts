@@ -432,7 +432,7 @@ export function typegenWatchOptions(): { unref: true; log: (msg: string) => void
 
 async function startTypegenWatch(): Promise<(() => void) | undefined> {
   try {
-    const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
+    const { scanValueKeys, watchHostingValues } = await import('@aws-cdk-blocks/hosting/scripts');
     const scan = await scanValueKeys();
     if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
       return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
@@ -956,7 +956,7 @@ export function devStopCommand(port: number): string {
   return port === 3000 ? 'npm run dev:stop' : `npm run dev:stop -- --port ${port}`;
 }
 
-/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-blocks/bb-database`). */
+/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-cdk-blocks/bb-database`). */
 const LOCAL_ENGINE_CLOSERS = Symbol.for('aws-blocks.local-engine-closers');
 
 /** How long {@link closeLocalEngines} waits for the engines: within `tsx watch`'s 5 s, with the frontend's teardown. */
@@ -1566,7 +1566,7 @@ export async function startDevServer(options: DevServerOptions) {
       try { recorded = parsePidRecord(readFileSync(pidfilePath, 'utf-8')); } catch { /* no pidfile */ }
       if (recorded?.pid !== process.pid) claimDevPidfile(pidfilePath, selfRecord);
     } catch { /* best effort: the server runs on, as it would without a record */ }
-    console.log(`AWS Blocks local server running on ${frontDoor}`);
+    console.log(`AWS CDK Blocks local server running on ${frontDoor}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
     // Spawn frontend dev server after Blocks server is ready

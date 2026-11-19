@@ -17,7 +17,7 @@
  */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
+import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';

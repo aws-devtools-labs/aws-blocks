@@ -21,7 +21,7 @@
  */
 
 import { createHmac } from 'node:crypto';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 
 /** V1 payload. Future versions add arms keyed on `v`. */
 export interface StatePayloadV1 {

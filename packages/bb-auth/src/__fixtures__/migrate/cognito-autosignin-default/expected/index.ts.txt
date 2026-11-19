@@ -1,5 +1,5 @@
-import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { Auth } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Scope } from '@aws-cdk-blocks/core';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 // AuthCognito's signUp() did not sign the user in unless it passed
 // autoSignIn: true, so confirmSignUp() returned DONE. Nothing here relies on

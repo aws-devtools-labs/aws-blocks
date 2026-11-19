@@ -3,8 +3,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import type { BlocksContext } from '@aws-blocks/core';
-import { isBlocksError } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import {
 	resolveCookieSecurity,

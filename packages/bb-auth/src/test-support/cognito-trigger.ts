@@ -17,8 +17,8 @@
 
 import assert from 'node:assert';
 import crypto from 'node:crypto';
-import { unlockRouteRegistry } from '@aws-blocks/core';
-import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
+import { unlockRouteRegistry } from '@aws-cdk-blocks/core';
+import { createLambdaHandler } from '@aws-cdk-blocks/core/lambda-handler';
 import type { AuthOptions } from '../types.js';
 import { type AwsAuthHarness, cognitoError, TEST_POOL_ID, TEST_REGION } from './aws-harness.js';
 

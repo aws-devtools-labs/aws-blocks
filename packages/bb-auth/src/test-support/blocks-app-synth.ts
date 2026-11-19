@@ -25,7 +25,7 @@ export interface BlocksAppSynthOptions {
 	/**
 	 * The backend module's body, run with `stack` (the `BlocksStack`) and `Auth`
 	 * in scope. `''` builds an app with no block at all — and does not import
-	 * `@aws-blocks/bb-auth`.
+	 * `@aws-cdk-blocks/bb-auth`.
 	 */
 	build: string;
 	/** The app directory: `backendHandlerPath` is `<appDir>/cdk-blocks/index.handler.ts`. */
@@ -60,11 +60,11 @@ export function synthBlocksApp(options: BlocksAppSynthOptions): BlocksAppSynthRe
 	const handlerPath = join(options.appDir, 'cdk-blocks', 'index.handler.ts');
 	writeFileSync(
 		backend,
-		// `@aws-blocks/bb-auth` is imported only when the build uses it, so an
+		// `@aws-cdk-blocks/bb-auth` is imported only when the build uses it, so an
 		// app without `Auth` proves the stack-level check needs no bb-auth code.
 		`
-${/\bAuth\b/.test(options.build) ? `import { Auth${/\bstubIdp\b/.test(options.build) ? ', stubIdp' : ''} } from '@aws-blocks/bb-auth';` : ''}
-${/\bAppSetting\b/.test(options.build) ? "import { AppSetting } from '@aws-blocks/bb-app-setting';" : ''}
+${/\bAuth\b/.test(options.build) ? `import { Auth${/\bstubIdp\b/.test(options.build) ? ', stubIdp' : ''} } from '@aws-cdk-blocks/bb-auth';` : ''}
+${/\bAppSetting\b/.test(options.build) ? "import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';" : ''}
 export default (stack) => {
 ${options.build}
 };
@@ -76,8 +76,8 @@ ${options.build}
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { BlocksPresets, BlocksStack, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { ComputeBase } from '@aws-blocks/core/cdk/internal';
+import { BlocksPresets, BlocksStack, DEFAULT_NODE_RUNTIME } from '@aws-cdk-blocks/core/cdk';
+import { ComputeBase } from '@aws-cdk-blocks/core/cdk/internal';
 
 class StubCompute extends ComputeBase {
 	constructor(scope, id) {

@@ -294,11 +294,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         }
         // No RawRoute matched and the path is not under the RPC endpoint — 404.
         // Log it: an unmatched route used to be entirely silent, which is what
-        // made a split route registry (duplicate @aws-blocks/core copies)
+        // made a split route registry (duplicate @aws-cdk-blocks/core copies)
         // undiagnosable from CloudWatch alone. The path is already in the front
         // door's access logs, so this adds no new category of data.
         const copies = getLoadedCoreCopies();
-        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-cdk-blocks/core are loaded` : '';
         const requestNote = request.requestId === undefined ? '' : ` [request ${request.requestId}]`;
         console.error(
           `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}${requestNote}`,

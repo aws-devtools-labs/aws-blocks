@@ -10,7 +10,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { clearRouteRegistry, getRegisteredRoutes } from '@aws-blocks/core';
+import { clearRouteRegistry, getRegisteredRoutes } from '@aws-cdk-blocks/core';
 import { authRoutes, stubProviders } from './cdk/auth-routes.js';
 import { Auth, github, stubIdp } from './index.mock.js';
 import { resolveOptions } from './resolve-options.js';

@@ -5,7 +5,7 @@
  * Shared types for the Metrics building block.
  * This file has zero runtime dependencies — types only.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 /**
  * Units supported by CloudWatch. Using a unit enables automatic conversions

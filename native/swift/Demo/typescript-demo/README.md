@@ -1,6 +1,6 @@
 # Blocks Application
 
-Full-stack TypeScript application with AWS Blocks.
+Full-stack TypeScript application with AWS CDK Blocks.
 
 ## For Coding Agents
 
