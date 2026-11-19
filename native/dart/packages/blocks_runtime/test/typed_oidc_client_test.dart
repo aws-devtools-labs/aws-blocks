@@ -78,7 +78,11 @@ class _Launcher implements BrowserLauncher {
   final Map<String, String> Function(Uri authorizeUrl) callback;
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     this.authorizeUrl = authorizeUrl;
     this.callbackScheme = callbackScheme;
     return Uri(

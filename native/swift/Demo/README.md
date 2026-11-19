@@ -57,7 +57,7 @@ swift run swift-code-generator Demo/typescript-demo/aws-blocks/blocks.spec.json 
 ### Option B: Command Plugin (Xcode)
 
 1. Open `swift-demo/BlocksDemo.xcodeproj` in Xcode
-2. Right-click the `aws-blocks-swift` package in the Project Navigator
+2. Right-click the `cdk-blocks-swift` package in the Project Navigator
 3. Select "generate-code-from-blocks-spec"
 4. Add the `Generated/` folder to your target (first time only)
 
@@ -79,8 +79,8 @@ Or add it in `Package.swift`:
 ```swift
 .target(
     name: "MyApp",
-    dependencies: [.product(name: "BlocksRuntime", package: "aws-blocks-swift")],
-    plugins: [.plugin(name: "BlocksCodegenBuildPlugin", package: "aws-blocks-swift")]
+    dependencies: [.product(name: "BlocksRuntime", package: "cdk-blocks-swift")],
+    plugins: [.plugin(name: "BlocksCodegenBuildPlugin", package: "cdk-blocks-swift")]
 )
 ```
 

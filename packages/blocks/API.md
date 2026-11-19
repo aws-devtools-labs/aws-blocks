@@ -57,6 +57,7 @@ import { customOauth2 } from '@aws-blocks/bb-auth';
 import { Dashboard } from '@aws-blocks/bb-dashboard';
 import { DashboardErrors } from '@aws-blocks/bb-dashboard';
 import { DashboardOptions } from '@aws-blocks/bb-dashboard';
+import { DataApiOptions } from '@aws-blocks/bb-database';
 import { Database } from '@aws-blocks/bb-database';
 import { DatabaseCluster } from '@aws-blocks/bb-database';
 import { DatabaseClusterOptions } from '@aws-blocks/bb-database';
@@ -103,6 +104,8 @@ import { ScanOptions as KVScanOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
+import { LegacyDatabaseCluster } from '@aws-blocks/bb-database';
+import { LegacyDatabaseClusterOptions } from '@aws-blocks/bb-database';
 import { LegacyKVStore } from '@aws-blocks/bb-kv-store';
 import { LegacyKVStoreDeleteOptions } from '@aws-blocks/bb-kv-store';
 import { LegacyKVStoreOptions } from '@aws-blocks/bb-kv-store';
@@ -279,6 +282,8 @@ export { DashboardErrors }
 
 export { DashboardOptions }
 
+export { DataApiOptions }
+
 export { Database }
 
 export { DatabaseCluster }
@@ -453,6 +458,10 @@ export { KVStore }
 export { KVStoreErrors }
 
 export { KVStoreOptions }
+
+export { LegacyDatabaseCluster }
+
+export { LegacyDatabaseClusterOptions }
 
 export { LegacyKVStore }
 

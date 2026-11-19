@@ -122,21 +122,21 @@ final class OpenRecordFlatteningTests: XCTestCase {
 
     func testDiscriminatedVariantOpenRecordTreatsTheDiscriminatorAsAFixedKey() throws {
         let output = try generate(fixture: "18-hybrid-arm")
-        assertContains(output.api, """
-                public struct SignUp: Codable, Sendable {
-                    public let password: String
-                    public let username: String
-                    public let attributes: [String: String]
+        assertContains(output.models, """
+            public struct SignUp: Codable, Sendable {
+                public let password: String
+                public let username: String
+                public let attributes: [String: String]
 
-                    public init(password: String, username: String, attributes: [String: String] = [:]) {
+                public init(password: String, username: String, attributes: [String: String] = [:]) {
         """)
         // `action` is written by the union, so it is neither read into `attributes` nor sent from it.
-        assertContains(output.api, """
-                    private static let fixedFieldNames: Set<String> = [
-                        "password",
-                        "username",
-                        "action",
-                    ]
+        assertContains(output.models, """
+                private static let fixedFieldNames: Set<String> = [
+                    "password",
+                    "username",
+                    "action",
+                ]
         """)
     }
 
@@ -189,6 +189,8 @@ final class OpenRecordFlatteningTests: XCTestCase {
                 // The namespace classes' and `Blocks`' inits.
                 - occurrences(of: "public init(client: BlocksClient)", in: source)
                 - occurrences(of: "public init(\n        server: BlocksRuntime.BlocksServer", in: source)
+                // An open enum's.
+                - occurrences(of: "public init(rawValue: String)", in: source)
             XCTAssertEqual(inits, structs, source)
         }
     }

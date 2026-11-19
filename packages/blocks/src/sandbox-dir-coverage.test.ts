@@ -76,6 +76,8 @@ const HISTORICAL_FILES: Record<string, string> = {
 		'fixtures of pre-migration apps — the migrate test asserts against the OLD layout',
 	'.changeset/cdk-blocks-sandbox-dir-rename.md':
 		'the release note for the rename itself — it has to name the directory it renames FROM, and tell users which path stops being served',
+	'native/kotlin/.changeset/cdk-blocks-sandbox-dir-rename.md':
+		"the Kotlin release note for the same rename: it names the directory the codegen task's error message used to point at",
 };
 
 /** Published changelog entries describe shipped releases and cannot be rewritten. */
@@ -91,6 +93,8 @@ const LEGACY_NAME_REQUIRED_LINES: Record<string, readonly string[]> = {
 	'.gitignore': [`${LEGACY}/`],
 	// Prose about an app's state BEFORE upgrading, which really was at the old path.
 	'.changeset/core-deploy-config-per-stage.md': ['may still have a deployed URL in'],
+	// The harness deploys a release from before the rename and reads the outputs file that the release wrote.
+	'test-apps/comprehensive/test/upgrade-sql-blocks.ts': ["for (const dir of ['.cdk-blocks-sandbox',"],
 };
 
 /** Every git-tracked file, repo-relative. */

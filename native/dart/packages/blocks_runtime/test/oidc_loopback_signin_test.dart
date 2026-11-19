@@ -52,7 +52,11 @@ class _Launcher implements BrowserLauncher {
   String? scheme;
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     this.authorizeUrl = authorizeUrl;
     scheme = callbackScheme;
     final state = authorizeUrl.queryParameters['state']!;
@@ -196,6 +200,49 @@ void main() {
         oidc.signIn('google', cancel: cancel.future),
         throwsA(isA<OidcCancelledException>()),
       );
+      expect(server.requests, hasLength(1));
+    }, testOn: 'vm && (mac-os || linux || windows)');
+
+    test('cancel while waiting for the redirect closes the listener and '
+        'never exchanges', () async {
+      final server = _AuthServer();
+      final oidc = _client(server);
+      final opened = Completer<void>();
+      oidc.openBrowser = (_) async => opened.complete();
+      final cancel = Completer<void>();
+
+      final signIn = oidc.signIn('google', cancel: cancel.future);
+      await opened.future;
+      final relayTo =
+          (jsonDecode(server.requests.first.body) as Map)['relayTo'] as String;
+      cancel.complete();
+
+      await expectLater(signIn, throwsA(isA<OidcCancelledException>()));
+      await expectLater(http.get(Uri.parse(relayTo)), throwsA(anything));
+      expect(server.requests, hasLength(1));
+    }, testOn: 'vm && (mac-os || linux || windows)');
+
+    test('signInTimeout without a redirect throws OidcCancelledException and '
+        'closes the listener', () async {
+      final server = _AuthServer();
+      final oidc = _client(server);
+      oidc
+        ..openBrowser = (_) async {}
+        ..signInTimeout = const Duration(milliseconds: 200);
+
+      await expectLater(
+        oidc.signIn('google'),
+        throwsA(
+          isA<OidcCancelledException>().having(
+            (e) => e.message,
+            'message',
+            contains('timed out'),
+          ),
+        ),
+      );
+      final relayTo =
+          (jsonDecode(server.requests.first.body) as Map)['relayTo'] as String;
+      await expectLater(http.get(Uri.parse(relayTo)), throwsA(anything));
       expect(server.requests, hasLength(1));
     }, testOn: 'vm && (mac-os || linux || windows)');
 

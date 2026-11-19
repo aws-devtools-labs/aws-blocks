@@ -5,7 +5,7 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
 
 // --- Models ---
 
@@ -46,6 +46,19 @@ class IsUpdatedFalseNextStep {
   String toString() => 'IsUpdatedFalseNextStep(name: $name, destination: $destination)';
 }
 
+
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
 
 // --- API Namespaces ---
 
@@ -131,7 +144,7 @@ sealed class GetNotificationResult {
     switch (json['type'] as String) {
       case 'email': return EmailGetNotificationResult.fromJson(json);
       case 'sms': return SmsGetNotificationResult.fromJson(json);
-      default: throw ArgumentError('Unknown type: ${json['type']}');
+      default: return GetNotificationResultUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -209,6 +222,27 @@ class SmsGetNotificationResult extends GetNotificationResult {
   String toString() => 'SmsGetNotificationResult(message: $message)';
 }
 
+final class GetNotificationResultUnknown extends GetNotificationResult {
+  final Map<String, dynamic> json;
+
+  const GetNotificationResultUnknown(this.json);
+
+  String get discriminator => json['type'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is GetNotificationResultUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'GetNotificationResultUnknown' '($json)';
+}
+
 
 
 class Api {
@@ -237,10 +271,17 @@ class Api {
 
 class Blocks {
   late final Api api;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
+    _client = client;
     api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 

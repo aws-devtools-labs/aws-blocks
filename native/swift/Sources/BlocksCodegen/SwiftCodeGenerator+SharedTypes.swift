@@ -76,8 +76,11 @@ extension SwiftCodeGenerator {
         emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
         emissionScope.current = Self.sendableScope(namespace: namespace, operation: operation.name)
         defer { emissionScope.current = "" }
+        let resultRoots = resultRootTypeNames(operation)
         for node in operation.nestedTypes {
-            emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
+            openEnums.with(open: resultRoots.contains(node.name)) {
+                emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
+            }
         }
         emitSharedTypeAliases(operation, shared: shared, indent: indent + "    ", lines: &lines)
         emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
