@@ -35,34 +35,34 @@ class BlocksClientTest {
             )
         }
         val client = BlocksClient(
-            BlocksServer("cloudfront", "https://d123.cloudfront.net/aws-blocks/api"),
+            BlocksServer("cloudfront", "https://d123.cloudfront.net/cdk-blocks/api"),
             defaultHttpClient(engine, cookiesStorage = AcceptAllCookiesStorage()),
         )
 
         client.execute(BlocksRequest(method = "reports.build", params = emptyList(), id = 1))
 
-        captured!!.url.toString() shouldBe "https://d123.cloudfront.net/aws-blocks/api/reports"
+        captured!!.url.toString() shouldBe "https://d123.cloudfront.net/cdk-blocks/api/reports"
     }
 
     @Test
     fun `rpcUrl appends the namespace segment`() {
-        rpcUrl("http://localhost:3001/aws-blocks/api", "api.greet") shouldBe "http://localhost:3001/aws-blocks/api/api"
-        rpcUrl("https://a.example/prod/aws-blocks/api//", "reports.build") shouldBe "https://a.example/prod/aws-blocks/api/reports"
+        rpcUrl("http://localhost:3001/cdk-blocks/api", "api.greet") shouldBe "http://localhost:3001/cdk-blocks/api/api"
+        rpcUrl("https://a.example/prod/cdk-blocks/api//", "reports.build") shouldBe "https://a.example/prod/cdk-blocks/api/reports"
         // Only the first `.` separates the namespace.
-        rpcUrl("https://a.example/aws-blocks/api", "ns.a.b") shouldBe "https://a.example/aws-blocks/api/ns"
+        rpcUrl("https://a.example/cdk-blocks/api", "ns.a.b") shouldBe "https://a.example/cdk-blocks/api/ns"
         // Path-safe characters are sent as they are; others are percent-encoded.
-        rpcUrl("https://a.example/aws-blocks/api", "\$ns.m") shouldBe "https://a.example/aws-blocks/api/\$ns"
-        rpcUrl("https://a.example/aws-blocks/api", "café.m") shouldBe "https://a.example/aws-blocks/api/caf%C3%A9"
+        rpcUrl("https://a.example/cdk-blocks/api", "\$ns.m") shouldBe "https://a.example/cdk-blocks/api/\$ns"
+        rpcUrl("https://a.example/cdk-blocks/api", "café.m") shouldBe "https://a.example/cdk-blocks/api/caf%C3%A9"
     }
 
     @Test
     fun `rpcUrl leaves the base for a method without namespace`() {
-        rpcUrl("https://a.example/aws-blocks/api", "greet") shouldBe "https://a.example/aws-blocks/api"
-        rpcUrl("https://a.example/aws-blocks/api", ".greet") shouldBe "https://a.example/aws-blocks/api"
+        rpcUrl("https://a.example/cdk-blocks/api", "greet") shouldBe "https://a.example/cdk-blocks/api"
+        rpcUrl("https://a.example/cdk-blocks/api", ".greet") shouldBe "https://a.example/cdk-blocks/api"
     }
 
     private fun clientAnswering(status: HttpStatusCode, body: String) = BlocksClient(
-        BlocksServer("local", "http://localhost:3000/aws-blocks/api"),
+        BlocksServer("local", "http://localhost:3000/cdk-blocks/api"),
         defaultHttpClient(
             MockEngine {
                 respond(
@@ -195,7 +195,7 @@ class BlocksClientTest {
     @Test
     fun `a cancellation is not turned into a TransportException`() = runTest {
         val client = BlocksClient(
-            BlocksServer("local", "http://localhost:3000/aws-blocks/api"),
+            BlocksServer("local", "http://localhost:3000/cdk-blocks/api"),
             defaultHttpClient(
                 MockEngine { throw CancellationException("cancelled") },
                 cookiesStorage = AcceptAllCookiesStorage(),
@@ -209,7 +209,7 @@ class BlocksClientTest {
     @Test
     fun `a connection failure is a TransportException with no status`() = runTest {
         val client = BlocksClient(
-            BlocksServer("local", "http://localhost:3000/aws-blocks/api"),
+            BlocksServer("local", "http://localhost:3000/cdk-blocks/api"),
             defaultHttpClient(
                 MockEngine { throw RuntimeException("Connection refused") },
                 cookiesStorage = AcceptAllCookiesStorage(),

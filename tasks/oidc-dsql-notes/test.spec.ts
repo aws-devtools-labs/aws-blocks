@@ -22,7 +22,7 @@ async function rpc(
 ): Promise<{ status: number; body: any }> {
 	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++rpcSeq };
 	if (!opts.omitParams) data.params = params ?? [];
-	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
+	const res = await ctx.post(`${BASE}/cdk-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
 		data,
 	});
@@ -36,7 +36,7 @@ const note = (page: Page, text: string) => page.getByTestId('note-item').filter(
 // the session cookie) → app. After this the page's cookie jar is authenticated,
 // so page.request calls the gated api as the signed-in user.
 async function signIn(page: Page): Promise<void> {
-	await page.goto(`${BASE}/aws-blocks/auth/signin/stub`);
+	await page.goto(`${BASE}/cdk-blocks/auth/signin/stub`);
 	await expect(page.getByTestId('profile-sub')).toBeVisible({ timeout: SIGNIN });
 	await expect
 		.poll(async () => (await page.getByTestId('profile-sub').textContent())?.trim() ?? '', { timeout: SIGNIN })

@@ -38,8 +38,8 @@ const oktaSecret = `{ fullId: 'okta-secret', get: async () => 's' }`;
 const passkeys = { relyingPartyId: 'example.com', origins: ['https://example.com'] };
 /** The second block with a provider mounts its routes apart from the first's. */
 const mixedRedirects = {
-	callbackPath: '/aws-blocks/auth/mixed/callback',
-	signOutPath: '/aws-blocks/auth/mixed/signout',
+	callbackPath: '/cdk-blocks/auth/mixed/callback',
+	signOutPath: '/cdk-blocks/auth/mixed/signout',
 };
 
 /** Each block's options, as the backend source spells them. */

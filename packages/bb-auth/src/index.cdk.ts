@@ -682,8 +682,8 @@ const AUTH_ROUTE_CLAIMS = Symbol.for('blocks:AuthRouteClaims');
  * loads (`DuplicateRouteException`) fail synth instead, with the fix. Scoped like the runtime's route table: per
  * backend, so the same paths in two stacks are fine. A block's sign-in routes (`exchange`, `session`, …) live beside
  * `callbackPath`, its sign-out routes are `signOutPath`, and a stub IdP's routes are keyed by its provider key alone,
- * so one block's `signOutPath` can still land on another block's sign-in route (`/aws-blocks/auth/session`). A block
- * whose own `redirects` put two of its routes on one path (`signOutPath: '/aws-blocks/auth/session'`) fails too.
+ * so one block's `signOutPath` can still land on another block's sign-in route (`/cdk-blocks/auth/session`). A block
+ * whose own `redirects` put two of its routes on one path (`signOutPath: '/cdk-blocks/auth/session'`) fails too.
  */
 function claimAuthRoutes(block: Auth, id: string, opts: ResolvedAuthOptions): void {
 	const claims = getOrCreateOnRoot(

@@ -55,7 +55,7 @@ export const auth = new Auth(scope, 'oidc-auth', {
 	},
 	allowBearerAuth: true,
 	redirects: {
-		callbackPath: '/aws-blocks/auth/callback',
+		callbackPath: '/cdk-blocks/auth/callback',
 		postSignInPath: '/home',
 		allowedRelayOrigins: [relayOrigin('myapp://auth')],
 	},

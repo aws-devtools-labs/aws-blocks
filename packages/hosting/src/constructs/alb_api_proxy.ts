@@ -4,10 +4,10 @@
 import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
 
 /**
- * API-proxy Lambda for the ALB front door (same-origin `/aws-blocks/*`).
+ * API-proxy Lambda for the ALB front door (same-origin `/cdk-blocks/*`).
  *
  * On CloudFront the same-origin API proxy is a cache behavior forwarding
- * `/aws-blocks/*` (+ the auth subtree) to the backend API Gateway. An ALB
+ * `/cdk-blocks/*` (+ the auth subtree) to the backend API Gateway. An ALB
  * cannot target an external HTTPS URL directly, so this tiny Lambda TARGET
  * forwards the request to the API Gateway base URL and relays the response —
  * keeping the API same-origin with the frontend (so `SameSite=Lax` session
@@ -24,7 +24,7 @@ import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
  *
  * The API Gateway base URL is passed via the `API_GW_BASE` env var (NOT baked
  * into the code) because it is a CloudFormation token at synth. It is the API
- * Gateway origin base WITHOUT the `/aws-blocks/api` suffix (e.g.
+ * Gateway origin base WITHOUT the `/cdk-blocks/api` suffix (e.g.
  * `https://abc.execute-api.us-west-2.amazonaws.com/prod`); the forwarder appends
  * the request path verbatim.
  *

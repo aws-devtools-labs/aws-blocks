@@ -36,7 +36,7 @@ export type RpcReply = { result?: unknown; error?: { code?: number; message?: st
  * Gateway stage, so on the `apigateway` leg this is `ApiUrl` without its `/prod`.
  */
 export function requestUrlFor(apiUrl: string, namespace: string): string {
-  return `${new URL(apiUrl).origin}/aws-blocks/api/${namespace}`;
+  return `${new URL(apiUrl).origin}/cdk-blocks/api/${namespace}`;
 }
 
 /**

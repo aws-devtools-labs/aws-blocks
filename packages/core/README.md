@@ -113,10 +113,10 @@ The RPC endpoint dispatches `<exportName>.<method>` against your backend module'
 
 The typed `import { api } from 'cdk-blocks'` client is the normal path. The HTTP form below is for manual verification (curl/Postman) and non-JS clients.
 
-`POST` to the RPC path `/aws-blocks/api`:
+`POST` to the RPC path `/cdk-blocks/api`:
 
-- Local dev: `http://localhost:3000/aws-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
-- Deployed: the API Gateway stage URL + `/aws-blocks/api`
+- Local dev: `http://localhost:3000/cdk-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
+- Deployed: the API Gateway stage URL + `/cdk-blocks/api`
 
 The body is JSON-RPC 2.0:
 
@@ -141,7 +141,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 Turn it on only when every client of the namespace reads the body of a non-2xx response (a hand-written `fetch` that throws on `!response.ok` would not). Two more things to check:
 
-- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/aws-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. CloudFront cannot scope error responses away from `/aws-blocks/*`, so `Hosting` fails synth for that combination (`HttpErrorStatusErrorPagesError`): remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
+- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/cdk-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. CloudFront cannot scope error responses away from `/cdk-blocks/*`, so `Hosting` fails synth for that combination (`HttpErrorStatusErrorPagesError`): remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
 - **Dart clients with bearer tokens.** With an `authProvider`, the Dart client treats any HTTP 401 as an expired token: it refreshes and runs the method once more, so a method that throws 401 after a side effect runs twice. Put the guard first — `requireAuth()` as the first statement, or `auth.protect`, which runs it before any of the method's code — and keep any method that can still fail with 401 later idempotent. The Swift and Kotlin clients decode the error the same way on any status, and do not retry.
 
 Error responses use these JSON-RPC codes:
@@ -159,7 +159,7 @@ Errors thrown with `ApiError` use the positive HTTP status as the JSON-RPC `erro
 Working example:
 
 ```bash
-curl -X POST http://localhost:3000/aws-blocks/api \
+curl -X POST http://localhost:3000/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
 # → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
@@ -200,7 +200,7 @@ A named object is convenient for `curl`, but it is only safe when the keys are w
 One shape that looks reasonable and is **not** supported: a top-level JSON **array** as the whole body (a JSON-RPC batch). The parser reads `jsonrpc` and `method` off the body object, so an array body fails validation instead of running anything:
 
 ```bash
-curl -X POST http://localhost:3000/aws-blocks/api \
+curl -X POST http://localhost:3000/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '[{"jsonrpc":"2.0","method":"api.greet","params":["a"],"id":1}]'
 # → HTTP 200
@@ -219,7 +219,7 @@ The generated client does not hardcode the API URL; it resolves one at first cal
 3. Node.js 22.3 or later only: the file `.cdk-blocks-sandbox/config.json`, read from the **process working directory**. Only a dev server writes it, with its own local URL. Older Node.js skips this step, so set `BLOCKS_API_URL` there.
 4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
 
-Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and the dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
+Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and the dev server (`npm run dev`, and the one `npm run sandbox` runs) sets `BLOCKS_API_URL` to its own front door on the frontend dev server it starts, so a Next.js Server Component calls the local server too. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
 
 A deploy never rewrites `.cdk-blocks-sandbox/config.json`, so it never changes where local tooling points while `npm run dev` runs. It records its API URL in a file of its own, which only code that means to target that stage reads: `.cdk-blocks-sandbox/config.sandbox.json` for a sandbox deploy, `.cdk-blocks-sandbox/config.production.json` for `npm run deploy`. The template e2e tests call the dev server on `blocks.dev.port`, or the deployed app you name with `TEST_URL`.
 
@@ -235,19 +235,19 @@ What you should see instead, per environment:
 ```bash
 # Local dev / sandbox: served by the dev server itself, Cache-Control: no-store
 curl http://localhost:3000/.blocks-sandbox/config.json
-# → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
+# → {"apiUrl":"http://localhost:3000/cdk-blocks/api","environment":"local"}
 
 # After a deploy: the URL the deploy recorded (never config.json), and the config uploaded to the origin
 cat .cdk-blocks-sandbox/config.production.json
-# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
-#   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /aws-blocks/api instead)
+# → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api", "environment": "production" }
+#   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /cdk-blocks/api instead)
 curl https://<your-cloudfront-domain>/.blocks-sandbox/config.json
-# → {"apiUrl":"/aws-blocks/api","__blocksBuildId":"<build id>"}
+# → {"apiUrl":"/cdk-blocks/api","__blocksBuildId":"<build id>"}
 ```
 
 The deployed file is public on purpose, in every stage, production included: a browser has no other way to learn the API URL, and `cdk-blocks deploy --wait-live` polls it for `__blocksBuildId` to know the new build is live. Keep serving it; removing the `/.blocks-sandbox/*` route breaks every deployed page. The name says `sandbox` for historical reasons, not because only a sandbox serves it. Hosting writes only values the browser receives anyway:
 
-- `apiUrl`, only when Hosting has an `api`: the same-origin `/aws-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
+- `apiUrl`, only when Hosting has an `api`: the same-origin `/cdk-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
 - `__blocksBuildId`: an opaque id for the deploy (a timestamp plus random characters, or a hash of the build's content with `buildId: 'fixed'`).
 - Your `backendConfig`, if you set one. Everything in it is published as is (except `apiUrl` and `__blocksBuildId`, which Hosting sets over any key of the same name), so never put a secret or an internal identifier there. The same object is also set as the `BLOCKS_CONFIG` environment variable on SSR functions.
 
@@ -259,7 +259,7 @@ So a real config problem looks like the client throwing `Blocks API URL not conf
 
 A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed). It is the stack's `gateway`, and its RPC URL is the `ApiUrl` stack output.
 
-- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-cdk-blocks/bb-compute`) is routed there without changing the app's endpoint.
+- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/cdk-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-cdk-blocks/bb-compute`) is routed there without changing the app's endpoint.
 - **Container computes.** A namespace on a `container` compute is integrated through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC; the load balancer forwards each namespace's path to its container's tasks. Namespaces without a compute, `RawRoute`s and the auth routes stay on the default compute. On the `cloudfront` tier, CloudFront reaches a container namespace straight from the distribution instead (see [API front door](#api-front-door)), so the gateway's throttling, access logs and limits don't apply to it.
 - **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched route (`resourcePath`) — the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource rather than the path called.
 - **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
@@ -276,19 +276,19 @@ How the backend's API is exposed to clients is chosen with the `apiFrontDoor` pr
 - **`'apigateway'`** (default) — clients call the stack's API Gateway endpoint directly, on its own `execute-api` domain. Nothing extra to deploy.
 - **`'cloudfront'`** — Blocks puts a CloudFront distribution in front of that gateway (and builds the gateway as a regional endpoint, so there is a single CloudFront layer); clients call the distribution's domain instead.
 
-Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/aws-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
+Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/cdk-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
 
 Either tier serves the API at the same path. The TypeScript client (and any manual caller that addresses a namespace) POSTs JSON-RPC to a per-namespace path:
 
 ```
-POST /aws-blocks/api/{namespace}
+POST /cdk-blocks/api/{namespace}
 ```
 
-where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat; it runs on the default compute, and with `defaults.strictNamespacePlacement` it refuses a namespace placed on another compute. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-cdk-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/aws-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
+where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /cdk-blocks/api` form still works for back-compat; it runs on the default compute, and with `defaults.strictNamespacePlacement` it refuses a namespace placed on another compute. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/cdk-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-cdk-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/cdk-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
 
-**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/cdk-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
 
 Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
 
@@ -466,7 +466,7 @@ To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which 
 Registration rules worth knowing before you hit them at runtime:
 
 - Routes must be constructed while the backend module is loading (top level of `cdk-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
-- `/aws-blocks` itself and `/aws-blocks/api` (plus anything under it) are reserved for RPC dispatch, and `/` is not routable, so use a sub-path.
+- `/cdk-blocks` itself and `/cdk-blocks/api` (plus anything under it) are reserved for RPC dispatch (the legacy `/aws-blocks` prefix is served as an alias of `/cdk-blocks`), and `/` is not routable, so use a sub-path.
 - The same `method` + `path` twice throws `RawRouteErrors.DuplicateRoute`; catch it with `isBlocksError(e, RawRouteErrors.DuplicateRoute)`.
 - No extra AWS resources are created. The existing API Gateway proxy already forwards every path to the same Lambda, which checks the route registry before falling through to RPC.
 
@@ -636,12 +636,12 @@ The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so no
 BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
 ```
 
-The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/aws-blocks/settings` shortcut opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
+The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/cdk-blocks/settings` shortcut opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
 
 The `Host` check doesn't stop a page on another site from sending a request to `http://localhost:3000` itself, so the dev server also checks where state-changing requests come from. Both checks below apply in local mode and in sandbox mode, where the dev server forwards API requests to the deployed sandbox API (`BLOCKS_API_URL`): a refused request is never forwarded.
 
 - A `POST`, `PUT`, `PATCH` or `DELETE` request (JSON-RPC calls and RawRoutes alike) whose `Origin` header names another site gets `403 Forbidden`. Allowed origins are a loopback origin on any port (`http://localhost:5173`, `http://127.0.0.1:3100`, `http://[::1]:4321`, so a frontend dev server calling the backend directly keeps working), the dev server's own address (a page opened by IP address with `BLOCKS_DEV_HOST=0.0.0.0`), and the host set in `BLOCKS_DEV_HOST` (or `startDevServer({ host })`) on any port. A loopback origin includes any other app running on your own machine: the check protects you from other sites, not from other local servers. `Origin: null` is refused. To call the dev server from a page on another hostname, set `BLOCKS_DEV_HOST` to that hostname; there is no separate allowed-origin list for local dev (`defaults.allowedOrigins` applies to the deployed API). A request with no `Origin` header, such as `curl`, server-side rendering or a native client, isn't affected, and neither are `GET`, `HEAD` and `OPTIONS` requests.
-- A JSON-RPC call (`POST /aws-blocks/api`) must send `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine), or it gets `415 Unsupported Media Type` and the method doesn't run. A browser sends `text/plain`, `application/x-www-form-urlencoded` and `multipart/form-data` bodies to another site without asking first, so this refuses them even when no `Origin` is sent. The generated client and the Swift, Kotlin and Dart clients already send `application/json`; with `curl`, pass `-H 'Content-Type: application/json'`. RawRoutes keep accepting any content type.
+- A JSON-RPC call (`POST /cdk-blocks/api`) must send `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine), or it gets `415 Unsupported Media Type` and the method doesn't run. A browser sends `text/plain`, `application/x-www-form-urlencoded` and `multipart/form-data` bodies to another site without asking first, so this refuses them even when no `Origin` is sent. The generated client and the Swift, Kotlin and Dart clients already send `application/json`; with `curl`, pass `-H 'Content-Type: application/json'`. RawRoutes keep accepting any content type.
 
 You can also set the host with `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the dev task also exports it to the dev server as `BLOCKS_DEV_HOST`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in:
 
@@ -696,7 +696,7 @@ Each entry in `defaults.allowedOrigins` is one of:
 
 If you use the `Hosting` construct with your API, CORS is handled automatically:
 
-- **Same-origin requests** (frontend fetches through the front door's proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
+- **Same-origin requests** (frontend fetches through the front door's proxy at `/cdk-blocks/api`) work without CORS headers since the browser treats them as same-origin.
 - **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the front door's URL (the CloudFront distribution's domain, your custom domain, or another door's address) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
 
 With the sandbox preset, the localhost pattern from `defaults.allowedOrigins` is also kept, so your local dev frontend still works.

@@ -4,7 +4,7 @@
 /**
  * The pending federated-sign-in cookie — shared by every federation engine.
  *
- * A server-initiated sign-in (`GET /aws-blocks/auth/signin/<id>`) stores what
+ * A server-initiated sign-in (`GET /cdk-blocks/auth/signin/<id>`) stores what
  * the callback needs in one short-lived (10 minute), HMAC-signed, `HttpOnly`
  * cookie: the PKCE verifier, the nonce, the `state` sent to the IdP, the exact
  * `redirect_uri`, and where to land afterwards. **Every engine writes it with

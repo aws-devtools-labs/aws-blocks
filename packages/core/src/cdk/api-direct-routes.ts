@@ -19,7 +19,7 @@ import { API_LISTENER_PORTS, type LoadBalancerIngress } from './api-vpc-link.js'
 /**
  * An API path a CloudFront front door can route straight to a load-balanced
  * compute (a container) instead of through the shared API gateway: an
- * `/aws-blocks/api/{namespace}` path and the listener that serves it.
+ * `/cdk-blocks/api/{namespace}` path and the listener that serves it.
  *
  * @internal
  */
@@ -93,7 +93,7 @@ const FORWARDED_HOST_FUNCTION = `function handler(event) {
 /** Construct id, under the load balancer, of the prefix-list lookup that admits CloudFront. */
 const PREFIX_LIST_LOOKUP_ID = 'CloudFrontOriginFacingPrefixList';
 
-/** The namespace name of a direct route (`/aws-blocks/api/{name}` → `name`). */
+/** The namespace name of a direct route (`/cdk-blocks/api/{name}` → `name`). */
 function namespaceOf(route: ApiDirectRoute): string {
 	return route.path.slice(BLOCKS_RPC_PREFIX.length + 1);
 }
@@ -134,7 +134,7 @@ export function cloudFrontReachableRoutes(
  * {@link DIRECT_ORIGIN_READ_TIMEOUT}) and one hop fewer. Every other API path
  * keeps reaching the gateway through the distribution's other behaviors.
  *
- * Call before adding the `/aws-blocks/api/*` behavior: CloudFront matches
+ * Call before adding the `/cdk-blocks/api/*` behavior: CloudFront matches
  * behaviors in the order they were added, and each direct path is an exact path
  * under that prefix.
  *

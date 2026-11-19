@@ -241,6 +241,13 @@ let lastSignal: AbortSignal | undefined;
 function registerRoutes() {
   registerRoute({
     method: 'GET',
+    path: '/cdk-blocks/legacy-twin',
+    handler: async (ctx) => {
+      ctx.response.send({ path: ctx.request.url.pathname });
+    },
+  });
+  registerRoute({
+    method: 'GET',
     path: '/users/{id}',
     handler: async (ctx) => {
       ctx.response.status = 201;
@@ -383,25 +390,28 @@ const PARITY: Array<{ name: string; method: string; target: string; headers?: Re
   {
     name: 'RPC call with an allowed origin and a cookie',
     method: 'POST',
-    target: '/aws-blocks/api/api',
+    target: '/cdk-blocks/api/api',
     headers: { ...json, origin: ALLOWED_ORIGIN, cookie: 'sid=abc' },
     body: rpc('api.echo', ['hi']),
   },
-  { name: 'RPC error envelope', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.fail') },
+  { name: 'RPC error envelope', method: 'POST', target: '/cdk-blocks/api', headers: json, body: rpc('api.fail') },
   {
     name: 'RPC request headers and the client user agent reach the handler',
     method: 'POST',
-    target: '/aws-blocks/api',
+    target: '/cdk-blocks/api',
     headers: { ...json, authorization: 'Bearer t', 'x-blocks-user-agent': 'aws-blocks-swift/1.2.3' },
     body: rpc('api.whoCalls'),
   },
-  { name: 'RPC non-ASCII arguments', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.echo', ['héllo ✓']) },
-  { name: 'RPC unknown method', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.nope') },
-  { name: 'RPC invalid JSON', method: 'POST', target: '/aws-blocks/api', headers: json, body: '{nope' },
-  { name: 'RPC path/body namespace mismatch', method: 'POST', target: '/aws-blocks/api/other', headers: json, body: rpc('api.echo', ['x']) },
-  { name: 'preflight from an allowed origin', method: 'OPTIONS', target: '/aws-blocks/api', headers: { origin: ALLOWED_ORIGIN } },
-  { name: 'preflight from a disallowed origin', method: 'OPTIONS', target: '/aws-blocks/api', headers: { origin: 'https://other.example' } },
-  { name: 'cross-origin rejection', method: 'POST', target: '/aws-blocks/api', headers: { ...json, origin: 'https://evil.example' }, body: rpc('api.echo', ['x']) },
+  { name: 'RPC at the legacy /aws-blocks/api path', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.echo', ['x']) },
+  { name: 'RPC at a legacy per-namespace path', method: 'POST', target: '/aws-blocks/api/api', headers: json, body: rpc('api.echo', ['x']) },
+  { name: 'RawRoute at its legacy /aws-blocks twin', method: 'GET', target: '/aws-blocks/legacy-twin' },
+  { name: 'RPC non-ASCII arguments', method: 'POST', target: '/cdk-blocks/api', headers: json, body: rpc('api.echo', ['héllo ✓']) },
+  { name: 'RPC unknown method', method: 'POST', target: '/cdk-blocks/api', headers: json, body: rpc('api.nope') },
+  { name: 'RPC invalid JSON', method: 'POST', target: '/cdk-blocks/api', headers: json, body: '{nope' },
+  { name: 'RPC path/body namespace mismatch', method: 'POST', target: '/cdk-blocks/api/other', headers: json, body: rpc('api.echo', ['x']) },
+  { name: 'preflight from an allowed origin', method: 'OPTIONS', target: '/cdk-blocks/api', headers: { origin: ALLOWED_ORIGIN } },
+  { name: 'preflight from a disallowed origin', method: 'OPTIONS', target: '/cdk-blocks/api', headers: { origin: 'https://other.example' } },
+  { name: 'cross-origin rejection', method: 'POST', target: '/cdk-blocks/api', headers: { ...json, origin: 'https://evil.example' }, body: rpc('api.echo', ['x']) },
   { name: 'RawRoute with params, repeated query and cookies', method: 'GET', target: '/users/42?q=a&q=b', headers: { origin: ALLOWED_ORIGIN, cookie: 'sid=abc' } },
   { name: 'RawRoute text body', method: 'GET', target: '/text' },
   { name: 'RawRoute that throws', method: 'GET', target: '/boom' },
@@ -411,10 +421,10 @@ const PARITY: Array<{ name: string; method: string; target: string; headers?: Re
   { name: 'RawRoute request URL behind a loopback forwarded host', method: 'GET', target: '/url', headers: { 'x-forwarded-host': 'localhost:3000' } },
   { name: 'RawRoute request base URL (getRequestBaseUrl)', method: 'GET', target: '/base-url?a=1' },
   { name: 'RawRoute request base URL behind a loopback forwarded host', method: 'GET', target: '/base-url', headers: { 'x-forwarded-host': 'localhost:3000' } },
-  { name: 'RPC request base URL (getRequestBaseUrl)', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.baseUrl') },
+  { name: 'RPC request base URL (getRequestBaseUrl)', method: 'POST', target: '/cdk-blocks/api', headers: json, body: rpc('api.baseUrl') },
   { name: 'repeated slashes collapse for routing', method: 'GET', target: '//users/42' },
   { name: 'a //host prefix is a path, not a host', method: 'GET', target: '//evil.example/users/42' },
-  { name: 'percent-encoded dot segments are not resolved', method: 'GET', target: '/aws-blocks/%2e%2e/users/42' },
+  { name: 'percent-encoded dot segments are not resolved', method: 'GET', target: '/cdk-blocks/%2e%2e/users/42' },
   { name: 'dot segments are not resolved', method: 'GET', target: '/x/../users/42' },
   { name: 'unknown path', method: 'GET', target: '/missing' },
 ];
@@ -460,6 +470,15 @@ describe('serveHttp — parity with the Lambda handler', () => {
     });
   }
 
+  it('serves the legacy /aws-blocks prefix with the same handlers', async () => {
+    const rpcCall = await send(server.port, 'POST', '/aws-blocks/api', json, rpc('api.echo', ['x']));
+    assert.strictEqual(rpcCall.status, 200);
+    assert.strictEqual(JSON.parse(rpcCall.body).result.msg, 'x');
+    const raw = await lambda(lambdaEvent('GET', '/aws-blocks/legacy-twin', {}, undefined));
+    assert.strictEqual(raw.statusCode, 200);
+    assert.deepStrictEqual(JSON.parse(raw.body), { path: '/aws-blocks/legacy-twin' });
+  });
+
   it('gives a RawRoute the route path in its URL and the stage in getRequestBaseUrl, as the Lambda handler does', async () => {
     const expected = { url: `https://${API_HOST}/base-url`, base: `https://${API_HOST}/prod` };
     const viaLambda = await lambda(lambdaEvent('GET', '/base-url', {}));
@@ -469,24 +488,24 @@ describe('serveHttp — parity with the Lambda handler', () => {
   });
 
   it('sends every Set-Cookie an RPC method sets, as the Lambda envelope does', async () => {
-    const viaLambda = await lambda(lambdaEvent('POST', '/aws-blocks/api', json, rpc('api.login')));
-    const viaHttp = await send(server.port, 'POST', '/aws-blocks/api', json, rpc('api.login'));
+    const viaLambda = await lambda(lambdaEvent('POST', '/cdk-blocks/api', json, rpc('api.login')));
+    const viaHttp = await send(server.port, 'POST', '/cdk-blocks/api', json, rpc('api.login'));
     assert.deepStrictEqual(viaLambda.multiValueHeaders?.['Set-Cookie'], ['a=1; Path=/', 'b=2; Path=/']);
     assert.deepStrictEqual(viaHttp.headers['set-cookie'], ['a=1; Path=/', 'b=2; Path=/']);
     assert.strictEqual(viaHttp.body, viaLambda.body);
   });
 
   it('delivers only the cookie deletions of an RPC method that throws, as the Lambda envelope does', async () => {
-    const viaLambda = await lambda(lambdaEvent('POST', '/aws-blocks/api', json, rpc('api.signOutAndFail')));
-    const viaHttp = await send(server.port, 'POST', '/aws-blocks/api', json, rpc('api.signOutAndFail'));
+    const viaLambda = await lambda(lambdaEvent('POST', '/cdk-blocks/api', json, rpc('api.signOutAndFail')));
+    const viaHttp = await send(server.port, 'POST', '/cdk-blocks/api', json, rpc('api.signOutAndFail'));
     assert.deepStrictEqual(viaLambda.multiValueHeaders?.['Set-Cookie'], ['gone=; Path=/; Max-Age=0']);
     assert.deepStrictEqual(viaHttp.headers['set-cookie'], ['gone=; Path=/; Max-Age=0']);
     assert.strictEqual(viaHttp.body, viaLambda.body);
   });
 
   it('answers a 4xx ApiError of an httpErrorStatus namespace with its status, as the Lambda handler does', async () => {
-    const viaLambda = await lambda(lambdaEvent('POST', '/aws-blocks/api', json, rpc('strict.guarded')));
-    const viaHttp = await send(server.port, 'POST', '/aws-blocks/api', json, rpc('strict.guarded'));
+    const viaLambda = await lambda(lambdaEvent('POST', '/cdk-blocks/api', json, rpc('strict.guarded')));
+    const viaHttp = await send(server.port, 'POST', '/cdk-blocks/api', json, rpc('strict.guarded'));
     assert.strictEqual(viaLambda.statusCode, 401);
     assert.strictEqual(viaHttp.status, 401);
     assert.strictEqual(viaHttp.body, viaLambda.body);
@@ -582,7 +601,7 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
   it('does not reserve a route path for readiness', async () => {
     const server = await start();
     try {
-      assert.strictEqual((await send(server.port, 'GET', '/aws-blocks/health')).status, 404);
+      assert.strictEqual((await send(server.port, 'GET', '/cdk-blocks/health')).status, 404);
     } finally {
       await server.close();
     }
@@ -672,7 +691,7 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
     const server = await start();
     try {
       // Declares more than it sends: the upload is still incomplete after the linger.
-      const reply = await send(server.port, 'POST', '/aws-blocks/api', { 'Content-Length': String(MAX_RPC_BODY_BYTES + 1) }, '');
+      const reply = await send(server.port, 'POST', '/cdk-blocks/api', { 'Content-Length': String(MAX_RPC_BODY_BYTES + 1) }, '');
       assert.strictEqual(reply.status, 200);
       assert.throws(
         () => decodeRpcResponse(JSON.parse(reply.body)),
@@ -692,7 +711,7 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
     try {
       // Declared over the RPC limit but under maxBodyBytes, and never sent: only a
       // limit applied before reading answers (a read would wait for the body).
-      const reply = await send(server.port, 'POST', '/aws-blocks/api', { 'Content-Length': String(MAX_RPC_BODY_BYTES + 1) }, '');
+      const reply = await send(server.port, 'POST', '/cdk-blocks/api', { 'Content-Length': String(MAX_RPC_BODY_BYTES + 1) }, '');
       assert.throws(
         () => decodeRpcResponse(JSON.parse(reply.body)),
         (e: any) => e.status === 413 && e.message.includes(`${MAX_RPC_BODY_BYTES} byte`),
@@ -705,7 +724,7 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
   it('states the effective limit in the JSON-RPC 413 envelope', async () => {
     const server = await start({ maxBodyBytes: 1024 });
     try {
-      const reply = await send(server.port, 'POST', '/aws-blocks/api', json, Buffer.alloc(2048, ' '));
+      const reply = await send(server.port, 'POST', '/cdk-blocks/api', json, Buffer.alloc(2048, ' '));
       assert.throws(
         () => decodeRpcResponse(JSON.parse(reply.body)),
         (e: any) => e.status === 413 && e.message.includes('1024 byte'),
@@ -742,7 +761,7 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
       ['a RawRoute', `GET /bad-status?status=${status} HTTP/1.1\r\nHost: x\r\n\r\n`],
       [
         'an RPC method',
-        `POST /aws-blocks/api HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(rpc('api.badStatus', [status]))}\r\n\r\n${rpc('api.badStatus', [status])}`,
+        `POST /cdk-blocks/api HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(rpc('api.badStatus', [status]))}\r\n\r\n${rpc('api.badStatus', [status])}`,
       ],
     ] as const) {
       it(`answers status ${status} from ${name} with a plain 500, keeping the next response intact`, async () => {
@@ -813,7 +832,7 @@ describe('serveHttp — request stores under concurrency', { timeout: 30_000 }, 
                 host: '127.0.0.1',
                 port: server.port,
                 method: viaRpc ? 'POST' : 'GET',
-                path: viaRpc ? '/aws-blocks/api' : '/stores',
+                path: viaRpc ? '/cdk-blocks/api' : '/stores',
                 headers,
                 agent,
               },
@@ -861,7 +880,7 @@ describe('serveHttp — request IDs in error logs', { timeout: 30_000 }, () => {
   }
 
   const sources = [
-    ['an RPC method that throws', 'HTTP Server RPC Error:', 'POST', '/aws-blocks/api', json, rpc('api.fail')],
+    ['an RPC method that throws', 'HTTP Server RPC Error:', 'POST', '/cdk-blocks/api', json, rpc('api.fail')],
     ['a RawRoute that throws', 'RawRoute Error:', 'GET', '/boom', {}, undefined],
     ['an invalid response status', 'HTTP server error:', 'GET', '/bad-status?status=1000', {}, undefined],
   ] as const;
@@ -981,7 +1000,7 @@ describe('serveHttp — initialization and request targets', { timeout: 30_000 }
   it('registers the built-in routes and locks the route registry', async () => {
     const server = await start();
     try {
-      const resources = await send(server.port, 'GET', '/aws-blocks/resources');
+      const resources = await send(server.port, 'GET', '/cdk-blocks/resources');
       assert.strictEqual(resources.status, 200);
       assert.match(String(resources.headers['content-type']), /text\/html/);
       assert.throws(
@@ -1103,7 +1122,7 @@ describe('serveHttp — initialization and request targets', { timeout: 30_000 }
     try {
       const status = await rawRequest(
         server.port,
-        `OPTIONS /aws-blocks/api HTTP/1.1\r\nHost: a b\r\nOrigin: ${ALLOWED_ORIGIN}\r\nConnection: close\r\n\r\n`,
+        `OPTIONS /cdk-blocks/api HTTP/1.1\r\nHost: a b\r\nOrigin: ${ALLOWED_ORIGIN}\r\nConnection: close\r\n\r\n`,
       );
       assert.strictEqual(status, 'HTTP/1.1 200 OK');
     } finally {
@@ -1152,7 +1171,7 @@ describe('serveHttp — strict API namespace placement', { timeout: 30_000 }, ()
     };
   }
 
-  async function call(server: HttpServerHandle, namespace: string, path = '/aws-blocks/api') {
+  async function call(server: HttpServerHandle, namespace: string, path = '/cdk-blocks/api') {
     const reply = await send(server.port, 'POST', path, json, rpc(`${namespace}.whereAmI`));
     assert.strictEqual(reply.status, 200, 'a JSON-RPC envelope');
     return JSON.parse(reply.body) as { result?: string; error?: { code?: number; message?: string } };
@@ -1181,7 +1200,7 @@ describe('serveHttp — strict API namespace placement', { timeout: 30_000 }, ()
     const calls: string[] = [];
     const server = await serve(calls);
     try {
-      for (const path of ['/aws-blocks/api', '/aws-blocks/api/api']) {
+      for (const path of ['/cdk-blocks/api', '/cdk-blocks/api/api']) {
         assert.strictEqual((await call(server, 'api', path)).result, 'api', path);
       }
       assert.deepStrictEqual(calls, ['api', 'api']);
@@ -1196,9 +1215,9 @@ describe('serveHttp — strict API namespace placement', { timeout: 30_000 }, ()
     const calls: string[] = [];
     const server = await serve(calls);
     try {
-      assert.strictEqual((await call(server, 'reports', '/aws-blocks/api/reports')).result, 'reports');
+      assert.strictEqual((await call(server, 'reports', '/cdk-blocks/api/reports')).result, 'reports');
       assert.strictEqual((await call(server, 'api')).error?.code, -32601);
-      assert.strictEqual((await call(server, 'api', '/aws-blocks/api/api')).error?.code, -32601);
+      assert.strictEqual((await call(server, 'api', '/cdk-blocks/api/api')).error?.code, -32601);
       assert.deepStrictEqual(calls, ['reports']);
     } finally {
       await server.close();
@@ -1233,7 +1252,7 @@ describe('serveHttp — strict API namespace placement', { timeout: 30_000 }, ()
         process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
         process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
         started = await serve(calls);
-        assert.strictEqual((await call(started, 'reports', '/aws-blocks/api/reports')).result, 'reports');
+        assert.strictEqual((await call(started, 'reports', '/cdk-blocks/api/reports')).result, 'reports');
       } finally {
         await started?.close();
       }
@@ -1250,8 +1269,8 @@ const stamped = (host: string, stage?: string): Record<string, string> =>
 
 describe('buildRequestUrl', () => {
   it('uses the front-door-stamped host when trusted, and leaves the stamped stage out of the path', () => {
-    const url = buildRequestUrl(incoming('/aws-blocks/api/x?a=1', { host: 'alb.internal', ...stamped(API_HOST, 'prod') }), undefined, true);
-    assert.strictEqual(url.href, `https://${API_HOST}/aws-blocks/api/x?a=1`);
+    const url = buildRequestUrl(incoming('/cdk-blocks/api/x?a=1', { host: 'alb.internal', ...stamped(API_HOST, 'prod') }), undefined, true);
+    assert.strictEqual(url.href, `https://${API_HOST}/cdk-blocks/api/x?a=1`);
   });
 
   it('omits the stage when the front door stamps none (CloudFront)', () => {
@@ -1347,16 +1366,16 @@ describe('buildRequestUrl — behind a Blocks CloudFront front door', () => {
   });
   /** A request the gateway proxied to the container: it stamps its own host and stage too. */
   const viaGateway = (publicHost: string) =>
-    incoming('/aws-blocks/api/containerApi?a=1', { host: 'alb.internal:10000', 'x-blocks-public-host': publicHost, ...stamped(API_HOST, 'prod') });
+    incoming('/cdk-blocks/api/containerApi?a=1', { host: 'alb.internal:10000', 'x-blocks-public-host': publicHost, ...stamped(API_HOST, 'prod') });
 
   it('reports the URL the viewer called when the gateway proxied the request: its host, no stage', () => {
-    assert.strictEqual(buildRequestUrl(viaGateway(VIEWER), undefined, true).href, `https://${VIEWER}/aws-blocks/api/containerApi?a=1`);
+    assert.strictEqual(buildRequestUrl(viaGateway(VIEWER), undefined, true).href, `https://${VIEWER}/cdk-blocks/api/containerApi?a=1`);
   });
 
   it("ignores a host that isn't one of the backend's front doors, and a repeated header", () => {
     for (const value of ['attacker.example', `${VIEWER}, app.example.com`]) {
       const url = buildRequestUrl(viaGateway(value), undefined, true);
-      assert.strictEqual(url.href, `https://${API_HOST}/aws-blocks/api/containerApi?a=1`, value);
+      assert.strictEqual(url.href, `https://${API_HOST}/cdk-blocks/api/containerApi?a=1`, value);
     }
   });
 
@@ -1366,22 +1385,22 @@ describe('buildRequestUrl — behind a Blocks CloudFront front door', () => {
 
   it('reports what a Lambda handler reports for the same request, through the gateway and straight from CloudFront', () => {
     const lambda = buildEventUrl({
-      path: '/aws-blocks/api/x',
+      path: '/cdk-blocks/api/x',
       headers: { Host: API_HOST, 'X-Forwarded-Proto': 'https', 'x-blocks-public-host': VIEWER },
       requestContext: { stage: 'prod' },
     });
     const throughGateway = buildRequestUrl(
-      incoming('/aws-blocks/api/x', { host: 'alb.internal:10000', 'x-blocks-public-host': VIEWER, ...stamped(API_HOST, 'prod') }),
+      incoming('/cdk-blocks/api/x', { host: 'alb.internal:10000', 'x-blocks-public-host': VIEWER, ...stamped(API_HOST, 'prod') }),
       undefined,
       true,
     );
     // Straight to the load balancer: CloudFront forwards `<host>:<origin port>` and the door stamps the bare host.
     const direct = buildRequestUrl(
-      incoming('/aws-blocks/api/x', { host: `${VIEWER}:10000`, 'x-blocks-public-host': VIEWER, ...stamped(VIEWER) }),
+      incoming('/cdk-blocks/api/x', { host: `${VIEWER}:10000`, 'x-blocks-public-host': VIEWER, ...stamped(VIEWER) }),
       undefined,
       true,
     );
-    assert.strictEqual(lambda.href, `https://${VIEWER}/aws-blocks/api/x`);
+    assert.strictEqual(lambda.href, `https://${VIEWER}/cdk-blocks/api/x`);
     assert.strictEqual(throughGateway.href, lambda.href);
     assert.strictEqual(direct.href, lambda.href);
   });
@@ -1399,14 +1418,14 @@ describe('buildRequestUrl — behind a Blocks CloudFront front door', () => {
   it('reports a subdomain of a wildcard custom domain as the Lambda handler does, through the gateway and straight from CloudFront', () => {
     process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
     const host = 'a.tenant.example.com';
-    const lambda = buildEventUrl({ path: '/aws-blocks/api/x', headers: { Host: API_HOST, 'x-blocks-public-host': host }, requestContext: { stage: 'prod' } });
+    const lambda = buildEventUrl({ path: '/cdk-blocks/api/x', headers: { Host: API_HOST, 'x-blocks-public-host': host }, requestContext: { stage: 'prod' } });
     const throughGateway = buildRequestUrl(
-      incoming('/aws-blocks/api/x', { host: 'alb.internal:10000', 'x-blocks-public-host': host, ...stamped(API_HOST, 'prod') }),
+      incoming('/cdk-blocks/api/x', { host: 'alb.internal:10000', 'x-blocks-public-host': host, ...stamped(API_HOST, 'prod') }),
       undefined,
       true,
     );
-    const direct = buildRequestUrl(incoming('/aws-blocks/api/x', { host: `${host}:10000`, 'x-blocks-public-host': host, ...stamped(host) }), undefined, true);
-    assert.strictEqual(lambda.href, `https://${host}/aws-blocks/api/x`);
+    const direct = buildRequestUrl(incoming('/cdk-blocks/api/x', { host: `${host}:10000`, 'x-blocks-public-host': host, ...stamped(host) }), undefined, true);
+    assert.strictEqual(lambda.href, `https://${host}/cdk-blocks/api/x`);
     assert.strictEqual(throughGateway.href, lambda.href);
     assert.strictEqual(direct.href, lambda.href);
   });
@@ -1414,7 +1433,7 @@ describe('buildRequestUrl — behind a Blocks CloudFront front door', () => {
 
 describe('buildRequestBaseUrl', () => {
   it('is the stamped host plus the stamped stage when trusted', () => {
-    const base = buildRequestBaseUrl(incoming('/aws-blocks/api/x?a=1', { host: 'alb.internal', ...stamped(API_HOST, 'prod') }), undefined, true);
+    const base = buildRequestBaseUrl(incoming('/cdk-blocks/api/x?a=1', { host: 'alb.internal', ...stamped(API_HOST, 'prod') }), undefined, true);
     assert.strictEqual(base, `https://${API_HOST}/prod`);
   });
 

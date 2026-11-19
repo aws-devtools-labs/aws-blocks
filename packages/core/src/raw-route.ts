@@ -3,7 +3,7 @@
 
 import type { BlocksContext } from './api.js';
 import type { ScopeParent } from './common/index.js';
-import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from './constants.js';
+import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX, canonicalBlocksPath } from './constants.js';
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -246,7 +246,7 @@ export function unlockRouteRegistry(): void {
  *
  * @throws If registration is locked (after handler creation).
  * @throws If the HTTP method is invalid.
- * @throws If the path is under the reserved namespace (`/aws-blocks` or `/aws-blocks/api/*`).
+ * @throws If the path is under the reserved namespace (`/cdk-blocks` or `/cdk-blocks/api/*`, or their legacy `/aws-blocks` twins).
  * @throws {RawRouteErrors.DuplicateRoute} If the same method+path is registered twice under the same owner.
  */
 export function registerRoute(options: RawRouteOptions & { path: string; ownerRootId?: string }): void {
@@ -259,12 +259,12 @@ export function registerRoute(options: RawRouteOptions & { path: string; ownerRo
     throw new Error(`Invalid HTTP method: ${options.method}. Must be one of: ${Array.from(VALID_METHODS).join(', ')}`);
   }
 
-  const normalizedPath = options.path.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+  const normalizedPath = canonicalBlocksPath(options.path.replace(/\/+/g, '/').replace(/\/$/, '') || '/');
   if (normalizedPath === '/') {
     throw new Error("Cannot register RawRoute at '/' — root path is not supported (API Gateway proxy resource doesn't handle root). Use a sub-path like '/health'.");
   }
 
-  const lowerPath = normalizedPath.toLowerCase();
+  const lowerPath = canonicalBlocksPath(normalizedPath.toLowerCase());
   if (lowerPath === BLOCKS_NAMESPACE || lowerPath === BLOCKS_RPC_PREFIX || lowerPath.startsWith(`${BLOCKS_RPC_PREFIX}/`)) {
     throw new Error(`Cannot register RawRoute at ${BLOCKS_NAMESPACE} or ${BLOCKS_RPC_PREFIX}/* — these paths are reserved for RPC dispatch`);
   }
@@ -321,8 +321,7 @@ export function matchRoute(
   method: string,
   path: string,
 ): { route: RegisteredRoute; params: Record<string, string> } | null {
-  // Normalize incoming path: collapse double slashes
-  path = path.replace(/\/+/g, '/');
+  path = canonicalBlocksPath(path.replace(/\/+/g, '/'));
 
   for (const route of getState().routes) {
     if (route.method !== method) continue;

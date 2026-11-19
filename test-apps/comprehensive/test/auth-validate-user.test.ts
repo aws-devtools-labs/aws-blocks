@@ -102,7 +102,7 @@ export function authValidateUserTests(getApi: () => typeof apiType) {
       { skip: ENV === 'production' && 'stub IdP is sandbox-only' },
       async () => {
         const baseUrl = getBaseUrl();
-        const start = await fetch(`${baseUrl}/aws-blocks/auth/gated/signin/gated-idp`, { redirect: 'manual' });
+        const start = await fetch(`${baseUrl}/cdk-blocks/auth/gated/signin/gated-idp`, { redirect: 'manual' });
         assert.strictEqual(start.status, 302, `sign-in kickoff should 302, got ${start.status}`);
         const pending = cookiesOf(start);
         const authorize = await fetch(start.headers.get('location') ?? '', { redirect: 'manual' });

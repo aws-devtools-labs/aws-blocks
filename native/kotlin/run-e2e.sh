@@ -76,7 +76,7 @@ if [ -z "$BLOCKS_URL" ]; then
   cd "$BACKEND"
   npx tsx cdk-blocks/scripts/server.ts > /tmp/blocks-kotlin-e2e-server.log 2>&1 &
   SERVER_PID=$!
-  BLOCKS_URL="http://localhost:3001/aws-blocks/api"
+  BLOCKS_URL="http://localhost:3001/cdk-blocks/api"
 
   # Wait for server
   for i in $(seq 1 30); do

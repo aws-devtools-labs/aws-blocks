@@ -105,9 +105,9 @@ OidcClient _client(
   List<String> providers = const ['google', 'login.gov'],
   TokenStore? tokenStore,
 }) => OidcClient(
-  exchangePath: '/aws-blocks/auth/exchange',
-  refreshPath: '/aws-blocks/auth/exchange/refresh',
-  signOutPath: '/aws-blocks/auth/signout',
+  exchangePath: '/cdk-blocks/auth/exchange',
+  refreshPath: '/cdk-blocks/auth/exchange/refresh',
+  signOutPath: '/cdk-blocks/auth/signout',
   providers: providers,
   providerConfigs: {
     for (final p in providers)
@@ -118,7 +118,7 @@ OidcClient _client(
         kind: 'oidc-builtin',
       ),
   },
-  baseUrl: 'http://localhost:3001/aws-blocks/api',
+  baseUrl: 'http://localhost:3001/cdk-blocks/api',
   tokenStore: tokenStore ?? InMemoryTokenStore(),
   httpClient: httpClient,
 );
@@ -140,7 +140,7 @@ void main() {
       // provider: a name that isn't an identifier reaches the wire unchanged.
       expect(
         backend.requests.first.url.path,
-        '/aws-blocks/auth/authorize-params/login.gov',
+        '/cdk-blocks/auth/authorize-params/login.gov',
       );
       expect(_bodyOf(backend.requests.last)['provider'], 'login.gov');
       // relayTo: sent to the backend and used as the callback scheme.
@@ -193,7 +193,7 @@ void main() {
       await typed.exchange(
         code: 'the-code',
         verifier: 'the-verifier',
-        callbackUrl: 'http://localhost:3001/aws-blocks/auth/callback',
+        callbackUrl: 'http://localhost:3001/cdk-blocks/auth/callback',
         provider: TestProvider.google,
         state: 'the-state',
         nonce: 'the-nonce',
@@ -203,7 +203,7 @@ void main() {
       expect(_bodyOf(backend.requests.single), {
         'code': 'the-code',
         'verifier': 'the-verifier',
-        'callbackUrl': 'http://localhost:3001/aws-blocks/auth/callback',
+        'callbackUrl': 'http://localhost:3001/cdk-blocks/auth/callback',
         'provider': 'google',
         'state': 'the-state',
         'nonce': 'the-nonce',
@@ -286,8 +286,8 @@ void main() {
         '__blocks': 'oidc/client',
         'providers': ['google'],
         'providerConfigs': <String, dynamic>{},
-        'exchangePath': '/aws-blocks/auth/exchange',
-        'signOutPath': '/aws-blocks/auth/signout',
+        'exchangePath': '/cdk-blocks/auth/exchange',
+        'signOutPath': '/cdk-blocks/auth/signout',
       };
       final typed = TypedOidcClient<TestProvider>(
         OidcClient.fromJson(
@@ -297,8 +297,8 @@ void main() {
         ),
       );
       expect(typed.providers, ['google']);
-      expect(typed.exchangePath, '/aws-blocks/auth/exchange');
-      expect(typed.signOutPath, '/aws-blocks/auth/signout');
+      expect(typed.exchangePath, '/cdk-blocks/auth/exchange');
+      expect(typed.signOutPath, '/cdk-blocks/auth/signout');
     });
   });
 
@@ -390,9 +390,9 @@ void main() {
     test('throws OidcUnknownProviderException for a listed provider with no '
         'config', () {
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/signout',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/signout',
         providers: const ['google'],
         providerConfigs: const {},
         baseUrl: 'http://localhost:3001',

@@ -33,7 +33,7 @@ const setup = () => {
     plan,
     bucket: new Bucket(stack, 'Assets'),
     staticDir: '.',
-    api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', paths: ['/hooks/*'] },
+    api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api', paths: ['/hooks/*'] },
   });
   return { stack, input };
 };
@@ -102,9 +102,9 @@ describe('cf.behaviors — image optimization', () => {
 });
 
 describe('cf.apiBehaviors', () => {
-  it('emits a behavior for /aws-blocks/* and every raw route; {} without an API', () => {
+  it('emits a behavior for /cdk-blocks/*, the legacy /aws-blocks/* and every raw route; {} without an API', () => {
     const { input } = setup();
-    assert.deepEqual(Object.keys(cf.apiBehaviors(input.origins.api)), ['/aws-blocks/*', '/hooks/*']);
+    assert.deepEqual(Object.keys(cf.apiBehaviors(input.origins.api)), ['/cdk-blocks/*', '/aws-blocks/*', '/hooks/*']);
     assert.deepEqual(cf.apiBehaviors(undefined), {});
   });
 });

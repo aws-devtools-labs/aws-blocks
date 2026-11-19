@@ -703,7 +703,7 @@ Some apps need the CloudFront door:
   `open-next.config.ts` with a streaming wrapper).
 
 **CloudFront error pages and the API.** A CloudFront distribution's custom
-error responses apply to every path it serves, the proxied API (`/aws-blocks/*`)
+error responses apply to every path it serves, the proxied API (`/cdk-blocks/*`)
 included. The CloudFront door maps 403 / 404 to a page when the app has one —
 `errorPages.notFound`, a static build's own `404.html` — and, for a static
 multi-page site with no server, no SPA fallback and no 404 page of its own, to
@@ -712,7 +712,7 @@ HTTP 200, so this never touches it; but an `ApiNamespace` created with
 `httpErrorStatus: true` (`@aws-cdk-blocks/core`) answers a 4xx `ApiError` with that
 status, and its 403 / 404 then reach the browser as that HTML page instead of
 the JSON-RPC error, which the typed client cannot read. CloudFront cannot
-scope error responses away from `/aws-blocks/*`, so `Hosting` from
+scope error responses away from `/cdk-blocks/*`, so `Hosting` from
 `@aws-cdk-blocks/core` fails synth when it sees both, with a `HostingError` named
 `HttpErrorStatusErrorPagesError` that names the namespaces and the mapped codes.
 Remove the 4xx error pages, or leave `httpErrorStatus` off for those
@@ -769,7 +769,7 @@ the chosen kind doesn't implement (for example `cdn.geoRestriction` with
 `{ kind: 'alb' }`) fails synth with `UnsupportedFrontDoorSettingError`, naming
 the kind and the prop.
 
-Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/*`
+Every door except `'none'` serves the API on the app's own origin: `/cdk-blocks/*`
 (RPC and sign-in) and each of the backend's raw routes registered before
 `Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
 into behaviors). A door served over plain HTTP with an API (an ALB without a
@@ -1123,7 +1123,7 @@ export const myDoor = defineFrontDoor({
       ...(origins.server ? {} : { defaultRootObject: 'index.html' }),
       additionalBehaviors: {
         ...cf.behaviors(app.routes), // each route → its origin
-        ...cf.apiBehaviors(origins.api), // /aws-blocks/* and raw routes → the API
+        ...cf.apiBehaviors(origins.api), // /cdk-blocks/* and raw routes → the API
         ...pages.behaviors, // the error pages, from the assets
       },
       errorResponses: pages.errorResponses,
@@ -1184,7 +1184,7 @@ export const myAlbDoor = defineFrontDoor({
     streams its response (see `serverResponse`). The Function URL is created on
     first read, in the matching invoke mode.
   - `image`: `{ fn, url }`. Its routes are in `app.routes`.
-  - `api`: `{ url, host, stagePath, paths }`. `paths` is `/aws-blocks/*` (RPC
+  - `api`: `{ url, host, stagePath, paths }`. `paths` is `/cdk-blocks/*` (RPC
     and sign-in) plus every raw route.
 - `features`: the door's `frontDoor.features`, under the same names and shapes,
   each present only when asked for: `domain` (with `wwwRedirect`), `waf` (when
@@ -1225,6 +1225,9 @@ its routing, from what the `cf.*` helpers recorded.
 - If nothing reaches the static assets, synth fails with `ServeStaticAsset`.
 - If the app has an API and none of `origins.api.paths` were wired, synth fails
   with `ProxySameOriginApi`.
+- If the door wired the legacy `/aws-blocks/*` subtree but not `/cdk-blocks/*`,
+  synth also fails with `ProxySameOriginApi`: current clients call
+  `/cdk-blocks/*`.
 - If some API paths (for example a raw route) were left unwired, synth warns.
 - If the app has redirects, per-pattern headers or error pages and the door
   wired none of them (`cf.redirects`, `cf.headers`, `cf.errorPages`), synth

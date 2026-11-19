@@ -31,7 +31,7 @@ export type {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 // Secrets share the same local store as AppSetting — `.bb-data/settings.json`,
-// a flat `{ key: value }` map at the project root — so the `/aws-blocks/settings`
+// a flat `{ key: value }` map at the project root — so the `/cdk-blocks/settings`
 // route surfaces settings AND secrets in one place, locally and when deployed.
 // The CURRENT value lives here as a plain `{ key: value }` entry (human-editable
 // via the route). Version HISTORY (current + previous, for get({ version }) /

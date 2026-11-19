@@ -19,7 +19,7 @@ const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
 const tracer = new Tracer(scope, 'tracer');
 
 // Dashboard: a CloudWatch Dashboard with health, logs, traces and the metrics
-// below. Cloud-only: under `npm run dev`, GET /aws-blocks/dashboard answers 503
+// below. Cloud-only: under `npm run dev`, GET /cdk-blocks/dashboard answers 503
 // with pointers to the local logs, metrics and traces; deployed, it redirects
 // to the dashboard.
 new Dashboard(scope, 'dashboard', {

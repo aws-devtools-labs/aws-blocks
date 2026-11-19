@@ -438,7 +438,7 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
  * stamps each non-default one with its own id (`BLOCKS_API_COMPUTE_ID`). The
  * dispatcher (see `apiNamespaceFilterFromEnv`) then refuses, on the default
  * compute, a namespace placed elsewhere — including on the bare
- * `/aws-blocks/api` endpoint — and, on a non-default compute, every namespace
+ * `/cdk-blocks/api` endpoint — and, on a non-default compute, every namespace
  * that isn't its own. Nothing is set when no namespace has its own compute: the
  * default compute serves them all either way.
  *
@@ -466,7 +466,7 @@ export function applyStrictNamespacePlacement(
 		cdk.Annotations.of(defaultCompute).addWarningV2(
 			'blocks:apigateway:bare-endpoint-serves-placed-namespaces',
 			`API namespaces on their own compute (${placed.join(', ')}) can also be called through the bare ` +
-				'/aws-blocks/api endpoint, which runs them on the default compute instead. To serve each namespace ' +
+				'/cdk-blocks/api endpoint, which runs them on the default compute instead. To serve each namespace ' +
 				"only on its own compute, add `strictNamespacePlacement: true` to the stack's `defaults` (keep the " +
 				'preset you already use); the typed clients already call each namespace at its own path. If raw ' +
 				'callers still need the bare endpoint for these namespaces, acknowledge this warning by calling ' +
@@ -654,7 +654,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	}
 	/**
 	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
-	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * `/cdk-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
 	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
 	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
 	 * deploy-time value works (a `CfnOutput`, Amplify outputs, …).

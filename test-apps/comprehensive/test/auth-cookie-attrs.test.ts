@@ -46,7 +46,7 @@ async function rpcSetCookies(
   args: unknown[],
   extraHeaders: Record<string, string> = {},
 ): Promise<string[]> {
-  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+  const resp = await fetch(`${baseUrl}/cdk-blocks/api`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),

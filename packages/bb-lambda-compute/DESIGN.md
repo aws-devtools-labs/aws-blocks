@@ -42,15 +42,15 @@ supplies the implementation.
 The API Gateway REST API is **not** owned here. `LambdaCompute.apiHandler()`
 returns `fn`, and the stack-level **shared REST API** (built by core in
 `packages/core/src/cdk/shared-gateway.ts`) integrates it:
-  - the `/aws-blocks` resource gets a proxy so `RawRoute` sub-paths reach the
+  - the `/cdk-blocks` resource (and its legacy `/aws-blocks` twin) gets a proxy so `RawRoute` sub-paths reach the
     function;
-  - `/aws-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
+  - `/cdk-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
     endpoint), plus a `{proxy+}` for the per-namespace RPC paths
-    (`/aws-blocks/api/{namespace}`);
+    (`/cdk-blocks/api/{namespace}`);
   - the root gets a catch-all proxy so all other paths reach the function.
   - **Multi-compute** — those resources all integrate the **default** compute's
     function. A **non-default** `LambdaCompute` that hosts namespaces gets its
-    own integration plus a literal `/aws-blocks/api/{namespace}` (ANY) resource
+    own integration plus a literal `/cdk-blocks/api/{namespace}` (ANY) resource
     for each namespace it hosts, keyed by the namespace's **export** name (what
     the client calls), and a single API-scoped invoke permission however many
     namespaces that is; a compute hosting no namespace gets no resource.

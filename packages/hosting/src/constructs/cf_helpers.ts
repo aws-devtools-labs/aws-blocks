@@ -19,7 +19,7 @@
  * no global state and two doors in one synth stay independent.
  *
  * Known limit: a door that wires correctly with raw CDK (its own `S3BucketOrigin`,
- * its own `/aws-blocks/*` behavior) is invisible to the record and would fail the
+ * its own `/cdk-blocks/*` behavior) is invisible to the record and would fail the
  * check. Such a door either calls {@link CloudFrontHelpers.recordWired} for what
  * it wired by hand, or opts out with `frontDoor: { kind: 'custom', door, wiringCheck: false }`.
  */
@@ -218,7 +218,7 @@ export interface CloudFrontHelpers {
    */
   behaviors(routes: readonly DoorRoute[]): Record<string, BehaviorOptions>;
   /**
-   * One uncached, all-methods behavior per API path (`/aws-blocks/*` and every
+   * One uncached, all-methods behavior per API path (`/cdk-blocks/*` and every
    * raw route) → the API origin. Records the paths as wired. Returns `{}` when
    * the app has no API, so it can be spread unconditionally.
    *

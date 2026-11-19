@@ -45,7 +45,7 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 }}
 ```
 - `Scope` is the namespace + registration bus; BBs **extend** it (never wrap it) — that's how infra discovery, IAM propagation, and `fullId` computation work.
-- `BlocksStack` / `BlocksBackend` anchor the infra; `ApiNamespace` turns an app's module of methods into a JSON-RPC endpoint at `POST /aws-blocks/api`. A BB doesn't auto-expose RPC — the app wraps the methods it wants to call.
+- `BlocksStack` / `BlocksBackend` anchor the infra; `ApiNamespace` turns an app's module of methods into a JSON-RPC endpoint at `POST /cdk-blocks/api`. A BB doesn't auto-expose RPC — the app wraps the methods it wants to call.
 - **Resource names are derived, not handed off.** Each layer computes the same deterministic name from `fullId` independently: the CDK layer provisions a resource named `fullId.substring(0,255)`; the runtime and mock layers call `registerSdkIdentifiers(this.fullId, {...})` in their constructor and resolve it with `getSdkIdentifiers(this)` **at call time** (a same-process registry, so co-located BBs can find each other). The mock uses a `mock-`-prefixed name and persists to disk. Extra (non-name) config is the only thing the CDK layer pushes to the runtime, via `registerConfig()`.
 - Some BBs return **live client objects, not data** (e.g. a realtime channel). They use the **Transferable** pattern: the server value serializes (`toJSON()` → `{__blocks: …}`) and re-hydrates into a live client object via client middleware. `bb-realtime` is the canonical end-to-end example.
 

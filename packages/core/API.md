@@ -54,10 +54,10 @@ export type AsyncAPI<T extends Record<string, (...args: any[]) => any>> = {
 };
 
 // @public
-export const BLOCKS_AUTH_PREFIX = "/aws-blocks/auth";
+export const BLOCKS_AUTH_PREFIX = "/cdk-blocks/auth";
 
 // @public
-export const BLOCKS_RPC_PREFIX = "/aws-blocks/api";
+export const BLOCKS_RPC_PREFIX = "/cdk-blocks/api";
 
 // @public (undocumented)
 export type BlocksContext = {
@@ -98,6 +98,9 @@ export function buildingBlockParent(meta: BuildingBlockMeta & {
     parent: ScopeParent;
     fullId: string;
 };
+
+// @public
+export function canonicalBlocksPath(pathname: string): string;
 
 // @public
 export function clearRouteRegistry(): void;

@@ -173,8 +173,8 @@ import { BB_NAME, BB_VERSION } from './version.js';
 const DEFAULT_FRESH_AGE_SECONDS = 900;
 /** Auto-sign-in bridge lifetime (`AuthCognito`'s): 15 minutes. */
 const AUTO_SIGN_IN_TTL_SECONDS = 15 * 60;
-const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
-const DEFAULT_SIGN_OUT_PATH = '/aws-blocks/auth/signout';
+const DEFAULT_CALLBACK_PATH = '/cdk-blocks/auth/callback';
+const DEFAULT_SIGN_OUT_PATH = '/cdk-blocks/auth/signout';
 
 /** The per-factor settings `updateMfaPreference` accepts. */
 const MFA_SETTINGS: readonly MfaSetting[] = ['ENABLED', 'DISABLED', 'PREFERRED', 'NOT_PREFERRED'];
@@ -594,7 +594,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 *
 	 * A request authenticated by a bearer token (`allowBearerAuth`) has no
 	 * server-side session: it returns `{ tokens: undefined, userSub }` — the
-	 * client already holds its token, and refreshes it at `/aws-blocks/auth/refresh`.
+	 * client already holds its token, and refreshes it at `/cdk-blocks/auth/refresh`.
 	 */
 	async getAuthSession(context: BlocksContext, options?: GetAuthSessionOptions): Promise<AuthSession> {
 		let subject: GuardSubject | null;

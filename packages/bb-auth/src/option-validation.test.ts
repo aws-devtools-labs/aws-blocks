@@ -692,8 +692,8 @@ describe('valid configurations pass', () => {
 			validateUser: async () => {},
 			session: { ttlSeconds: 60, crossDomain: false, freshAgeSeconds: 30 },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/callback',
-				signOutPath: '/aws-blocks/auth/signout',
+				callbackPath: '/cdk-blocks/auth/callback',
+				signOutPath: '/cdk-blocks/auth/signout',
 				postSignInPath: '/',
 				postSignOutPath: '/',
 				allowedRelayOrigins: [relayOrigin('myapp://auth')],
@@ -756,7 +756,7 @@ describe('valid configurations pass', () => {
 			validateUser: async () => {},
 			session: { ttlSeconds: 60, crossDomain: false, freshAgeSeconds: 30 },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/callback',
+				callbackPath: '/cdk-blocks/auth/callback',
 				allowedRelayOrigins: [relayOrigin('myapp://auth')],
 			},
 			allowBearerAuth: true,

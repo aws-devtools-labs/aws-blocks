@@ -29,7 +29,7 @@ test.before(async () => {
   for (let i = 0; i < 60 && !ready; i++) {
     await setTimeout(1000);
     try {
-      const res = await fetch('http://localhost:3001/aws-blocks/api', {
+      const res = await fetch('http://localhost:3001/cdk-blocks/api', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'hello.greet', params: ['ping'] }),
@@ -72,7 +72,7 @@ test('KV Store - set and get', async () => {
 // JSON-RPC (the shared client proxy has a single cookie session). Sign-up is
 // confirmed with the code the local runtime writes to `.bb-data/<fullId>/last-code.json`.
 
-const RPC_URL = 'http://localhost:3001/aws-blocks/api';
+const RPC_URL = 'http://localhost:3001/cdk-blocks/api';
 
 class Session {
   private cookies = new Map<string, string>();
