@@ -3,12 +3,12 @@
   "version": "0.2.4",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "url": "git+https://github.com/aws/cdk-blocks.git",
     "directory": "packages/pipeline"
   },
-  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/pipeline#readme",
+  "homepage": "https://github.com/aws/cdk-blocks/tree/main/packages/pipeline#readme",
   "bugs": {
-    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+    "url": "https://github.com/aws/cdk-blocks/issues"
   },
   "description": "CDK Pipelines-based CI/CD construct for AWS Blocks applications",
   "keywords": [
