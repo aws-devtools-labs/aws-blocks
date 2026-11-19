@@ -63,7 +63,7 @@ const ALLOWLIST = [
 		reason: 'The only value is the judge copy directory, passed through shellQuote() (single-quoted, embedded quotes escaped).',
 	},
 	{
-		at: 'scripts/agent-bench/steps/4-judge.ts:259',
+		at: 'scripts/agent-bench/steps/4-judge.ts:262',
 		reason: 'The only interpolation is --exclude-dir flags built from the constant STAGE_EXCLUDE_DIRS set in this script.',
 	},
 	{
@@ -71,7 +71,7 @@ const ALLOWLIST = [
 		reason: 'Maintainer planning script: every gh command is a literal in this file, interpolating only the ORG constant and numeric ids.',
 	},
 	{
-		at: 'scripts/publish/publish.ts:107',
+		at: 'scripts/publish/publish.ts:110',
 		reason: 'The only value is a mkdtemp() directory under os.tmpdir() that this script just created, double-quoted.',
 	},
 ];
