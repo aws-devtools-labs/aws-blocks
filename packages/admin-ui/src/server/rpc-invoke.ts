@@ -28,7 +28,14 @@
  */
 
 import type { RpcInvokeResponse } from '../contract/v1.js';
-import { type RpcErrorInfo, encodeRpcRequest, extractRpcError, isValidRpcMethod, legacyRpcUrl } from './rpc-codec.js';
+import {
+	type RpcErrorInfo,
+	encodeRpcRequest,
+	extractRpcError,
+	isRpcEnvelope,
+	isValidRpcMethod,
+	legacyRpcUrl,
+} from './rpc-codec.js';
 
 /** Default call budget. Long enough for a cold Lambda, short enough to not hang a page. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -142,10 +149,10 @@ export async function invokeRpc(params: InvokeParams): Promise<InvokeResult> {
 		});
 	try {
 		response = await post(endpoint);
-		// A 404 was not dispatched, so a dev server older than the `/cdk-blocks/`
-		// prefix can safely be retried at its legacy path.
+		// Only an older dev server's route-not-found 404 is retried at the legacy path.
+		// A 404 JSON-RPC envelope comes from a dispatched method and must not run twice.
 		const legacy = response.status === 404 ? legacyRpcUrl(endpoint) : undefined;
-		if (legacy) {
+		if (legacy && !isRpcEnvelope(await readJson(response.clone()))) {
 			response = await post(legacy);
 			calledEndpoint = legacy;
 		}
@@ -192,6 +199,15 @@ export async function invokeRpc(params: InvokeParams): Promise<InvokeResult> {
 		body: parsedBody,
 		...(rpcError ? { rpcError } : {}),
 	};
+}
+
+/** The response body parsed as JSON, or `undefined` when it is not JSON. */
+async function readJson(response: Response): Promise<unknown> {
+	try {
+		return JSON.parse(await response.text());
+	} catch {
+		return undefined;
+	}
 }
 
 /**

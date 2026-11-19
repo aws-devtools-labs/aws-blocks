@@ -67,6 +67,17 @@ describe('invokeRpc — an older dev server on the legacy path', () => {
 		assert.strictEqual(result.endpoint, 'http://localhost:3000/aws-blocks/api');
 	});
 
+	it('does not retry a 404 JSON-RPC error envelope: the method already ran', async () => {
+		const { fetchImpl, calls } = stubFetch(
+			jsonResponse({ jsonrpc: '2.0', id: 1, error: { code: 404, message: 'No such todo' } }, 404),
+		);
+		const result = await invokeRpc({ endpoint: ENDPOINT, method: 'todos.get', params: ['x'], fetchImpl });
+		assert.strictEqual(calls.length, 1);
+		assert.strictEqual(result.endpoint, ENDPOINT);
+		assert.strictEqual(result.httpStatus, 404);
+		assert.strictEqual(result.rpcError?.message, 'No such todo');
+	});
+
 	it('does not retry a 404 from an endpoint off the RPC path', async () => {
 		const { fetchImpl, calls } = stubFetch(new Response('nope', { status: 404 }));
 		const result = await invokeRpc({ endpoint: 'https://api.example.com/custom', method: 'todos.count', params: [], fetchImpl });

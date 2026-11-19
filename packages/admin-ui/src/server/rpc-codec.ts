@@ -120,6 +120,11 @@ export function extractRpcError(body: unknown): RpcErrorInfo | undefined {
 	};
 }
 
+/** True when the body is a JSON-RPC response envelope (`jsonrpc: '2.0'`), success or error. */
+export function isRpcEnvelope(body: unknown): boolean {
+	return typeof body === 'object' && body !== null && (body as Record<string, unknown>).jsonrpc === JSONRPC_VERSION;
+}
+
 /** True when the body is a JSON-RPC envelope carrying a `result`. */
 export function hasRpcResult(body: unknown): boolean {
 	return typeof body === 'object' && body !== null && 'result' in (body as Record<string, unknown>);
