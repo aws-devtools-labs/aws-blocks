@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'auth_provider.dart';
 import 'blocks_exception.dart';
 import 'client_lifetime.dart';
+import 'default_session_store.dart';
 import 'response_url.dart';
 import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
@@ -18,6 +19,21 @@ import 'transport.dart';
 class BlocksClient {
   final String baseUrl;
   final http.Client _httpClient;
+
+  /// Holds the session cookies the backend sets and sends them back on later
+  /// calls.
+  ///
+  /// When the constructor is given none, this is the default store: in a
+  /// Flutter app that depends on `blocks_runtime_flutter`, a store in the
+  /// platform's secure storage, shared by every client, so a signed-in user
+  /// stays signed in after the app restarts. Elsewhere it is a new
+  /// [InMemorySessionStore] unless the program registered a store with
+  /// [registerDefaultSessionStore]. Pass `InMemorySessionStore()` to keep this
+  /// client's session in memory only.
+  ///
+  /// A [PersistentSessionStore] reads its storage before it answers the first
+  /// call's cookies, so the session saved by an earlier run is sent on that
+  /// call.
   final SessionStore sessionStore;
   final TokenStore tokenStore;
 
@@ -39,7 +55,7 @@ class BlocksClient {
     TokenStore? tokenStore,
     this.authProvider,
   }) : _httpClient = client ?? http.Client(),
-       sessionStore = sessionStore ?? InMemorySessionStore(),
+       sessionStore = sessionStore ?? defaultSessionStore(),
        tokenStore = tokenStore ?? InMemoryTokenStore();
 
   /// Calls a JSON-RPC method with the given params and returns the result.
@@ -112,7 +128,7 @@ class BlocksClient {
     // The session cookie goes on every call that has one, and a bearer token
     // as well when the auth provider has one: the server prefers the cookie,
     // and some auth methods accept only the cookie.
-    final cookie = sessionStore.cookieHeaderFor(requestUri);
+    final cookie = await sessionStore.cookieHeaderFor(requestUri);
     if (cookie != null) {
       headers['cookie'] = cookie;
     }

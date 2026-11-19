@@ -65,6 +65,7 @@ const blocksRuntimeTypeNames = {
   'BrowserLauncher',
   'ClientClosedException',
   'FileDownloadHandle',
+  'FileTokenStore',
   'FileTransferException',
   'FileUploadHandle',
   'InMemorySessionStore',

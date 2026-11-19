@@ -13,6 +13,7 @@ import 'auth_provider.dart';
 import 'blocks_exception.dart';
 import 'client_lifetime.dart';
 import 'browser_launcher.dart';
+import 'default_session_store.dart';
 import 'loopback_session.dart';
 import 'oidc_auth_state.dart';
 import 'oidc_exception.dart';
@@ -205,7 +206,7 @@ class OidcClient implements AuthProvider {
   }) : sessionPath =
            sessionPath ??
            '${exchangePath.contains('/') ? exchangePath.substring(0, exchangePath.lastIndexOf('/')) : ''}/session',
-       sessionStore = sessionStore ?? InMemorySessionStore(),
+       sessionStore = sessionStore ?? defaultSessionStore(),
        _httpClient = httpClient ?? http.Client();
 
   /// API origin that the server-relay auth routes resolve against.
@@ -581,10 +582,10 @@ class OidcClient implements AuthProvider {
       '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}',
     );
     final (:response, url: responseUrl) = await guardRequest(
-      () => postWithResponseUrl(
+      () async => postWithResponseUrl(
         _httpClient,
         url,
-        headers: _jsonHeaders(url),
+        headers: await _jsonHeaders(url),
         body: jsonEncode({'csrf': csrf, 'relayTo': relayTo}),
       ),
     );
@@ -666,10 +667,10 @@ class OidcClient implements AuthProvider {
     }
     final url = Uri.parse('$_authBaseUrl$exchangePath');
     final (:response, url: responseUrl) = await guardRequest(
-      () => postWithResponseUrl(
+      () async => postWithResponseUrl(
         _httpClient,
         url,
-        headers: _jsonHeaders(url),
+        headers: await _jsonHeaders(url),
         body: jsonEncode({
           'code': code,
           'verifier': verifier,
@@ -692,12 +693,9 @@ class OidcClient implements AuthProvider {
     // Capture the session cookie set by the backend so the owning
     // BlocksClient replays it on subsequent JSON-RPC calls (cookie flow),
     // and remember its name so a failed sign-out can remove it.
-    final before = sessionStore.cookies;
-    sessionStore.setCookies(
-      response.headers['set-cookie'],
-      requestUri: responseUrl,
-    );
-    await _rememberSessionCookies(before);
+    final setCookie = response.headers['set-cookie'];
+    sessionStore.setCookies(setCookie, requestUri: responseUrl);
+    await _rememberSessionCookies(setCookie);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final refused = _routeError(response, 'Exchange failed');
@@ -875,7 +873,8 @@ class OidcClient implements AuthProvider {
       // Carries the session cookie via _jsonHeaders so the backend can
       // invalidate the server-side session.
       response = await guardRequest(
-        () => _httpClient.post(url, headers: _jsonHeaders(url), body: '{}'),
+        () async =>
+            _httpClient.post(url, headers: await _jsonHeaders(url), body: '{}'),
       );
     } catch (e, stackTrace) {
       // No response, a cancellation, or a bug: sign out locally all the same.
@@ -913,17 +912,28 @@ class OidcClient implements AuthProvider {
     }
   }
 
-  /// Records the cookies a sign-in response set or changed in
-  /// [sessionStore], compared with [before], as this block's.
-  Future<void> _rememberSessionCookies(Map<String, String> before) async {
+  /// Records the cookies a sign-in response's [setCookie] header sets as
+  /// this block's. Read from the header rather than from [sessionStore],
+  /// so it works with any [SessionStore].
+  Future<void> _rememberSessionCookies(String? setCookie) async {
     if (sessionCookieName != null) return;
-    final set = [
-      for (final MapEntry(:key, :value) in sessionStore.cookies.entries)
-        if (before[key] != value) key,
-    ];
+    final set = _setCookieNames(setCookie);
     if (set.isEmpty) return;
     final names = {...await _sessionCookieNames(), ...set}.toList()..sort();
     await tokenStore.set(_key(_sessionCookiesKey), jsonEncode(names));
+  }
+
+  /// The names of the cookies [setCookie] sets with a value. dart:http joins
+  /// several Set-Cookie headers with `,`; a cookie starts with `name=`, which
+  /// tells that separator apart from the comma in an `Expires` date.
+  static List<String> _setCookieNames(String? setCookie) {
+    if (setCookie == null) return const [];
+    return [
+      for (final cookie in setCookie.split(RegExp(r',(?=\s*[^;,=\s]+=)')))
+        if (RegExp(r'^\s*([^;,=\s]+)=([^;]*)').firstMatch(cookie) case final m?
+            when m.group(2)!.trim().isNotEmpty)
+          m.group(1)!,
+    ];
   }
 
   /// Signs out locally after a sign-out request, whatever its outcome:
@@ -959,8 +969,8 @@ class OidcClient implements AuthProvider {
   /// JSON content-type headers, plus the current session cookie when present so
   /// OIDC requests participate in the shared cookie session. Only cookies whose
   /// host, `Path` and `Secure` attributes match [url] are sent.
-  Map<String, String> _jsonHeaders(Uri url) {
-    final cookie = sessionStore.cookieHeaderFor(url);
+  Future<Map<String, String>> _jsonHeaders(Uri url) async {
+    final cookie = await sessionStore.cookieHeaderFor(url);
     return {'Content-Type': 'application/json', 'cookie': ?cookie};
   }
 
@@ -995,9 +1005,9 @@ class OidcClient implements AuthProvider {
     final accessToken = storedToken != null && !await _isExpired()
         ? storedToken
         : null;
-    final cookie = sessionStore.cookieHeaderFor(url);
+    final cookie = await sessionStore.cookieHeaderFor(url);
     final response = await guardRequest(
-      () => _httpClient.get(
+      () async => _httpClient.get(
         url,
         headers: {
           'cookie': ?cookie,

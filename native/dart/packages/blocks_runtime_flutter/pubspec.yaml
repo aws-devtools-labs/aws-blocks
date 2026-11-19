@@ -26,5 +26,24 @@ dev_dependencies:
   build_runner: ^2.14.0
   flutter_test:
     sdk: flutter
+  http: ^1.2.0
   lints: ^6.0.0
   mockito: ^5.6.0
+
+# A Dart-only plugin: Flutter calls BlocksRuntimeFlutterPlugin.registerWith()
+# before main on each platform listed, which makes the secure store the
+# default session store. Web is left out on purpose: the browser keeps the
+# session cookies there.
+flutter:
+  plugin:
+    platforms:
+      android:
+        dartPluginClass: BlocksRuntimeFlutterPlugin
+      ios:
+        dartPluginClass: BlocksRuntimeFlutterPlugin
+      linux:
+        dartPluginClass: BlocksRuntimeFlutterPlugin
+      macos:
+        dartPluginClass: BlocksRuntimeFlutterPlugin
+      windows:
+        dartPluginClass: BlocksRuntimeFlutterPlugin
