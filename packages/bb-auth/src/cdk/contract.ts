@@ -41,7 +41,7 @@ export function cognitoConfigKeys(fullId: string) {
 
 /**
  * The `registerConfig()` key that carries the backend's API Gateway URL (its
- * `apiUrl`, `https://<id>.execute-api.<region>.amazonaws.com/<stage>/aws-blocks/api`)
+ * `apiUrl`, `https://<id>.execute-api.<region>.amazonaws.com/<stage>/cdk-blocks/api`)
  * to the runtime, registered only when a sandbox deployment configures a
  * `stubIdp()` provider. The deployed stub IdP builds its issuer from it, so
  * the issuer is the same HTTPS URL whichever front door a request came through
@@ -313,7 +313,10 @@ export function assertBearerClientIds(fullId: string, options: ResolvedAuthOptio
  *
  * @internal
  */
-export const AUTH_ROUTE_PREFIX = '/aws-blocks/auth';
+export const AUTH_ROUTE_PREFIX = '/cdk-blocks/auth';
+
+/** The previous {@link AUTH_ROUTE_PREFIX}, still served and accepted in `redirects`. @internal */
+export const LEGACY_AUTH_ROUTE_PREFIX = '/aws-blocks/auth';
 
 /** Default federated-sign-in callback path (`RedirectOptions.callbackPath`). @internal */
 export const DEFAULT_CALLBACK_PATH = `${AUTH_ROUTE_PREFIX}/callback`;

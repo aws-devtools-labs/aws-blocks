@@ -13,7 +13,7 @@ import kotlin.test.assertFailsWith
 
 class BlocksTest {
 
-    private val server = BlocksServer(name = "test", url = "http://localhost:3001/aws-blocks/api")
+    private val server = BlocksServer(name = "test", url = "http://localhost:3001/cdk-blocks/api")
 
     @Test
     fun `the owned client targets the server it was constructed with`() {

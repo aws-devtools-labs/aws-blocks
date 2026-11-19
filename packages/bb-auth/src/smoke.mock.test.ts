@@ -52,7 +52,7 @@ function client(handler: ReturnType<typeof createLambdaHandler>) {
 			const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
 			const response: unknown = await handler({
 				httpMethod: 'POST',
-				path: '/aws-blocks/api',
+				path: '/cdk-blocks/api',
 				headers: {
 					'Content-Type': 'application/json',
 					host: 'localhost:3000',

@@ -37,7 +37,7 @@ import { BlocksPresets, BlocksStack } from './index.js';
 /** A default compute with an inline Lambda (no bundling), enough for create() and synth. */
 class StubCompute extends ComputeBase {
 	readonly fn: lambda.Function;
-	readonly apiUrl = 'https://example.invalid/aws-blocks/api';
+	readonly apiUrl = 'https://example.invalid/cdk-blocks/api';
 
 	constructor(scope: ScopeParent, id: string) {
 		super(id, { parent: scope });

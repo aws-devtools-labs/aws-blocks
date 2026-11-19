@@ -12,7 +12,7 @@ The workspace has already been scaffolded. Begin by reading README.md, then do a
 
 ### The `api` namespace (authoritative shared board)
 
-Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /aws-blocks/api`) with:
+Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /cdk-blocks/api`) with:
 
 - **`api.join(name)`** — registers `name` on the shared board (persisting it via the **kv-store** block) and broadcasts the change over the **realtime** block. **Keyed by name:** joining a name that is already present must **not** create a duplicate — the roster holds at most one entry per name. The name is stored and returned **verbatim** (a name like `<b>x</b>` is preserved literally as text; non-ASCII / emoji preserved exactly). A blank or whitespace-only `name` is rejected with a JSON-RPC **error** envelope and does not change the roster.
 - **`api.listPresent()`** — returns the current shared roster as an array `[{ name }]` read from the store. Because the roster is persisted, a fresh caller (or a freshly-loaded tab) sees everyone who has joined — not a blank board.

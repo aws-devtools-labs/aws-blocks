@@ -223,7 +223,7 @@ export class Browser {
 				body: null,
 				json: async () => ({}),
 				text: async () => '',
-				url: new URL('https://app.example.com/aws-blocks/api'),
+				url: new URL('https://app.example.com/cdk-blocks/api'),
 				params: {},
 			},
 			response: {

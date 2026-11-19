@@ -1,4 +1,4 @@
-# AWS Blocks Kotlin – Agent Guide
+# AWS CDK Blocks Kotlin – Agent Guide
 
 Context for AI coding agents working in this repository.
 
@@ -100,7 +100,7 @@ tests. One `commonTest` suite runs on all three targets.
 ./run-e2e.sh --target android   # boot an emulator first; the script does not
 
 # Against an already-running endpoint, skipping the local dev server
-./run-e2e.sh --target android --blocks-url https://example.com/aws-blocks/api
+./run-e2e.sh --target android --blocks-url https://example.com/cdk-blocks/api
 ```
 
 The Android target runs as an instrumented test APK (`connectedAndroidDeviceTest`), which is the

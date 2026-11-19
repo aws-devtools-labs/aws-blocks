@@ -1,9 +1,9 @@
-# AGENTS.md — AWS Blocks (contributor guide)
+# AGENTS.md — AWS CDK Blocks (contributor guide)
 
-> **AWS Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `cdk-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
+> **AWS CDK Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `cdk-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
 
 ## How to work here
-You're an engineer working **on AWS Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS Blocks, this is the wrong doc → run `npm create @aws-cdk-blocks/blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
+You're an engineer working **on AWS CDK Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS CDK Blocks, this is the wrong doc → run `npm create @aws-cdk-blocks/blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
 
 - **Default to making the change** — implement it, don't just describe it.
 - **Definition of done = the "Before you open a PR" checklist passes** (build, lint, tests, changeset, docs).
@@ -27,7 +27,7 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 10. Every change to a published package **ships a changeset** covering all changed packages (its text becomes the public changelog).
 11. Keep docs **runnable** — every README/JSDoc snippet, command, package name, and relative link is correct at HEAD; a dead link in a published `packages/*/README.md` is a defect. Without this → users copy-paste broken code and lose trust in the framework.
 12. **No root `/` route**, and a route wildcard must be the last path segment. Violating this → API Gateway rejects the route or swallows all traffic into one handler.
-13. Refer to the project as **"AWS Blocks"** (no article — "built with AWS Blocks"). Inconsistent naming → confuses search, docs, and brand recognition.
+13. Refer to the project as **"AWS CDK Blocks"** (no article — "built with AWS CDK Blocks"). Inconsistent naming → confuses search, docs, and brand recognition.
 
 ---
 
@@ -45,7 +45,7 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 }}
 ```
 - `Scope` is the namespace + registration bus; BBs **extend** it (never wrap it) — that's how infra discovery, IAM propagation, and `fullId` computation work.
-- `BlocksStack` / `BlocksBackend` anchor the infra; `ApiNamespace` turns an app's module of methods into a JSON-RPC endpoint at `POST /aws-blocks/api`. A BB doesn't auto-expose RPC — the app wraps the methods it wants to call.
+- `BlocksStack` / `BlocksBackend` anchor the infra; `ApiNamespace` turns an app's module of methods into a JSON-RPC endpoint at `POST /cdk-blocks/api`. A BB doesn't auto-expose RPC — the app wraps the methods it wants to call.
 - **Resource names are derived, not handed off.** Each layer computes the same deterministic name from `fullId` independently: the CDK layer provisions a resource named `fullId.substring(0,255)`; the runtime and mock layers call `registerSdkIdentifiers(this.fullId, {...})` in their constructor and resolve it with `getSdkIdentifiers(this)` **at call time** (a same-process registry, so co-located BBs can find each other). The mock uses a `mock-`-prefixed name and persists to disk. Extra (non-name) config is the only thing the CDK layer pushes to the runtime, via `registerConfig()`.
 - Some BBs return **live client objects, not data** (e.g. a realtime channel). They use the **Transferable** pattern: the server value serializes (`toJSON()` → `{__blocks: …}`) and re-hydrates into a live client object via client middleware. `bb-realtime` is the canonical end-to-end example.
 
@@ -200,7 +200,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 3. Root `README.md` — how conditional exports work
 
 ### Discovering Building Block Documentation
-When working in an AWS Blocks application (not this monorepo), Building Block documentation ships in `aws-cdk-blocks`, and `npm run docs` prints it for the installed version: `npm run docs` lists all Building Blocks with their package names, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). Use `npm run docs:search <term>` to search or `npm run docs:api <Block>` for signatures. Structured tasks print text on a terminal and JSON when piped; use `npm run -s docs KVStore` in pipelines to suppress npm’s banner.
+When working in an AWS CDK Blocks application (not this monorepo), Building Block documentation ships in `aws-cdk-blocks`, and `npm run docs` prints it for the installed version: `npm run docs` lists all Building Blocks with their package names, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). Use `npm run docs:search <term>` to search or `npm run docs:api <Block>` for signatures. Structured tasks print text on a terminal and JSON when piped; use `npm run -s docs KVStore` in pipelines to suppress npm’s banner.
 
 ---
 
@@ -333,4 +333,4 @@ Check correctness/security, mock↔aws↔cdk↔browser consistency + conditional
 - `packages/hosting/README.md` — SPA/SSR frontend hosting
 - `packages/bb-database/README.md` — DB migrations
 - `native/*` — Kotlin/Swift/Dart client codegen
-- per-template `AGENTS.md` (via `npm create @aws-cdk-blocks/blocks-app@latest my-app`) — building an app *with* AWS Blocks.
+- per-template `AGENTS.md` (via `npm create @aws-cdk-blocks/blocks-app@latest my-app`) — building an app *with* AWS CDK Blocks.

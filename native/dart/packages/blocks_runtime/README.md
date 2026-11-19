@@ -28,7 +28,7 @@ import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'blocks.blocks.dart'; // the generated client
 
-const rpcUrl = 'https://api.example.com/aws-blocks/api';
+const rpcUrl = 'https://api.example.com/cdk-blocks/api';
 
 // blocks_runtime_flutter keeps the session in secure storage by default
 // (see Sessions), so a restarted app is still signed in.
@@ -198,7 +198,7 @@ void main() {
       store: FileTokenStore(applicationId: 'com.example.notes_cli'),
     ),
   );
-  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   print(client.sessionStore is PersistentSessionStore); // true
 }
 ```

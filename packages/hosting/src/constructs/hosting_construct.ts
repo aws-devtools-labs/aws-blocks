@@ -506,7 +506,7 @@ export type HostingConstructProps = {
    *   (regional, no CDN, no VPC/NAT, scale-to-zero, pay-per-request). The
    *   *serverless* sibling of the ALB door: API Gateway owns routing (a route
    *   per origin/namespace), serves private S3 assets via an asset-proxy
-   *   Lambda, and proxies `/aws-blocks/*` same-origin to the backend natively
+   *   Lambda, and proxies `/cdk-blocks/*` same-origin to the backend natively
    *   (no forwarder Lambda). Best for a SPA/SSR app that wants no CDN and no
    *   always-on ALB baseline. It has no edge cache, skew protection or geo
    *   restriction; redirects, header rules and error pages are applied by the
@@ -514,7 +514,7 @@ export type HostingConstructProps = {
    *   `'http'` (default; SSR responses are buffered) or `'rest'` (streamed SSR;
    *   requires `domain`).
    *
-   * Every door except `'none'` routes `/aws-blocks/*` and the backend's raw
+   * Every door except `'none'` routes `/cdk-blocks/*` and the backend's raw
    * routes to the API same-origin. A door that invokes the server without
    * streaming (ALB, the HTTP API, a custom door with `serverResponse:
    * 'buffered'`) gets a server built in buffered mode.
@@ -559,11 +559,12 @@ export type HostingConstructProps = {
    * ignore it.
    */
   backendApi?: {
-    /** The backend's full API URL, ending in `/aws-blocks/api` (e.g. `https://{id}.execute-api.{region}.amazonaws.com/prod/aws-blocks/api`). */
+    /** The backend's full API URL, ending in `/cdk-blocks/api` (e.g. `https://{id}.execute-api.{region}.amazonaws.com/prod/cdk-blocks/api`). */
     url: string;
     /**
-     * Path patterns beyond `/aws-blocks/*` that must reach the backend (its
-     * raw routes, e.g. `/hooks/*`). `/aws-blocks/*` is always included.
+     * Path patterns beyond `/cdk-blocks/*` that must reach the backend (its
+     * raw routes, e.g. `/hooks/*`). `/cdk-blocks/*` and its legacy `/aws-blocks/*`
+     * alias are always included.
      */
     paths?: readonly string[];
   };
@@ -823,7 +824,7 @@ export class HostingConstruct extends Construct {
     this.buildId = buildId;
 
     // A bare REST API URL carries its stage (`https://{id}.execute-api…/prod/`),
-    // but an app links from the root (`/assets/…`, `/aws-blocks/api`,
+    // but an app links from the root (`/assets/…`, `/cdk-blocks/api`,
     // `/.blocks-sandbox/config.json`), and those miss the stage (403). A
     // custom domain's base-path mapping serves the stage at the domain root.
     // The door's effective settings: `frontDoor.features` plus the deprecated
@@ -3193,7 +3194,7 @@ const assertRestDoorAddressable = (
   throw new HostingError('RestFrontDoorNeedsDomainError', {
     message:
       "frontDoor { kind: 'apiGateway', api: 'rest' } has no custom domain. A REST API's own URL carries the `/prod` " +
-      "stage path, so the app's root-relative links (its assets, `/aws-blocks/api`, `/.blocks-sandbox/config.json`) " +
+      "stage path, so the app's root-relative links (its assets, `/cdk-blocks/api`, `/.blocks-sandbox/config.json`) " +
       'resolve outside the stage and get 403.',
     resolution:
       "Add `domain` (its base-path mapping serves the stage at the domain root), or use `api: 'http'` (the HTTP " +

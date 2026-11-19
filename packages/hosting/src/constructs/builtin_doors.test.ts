@@ -5,7 +5,7 @@
  * The built-in non-CloudFront doors (ALB, API Gateway HTTP and REST, and the
  * ALB router of the stacked door), end to end through `HostingConstruct`:
  *
- * - every path in `DoorInput.origins.api.paths` (`/aws-blocks/*` plus the
+ * - every path in `DoorInput.origins.api.paths` (`/cdk-blocks/*` plus the
  *   backend's raw routes) reaches the backend, as on the CloudFront door;
  * - the server compute answers in the mode the door can carry (buffered behind
  *   a door that invokes it without streaming), and `origins.server.streaming`
@@ -29,7 +29,7 @@ import { cf } from './cf_helpers.js';
 import { type DoorInput, defineFrontDoor } from './front_door.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
 const RAW_ROUTES = ['/hooks/door-probe', '/users/*'];
 
 type Template_ = ReturnType<typeof Template.fromStack>;
@@ -113,10 +113,10 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
   // ── A. Raw routes reach the backend ──────────────────────────────────────
 
   describe('A — every origins.api.paths entry reaches the backend', () => {
-    it('ALB: one rule carries /aws-blocks/* plus each raw route; no stale /aws-blocks-auth/*', () => {
+    it('ALB: one rule carries /cdk-blocks/* plus each raw route; no stale /aws-blocks-auth/*', () => {
       const { t } = synth(spaManifest(), { kind: 'alb' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       const paths = albRulePaths(t);
-      for (const p of ['/aws-blocks/*', ...RAW_ROUTES]) assert.ok(paths.includes(p), `ALB routes ${p}`);
+      for (const p of ['/cdk-blocks/*', '/aws-blocks/*', ...RAW_ROUTES]) assert.ok(paths.includes(p), `ALB routes ${p}`);
       assert.ok(!paths.includes('/aws-blocks-auth/*'), 'no stale /aws-blocks-auth/* rule');
     });
 
@@ -130,7 +130,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
         }
       }
       const paths = albRulePaths(t);
-      for (const p of ['/aws-blocks/*', ...many]) assert.ok(paths.includes(p), `ALB routes ${p}`);
+      for (const p of ['/cdk-blocks/*', ...many]) assert.ok(paths.includes(p), `ALB routes ${p}`);
     });
 
     it('ALB: too many API paths for the reserved priority band fails synth with a clear error', () => {
@@ -150,13 +150,14 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     it('API Gateway HTTP: a route per raw route, proxied to the same path on the backend', () => {
       const { t } = synth(spaManifest(), { kind: 'apiGateway' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       const keys = httpRouteKeys(t);
+      assert.ok(keys.includes('ANY /cdk-blocks/{proxy+}'));
       assert.ok(keys.includes('ANY /aws-blocks/{proxy+}'));
       assert.ok(keys.includes('ANY /hooks/door-probe'), `routes: ${keys.join(', ')}`);
       assert.ok(keys.includes('ANY /users/{proxy+}'));
       assert.ok(!keys.some((k) => k.includes('/aws-blocks-auth')), 'no stale /aws-blocks-auth route');
       t.hasResourceProperties('AWS::ApiGatewayV2::Integration', {
         IntegrationType: 'HTTP_PROXY',
-        // Proxied to the same path on the backend's stage (API_URL minus `/aws-blocks/api`).
+        // Proxied to the same path on the backend's stage (API_URL minus `/cdk-blocks/api`).
         IntegrationUri: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/hooks/door-probe',
       });
     });
@@ -174,10 +175,10 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
 
     it('the door input lists the same paths the door routes', () => {
       const { hosting } = synth(spaManifest(), { kind: 'apiGateway' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
-      assert.deepEqual(hosting.doorInput?.origins.api?.paths, ['/aws-blocks/*', ...RAW_ROUTES]);
+      assert.deepEqual(hosting.doorInput?.origins.api?.paths, ['/cdk-blocks/*', '/aws-blocks/*', ...RAW_ROUTES]);
     });
 
-    it('construct default (no paths given): the single-compute backend gets /aws-blocks/* only', () => {
+    it('construct default (no paths given): the single-compute backend gets /cdk-blocks/* and the legacy /aws-blocks/*', () => {
       const plan: HostingPlan = {
         origins: [{ id: 'blocks-s3', kind: 'static' }],
         routes: { entries: [], redirects: [], headers: [] },
@@ -187,7 +188,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       };
       const stack = new Stack(new App(), 'C', { env: { account: '111111111111', region: 'us-west-2' } });
       new AlbConstruct(stack, 'Alb', { plan, bucket: new Bucket(stack, 'B') });
-      assert.deepEqual(albRulePaths(Template.fromStack(stack)), ['/aws-blocks/*']);
+      assert.deepEqual(albRulePaths(Template.fromStack(stack)), ['/cdk-blocks/*', '/aws-blocks/*']);
     });
   });
 

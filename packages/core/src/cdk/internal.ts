@@ -28,7 +28,7 @@
  * @internal
  */
 
-// Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
+// Reserved `/cdk-blocks` path segment, needed by concrete computes (e.g.
 // LambdaCompute in @aws-cdk-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';
 export type {

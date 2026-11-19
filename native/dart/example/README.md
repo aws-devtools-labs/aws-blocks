@@ -31,11 +31,11 @@ native/dart/run-e2e.sh
 
 This generates the spec from `test-apps/native-bindings`, runs codegen, starts
 the local dev server (`npm run dev:server`, JSON-RPC at
-`http://localhost:3001/aws-blocks/api`), and executes all tests.
+`http://localhost:3001/cdk-blocks/api`), and executes all tests.
 
 To run against a deployed endpoint:
 ```bash
-native/dart/run-e2e.sh --blocks-url https://xxx.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api
+native/dart/run-e2e.sh --blocks-url https://xxx.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api
 ```
 
 ## Verification codes and deployed backends
@@ -55,7 +55,7 @@ confirmed user instead. Seed it into the stack's user pools first:
 `oidc_test.dart` validates the server-relay sign-in + cookie-persistence flow
 headlessly against `Auth`'s stub IdP. It signs in with the `OidcClient` the
 backend's `oidcAuthApi.getClient()` returns (`Auth.createOidcApi()`), which carries
-the block's `/aws-blocks/auth/*` routes.
+the block's `/cdk-blocks/auth/*` routes.
 
 The stub IdP runs only locally and on sandbox deployments. The native-bindings
 test app always deploys as a sandbox, so its deployed backend serves the stub

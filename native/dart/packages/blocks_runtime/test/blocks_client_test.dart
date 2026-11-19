@@ -28,46 +28,46 @@ void main() {
     test('posts to the method\'s namespace path', () async {
       expect(
         await _requestedUrl(
-          'https://d123.cloudfront.net/aws-blocks/api',
+          'https://d123.cloudfront.net/cdk-blocks/api',
           'reports.build',
         ),
-        'https://d123.cloudfront.net/aws-blocks/api/reports',
+        'https://d123.cloudfront.net/cdk-blocks/api/reports',
       );
       expect(
         await _requestedUrl(
-          'https://a.example/prod/aws-blocks/api//',
+          'https://a.example/prod/cdk-blocks/api//',
           'reports.build',
         ),
-        'https://a.example/prod/aws-blocks/api/reports',
+        'https://a.example/prod/cdk-blocks/api/reports',
       );
     });
 
     test('only the first `.` separates the namespace', () async {
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', 'ns.a.b'),
-        'https://a.example/aws-blocks/api/ns',
+        await _requestedUrl('https://a.example/cdk-blocks/api', 'ns.a.b'),
+        'https://a.example/cdk-blocks/api/ns',
       );
     });
 
     test('sends path-safe characters as they are, encodes others', () async {
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', r'$ns.m'),
-        r'https://a.example/aws-blocks/api/$ns',
+        await _requestedUrl('https://a.example/cdk-blocks/api', r'$ns.m'),
+        r'https://a.example/cdk-blocks/api/$ns',
       );
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', 'café.m'),
-        'https://a.example/aws-blocks/api/caf%C3%A9',
+        await _requestedUrl('https://a.example/cdk-blocks/api', 'café.m'),
+        'https://a.example/cdk-blocks/api/caf%C3%A9',
       );
     });
 
     test('leaves the base URL for a method without namespace', () async {
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', 'greet'),
-        'https://a.example/aws-blocks/api',
+        await _requestedUrl('https://a.example/cdk-blocks/api', 'greet'),
+        'https://a.example/cdk-blocks/api',
       );
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', '.greet'),
-        'https://a.example/aws-blocks/api',
+        await _requestedUrl('https://a.example/cdk-blocks/api', '.greet'),
+        'https://a.example/cdk-blocks/api',
       );
     });
   });
@@ -124,7 +124,7 @@ void main() {
         });
         for (final status in [401, 200]) {
           final client = BlocksClient(
-            baseUrl: 'http://test/aws-blocks/api',
+            baseUrl: 'http://test/cdk-blocks/api',
             client: MockClient((_) async => http.Response(body, status)),
           );
           await expectLater(
@@ -151,7 +151,7 @@ void main() {
         // Documented with `httpErrorStatus`: a non-idempotent method can run twice.
         var calls = 0;
         final client = BlocksClient(
-          baseUrl: 'http://test/aws-blocks/api',
+          baseUrl: 'http://test/cdk-blocks/api',
           client: MockClient((_) async {
             calls++;
             return http.Response(
@@ -349,42 +349,42 @@ void main() {
         ),
       );
       await BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: mockClient,
         sessionStore: store,
       ).call('test', {});
       expect(
-        await cookieSentTo('http://test/aws-blocks/api', store),
+        await cookieSentTo('http://test/cdk-blocks/api', store),
         'session=abc123',
       );
-      expect(await cookieSentTo('http://other/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('http://other/cdk-blocks/api', store), isNull);
     });
 
     test('sends a Secure cookie only over https', () async {
       final store = InMemorySessionStore()
         ..setCookies(
           'session=s; Path=/; Secure',
-          requestUri: Uri.parse('https://test/aws-blocks/api'),
+          requestUri: Uri.parse('https://test/cdk-blocks/api'),
         );
       expect(
-        await cookieSentTo('https://test/aws-blocks/api', store),
+        await cookieSentTo('https://test/cdk-blocks/api', store),
         'session=s',
       );
-      expect(await cookieSentTo('http://test/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('http://test/cdk-blocks/api', store), isNull);
     });
 
     test('sends a cookie only to paths under its Path', () async {
       final store = InMemorySessionStore()
         ..setCookies(
           'session=s; Path=/prod',
-          requestUri: Uri.parse('https://test/prod/aws-blocks/api'),
+          requestUri: Uri.parse('https://test/prod/cdk-blocks/api'),
         );
       expect(
-        await cookieSentTo('https://test/prod/aws-blocks/api', store),
+        await cookieSentTo('https://test/prod/cdk-blocks/api', store),
         'session=s',
       );
       expect(
-        await cookieSentTo('https://test/beta/aws-blocks/api', store),
+        await cookieSentTo('https://test/beta/cdk-blocks/api', store),
         isNull,
       );
     });
@@ -392,31 +392,31 @@ void main() {
     test('scopes cookies to the URL the response came from', () async {
       final store = InMemorySessionStore();
       final redirectingClient = _FinalUrlClient(
-        Uri.parse('https://final/next/aws-blocks/api'),
+        Uri.parse('https://final/next/cdk-blocks/api'),
         jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
         headers: {'set-cookie': 'session=abc123; HttpOnly'},
       );
       await BlocksClient(
-        baseUrl: 'https://test/aws-blocks/api',
+        baseUrl: 'https://test/cdk-blocks/api',
         client: redirectingClient,
         sessionStore: store,
       ).call('test', {});
       expect(
-        await cookieSentTo('https://final/next/aws-blocks/api', store),
+        await cookieSentTo('https://final/next/cdk-blocks/api', store),
         'session=abc123',
       );
       expect(
-        await cookieSentTo('https://final/other/aws-blocks/api', store),
+        await cookieSentTo('https://final/other/cdk-blocks/api', store),
         isNull,
       );
-      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('https://test/cdk-blocks/api', store), isNull);
     });
 
     test('drops a cookie the server expires', () async {
       final store = InMemorySessionStore()
         ..setCookies(
           'session=s; Path=/',
-          requestUri: Uri.parse('https://test/aws-blocks/api'),
+          requestUri: Uri.parse('https://test/cdk-blocks/api'),
         );
       final mockClient = MockClient(
         (req) async => http.Response(
@@ -427,12 +427,12 @@ void main() {
         ),
       );
       await BlocksClient(
-        baseUrl: 'https://test/aws-blocks/api',
+        baseUrl: 'https://test/cdk-blocks/api',
         client: mockClient,
         sessionStore: store,
       ).call('test', {});
       expect(store.cookies, isEmpty);
-      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('https://test/cdk-blocks/api', store), isNull);
     });
   });
 }

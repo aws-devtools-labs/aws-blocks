@@ -360,11 +360,11 @@ export const COGNITO_METHOD_RENAMES: Readonly<Record<string, string>> = {
 
 /** `AuthOIDC` members with no `Auth` equivalent. */
 export const OIDC_GONE_MEMBERS: Readonly<Record<string, string>> = {
-	handleCallback: 'Auth serves the callback route itself (GET /aws-blocks/auth/callback); remove this call.',
-	handleCallbackDispatch: 'Auth serves the callback route itself (GET /aws-blocks/auth/callback); remove this call.',
-	handleExchange: 'Auth serves POST /aws-blocks/auth/exchange itself; remove this call.',
-	getAuthorizeParams: 'Auth serves POST /aws-blocks/auth/authorize-params/<id> itself; remove this call.',
-	refreshBearerTokens: 'Auth serves POST /aws-blocks/auth/exchange/refresh itself; remove this call.',
+	handleCallback: 'Auth serves the callback route itself (GET /cdk-blocks/auth/callback); remove this call.',
+	handleCallbackDispatch: 'Auth serves the callback route itself (GET /cdk-blocks/auth/callback); remove this call.',
+	handleExchange: 'Auth serves POST /cdk-blocks/auth/exchange itself; remove this call.',
+	getAuthorizeParams: 'Auth serves POST /cdk-blocks/auth/authorize-params/<id> itself; remove this call.',
+	refreshBearerTokens: 'Auth serves POST /cdk-blocks/auth/exchange/refresh itself; remove this call.',
 	signInRoutePath: 'Use getSignInUrl(context, provider) instead.',
 	signInBasePath: 'Use getSignInUrl(context, provider) instead.',
 	providers: 'Auth has no providers getter; the provider ids are the keys of the providers option.',

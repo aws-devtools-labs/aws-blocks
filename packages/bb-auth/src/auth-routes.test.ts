@@ -37,7 +37,7 @@ const CASES: Array<{ name: string; options: AuthOptions }> = [
 				'my idp': okta,
 				gh: github({ clientId: 'gh-client', clientSecret: secret }),
 			},
-			redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+			redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' },
 		},
 	},
 	{
@@ -60,7 +60,7 @@ const CASES: Array<{ name: string; options: AuthOptions }> = [
 		options: {
 			store: 'builtin',
 			providers: { corp: stubIdp() },
-			redirects: { callbackPath: '/aws-blocks/auth//deep/cb', signOutPath: '/aws-blocks/auth/out/' },
+			redirects: { callbackPath: '/cdk-blocks/auth//deep/cb', signOutPath: '/cdk-blocks/auth/out/' },
 		},
 	},
 ];

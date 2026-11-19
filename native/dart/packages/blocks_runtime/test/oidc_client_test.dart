@@ -106,13 +106,14 @@ void main() {
 
   group('OidcClient auth origin', () {
     // The auth routes resolve against the base URL cut at its first
-    // `aws-blocks` path segment, which keeps an API Gateway stage.
+    // `cdk-blocks` (or legacy `aws-blocks`) path segment, which keeps an API
+    // Gateway stage.
     Future<String> exchangeUrlFor(String baseUrl) async {
       Uri? sent;
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/signout',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/signout',
         providers: ['google'],
         providerConfigs: {},
         baseUrl: baseUrl,
@@ -141,43 +142,50 @@ void main() {
     test('keeps an API Gateway stage', () async {
       expect(
         await exchangeUrlFor(
-          'https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api',
+          'https://x.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api',
         ),
-        'https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/exchange',
+        'https://x.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/auth/exchange',
       );
     });
 
     test('gives the origin for a URL with no stage', () async {
       expect(
-        await exchangeUrlFor('https://d1.cloudfront.net/aws-blocks/api'),
-        'https://d1.cloudfront.net/aws-blocks/auth/exchange',
+        await exchangeUrlFor('https://d1.cloudfront.net/cdk-blocks/api'),
+        'https://d1.cloudfront.net/cdk-blocks/auth/exchange',
       );
     });
 
     test('gives the origin for a doubled RPC prefix', () async {
       expect(
         await exchangeUrlFor(
-          'https://d1.cloudfront.net/aws-blocks/api/aws-blocks/api',
+          'https://d1.cloudfront.net/cdk-blocks/api/cdk-blocks/api',
         ),
-        'https://d1.cloudfront.net/aws-blocks/auth/exchange',
+        'https://d1.cloudfront.net/cdk-blocks/auth/exchange',
       );
     });
 
-    test('keeps a URL with no aws-blocks segment, port included', () async {
+    test('cuts at a legacy aws-blocks segment', () async {
+      expect(
+        await exchangeUrlFor('https://host/prod/aws-blocks/api'),
+        'https://host/prod/cdk-blocks/auth/exchange',
+      );
+    });
+
+    test('keeps a URL with no cdk-blocks segment, port included', () async {
       expect(
         await exchangeUrlFor('http://localhost:3001'),
-        'http://localhost:3001/aws-blocks/auth/exchange',
+        'http://localhost:3001/cdk-blocks/auth/exchange',
       );
       expect(
         await exchangeUrlFor('http://localhost:3001/'),
-        'http://localhost:3001/aws-blocks/auth/exchange',
+        'http://localhost:3001/cdk-blocks/auth/exchange',
       );
     });
 
-    test('cuts only at a segment that is exactly aws-blocks', () async {
+    test('cuts only at a segment that is exactly cdk-blocks', () async {
       expect(
-        await exchangeUrlFor('https://host/aws-blocks-x/aws-blocks/api'),
-        'https://host/aws-blocks-x/aws-blocks/auth/exchange',
+        await exchangeUrlFor('https://host/cdk-blocks-x/cdk-blocks/api'),
+        'https://host/cdk-blocks-x/cdk-blocks/auth/exchange',
       );
     });
   });
@@ -528,9 +536,9 @@ void main() {
         'error', () async {
       final store = InMemoryTokenStore();
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/signout',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/signout',
         providers: ['google'],
         providerConfigs: {
           'google': ProviderConfig(
@@ -558,9 +566,9 @@ void main() {
 
   group('OidcClient signInDirect callback errors', () {
     OidcClient directClient(TokenStore store) => OidcClient(
-      exchangePath: '/aws-blocks/auth/exchange',
-      refreshPath: '/aws-blocks/auth/exchange/refresh',
-      signOutPath: '/aws-blocks/auth/signout',
+      exchangePath: '/cdk-blocks/auth/exchange',
+      refreshPath: '/cdk-blocks/auth/exchange/refresh',
+      signOutPath: '/cdk-blocks/auth/signout',
       providers: ['google'],
       providerConfigs: {
         'google': ProviderConfig(
@@ -636,12 +644,12 @@ void main() {
       TokenStore? store,
       SessionStore? session,
     }) => OidcClient(
-      exchangePath: '/aws-blocks/auth/exchange',
-      refreshPath: '/aws-blocks/auth/exchange/refresh',
-      signOutPath: '/aws-blocks/auth/signout',
+      exchangePath: '/cdk-blocks/auth/exchange',
+      refreshPath: '/cdk-blocks/auth/exchange/refresh',
+      signOutPath: '/cdk-blocks/auth/signout',
       providers: ['google'],
       providerConfigs: {},
-      baseUrl: 'http://localhost:3000/aws-blocks/api',
+      baseUrl: 'http://localhost:3000/cdk-blocks/api',
       tokenStore: store ?? InMemoryTokenStore(),
       sessionStore: session,
       httpClient: http,
@@ -682,7 +690,7 @@ void main() {
         expect(sent!.method, 'GET');
         expect(
           sent!.url.toString(),
-          'http://localhost:3000/aws-blocks/auth/session',
+          'http://localhost:3000/cdk-blocks/auth/session',
         );
         expect(sent!.headers['cookie'], 'blocks_session=live');
         expect(sent!.headers.containsKey('authorization'), isFalse);
@@ -908,22 +916,22 @@ void main() {
     test('derives the session route from a custom callbackPath', () async {
       Uri? url;
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/sso/exchange',
-        refreshPath: '/aws-blocks/auth/sso/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/sso/signout',
-        callbackPath: '/aws-blocks/auth/sso/callback',
+        exchangePath: '/cdk-blocks/auth/sso/exchange',
+        refreshPath: '/cdk-blocks/auth/sso/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/sso/signout',
+        callbackPath: '/cdk-blocks/auth/sso/callback',
         providers: ['google'],
         providerConfigs: {},
-        baseUrl: 'https://host/prod/aws-blocks/api',
+        baseUrl: 'https://host/prod/cdk-blocks/api',
         tokenStore: InMemoryTokenStore(),
         httpClient: MockClient((req) async {
           url = req.url;
           return http.Response('{}', 401);
         }),
       );
-      expect(client.sessionPath, '/aws-blocks/auth/sso/session');
+      expect(client.sessionPath, '/cdk-blocks/auth/sso/session');
       await client.restore();
-      expect(url.toString(), 'https://host/prod/aws-blocks/auth/sso/session');
+      expect(url.toString(), 'https://host/prod/cdk-blocks/auth/sso/session');
     });
   });
 
@@ -947,12 +955,12 @@ void main() {
         ..setCookies('blocks_session=live; Path=/', requestUri: origin);
       final sent = <http.Request>[];
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/signout',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/signout',
         providers: ['google'],
         providerConfigs: {},
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: store,
         sessionStore: session,
         httpClient: MockClient((req) {
@@ -988,7 +996,7 @@ void main() {
       expect(req.method, 'POST');
       expect(
         req.url.toString(),
-        'http://localhost:3000/aws-blocks/auth/signout?format=json',
+        'http://localhost:3000/cdk-blocks/auth/signout?format=json',
       );
       expect(req.headers['content-type'], startsWith('application/json'));
       expect(req.headers['cookie'], 'blocks_session=live');
@@ -1082,7 +1090,7 @@ void main() {
           'signOutPath': '$base/signout',
           'callbackPath': '$base/callback',
         },
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: InMemoryTokenStore(),
         sessionStore: session,
         httpClient: MockClient(
@@ -1094,14 +1102,14 @@ void main() {
         ),
       );
 
-      await block('/aws-blocks/auth/sso', 'auth_app-sso').signOut();
+      await block('/cdk-blocks/auth/sso', 'auth_app-sso').signOut();
 
       expect(session.cookies, {'auth_app-auth': 'main'});
-      await block('/aws-blocks/auth', 'auth_app-auth').signOut();
+      await block('/cdk-blocks/auth', 'auth_app-auth').signOut();
       expect(session.cookies, isEmpty);
     });
 
-    /// A client of the block at `/aws-blocks/auth/sso`, signed in through
+    /// A client of the block at `/cdk-blocks/auth/sso`, signed in through
     /// its exchange, which set the block's session cookie `auth_app-sso`,
     /// on a session store that also holds another block's cookie. Its
     /// sign-out route is answered by [signOut].
@@ -1121,9 +1129,9 @@ void main() {
         {
           '__blocks': 'oidc/client',
           'providers': ['google'],
-          'exchangePath': '/aws-blocks/auth/sso/exchange',
+          'exchangePath': '/cdk-blocks/auth/sso/exchange',
         },
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: store,
         sessionStore: session,
         httpClient: MockClient((req) async {
@@ -1185,8 +1193,8 @@ void main() {
 
         expect(t.states, [isA<OidcSignedOut>()]);
         expect(t.client.authState, isA<OidcSignedOut>());
-        expect(await t.store.get('/aws-blocks/auth/sso/access_token'), isNull);
-        expect(await t.store.get('/aws-blocks/auth/sso/refresh_token'), isNull);
+        expect(await t.store.get('/cdk-blocks/auth/sso/access_token'), isNull);
+        expect(await t.store.get('/cdk-blocks/auth/sso/refresh_token'), isNull);
         expect(t.session.cookies, {'auth_app-auth': 'main'});
       });
     }
@@ -1204,10 +1212,10 @@ void main() {
         {
           '__blocks': 'oidc/client',
           'providers': ['google'],
-          'exchangePath': '/aws-blocks/auth/sso/exchange',
+          'exchangePath': '/cdk-blocks/auth/sso/exchange',
           'sessionCookieName': 'auth_app-sso',
         },
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: store,
         sessionStore: session,
         httpClient: MockClient(
@@ -1228,9 +1236,9 @@ void main() {
       final client = OidcClient.fromJson(
         {
           '__blocks': 'oidc/client',
-          'exchangePath': '/aws-blocks/auth/sso/exchange',
+          'exchangePath': '/cdk-blocks/auth/sso/exchange',
         },
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: InMemoryTokenStore(),
         sessionStore: session,
         httpClient: MockClient((_) async => http.Response('{}', 500)),
@@ -1245,12 +1253,12 @@ void main() {
       final session = Completer<http.Response>();
       final store = InMemoryTokenStore();
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/signout',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/signout',
         providers: ['google'],
         providerConfigs: {},
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: store,
         httpClient: MockClient((req) async {
           if (req.url.path.endsWith('/session')) return session.future;
@@ -1316,8 +1324,8 @@ void main() {
           {
             '__blocks': 'oidc/client',
             'providers': ['google'],
-            'sessionPath': '/aws-blocks/auth/session',
-            'signOutPath': '/aws-blocks/auth/signout',
+            'sessionPath': '/cdk-blocks/auth/session',
+            'signOutPath': '/cdk-blocks/auth/signout',
           },
           baseUrl: 'http://localhost:3001',
           tokenStore: InMemoryTokenStore(),
@@ -1361,20 +1369,20 @@ void main() {
       final client = OidcClient.fromJson(
         {
           '__blocks': 'oidc/client',
-          'exchangePath': '/aws-blocks/auth/sso/exchange',
+          'exchangePath': '/cdk-blocks/auth/sso/exchange',
         },
         baseUrl: 'http://localhost:3001',
         tokenStore: InMemoryTokenStore(),
       );
       expect(client.providers, isEmpty);
       expect(client.providerConfigs, isEmpty);
-      expect(client.refreshPath, '/aws-blocks/auth/sso/exchange/refresh');
-      expect(client.sessionPath, '/aws-blocks/auth/sso/session');
-      expect(client.signOutPath, '/aws-blocks/auth/sso/signout');
-      expect(client.callbackPath, '/aws-blocks/auth/sso/callback');
+      expect(client.refreshPath, '/cdk-blocks/auth/sso/exchange/refresh');
+      expect(client.sessionPath, '/cdk-blocks/auth/sso/session');
+      expect(client.signOutPath, '/cdk-blocks/auth/sso/signout');
+      expect(client.callbackPath, '/cdk-blocks/auth/sso/callback');
       expect(
         client.authorizeParamsBasePath,
-        '/aws-blocks/auth/sso/authorize-params',
+        '/cdk-blocks/auth/sso/authorize-params',
       );
     });
 
@@ -1411,8 +1419,8 @@ void main() {
               'scopes': ['openid'],
             },
           },
-          'exchangePath': '/aws-blocks/auth/exchange',
-          'signOutPath': '/aws-blocks/auth/signout',
+          'exchangePath': '/cdk-blocks/auth/exchange',
+          'signOutPath': '/cdk-blocks/auth/signout',
         },
         baseUrl: 'http://localhost:3001',
         tokenStore: InMemoryTokenStore(),
@@ -1447,41 +1455,41 @@ void main() {
       expect(client.exchangePath, '/auth/exchange');
     });
 
-    test('defaults the relay routes to the auth block\'s /aws-blocks/auth/* '
+    test('defaults the relay routes to the auth block\'s /cdk-blocks/auth/* '
         'routes when the descriptor omits them', () {
       final client = OidcClient.fromJson(
         {
-          'exchangePath': '/aws-blocks/auth/exchange',
-          'signOutPath': '/aws-blocks/auth/signout',
+          'exchangePath': '/cdk-blocks/auth/exchange',
+          'signOutPath': '/cdk-blocks/auth/signout',
           'providers': ['google'],
           'providerConfigs': <String, dynamic>{},
         },
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: InMemoryTokenStore(),
       );
 
       // The routes `Auth` serves (packages/bb-auth DESIGN.md → Routes).
       expect(
         client.authorizeParamsBasePath,
-        '/aws-blocks/auth/authorize-params',
+        '/cdk-blocks/auth/authorize-params',
       );
-      expect(client.callbackPath, '/aws-blocks/auth/callback');
-      expect(client.refreshPath, '/aws-blocks/auth/exchange/refresh');
+      expect(client.callbackPath, '/cdk-blocks/auth/callback');
+      expect(client.refreshPath, '/cdk-blocks/auth/exchange/refresh');
       expect(
         OidcClient.defaultAuthorizeParamsBasePath,
-        '/aws-blocks/auth/authorize-params',
+        '/cdk-blocks/auth/authorize-params',
       );
-      expect(OidcClient.defaultCallbackPath, '/aws-blocks/auth/callback');
+      expect(OidcClient.defaultCallbackPath, '/cdk-blocks/auth/callback');
     });
 
     test('constructor defaults match the descriptor defaults', () {
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/signout',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/signout',
         providers: ['google'],
         providerConfigs: {},
-        baseUrl: 'http://localhost:3000/aws-blocks/api',
+        baseUrl: 'http://localhost:3000/cdk-blocks/api',
         tokenStore: InMemoryTokenStore(),
       );
 

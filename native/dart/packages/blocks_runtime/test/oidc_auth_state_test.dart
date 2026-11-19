@@ -20,12 +20,12 @@ const _user = {
   Future<http.Response> Function(http.Request) handler,
 ) {
   final client = OidcClient(
-    exchangePath: '/aws-blocks/auth/exchange',
-    refreshPath: '/aws-blocks/auth/exchange/refresh',
-    signOutPath: '/aws-blocks/auth/signout',
+    exchangePath: '/cdk-blocks/auth/exchange',
+    refreshPath: '/cdk-blocks/auth/exchange/refresh',
+    signOutPath: '/cdk-blocks/auth/signout',
     providers: ['google'],
     providerConfigs: {},
-    baseUrl: 'http://localhost:3000/aws-blocks/api',
+    baseUrl: 'http://localhost:3000/cdk-blocks/api',
     tokenStore: InMemoryTokenStore(),
     httpClient: MockClient(handler),
   );

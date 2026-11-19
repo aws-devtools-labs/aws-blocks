@@ -19,7 +19,7 @@ export const BB_DASHBOARD_URL_ENV = 'BB_DASHBOARD_URL';
  * Mount the dashboard redirect route on the given scope.
  *
  * @param scope - Parent scope to register the RawRoute on.
- * @param routePath - HTTP path for the redirect (e.g., '/aws-blocks/dashboard').
+ * @param routePath - HTTP path for the redirect (e.g., '/cdk-blocks/dashboard').
  * @param dashboardUrl - Fallback URL for local/mock mode (null means not deployed).
  */
 export function mountDashboardRoute(

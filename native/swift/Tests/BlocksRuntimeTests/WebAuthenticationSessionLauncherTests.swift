@@ -590,7 +590,7 @@ final class WebAuthenticationSessionLauncherTests: XCTestCase {
         XCTAssertEqual(opened.queryItems?.first { $0.name == "state" }?.value?.hasSuffix(".sig"), true, "the server's signed state")
         XCTAssertEqual(
             OIDCMockURLProtocol.requests.compactMap { $0.url?.path },
-            ["/aws-blocks/auth/authorize-params/google", "/aws-blocks/auth/exchange"]
+            ["/cdk-blocks/auth/authorize-params/google", "/cdk-blocks/auth/exchange"]
         )
     }
 
@@ -619,15 +619,15 @@ final class WebAuthenticationSessionLauncherTests: XCTestCase {
         } catch OIDCError.cancelled {
             // Expected.
         }
-        XCTAssertEqual(OIDCMockURLProtocol.requests.compactMap { $0.url?.path }, ["/aws-blocks/auth/authorize-params/google"])
+        XCTAssertEqual(OIDCMockURLProtocol.requests.compactMap { $0.url?.path }, ["/cdk-blocks/auth/authorize-params/google"])
     }
 
     private func makeOIDCClient() -> OIDCClient<String> {
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: mockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: mockSession())
         return OIDCClient<String>(
-            exchangePath: "/aws-blocks/auth/exchange",
-            refreshPath: "/aws-blocks/auth/exchange/refresh",
-            signOutPath: "/aws-blocks/auth/signout",
+            exchangePath: "/cdk-blocks/auth/exchange",
+            refreshPath: "/cdk-blocks/auth/exchange/refresh",
+            signOutPath: "/cdk-blocks/auth/signout",
             providers: ["google"],
             providerConfigs: [:],
             baseUrl: blocksClient.baseUrl,

@@ -20,12 +20,12 @@ const _user = {'userId': 'u1', 'username': 'alice'};
 _client(Completer<http.Response> session) {
   final store = InMemoryTokenStore();
   final client = OidcClient(
-    exchangePath: '/aws-blocks/auth/exchange',
-    refreshPath: '/aws-blocks/auth/exchange/refresh',
-    signOutPath: '/aws-blocks/auth/signout',
+    exchangePath: '/cdk-blocks/auth/exchange',
+    refreshPath: '/cdk-blocks/auth/exchange/refresh',
+    signOutPath: '/cdk-blocks/auth/signout',
     providers: ['google'],
     providerConfigs: {},
-    baseUrl: 'http://localhost:3000/aws-blocks/api',
+    baseUrl: 'http://localhost:3000/cdk-blocks/api',
     tokenStore: store,
     httpClient: MockClient((req) async {
       final path = req.url.path;
@@ -98,7 +98,7 @@ void main() {
       expect(t.client.authState, isA<OidcSignedOut>());
       expect(
         await t.client.sessionStore.cookieHeaderFor(
-          Uri.parse('http://localhost:3000/aws-blocks/auth/session'),
+          Uri.parse('http://localhost:3000/cdk-blocks/auth/session'),
         ),
         isNull,
       );

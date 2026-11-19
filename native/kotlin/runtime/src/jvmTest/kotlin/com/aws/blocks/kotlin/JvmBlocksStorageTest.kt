@@ -40,7 +40,7 @@ class JvmBlocksStorageTest {
      */
     private fun relaunch() = forgetCookieJars()
 
-    private val server = BlocksServer(name = "test", url = "https://example.com/aws-blocks/api")
+    private val server = BlocksServer(name = "test", url = "https://example.com/cdk-blocks/api")
 
     /** Answers every call with a session cookie, and records the cookies it was sent. */
     private class Backend(private val setCookie: String = "session=a-session; Path=/") {
@@ -80,8 +80,8 @@ class JvmBlocksStorageTest {
         // An environment switcher: two instances, two backends, one application directory. Each
         // holds its jar in memory and mirrors the whole thing on write, so unless they share that
         // jar the second write replaces the first instance's cookies rather than adding to them.
-        val hostA = BlocksServer(name = "a", url = "https://a.example.com/aws-blocks/api")
-        val hostB = BlocksServer(name = "b", url = "https://b.example.com/aws-blocks/api")
+        val hostA = BlocksServer(name = "a", url = "https://a.example.com/cdk-blocks/api")
+        val hostB = BlocksServer(name = "b", url = "https://b.example.com/cdk-blocks/api")
 
         val a = blocksFor("com.example.one", Backend("session=from-a; Path=/"), hostA)
         val b = blocksFor("com.example.one", Backend("session=from-b; Path=/"), hostB)

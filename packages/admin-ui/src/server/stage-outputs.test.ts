@@ -28,7 +28,7 @@ function project(files: Record<string, unknown>): string {
 }
 
 const EU_BACKEND = {
-	ApiUrl: 'https://a1b2c3d4e5.execute-api.eu-west-1.amazonaws.com/prod/aws-blocks/api',
+	ApiUrl: 'https://a1b2c3d4e5.execute-api.eu-west-1.amazonaws.com/prod/cdk-blocks/api',
 	HostingCdnDistributionUrl6712AC73: 'https://d1a2b3c4d5e6f7.cloudfront.net',
 };
 

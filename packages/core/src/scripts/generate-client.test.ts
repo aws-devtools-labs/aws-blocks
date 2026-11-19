@@ -168,7 +168,7 @@ describe('generateClientCode — generateClient options', () => {
 		const stub = (await import(stubUrl)) as { calls: { name: string; options: unknown }[] };
 		stub.calls.length = 0; // drop the module-level default exports' calls
 
-		const config = { url: 'http://127.0.0.1:1/aws-blocks/api', retryStaleConnection: false };
+		const config = { url: 'http://127.0.0.1:1/cdk-blocks/api', retryStaleConnection: false };
 		const generated = client.generateClient(config);
 		assert.deepStrictEqual(Object.keys(generated).sort(), ['api', 'other']);
 		assert.deepStrictEqual(stub.calls.map((c) => c.name).sort(), ['api', 'other']);

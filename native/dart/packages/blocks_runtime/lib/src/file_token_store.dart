@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_runtime/src/token_store.dart';
 
 /// A [TokenStore] that keeps each value in a file of its own, for pure Dart

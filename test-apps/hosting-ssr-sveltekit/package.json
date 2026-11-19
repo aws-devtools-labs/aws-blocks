@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev:api": "tsx watch cdk-blocks/scripts/server.ts",
-    "dev:svelte": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api vite dev",
+    "dev:svelte": "BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api vite dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:svelte\"",
     "build": "vite build",
     "preview": "node build/index.js",

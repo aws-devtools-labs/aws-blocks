@@ -91,7 +91,7 @@ This produces a typed Dart client from your spec.
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'blocks.blocks.dart';
 
-final blocks = Blocks(baseUrl: 'http://localhost:3001/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'http://localhost:3001/cdk-blocks/api');
 final greeting = await blocks.hello.greet(name: 'World');
 print(greeting.message); // "Hello, World!"
 ```
@@ -114,7 +114,7 @@ import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'blocks.blocks.dart'; // the generated client
 
-const rpcUrl = 'https://api.example.com/aws-blocks/api';
+const rpcUrl = 'https://api.example.com/cdk-blocks/api';
 
 // blocks_runtime_flutter keeps the session in secure storage by default
 // (see Sessions), so a restarted app is still signed in.
@@ -269,7 +269,7 @@ dependencies:
 and build the client as usual, before or after `runApp`. The app does not have to call `WidgetsFlutterBinding.ensureInitialized()` first:
 
 ```dart
-final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
 // Signed in if the user was signed in before the app restarted.
 final state = await blocks.authApi.getAuthState();
 ```
@@ -284,7 +284,7 @@ To keep the session in memory only, so that it ends when the process does, pass 
 
 ```dart
 final blocks = Blocks(
-  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  baseUrl: 'https://your-api.example.com/cdk-blocks/api',
   sessionStore: InMemorySessionStore(),
 );
 ```
@@ -302,7 +302,7 @@ Future<void> main() async {
     onPersistError: (error, _) => stderr.writeln('session not saved: $error'),
   );
   registerDefaultSessionStore(() => session);
-  final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   // ... sign in ...
 
   // The session is written in the background; wait for it before exit().

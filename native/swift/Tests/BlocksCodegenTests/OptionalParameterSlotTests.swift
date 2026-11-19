@@ -142,7 +142,7 @@ final class OptionalParameterSlotTests: XCTestCase {
             print("\(method) \(sent)")
             return #""ok""#
         }
-        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/aws-blocks/api"))
+        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/cdk-blocks/api"))
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let instant = formatter.date(from: "2026-10-05T12:34:56.789Z")!

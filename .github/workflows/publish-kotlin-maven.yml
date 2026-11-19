@@ -70,7 +70,11 @@ jobs:
           ./gradlew build publishToMavenLocal \
             -PsignAllPublications=false -PRELEASE_SIGNING_ENABLED=false \
             -Dmaven.repo.local="$RUNNER_TEMP/maven-staging"
-          find "$RUNNER_TEMP/maven-staging" -type f -name 'maven-metadata-local*' -delete
+          # Central rejects repository metadata in a bundle. Matches both the
+          # -local name publishToMavenLocal writes and a plain maven-metadata.xml,
+          # which sits inside com/aws/blocks/kotlin/ where the layout check in the
+          # publish job cannot distinguish it from a real artifact.
+          find "$RUNNER_TEMP/maven-staging" -type f -name 'maven-metadata*' -delete
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -153,6 +157,16 @@ jobs:
           printf '%s\n' "$KEY_PASS" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
             --import <(printf '%s\n' "$KEY")
           unset KEY
+
+          # Fingerprints are public. Printing them makes the key that is about to
+          # sign visible in the log, so it can be compared against the published
+          # release key. keyId is masked, so it prints here as ***.
+          gpg --batch --list-secret-keys --with-subkey-fingerprints --keyid-format=long
+
+          # The trailing "!" pins the exact key rather than letting gpg choose a
+          # subkey. gpg fails outright if that key cannot sign, which is the point:
+          # keyId comes from a secret written for a different signing implementation
+          # and is not guaranteed to name a key gpg will use.
           SIGNER=()
           if [ -n "$KEY_ID" ]; then SIGNER=(--local-user "${KEY_ID}!"); fi
 
@@ -162,6 +176,44 @@ jobs:
             printf '%s\n' "$KEY_PASS" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
               "${SIGNER[@]}" --armor --detach-sign --output "$f.asc" "$f"
           done
+
+      # Runs before the bundle is built, so a signing problem fails here rather
+      # than as a Central-side rejection after the upload. The keyring holds only
+      # the key imported above, so this proves every file carries a well-formed
+      # signature from that key -- not that the public key on the keyservers
+      # matches it. Compare the fingerprint printed below against the published
+      # release key.
+      - name: Verify the signatures
+        run: |
+          set -euo pipefail
+          mapfile -d '' FILES < <(find "$STAGING" -type f ! -name '*.asc' -print0)
+          FPRS=()
+          for f in "${FILES[@]}"; do
+            if ! STATUS=$(gpg --batch --status-fd=1 --verify "$f.asc" "$f" 2>&1); then
+              echo "::error::Signature verification failed for ${f#"$STAGING"/}"
+              printf '%s\n' "$STATUS"
+              exit 1
+            fi
+            # VALIDSIG's first field is the fingerprint of the signing key.
+            FPR=$(printf '%s\n' "$STATUS" | awk '/^\[GNUPG:\] VALIDSIG /{print $3; exit}')
+            if [ -z "$FPR" ]; then
+              echo "::error::No VALIDSIG for ${f#"$STAGING"/}"
+              printf '%s\n' "$STATUS"
+              exit 1
+            fi
+            FPRS+=("$FPR")
+          done
+
+          # One key must sign everything. Without keyId gpg falls back to its
+          # default key, so a keyring with more than one secret key could
+          # otherwise sign different files with different keys.
+          UNIQUE=$(printf '%s\n' "${FPRS[@]}" | sort -u)
+          if [ "$(printf '%s\n' "$UNIQUE" | wc -l)" -ne 1 ]; then
+            echo "::error::Files were signed by more than one key:"
+            printf '%s\n' "$UNIQUE"
+            exit 1
+          fi
+          echo "Verified ${#FILES[@]} signatures, all from key $UNIQUE"
 
       - name: Add checksums and build the Central bundle
         run: |

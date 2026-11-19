@@ -63,7 +63,7 @@ export type ComputeApiIngress =
 			/** Subnets for the VPC link's network interfaces (the load balancer's subnets). */
 			readonly subnets: ec2.SubnetSelection;
 			/**
-			 * Route an exact request path (`/aws-blocks/api/{name}`) on the listener to
+			 * Route an exact request path (`/cdk-blocks/api/{name}`) on the listener to
 			 * this compute. Called once per namespace path by the gateway build.
 			 */
 			routePath(path: string): void;
