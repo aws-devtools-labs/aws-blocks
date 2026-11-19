@@ -68,6 +68,26 @@ describe('entry points send their own event', () => {
     assert.deepStrictEqual(events(), [{ command: 'generate:types', state: 'SUCCESS' }]);
   });
 
+  it('runTypegenCli --watch sends generate:types once its signal is aborted', { timeout: 10_000 }, async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    const watching = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    // Abort only once the watcher logs that it watches: it listens for the abort from then on.
+    const log = (message: string) => {
+      if (message.includes('watching')) started();
+    };
+    const run = runTypegenCli(['--watch', '--cwd', dir], { log, error: () => {}, signal: controller.signal });
+    await watching;
+    // hosting logs "watching" just before it starts waiting for the abort; let it get there.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepStrictEqual(events(), []);
+    controller.abort();
+    assert.strictEqual(await run, 0);
+    assert.deepStrictEqual(events(), [{ command: 'generate:types', state: 'SUCCESS' }]);
+  });
+
   it('writeSpec sends generate:spec, with the error passed through', async () => {
     await assert.rejects(writeSpec(join(dir, 'missing', 'cdk-blocks', 'index.js'), join(dir, 'spec.json')));
     assert.deepStrictEqual(events(), [{ command: 'generate:spec', state: 'FAIL' }]);
