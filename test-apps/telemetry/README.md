@@ -35,7 +35,7 @@ in order:
   so no case reaches an account. Each case runs twice: once to check its event
   is delivered, and once against an unreachable endpoint to check that the exit
   code and the recorded outcome do not change.
-- **AWS sandbox lifecycle**: `sandbox`, `sandbox:destroy` and `console`.
+- **AWS sandbox lifecycle**: `sandbox:deploy`, `sandbox:destroy` and `console`.
 - **AWS production lifecycle**: `deploy` and `destroy`.
 
 API Gateway allows one edge-optimized CreateRestApi, and one DeleteRestApi,
@@ -88,7 +88,7 @@ random ID, and asserts it was created correctly.
   where the command needs no AWS and FAIL (usage error or no credentials)
   otherwise.
 - **Per-command success + failure**: SUCCESS + FAIL events for `deploy`,
-  `destroy`, `sandbox`, `sandbox:destroy`, and `dev`; `console` SUCCESS only;
+  `destroy`, `sandbox:deploy`, `sandbox:destroy`, and `dev`; `console` SUCCESS only;
   `create-blocks-app` and `vendorize` document the no-telemetry limitation for
   their failure paths.
 - **Network resilience**: broken endpoint is invisible to users, visible with
