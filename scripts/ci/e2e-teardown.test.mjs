@@ -70,8 +70,8 @@ function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suff
 	const app = join(dir, 'app');
 	mkdirSync(app);
 	if (id !== null) {
-		mkdirSync(join(app, '.blocks-sandbox'));
-		writeFileSync(join(app, '.blocks-sandbox', 'sandbox-id.txt'), `${id}\n`);
+		mkdirSync(join(app, '.cdk-blocks-sandbox'));
+		writeFileSync(join(app, '.cdk-blocks-sandbox', 'sandbox-id.txt'), `${id}\n`);
 	}
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
@@ -611,7 +611,7 @@ describe('pr-checks.yml', () => {
 			const steps = stepsOf(jobs[id]);
 			const [teardown, refresh] = [steps.at(-1), steps.at(-2)];
 			assert.match(teardown, /run: node scripts\/ci\/e2e-teardown\.mjs test-apps\/comprehensive\n/);
-			const guard = "always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''";
+			const guard = "always() && hashFiles('test-apps/comprehensive/.cdk-blocks-sandbox/sandbox-id.txt') != ''";
 			assert.equal(ifOf(teardown), guard);
 			assert.ok(refresh.includes(CREDENTIALS), `${id}: the teardown must follow a credentials step`);
 			const withOf = (step) => step.slice(step.indexOf('        with:\n')).trim();

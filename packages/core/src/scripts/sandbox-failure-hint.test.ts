@@ -42,7 +42,7 @@ describe('sandboxFailureKind', () => {
 		const kind = await sandboxFailureKind({
 			phase: 'synth',
 			lines: [
-				"Another CLI (PID=4179307) is currently synthing to .blocks-sandbox/cdk.out. Invoke the CLI in sequence, or use '--output' to synth into different directories.",
+				"Another CLI (PID=4179307) is currently synthing to .cdk-blocks-sandbox/cdk.out. Invoke the CLI in sequence, or use '--output' to synth into different directories.",
 			],
 			stacks: [],
 			cfnFor: noAws,

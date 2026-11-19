@@ -4,5 +4,5 @@
 import { openConsole } from '@aws-blocks/blocks/scripts';
 
 openConsole({
-  outputsFile: '.blocks-sandbox/outputs.json',
+  outputsFile: '.cdk-blocks-sandbox/outputs.json',
 });

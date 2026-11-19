@@ -281,6 +281,11 @@ class OidcClient implements AuthProvider {
   /// [redirectUri] as the IdP `redirect_uri`. Most IdPs reject a custom-scheme
   /// `redirect_uri`; [signIn] is the flow that works with them.
   ///
+  /// Throws [OidcCancelledException] when the launch ends without a
+  /// redirect: the user closed the browser, the launcher timed out, or
+  /// [cancel] completed first. The client stops waiting as soon as [cancel]
+  /// completes, even if [launcher] doesn't.
+  ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider], or [providerConfigs] has no entry for it.
   ///
@@ -289,6 +294,7 @@ class OidcClient implements AuthProvider {
     String provider, {
     required BrowserLauncher launcher,
     required String redirectUri,
+    Future<void>? cancel,
   }) async {
     await _ready;
     final config = providerConfigs[provider];
@@ -323,9 +329,11 @@ class OidcClient implements AuthProvider {
     final String storedVerifier;
     final String storedNonce;
     try {
-      callbackUri = await launcher.launch(
+      callbackUri = await _launch(
+        launcher,
         authorizeUri,
-        callbackScheme: Uri.parse(redirectUri).scheme,
+        Uri.parse(redirectUri).scheme,
+        cancel,
       );
 
       final returnedState = callbackUri.queryParameters['state'];
@@ -389,9 +397,15 @@ class OidcClient implements AuthProvider {
   /// `http://127.0.0.1:<port>/oidc/callback`, which the backend always
   /// allows, opens the browser with [openBrowser] and waits up to
   /// [signInTimeout]. [relayTo] is not used then. A launcher, when passed,
-  /// always wins. When [cancel] completes first, for example because the user
-  /// closed the sign-in dialog, the listener closes and this throws
-  /// [OidcCancelledException]. [cancel] is not used with a launcher.
+  /// always wins.
+  ///
+  /// When [cancel] completes before the redirect arrives, for example because
+  /// the user closed the sign-in dialog, this throws [OidcCancelledException]:
+  /// the loopback listener closes, or the client stops waiting for the
+  /// launcher, which also gets [cancel]. A launcher that ends without a
+  /// redirect, because the user closed the browser or its own timeout passed,
+  /// throws [OidcCancelledException] too, and so does the loopback sign-in
+  /// once [signInTimeout] passes.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider]. With a [launcher], throws a [StateError] when [relayTo] is
@@ -441,8 +455,29 @@ class OidcClient implements AuthProvider {
     return _signIn(
       provider,
       relay,
-      (url, _) => launcher.launch(url, callbackScheme: Uri.parse(relay).scheme),
+      (url, _) => _launch(launcher, url, Uri.parse(relay).scheme, cancel),
     );
+  }
+
+  /// Runs [launcher] and stops waiting for it with [OidcCancelledException]
+  /// once [cancel] completes, so a launcher that ignores [cancel] can't hold
+  /// the sign-in open.
+  static Future<Uri> _launch(
+    BrowserLauncher launcher,
+    Uri authorizeUrl,
+    String callbackScheme,
+    Future<void>? cancel,
+  ) {
+    final launched = launcher.launch(
+      authorizeUrl,
+      callbackScheme: callbackScheme,
+      cancel: cancel,
+    );
+    if (cancel == null) return launched;
+    return Future.any([
+      launched,
+      cancel.then<Uri>((_) => throw OidcCancelledException()),
+    ]);
   }
 
   /// The relay sign-in after the relay target is known. [launch] opens

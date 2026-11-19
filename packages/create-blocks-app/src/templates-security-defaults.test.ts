@@ -193,7 +193,7 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       assert.match(stdout, /MODIFY {2}\.gitignore .*node_modules if missing, and secret and key-material patterns/);
       const modified = stdout.split('\n').find((line) => line.includes('Modified .gitignore'));
       assert.ok(modified, `no "Modified .gitignore" line in:\n${stdout}`);
-      for (const entry of ['.blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
+      for (const entry of ['.cdk-blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
         assert.ok(modified.includes(entry), `"${modified}" does not list ${entry}`);
       }
       assert.ok(!/[(,] ?\.env[,)]/.test(modified), `"${modified}" lists .env, which the project already ignores`);

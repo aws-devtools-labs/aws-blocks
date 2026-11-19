@@ -73,7 +73,7 @@ import { promisify } from 'node:util';
 import { parse } from 'yaml';
 
 const exec = promisify(execFile);
-const REPO = process.env.GITHUB_REPOSITORY ?? 'aws-devtools-labs/aws-blocks';
+const REPO = process.env.GITHUB_REPOSITORY ?? 'aws/cdk-blocks';
 const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
 const CACHE = join(tmpdir(), 'hosting-teardown-replay');
 

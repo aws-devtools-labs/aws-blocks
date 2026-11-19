@@ -21,7 +21,7 @@ test.beforeAll(async () => {
     // The stack was deployed once for this run by `globalSetup` (test/global-setup.ts);
     // this hook runs per worker, so a retry re-reads the outputs instead of redeploying.
 
-    const outputs = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
+    const outputs = JSON.parse(readFileSync(join(projectRoot, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8'));
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     // CDK appends a hash suffix to output keys — find by prefix
     const hostingKey = Object.keys(stackOutputs).find(k => k.startsWith('HostingHostingUrl'));
@@ -96,7 +96,7 @@ test.describe('Notes Manager — SPA Hosting', () => {
   });
 
   test('2. config.json is served with apiUrl', async ({ request }) => {
-    const resp = await request.get(`${hostingUrl}/.blocks-sandbox/config.json`);
+    const resp = await request.get(`${hostingUrl}/.cdk-blocks-sandbox/config.json`);
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();

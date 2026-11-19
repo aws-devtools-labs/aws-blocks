@@ -1,7 +1,7 @@
 node_modules
 .nuxt
 .output
-.blocks-sandbox
+.cdk-blocks-sandbox
 test-results
 playwright-report
 *.log

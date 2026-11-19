@@ -86,8 +86,8 @@ export class S3WebsiteConstruct extends Construct {
     );
 
     // Publish the built static dir to the bucket ROOT (no build-id prefix).
-    // EXCLUDE `.blocks-sandbox/*`: the build ships a placeholder
-    // `.blocks-sandbox/config.json` (`{_placeholder:true}`), and the REAL config
+    // EXCLUDE `.cdk-blocks-sandbox/*`: the build ships a placeholder
+    // `.cdk-blocks-sandbox/config.json` (`{_placeholder:true}`), and the REAL config
     // (with the absolute cross-origin `apiUrl` this door needs) is written to the
     // same key by the separate `BlocksConfigDeployment`. Uploading the placeholder
     // here races/clobbers that real config, leaving the SPA with no `apiUrl` (it
@@ -108,7 +108,7 @@ export class S3WebsiteConstruct extends Construct {
     };
     new BucketDeployment(this, 'WebsiteDeployment', {
       ...base,
-      exclude: ['.blocks-sandbox/*', ...html, ...immutable],
+      exclude: ['.cdk-blocks-sandbox/*', ...html, ...immutable],
       cacheControl: [CacheControl.fromString(props.cacheControl ?? 'public, max-age=0, must-revalidate')],
     });
     new BucketDeployment(this, 'WebsiteHtmlDeployment', {

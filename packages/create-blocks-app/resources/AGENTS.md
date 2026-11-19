@@ -105,7 +105,7 @@ When the app is complete, a signed-out user reaches the sign-in form from the fi
 
 ### The deployed frontend finds the backend on its own
 
-You do **not** wire an API URL into the frontend. The imported client resolves the API endpoint itself at runtime: locally, the dev server serves the backend and its config together (`npm run dev` in a fresh app, or `npm run dev:server` when Blocks was added to an existing project; it exposes `/.blocks-sandbox/config.json`); once deployed, the client reads the config served from the hosting origin, where the frontend and API sit same-origin. So build against the imported client and let the framework resolve the URL — don't hardcode one or curl-hunt for the API base.
+You do **not** wire an API URL into the frontend. The imported client resolves the API endpoint itself at runtime: locally, the dev server serves the backend and its config together (`npm run dev` in a fresh app, or `npm run dev:server` when Blocks was added to an existing project; it exposes `/.cdk-blocks-sandbox/config.json`); once deployed, the client reads the config served from the hosting origin, where the frontend and API sit same-origin. So build against the imported client and let the framework resolve the URL — don't hardcode one or curl-hunt for the API base.
 
 ### Minimal end-to-end example
 
@@ -250,7 +250,7 @@ Before deploying, both commands print `Deployment target: <credentials>, Region 
 
 In text mode, look for `BLOCKS_DEPLOYED url=<frontend> api=<backend>` in `deploy.log` (a backend-only app omits `url=`). Wait for the process to exit successfully. For automation, use `npm run -s deploy > deploy.json` instead: stdout contains the structured result, including the URLs, and progress stays on stderr.
 
-`npm run sandbox:deploy` prints `BLOCKS_DEPLOYED api=<backend>` too. The typed client (`aws-blocks/client.js`) is generated before the deploy and `.blocks-sandbox/config.sandbox.json` is written before the line, so once you see it the sandbox is ready. A deploy never changes where `npm run dev`, `npm run test:e2e` or your local scripts point: it records its URL in `.blocks-sandbox/config.sandbox.json` (`config.production.json` for `npm run deploy`), and only the dev server writes `.blocks-sandbox/config.json`. To get the API URL alone in a script, run `npm run -s sandbox:deploy -- --query apiUrl`.
+`npm run sandbox:deploy` prints `BLOCKS_DEPLOYED api=<backend>` too. The typed client (`aws-blocks/client.js`) is generated before the deploy and `.cdk-blocks-sandbox/config.sandbox.json` is written before the line, so once you see it the sandbox is ready. A deploy never changes where `npm run dev`, `npm run test:e2e` or your local scripts point: it records its URL in `.cdk-blocks-sandbox/config.sandbox.json` (`config.production.json` for `npm run deploy`), and only the dev server writes `.cdk-blocks-sandbox/config.json`. To get the API URL alone in a script, run `npm run -s sandbox:deploy -- --query apiUrl`.
 
 If you will immediately self-test the frontend, add `npm run deploy -- --wait-live`: it holds the `BLOCKS_DEPLOYED` line until the new build is actually being served through CloudFront, so a request issued right after the signal returns the new asset rather than a stale cached bundle. Without it, the signal fires as soon as the deploy process exits, which can be a few seconds before the edge finishes serving the new build. Tune the budget with `--wait-live-timeout=<seconds>` (default 180); if it can't confirm within the budget it says so and exits non-zero instead of printing the signal.
 

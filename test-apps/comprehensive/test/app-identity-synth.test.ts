@@ -145,11 +145,6 @@ describe('defaults.appIdentity: every Building Block stays inside the app', () =
     'AWS::EC2::SecurityGroup': 'Tags',
     'AWS::DSQL::Cluster': 'Tags',
   };
-  /** Known gaps, each with its issue. */
-  const UNTAGGED_KNOWN: Record<string, string> = {
-    // DistributedDatabase creates the cluster as a raw CfnResource, which Tags.of() doesn't reach.
-    'AWS::DSQL::Cluster': 'https://github.com/aws-devtools-labs/aws-blocks/issues/1467',
-  };
 
   test('every tag-scoped resource in every template carries app=<id>', () => {
     const appTag = (tags: unknown): unknown =>
@@ -163,13 +158,14 @@ describe('defaults.appIdentity: every Building Block stays inside the app', () =
     for (const { file, template } of templates()) {
       for (const [id, r] of Object.entries(template.Resources ?? {})) {
         const key = TAG_SCOPED[r.Type];
-        if (!key || r.Type in UNTAGGED_KNOWN) continue;
+        if (!key) continue;
         checked.push(r.Type);
         const tag = appTag((r.Properties as Record<string, unknown> | undefined)?.[key]);
         if (tag !== APP_ID) missing.push(`${file}: ${id} (${r.Type}) → ${JSON.stringify(tag ?? 'NONE')}`);
       }
     }
     assert.ok(checked.length >= 5, `expected the app's tag-scoped resources, found only ${checked.length}: ${checked}`);
+    assert.ok(checked.includes('AWS::DSQL::Cluster'), 'expected the Database block\'s DSQL cluster among them');
     assert.deepStrictEqual(missing, [], `tag-scoped resources without app=${APP_ID}:\n  ${missing.join('\n  ')}`);
   });
 
