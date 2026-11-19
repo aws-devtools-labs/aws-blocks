@@ -117,6 +117,10 @@ export type ComputeConstructProps = {
  * - **http-server**: Lambda + Web Adapter layer. Runs an HTTP server process inside Lambda.
  *   Used for frameworks that produce HTTP servers (SvelteKit, Astro, custom servers).
  * - **edge**: Lambda@Edge (placeholder — deployed via CloudFront).
+ *   A replaced version is retained, not deleted (Lambda can't delete it while
+ *   CloudFront holds its replicas). Retained versions count toward the
+ *   `us-east-1` Lambda code storage quota; prune them once their replicas are
+ *   gone with `aws lambda delete-function --qualifier <version>`.
  */
 export class ComputeConstruct extends Construct {
   readonly function: LambdaFunction | experimental.EdgeFunction;
@@ -318,8 +322,11 @@ export class ComputeConstruct extends Construct {
           // after a deploy moves the distribution to the new one, and Lambda
           // refuses to delete a version that has replicas: the delete fails,
           // CloudFormation retries it for minutes and then skips it with a
-          // "clean them up manually" warning. Retained versions don't run,
-          // and cost nothing.
+          // "clean them up manually" warning. Retained versions don't run and
+          // have no invocation charge, but their code still counts toward the
+          // shared us-east-1 Lambda code storage quota, so operators need to
+          // prune them once their replicas are gone (see the README's
+          // Next.js section for the commands).
           currentVersionOptions: { removalPolicy: RemovalPolicy.RETAIN },
           ...(props.edgeStackId ? { stackId: props.edgeStackId } : {}),
         },

@@ -629,10 +629,35 @@ const blocksStack = await BlocksStack.create(app, stackName, {
   removes the old version's replicas only hours after the distribution stops
   using it, and Lambda can't delete a version until then, so Hosting retains
   replaced versions instead of having the deploy wait on a delete that fails.
-  A retained version doesn't run and costs nothing. To remove old versions
-  later, delete them in the Lambda console or with
-  `aws lambda delete-function --function-name <name> --qualifier <version>`
-  in `us-east-1`.
+  A retained version doesn't run and has no invocation charge, but its code
+  still counts toward the
+  [Lambda code storage quota](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html#compute-and-storage)
+  of `us-east-1`, which every function in that account and Region shares.
+  Each `next build` changes the edge bundle, so every deploy adds a version;
+  left unpruned, they can fill the quota and stop any function in the Region
+  from publishing new code. Prune versions the distribution no longer uses.
+  CloudFormation no longer tracks a retained version, so deleting one doesn't
+  affect the stack. Find the edge function, list its versions, then delete the
+  old ones:
+
+  ```sh
+  # The stack that holds the edge function: for an app outside us-east-1, the
+  # us-east-1 support stack (edge-lambda-stack-<hash>, or <app id>-edge);
+  # otherwise the app's own stack.
+  aws cloudformation describe-stack-resources --region us-east-1 \
+  	--stack-name <stack-name> \
+  	--query "StackResources[?ResourceType=='AWS::Lambda::Function' && contains(LogicalResourceId, 'EdgeFunction')].PhysicalResourceId"
+  aws lambda list-versions-by-function --region us-east-1 \
+  	--function-name <function-name> \
+  	--query 'Versions[].[Version,LastModified,CodeSize]' --output table
+  aws lambda delete-function --region us-east-1 \
+  	--function-name <function-name> --qualifier <version>
+  ```
+
+  Keep the version the distribution runs (the highest number after a
+  successful deploy). A version can only be deleted once CloudFront has
+  removed its replicas: until then Lambda rejects the delete, so wait a few
+  hours after the deploy that replaced it and try again.
 
 ## SSR compute: Lambda or Lambda Web Functions
 
