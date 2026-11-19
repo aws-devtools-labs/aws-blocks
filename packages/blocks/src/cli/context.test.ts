@@ -591,7 +591,7 @@ setInterval(() => {}, 1000);
 			assert.strictEqual(await isListening(port), false, context);
 			assert.strictEqual(await isListening(frontendPort), false, context);
 			// The dev server's pidfile hand-off watcher removes its record just after `tsx watch` exits.
-			const pidfile = join(root, '.blocks-sandbox', `dev-server.${port}.pid`);
+			const pidfile = join(root, '.cdk-blocks-sandbox', `dev-server.${port}.pid`);
 			for (const deadline = Date.now() + 2000; existsSync(pidfile) && Date.now() < deadline; ) await sleep(25);
 			assert.strictEqual(existsSync(pidfile), false, `the pidfile outlived the session${context}`);
 		} finally {
@@ -844,7 +844,7 @@ setInterval(() => {}, 1000);
 			assert.strictEqual(await isListening(port), false, dev.output());
 			assert.strictEqual(isGroupRunning(dev.cli.pid ?? 0), false, dev.output());
 			assert.strictEqual(
-				existsSync(join(root, '.blocks-sandbox', `dev-server.${port}.pid`)),
+				existsSync(join(root, '.cdk-blocks-sandbox', `dev-server.${port}.pid`)),
 				false,
 				dev.output(),
 			);

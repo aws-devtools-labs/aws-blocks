@@ -66,7 +66,11 @@ class HttpRelayLauncher implements BrowserLauncher {
       uri.toString().split(RegExp('[?#]')).first;
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     var current = authorizeUrl;
     for (var hop = 0; hop < 10; hop++) {
       final req = http.Request('GET', current)..followRedirects = false;

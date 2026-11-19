@@ -1511,7 +1511,11 @@ class _StateDroppingLauncher implements BrowserLauncher {
   final TokenStore _store;
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     await _store.delete('oidc_state');
     return Uri.parse('$callbackScheme://auth?code=c');
   }
@@ -1520,7 +1524,11 @@ class _StateDroppingLauncher implements BrowserLauncher {
 /// Returns an IdP error redirect that carries the issued state.
 class _ErrorLauncher implements BrowserLauncher {
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     final state = Uri.encodeComponent(authorizeUrl.queryParameters['state']!);
     return Uri.parse('$callbackScheme://auth?error=access_denied&state=$state');
   }
@@ -1529,8 +1537,11 @@ class _ErrorLauncher implements BrowserLauncher {
 /// Fails as a launcher does when no browser could be opened.
 class _ThrowingLauncher implements BrowserLauncher {
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) =>
-      throw StateError('no browser');
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) => throw StateError('no browser');
 }
 
 /// Returns a callback with a state this sign-in didn't issue.
@@ -1539,5 +1550,6 @@ class _ForgedStateLauncher implements BrowserLauncher {
   Future<Uri> launch(
     Uri authorizeUrl, {
     required String callbackScheme,
+    Future<void>? cancel,
   }) async => Uri.parse('$callbackScheme://auth?code=c&state=forged');
 }

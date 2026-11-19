@@ -86,6 +86,26 @@ describe('Database (CDK)', () => {
 		Template.fromStack(other.stack).hasResource('AWS::DSQL::Cluster', { DeletionPolicy: 'Delete' });
 	});
 
+	test('the DSQL cluster carries Tags.of() tags, including the app tag, under its existing logical id', () => {
+		const { stack } = setup();
+		// A fixed scope id: the logical id comes from the construct path.
+		const parent = new Scope('ledger');
+		new Database(parent, 'db');
+		cdk.Tags.of(stack).add('app', 'ledger', { priority: 1000 });
+		cdk.Tags.of(parent).add('cost-center', 'payments');
+		const clusters = Template.fromStack(stack).findResources('AWS::DSQL::Cluster');
+		// The logical id the cluster had as a raw CfnResource: a changed id would replace the cluster.
+		assert.deepStrictEqual(Object.keys(clusters), ['ledgerdbDsqlClusterB0EDBE16']);
+		const [cluster] = Object.values(clusters);
+		assert.deepStrictEqual(cluster.Properties, {
+			DeletionProtectionEnabled: false,
+			Tags: [
+				{ Key: 'app', Value: 'ledger' },
+				{ Key: 'cost-center', Value: 'payments' },
+			],
+		});
+	});
+
 	test('the app role gets dsql:DbConnect; the migration Lambdas get dsql:DbConnectAdmin', () => {
 		const { stack, parent } = setup();
 		new Database(parent, 'db');

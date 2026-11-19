@@ -7,7 +7,7 @@ const config = ref<unknown>(null);
 
 onMounted(async () => {
   try {
-    const r = await fetch('/.blocks-sandbox/config.json');
+    const r = await fetch('/.cdk-blocks-sandbox/config.json');
     config.value = await r.json();
   } catch {
     config.value = { error: 'config.json not reachable' };

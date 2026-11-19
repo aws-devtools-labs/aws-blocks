@@ -140,6 +140,17 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   exists there. It used to be a compile error.
 - A class that implements `OidcClient` and overrides `signIn` with a
   required `launcher` no longer compiles.
+- `BrowserLauncher.launch` takes a `Future<void>? cancel` named parameter, so
+  a custom launcher must add it to its `launch` override. It is the `cancel`
+  future the app passed to `OidcClient.signIn` or `OidcClient.signInDirect`, or
+  null. A launcher throws `OidcCancelledException` when the launch ends
+  without a redirect: the user closed the browser, its own timeout passed, or
+  `cancel` completed.
+- `OidcClient.signIn` now uses `cancel` with a launcher too: the client stops
+  waiting and throws `OidcCancelledException` once it completes, even when
+  the launcher keeps waiting. It used to apply only to the loopback sign-in.
+  `OidcClient.signInDirect` and `TypedOidcClient.signInDirect` take a `cancel`
+  parameter that works the same way.
 - A realtime subscription never ends silently. Its stream closes normally
   only when the app cancels it or calls `RealtimeChannel.close()`; every other
   end emits one `RealtimeException`, then closes the stream:

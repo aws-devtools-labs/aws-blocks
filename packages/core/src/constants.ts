@@ -86,7 +86,7 @@ export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
  * on a project-root file. Keeping this symmetric with production is what makes
  * the browser client work the same in `dev`, `sandbox`, and deployed.
  */
-export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';
+export const BLOCKS_SANDBOX_PREFIX = '/.cdk-blocks-sandbox';
 
 /**
  * Header name carrying the native-client token on the RPC hop. A custom header,

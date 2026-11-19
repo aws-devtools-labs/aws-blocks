@@ -14,6 +14,7 @@ import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
+import { migrateLegacySandboxDir } from './migrate-sandbox-dir.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE, corsRejection } from '../cors.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
@@ -318,7 +319,7 @@ export function buildBlocksConfig(port: number, isSandbox: boolean, host = '127.
  * {@link buildBlocksConfig}, except that a server bound to all interfaces (`0.0.0.0`, `::`)
  * serves the same-origin `apiUrl` `/aws-blocks/api`. A browser can load the app at any of
  * the machine's addresses, and the absolute `http://localhost:<port>` would send it to
- * another origin, or to another machine. The `.blocks-sandbox/config.json` file keeps the
+ * another origin, or to another machine. The `.cdk-blocks-sandbox/config.json` file keeps the
  * absolute URL: Node.js reads it, and a relative URL has no origin there.
  */
 export function buildServedBlocksConfig(port: number, isSandbox: boolean, host = '127.0.0.1'): BlocksRuntimeConfig {
@@ -1073,6 +1074,7 @@ export async function startDevServer(options: DevServerOptions) {
   if (sessionPid !== undefined) selfRecord.session = { pid: sessionPid };
   const underTsxWatch = process.ppid > 1 && runsUnderTsxWatch(process.env, selfRecord.parentCommand ?? '');
   delete process.env[DEV_UNDER_WATCH_ENV]; // not the frontend's to inherit
+  migrateLegacySandboxDir(process.cwd());
   mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
   const claim = claimDevPidfile(pidfilePath, selfRecord, {}, sessionPid);
   if (!claim.acquired) {

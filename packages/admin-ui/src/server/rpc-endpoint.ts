@@ -32,10 +32,10 @@ import type { DeployStage } from './stage-outputs.js';
  *   `resolveLocalPort` (which reads `startDevServer({ port })` out of the app's own
  *   server script and falls back to 3000).
  * - Cloud: the deployed stack's `ApiUrl` output, which already includes the RPC
- *   prefix. `.blocks-sandbox/config.<stage>.json`'s `apiUrl` is the same value
+ *   prefix. `.cdk-blocks-sandbox/config.<stage>.json`'s `apiUrl` is the same value
  *   written locally when that stage was deployed and is used ONLY as a fallback:
  *   that file can be stale from a previous deploy, while the stack output is what
- *   is deployed now. `.blocks-sandbox/config.json` is never read here: only a dev
+ *   is deployed now. `.cdk-blocks-sandbox/config.json` is never read here: only a dev
  *   server writes it, with its own local URL.
  *
  * Resolution answers "where would the call go", not "is anything listening".
@@ -62,8 +62,8 @@ const API_URL_OUTPUT_KEY = 'ApiUrl';
  * {@link asDeployStage}): the stage in a request never becomes part of a path.
  */
 const DEPLOYED_CONFIG_FILE: Readonly<Record<DeployStage, string>> = Object.freeze({
-	sandbox: '.blocks-sandbox/config.sandbox.json',
-	production: '.blocks-sandbox/config.production.json',
+	sandbox: '.cdk-blocks-sandbox/config.sandbox.json',
+	production: '.cdk-blocks-sandbox/config.production.json',
 });
 
 /** `stage` as one of the two stages that have a stack, or undefined for any other value. */
@@ -165,7 +165,7 @@ function explainMissingStack(stage: string): string {
 		return 'no stack id is recorded in .blocks/config.json and package.json names none either. Deploy production once, or switch to local mode.';
 	}
 	if (stage === 'sandbox') {
-		return 'no .blocks-sandbox/sandbox-id.txt (or no stack id at all) — that file is written the first time a sandbox is deployed. Run a sandbox deploy, or switch to local mode.';
+		return 'no .cdk-blocks-sandbox/sandbox-id.txt (or no stack id at all) — that file is written the first time a sandbox is deployed. Run a sandbox deploy, or switch to local mode.';
 	}
 	return 'only "sandbox" and "production" have stacks. Pass one of those, or use local mode.';
 }

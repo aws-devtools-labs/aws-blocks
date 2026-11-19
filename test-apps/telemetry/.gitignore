@@ -1,4 +1,4 @@
-.blocks-sandbox/
+.cdk-blocks-sandbox/
 cdk.out/
 node_modules/
 dist/

@@ -764,7 +764,7 @@ function resultField(call: RpcCall, field: string): unknown {
 // outputs to its own document (core's `OUTPUTS_FILE.production`); the pre-refactor revision's
 // core predates the per-stage split and writes the shared `outputs.json`. Step 1 deploys the
 // old revision and step 4 the new one, so read whichever document the deploying core wrote.
-const OUTPUTS_DOCS = [join('.blocks-sandbox', 'outputs.production.json'), join('.blocks-sandbox', 'outputs.json')];
+const OUTPUTS_DOCS = [join('.cdk-blocks-sandbox', 'outputs.production.json'), join('.cdk-blocks-sandbox', 'outputs.json')];
 
 function readApiUrl(appDir: string, stackName: string): string {
 	const doc = OUTPUTS_DOCS.find((d) => existsSync(join(appDir, d)));

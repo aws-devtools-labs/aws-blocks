@@ -44,7 +44,7 @@ const ALLOWLIST = [
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
 	{ at: 'packages/core/src/hosting.ts:1221', reason: `Hosting buildCommand. ${APP_COMMAND}` },
-	{ at: 'packages/core/src/scripts/dev-server.ts:1276', reason: `Frontend dev command. ${APP_COMMAND}` },
+	{ at: 'packages/core/src/scripts/dev-server.ts:1278', reason: `Frontend dev command. ${APP_COMMAND}` },
 	{
 		at: 'packages/core/src/scripts/run-command.ts:89',
 		reason: `spawnShellCommand, whose only caller is the sandbox dev-server command. ${APP_COMMAND}`,

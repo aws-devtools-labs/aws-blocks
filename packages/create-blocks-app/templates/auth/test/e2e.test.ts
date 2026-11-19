@@ -20,7 +20,7 @@ let hello: typeof helloType;
 let authApi: typeof authApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
-const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
 
 // The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
 // API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The

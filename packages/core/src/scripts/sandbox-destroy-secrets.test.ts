@@ -28,8 +28,8 @@ describe('sandbox destroy deletes the sandbox SSM secrets', () => {
 		root = await mkdtemp(join(tmpdir(), 'blocks-destroy-secrets-'));
 		mkdirSync(join(root, '.blocks'));
 		writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'zz-app' }));
-		mkdirSync(join(root, '.blocks-sandbox'));
-		writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'dev-abc123\n');
+		mkdirSync(join(root, '.cdk-blocks-sandbox'));
+		writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'dev-abc123\n');
 		// Keep the destroy's progress off stdout: in a `node --test` child, stdout carries the runner's
 		// serialized messages, and these lines sometimes broke them ("Unable to deserialize cloned data").
 		mock.method(console, 'log', () => {});

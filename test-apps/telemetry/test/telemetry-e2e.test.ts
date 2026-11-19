@@ -307,7 +307,7 @@ function assertNotDelivered(stderr: string): void {
  * other groups do.
  *
  * - `root` is a copy of the app. The CLI keeps its state under the project
- *   root (`cdk.out`, `.blocks-sandbox/` with the cdk assembly, outputs.json
+ *   root (`cdk.out`, `.cdk-blocks-sandbox/` with the cdk assembly, outputs.json
  *   and the sandbox id, the generated `aws-blocks/client.js`, the project
  *   config), and two cdk processes in one `cdk.out` fail on its lock.
  * - `home` is its own HOME, seeded with the pinned installation-id. The local
@@ -336,7 +336,7 @@ const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'aw
  */
 const APP_EXCLUDED = [
   'test', 'README.md', '.gitignore', 'node_modules', 'dist',
-  'cdk.out', 'cdk.context.json', '.blocks-sandbox', '.bb-data', '.e2e-groups',
+  'cdk.out', 'cdk.context.json', '.cdk-blocks-sandbox', '.bb-data', '.e2e-groups',
   '.DS_Store', '.idea', '.vscode',
 ];
 
@@ -437,7 +437,7 @@ const sandboxGroup = cloudGroup('sandbox');
 const productionGroup = cloudGroup('production');
 
 function writeSandboxId(projectRoot: string, sandboxId: string): void {
-  const dir = join(projectRoot, '.blocks-sandbox');
+  const dir = join(projectRoot, '.cdk-blocks-sandbox');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'sandbox-id.txt'), sandboxId);
 }

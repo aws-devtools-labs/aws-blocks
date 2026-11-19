@@ -38,7 +38,7 @@ the longer one, takes the first deploy slot.
 Each AWS group runs its commands in its own copy of the app under
 `.e2e-groups/<group>/app` (git-ignored, removed at the end) with its own HOME.
 The copy keeps the CLI state that lives in the project root apart: `cdk.out`
-(two cdk processes on one `cdk.out` collide on its lock), `.blocks-sandbox/`
+(two cdk processes on one `cdk.out` collide on its lock), `.cdk-blocks-sandbox/`
 and the generated client. The HOME keeps the local group's global-config
 cases from disabling telemetry for a cloud command; it is seeded with the
 pinned installation-id and links to the real `~/.aws`, `~/.npm`, `~/.npmrc`
