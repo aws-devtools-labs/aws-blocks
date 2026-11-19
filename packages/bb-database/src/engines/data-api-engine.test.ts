@@ -113,6 +113,26 @@ describe('Data API engine: parameters and values', () => {
 });
 
 describe('Data API engine: statements', () => {
+	test('binds positional parameters without rewriting unquoted identifiers containing dollar signs', async () => {
+		const { engine, calls } = stubClient();
+		const alias = '\u00e9$2';
+		await engine.query(`SELECT CAST($1 AS integer) AS value$1, CAST($2 AS integer) AS ${alias}`, [7, 8]);
+		assert.strictEqual(
+			calls[0].input.sql,
+			`SELECT CAST(:p1 AS integer) AS value$1, CAST(:p2 AS integer) AS ${alias}`,
+		);
+		assert.deepStrictEqual(calls[0].input.parameters, [
+			{ name: 'p1', value: { longValue: 7 } },
+			{ name: 'p2', value: { longValue: 8 } },
+		]);
+	});
+
+	test('binds parameters after an unquoted identifier ending in a dollar-quote tag', async () => {
+		const { engine, calls } = stubClient();
+		await engine.query('SELECT 1 AS value$tag$, CAST($1 AS integer) AS bound', [7]);
+		assert.strictEqual(calls[0].input.sql, 'SELECT 1 AS value$tag$, CAST(:p1 AS integer) AS bound');
+	});
+
 	test('a query sends one statement with the coordinates and returns rows keyed by column name', async () => {
 		const { engine, calls } = stubClient([
 			{

@@ -80,12 +80,14 @@ function endOfNonCode(sql: string, i: number): number | undefined {
 	return undefined;
 }
 
+// PostgreSQL accepts non-ASCII bytes in identifiers and `$` after the first character.
+const UNQUOTED_IDENTIFIER = /[A-Za-z_\u0080-\uffff][A-Za-z_0-9$\u0080-\uffff]*/y;
 const PLACEHOLDER = /\$([1-9]\d*)/y;
 
 /**
  * `$1`, `$2`, … become the named parameters `:p1`, `:p2`, … of the Data API. A placeholder is the longest run of
  * digits after `$` that is the number of a parameter: `$10` is `:p10` with ten parameters, and `:p1` followed by
- * `0` with three. Text in a string, a quoted identifier, a comment or a dollar-quoted body stays as it is, as it
+ * `0` with three. Text in a string, an identifier, a comment or a dollar-quoted body stays as it is, as it
  * does on a PostgreSQL connection.
  */
 export function namedParameters(sql: string, params?: unknown[]): { sql: string; parameters: SqlParameter[] } {
@@ -97,6 +99,11 @@ export function namedParameters(sql: string, params?: unknown[]): { sql: string;
 		const end = endOfNonCode(sql, i);
 		if (end !== undefined) {
 			i = end;
+			continue;
+		}
+		UNQUOTED_IDENTIFIER.lastIndex = i;
+		if (UNQUOTED_IDENTIFIER.test(sql)) {
+			i = UNQUOTED_IDENTIFIER.lastIndex;
 			continue;
 		}
 		PLACEHOLDER.lastIndex = i;
