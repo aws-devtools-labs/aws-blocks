@@ -440,6 +440,52 @@ test('CDK: explicit-origin CORS with a mutating method is allowed', () => {
   );
 });
 
+test('CDK: CORS origins are written in lower case, as browsers send them', () => {
+  // An Application Load Balancer's DNS name keeps the capitals of its generated
+  // name (`http://my-app-Hosti-AbCdEf-123.us-west-2.elb.amazonaws.com`), and so
+  // does the `HostingUrl` output of the ALB door. A browser lower-cases the host
+  // in its `Origin` header, and S3 compares `AllowedOrigin` case-sensitively, so
+  // an origin copied from `HostingUrl` would never match.
+  const { parent, stack } = setup();
+  new FileBucket(parent, 'uploads', {
+    corsRules: [
+      {
+        allowedOrigins: ['http://my-App-Hosti-AbCdEf12GhIj-1234567890.us-west-2.elb.amazonaws.com', 'HTTPS://*.Example.com'],
+        allowedMethods: ['GET', 'PUT'],
+      },
+    ],
+  });
+  Template.fromStack(stack).hasResourceProperties('AWS::S3::Bucket', {
+    CorsConfiguration: {
+      CorsRules: [
+        Match.objectLike({
+          AllowedOrigins: [
+            'http://my-app-hosti-abcdef12ghij-1234567890.us-west-2.elb.amazonaws.com',
+            'https://*.example.com',
+          ],
+        }),
+      ],
+    },
+  });
+});
+
+test('CDK: a CORS origin that is a token is passed through unchanged', () => {
+  const { parent, stack } = setup();
+  const origin = cdk.Token.asString({ 'Fn::GetAtt': ['Alb', 'DNSName'] });
+  new FileBucket(parent, 'uploads', {
+    corsRules: [{ allowedOrigins: [`http://${origin}`], allowedMethods: ['GET'] }],
+  });
+  Template.fromStack(stack).hasResourceProperties('AWS::S3::Bucket', {
+    CorsConfiguration: {
+      CorsRules: [
+        Match.objectLike({
+          AllowedOrigins: [{ 'Fn::Join': ['', ['http://', { 'Fn::GetAtt': ['Alb', 'DNSName'] }]] }],
+        }),
+      ],
+    },
+  });
+});
+
 // ── Encryption at rest ──────────────────────────────────────────────────────
 
 const KEY_ARN = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234';

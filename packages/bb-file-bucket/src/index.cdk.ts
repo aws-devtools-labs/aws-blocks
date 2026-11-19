@@ -4,7 +4,7 @@
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
-import { Annotations, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Token } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope, synthGuard } from '@aws-cdk-blocks/core/cdk';
 import { resolveKmsEncryption } from '@aws-cdk-blocks/core/cdk/internal';
@@ -238,7 +238,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			serverAccessLogsBucket,
 			serverAccessLogsPrefix: serverAccessLogsBucket ? 'access-logs/' : undefined,
 			cors: options?.corsRules?.map((rule: CorsRule) => ({
-				allowedOrigins: rule.allowedOrigins,
+				allowedOrigins: rule.allowedOrigins.map(s3CorsOrigin),
 				allowedMethods: rule.allowedMethods.map(m => httpMethodMap[m]),
 				allowedHeaders: rule.allowedHeaders,
 				exposedHeaders: rule.exposedHeaders,
@@ -264,4 +264,17 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	scan(..._args: unknown[]): never { return synthGuard('FileBucket', 'scan'); }
 	listVersions(..._args: unknown[]): never { return synthGuard('FileBucket', 'listVersions'); }
 	restoreVersion(..._args: unknown[]): never { return synthGuard('FileBucket', 'restoreVersion'); }
+}
+
+/**
+ * A CORS origin as S3 compares it: in lower case. A browser's `Origin` header
+ * carries the scheme and host in lower case, and S3 matches `AllowedOrigin`
+ * case-sensitively, so an origin with capitals never matches. An Application
+ * Load Balancer's DNS name keeps the capitals of its generated name, and so
+ * does the `HostingUrl` of the ALB door, which the README tells you to copy
+ * here. An origin that is an unresolved token (`hosting.url`) is kept as is:
+ * CloudFormation can't change its case.
+ */
+function s3CorsOrigin(origin: string): string {
+	return Token.isUnresolved(origin) ? origin : origin.toLowerCase();
 }
