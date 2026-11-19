@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -24,7 +34,8 @@ class ApiSetScoreInput {
     if (!(score >= 0)) throw ArgumentError('score must be >= 0');
     if (!(score <= 100)) throw ArgumentError('score must be <= 100');
     if (!(level > 0)) throw ArgumentError('level must be > 0');
-    if (!(step % 0.5 == 0)) throw ArgumentError('step must be a multiple of 0.5');
+    if (!(step % 0.5 == 0))
+      throw ArgumentError('step must be a multiple of 0.5');
   }
 
   factory ApiSetScoreInput.fromJson(Map<String, dynamic> json) {
@@ -36,11 +47,7 @@ class ApiSetScoreInput {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'score': score,
-      'level': level,
-      'step': step,
-    };
+    return {'score': score, 'level': level, 'step': step};
   }
 
   @override
@@ -55,34 +62,26 @@ class ApiSetScoreInput {
   int get hashCode => Object.hash(score, level, step);
 
   @override
-  String toString() => 'ApiSetScoreInput(score: $score, level: $level, step: $step)';
+  String toString() =>
+      'ApiSetScoreInput(score: $score, level: $level, step: $step)';
 }
-
 
 class SetScoreResult {
   final bool ok;
 
-  const SetScoreResult({
-    required this.ok,
-  });
+  const SetScoreResult({required this.ok});
 
   factory SetScoreResult.fromJson(Map<String, dynamic> json) {
-    return SetScoreResult(
-      ok: json['ok'] as bool,
-    );
+    return SetScoreResult(ok: json['ok'] as bool);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'ok': ok,
-    };
+    return {'ok': ok};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SetScoreResult &&
-          ok == other.ok;
+      identical(this, other) || other is SetScoreResult && ok == other.ok;
 
   @override
   int get hashCode => ok.hashCode;
@@ -91,20 +90,16 @@ class SetScoreResult {
   String toString() => 'SetScoreResult(ok: $ok)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<SetScoreResult> setScore({required ApiSetScoreInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('api.setScore', params);
     return SetScoreResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -123,4 +118,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

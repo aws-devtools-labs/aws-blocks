@@ -6,7 +6,9 @@ import 'dart:convert';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // An `oidc/client` whose `x-blocks-type-args[0]` is a string enum names the
 // providers its client signs in with. A direct or optional result generates

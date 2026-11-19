@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,8 +6,28 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
-export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, RealtimeSubscriptionEndedException, TransferableException, InvalidDescriptorException;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        RealtimeChannel,
+        FileDownloadHandle,
+        FileUploadHandle,
+        FileTransferException,
+        RealtimeException,
+        RealtimeChannelClosedException,
+        RealtimeConnectionException,
+        RealtimeSubscriptionEndedException,
+        TransferableException,
+        InvalidDescriptorException;
 
 // --- Models ---
 
@@ -14,16 +35,17 @@ sealed class TaskLabels {
   static const red = TaskLabelsKnown.red;
   static const green = TaskLabelsKnown.green;
   static const values = TaskLabelsKnown.values;
-  static final Map<String, TaskLabelsKnown> _byJson = TaskLabelsKnown.values.asNameMap();
+  static final Map<String, TaskLabelsKnown> _byJson = TaskLabelsKnown.values
+      .asNameMap();
 
   String toJson();
-  static TaskLabels fromJson(String json) => _byJson[json] ?? TaskLabelsUnknown(json);
+  static TaskLabels fromJson(String json) =>
+      _byJson[json] ?? TaskLabelsUnknown(json);
 }
 
 enum TaskLabelsKnown implements TaskLabels {
   red,
-  green
-;
+  green;
 
   @override
   String toJson() => name;
@@ -45,24 +67,26 @@ final class TaskLabelsUnknown implements TaskLabels {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'TaskLabelsUnknown' '($value)';
+  String toString() =>
+      'TaskLabelsUnknown'
+      '($value)';
 }
-
 
 sealed class TaskPriority {
   static const low = TaskPriorityKnown.low;
   static const high = TaskPriorityKnown.high;
   static const values = TaskPriorityKnown.values;
-  static final Map<String, TaskPriorityKnown> _byJson = TaskPriorityKnown.values.asNameMap();
+  static final Map<String, TaskPriorityKnown> _byJson = TaskPriorityKnown.values
+      .asNameMap();
 
   String toJson();
-  static TaskPriority fromJson(String json) => _byJson[json] ?? TaskPriorityUnknown(json);
+  static TaskPriority fromJson(String json) =>
+      _byJson[json] ?? TaskPriorityUnknown(json);
 }
 
 enum TaskPriorityKnown implements TaskPriority {
   low,
-  high
-;
+  high;
 
   @override
   String toJson() => name;
@@ -84,24 +108,26 @@ final class TaskPriorityUnknown implements TaskPriority {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'TaskPriorityUnknown' '($value)';
+  String toString() =>
+      'TaskPriorityUnknown'
+      '($value)';
 }
-
 
 sealed class TaskSource {
   static const web = TaskSourceKnown.web;
   static const unknown = TaskSourceKnown.unknown;
   static const values = TaskSourceKnown.values;
-  static final Map<String, TaskSourceKnown> _byJson = TaskSourceKnown.values.asNameMap();
+  static final Map<String, TaskSourceKnown> _byJson = TaskSourceKnown.values
+      .asNameMap();
 
   String toJson();
-  static TaskSource fromJson(String json) => _byJson[json] ?? TaskSourceUnknown(json);
+  static TaskSource fromJson(String json) =>
+      _byJson[json] ?? TaskSourceUnknown(json);
 }
 
 enum TaskSourceKnown implements TaskSource {
   web,
-  unknown
-;
+  unknown;
 
   @override
   String toJson() => name;
@@ -123,24 +149,26 @@ final class TaskSourceUnknown implements TaskSource {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'TaskSourceUnknown' '($value)';
+  String toString() =>
+      'TaskSourceUnknown'
+      '($value)';
 }
-
 
 sealed class TaskPhase {
   static const companion = TaskPhaseKnown.companion;
   static const other = TaskPhaseKnown.other;
   static const values = TaskPhaseKnown.values;
-  static final Map<String, TaskPhaseKnown> _byJson = TaskPhaseKnown.values.asNameMap();
+  static final Map<String, TaskPhaseKnown> _byJson = TaskPhaseKnown.values
+      .asNameMap();
 
   String toJson();
-  static TaskPhase fromJson(String json) => _byJson[json] ?? TaskPhaseUnknown(json);
+  static TaskPhase fromJson(String json) =>
+      _byJson[json] ?? TaskPhaseUnknown(json);
 }
 
 enum TaskPhaseKnown implements TaskPhase {
   companion,
-  other
-;
+  other;
 
   @override
   String toJson() => name;
@@ -162,24 +190,26 @@ final class TaskPhaseUnknown implements TaskPhase {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'TaskPhaseUnknown' '($value)';
+  String toString() =>
+      'TaskPhaseUnknown'
+      '($value)';
 }
-
 
 sealed class NodeKind {
   static const leaf = NodeKindKnown.leaf;
   static const branch = NodeKindKnown.branch;
   static const values = NodeKindKnown.values;
-  static final Map<String, NodeKindKnown> _byJson = NodeKindKnown.values.asNameMap();
+  static final Map<String, NodeKindKnown> _byJson = NodeKindKnown.values
+      .asNameMap();
 
   String toJson();
-  static NodeKind fromJson(String json) => _byJson[json] ?? NodeKindUnknown(json);
+  static NodeKind fromJson(String json) =>
+      _byJson[json] ?? NodeKindUnknown(json);
 }
 
 enum NodeKindKnown implements NodeKind {
   leaf,
-  branch
-;
+  branch;
 
   @override
   String toJson() => name;
@@ -201,9 +231,10 @@ final class NodeKindUnknown implements NodeKind {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'NodeKindUnknown' '($value)';
+  String toString() =>
+      'NodeKindUnknown'
+      '($value)';
 }
-
 
 sealed class Kind {
   static const kind = KindKnown.kind;
@@ -217,8 +248,7 @@ sealed class Kind {
 
 enum KindKnown implements Kind {
   kind,
-  other
-;
+  other;
 
   @override
   String toJson() => name;
@@ -240,9 +270,10 @@ final class KindUnknown implements Kind {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'KindUnknown' '($value)';
+  String toString() =>
+      'KindUnknown'
+      '($value)';
 }
-
 
 sealed class LabelsSpelling {
   static const unknown = LabelsSpellingKnown.unknown;
@@ -250,13 +281,13 @@ sealed class LabelsSpelling {
   static const values = LabelsSpellingKnown.values;
 
   String toJson();
-  static LabelsSpelling fromJson(String json) => LabelsSpellingKnown._jsonMap[json] ?? LabelsSpellingUnknown(json);
+  static LabelsSpelling fromJson(String json) =>
+      LabelsSpellingKnown._jsonMap[json] ?? LabelsSpellingUnknown(json);
 }
 
 enum LabelsSpellingKnown implements LabelsSpelling {
   unknown,
-  unKnown
-;
+  unKnown;
 
   static const _jsonMap = <String, LabelsSpellingKnown>{
     'unknown': unknown,
@@ -286,9 +317,10 @@ final class LabelsSpellingUnknown implements LabelsSpelling {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'LabelsSpellingUnknown' '($value)';
+  String toString() =>
+      'LabelsSpellingUnknown'
+      '($value)';
 }
-
 
 sealed class LabelsCase {
   static const fooBar$ = LabelsCaseKnown.fooBar$;
@@ -299,7 +331,8 @@ sealed class LabelsCase {
   static const values = LabelsCaseKnown.values;
 
   String toJson();
-  static LabelsCase fromJson(String json) => LabelsCaseKnown._jsonMap[json] ?? LabelsCaseUnknown(json);
+  static LabelsCase fromJson(String json) =>
+      LabelsCaseKnown._jsonMap[json] ?? LabelsCaseUnknown(json);
 }
 
 enum LabelsCaseKnown implements LabelsCase {
@@ -307,8 +340,7 @@ enum LabelsCaseKnown implements LabelsCase {
   foo_bar,
   fooBar,
   FOO_BAR,
-  fooBar$$
-;
+  fooBar$$;
 
   static const _jsonMap = <String, LabelsCaseKnown>{
     'foo-bar': fooBar$,
@@ -344,26 +376,29 @@ final class LabelsCaseUnknown implements LabelsCase {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'LabelsCaseUnknown' '($value)';
+  String toString() =>
+      'LabelsCaseUnknown'
+      '($value)';
 }
-
 
 sealed class LabelsFallback {
   static const unknown = LabelsFallbackKnown.unknown;
   static const unknownValue = LabelsFallbackKnown.unknownValue;
   static const UnknownValue = LabelsFallbackKnown.UnknownValue;
   static const values = LabelsFallbackKnown.values;
-  static final Map<String, LabelsFallbackKnown> _byJson = LabelsFallbackKnown.values.asNameMap();
+  static final Map<String, LabelsFallbackKnown> _byJson = LabelsFallbackKnown
+      .values
+      .asNameMap();
 
   String toJson();
-  static LabelsFallback fromJson(String json) => _byJson[json] ?? LabelsFallbackUnknown(json);
+  static LabelsFallback fromJson(String json) =>
+      _byJson[json] ?? LabelsFallbackUnknown(json);
 }
 
 enum LabelsFallbackKnown implements LabelsFallback {
   unknown,
   unknownValue,
-  UnknownValue
-;
+  UnknownValue;
 
   @override
   String toJson() => name;
@@ -385,24 +420,26 @@ final class LabelsFallbackUnknown implements LabelsFallback {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'LabelsFallbackUnknown' '($value)';
+  String toString() =>
+      'LabelsFallbackUnknown'
+      '($value)';
 }
-
 
 sealed class LabelsMaybe {
   static const yes = LabelsMaybeKnown.yes;
   static const no = LabelsMaybeKnown.no;
   static const values = LabelsMaybeKnown.values;
-  static final Map<String, LabelsMaybeKnown> _byJson = LabelsMaybeKnown.values.asNameMap();
+  static final Map<String, LabelsMaybeKnown> _byJson = LabelsMaybeKnown.values
+      .asNameMap();
 
   String toJson();
-  static LabelsMaybe fromJson(String json) => _byJson[json] ?? LabelsMaybeUnknown(json);
+  static LabelsMaybe fromJson(String json) =>
+      _byJson[json] ?? LabelsMaybeUnknown(json);
 }
 
 enum LabelsMaybeKnown implements LabelsMaybe {
   yes,
-  no
-;
+  no;
 
   @override
   String toJson() => name;
@@ -424,43 +461,39 @@ final class LabelsMaybeUnknown implements LabelsMaybe {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'LabelsMaybeUnknown' '($value)';
+  String toString() =>
+      'LabelsMaybeUnknown'
+      '($value)';
 }
-
 
 enum PendingState {
   idle,
-  loading
-;
+  loading;
 
   String toJson() => name;
   static PendingState fromJson(String json) => values.byName(json);
 }
 
-
 enum PendingSteps {
   fetch,
-  parse
-;
+  parse;
 
   String toJson() => name;
   static PendingSteps fromJson(String json) => values.byName(json);
 }
 
-
 class Pending {
   final PendingState state;
   final List<PendingSteps>? steps;
 
-  const Pending({
-    required this.state,
-    this.steps,
-  });
+  const Pending({required this.state, this.steps});
 
   factory Pending.fromJson(Map<String, dynamic> json) {
     return Pending(
       state: PendingState.fromJson(json['state'] as String),
-      steps: (json['steps'] as List<dynamic>?)?.map((e) => PendingSteps.fromJson(e as String)).toList(),
+      steps: (json['steps'] as List<dynamic>?)
+          ?.map((e) => PendingSteps.fromJson(e as String))
+          .toList(),
     );
   }
 
@@ -485,24 +518,18 @@ class Pending {
   String toString() => 'Pending(state: $state, steps: $steps)';
 }
 
-
 enum FailedState {
-  error
-;
+  error;
 
   String toJson() => name;
   static FailedState fromJson(String json) => values.byName(json);
 }
 
-
 class Failed {
   final FailedState state;
   final String message;
 
-  const Failed({
-    required this.state,
-    required this.message,
-  });
+  const Failed({required this.state, required this.message});
 
   factory Failed.fromJson(Map<String, dynamic> json) {
     return Failed(
@@ -512,18 +539,13 @@ class Failed {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'state': state.toJson(),
-      'message': message,
-    };
+    return {'state': state.toJson(), 'message': message};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is Failed &&
-          state == other.state &&
-          message == other.message;
+      other is Failed && state == other.state && message == other.message;
 
   @override
   int get hashCode => Object.hash(state, message);
@@ -532,15 +554,17 @@ class Failed {
   String toString() => 'Failed(state: $state, message: $message)';
 }
 
-
 sealed class ConfirmAuthStepChallenge {
   const ConfirmAuthStepChallenge();
   Map<String, dynamic> toJson();
   static ConfirmAuthStepChallenge fromJson(Map<String, dynamic> json) {
     switch (json['challenge'] as String) {
-      case 'sms': return SmsConfirmAuthStepChallenge.fromJson(json);
-      case 'totp': return TotpConfirmAuthStepChallenge.fromJson(json);
-      default: throw ArgumentError('Unknown challenge: ${json['challenge']}');
+      case 'sms':
+        return SmsConfirmAuthStepChallenge.fromJson(json);
+      case 'totp':
+        return TotpConfirmAuthStepChallenge.fromJson(json);
+      default:
+        throw ArgumentError('Unknown challenge: ${json['challenge']}');
     }
   }
 }
@@ -548,29 +572,21 @@ sealed class ConfirmAuthStepChallenge {
 class SmsConfirmAuthStepChallenge extends ConfirmAuthStepChallenge {
   final String code;
 
-  const SmsConfirmAuthStepChallenge({
-    required this.code,
-  });
+  const SmsConfirmAuthStepChallenge({required this.code});
 
   factory SmsConfirmAuthStepChallenge.fromJson(Map<String, dynamic> json) {
-    return SmsConfirmAuthStepChallenge(
-      code: json['code'] as String,
-    );
+    return SmsConfirmAuthStepChallenge(code: json['code'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'sms',
-      'code': code,
-    };
+    return {'challenge': 'sms', 'code': code};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is SmsConfirmAuthStepChallenge &&
-          code == other.code;
+      other is SmsConfirmAuthStepChallenge && code == other.code;
 
   @override
   int get hashCode => code.hashCode;
@@ -582,29 +598,21 @@ class SmsConfirmAuthStepChallenge extends ConfirmAuthStepChallenge {
 class TotpConfirmAuthStepChallenge extends ConfirmAuthStepChallenge {
   final String otp;
 
-  const TotpConfirmAuthStepChallenge({
-    required this.otp,
-  });
+  const TotpConfirmAuthStepChallenge({required this.otp});
 
   factory TotpConfirmAuthStepChallenge.fromJson(Map<String, dynamic> json) {
-    return TotpConfirmAuthStepChallenge(
-      otp: json['otp'] as String,
-    );
+    return TotpConfirmAuthStepChallenge(otp: json['otp'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'totp',
-      'otp': otp,
-    };
+    return {'challenge': 'totp', 'otp': otp};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is TotpConfirmAuthStepChallenge &&
-          otp == other.otp;
+      other is TotpConfirmAuthStepChallenge && otp == other.otp;
 
   @override
   int get hashCode => otp.hashCode;
@@ -613,28 +621,29 @@ class TotpConfirmAuthStepChallenge extends ConfirmAuthStepChallenge {
   String toString() => 'TotpConfirmAuthStepChallenge(otp: $otp)';
 }
 
-
-
 sealed class FlaggedGetEventResultSeverity {
   static const low = FlaggedGetEventResultSeverityKnown.low;
   static const high = FlaggedGetEventResultSeverityKnown.high;
   static const values = FlaggedGetEventResultSeverityKnown.values;
-  static final Map<String, FlaggedGetEventResultSeverityKnown> _byJson = FlaggedGetEventResultSeverityKnown.values.asNameMap();
+  static final Map<String, FlaggedGetEventResultSeverityKnown> _byJson =
+      FlaggedGetEventResultSeverityKnown.values.asNameMap();
 
   String toJson();
-  static FlaggedGetEventResultSeverity fromJson(String json) => _byJson[json] ?? FlaggedGetEventResultSeverityUnknown(json);
+  static FlaggedGetEventResultSeverity fromJson(String json) =>
+      _byJson[json] ?? FlaggedGetEventResultSeverityUnknown(json);
 }
 
-enum FlaggedGetEventResultSeverityKnown implements FlaggedGetEventResultSeverity {
+enum FlaggedGetEventResultSeverityKnown
+    implements FlaggedGetEventResultSeverity {
   low,
-  high
-;
+  high;
 
   @override
   String toJson() => name;
 }
 
-final class FlaggedGetEventResultSeverityUnknown implements FlaggedGetEventResultSeverity {
+final class FlaggedGetEventResultSeverityUnknown
+    implements FlaggedGetEventResultSeverity {
   final String value;
 
   const FlaggedGetEventResultSeverityUnknown(this.value);
@@ -650,30 +659,34 @@ final class FlaggedGetEventResultSeverityUnknown implements FlaggedGetEventResul
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'FlaggedGetEventResultSeverityUnknown' '($value)';
+  String toString() =>
+      'FlaggedGetEventResultSeverityUnknown'
+      '($value)';
 }
-
 
 sealed class WatchTasksResultMessageChange {
   static const created = WatchTasksResultMessageChangeKnown.created;
   static const deleted = WatchTasksResultMessageChangeKnown.deleted;
   static const values = WatchTasksResultMessageChangeKnown.values;
-  static final Map<String, WatchTasksResultMessageChangeKnown> _byJson = WatchTasksResultMessageChangeKnown.values.asNameMap();
+  static final Map<String, WatchTasksResultMessageChangeKnown> _byJson =
+      WatchTasksResultMessageChangeKnown.values.asNameMap();
 
   String toJson();
-  static WatchTasksResultMessageChange fromJson(String json) => _byJson[json] ?? WatchTasksResultMessageChangeUnknown(json);
+  static WatchTasksResultMessageChange fromJson(String json) =>
+      _byJson[json] ?? WatchTasksResultMessageChangeUnknown(json);
 }
 
-enum WatchTasksResultMessageChangeKnown implements WatchTasksResultMessageChange {
+enum WatchTasksResultMessageChangeKnown
+    implements WatchTasksResultMessageChange {
   created,
-  deleted
-;
+  deleted;
 
   @override
   String toJson() => name;
 }
 
-final class WatchTasksResultMessageChangeUnknown implements WatchTasksResultMessageChange {
+final class WatchTasksResultMessageChangeUnknown
+    implements WatchTasksResultMessageChange {
   final String value;
 
   const WatchTasksResultMessageChangeUnknown(this.value);
@@ -689,18 +702,16 @@ final class WatchTasksResultMessageChangeUnknown implements WatchTasksResultMess
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'WatchTasksResultMessageChangeUnknown' '($value)';
+  String toString() =>
+      'WatchTasksResultMessageChangeUnknown'
+      '($value)';
 }
-
 
 class WatchTasksResultMessage {
   final String taskId;
   final WatchTasksResultMessageChange change;
 
-  const WatchTasksResultMessage({
-    required this.taskId,
-    required this.change,
-  });
+  const WatchTasksResultMessage({required this.taskId, required this.change});
 
   factory WatchTasksResultMessage.fromJson(Map<String, dynamic> json) {
     return WatchTasksResultMessage(
@@ -710,10 +721,7 @@ class WatchTasksResultMessage {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'taskId': taskId,
-      'change': change.toJson(),
-    };
+    return {'taskId': taskId, 'change': change.toJson()};
   }
 
   @override
@@ -727,24 +735,25 @@ class WatchTasksResultMessage {
   int get hashCode => Object.hash(taskId, change);
 
   @override
-  String toString() => 'WatchTasksResultMessage(taskId: $taskId, change: $change)';
+  String toString() =>
+      'WatchTasksResultMessage(taskId: $taskId, change: $change)';
 }
-
 
 sealed class GetSettingsResultMode {
   static const light = GetSettingsResultModeKnown.light;
   static const dark = GetSettingsResultModeKnown.dark;
   static const values = GetSettingsResultModeKnown.values;
-  static final Map<String, GetSettingsResultModeKnown> _byJson = GetSettingsResultModeKnown.values.asNameMap();
+  static final Map<String, GetSettingsResultModeKnown> _byJson =
+      GetSettingsResultModeKnown.values.asNameMap();
 
   String toJson();
-  static GetSettingsResultMode fromJson(String json) => _byJson[json] ?? GetSettingsResultModeUnknown(json);
+  static GetSettingsResultMode fromJson(String json) =>
+      _byJson[json] ?? GetSettingsResultModeUnknown(json);
 }
 
 enum GetSettingsResultModeKnown implements GetSettingsResultMode {
   light,
-  dark
-;
+  dark;
 
   @override
   String toJson() => name;
@@ -766,9 +775,10 @@ final class GetSettingsResultModeUnknown implements GetSettingsResultMode {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'GetSettingsResultModeUnknown' '($value)';
+  String toString() =>
+      'GetSettingsResultModeUnknown'
+      '($value)';
 }
-
 
 Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
     Map<String, dynamic>.unmodifiable(<String, dynamic>{
@@ -792,14 +802,14 @@ sealed class Status {
   static const values = StatusKnown.values;
 
   String toJson();
-  static Status fromJson(String json) => StatusKnown._jsonMap[json] ?? StatusUnknown(json);
+  static Status fromJson(String json) =>
+      StatusKnown._jsonMap[json] ?? StatusUnknown(json);
 }
 
 enum StatusKnown implements Status {
   todo,
   inProgress,
-  done
-;
+  done;
 
   static const _jsonMap = <String, StatusKnown>{
     'todo': todo,
@@ -831,9 +841,10 @@ final class StatusUnknown implements Status {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'StatusUnknown' '($value)';
+  String toString() =>
+      'StatusUnknown'
+      '($value)';
 }
-
 
 class Task {
   final String id;
@@ -858,11 +869,21 @@ class Task {
     return Task(
       id: json['id'] as String,
       status: Status.fromJson(json['status'] as String),
-      history: (json['history'] as List<dynamic>).map((e) => Status.fromJson(e as String)).toList(),
-      labels: (json['labels'] as Map<String, dynamic>).map((k, v) => MapEntry(k, TaskLabels.fromJson(v as String))),
-      priority: json['priority'] != null ? TaskPriority.fromJson(json['priority'] as String) : null,
-      source: json['source'] != null ? TaskSource.fromJson(json['source'] as String) : null,
-      phase: json['phase'] != null ? TaskPhase.fromJson(json['phase'] as String) : null,
+      history: (json['history'] as List<dynamic>)
+          .map((e) => Status.fromJson(e as String))
+          .toList(),
+      labels: (json['labels'] as Map<String, dynamic>).map(
+        (k, v) => MapEntry(k, TaskLabels.fromJson(v as String)),
+      ),
+      priority: json['priority'] != null
+          ? TaskPriority.fromJson(json['priority'] as String)
+          : null,
+      source: json['source'] != null
+          ? TaskSource.fromJson(json['source'] as String)
+          : null,
+      phase: json['phase'] != null
+          ? TaskPhase.fromJson(json['phase'] as String)
+          : null,
     );
   }
 
@@ -891,12 +912,20 @@ class Task {
           phase == other.phase;
 
   @override
-  int get hashCode => Object.hash(id, status, blocksDeepHash(history), blocksDeepHash(labels), priority, source, phase);
+  int get hashCode => Object.hash(
+    id,
+    status,
+    blocksDeepHash(history),
+    blocksDeepHash(labels),
+    priority,
+    source,
+    phase,
+  );
 
   @override
-  String toString() => 'Task(id: $id, status: $status, history: $history, labels: $labels, priority: $priority, source: $source, phase: $phase)';
+  String toString() =>
+      'Task(id: $id, status: $status, history: $history, labels: $labels, priority: $priority, source: $source, phase: $phase)';
 }
-
 
 sealed class Color {
   static const red = ColorKnown.red;
@@ -910,8 +939,7 @@ sealed class Color {
 
 enum ColorKnown implements Color {
   red,
-  blue
-;
+  blue;
 
   @override
   String toJson() => name;
@@ -933,9 +961,10 @@ final class ColorUnknown implements Color {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'ColorUnknown' '($value)';
+  String toString() =>
+      'ColorUnknown'
+      '($value)';
 }
-
 
 sealed class Size {
   static const small = SizeKnown.small;
@@ -949,8 +978,7 @@ sealed class Size {
 
 enum SizeKnown implements Size {
   small,
-  large
-;
+  large;
 
   @override
   String toJson() => name;
@@ -972,33 +1000,31 @@ final class SizeUnknown implements Size {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'SizeUnknown' '($value)';
+  String toString() =>
+      'SizeUnknown'
+      '($value)';
 }
-
 
 enum Mode {
   auto,
-  manual
-;
+  manual;
 
   String toJson() => name;
   static Mode fromJson(String json) => values.byName(json);
 }
 
-
 class Node {
   final NodeKind kind;
   final List<Node> children;
 
-  const Node({
-    required this.kind,
-    required this.children,
-  });
+  const Node({required this.kind, required this.children});
 
   factory Node.fromJson(Map<String, dynamic> json) {
     return Node(
       kind: NodeKind.fromJson(json['kind'] as String),
-      children: (json['children'] as List<dynamic>).map((e) => Node.fromJson(e as Map<String, dynamic>)).toList(),
+      children: (json['children'] as List<dynamic>)
+          .map((e) => Node.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 
@@ -1023,7 +1049,6 @@ class Node {
   String toString() => 'Node(kind: $kind, children: $children)';
 }
 
-
 class Labels {
   final Kind kind;
   final LabelsSpelling spelling;
@@ -1045,7 +1070,9 @@ class Labels {
       spelling: LabelsSpelling.fromJson(json['spelling'] as String),
       case$: LabelsCase.fromJson(json['case'] as String),
       fallback: LabelsFallback.fromJson(json['fallback'] as String),
-      maybe: json['maybe'] != null ? LabelsMaybe.fromJson(json['maybe'] as String) : null,
+      maybe: json['maybe'] != null
+          ? LabelsMaybe.fromJson(json['maybe'] as String)
+          : null,
     );
   }
 
@@ -1073,42 +1100,40 @@ class Labels {
   int get hashCode => Object.hash(kind, spelling, case$, fallback, maybe);
 
   @override
-  String toString() => 'Labels(kind: $kind, spelling: $spelling, case\$: ${case$}, fallback: $fallback, maybe: $maybe)';
+  String toString() =>
+      'Labels(kind: $kind, spelling: $spelling, case\$: ${case$}, fallback: $fallback, maybe: $maybe)';
 }
-
 
 sealed class AuthStep {
   const AuthStep();
   Map<String, dynamic> toJson();
   static AuthStep fromJson(Map<String, dynamic> json) {
     switch (json['step'] as String) {
-      case 'done': return DoneAuthStep.fromJson(json);
-      case 'confirm': return ConfirmAuthStep.fromJson(json);
-      default: return AuthStepUnknown(_blocksFrozenObject(json));
+      case 'done':
+        return DoneAuthStep.fromJson(json);
+      case 'confirm':
+        return ConfirmAuthStep.fromJson(json);
+      default:
+        return AuthStepUnknown(_blocksFrozenObject(json));
     }
   }
 }
 
 class DoneAuthStep extends AuthStep {
-
   const DoneAuthStep();
 
   factory DoneAuthStep.fromJson(Map<String, dynamic> json) {
-    return DoneAuthStep(
-    );
+    return DoneAuthStep();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'step': 'done',
-    };
+    return {'step': 'done'};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is DoneAuthStep;
+      identical(this, other) || other is DoneAuthStep;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -1117,16 +1142,11 @@ class DoneAuthStep extends AuthStep {
   String toString() => 'DoneAuthStep()';
 }
 
-
-
 class ConfirmAuthStep extends AuthStep {
   final String session;
   final ConfirmAuthStepChallenge challenge;
 
-  const ConfirmAuthStep({
-    required this.session,
-    required this.challenge,
-  });
+  const ConfirmAuthStep({required this.session, required this.challenge});
 
   factory ConfirmAuthStep.fromJson(Map<String, dynamic> json) {
     return ConfirmAuthStep(
@@ -1137,11 +1157,7 @@ class ConfirmAuthStep extends AuthStep {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'step': 'confirm',
-      'session': session,
-      ...challenge.toJson(),
-    };
+    return {'step': 'confirm', 'session': session, ...challenge.toJson()};
   }
 
   @override
@@ -1155,7 +1171,8 @@ class ConfirmAuthStep extends AuthStep {
   int get hashCode => Object.hash(session, challenge);
 
   @override
-  String toString() => 'ConfirmAuthStep(session: $session, challenge: $challenge)';
+  String toString() =>
+      'ConfirmAuthStep(session: $session, challenge: $challenge)';
 }
 
 final class AuthStepUnknown extends AuthStep {
@@ -1176,45 +1193,35 @@ final class AuthStepUnknown extends AuthStep {
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'AuthStepUnknown' '($json)';
+  String toString() =>
+      'AuthStepUnknown'
+      '($json)';
 }
-
-
 
 enum ApiUpdateTaskSort {
   newest,
-  oldest
-;
+  oldest;
 
   String toJson() => name;
   static ApiUpdateTaskSort fromJson(String json) => values.byName(json);
 }
 
-
 class UpdateTaskResult {
   final bool ok;
 
-  const UpdateTaskResult({
-    required this.ok,
-  });
+  const UpdateTaskResult({required this.ok});
 
   factory UpdateTaskResult.fromJson(Map<String, dynamic> json) {
-    return UpdateTaskResult(
-      ok: json['ok'] as bool,
-    );
+    return UpdateTaskResult(ok: json['ok'] as bool);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'ok': ok,
-    };
+    return {'ok': ok};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is UpdateTaskResult &&
-          ok == other.ok;
+      identical(this, other) || other is UpdateTaskResult && ok == other.ok;
 
   @override
   int get hashCode => ok.hashCode;
@@ -1223,16 +1230,19 @@ class UpdateTaskResult {
   String toString() => 'UpdateTaskResult(ok: $ok)';
 }
 
-
 sealed class GetEventResult {
   const GetEventResult();
   Map<String, dynamic> toJson();
   static GetEventResult fromJson(Map<String, dynamic> json) {
     switch (json['kind'] as String) {
-      case 'moved': return MovedGetEventResult.fromJson(json);
-      case 'flagged': return FlaggedGetEventResult.fromJson(json);
-      case 'unknown': return UnknownGetEventResult.fromJson(json);
-      default: return GetEventResultUnknown(_blocksFrozenObject(json));
+      case 'moved':
+        return MovedGetEventResult.fromJson(json);
+      case 'flagged':
+        return FlaggedGetEventResult.fromJson(json);
+      case 'unknown':
+        return UnknownGetEventResult.fromJson(json);
+      default:
+        return GetEventResultUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -1240,29 +1250,20 @@ sealed class GetEventResult {
 class MovedGetEventResult extends GetEventResult {
   final Status to;
 
-  const MovedGetEventResult({
-    required this.to,
-  });
+  const MovedGetEventResult({required this.to});
 
   factory MovedGetEventResult.fromJson(Map<String, dynamic> json) {
-    return MovedGetEventResult(
-      to: Status.fromJson(json['to'] as String),
-    );
+    return MovedGetEventResult(to: Status.fromJson(json['to'] as String));
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'kind': 'moved',
-      'to': to.toJson(),
-    };
+    return {'kind': 'moved', 'to': to.toJson()};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is MovedGetEventResult &&
-          to == other.to;
+      identical(this, other) || other is MovedGetEventResult && to == other.to;
 
   @override
   int get hashCode => to.hashCode;
@@ -1274,29 +1275,25 @@ class MovedGetEventResult extends GetEventResult {
 class FlaggedGetEventResult extends GetEventResult {
   final FlaggedGetEventResultSeverity severity;
 
-  const FlaggedGetEventResult({
-    required this.severity,
-  });
+  const FlaggedGetEventResult({required this.severity});
 
   factory FlaggedGetEventResult.fromJson(Map<String, dynamic> json) {
     return FlaggedGetEventResult(
-      severity: FlaggedGetEventResultSeverity.fromJson(json['severity'] as String),
+      severity: FlaggedGetEventResultSeverity.fromJson(
+        json['severity'] as String,
+      ),
     );
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'kind': 'flagged',
-      'severity': severity.toJson(),
-    };
+    return {'kind': 'flagged', 'severity': severity.toJson()};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is FlaggedGetEventResult &&
-          severity == other.severity;
+      other is FlaggedGetEventResult && severity == other.severity;
 
   @override
   int get hashCode => severity.hashCode;
@@ -1308,29 +1305,21 @@ class FlaggedGetEventResult extends GetEventResult {
 class UnknownGetEventResult extends GetEventResult {
   final String note;
 
-  const UnknownGetEventResult({
-    required this.note,
-  });
+  const UnknownGetEventResult({required this.note});
 
   factory UnknownGetEventResult.fromJson(Map<String, dynamic> json) {
-    return UnknownGetEventResult(
-      note: json['note'] as String,
-    );
+    return UnknownGetEventResult(note: json['note'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'kind': 'unknown',
-      'note': note,
-    };
+    return {'kind': 'unknown', 'note': note};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is UnknownGetEventResult &&
-          note == other.note;
+      other is UnknownGetEventResult && note == other.note;
 
   @override
   int get hashCode => note.hashCode;
@@ -1357,17 +1346,15 @@ final class GetEventResultUnknown extends GetEventResult {
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'GetEventResultUnknown' '($json)';
+  String toString() =>
+      'GetEventResultUnknown'
+      '($json)';
 }
-
-
 
 class GetSettingsResult {
   final GetSettingsResultMode mode;
 
-  const GetSettingsResult({
-    required this.mode,
-  });
+  const GetSettingsResult({required this.mode});
 
   factory GetSettingsResult.fromJson(Map<String, dynamic> json) {
     return GetSettingsResult(
@@ -1376,16 +1363,13 @@ class GetSettingsResult {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'mode': mode.toJson(),
-    };
+    return {'mode': mode.toJson()};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GetSettingsResult &&
-          mode == other.mode;
+      other is GetSettingsResult && mode == other.mode;
 
   @override
   int get hashCode => mode.hashCode;
@@ -1394,21 +1378,22 @@ class GetSettingsResult {
   String toString() => 'GetSettingsResult(mode: $mode)';
 }
 
-
 sealed class GetRangeResult {
   static const up = GetRangeResultKnown.up;
   static const down = GetRangeResultKnown.down;
   static const values = GetRangeResultKnown.values;
-  static final Map<String, GetRangeResultKnown> _byJson = GetRangeResultKnown.values.asNameMap();
+  static final Map<String, GetRangeResultKnown> _byJson = GetRangeResultKnown
+      .values
+      .asNameMap();
 
   String toJson();
-  static GetRangeResult fromJson(String json) => _byJson[json] ?? GetRangeResultUnknown(json);
+  static GetRangeResult fromJson(String json) =>
+      _byJson[json] ?? GetRangeResultUnknown(json);
 }
 
 enum GetRangeResultKnown implements GetRangeResult {
   up,
-  down
-;
+  down;
 
   @override
   String toJson() => name;
@@ -1430,18 +1415,22 @@ final class GetRangeResultUnknown implements GetRangeResult {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'GetRangeResultUnknown' '($value)';
+  String toString() =>
+      'GetRangeResultUnknown'
+      '($value)';
 }
-
 
 sealed class GetSignalResult {
   const GetSignalResult();
   Map<String, dynamic> toJson();
   static GetSignalResult fromJson(Map<String, dynamic> json) {
     switch (json['kind'] as String) {
-      case 'un-known': return UnKnownGetSignalResult.fromJson(json);
-      case 'on': return OnGetSignalResult.fromJson(json);
-      default: return GetSignalResultUnknown(_blocksFrozenObject(json));
+      case 'un-known':
+        return UnKnownGetSignalResult.fromJson(json);
+      case 'on':
+        return OnGetSignalResult.fromJson(json);
+      default:
+        return GetSignalResultUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -1449,29 +1438,21 @@ sealed class GetSignalResult {
 class UnKnownGetSignalResult extends GetSignalResult {
   final String note;
 
-  const UnKnownGetSignalResult({
-    required this.note,
-  });
+  const UnKnownGetSignalResult({required this.note});
 
   factory UnKnownGetSignalResult.fromJson(Map<String, dynamic> json) {
-    return UnKnownGetSignalResult(
-      note: json['note'] as String,
-    );
+    return UnKnownGetSignalResult(note: json['note'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'kind': 'un-known',
-      'note': note,
-    };
+    return {'kind': 'un-known', 'note': note};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is UnKnownGetSignalResult &&
-          note == other.note;
+      other is UnKnownGetSignalResult && note == other.note;
 
   @override
   int get hashCode => note.hashCode;
@@ -1481,25 +1462,20 @@ class UnKnownGetSignalResult extends GetSignalResult {
 }
 
 class OnGetSignalResult extends GetSignalResult {
-
   const OnGetSignalResult();
 
   factory OnGetSignalResult.fromJson(Map<String, dynamic> json) {
-    return OnGetSignalResult(
-    );
+    return OnGetSignalResult();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'kind': 'on',
-    };
+    return {'kind': 'on'};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is OnGetSignalResult;
+      identical(this, other) || other is OnGetSignalResult;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -1526,24 +1502,26 @@ final class GetSignalResultUnknown extends GetSignalResult {
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'GetSignalResultUnknown' '($json)';
+  String toString() =>
+      'GetSignalResultUnknown'
+      '($json)';
 }
-
-
 
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<Task> getTask({required String id}) async {
-    final params = <dynamic>[
-      id,
-    ];
+    final params = <dynamic>[id];
     final result = await _client.call('api.getTask', params);
     return Task.fromJson(result as Map<String, dynamic>);
   }
 
-  Future<UpdateTaskResult> updateTask({required String id, required Status status, ApiUpdateTaskSort? sort}) async {
+  Future<UpdateTaskResult> updateTask({
+    required String id,
+    required Status status,
+    ApiUpdateTaskSort? sort,
+  }) async {
     final params = <dynamic>[
       id,
       status.toJson(),
@@ -1560,7 +1538,10 @@ class Api {
 
   Future<RealtimeChannel<WatchTasksResultMessage>> watchTasks() async {
     final result = await _client.call('api.watchTasks', const <dynamic>[]);
-    return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => WatchTasksResultMessage.fromJson(json));
+    return RealtimeChannel.fromJson(
+      result as Map<String, dynamic>,
+      (json) => WatchTasksResultMessage.fromJson(json),
+    );
   }
 
   Future<Color> getColor() async {
@@ -1574,9 +1555,7 @@ class Api {
   }
 
   Future<bool> setMode({required Mode mode}) async {
-    final params = <dynamic>[
-      mode.toJson(),
-    ];
+    final params = <dynamic>[mode.toJson()];
     final result = await _client.call('api.setMode', params);
     return result as bool;
   }
@@ -1593,7 +1572,10 @@ class Api {
 
   Future<(Size, GetRangeResult)> getRange() async {
     final result = await _client.call('api.getRange', const <dynamic>[]);
-    return (Size.fromJson((result as List<dynamic>)[0] as String), GetRangeResult.fromJson((result as List<dynamic>)[1] as String));
+    return (
+      Size.fromJson((result as List<dynamic>)[0] as String),
+      GetRangeResult.fromJson((result as List<dynamic>)[1] as String),
+    );
   }
 
   Future<Labels> getLabels() async {
@@ -1617,7 +1599,6 @@ class Api {
   }
 }
 
-
 // --- Blocks Client ---
 
 class Blocks {
@@ -1635,4 +1616,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

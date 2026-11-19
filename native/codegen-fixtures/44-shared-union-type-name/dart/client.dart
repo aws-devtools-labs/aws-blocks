@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -15,12 +25,16 @@ sealed class AuthStateState {
   static const confirmingSignUp = AuthStateStateKnown.confirmingSignUp;
   static const confirmingSignIn = AuthStateStateKnown.confirmingSignIn;
   static const confirmingMfa = AuthStateStateKnown.confirmingMfa;
-  static const confirmingPasswordReset = AuthStateStateKnown.confirmingPasswordReset;
+  static const confirmingPasswordReset =
+      AuthStateStateKnown.confirmingPasswordReset;
   static const values = AuthStateStateKnown.values;
-  static final Map<String, AuthStateStateKnown> _byJson = AuthStateStateKnown.values.asNameMap();
+  static final Map<String, AuthStateStateKnown> _byJson = AuthStateStateKnown
+      .values
+      .asNameMap();
 
   String toJson();
-  static AuthStateState fromJson(String json) => _byJson[json] ?? AuthStateStateUnknown(json);
+  static AuthStateState fromJson(String json) =>
+      _byJson[json] ?? AuthStateStateUnknown(json);
 }
 
 enum AuthStateStateKnown implements AuthStateState {
@@ -29,8 +43,7 @@ enum AuthStateStateKnown implements AuthStateState {
   confirmingSignUp,
   confirmingSignIn,
   confirmingMfa,
-  confirmingPasswordReset
-;
+  confirmingPasswordReset;
 
   @override
   String toJson() => name;
@@ -52,9 +65,10 @@ final class AuthStateStateUnknown implements AuthStateState {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'AuthStateStateUnknown' '($value)';
+  String toString() =>
+      'AuthStateStateUnknown'
+      '($value)';
 }
-
 
 class AuthState {
   final AuthStateState state;
@@ -76,8 +90,12 @@ class AuthState {
   factory AuthState.fromJson(Map<String, dynamic> json) {
     return AuthState(
       state: AuthStateState.fromJson(json['state'] as String),
-      user: json['user'] != null ? AuthUser.fromJson(json['user'] as Map<String, dynamic>) : null,
-      actions: (json['actions'] as List<dynamic>).map((e) => AuthAction.fromJson(e as Map<String, dynamic>)).toList(),
+      user: json['user'] != null
+          ? AuthUser.fromJson(json['user'] as Map<String, dynamic>)
+          : null,
+      actions: (json['actions'] as List<dynamic>)
+          .map((e) => AuthAction.fromJson(e as Map<String, dynamic>))
+          .toList(),
       error: json['error'] as String?,
       errorName: json['errorName'] as String?,
       retriable: json['retriable'] as bool?,
@@ -107,12 +125,19 @@ class AuthState {
           retriable == other.retriable;
 
   @override
-  int get hashCode => Object.hash(state, user, blocksDeepHash(actions), error, errorName, retriable);
+  int get hashCode => Object.hash(
+    state,
+    user,
+    blocksDeepHash(actions),
+    error,
+    errorName,
+    retriable,
+  );
 
   @override
-  String toString() => 'AuthState(state: $state, user: $user, actions: $actions, error: $error, errorName: $errorName, retriable: $retriable)';
+  String toString() =>
+      'AuthState(state: $state, user: $user, actions: $actions, error: $error, errorName: $errorName, retriable: $retriable)';
 }
-
 
 class AuthUser {
   final String userId;
@@ -153,24 +178,25 @@ class AuthUser {
   int get hashCode => Object.hash(userId, username, displayName);
 
   @override
-  String toString() => 'AuthUser(userId: $userId, username: $username, displayName: $displayName)';
+  String toString() =>
+      'AuthUser(userId: $userId, username: $username, displayName: $displayName)';
 }
-
 
 sealed class AuthActionMethod {
   static const GET = AuthActionMethodKnown.GET;
   static const POST = AuthActionMethodKnown.POST;
   static const values = AuthActionMethodKnown.values;
-  static final Map<String, AuthActionMethodKnown> _byJson = AuthActionMethodKnown.values.asNameMap();
+  static final Map<String, AuthActionMethodKnown> _byJson =
+      AuthActionMethodKnown.values.asNameMap();
 
   String toJson();
-  static AuthActionMethod fromJson(String json) => _byJson[json] ?? AuthActionMethodUnknown(json);
+  static AuthActionMethod fromJson(String json) =>
+      _byJson[json] ?? AuthActionMethodUnknown(json);
 }
 
 enum AuthActionMethodKnown implements AuthActionMethod {
   GET,
-  POST
-;
+  POST;
 
   @override
   String toJson() => name;
@@ -192,9 +218,10 @@ final class AuthActionMethodUnknown implements AuthActionMethod {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'AuthActionMethodUnknown' '($value)';
+  String toString() =>
+      'AuthActionMethodUnknown'
+      '($value)';
 }
-
 
 sealed class AuthActionCapability {
   static const webauthnGet = AuthActionCapabilityKnown.webauthnGet;
@@ -202,13 +229,14 @@ sealed class AuthActionCapability {
   static const values = AuthActionCapabilityKnown.values;
 
   String toJson();
-  static AuthActionCapability fromJson(String json) => AuthActionCapabilityKnown._jsonMap[json] ?? AuthActionCapabilityUnknown(json);
+  static AuthActionCapability fromJson(String json) =>
+      AuthActionCapabilityKnown._jsonMap[json] ??
+      AuthActionCapabilityUnknown(json);
 }
 
 enum AuthActionCapabilityKnown implements AuthActionCapability {
   webauthnGet,
-  webauthnCreate
-;
+  webauthnCreate;
 
   static const _jsonMap = <String, AuthActionCapabilityKnown>{
     'webauthn-get': webauthnGet,
@@ -238,9 +266,10 @@ final class AuthActionCapabilityUnknown implements AuthActionCapability {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'AuthActionCapabilityUnknown' '($value)';
+  String toString() =>
+      'AuthActionCapabilityUnknown'
+      '($value)';
 }
-
 
 class AuthAction {
   final String name;
@@ -265,10 +294,16 @@ class AuthAction {
     return AuthAction(
       name: json['name'] as String,
       label: json['label'] as String,
-      fields: (json['fields'] as List<dynamic>).map((e) => AuthField.fromJson(e as Map<String, dynamic>)).toList(),
+      fields: (json['fields'] as List<dynamic>)
+          .map((e) => AuthField.fromJson(e as Map<String, dynamic>))
+          .toList(),
       url: json['url'] as String?,
-      method: json['method'] != null ? AuthActionMethod.fromJson(json['method'] as String) : null,
-      capability: json['capability'] != null ? AuthActionCapability.fromJson(json['capability'] as String) : null,
+      method: json['method'] != null
+          ? AuthActionMethod.fromJson(json['method'] as String)
+          : null,
+      capability: json['capability'] != null
+          ? AuthActionCapability.fromJson(json['capability'] as String)
+          : null,
       unavailable: json['unavailable'] as String?,
     );
   }
@@ -298,12 +333,20 @@ class AuthAction {
           unavailable == other.unavailable;
 
   @override
-  int get hashCode => Object.hash(name, label, blocksDeepHash(fields), url, method, capability, unavailable);
+  int get hashCode => Object.hash(
+    name,
+    label,
+    blocksDeepHash(fields),
+    url,
+    method,
+    capability,
+    unavailable,
+  );
 
   @override
-  String toString() => 'AuthAction(name: $name, label: $label, fields: $fields, url: $url, method: $method, capability: $capability, unavailable: $unavailable)';
+  String toString() =>
+      'AuthAction(name: $name, label: $label, fields: $fields, url: $url, method: $method, capability: $capability, unavailable: $unavailable)';
 }
-
 
 sealed class AuthFieldType {
   static const number = AuthFieldTypeKnown.number;
@@ -313,10 +356,13 @@ sealed class AuthFieldType {
   static const tel = AuthFieldTypeKnown.tel;
   static const hidden = AuthFieldTypeKnown.hidden;
   static const values = AuthFieldTypeKnown.values;
-  static final Map<String, AuthFieldTypeKnown> _byJson = AuthFieldTypeKnown.values.asNameMap();
+  static final Map<String, AuthFieldTypeKnown> _byJson = AuthFieldTypeKnown
+      .values
+      .asNameMap();
 
   String toJson();
-  static AuthFieldType fromJson(String json) => _byJson[json] ?? AuthFieldTypeUnknown(json);
+  static AuthFieldType fromJson(String json) =>
+      _byJson[json] ?? AuthFieldTypeUnknown(json);
 }
 
 enum AuthFieldTypeKnown implements AuthFieldType {
@@ -325,8 +371,7 @@ enum AuthFieldTypeKnown implements AuthFieldType {
   password,
   text,
   tel,
-  hidden
-;
+  hidden;
 
   @override
   String toJson() => name;
@@ -348,9 +393,10 @@ final class AuthFieldTypeUnknown implements AuthFieldType {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'AuthFieldTypeUnknown' '($value)';
+  String toString() =>
+      'AuthFieldTypeUnknown'
+      '($value)';
 }
-
 
 class AuthField {
   final String name;
@@ -401,24 +447,33 @@ class AuthField {
   int get hashCode => Object.hash(name, label, type, required$, defaultValue);
 
   @override
-  String toString() => 'AuthField(name: $name, label: $label, type: $type, required\$: ${required$}, defaultValue: $defaultValue)';
+  String toString() =>
+      'AuthField(name: $name, label: $label, type: $type, required\$: ${required$}, defaultValue: $defaultValue)';
 }
-
 
 sealed class ConfirmSignInInputChallenge {
   const ConfirmSignInInputChallenge();
   Map<String, dynamic> toJson();
   static ConfirmSignInInputChallenge fromJson(Map<String, dynamic> json) {
     switch (json['challenge'] as String) {
-      case 'code': return CodeConfirmSignInInputChallenge.fromJson(json);
-      case 'mfaType': return MfaTypeConfirmSignInInputChallenge.fromJson(json);
-      case 'newPassword': return NewPasswordConfirmSignInInputChallenge.fromJson(json);
-      case 'totpSetup': return TotpSetupConfirmSignInInputChallenge.fromJson(json);
-      case 'email': return EmailConfirmSignInInputChallenge.fromJson(json);
-      case 'password': return PasswordConfirmSignInInputChallenge.fromJson(json);
-      case 'firstFactor': return FirstFactorConfirmSignInInputChallenge.fromJson(json);
-      case 'webauthn': return WebauthnConfirmSignInInputChallenge.fromJson(json);
-      default: throw ArgumentError('Unknown challenge: ${json['challenge']}');
+      case 'code':
+        return CodeConfirmSignInInputChallenge.fromJson(json);
+      case 'mfaType':
+        return MfaTypeConfirmSignInInputChallenge.fromJson(json);
+      case 'newPassword':
+        return NewPasswordConfirmSignInInputChallenge.fromJson(json);
+      case 'totpSetup':
+        return TotpSetupConfirmSignInInputChallenge.fromJson(json);
+      case 'email':
+        return EmailConfirmSignInInputChallenge.fromJson(json);
+      case 'password':
+        return PasswordConfirmSignInInputChallenge.fromJson(json);
+      case 'firstFactor':
+        return FirstFactorConfirmSignInInputChallenge.fromJson(json);
+      case 'webauthn':
+        return WebauthnConfirmSignInInputChallenge.fromJson(json);
+      default:
+        throw ArgumentError('Unknown challenge: ${json['challenge']}');
     }
   }
 }
@@ -426,29 +481,21 @@ sealed class ConfirmSignInInputChallenge {
 class CodeConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   final String code;
 
-  const CodeConfirmSignInInputChallenge({
-    required this.code,
-  });
+  const CodeConfirmSignInInputChallenge({required this.code});
 
   factory CodeConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
-    return CodeConfirmSignInInputChallenge(
-      code: json['code'] as String,
-    );
+    return CodeConfirmSignInInputChallenge(code: json['code'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'code',
-      'code': code,
-    };
+    return {'challenge': 'code', 'code': code};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is CodeConfirmSignInInputChallenge &&
-          code == other.code;
+      other is CodeConfirmSignInInputChallenge && code == other.code;
 
   @override
   int get hashCode => code.hashCode;
@@ -460,11 +507,11 @@ class CodeConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
 class MfaTypeConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   final String mfaType;
 
-  const MfaTypeConfirmSignInInputChallenge({
-    required this.mfaType,
-  });
+  const MfaTypeConfirmSignInInputChallenge({required this.mfaType});
 
-  factory MfaTypeConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
+  factory MfaTypeConfirmSignInInputChallenge.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return MfaTypeConfirmSignInInputChallenge(
       mfaType: json['mfaType'] as String,
     );
@@ -472,17 +519,13 @@ class MfaTypeConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'mfaType',
-      'mfaType': mfaType,
-    };
+    return {'challenge': 'mfaType', 'mfaType': mfaType};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is MfaTypeConfirmSignInInputChallenge &&
-          mfaType == other.mfaType;
+      other is MfaTypeConfirmSignInInputChallenge && mfaType == other.mfaType;
 
   @override
   int get hashCode => mfaType.hashCode;
@@ -491,14 +534,15 @@ class MfaTypeConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   String toString() => 'MfaTypeConfirmSignInInputChallenge(mfaType: $mfaType)';
 }
 
-class NewPasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
+class NewPasswordConfirmSignInInputChallenge
+    extends ConfirmSignInInputChallenge {
   final String newPassword;
 
-  const NewPasswordConfirmSignInInputChallenge({
-    required this.newPassword,
-  });
+  const NewPasswordConfirmSignInInputChallenge({required this.newPassword});
 
-  factory NewPasswordConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
+  factory NewPasswordConfirmSignInInputChallenge.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return NewPasswordConfirmSignInInputChallenge(
       newPassword: json['newPassword'] as String,
     );
@@ -506,10 +550,7 @@ class NewPasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'newPassword',
-      'newPassword': newPassword,
-    };
+    return {'challenge': 'newPassword', 'newPassword': newPassword};
   }
 
   @override
@@ -522,7 +563,8 @@ class NewPasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge
   int get hashCode => newPassword.hashCode;
 
   @override
-  String toString() => 'NewPasswordConfirmSignInInputChallenge(newPassword: $newPassword)';
+  String toString() =>
+      'NewPasswordConfirmSignInInputChallenge(newPassword: $newPassword)';
 }
 
 class TotpSetupConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
@@ -534,7 +576,9 @@ class TotpSetupConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
     required this.code,
   });
 
-  factory TotpSetupConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
+  factory TotpSetupConfirmSignInInputChallenge.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return TotpSetupConfirmSignInInputChallenge(
       sharedSecret: json['sharedSecret'] as String,
       code: json['code'] as String,
@@ -561,35 +605,28 @@ class TotpSetupConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   int get hashCode => Object.hash(sharedSecret, code);
 
   @override
-  String toString() => 'TotpSetupConfirmSignInInputChallenge(sharedSecret: $sharedSecret, code: $code)';
+  String toString() =>
+      'TotpSetupConfirmSignInInputChallenge(sharedSecret: $sharedSecret, code: $code)';
 }
 
 class EmailConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   final String email;
 
-  const EmailConfirmSignInInputChallenge({
-    required this.email,
-  });
+  const EmailConfirmSignInInputChallenge({required this.email});
 
   factory EmailConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
-    return EmailConfirmSignInInputChallenge(
-      email: json['email'] as String,
-    );
+    return EmailConfirmSignInInputChallenge(email: json['email'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'email',
-      'email': email,
-    };
+    return {'challenge': 'email', 'email': email};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is EmailConfirmSignInInputChallenge &&
-          email == other.email;
+      other is EmailConfirmSignInInputChallenge && email == other.email;
 
   @override
   int get hashCode => email.hashCode;
@@ -601,11 +638,11 @@ class EmailConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
 class PasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   final String password;
 
-  const PasswordConfirmSignInInputChallenge({
-    required this.password,
-  });
+  const PasswordConfirmSignInInputChallenge({required this.password});
 
-  factory PasswordConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
+  factory PasswordConfirmSignInInputChallenge.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return PasswordConfirmSignInInputChallenge(
       password: json['password'] as String,
     );
@@ -613,10 +650,7 @@ class PasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'password',
-      'password': password,
-    };
+    return {'challenge': 'password', 'password': password};
   }
 
   @override
@@ -629,17 +663,19 @@ class PasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   int get hashCode => password.hashCode;
 
   @override
-  String toString() => 'PasswordConfirmSignInInputChallenge(password: $password)';
+  String toString() =>
+      'PasswordConfirmSignInInputChallenge(password: $password)';
 }
 
-class FirstFactorConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
+class FirstFactorConfirmSignInInputChallenge
+    extends ConfirmSignInInputChallenge {
   final String firstFactor;
 
-  const FirstFactorConfirmSignInInputChallenge({
-    required this.firstFactor,
-  });
+  const FirstFactorConfirmSignInInputChallenge({required this.firstFactor});
 
-  factory FirstFactorConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
+  factory FirstFactorConfirmSignInInputChallenge.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return FirstFactorConfirmSignInInputChallenge(
       firstFactor: json['firstFactor'] as String,
     );
@@ -647,10 +683,7 @@ class FirstFactorConfirmSignInInputChallenge extends ConfirmSignInInputChallenge
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'firstFactor',
-      'firstFactor': firstFactor,
-    };
+    return {'challenge': 'firstFactor', 'firstFactor': firstFactor};
   }
 
   @override
@@ -663,17 +696,18 @@ class FirstFactorConfirmSignInInputChallenge extends ConfirmSignInInputChallenge
   int get hashCode => firstFactor.hashCode;
 
   @override
-  String toString() => 'FirstFactorConfirmSignInInputChallenge(firstFactor: $firstFactor)';
+  String toString() =>
+      'FirstFactorConfirmSignInInputChallenge(firstFactor: $firstFactor)';
 }
 
 class WebauthnConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   final String credential;
 
-  const WebauthnConfirmSignInInputChallenge({
-    required this.credential,
-  });
+  const WebauthnConfirmSignInInputChallenge({required this.credential});
 
-  factory WebauthnConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
+  factory WebauthnConfirmSignInInputChallenge.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return WebauthnConfirmSignInInputChallenge(
       credential: json['credential'] as String,
     );
@@ -681,10 +715,7 @@ class WebauthnConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'webauthn',
-      'credential': credential,
-    };
+    return {'challenge': 'webauthn', 'credential': credential};
   }
 
   @override
@@ -697,71 +728,86 @@ class WebauthnConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   int get hashCode => credential.hashCode;
 
   @override
-  String toString() => 'WebauthnConfirmSignInInputChallenge(credential: $credential)';
+  String toString() =>
+      'WebauthnConfirmSignInInputChallenge(credential: $credential)';
 }
-
-
 
 enum UpdateMfaPreferenceInputSms {
   ENABLED,
   DISABLED,
   PREFERRED,
-  NOT_PREFERRED
-;
+  NOT_PREFERRED;
 
   String toJson() => name;
-  static UpdateMfaPreferenceInputSms fromJson(String json) => values.byName(json);
+  static UpdateMfaPreferenceInputSms fromJson(String json) =>
+      values.byName(json);
 }
-
 
 enum UpdateMfaPreferenceInputTotp {
   ENABLED,
   DISABLED,
   PREFERRED,
-  NOT_PREFERRED
-;
+  NOT_PREFERRED;
 
   String toJson() => name;
-  static UpdateMfaPreferenceInputTotp fromJson(String json) => values.byName(json);
+  static UpdateMfaPreferenceInputTotp fromJson(String json) =>
+      values.byName(json);
 }
-
 
 enum UpdateMfaPreferenceInputEmail {
   ENABLED,
   DISABLED,
   PREFERRED,
-  NOT_PREFERRED
-;
+  NOT_PREFERRED;
 
   String toJson() => name;
-  static UpdateMfaPreferenceInputEmail fromJson(String json) => values.byName(json);
+  static UpdateMfaPreferenceInputEmail fromJson(String json) =>
+      values.byName(json);
 }
-
 
 sealed class AuthActionInput {
   const AuthActionInput();
   Map<String, dynamic> toJson();
   static AuthActionInput fromJson(Map<String, dynamic> json) {
     switch (json['action'] as String) {
-      case 'signUp': return SignUpInput.fromJson(json);
-      case 'resetPassword': return ResetPasswordInput.fromJson(json);
-      case 'signIn': return SignInInput.fromJson(json);
-      case 'signInWithPasskey': return SignInWithPasskeyInput.fromJson(json);
-      case 'confirmSignUp': return ConfirmSignUpInput.fromJson(json);
-      case 'resendSignUpCode': return ResendSignUpCodeInput.fromJson(json);
-      case 'signOut': return SignOutInput.fromJson(json);
-      case 'confirmResetPassword': return ConfirmResetPasswordInput.fromJson(json);
-      case 'autoSignIn': return AutoSignInInput.fromJson(json);
-      case 'confirmSignIn': return ConfirmSignInInput.fromJson(json);
-      case 'startPasskeyRegistration': return StartPasskeyRegistrationInput.fromJson(json);
-      case 'completePasskeyRegistration': return CompletePasskeyRegistrationInput.fromJson(json);
-      case 'listPasskeys': return ListPasskeysInput.fromJson(json);
-      case 'deletePasskey': return DeletePasskeyInput.fromJson(json);
-      case 'setUpTotp': return SetUpTotpInput.fromJson(json);
-      case 'verifyTotpSetup': return VerifyTotpSetupInput.fromJson(json);
-      case 'getMfaPreference': return GetMfaPreferenceInput.fromJson(json);
-      case 'updateMfaPreference': return UpdateMfaPreferenceInput.fromJson(json);
-      default: throw ArgumentError('Unknown action: ${json['action']}');
+      case 'signUp':
+        return SignUpInput.fromJson(json);
+      case 'resetPassword':
+        return ResetPasswordInput.fromJson(json);
+      case 'signIn':
+        return SignInInput.fromJson(json);
+      case 'signInWithPasskey':
+        return SignInWithPasskeyInput.fromJson(json);
+      case 'confirmSignUp':
+        return ConfirmSignUpInput.fromJson(json);
+      case 'resendSignUpCode':
+        return ResendSignUpCodeInput.fromJson(json);
+      case 'signOut':
+        return SignOutInput.fromJson(json);
+      case 'confirmResetPassword':
+        return ConfirmResetPasswordInput.fromJson(json);
+      case 'autoSignIn':
+        return AutoSignInInput.fromJson(json);
+      case 'confirmSignIn':
+        return ConfirmSignInInput.fromJson(json);
+      case 'startPasskeyRegistration':
+        return StartPasskeyRegistrationInput.fromJson(json);
+      case 'completePasskeyRegistration':
+        return CompletePasskeyRegistrationInput.fromJson(json);
+      case 'listPasskeys':
+        return ListPasskeysInput.fromJson(json);
+      case 'deletePasskey':
+        return DeletePasskeyInput.fromJson(json);
+      case 'setUpTotp':
+        return SetUpTotpInput.fromJson(json);
+      case 'verifyTotpSetup':
+        return VerifyTotpSetupInput.fromJson(json);
+      case 'getMfaPreference':
+        return GetMfaPreferenceInput.fromJson(json);
+      case 'updateMfaPreference':
+        return UpdateMfaPreferenceInput.fromJson(json);
+      default:
+        throw ArgumentError('Unknown action: ${json['action']}');
     }
   }
 }
@@ -783,7 +829,8 @@ class SignUpInput extends AuthActionInput {
       username: json['username'] as String,
       password: json['password'] as String,
       additionalProperties: Map.fromEntries(
-        json.entries.where((e) => !knownKeys.contains(e.key))
+        json.entries
+            .where((e) => !knownKeys.contains(e.key))
             .map((e) => MapEntry(e.key, e.value as String)),
       ),
     );
@@ -796,7 +843,8 @@ class SignUpInput extends AuthActionInput {
       'username': username,
       'password': password,
       for (final e in additionalProperties.entries)
-        if (!const {'action', 'username', 'password'}.contains(e.key)) e.key: e.value,
+        if (!const {'action', 'username', 'password'}.contains(e.key))
+          e.key: e.value,
     };
   }
 
@@ -809,38 +857,32 @@ class SignUpInput extends AuthActionInput {
           blocksDeepEquals(additionalProperties, other.additionalProperties);
 
   @override
-  int get hashCode => Object.hash(username, password, blocksDeepHash(additionalProperties));
+  int get hashCode =>
+      Object.hash(username, password, blocksDeepHash(additionalProperties));
 
   @override
-  String toString() => 'SignUpInput(username: $username, password: $password, additionalProperties: $additionalProperties)';
+  String toString() =>
+      'SignUpInput(username: $username, password: $password, additionalProperties: $additionalProperties)';
 }
 
 class ResetPasswordInput extends AuthActionInput {
   final String username;
 
-  const ResetPasswordInput({
-    required this.username,
-  });
+  const ResetPasswordInput({required this.username});
 
   factory ResetPasswordInput.fromJson(Map<String, dynamic> json) {
-    return ResetPasswordInput(
-      username: json['username'] as String,
-    );
+    return ResetPasswordInput(username: json['username'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'resetPassword',
-      'username': username,
-    };
+    return {'action': 'resetPassword', 'username': username};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ResetPasswordInput &&
-          username == other.username;
+      other is ResetPasswordInput && username == other.username;
 
   @override
   int get hashCode => username.hashCode;
@@ -853,10 +895,7 @@ class SignInInput extends AuthActionInput {
   final String username;
   final String password;
 
-  const SignInInput({
-    required this.username,
-    required this.password,
-  });
+  const SignInInput({required this.username, required this.password});
 
   factory SignInInput.fromJson(Map<String, dynamic> json) {
     return SignInInput(
@@ -867,11 +906,7 @@ class SignInInput extends AuthActionInput {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'signIn',
-      'username': username,
-      'password': password,
-    };
+    return {'action': 'signIn', 'username': username, 'password': password};
   }
 
   @override
@@ -891,29 +926,21 @@ class SignInInput extends AuthActionInput {
 class SignInWithPasskeyInput extends AuthActionInput {
   final String username;
 
-  const SignInWithPasskeyInput({
-    required this.username,
-  });
+  const SignInWithPasskeyInput({required this.username});
 
   factory SignInWithPasskeyInput.fromJson(Map<String, dynamic> json) {
-    return SignInWithPasskeyInput(
-      username: json['username'] as String,
-    );
+    return SignInWithPasskeyInput(username: json['username'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'signInWithPasskey',
-      'username': username,
-    };
+    return {'action': 'signInWithPasskey', 'username': username};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is SignInWithPasskeyInput &&
-          username == other.username;
+      other is SignInWithPasskeyInput && username == other.username;
 
   @override
   int get hashCode => username.hashCode;
@@ -963,35 +990,28 @@ class ConfirmSignUpInput extends AuthActionInput {
   int get hashCode => Object.hash(username, code, password);
 
   @override
-  String toString() => 'ConfirmSignUpInput(username: $username, code: $code, password: $password)';
+  String toString() =>
+      'ConfirmSignUpInput(username: $username, code: $code, password: $password)';
 }
 
 class ResendSignUpCodeInput extends AuthActionInput {
   final String username;
 
-  const ResendSignUpCodeInput({
-    required this.username,
-  });
+  const ResendSignUpCodeInput({required this.username});
 
   factory ResendSignUpCodeInput.fromJson(Map<String, dynamic> json) {
-    return ResendSignUpCodeInput(
-      username: json['username'] as String,
-    );
+    return ResendSignUpCodeInput(username: json['username'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'resendSignUpCode',
-      'username': username,
-    };
+    return {'action': 'resendSignUpCode', 'username': username};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ResendSignUpCodeInput &&
-          username == other.username;
+      other is ResendSignUpCodeInput && username == other.username;
 
   @override
   int get hashCode => username.hashCode;
@@ -1001,25 +1021,20 @@ class ResendSignUpCodeInput extends AuthActionInput {
 }
 
 class SignOutInput extends AuthActionInput {
-
   const SignOutInput();
 
   factory SignOutInput.fromJson(Map<String, dynamic> json) {
-    return SignOutInput(
-    );
+    return SignOutInput();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'signOut',
-    };
+    return {'action': 'signOut'};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SignOutInput;
+      identical(this, other) || other is SignOutInput;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -1069,35 +1084,28 @@ class ConfirmResetPasswordInput extends AuthActionInput {
   int get hashCode => Object.hash(username, code, newPassword);
 
   @override
-  String toString() => 'ConfirmResetPasswordInput(username: $username, code: $code, newPassword: $newPassword)';
+  String toString() =>
+      'ConfirmResetPasswordInput(username: $username, code: $code, newPassword: $newPassword)';
 }
 
 class AutoSignInInput extends AuthActionInput {
   final String username;
 
-  const AutoSignInInput({
-    required this.username,
-  });
+  const AutoSignInInput({required this.username});
 
   factory AutoSignInInput.fromJson(Map<String, dynamic> json) {
-    return AutoSignInInput(
-      username: json['username'] as String,
-    );
+    return AutoSignInInput(username: json['username'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'autoSignIn',
-      'username': username,
-    };
+    return {'action': 'autoSignIn', 'username': username};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is AutoSignInInput &&
-          username == other.username;
+      other is AutoSignInInput && username == other.username;
 
   @override
   int get hashCode => username.hashCode;
@@ -1106,16 +1114,11 @@ class AutoSignInInput extends AuthActionInput {
   String toString() => 'AutoSignInInput(username: $username)';
 }
 
-
-
 class ConfirmSignInInput extends AuthActionInput {
   final String session;
   final ConfirmSignInInputChallenge challenge;
 
-  const ConfirmSignInInput({
-    required this.session,
-    required this.challenge,
-  });
+  const ConfirmSignInInput({required this.session, required this.challenge});
 
   factory ConfirmSignInInput.fromJson(Map<String, dynamic> json) {
     return ConfirmSignInInput(
@@ -1144,29 +1147,25 @@ class ConfirmSignInInput extends AuthActionInput {
   int get hashCode => Object.hash(session, challenge);
 
   @override
-  String toString() => 'ConfirmSignInInput(session: $session, challenge: $challenge)';
+  String toString() =>
+      'ConfirmSignInInput(session: $session, challenge: $challenge)';
 }
 
 class StartPasskeyRegistrationInput extends AuthActionInput {
-
   const StartPasskeyRegistrationInput();
 
   factory StartPasskeyRegistrationInput.fromJson(Map<String, dynamic> json) {
-    return StartPasskeyRegistrationInput(
-    );
+    return StartPasskeyRegistrationInput();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'startPasskeyRegistration',
-    };
+    return {'action': 'startPasskeyRegistration'};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is StartPasskeyRegistrationInput;
+      identical(this, other) || other is StartPasskeyRegistrationInput;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -1178,9 +1177,7 @@ class StartPasskeyRegistrationInput extends AuthActionInput {
 class CompletePasskeyRegistrationInput extends AuthActionInput {
   final String credential;
 
-  const CompletePasskeyRegistrationInput({
-    required this.credential,
-  });
+  const CompletePasskeyRegistrationInput({required this.credential});
 
   factory CompletePasskeyRegistrationInput.fromJson(Map<String, dynamic> json) {
     return CompletePasskeyRegistrationInput(
@@ -1190,10 +1187,7 @@ class CompletePasskeyRegistrationInput extends AuthActionInput {
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'completePasskeyRegistration',
-      'credential': credential,
-    };
+    return {'action': 'completePasskeyRegistration', 'credential': credential};
   }
 
   @override
@@ -1206,29 +1200,25 @@ class CompletePasskeyRegistrationInput extends AuthActionInput {
   int get hashCode => credential.hashCode;
 
   @override
-  String toString() => 'CompletePasskeyRegistrationInput(credential: $credential)';
+  String toString() =>
+      'CompletePasskeyRegistrationInput(credential: $credential)';
 }
 
 class ListPasskeysInput extends AuthActionInput {
-
   const ListPasskeysInput();
 
   factory ListPasskeysInput.fromJson(Map<String, dynamic> json) {
-    return ListPasskeysInput(
-    );
+    return ListPasskeysInput();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'listPasskeys',
-    };
+    return {'action': 'listPasskeys'};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ListPasskeysInput;
+      identical(this, other) || other is ListPasskeysInput;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -1240,29 +1230,21 @@ class ListPasskeysInput extends AuthActionInput {
 class DeletePasskeyInput extends AuthActionInput {
   final String credentialId;
 
-  const DeletePasskeyInput({
-    required this.credentialId,
-  });
+  const DeletePasskeyInput({required this.credentialId});
 
   factory DeletePasskeyInput.fromJson(Map<String, dynamic> json) {
-    return DeletePasskeyInput(
-      credentialId: json['credentialId'] as String,
-    );
+    return DeletePasskeyInput(credentialId: json['credentialId'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'deletePasskey',
-      'credentialId': credentialId,
-    };
+    return {'action': 'deletePasskey', 'credentialId': credentialId};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is DeletePasskeyInput &&
-          credentialId == other.credentialId;
+      other is DeletePasskeyInput && credentialId == other.credentialId;
 
   @override
   int get hashCode => credentialId.hashCode;
@@ -1272,25 +1254,20 @@ class DeletePasskeyInput extends AuthActionInput {
 }
 
 class SetUpTotpInput extends AuthActionInput {
-
   const SetUpTotpInput();
 
   factory SetUpTotpInput.fromJson(Map<String, dynamic> json) {
-    return SetUpTotpInput(
-    );
+    return SetUpTotpInput();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'setUpTotp',
-    };
+    return {'action': 'setUpTotp'};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SetUpTotpInput;
+      identical(this, other) || other is SetUpTotpInput;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -1302,29 +1279,21 @@ class SetUpTotpInput extends AuthActionInput {
 class VerifyTotpSetupInput extends AuthActionInput {
   final String code;
 
-  const VerifyTotpSetupInput({
-    required this.code,
-  });
+  const VerifyTotpSetupInput({required this.code});
 
   factory VerifyTotpSetupInput.fromJson(Map<String, dynamic> json) {
-    return VerifyTotpSetupInput(
-      code: json['code'] as String,
-    );
+    return VerifyTotpSetupInput(code: json['code'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'verifyTotpSetup',
-      'code': code,
-    };
+    return {'action': 'verifyTotpSetup', 'code': code};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is VerifyTotpSetupInput &&
-          code == other.code;
+      other is VerifyTotpSetupInput && code == other.code;
 
   @override
   int get hashCode => code.hashCode;
@@ -1334,25 +1303,20 @@ class VerifyTotpSetupInput extends AuthActionInput {
 }
 
 class GetMfaPreferenceInput extends AuthActionInput {
-
   const GetMfaPreferenceInput();
 
   factory GetMfaPreferenceInput.fromJson(Map<String, dynamic> json) {
-    return GetMfaPreferenceInput(
-    );
+    return GetMfaPreferenceInput();
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'getMfaPreference',
-    };
+    return {'action': 'getMfaPreference'};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is GetMfaPreferenceInput;
+      identical(this, other) || other is GetMfaPreferenceInput;
 
   @override
   int get hashCode => runtimeType.hashCode;
@@ -1366,17 +1330,19 @@ class UpdateMfaPreferenceInput extends AuthActionInput {
   final UpdateMfaPreferenceInputTotp? totp;
   final UpdateMfaPreferenceInputEmail? email;
 
-  const UpdateMfaPreferenceInput({
-    this.sms,
-    this.totp,
-    this.email,
-  });
+  const UpdateMfaPreferenceInput({this.sms, this.totp, this.email});
 
   factory UpdateMfaPreferenceInput.fromJson(Map<String, dynamic> json) {
     return UpdateMfaPreferenceInput(
-      sms: json['sms'] != null ? UpdateMfaPreferenceInputSms.fromJson(json['sms'] as String) : null,
-      totp: json['totp'] != null ? UpdateMfaPreferenceInputTotp.fromJson(json['totp'] as String) : null,
-      email: json['email'] != null ? UpdateMfaPreferenceInputEmail.fromJson(json['email'] as String) : null,
+      sms: json['sms'] != null
+          ? UpdateMfaPreferenceInputSms.fromJson(json['sms'] as String)
+          : null,
+      totp: json['totp'] != null
+          ? UpdateMfaPreferenceInputTotp.fromJson(json['totp'] as String)
+          : null,
+      email: json['email'] != null
+          ? UpdateMfaPreferenceInputEmail.fromJson(json['email'] as String)
+          : null,
     );
   }
 
@@ -1402,10 +1368,9 @@ class UpdateMfaPreferenceInput extends AuthActionInput {
   int get hashCode => Object.hash(sms, totp, email);
 
   @override
-  String toString() => 'UpdateMfaPreferenceInput(sms: $sms, totp: $totp, email: $email)';
+  String toString() =>
+      'UpdateMfaPreferenceInput(sms: $sms, totp: $totp, email: $email)';
 }
-
-
 
 @Deprecated('Use AuthActionInput')
 typedef AlphaAuthApiSetAuthStateInput = AuthActionInput;
@@ -1417,38 +1382,38 @@ class AlphaAuthApi {
   AlphaAuthApi(this._client);
 
   Future<AuthState> getAuthState() async {
-    final result = await _client.call('alphaAuthApi.getAuthState', const <dynamic>[]);
+    final result = await _client.call(
+      'alphaAuthApi.getAuthState',
+      const <dynamic>[],
+    );
     return AuthState.fromJson(result as Map<String, dynamic>);
   }
 
   Future<AuthState> setAuthState({required AuthActionInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('alphaAuthApi.setAuthState', params);
     return AuthState.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 class ZetaAuthApi {
   final BlocksClient _client;
   ZetaAuthApi(this._client);
 
   Future<AuthState> getAuthState() async {
-    final result = await _client.call('zetaAuthApi.getAuthState', const <dynamic>[]);
+    final result = await _client.call(
+      'zetaAuthApi.getAuthState',
+      const <dynamic>[],
+    );
     return AuthState.fromJson(result as Map<String, dynamic>);
   }
 
   Future<AuthState> setAuthState({required AuthActionInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('zetaAuthApi.setAuthState', params);
     return AuthState.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -1469,4 +1434,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

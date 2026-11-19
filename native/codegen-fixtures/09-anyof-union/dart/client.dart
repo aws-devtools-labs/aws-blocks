@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -14,27 +24,19 @@ export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksCli
 class SearchResult {
   final int count;
 
-  const SearchResult({
-    required this.count,
-  });
+  const SearchResult({required this.count});
 
   factory SearchResult.fromJson(Map<String, dynamic> json) {
-    return SearchResult(
-      count: (json['count'] as num).toInt(),
-    );
+    return SearchResult(count: (json['count'] as num).toInt());
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'count': count,
-    };
+    return {'count': count};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SearchResult &&
-          count == other.count;
+      identical(this, other) || other is SearchResult && count == other.count;
 
   @override
   int get hashCode => count.hashCode;
@@ -43,15 +45,12 @@ class SearchResult {
   String toString() => 'SearchResult(count: $count)';
 }
 
-
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
   Future<SearchResult> search({required dynamic query}) async {
-    final params = <dynamic>[
-      query,
-    ];
+    final params = <dynamic>[query];
     final result = await _client.call('api.search', params);
     return SearchResult.fromJson(result as Map<String, dynamic>);
   }
@@ -61,7 +60,6 @@ class Api {
     return result as dynamic;
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -80,4 +78,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

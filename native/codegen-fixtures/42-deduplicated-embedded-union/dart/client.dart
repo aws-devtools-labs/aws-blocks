@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -14,9 +24,12 @@ sealed class ConfirmSignInInputChallenge {
   Map<String, dynamic> toJson();
   static ConfirmSignInInputChallenge fromJson(Map<String, dynamic> json) {
     switch (json['challenge'] as String) {
-      case 'code': return CodeConfirmSignInInputChallenge.fromJson(json);
-      case 'newPassword': return NewPasswordConfirmSignInInputChallenge.fromJson(json);
-      default: throw ArgumentError('Unknown challenge: ${json['challenge']}');
+      case 'code':
+        return CodeConfirmSignInInputChallenge.fromJson(json);
+      case 'newPassword':
+        return NewPasswordConfirmSignInInputChallenge.fromJson(json);
+      default:
+        throw ArgumentError('Unknown challenge: ${json['challenge']}');
     }
   }
 }
@@ -24,29 +37,21 @@ sealed class ConfirmSignInInputChallenge {
 class CodeConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   final String code;
 
-  const CodeConfirmSignInInputChallenge({
-    required this.code,
-  });
+  const CodeConfirmSignInInputChallenge({required this.code});
 
   factory CodeConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
-    return CodeConfirmSignInInputChallenge(
-      code: json['code'] as String,
-    );
+    return CodeConfirmSignInInputChallenge(code: json['code'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'code',
-      'code': code,
-    };
+    return {'challenge': 'code', 'code': code};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is CodeConfirmSignInInputChallenge &&
-          code == other.code;
+      other is CodeConfirmSignInInputChallenge && code == other.code;
 
   @override
   int get hashCode => code.hashCode;
@@ -55,14 +60,15 @@ class CodeConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
   String toString() => 'CodeConfirmSignInInputChallenge(code: $code)';
 }
 
-class NewPasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
+class NewPasswordConfirmSignInInputChallenge
+    extends ConfirmSignInInputChallenge {
   final String newPassword;
 
-  const NewPasswordConfirmSignInInputChallenge({
-    required this.newPassword,
-  });
+  const NewPasswordConfirmSignInInputChallenge({required this.newPassword});
 
-  factory NewPasswordConfirmSignInInputChallenge.fromJson(Map<String, dynamic> json) {
+  factory NewPasswordConfirmSignInInputChallenge.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return NewPasswordConfirmSignInInputChallenge(
       newPassword: json['newPassword'] as String,
     );
@@ -70,10 +76,7 @@ class NewPasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'challenge': 'newPassword',
-      'newPassword': newPassword,
-    };
+    return {'challenge': 'newPassword', 'newPassword': newPassword};
   }
 
   @override
@@ -86,19 +89,21 @@ class NewPasswordConfirmSignInInputChallenge extends ConfirmSignInInputChallenge
   int get hashCode => newPassword.hashCode;
 
   @override
-  String toString() => 'NewPasswordConfirmSignInInputChallenge(newPassword: $newPassword)';
+  String toString() =>
+      'NewPasswordConfirmSignInInputChallenge(newPassword: $newPassword)';
 }
-
-
 
 sealed class AlphaApiSetStateInput {
   const AlphaApiSetStateInput();
   Map<String, dynamic> toJson();
   static AlphaApiSetStateInput fromJson(Map<String, dynamic> json) {
     switch (json['action'] as String) {
-      case 'signIn': return SignInInput.fromJson(json);
-      case 'confirmSignIn': return ConfirmSignInInput.fromJson(json);
-      default: throw ArgumentError('Unknown action: ${json['action']}');
+      case 'signIn':
+        return SignInInput.fromJson(json);
+      case 'confirmSignIn':
+        return ConfirmSignInInput.fromJson(json);
+      default:
+        throw ArgumentError('Unknown action: ${json['action']}');
     }
   }
 }
@@ -106,29 +111,21 @@ sealed class AlphaApiSetStateInput {
 class SignInInput extends AlphaApiSetStateInput {
   final String username;
 
-  const SignInInput({
-    required this.username,
-  });
+  const SignInInput({required this.username});
 
   factory SignInInput.fromJson(Map<String, dynamic> json) {
-    return SignInInput(
-      username: json['username'] as String,
-    );
+    return SignInInput(username: json['username'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'action': 'signIn',
-      'username': username,
-    };
+    return {'action': 'signIn', 'username': username};
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is SignInInput &&
-          username == other.username;
+      other is SignInInput && username == other.username;
 
   @override
   int get hashCode => username.hashCode;
@@ -137,16 +134,11 @@ class SignInInput extends AlphaApiSetStateInput {
   String toString() => 'SignInInput(username: $username)';
 }
 
-
-
 class ConfirmSignInInput extends AlphaApiSetStateInput {
   final String session;
   final ConfirmSignInInputChallenge challenge;
 
-  const ConfirmSignInInput({
-    required this.session,
-    required this.challenge,
-  });
+  const ConfirmSignInInput({required this.session, required this.challenge});
 
   factory ConfirmSignInInput.fromJson(Map<String, dynamic> json) {
     return ConfirmSignInInput(
@@ -175,10 +167,9 @@ class ConfirmSignInInput extends AlphaApiSetStateInput {
   int get hashCode => Object.hash(session, challenge);
 
   @override
-  String toString() => 'ConfirmSignInInput(session: $session, challenge: $challenge)';
+  String toString() =>
+      'ConfirmSignInInput(session: $session, challenge: $challenge)';
 }
-
-
 
 // --- API Namespaces ---
 
@@ -187,28 +178,22 @@ class AlphaApi {
   AlphaApi(this._client);
 
   Future<bool> setState({required AlphaApiSetStateInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('alphaApi.setState', params);
     return result as bool;
   }
 }
-
 
 class BetaApi {
   final BlocksClient _client;
   BetaApi(this._client);
 
   Future<bool> setState({required AlphaApiSetStateInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('betaApi.setState', params);
     return result as bool;
   }
 }
-
 
 // --- Blocks Client ---
 
@@ -229,4 +214,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-

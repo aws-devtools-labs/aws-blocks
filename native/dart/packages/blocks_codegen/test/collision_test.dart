@@ -4,7 +4,9 @@
 import 'package:blocks_codegen/src/model.dart';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 /// Irreducible collision: even full namespace+method+param qualification
 /// collapses to the same string.

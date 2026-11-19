@@ -3,7 +3,9 @@
 
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 /// JSON-RPC params are positional on an AWS Blocks server: `parseRpcRequest`
 /// (`packages/core`) passes an array as the method's argument list, and reads

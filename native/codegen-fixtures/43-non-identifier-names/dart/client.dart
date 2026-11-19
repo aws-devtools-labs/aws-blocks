@@ -1,3 +1,4 @@
+// dart format width=80
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
@@ -5,7 +6,16 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart'
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -22,7 +32,8 @@ sealed class SampleType$XKind {
   static const values = SampleType$XKindKnown.values;
 
   String toJson();
-  static SampleType$XKind fromJson(String json) => SampleType$XKindKnown._jsonMap[json] ?? SampleType$XKindUnknown(json);
+  static SampleType$XKind fromJson(String json) =>
+      SampleType$XKindKnown._jsonMap[json] ?? SampleType$XKindUnknown(json);
 }
 
 enum SampleType$XKindKnown implements SampleType$XKind {
@@ -34,8 +45,7 @@ enum SampleType$XKindKnown implements SampleType$XKind {
   Z,
   $,
   $1st,
-  SpAce
-;
+  SpAce;
 
   static const _jsonMap = <String, SampleType$XKindKnown>{
     'a"b': aB,
@@ -79,9 +89,10 @@ final class SampleType$XKindUnknown implements SampleType$XKind {
   int get hashCode => value.hashCode;
 
   @override
-  String toString() => 'SampleType\$XKindUnknown' '($value)';
+  String toString() =>
+      'SampleType\$XKindUnknown'
+      '($value)';
 }
-
 
 // --- API Namespaces ---
 
@@ -115,8 +126,10 @@ class SampleType$X {
     this.$9lives,
     this.kind,
   }) {
-    if (!(runErrorXId.length >= 2)) throw ArgumentError('runErrorXId must be at least 2 characters');
-    if (!(semiColon.length <= 10)) throw ArgumentError('semiColon must be at most 10 characters');
+    if (!(runErrorXId.length >= 2))
+      throw ArgumentError('runErrorXId must be at least 2 characters');
+    if (!(semiColon.length <= 10))
+      throw ArgumentError('semiColon must be at most 10 characters');
     if (!(withSpace >= 1)) throw ArgumentError('withSpace must be >= 1');
   }
 
@@ -134,7 +147,9 @@ class SampleType$X {
       newLine: json['new\nline'] as String?,
       withSpace: (json['with space'] as num).toInt(),
       $9lives: json['9lives'] as bool?,
-      kind: json['kind'] != null ? SampleType$XKind.fromJson(json['kind'] as String) : null,
+      kind: json['kind'] != null
+          ? SampleType$XKind.fromJson(json['kind'] as String)
+          : null,
     );
   }
 
@@ -175,18 +190,36 @@ class SampleType$X {
           kind == other.kind;
 
   @override
-  int get hashCode => Object.hash(runErrorXId, $, $X, Y, $$, qUote, sIngle, semiColon, backTick, newLine, withSpace, $9lives, kind);
+  int get hashCode => Object.hash(
+    runErrorXId,
+    $,
+    $X,
+    Y,
+    $$,
+    qUote,
+    sIngle,
+    semiColon,
+    backTick,
+    newLine,
+    withSpace,
+    $9lives,
+    kind,
+  );
 
   @override
-  String toString() => 'SampleType\$X(runErrorXId: $runErrorXId, \$: ${$}, \$X: ${$X}, Y: $Y, \$\$: ${$$}, qUote: $qUote, sIngle: $sIngle, semiColon: $semiColon, backTick: $backTick, newLine: $newLine, withSpace: $withSpace, \$9lives: ${$9lives}, kind: $kind)';
+  String toString() =>
+      'SampleType\$X(runErrorXId: $runErrorXId, \$: ${$}, \$X: ${$X}, Y: $Y, \$\$: ${$$}, qUote: $qUote, sIngle: $sIngle, semiColon: $semiColon, backTick: $backTick, newLine: $newLine, withSpace: $withSpace, \$9lives: ${$9lives}, kind: $kind)';
 }
-
 
 class Api {
   final BlocksClient _client;
   Api(this._client);
 
-  Future<SampleType$X> getSampleX({required String runErrorXParamP, required SampleType$X item, int? optIonal}) async {
+  Future<SampleType$X> getSampleX({
+    required String runErrorXParamP,
+    required SampleType$X item,
+    int? optIonal,
+  }) async {
     final params = <dynamic>[
       runErrorXParamP,
       item.toJson(),
@@ -197,15 +230,17 @@ class Api {
   }
 }
 
-
 sealed class NsDoActionInput {
   const NsDoActionInput();
   Map<String, dynamic> toJson();
   static NsDoActionInput fromJson(Map<String, dynamic> json) {
     switch (json['ty pe'] as String) {
-      case 'cre"ate': return CreAteInput.fromJson(json);
-      case 're`move': return ReMoveInput.fromJson(json);
-      default: throw ArgumentError('Unknown ty pe: ${json['ty pe']}');
+      case 'cre"ate':
+        return CreAteInput.fromJson(json);
+      case 're`move':
+        return ReMoveInput.fromJson(json);
+      default:
+        throw ArgumentError('Unknown ty pe: ${json['ty pe']}');
     }
   }
 }
@@ -213,29 +248,20 @@ sealed class NsDoActionInput {
 class CreAteInput extends NsDoActionInput {
   final String tiTle;
 
-  const CreAteInput({
-    required this.tiTle,
-  });
+  const CreAteInput({required this.tiTle});
 
   factory CreAteInput.fromJson(Map<String, dynamic> json) {
-    return CreAteInput(
-      tiTle: json['ti;tle'] as String,
-    );
+    return CreAteInput(tiTle: json['ti;tle'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'ty pe': 'cre"ate',
-      'ti;tle': tiTle,
-    };
+    return {'ty pe': 'cre"ate', 'ti;tle': tiTle};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is CreAteInput &&
-          tiTle == other.tiTle;
+      identical(this, other) || other is CreAteInput && tiTle == other.tiTle;
 
   @override
   int get hashCode => tiTle.hashCode;
@@ -247,29 +273,20 @@ class CreAteInput extends NsDoActionInput {
 class ReMoveInput extends NsDoActionInput {
   final String $Id;
 
-  const ReMoveInput({
-    required this.$Id,
-  });
+  const ReMoveInput({required this.$Id});
 
   factory ReMoveInput.fromJson(Map<String, dynamic> json) {
-    return ReMoveInput(
-      $Id: json['\${id}'] as String,
-    );
+    return ReMoveInput($Id: json['\${id}'] as String);
   }
 
   @override
   Map<String, dynamic> toJson() {
-    return {
-      'ty pe': 're`move',
-      '\${id}': $Id,
-    };
+    return {'ty pe': 're`move', '\${id}': $Id};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ReMoveInput &&
-          $Id == other.$Id;
+      identical(this, other) || other is ReMoveInput && $Id == other.$Id;
 
   @override
   int get hashCode => $Id.hashCode;
@@ -278,32 +295,22 @@ class ReMoveInput extends NsDoActionInput {
   String toString() => 'ReMoveInput(\$Id: ${$Id})';
 }
 
-
-
 class DoActionResult {
   final bool ok;
 
-  const DoActionResult({
-    required this.ok,
-  });
+  const DoActionResult({required this.ok});
 
   factory DoActionResult.fromJson(Map<String, dynamic> json) {
-    return DoActionResult(
-      ok: json['ok`'] as bool,
-    );
+    return DoActionResult(ok: json['ok`'] as bool);
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'ok`': ok,
-    };
+    return {'ok`': ok};
   }
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is DoActionResult &&
-          ok == other.ok;
+      identical(this, other) || other is DoActionResult && ok == other.ok;
 
   @override
   int get hashCode => ok.hashCode;
@@ -312,27 +319,22 @@ class DoActionResult {
   String toString() => 'DoActionResult(ok: $ok)';
 }
 
-
 class NsApi {
   final BlocksClient _client;
   NsApi(this._client);
 
   Future<DoActionResult> doAction({required NsDoActionInput input}) async {
-    final params = <dynamic>[
-      input.toJson(),
-    ];
+    final params = <dynamic>[input.toJson()];
     final result = await _client.call('ns.do`Action', params);
     return DoActionResult.fromJson(result as Map<String, dynamic>);
   }
 }
-
 
 // --- Servers ---
 
 class Servers {
   static const String mainValX1 = 'https://example.com';
 }
-
 
 // --- Blocks Client ---
 
@@ -342,7 +344,10 @@ class Blocks {
   late final BlocksClient _client;
 
   Blocks({String? baseUrl, SessionStore? sessionStore}) {
-    final client = BlocksClient(baseUrl: baseUrl ?? Servers.mainValX1, sessionStore: sessionStore);
+    final client = BlocksClient(
+      baseUrl: baseUrl ?? Servers.mainValX1,
+      sessionStore: sessionStore,
+    );
     _client = client;
     api = Api(client);
     ns = NsApi(client);
@@ -353,4 +358,3 @@ class Blocks {
   /// does nothing more.
   void close() => _client.close();
 }
-
