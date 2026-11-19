@@ -43,6 +43,7 @@ blocks.close();
 |---------|------|
 | **blocks_runtime** | The runtime your app ships with — HTTP client, WebSocket realtime, file handles |
 | **blocks_codegen** | The code generator — reads your spec, outputs Dart. Only runs at build time. |
+| **blocks_runtime_flutter** | Flutter support: keeps the session in the platform's secure storage, and opens the browser for OIDC sign-in |
 
 ## Getting started
 
@@ -110,17 +111,14 @@ export const oidcApi = auth.createOidcApi();
 ```dart
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
-import 'package:flutter/widgets.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'blocks.blocks.dart'; // the generated client
 
 const rpcUrl = 'https://api.example.com/aws-blocks/api';
 
-// FlutterSecureStore uses a platform channel: in main(), before it.
-WidgetsFlutterBinding.ensureInitialized();
-final session = PersistentSessionStore(store: FlutterSecureStore());
-await session.load();
-final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
+// blocks_runtime_flutter keeps the session in secure storage by default
+// (see Sessions), so a restarted app is still signed in.
+final blocks = Blocks(baseUrl: rpcUrl);
 // Listed in the block's redirects.allowedRelayOrigins.
 const relayTo = 'com.example.app://auth';
 
@@ -249,6 +247,71 @@ On desktop, a call without a `launcher` binds `127.0.0.1` on a port the operatin
 - `oidc.signInTimeout` (default 5 minutes) bounds the wait. When it passes, `signIn` throws `OidcCancelledException`. Both fields apply only to a call without a `launcher`.
 - For a command-line app: when the default handler can't open a browser, for example on a Linux host with no `xdg-open`, the client prints a one-time `http://127.0.0.1:<port>/oidc/start/<random>` URL to stderr and keeps waiting. Opening it redirects to the sign-in page. Treat it like the sign-in link itself: it works once, for this sign-in only. On Windows, `rundll32` usually exits 0 even when nothing opened, so this fallback rarely runs there. A Flutter app has no stderr to read, which is why it should set `openBrowser`.
 - A sandboxed macOS app needs the `com.apple.security.network.server` entitlement to accept the redirect on its listener, and should set `openBrowser` to `url_launcher`, because the sandbox can stop it from running `open`.
+
+## Sessions
+
+When the backend signs a user in, it sets a session cookie, and the client sends it back on every later call. Where that cookie is kept depends on the platform, the same way it does in the Swift and Kotlin SDKs:
+
+| Where the app runs | Where the session is kept |
+|---|---|
+| Flutter on Android, iOS, macOS, Linux or Windows, with `blocks_runtime_flutter` | The platform's secure storage, through `flutter_secure_storage` (the Keystore on Android, the Keychain on iOS and macOS). The user stays signed in after the app restarts. |
+| Flutter web, or Dart compiled for the web | The browser's own cookie jar, for a backend on the app's own origin. The browser never shows the session cookie to Dart. |
+| A pure Dart program (command-line tool, server) | Memory, unless the program registers a store (see below). |
+
+A Flutter app needs no code for this. Add the dependency:
+
+```yaml
+dependencies:
+  blocks_runtime: ^0.2.0
+  blocks_runtime_flutter: ^0.2.0
+```
+
+and build the client as usual, before or after `runApp`. The app does not have to call `WidgetsFlutterBinding.ensureInitialized()` first:
+
+```dart
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+// Signed in if the user was signed in before the app restarted.
+final state = await blocks.authApi.getAuthState();
+```
+
+`blocks_runtime_flutter` registers itself as a Dart plugin, so Flutter sets up the secure store before `main` runs. Every `Blocks` (and `BlocksClient` or `OidcClient`) built without a `sessionStore:` then shares that one store. It reads the saved session before the first call, and writes it back only when the backend changes a cookie. If the secure storage cannot be read or written, the call still goes ahead with the session held in memory, and the error is passed to `FlutterError.reportError` as a silent error, so a crash reporter hooked to `FlutterError.onError` sees it.
+
+macOS, Android and Linux each need some app setup for the secure storage to work, or to keep the session safe: the macOS `keychain-access-groups` entitlement, Android backup rules, and the libsecret runtime on Linux. See [Platform setup](packages/blocks_runtime_flutter/README.md#platform-setup).
+
+Flutter does not run plugin registration under `flutter test`, so widget and unit tests keep the session in memory. An `integration_test` run on a device does register it, and keeps the session between runs.
+
+To keep the session in memory only, so that it ends when the process does, pass `InMemorySessionStore()`:
+
+```dart
+final blocks = Blocks(
+  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  sessionStore: InMemorySessionStore(),
+);
+```
+
+A pure Dart program has no per-application storage to default to: the home directory is shared by every program the user runs. To keep its session across runs, it names itself once at startup, before building any client (registering a different store after a client exists throws a `StateError`):
+
+```dart
+import 'dart:io';
+
+import 'package:blocks_runtime/blocks_runtime.dart';
+
+Future<void> main() async {
+  final session = PersistentSessionStore(
+    store: FileTokenStore(applicationId: 'com.example.notes_cli'),
+    onPersistError: (error, _) => stderr.writeln('session not saved: $error'),
+  );
+  registerDefaultSessionStore(() => session);
+  final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  // ... sign in ...
+
+  // The session is written in the background; wait for it before exit().
+  await session.flush();
+  exit(0);
+}
+```
+
+`FileTokenStore` keeps the session unencrypted in `~/.blocks/<applicationId>/dart/`, in a directory only your OS user can read on Linux and macOS. See its documentation for what that does and does not protect against. Without `onPersistError`, a storage error is written once to standard error.
 
 ## Features
 

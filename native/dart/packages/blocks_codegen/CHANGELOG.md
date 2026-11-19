@@ -125,6 +125,9 @@
   `OidcProvider` is a generation error, as for every other public
   `blocks_runtime` type, because the generated library imports the runtime
   wholesale and the name would be ambiguous.
+- A declared native binding whose Dart type is named `FileTokenStore` is
+  rejected, as for every other type `blocks_runtime` exports, because the
+  runtime now exports a class of that name.
 
 ## 0.2.0
 
