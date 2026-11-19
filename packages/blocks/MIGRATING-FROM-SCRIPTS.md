@@ -20,12 +20,12 @@ Some generated scripts are kept and reported:
 
 - Customized `server.ts`: the `sandbox`, `sandbox:deploy` and `sandbox:preview` scripts are kept. A generated `sandbox.ts` starts `server.ts` as the sandbox's dev server, and `npm run sandbox` would bypass the custom server.
 - Customized `server.ts` in the Amplify overlay: `blocks:stop` and `stop.ts` are kept as well. The overlay's `stop.ts` stops the port of its `server.ts`, but the replacement task stops the `blocks.dev` port, which migrate takes only from a generated `server.ts`.
-- `.blocks/config.json` missing or without a `stackId`: the `deploy` and `destroy` scripts and their wrappers are kept. `npm run deploy` and `npm run destroy` name the production stack `<stackId>-prod` and stop without it.
-- `.blocks/config.json` that is not valid JSON: they are kept too, and the report quotes the parse error so you can fix the file.
+- `.cdk-blocks/config.json` missing or without a `stackId`: the `deploy` and `destroy` scripts and their wrappers are kept. `npm run deploy` and `npm run destroy` name the production stack `<stackId>-prod` and stop without it.
+- `.cdk-blocks/config.json` that is not valid JSON: they are kept too, and the report quotes the parse error so you can fix the file.
 
 To finish a kept `deploy` or `destroy`:
 
-1. Create `.blocks/config.json` with `{"stackId": "<id>"}`. `<id>-prod` must equal the name of the production stack that your `aws-blocks/index.cdk.ts` defines: an app whose `index.cdk.ts` hard-codes `'my-blocks-stack-prod'` uses `{"stackId": "my-blocks-stack"}`.
+1. Create `.cdk-blocks/config.json` with `{"stackId": "<id>"}`. `<id>-prod` must equal the name of the production stack that your `aws-blocks/index.cdk.ts` defines: an app whose `index.cdk.ts` hard-codes `'my-blocks-stack-prod'` uses `{"stackId": "my-blocks-stack"}`.
 2. Review and commit the config together with the script changes and wrapper deletions from the first migration. Start the next run with a clean working tree.
 3. Run `npm run migrate` again.
 

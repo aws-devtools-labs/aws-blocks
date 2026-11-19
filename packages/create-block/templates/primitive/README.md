@@ -50,7 +50,7 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 `npm run dev` runs the mock entry (`index.mock.ts`) — no AWS account required.
 
 TODO: say where the mock keeps its data (in memory, or on disk under
-`.bb-data/`, which `rm -rf .bb-data` wipes).
+`.cdk-blocks/local/data/`, which `rm -rf .cdk-blocks/local/data .bb-data` resets along with legacy data).
 
 TODO: list each difference between the mock and AWS that an app can observe.
 Write "None." if there is none.

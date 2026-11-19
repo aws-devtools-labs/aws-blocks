@@ -367,7 +367,7 @@ Run `npm run typegen` once and commit `.cdk-blocks/hosting-values.d.ts` before g
 - `--no-input`: never prompt.
 - `--profile <name>` (sets `AWS_PROFILE`) and `--region <region>` (sets `AWS_REGION`).
 - `-C`/`--cwd <dir>`: run as if started in that directory.
-- `--telemetry-file <path>` (also `--telemetry-file=<path>`): also write the run's telemetry events to that file, for example `npm run dev -- --telemetry-file=/tmp/events.json`. It is passed to the lifecycle runners. A relative path is resolved from the directory you run the command in.
+- `--telemetry-file <path>` (also `--telemetry-file=<path>`): also write the run's telemetry events to that file, for example `npm run dev -- --telemetry-file=/tmp/events.json`. This applies to every command. A relative path is resolved from the directory you run the command in.
 
 ### Telemetry
 
@@ -495,7 +495,7 @@ node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate --dry-run
 node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate
 ```
 
-4. Review `git diff` and the list of kept items. A customized wrapper is never deleted; it is reported with its script, which keeps running it. When `.blocks/config.json` is missing or has no `stackId`, the `deploy` and `destroy` scripts and their wrappers are kept.
+4. Review `git diff` and the list of kept items. A customized wrapper is never deleted; it is reported with its script, which keeps running it. When `.cdk-blocks/config.json` is missing or has no `stackId`, the `deploy` and `destroy` scripts and their wrappers are kept.
 5. Replace any remaining calls in CI, shell scripts and custom wrappers with the matching app script; for example, use `npm run sandbox:deploy`, not an executable on `PATH`.
 
 Use `npm run migrate -- --dry-run` for subsequent checks once that script exists.

@@ -66,7 +66,7 @@ data: the block does not move rows between clusters. See "Which cluster" and
 
 `npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-`npm run typegen` regenerates the secret and config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
 
 After code changes, run `npm run typecheck`: `npm run test:e2e` does not type-check.
 

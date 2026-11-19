@@ -65,7 +65,7 @@ your first deploy: Cognito can't change them on an existing user pool. Full
 
 `npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-`npm run typegen` regenerates the secret and config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
 
 ## For Agents
 

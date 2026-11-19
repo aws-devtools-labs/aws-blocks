@@ -25,7 +25,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 `npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-`npm run typegen` regenerates the secret and config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
 
 ## Stack naming
 
