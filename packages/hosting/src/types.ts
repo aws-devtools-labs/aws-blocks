@@ -131,17 +131,30 @@ export type HostingProps = {
   /**
    * WAF configuration.
    */
-  waf?: {
-    enabled: boolean;
-    /** Requests per 5-minute window per IP. Default: 1000 */
-    rateLimit?: number;
-    /**
-     * ARN of an existing WAFv2 WebACL in us-east-1. When provided, the
-     * construct uses this ACL directly instead of creating a new one.
-     * Enables cross-region deployments (WebACL in us-east-1, stack elsewhere).
-     */
-    webAclArn?: string;
-  };
+  waf?:
+    | {
+        enabled: boolean;
+        /** Requests per 5-minute window per IP. Default: 1000 */
+        rateLimit?: number;
+        /**
+         * ARN of an existing WAFv2 WebACL in us-east-1. When provided, the
+         * construct uses this ACL directly instead of creating a new one.
+         * Enables cross-region deployments (WebACL in us-east-1, stack elsewhere).
+         */
+        webAclArn?: string;
+      }
+    | {
+        /** Not needed with `webAclArn`, and ignored: your ACL is attached and none is built. */
+        enabled?: boolean;
+        /** Requests per 5-minute window per IP. Default: 1000 */
+        rateLimit?: number;
+        /**
+         * ARN of an existing WAFv2 WebACL in us-east-1. When provided, the
+         * construct uses this ACL directly instead of creating a new one.
+         * Enables cross-region deployments (WebACL in us-east-1, stack elsewhere).
+         */
+        webAclArn: string;
+      };
 
   /**
    * Enable build caching. Preserves framework build cache (e.g. `.next/cache`)

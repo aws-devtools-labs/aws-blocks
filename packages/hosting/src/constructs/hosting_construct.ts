@@ -151,18 +151,42 @@ export type HostingDomainConfig = {
 
 /**
  * WAF configuration for CloudFront protection.
+ *
+ * Either `enabled` (a rate-limited web ACL built for you) or `webAclArn` (your
+ * own web ACL) is required. With `webAclArn`, `enabled` is not needed and has
+ * no effect: your ACL is attached and none is built.
+ *
+ * @example
+ * ```ts
+ * waf: { enabled: true, rateLimit: 2000 } // a web ACL built for you
+ * waf: { webAclArn: myWebAcl.attrArn }     // your own web ACL
+ * ```
  */
-export type HostingWafConfig = {
-  enabled: boolean;
-  /** Requests per 5-minute window per IP. Default: 1000 */
-  rateLimit?: number;
-  /**
-   * ARN of an existing WAFv2 WebACL in us-east-1. When provided, the
-   * construct uses this ACL directly instead of creating a new one.
-   * Enables cross-region deployments.
-   */
-  webAclArn?: string;
-};
+export type HostingWafConfig =
+  | {
+      /** Build a rate-limited web ACL. Ignored when `webAclArn` is set. */
+      enabled: boolean;
+      /** Requests per 5-minute window per IP. Default: 1000 */
+      rateLimit?: number;
+      /**
+       * ARN of an existing WAFv2 WebACL in us-east-1. When provided, the
+       * construct uses this ACL directly instead of creating a new one.
+       * Enables cross-region deployments.
+       */
+      webAclArn?: string;
+    }
+  | {
+      /** Not needed with `webAclArn`, and ignored: your ACL is attached and none is built. */
+      enabled?: boolean;
+      /** Requests per 5-minute window per IP. Default: 1000 */
+      rateLimit?: number;
+      /**
+       * ARN of an existing WAFv2 WebACL in us-east-1. When provided, the
+       * construct uses this ACL directly instead of creating a new one.
+       * Enables cross-region deployments.
+       */
+      webAclArn: string;
+    };
 
 /**
  * Props for the HostingConstruct.
