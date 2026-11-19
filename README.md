@@ -11,7 +11,7 @@ AWS CDK Blocks is a backend toolkit for building full-stack applications on AWS.
 Requires [Node.js](https://nodejs.org/) 22 or later and npm 10 or later.
 
 ```bash
-npm create aws-cdk-blocks-app@latest my-app
+npm create @aws-cdk-blocks/blocks-app@latest my-app
 cd my-app
 npm install
 npm run dev

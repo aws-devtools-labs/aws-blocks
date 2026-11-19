@@ -3,7 +3,7 @@
 > **AWS Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `cdk-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
 
 ## How to work here
-You're an engineer working **on AWS Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS Blocks, this is the wrong doc → run `npm create aws-cdk-blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
+You're an engineer working **on AWS Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS Blocks, this is the wrong doc → run `npm create @aws-cdk-blocks/blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
 
 - **Default to making the change** — implement it, don't just describe it.
 - **Definition of done = the "Before you open a PR" checklist passes** (build, lint, tests, changeset, docs).
@@ -333,4 +333,4 @@ Check correctness/security, mock↔aws↔cdk↔browser consistency + conditional
 - `packages/hosting/README.md` — SPA/SSR frontend hosting
 - `packages/bb-database/README.md` — DB migrations
 - `native/*` — Kotlin/Swift/Dart client codegen
-- per-template `AGENTS.md` (via `npm create aws-cdk-blocks-app@latest my-app`) — building an app *with* AWS Blocks.
+- per-template `AGENTS.md` (via `npm create @aws-cdk-blocks/blocks-app@latest my-app`) — building an app *with* AWS Blocks.

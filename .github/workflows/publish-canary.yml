@@ -81,6 +81,6 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "### Create App" >> "$GITHUB_STEP_SUMMARY"
             echo '```bash' >> "$GITHUB_STEP_SUMMARY"
-            echo "npm create aws-cdk-blocks-app@$(jq -r .distTag publish-manifest.json) -- --template demo" >> "$GITHUB_STEP_SUMMARY"
+            echo "npm create @aws-cdk-blocks/blocks-app@$(jq -r .distTag publish-manifest.json) -- --template demo" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi

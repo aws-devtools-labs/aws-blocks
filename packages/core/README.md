@@ -1750,7 +1750,7 @@ The execution policy and the deploy guard enforce both anyway; the check fails t
 
 #### The app's side: what to put in your project template
 
-A platform team gives every app the same starting point, so the identity and the boundary are there before anyone writes code. Put these files in the platform's own project template (for example a copy of an AWS CDK Blocks starter such as `npm create aws-cdk-blocks-app@latest my-app -- --template api-only`). `APP_ID` is the app's id, which the platform gives it however it manages ids; the pipeline sets it, and a developer exports it for a sandbox (`APP_ID=<id> npm run sandbox`).
+A platform team gives every app the same starting point, so the identity and the boundary are there before anyone writes code. Put these files in the platform's own project template (for example a copy of an AWS CDK Blocks starter such as `npm create @aws-cdk-blocks/blocks-app@latest my-app -- --template api-only`). `APP_ID` is the app's id, which the platform gives it however it manages ids; the pipeline sets it, and a developer exports it for a sandbox (`APP_ID=<id> npm run sandbox`).
 
 **`cdk-blocks/index.cdk.ts`.** The app id is the bootstrap qualifier and the stack name, and `defaults.appIdentity` sets the identity. `defaults.appIdentity` validates the id at synth (pattern and reserved ids, with the reason), so the entry only has to check that `APP_ID` is set:
 
