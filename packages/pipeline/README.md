@@ -14,7 +14,7 @@ Creates one self-mutating CodePipeline V2 per branch. Each pipeline:
 ```ts
 // aws-blocks/pipeline.cdk.ts
 import { App } from 'aws-cdk-lib';
-import { Pipeline } from '@aws-blocks/pipeline';
+import { Pipeline } from '@aws-blocks/core/cdk';
 
 const app = new App();
 
@@ -22,6 +22,9 @@ await Pipeline.create(app, 'Pipeline', {
   source: {
     repo: 'my-org/my-app',
     connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc',
+  },
+  synth: {
+    commands: ['npm ci', 'npx cdk synth --app "npx tsx -C cdk aws-blocks/pipeline.cdk.ts"'],
   },
   branches: [
     {
@@ -39,9 +42,10 @@ The file sits beside the app's `aws-blocks/index.cdk.ts`. With neither
 `stageFactory` nor `appFile`, `Pipeline.create()` imports `./index.cdk.ts`
 (resolved relative to the calling file) once per stage, with the stage's
 `environment` set on `process.env`, and the `BlocksStack.create()` call in
-that file attaches its stack to the stage. The synth step runs
-`npx cdk synth`, so the CDK app of `cdk.json` must be the pipeline file, for
-example `"app": "npx tsx -C cdk aws-blocks/pipeline.cdk.ts"`.
+that file attaches its stack to the stage. The explicit `--app` selects the
+pipeline for the synth step. Keep `cdk.json` pointed at `aws-blocks/index.cdk.ts`
+for local app deploys. To deploy the pipeline itself from the project root,
+run `npx cdk deploy --app "npx tsx -C cdk aws-blocks/pipeline.cdk.ts"`.
 
 The CodeConnections connection needs a one-time OAuth handshake in the AWS
 Console (Developer Tools → Connections) before the pipeline can pull source.
@@ -100,7 +104,7 @@ new Pipeline(stack, 'Pipeline', {
 | `selfMutation` | `boolean` | `true` | Whether the pipeline updates its own definition. |
 | `crossAccountKeys` | `boolean` | `false` | KMS keys for artifact encryption. Must be `true` when a stage's `env.account` differs from the pipeline's account, or synth throws. |
 
-`Pipeline` from `@aws-blocks/core` takes the same props and defaults the two
+`Pipeline` from `@aws-blocks/core/cdk` takes the same props and defaults the two
 prefixes to the ones the AWS Blocks `secret` and `config` scripts write:
 `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`, or
 `/blocks/secrets` and `/blocks/config` when the app has no `stackId`.
@@ -130,7 +134,7 @@ prefixes to the ones the AWS Blocks `secret` and `config` scripts write:
 | `env` | `cdk.Environment` | the pipeline's account and region | Target account and region. |
 | `requireApproval` | `boolean` | `false` | Manual approval before the stage deploys. |
 | `approvalComment` | `string` | `Approve deployment to <name>` | Comment shown in the approval. |
-| `bakeTime` | `cdk.Duration` | | Wait after the deploy before the pipeline proceeds. Must be positive. Runs as a CodeBuild `sleep` step with a timeout of `bakeTime` plus 10 minutes. |
+| `bakeTime` | `cdk.Duration` | | Wait after the deploy before the pipeline proceeds. Use a positive whole number of minutes, such as `Duration.minutes(5)`. Runs as a CodeBuild `sleep` step with a timeout of `bakeTime` plus 10 minutes. |
 | `config` | `TConfig` | | Your own per-stage settings, passed to `stageFactory` as `stageConfig.config`. |
 | `environment` | `Record<string, string>` | | Variables set on `process.env` while `appFile` is imported for this stage (synth time only). Applies with `appFile` only. |
 

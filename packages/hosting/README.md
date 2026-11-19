@@ -61,7 +61,7 @@ new HostingConstruct(stack, 'Hosting', { manifest });
 | `frontDoor` | `'cloudfront'`, `'none'` or `{ kind?, features?, … }` | `'cloudfront'` | The public entry point and its settings. See [Front doors](#front-doors). |
 | `compute` | object | | Overrides for the compute: `type` (`'lambda'` or `'web-function'`, default `'lambda'`), `webFunction`, `memorySize`, `timeout` (a `Duration` or seconds), `reservedConcurrency`, `provisionedConcurrency`, `imageOptimization.reservedConcurrency`, `logRetention`, `environment`, `warmup: { rate }`, `tracing: { otelEndpoint, otelHeaders?, serviceName? }`. |
 | `environment` | `Record<string, string \| ManagedValue \| ISecret \| IParameter>` | | Environment variables for all compute functions. See [Secrets & config](#secrets--config). |
-| `secretStore`, `configStore` | `KindStoreOptions` | | Prefix, stage and cache settings of the two stores. See [Secrets & config](#secrets--config). |
+| `secretStore`, `configStore` | `KindStoreOptions` | | Prefix, stage and cache settings. Before deploying, check the [region, prefix and stage limits](#region-prefix-and-stage-limits). |
 | `storage` | object | | `encryption` (`'S3_MANAGED'` or `'KMS'`), `encryptionKey`, `retainOnDelete`, `buildRetentionDays` (default 30), `deployIntervalDays`, `inventory: { enabled }`, `deployment: { memoryLimit, ephemeralStorageMiB }` (the asset-upload Lambda, default 1024 MiB each). |
 | `errorPages` | `{ notFound?, serverError? }` | | Paths of the 404 and 500 HTML files, relative to the project root. |
 | `buildCache` | `{ enabled, bucket? }` | | An S3 bucket for framework build caches. Created unless `bucket` is given. |
@@ -210,7 +210,7 @@ with `StreamingServerNeedsStreamingDoorError`. A Lambda Web Adapter server
 | Door | Invokes the server | Next.js | Nitro `aws-lambda` preset |
 |---|---|---|---|
 | CloudFront; `apiGateway` with `api: 'rest'` | Streaming or buffered, as it was built | Works | Works with `awsLambda.streaming` on or off |
-| `apiGateway` with `api: 'http'` | Buffered | Works: the adapter builds a buffered server. A hand-written `open-next.config.ts` with a streaming wrapper fails synth | Works with `awsLambda.streaming` off; fails synth with it on |
+| `apiGateway` with `api: 'http'` | Buffered | Works with the HTTP API build profile that core `Hosting` selects. A default streaming build fails synth | Works with `awsLambda.streaming` off; fails synth with it on |
 | `alb`, `stacked` | Buffered | Fails synth | Works with `awsLambda.streaming` off; fails synth with it on |
 | `custom` | As the door's `serverResponse` declares (default `'streaming'`) | Works with `'streaming'`; fails synth with `'buffered'` | Works with `'streaming'`, or with `awsLambda.streaming` off |
 
@@ -273,7 +273,9 @@ frontDoor: { kind: 'alb', features: { geoRestriction: { type: 'allowlist', count
 `skewProtection` and the `cdn.*` settings are deprecated aliases of the
 `frontDoor.features` settings of the same name (`cdn.priceClass` is
 `features.priceClass`; `cdn.webAclArn` is `features.waf.webAclArn`). They are
-merged into the effective `frontDoor.features`.
+merged into the effective `frontDoor.features`. With `frontDoor` omitted or set
+to `'cloudfront'`, moving each alias to its corresponding feature preserves the
+synthesized template.
 
 - Setting a setting both ways fails synth with
   `FrontDoorSettingConflictError`.
@@ -337,7 +339,11 @@ on the ALB, the headers also by the API forwarder) with the CloudFront door's
 semantics, using the same matching code:
 
 - redirects: first match wins, a wildcard destination gets the matched tail
-  (`/old/*` → `/new/*`), and the status is kept exactly (301, 302, 307, 308);
+  (`/old/*` → `/new/*`), and the status is kept exactly (301, 302, 307, 308).
+  A spliced target's leading slashes or backslashes collapse to one slash,
+  so `/old//evil.example` never becomes `Location: //evil.example`. Each
+  redirect source routes to the asset proxy through an ALB listener rule,
+  an HTTP API route or a REST resource;
 - header rules: every matching rule is added to a successful response (not to
   a redirect or an error, as at the CloudFront edge);
 - error pages: a missing static file answers with the 404 page (status 404),
@@ -374,7 +380,8 @@ from a file bucket. The same limits bind everything else these doors carry:
   integration timeout.
 
 **ALB listener rules.** Consecutive paths bound for the same target share a
-rule, and routes that go where the default goes get no rule. A single pattern
+rule: up to five path values (four alongside the stacked router's header
+check) and six wildcards per rule. Routes to the default target need no rule. A single pattern
 with more than six wildcards (`*` or `?`) fails synth
 (`UnsupportedRoutePatternError`). A load balancer allows 100 rules by default;
 synth warns above that (`@aws-blocks/hosting:AlbRuleLimit`).
@@ -398,10 +405,17 @@ fails synth (`UnsupportedRoutePatternError`); a route-table pattern of that
 shape is served by the default integration, with a synth warning
 (`@aws-blocks/hosting:RouteNotExpressible`). A REST API allows 300 resources
 by default (every path segment is one); synth warns above that.
+Each function gets one API-scoped invoke permission, not one per route, so
+adding routes doesn't fill Lambda's 20 KB resource policy.
 
 **The server behind the HTTP API.** An HTTP API Lambda integration sends the
-payload format 2.0 event and can't stream, so the adapters build the server
-for it:
+payload format 2.0 event and can't stream. `Hosting` from `@aws-blocks/core`
+selects the HTTP API build profile for the adapter. If you run the adapter
+yourself for `HostingConstruct`, import `withBuildProfile` from
+`@aws-blocks/hosting/adapters` and wrap the build, for example
+`withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: process.cwd() }))`.
+Without that profile, the default Next.js build streams and fails synth.
+Core `Hosting` uses these settings:
 
 - Next.js: OpenNext's `aws-apigw-v2` converter with the buffered `aws-lambda`
   wrapper. A hand-written `open-next.config.ts` must use the same pair.
@@ -673,7 +687,15 @@ new HostingConstruct(stack, 'Hosting', {
 - The SSR server is exposed as `HostingConstruct.computeWebFunctions`, not in
   `computeFunctions`. Grant it access to AWS resources through its
   `grantPrincipal`.
-- Superseded bundle zips expire after 30 days.
+- Each deploy writes `web-function/<fn>/code.zip` to a versioned S3 bucket.
+  The revision pins that object version; superseded zips expire after 30 days.
+  A content-derived logical ID lets CloudFormation create the new revision
+  and switch the endpoint without a replacement update, which sandbox Express
+  Mode rejects when rollback is disabled.
+- An entry shim sets `HOST` and `PORT` from `AWS_LAMBDA_HTTP_ENDPOINT` before
+  importing the server. A custom resource grants the distribution
+  `lambda:InvokeWebFunctionEndpoint` because CloudFormation has no resource
+  type for the Web Function's resource policy.
 - Each Web Function stack creates one response headers policy, which counts
   against the account's response headers policy quota (20 by default). It has
   the settings of AWS's managed `SecurityHeadersPolicy` and removes the
@@ -786,6 +808,7 @@ deploy that moves it to the random secret. To avoid it, deploy once with
 without it. While it is set:
 
 - the SSR REST API's policy accepts both values;
+- anyone who can derive the earlier value can reach the server origin directly;
 - with a Nuxt IPX optimizer, the SSR REST API keeps the image routes for the
   edges still sending image requests there;
 - the SSR REST API's stage gets no web ACL, because edges on the previous
@@ -808,8 +831,8 @@ A build that a later deploy replaced is kept for `storage.buildRetentionDays`
   your next deploy.
 - The lifecycle rule expires only builds tagged
   `aws-blocks:build-state=superseded`, which a deploy's cutover sets. Builds
-  left by an aborted or rolled-back deploy are never tagged: remove them
-  yourself.
+  uploaded before hosting tagged builds, or left by an aborted or rolled-back
+  deploy, stay untagged and must be removed manually.
 
 ```ts
 new HostingConstruct(stack, 'Hosting', {
@@ -876,8 +899,8 @@ Set `cacheKeyCookies` (your session cookie names) and/or `cacheKeyHeaders`
 | `frontDoor.features` option | Type | Default | Limit | Error |
 |---|---|---|---|---|
 | `ssrDefaultTtl` | `Duration` | `Duration.seconds(0)`: no caching unless the origin opts in | Edge TTLs are capped at 1 day | `SsrCacheKeyCredentialsRequiredError` when above 0 and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set |
-| `cacheKeyCookies` | `string[]` | none | 8 names | `SsrCacheKeyCookieCapError` |
-| `cacheKeyHeaders` | `string[]` | none | 5 names; `accept-encoding` is handled automatically and not allowed | `SsrCacheKeyHeaderCapError`, `SsrCacheKeyAcceptEncodingError` |
+| `cacheKeyCookies` | `string[]` | none | 8 extra names by default (10 minus 2 reserved). Set `quotas.cacheKeyCookies` to your approved CloudFront quota. | `SsrCacheKeyCookieCapError` |
+| `cacheKeyHeaders` | `string[]` | none | 5 extra names by default (10 minus 5 reserved). Set `quotas.cacheKeyHeaders` to your approved CloudFront quota. `accept-encoding` is handled automatically and not allowed. | `SsrCacheKeyHeaderCapError`, `SsrCacheKeyAcceptEncodingError` |
 | `cacheGuardIgnoredCookies` | `string[]` | none | A name may not also be in `cacheKeyCookies` | `CacheGuardIgnoredCookieInCacheKeyError` |
 
 ```ts
@@ -1187,10 +1210,10 @@ environment: { FEATURE_FLAGS: config('FEATURE_FLAGS', { schema: z.object({ beta:
 const { beta } = await getConfig('FEATURE_FLAGS');   // typed as { beta: boolean }
 ```
 
-After `hosting-typegen`, `getConfig` / `getSecret` return the schema's output
-type and JSON-parse the stored value. The `schema` option is typed as
-`StandardSchemaV1`. The schema does not run at runtime: the value is parsed,
-not validated, on read.
+Declaring a schema sets a flag at synth: `getConfig` and `getSecret` JSON-parse
+that key on read, even without `hosting-typegen`. Typegen gives the getter the
+schema's static output type. The schema (`StandardSchemaV1`) does not run at
+runtime: the stored value is parsed, not validated.
 
 ### Transport markers across a JSON / build boundary
 
@@ -1214,10 +1237,11 @@ isSecret(cfg.apiKey); // true
 `JSON.parse` hooks for a whole, possibly nested, object. `encodeManagedValue`
 / `decodeManagedValue` convert a single value.
 
-Wire format:
+The wire format is a published, cross-build compatibility boundary:
 
 - Each encoded value carries a protocol version
-  (`MANAGED_VALUE_JSON_VERSION`).
+  (`MANAGED_VALUE_JSON_VERSION`). The decoder rejects versions it doesn't
+  understand rather than silently misreading a different producer's data.
 - `decodeManagedValue(v: unknown)` throws `ManagedValueCodecError` on an
   unsupported version, an unknown kind, an invalid key or any other malformed
   shape.
@@ -1245,7 +1269,7 @@ npx hosting-secret remove STRIPE_KEY --force --yes --prefix /myapp/secrets # imm
 npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
 ```
 
-- `set` creates the entry or overwrites it, with no prompt. Run it again to
+- `set` creates the entry or overwrites it, with no overwrite confirmation. Run it again to
   rotate a value.
 - `hosting-secret set KEY value` is an error: a secret value comes from the
   hidden prompt or `--value-stdin`.
@@ -1285,12 +1309,14 @@ synth. `error.name` and `error.code` hold the name in the table, and
 | `CacheGuardIgnoredCookieInCacheKeyError` | A cookie is in both `cacheKeyCookies` and `cacheGuardIgnoredCookies`. |
 | `EdgeComputeRequiresRegionError` | The app has Lambda@Edge compute and the stack has no explicit region. |
 | `EdgeRouteNeedsCloudFrontDoorError` | A Lambda@Edge compute is behind a door other than CloudFront. |
+| `EmptyGeoRestrictionError` | `geoRestriction.countries` is empty. |
 | `FrontDoorSettingConflictError` | A setting is set both as a top-level prop and in `frontDoor.features`. |
 | `HttpErrorStatusErrorPagesError` | `Hosting` from `@aws-blocks/core` sees an `ApiNamespace` with `httpErrorStatus: true` and a CloudFront 403 / 404 error page. |
 | `InvalidCertificateRegionError` | The CloudFront door's `certificate` is not in us-east-1. |
 | `InvalidFrontDoorOptionError` | A door option is unknown for the kind or has the wrong type. |
 | `InvalidFrontDoorSettingError` | A `features` setting has an unknown key, an unknown `geoRestriction.type`, or a `serverOrigin.verifySecretRotation` that is not a non-negative integer. |
 | `InvalidSkewProtectionMaxAgeError` | `skewProtection.maxAge` is outside 0 to 2592000 seconds (30 days), or exceeds `storage.buildRetentionDays`. |
+| `InvalidWebFunctionOptionError` | `maxConcurrencyPerEnvironment` is not an integer in 1–128, `maxEnvironments` is not an integer in 2–10000, or `rateLimit` is not 0, 100–1000 in steps of 100, or 2000–10000 in steps of 1000. |
 | `LoggingV2RegionError` | `logging.version: 'v2'` in a stack outside us-east-1. |
 | `MiddlewareNeedsCloudFrontDoorError` | The app has Next.js middleware and the door is not CloudFront. |
 | `MissingCertificateError` | A `domain` has no `hostedZone`, no `hostedZoneId` and no `certificate`. |
@@ -1299,15 +1325,18 @@ synth. `error.name` and `error.code` hold the name in the table, and
 | `PlainHttpFrontDoorError` | Production synth of an `alb` or `custom` door served over plain HTTP with an API, without `allowPlainHttp: true`. |
 | `RestFrontDoorNeedsDomainError` | `{ kind: 'apiGateway', api: 'rest' }` has no custom domain. |
 | `SsrCacheKeyAcceptEncodingError` | `cacheKeyHeaders` includes `accept-encoding`. |
-| `SsrCacheKeyCookieCapError` | `cacheKeyCookies` has more than 8 names. |
+| `SsrCacheKeyCookieCapError` | Extra cookie names plus the 2 reserved names exceed `quotas.cacheKeyCookies` (10 by default). |
 | `SsrCacheKeyCredentialsRequiredError` | `ssrDefaultTtl` is above 0 and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set. |
-| `SsrCacheKeyHeaderCapError` | `cacheKeyHeaders` has more than 5 names. |
+| `SsrCacheKeyHeaderCapError` | Extra header names plus the 5 reserved names exceed `quotas.cacheKeyHeaders` (10 by default). |
 | `StackedRouterCertificateNeedsDomainError` | `Hosting` from `@aws-blocks/core`: the stacked door's router has a `certificate` and no `features.router.domain`. |
 | `StreamingServerNeedsStreamingDoorError` | A streaming server handler is behind a door that invokes it without streaming. |
+| `TooManyCacheBehaviorsError` | The default behavior plus the additional CloudFront cache behaviors exceed `quotas.cacheBehaviors`. |
 | `UnsupportedComputeFrontDoorError` | `compute.type: 'web-function'` behind a door other than CloudFront. |
 | `UnsupportedFrontDoorError` | `frontDoor` is not a front door, `'none'` is set for an app with a server, or a custom door fails the wiring check. |
 | `UnsupportedFrontDoorSettingError` | The door kind doesn't implement a setting. |
 | `UnsupportedRoutePatternError` | ALB: one pattern has more than six wildcards. API Gateway: a backend route has a wildcard other than one trailing `/*`. |
+| `WafRegionError` | A CloudFront-scoped WAF is enabled in a known region outside us-east-1 and region validation isn't skipped. |
+| `WebFunctionPolicyAlreadySetError` | `allowCloudFrontInvoke()` was called twice on the same Web Function. |
 | `WebFunctionUnsupportedComputeError` | `compute.type: 'web-function'` with a compute that is not an HTTP-server build. |
 | `WebFunctionUnsupportedRegionError` | `compute.type: 'web-function'` in a Region without Lambda Web Functions. |
 
