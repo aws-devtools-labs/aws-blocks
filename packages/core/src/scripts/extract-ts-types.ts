@@ -16,6 +16,7 @@
 import * as ts from 'typescript';
 import { dirname, join, relative, resolve } from 'path';
 import { existsSync } from 'fs';
+import { DECLARATION_MARKER } from './schema-markers.js';
 
 /**
  * The handler argument of `new ApiNamespace(scope, label, handler, options?)`: the
@@ -358,8 +359,6 @@ export interface JsonSchema {
 	title?: string;
 	[key: string]: unknown;
 }
-
-import { DECLARATION_MARKER } from './schema-markers.js';
 
 /**
  * Set on a named object schema to the declaration it comes from

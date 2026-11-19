@@ -254,31 +254,39 @@ function extractParamNames(fn: Function): string[] {
  * loader when the entry point ends in `.ts` / `.tsx`, so customers can point the
  * spec emitter at their TypeScript source without an extra build step.
  */
+export type FoundationLoader = (fileUrl: string) => Promise<Record<string, unknown>>;
+
+const defaultLoader: FoundationLoader = (url) => import(url);
+
 /** `extract-ts-types.js`, or why it could not be loaded (most often: no `typescript` package installed). */
 type TsTypeExtractor =
 	| { ok: true; module: typeof import('./extract-ts-types.js') }
 	| { ok: false; error: Error };
+
+/**
+ * Whether `error` is Node's failure to find the `typescript` package itself. Only the
+ * module that did not load counts ("Cannot find package 'typescript' imported from …"),
+ * so a broken install, an `exports` change or an error thrown from inside the compiler
+ * keeps its own message instead of being reported as "not installed".
+ */
+function isTypeScriptMissing(error: unknown): boolean {
+	if (!(error instanceof Error) || !('code' in error) || error.code !== 'ERR_MODULE_NOT_FOUND') return false;
+	const [failed = ''] = error.message.split(' imported from ');
+	return failed.includes("'typescript'");
+}
 
 /** Load `extract-ts-types.js`, which needs the app's `typescript` package. Never throws. */
 async function loadTsTypeExtractor(): Promise<TsTypeExtractor> {
 	try {
 		return { ok: true, module: await import('./extract-ts-types.js') };
 	} catch (e) {
-		const message = e instanceof Error ? e.message : String(e);
-		return {
-			ok: false,
-			error: new Error(
-				/'typescript'/.test(message)
-					? 'the "typescript" package is not installed; install it with `npm install --save-dev typescript`'
-					: message,
-			),
-		};
+		if (isTypeScriptMissing(e)) {
+			const hint = 'install it with `npm install --save-dev typescript`';
+			return { ok: false, error: new Error(`the "typescript" package is not installed; ${hint}`) };
+		}
+		return { ok: false, error: e instanceof Error ? e : new Error(String(e)) };
 	}
 }
-
-export type FoundationLoader = (fileUrl: string) => Promise<Record<string, unknown>>;
-
-const defaultLoader: FoundationLoader = (url) => import(url);
 
 /**
  * Declarations are supplied by the authoring surface that reads them from a
@@ -337,8 +345,11 @@ export async function generateSpec(
 		// A misused codegen tag is the author's to fix, not a reason to emit `unknown`.
 		if (tsExtractor.ok && e instanceof tsExtractor.module.CodegenTagError) throw e;
 		// The program itself could not be read: every method falls back to `unknown`. Say so.
+		// Without the compiler, the `@blocksSkipCodegen` scan below cannot run either, so
+		// tagged methods stay in the spec (and in native clients). Say that too.
+		const skipNote = tsExtractor.ok ? '' : ', and methods tagged @blocksSkipCodegen are not skipped';
 		console.warn(
-			`[blocks] Could not read the TypeScript types of ${foundationPath} (${e instanceof Error ? e.message : String(e)}); the OpenRPC spec describes every method as unknown.`,
+			`[blocks] Could not read the TypeScript types of ${foundationPath} (${e instanceof Error ? e.message : String(e)}); the OpenRPC spec describes every method as unknown${skipNote}.`,
 		);
 	}
 
