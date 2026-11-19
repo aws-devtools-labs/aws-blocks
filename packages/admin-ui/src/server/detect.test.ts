@@ -210,6 +210,22 @@ describe('detectLocalDevServer', () => {
 		assert.deepStrictEqual(status.namespaces, ['api', 'admin']);
 	});
 
+	it('falls back to the legacy /aws-blocks/api path of an older dev server', async () => {
+		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ port: 4400 });\n' });
+		const seen: string[] = [];
+		const status = await detectLocalDevServer(
+			root,
+			stubFetch((url) => {
+				seen.push(url);
+				if (url.endsWith('/cdk-blocks/api')) return new Response('{"error":"Not Found"}', { status: 404 });
+				return jsonResponse({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: "API 'x' not found. Available: api" } });
+			}),
+		);
+		assert.deepStrictEqual(seen, ['http://localhost:4400/cdk-blocks/api', 'http://localhost:4400/aws-blocks/api']);
+		assert.strictEqual(status.serverUp, true);
+		assert.deepStrictEqual(status.namespaces, ['api']);
+	});
+
 	it('reports up with no namespaces when the body is not a JSON-RPC error', async () => {
 		const root = makeProject({});
 		const status = await detectLocalDevServer(

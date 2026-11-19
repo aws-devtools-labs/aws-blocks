@@ -20,3 +20,5 @@ The framework's reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/
 On upgrade, the default `redirects.callbackPath` of an `Auth` with `providers` becomes `/cdk-blocks/auth/callback`. An external identity provider (OIDC, Google, ...) that only allows the old `/aws-blocks/auth/callback` redirect URI must have the new one registered, or set `redirects.callbackPath: '/aws-blocks/auth/callback'` to keep the old one. A custom front door that wires only `/cdk-blocks/*` gets a warning that legacy `/aws-blocks/*` clients are not routed.
 
 A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`. Native clients move tokens stored under a block's old `/aws-blocks/` keys to its new keys, so an upgrade keeps their session.
+
+The Admin UI calls `/cdk-blocks/api` and retries a 404 at `/aws-blocks/api`, so it still works with an older dev server.

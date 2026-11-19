@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { DataMode } from '../contract/v1.js';
 import { resolveLocalPort, stackNameCandidates } from './detect.js';
 import { fetchStackDescription, isStackNotFound } from './environments.js';
+import { BLOCKS_RPC_PREFIX } from './rpc-codec.js';
 import type { DeployStage } from './stage-outputs.js';
 
 /**
@@ -42,16 +43,6 @@ import type { DeployStage } from './stage-outputs.js';
  * Local mode deliberately does not probe: a probe here would double the latency of
  * every page load to learn something the invoke itself reports anyway.
  */
-
-/**
- * URL path prefix of the Blocks RPC endpoint.
- *
- * SOURCE OF TRUTH: `BLOCKS_RPC_PREFIX` in `packages/core/src/constants.ts`,
- * duplicated for the same reason `rpc-codec.ts` duplicates the wire format —
- * `admin-ui` installs into a *user's* project and must not pin a core version.
- * `detect.ts` already hardcodes the same literal in its probe.
- */
-const BLOCKS_RPC_PREFIX = '/cdk-blocks/api';
 
 /** Output key the CDK stack publishes its RPC base URL under. */
 const API_URL_OUTPUT_KEY = 'ApiUrl';

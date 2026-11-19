@@ -1507,9 +1507,9 @@ export interface SessionOptions {
 
 /** Settings for {@link AuthCommonOptions.redirects}. */
 export interface RedirectOptions {
-	/** @default '/cdk-blocks/auth/callback' — must start with `/cdk-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/callback' — must start with `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	callbackPath?: string;
-	/** @default '/cdk-blocks/auth/signout' — must start with `/cdk-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/signout' — must start with `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	signOutPath?: string;
 	/** Where the browser lands after a successful federated sign-in. @default '/' */
 	postSignInPath?: string;

@@ -1101,6 +1101,20 @@ describe('Auth federation — two blocks with providers on one backend cannot sh
 		);
 	});
 
+	test('a legacy /aws-blocks/auth/ redirect collides with its /cdk-blocks/auth/ twin', () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta } });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: '/aws-blocks/auth/callback', signOutPath: '/aws-blocks/auth/staff/signout' },
+				}),
+			/Auth '[^']*staff': its sign-in routes \(\/aws-blocks\/auth\/…\) are already mounted by Auth '[^']*sso'/,
+		);
+	});
+
 	test("a shared sign-out path alone (or a callback beside the other block's) collides too; trailing slashes do not hide it", () => {
 		const stack = newStack();
 		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, redirects: own('sso') });

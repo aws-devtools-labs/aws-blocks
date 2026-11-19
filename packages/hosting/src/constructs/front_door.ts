@@ -118,8 +118,8 @@ export type ApiOrigin = {
   /** The stage path to set as the origin path, e.g. `/prod`, derived from {@link url} in-template. */
   readonly stagePath: string;
   /**
-   * Every path pattern to proxy to the API: `/cdk-blocks/*` (RPC and sign-in)
-   * plus each raw route the backend registered.
+   * Every path pattern to proxy to the API: `/cdk-blocks/*` (RPC and sign-in),
+   * its legacy `/aws-blocks/*` alias, and each raw route the backend registered.
    */
   readonly paths: readonly string[];
 };

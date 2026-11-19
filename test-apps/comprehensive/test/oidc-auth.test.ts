@@ -460,9 +460,8 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const me = meCall.result;
         assert.strictEqual(me.userId, `${me.iss}:${me.sub}`, 'userId should be ${iss}:${sub}');
 
-        // The unchanged `userId`, checked independently of the session's own claims: the issuer the
-        // stub IdP advertises in discovery, plus the stub's subject for google.
-        // AuthOIDC produced exactly this value, so `oidcProfiles` keys survive.
+        // The `userId`, checked independently of the session's own claims: the issuer the stub IdP
+        // advertises in discovery, plus the stub's subject for google.
         const discovery = await (await fetch(`${baseUrl}/cdk-blocks/auth/idp/google/.well-known/openid-configuration`)).json();
         assert.strictEqual(me.userId, `${discovery.issuer}:stub-google-user`);
 

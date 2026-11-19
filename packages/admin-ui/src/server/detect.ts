@@ -3,6 +3,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { BLOCKS_RPC_PREFIX, LEGACY_BLOCKS_RPC_PREFIX } from './rpc-codec.js';
 
 /**
  * Environment detection probes for the doctor report.
@@ -208,12 +209,16 @@ export async function detectLocalDevServer(
 	let serverUp = false;
 	let namespaces: string[] = [];
 	try {
-		const response = await fetchImpl(`${serverUrl}/cdk-blocks/api`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: PROBE_RPC_BODY,
-			signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-		});
+		const probe = (prefix: string) =>
+			fetchImpl(`${serverUrl}${prefix}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: PROBE_RPC_BODY,
+				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+			});
+		let response = await probe(BLOCKS_RPC_PREFIX);
+		// A dev server older than the `/cdk-blocks/` prefix answers only the legacy path.
+		if (response.status === 404) response = await probe(LEGACY_BLOCKS_RPC_PREFIX);
 		serverUp = response.ok;
 		if (serverUp) namespaces = await mineNamespaces(response);
 	} catch {

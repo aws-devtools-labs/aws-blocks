@@ -28,7 +28,7 @@
  */
 
 import type { RpcInvokeResponse } from '../contract/v1.js';
-import { type RpcErrorInfo, encodeRpcRequest, extractRpcError, isValidRpcMethod } from './rpc-codec.js';
+import { type RpcErrorInfo, encodeRpcRequest, extractRpcError, isValidRpcMethod, legacyRpcUrl } from './rpc-codec.js';
 
 /** Default call budget. Long enough for a cold Lambda, short enough to not hang a page. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -124,8 +124,9 @@ export async function invokeRpc(params: InvokeParams): Promise<InvokeResult> {
 	const startedAt = now();
 
 	let response: Response;
-	try {
-		response = await fetchImpl(endpoint, {
+	let calledEndpoint = endpoint;
+	const post = (url: string) =>
+		fetchImpl(url, {
 			method: 'POST',
 			// Content-Type and NOTHING else. The reference forwards the incoming
 			// `Cookie` header, which hands the developer's dashboard session to
@@ -139,6 +140,15 @@ export async function invokeRpc(params: InvokeParams): Promise<InvokeResult> {
 			body,
 			signal: AbortSignal.timeout(timeoutMs),
 		});
+	try {
+		response = await post(endpoint);
+		// A 404 was not dispatched, so a dev server older than the `/cdk-blocks/`
+		// prefix can safely be retried at its legacy path.
+		const legacy = response.status === 404 ? legacyRpcUrl(endpoint) : undefined;
+		if (legacy) {
+			response = await post(legacy);
+			calledEndpoint = legacy;
+		}
 	} catch (error) {
 		// Outcome 2. Duration is reported even here: how long a call took before
 		// failing is often the whole diagnosis — an instant failure is a refused
@@ -175,7 +185,7 @@ export async function invokeRpc(params: InvokeParams): Promise<InvokeResult> {
 	// for the case it is most needed, debugging an auth or token flow.
 	const rpcError = extractRpcError(parsedBody);
 	return {
-		endpoint,
+		endpoint: calledEndpoint,
 		ok: true,
 		httpStatus: response.status,
 		durationMs,

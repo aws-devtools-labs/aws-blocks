@@ -563,7 +563,8 @@ export type HostingConstructProps = {
     url: string;
     /**
      * Path patterns beyond `/cdk-blocks/*` that must reach the backend (its
-     * raw routes, e.g. `/hooks/*`). `/cdk-blocks/*` is always included.
+     * raw routes, e.g. `/hooks/*`). `/cdk-blocks/*` and its legacy `/aws-blocks/*`
+     * alias are always included.
      */
     paths?: readonly string[];
   };

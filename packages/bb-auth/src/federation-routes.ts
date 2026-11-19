@@ -151,8 +151,8 @@ export interface FederationRoutePaths {
 
 /**
  * Derive (and validate) the route paths. Throws a plain configuration `Error`
- * at construction for a path outside `/cdk-blocks/auth/` — a deployed
- * CloudFront app only proxies that subtree.
+ * at construction for a path outside `/cdk-blocks/auth/` and its legacy
+ * `/aws-blocks/auth/` alias — a deployed CloudFront app only proxies those subtrees.
  */
 export function federationRoutePaths(options: ResolvedAuthOptions): FederationRoutePaths {
 	const redirects = options.redirects ?? {};
