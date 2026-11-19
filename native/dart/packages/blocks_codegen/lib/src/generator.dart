@@ -155,6 +155,14 @@ class DartCodeGenerator {
       buf.writeln();
     }
 
+    for (final MapEntry(key: alias, value: target)
+        in model.deprecatedAliases.entries) {
+      // A Dart identifier, but it can hold a `$` (`Map$`, `$Action`), which
+      // the message string would read as an interpolation.
+      final escaped = target.replaceAll(r'$', r'\$');
+      buf.writeln("@Deprecated('Use $escaped')\ntypedef $alias = $target;\n");
+    }
+
     // Emit namespace API classes with their single-use types grouped nearby
     buf.writeln('// --- API Namespaces ---');
     buf.writeln();
@@ -2227,10 +2235,12 @@ Object? _blocksFrozen(Object? value) => switch (value) {
     if (_hasProviderEnum(model)) ...oidcRuntimeTypeNames,
   };
 
-  /// `Blocks`, `Servers`, and the name of every model, enum, union and
-  /// variant class (see [modelTypeNames]).
-  Set<String> _typeNames(CodegenModel model) =>
-      modelTypeNames(model.types.values);
+  /// `Blocks`, `Servers`, each deprecated alias, and the name of every model,
+  /// enum, union and variant class (see [modelTypeNames]).
+  Set<String> _typeNames(CodegenModel model) => {
+    ...modelTypeNames(model.types.values),
+    ...model.deprecatedAliases.keys,
+  };
 
   /// The `…Api` class of each namespace, keyed by the namespace's name (see
   /// [apiClassNamesOf]).

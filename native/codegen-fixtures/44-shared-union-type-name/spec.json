@@ -1,0 +1,1337 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "methods": [
+    {
+      "name": "alphaAuthApi.getAuthState",
+      "params": [],
+      "result": {
+        "name": "GetAuthStateResult",
+        "schema": {
+          "$ref": "#/components/schemas/AuthState"
+        }
+      }
+    },
+    {
+      "name": "alphaAuthApi.setAuthState",
+      "params": [
+        {
+          "name": "input",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signUp"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "password"
+                ],
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "resetPassword"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signIn"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "password"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signInWithPasskey"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmSignUp"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "code"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "resendSignUpCode"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signOut"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmResetPassword"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "newPassword": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "code",
+                  "newPassword"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "autoSignIn"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmSignIn"
+                    ]
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "session"
+                ],
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "code"
+                        ]
+                      },
+                      "code": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "code"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "mfaType"
+                        ]
+                      },
+                      "mfaType": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "mfaType"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "newPassword"
+                        ]
+                      },
+                      "newPassword": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "newPassword"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "totpSetup"
+                        ]
+                      },
+                      "sharedSecret": {
+                        "type": "string"
+                      },
+                      "code": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "sharedSecret",
+                      "code"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "email"
+                        ]
+                      },
+                      "email": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "email"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "password"
+                        ]
+                      },
+                      "password": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "password"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "firstFactor"
+                        ]
+                      },
+                      "firstFactor": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "firstFactor"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "webauthn"
+                        ]
+                      },
+                      "credential": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "credential"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "startPasskeyRegistration"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "completePasskeyRegistration"
+                    ]
+                  },
+                  "credential": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "credential"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "listPasskeys"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "deletePasskey"
+                    ]
+                  },
+                  "credentialId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "credentialId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "setUpTotp"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "verifyTotpSetup"
+                    ]
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "code"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "getMfaPreference"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "updateMfaPreference"
+                    ]
+                  },
+                  "sms": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "totp": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "email": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            ],
+            "x-blocks-type-name": "AuthActionInput"
+          }
+        }
+      ],
+      "result": {
+        "name": "SetAuthStateResult",
+        "schema": {
+          "$ref": "#/components/schemas/AuthState"
+        }
+      }
+    },
+    {
+      "name": "zetaAuthApi.getAuthState",
+      "params": [],
+      "result": {
+        "name": "GetAuthStateResult",
+        "schema": {
+          "$ref": "#/components/schemas/AuthState"
+        }
+      }
+    },
+    {
+      "name": "zetaAuthApi.setAuthState",
+      "params": [
+        {
+          "name": "input",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signUp"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "password"
+                ],
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "resetPassword"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signIn"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "password"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signInWithPasskey"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmSignUp"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "code"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "resendSignUpCode"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "signOut"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmResetPassword"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "newPassword": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username",
+                  "code",
+                  "newPassword"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "autoSignIn"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "username"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "confirmSignIn"
+                    ]
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "session"
+                ],
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "code"
+                        ]
+                      },
+                      "code": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "code"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "mfaType"
+                        ]
+                      },
+                      "mfaType": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "mfaType"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "newPassword"
+                        ]
+                      },
+                      "newPassword": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "newPassword"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "totpSetup"
+                        ]
+                      },
+                      "sharedSecret": {
+                        "type": "string"
+                      },
+                      "code": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "sharedSecret",
+                      "code"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "email"
+                        ]
+                      },
+                      "email": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "email"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "password"
+                        ]
+                      },
+                      "password": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "password"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "firstFactor"
+                        ]
+                      },
+                      "firstFactor": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "firstFactor"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "challenge": {
+                        "type": "string",
+                        "enum": [
+                          "webauthn"
+                        ]
+                      },
+                      "credential": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "challenge",
+                      "credential"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "startPasskeyRegistration"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "completePasskeyRegistration"
+                    ]
+                  },
+                  "credential": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "credential"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "listPasskeys"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "deletePasskey"
+                    ]
+                  },
+                  "credentialId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "credentialId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "setUpTotp"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "verifyTotpSetup"
+                    ]
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "code"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "getMfaPreference"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "updateMfaPreference"
+                    ]
+                  },
+                  "sms": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "totp": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "email": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            ],
+            "x-blocks-type-name": "AuthActionInput"
+          }
+        }
+      ],
+      "result": {
+        "name": "SetAuthStateResult",
+        "schema": {
+          "$ref": "#/components/schemas/AuthState"
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "AuthState": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "signedOut",
+              "signedIn",
+              "confirmingSignUp",
+              "confirmingSignIn",
+              "confirmingMfa",
+              "confirmingPasswordReset"
+            ]
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuthUser"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthAction"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorName": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retriable": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "actions"
+        ]
+      },
+      "AuthUser": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "userId",
+          "username"
+        ]
+      },
+      "AuthAction": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthField"
+            }
+          },
+          "url": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "method": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "POST"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capability": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "webauthn-get",
+                  "webauthn-create"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unavailable": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "fields"
+        ]
+      },
+      "AuthField": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "number",
+              "email",
+              "password",
+              "text",
+              "tel",
+              "hidden"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "defaultValue": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "type",
+          "required"
+        ]
+      }
+    }
+  }
+}

@@ -61,13 +61,13 @@ public class Api(
         override fun serialize(encoder: Encoder, `value`: Result) {
           val output = encoder as? JsonEncoder ?: throw SerializationException("Result can only be written as JSON")
           val element = when (value) {
-            is ContinueSignIn -> buildJsonObject {
-              put("status", JsonPrimitive("continueSignIn"))
-              output.json.encodeToJsonElement(ContinueSignIn.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
-            }
             is SignedIn -> buildJsonObject {
               put("status", JsonPrimitive("signedIn"))
               output.json.encodeToJsonElement(SignedIn.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is ContinueSignIn -> buildJsonObject {
+              put("status", JsonPrimitive("continueSignIn"))
+              output.json.encodeToJsonElement(ContinueSignIn.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
             }
             is Unknown -> value.json
           }
@@ -80,12 +80,12 @@ public class Api(
           if (element is JsonObject) {
             val fields = JsonObject(element - "status")
             when (element["status"]) {
-              JsonPrimitive("continueSignIn") -> return input.json.decodeFromJsonElement(ContinueSignIn.serializer(), fields)
               JsonPrimitive("signedIn") -> return input.json.decodeFromJsonElement(SignedIn.serializer(), fields)
+              JsonPrimitive("continueSignIn") -> return input.json.decodeFromJsonElement(ContinueSignIn.serializer(), fields)
               else -> if ((element["status"] as? JsonPrimitive)?.isString == true) return Unknown(element)
             }
           }
-          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"status\": \"continueSignIn\"; or an object with \"status\": \"signedIn\"")
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"status\": \"signedIn\"; or an object with \"status\": \"continueSignIn\"")
         }
       }
 
@@ -95,6 +95,12 @@ public class Api(
         public val discriminator: String
           get() = (json.getValue("status") as JsonPrimitive).content
       }
+
+      @Serializable
+      @SerialName("signedIn")
+      public data class SignedIn(
+        public val user: AuthenticatedUser,
+      ) : Result()
 
       @Serializable
       @SerialName("continueSignIn")
@@ -427,12 +433,6 @@ public class Api(
           ) : NextStep()
         }
       }
-
-      @Serializable
-      @SerialName("signedIn")
-      public data class SignedIn(
-        public val user: AuthenticatedUser,
-      ) : Result()
     }
   }
 
@@ -449,13 +449,13 @@ public class Api(
         override fun serialize(encoder: Encoder, `value`: Result) {
           val output = encoder as? JsonEncoder ?: throw SerializationException("Result can only be written as JSON")
           val element = when (value) {
-            is ContinueSignIn -> buildJsonObject {
-              put("status", JsonPrimitive("continueSignIn"))
-              output.json.encodeToJsonElement(ContinueSignIn.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
-            }
             is SignedIn -> buildJsonObject {
               put("status", JsonPrimitive("signedIn"))
               output.json.encodeToJsonElement(SignedIn.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is ContinueSignIn -> buildJsonObject {
+              put("status", JsonPrimitive("continueSignIn"))
+              output.json.encodeToJsonElement(ContinueSignIn.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
             }
             is Unknown -> value.json
           }
@@ -468,12 +468,12 @@ public class Api(
           if (element is JsonObject) {
             val fields = JsonObject(element - "status")
             when (element["status"]) {
-              JsonPrimitive("continueSignIn") -> return input.json.decodeFromJsonElement(ContinueSignIn.serializer(), fields)
               JsonPrimitive("signedIn") -> return input.json.decodeFromJsonElement(SignedIn.serializer(), fields)
+              JsonPrimitive("continueSignIn") -> return input.json.decodeFromJsonElement(ContinueSignIn.serializer(), fields)
               else -> if ((element["status"] as? JsonPrimitive)?.isString == true) return Unknown(element)
             }
           }
-          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"status\": \"continueSignIn\"; or an object with \"status\": \"signedIn\"")
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"status\": \"signedIn\"; or an object with \"status\": \"continueSignIn\"")
         }
       }
 
@@ -483,6 +483,12 @@ public class Api(
         public val discriminator: String
           get() = (json.getValue("status") as JsonPrimitive).content
       }
+
+      @Serializable
+      @SerialName("signedIn")
+      public data class SignedIn(
+        public val user: AuthenticatedUser,
+      ) : Result()
 
       @Serializable
       @SerialName("continueSignIn")
@@ -815,12 +821,6 @@ public class Api(
           ) : NextStep()
         }
       }
-
-      @Serializable
-      @SerialName("signedIn")
-      public data class SignedIn(
-        public val user: AuthenticatedUser,
-      ) : Result()
     }
   }
 }

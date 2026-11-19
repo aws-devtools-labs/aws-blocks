@@ -91,6 +91,19 @@
   `name` and `index` are on `XKnown` only; `X.values.byName` still works,
   since `X.values` is `XKnown.values`. An enum that only parameters use stays
   a closed Dart enum.
+- The input of every `Auth` namespace's `setAuthState` is now
+  the class `AuthActionInput`, named after the spec's `x-blocks-type-name`.
+  It used to be named after the first `Auth` namespace in the spec
+  (`AuthBasicApiSetAuthStateInput`), so adding or renaming an `Auth` block
+  renamed it. The old name stays as a deprecated typedef of
+  `AuthActionInput`, so existing code compiles with a deprecation warning.
+  Any parameter union the spec names this way takes the name, unless another
+  generated type already has it. Its arm classes and the types nested in them
+  keep their names (`SignInInput`, and `StartInput` for a union named
+  `Command`), so only the union's own name changes. When distinct unions are
+  given one name, the one whose `<namespace>.<method>` and parameter sort
+  first takes it and the others keep their old names, whatever their order in
+  the spec.
 
 ### Other changes
 

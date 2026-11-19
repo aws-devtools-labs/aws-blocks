@@ -544,7 +544,8 @@
                   "action"
                 ]
               }
-            ]
+            ],
+            "x-blocks-type-name": "AuthActionInput"
           }
         }
       ],

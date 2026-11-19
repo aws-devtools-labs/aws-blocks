@@ -404,6 +404,89 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 });
 
 
+describe('extractMethodTypes: x-blocks-type-name on unions declared as a type alias', () => {
+	it('names a type alias union, and leaves an anonymous one unnamed', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+
+				export type Action = { action: 'signIn'; username: string } | { action: 'signOut' };
+				export const api = new ApiNamespace(null, 'api', (context) => ({
+					async named(input: Action): Promise<boolean> {
+						return true;
+					},
+					async anonymous(input: { kind: 'a' } | { kind: 'b' }): Promise<Action> {
+						return { action: 'signOut' };
+					},
+				}));
+			`,
+		});
+
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			const named = types.get('api.named')!.params[0].schema;
+			assert.strictEqual(named['x-blocks-type-name'], 'Action');
+			assert.strictEqual(named.oneOf?.length, 2, 'the union stays inline');
+			assert.strictEqual(types.get('api.anonymous')!.params[0].schema['x-blocks-type-name'], undefined);
+			assert.strictEqual(types.get('api.anonymous')!.returnType['x-blocks-type-name'], 'Action');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('leaves an instantiation of a generic alias unnamed, including TS utility types', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+
+				export type Action = { action: 'signIn'; username: string } | { action: 'signOut' };
+				export type Result<T> = { status: 'ok'; value: T } | { status: 'err'; message: string };
+				export const api = new ApiNamespace(null, 'api', (context) => ({
+					async named(input: Action): Promise<boolean> {
+						return true;
+					},
+					async genericA(input: Result<string>): Promise<boolean> {
+						return true;
+					},
+					async genericB(input: Result<number>): Promise<boolean> {
+						return true;
+					},
+					async partial(input: Partial<Action>): Promise<boolean> {
+						return true;
+					},
+					async nonNullable(input: NonNullable<Action | null>): Promise<boolean> {
+						return true;
+					},
+				}));
+			`,
+		});
+
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			const param = (method: string) => types.get(`api.${method}`)!.params[0].schema;
+			assert.strictEqual(param('named')['x-blocks-type-name'], 'Action');
+			for (const method of ['genericA', 'genericB', 'partial', 'nonNullable']) {
+				const schema = param(method);
+				assert.ok(schema.oneOf, `${method} is still a union`);
+				assert.notStrictEqual(schema['x-blocks-type-name'], 'Result', method);
+				assert.notStrictEqual(schema['x-blocks-type-name'], 'Partial', method);
+				assert.notStrictEqual(schema['x-blocks-type-name'], 'NonNullable', method);
+			}
+			assert.strictEqual(param('genericA')['x-blocks-type-name'], undefined);
+			assert.strictEqual(param('genericB')['x-blocks-type-name'], undefined);
+			assert.strictEqual(param('partial')['x-blocks-type-name'], undefined);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe('extractMethodTypes — @blocksCodegenDefaultTypeArgs (one native shape for a per-instance narrowing)', () => {
 	const TSCONFIG = JSON.stringify({
 		compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },

@@ -3,30 +3,30 @@ import BlocksRuntime
 
 
 public nonisolated enum AuthenticatedUserGroups: RawRepresentable, Codable, Hashable, Sendable {
-    case admins
     case users
+    case admins
     case unknown(String)
 
     public init(rawValue: String) {
         switch rawValue {
-        case "admins": self = .admins
         case "users": self = .users
+        case "admins": self = .admins
         default: self = .unknown(rawValue)
         }
     }
 
     public var rawValue: String {
         switch self {
-        case .admins: return "admins"
         case .users: return "users"
+        case .admins: return "admins"
         case .unknown(let value): return value
         }
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
-        case (.admins, .admins): return true
         case (.users, .users): return true
+        case (.admins, .admins): return true
         case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
         default: return false
         }
@@ -34,8 +34,8 @@ public nonisolated enum AuthenticatedUserGroups: RawRepresentable, Codable, Hash
 
     public func hash(into hasher: inout Hasher) {
         switch self {
-        case .admins: hasher.combine(0)
-        case .users: hasher.combine(1)
+        case .users: hasher.combine(0)
+        case .admins: hasher.combine(1)
         case .unknown(let value):
             hasher.combine(2)
             hasher.combine(value)

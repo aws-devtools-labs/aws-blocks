@@ -31,6 +31,14 @@ public final nonisolated class Api: Sendable {
 
     public enum CognitoConfirmSignIn {
 
+        public struct SignedIn: Codable, Sendable {
+            public let user: AuthenticatedUser
+
+            public init(user: AuthenticatedUser) {
+                self.user = user
+            }
+        }
+
         public struct ContinueSignIn: Codable, Sendable {
             public let nextStep: NextStep
 
@@ -448,17 +456,9 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct SignedIn: Codable, Sendable {
-            public let user: AuthenticatedUser
-
-            public init(user: AuthenticatedUser) {
-                self.user = user
-            }
-        }
-
         public enum Result: Codable, Sendable {
-            case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
+            case continueSignIn(ContinueSignIn)
             case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
@@ -467,13 +467,13 @@ public final nonisolated class Api: Sendable {
 
             public func encode(to encoder: Encoder) throws {
                 switch self {
-                case .continueSignIn(let params):
-                    var container = encoder.container(keyedBy: CodingKeys.self)
-                    try container.encode("continueSignIn", forKey: .status)
-                    try params.encode(to: encoder)
                 case .signedIn(let params):
                     var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("signedIn", forKey: .status)
+                    try params.encode(to: encoder)
+                case .continueSignIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode("continueSignIn", forKey: .status)
                     try params.encode(to: encoder)
                 case .unknown(let value):
                     try value.encode(to: encoder)
@@ -490,8 +490,8 @@ public final nonisolated class Api: Sendable {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .status)
                 switch disc {
-                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 case "signedIn": self = .signedIn(try SignedIn(from: decoder))
+                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 default:
                     self = .unknown(try JSONValue(from: decoder))
                 }
@@ -501,6 +501,14 @@ public final nonisolated class Api: Sendable {
 
     public enum CognitoSignIn {
 
+        public struct SignedIn: Codable, Sendable {
+            public let user: AuthenticatedUser
+
+            public init(user: AuthenticatedUser) {
+                self.user = user
+            }
+        }
+
         public struct ContinueSignIn: Codable, Sendable {
             public let nextStep: NextStep
 
@@ -918,17 +926,9 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct SignedIn: Codable, Sendable {
-            public let user: AuthenticatedUser
-
-            public init(user: AuthenticatedUser) {
-                self.user = user
-            }
-        }
-
         public enum Result: Codable, Sendable {
-            case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
+            case continueSignIn(ContinueSignIn)
             case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
@@ -937,13 +937,13 @@ public final nonisolated class Api: Sendable {
 
             public func encode(to encoder: Encoder) throws {
                 switch self {
-                case .continueSignIn(let params):
-                    var container = encoder.container(keyedBy: CodingKeys.self)
-                    try container.encode("continueSignIn", forKey: .status)
-                    try params.encode(to: encoder)
                 case .signedIn(let params):
                     var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("signedIn", forKey: .status)
+                    try params.encode(to: encoder)
+                case .continueSignIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode("continueSignIn", forKey: .status)
                     try params.encode(to: encoder)
                 case .unknown(let value):
                     try value.encode(to: encoder)
@@ -960,8 +960,8 @@ public final nonisolated class Api: Sendable {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .status)
                 switch disc {
-                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 case "signedIn": self = .signedIn(try SignedIn(from: decoder))
+                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 default:
                     self = .unknown(try JSONValue(from: decoder))
                 }
