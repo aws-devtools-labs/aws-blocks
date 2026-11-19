@@ -1,8 +1,8 @@
 # Auth
 
-`Auth` is the single authentication Building Block for AWS Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML.
+`Auth` is the single authentication Building Block for AWS CDK Blocks: one import and one options object for email + password, social sign-in, generic OIDC and SAML.
 
-Import it from `@aws-blocks/blocks` (or `@aws-blocks/bb-auth`), and its UI helpers from `@aws-blocks/blocks/ui` (or `@aws-blocks/bb-auth/ui`).
+Import it from `aws-cdk-blocks` (or `@aws-cdk-blocks/bb-auth`), and its UI helpers from `aws-cdk-blocks/ui` (or `@aws-cdk-blocks/bb-auth/ui`).
 
 > **First choice: where do your users live?** In a Cognito user pool (the default), or at their identity provider with `store: 'builtin'`. See [Where do your users live?](#where-do-your-users-live).
 
@@ -13,8 +13,8 @@ Import it from `@aws-blocks/blocks` (or `@aws-blocks/bb-auth`), and its UI helpe
 `new Auth(scope, 'auth')` is email + password sign-in on a Cognito user pool. Export `auth.createApi()` for the sign-in UI, and guard each API method:
 
 ```typescript
-// aws-blocks/index.ts
-import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { ApiNamespace, Auth, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth');
@@ -32,8 +32,8 @@ Exporting `authApi` provisions the backend, but **it does not render a login scr
 
 ```typescript
 // src/index.ts — the SPA entrypoint
-import { api, authApi } from 'aws-blocks';
-import { AccountMenuBar, AuthenticatedContent } from '@aws-blocks/blocks/ui';
+import { api, authApi } from 'cdk-blocks';
+import { AccountMenuBar, AuthenticatedContent } from 'aws-cdk-blocks/ui';
 
 // A Sign In / account control that opens the Authenticator (sign-up, sign-in,
 // the emailed code, password reset) when clicked.
@@ -95,8 +95,8 @@ The guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAut
 | `mfa.totpIssuer` | `string` | the id of the root `Scope` | The name authenticator apps show next to the codes. |
 | `passkeys` | `false \| { relyingPartyId, origins, userVerification? }` | `false` | WebAuthn passkeys. Needs `users.authFlow: 'USER_AUTH'` and a `featurePlan` above `'lite'`, both checked at synth. `userVerification` is `'preferred'` (default) or `'required'`. Default store only. |
 | `session` | `SessionOptions` | — | Session and token lifetimes ([Session lifetime and refresh tokens](#session-lifetime-and-refresh-tokens)). |
-| `redirects.callbackPath` | `string` | `'/aws-blocks/auth/callback'` | Must start with `/aws-blocks/auth/`. |
-| `redirects.signOutPath` | `string` | `'/aws-blocks/auth/signout'` | Must start with `/aws-blocks/auth/`. |
+| `redirects.callbackPath` | `string` | `'/cdk-blocks/auth/callback'` | Must start with `/cdk-blocks/auth/`. |
+| `redirects.signOutPath` | `string` | `'/cdk-blocks/auth/signout'` | Must start with `/cdk-blocks/auth/`. |
 | `redirects.postSignInPath` | `string` | `'/'` | Where the browser lands after a federated sign-in. |
 | `redirects.postSignOutPath` | `string` | `'/'` | Where the browser lands after a federated sign-out. A same-origin path. |
 | `redirects.allowedRelayOrigins` | `RelayOrigin[]` | `[]` | Origins a relay sign-in may return to, each built with `relayOrigin()`. Loopback and the API's own origin are always allowed. |
@@ -121,7 +121,7 @@ The guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAut
 For local development without an identity provider account, use the stub IdP — a real OIDC provider served by the dev server, with an account picker:
 
 ```typescript
-import { Auth, stubIdp } from '@aws-blocks/bb-auth';
+import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';
 
 const auth = new Auth(scope, 'auth', {
   store: 'builtin',
@@ -143,18 +143,18 @@ The stub runs in `npm run dev` and on sandbox deployments (`npm run sandbox`) on
 
 **The stub in local dev and sandbox, the real provider in production.** Keep one provider id and pick its entry from `getDeploymentType()`, as the two-block example in [Where do your users live?](#where-do-your-users-live) does. The client code (`signIn:<id>`) is then the same everywhere.
 
-A `type: 'oidc'` entry of a `store: 'builtin'` block also works in `npm run dev`, without the stub, if you register `http://localhost:<port>/aws-blocks/auth/callback` as a redirect URI with the provider.
+A `type: 'oidc'` entry of a `store: 'builtin'` block also works in `npm run dev`, without the stub, if you register `http://localhost:<port>/cdk-blocks/auth/callback` as a redirect URI with the provider.
 
 **The stub on a sandbox.** A sandbox serves the stub from the deployed backend, so an end-to-end test needs no external IdP.
 
 - The stub signs users in without credentials: **anyone who can reach the sandbox can sign in as any of the stub's users**, with their claims and groups.
-- Synth succeeds with a `@aws-blocks/bb-auth:StubIdpDeployed` warning.
+- Synth succeeds with a `@aws-cdk-blocks/bb-auth:StubIdpDeployed` warning.
 - A `cdk watch` hotswap alone does not turn the stub on: if the stub answers `501` on a sandbox, restart `npm run sandbox` once.
 - The issuer and signing keys of a deployed stub are described in [DESIGN.md](./DESIGN.md).
 
 **Redirect URIs to register with a provider.**
 
-- `store: 'builtin'`: `<your origin>/aws-blocks/auth/callback` as the redirect URI, and `<your origin>/` (or `<your origin><redirects.postSignOutPath>`) as the post-logout redirect URI when the IdP supports sign-out.
+- `store: 'builtin'`: `<your origin>/cdk-blocks/auth/callback` as the redirect URI, and `<your origin>/` (or `<your origin><redirects.postSignOutPath>`) as the post-logout redirect URI when the IdP supports sign-out.
 - Default store: the Cognito domain's URL ([step 2 of the social sign-in recipe](#social-sign-in-the-client-secret-and-the-callback-url)). The block registers its own callback and sign-out URLs on the Cognito app client.
 
 A `store: 'builtin'` user's `userId` is `` `${issuer}:${sub}` ``, and `requireRole()` reads their groups from the provider's `groupsClaim`.
@@ -163,8 +163,8 @@ A `store: 'builtin'` user's `userId` is `` `${issuer}:${sub}` ``, and `requireRo
 
 `Auth` throws `ApiError`s. Each `name` is a value of `AuthErrors`, and `setAuthState` returns the same name as `errorName` on a failed `AuthState`. The names are listed in the [`auth-common` README](../auth-common/README.md#auth-error-names-autherrors).
 
-- Match a thrown error on the server with `isAuthError(e, AuthErrors.NotAuthenticated)` (both from `@aws-blocks/blocks`). In the browser, use `isBlocksError(e, 'NotAuthenticatedException')` from `@aws-blocks/blocks/client`: the root `@aws-blocks/blocks` entry exports nothing to a browser bundle.
-- Match a returned state with `hasAuthError(state, 'InvalidPasswordException')` from `@aws-blocks/blocks/client`.
+- Match a thrown error on the server with `isAuthError(e, AuthErrors.NotAuthenticated)` (both from `aws-cdk-blocks`). In the browser, use `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client`: the root `aws-cdk-blocks` entry exports nothing to a browser bundle.
+- Match a returned state with `hasAuthError(state, 'InvalidPasswordException')` from `aws-cdk-blocks/client`.
 - An error `Auth` does not recognise becomes `InternalErrorException`. An `ApiError` your own `validateUser` or `onSignIn` hook throws keeps its name and status.
 
 The default HTTP status of each name:
@@ -217,8 +217,8 @@ Every sign-in provider goes in one `providers` map, keyed by the provider id you
 **One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. An app that wants both uses two `Auth` blocks, each with its own session cookie and its own `createApi()`, and the frontend picks one per sign-in. There is no account linking: the same person signing in through both blocks is two users.
 
 ```typescript
-// aws-blocks/index.ts
-import { Auth, Scope, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { Auth, Scope, getDeploymentType, stubIdp } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 
@@ -242,7 +242,7 @@ export const ssoApi = sso.createApi();
 
 Two blocks that both have `providers` (say Google on the default store and Okta on `store: 'builtin'`) need their own `redirects.callbackPath` and `redirects.signOutPath`:
 
-- With the defaults, both would mount `/aws-blocks/auth/callback` and `/aws-blocks/auth/signout`. Synth fails on the second block, naming both, and `npm run dev` refuses it when the backend loads.
+- With the defaults, both would mount `/cdk-blocks/auth/callback` and `/cdk-blocks/auth/signout`. Synth fails on the second block, naming both, and `npm run dev` refuses it when the backend loads.
 - A block without `providers` mounts no sign-in routes. That is why `sso` above keeps the default `redirects` next to the password-only `auth`.
 - Two `stubIdp()` providers in two blocks need different provider keys: a stub IdP's routes are keyed by its provider key alone, whatever the `redirects`.
 - Register each block's callback URL with its provider. The example at the end of [The sign-in methods](#the-sign-in-methods) gives `sso` its own paths.
@@ -276,10 +276,10 @@ Every option also stores sessions in the block's DynamoDB table.
 - Use `type: 'saml'` only for an IdP that does not speak OIDC.
 - If a frontend may later sign in with the Amplify client libraries against the same pool, read [Planning to use Amplify client libraries?](#planning-to-use-amplify-client-libraries) before the first deploy: some of those choices are permanent.
 
-All five, in the two blocks they need. Both blocks have `providers`, so `sso` gets its own `redirects`: register `<origin>/aws-blocks/auth/sso/callback` with Okta (`auth` keeps the default `/aws-blocks/auth/callback`):
+All five, in the two blocks they need. Both blocks have `providers`, so `sso` gets its own `redirects`: register `<origin>/cdk-blocks/auth/sso/callback` with Okta (`auth` keeps the default `/cdk-blocks/auth/callback`):
 
 ```typescript
-import { AppSetting, Auth, Scope } from '@aws-blocks/blocks';
+import { AppSetting, Auth, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
@@ -306,7 +306,7 @@ const sso = new Auth(scope, 'sso', {
   store: 'builtin',
   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
   // Its own sign-in routes: `auth` above already mounts the default ones.
-  redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+  redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' },
 });
 ```
 
@@ -317,8 +317,8 @@ const sso = new Auth(scope, 'sso', {
 A method of `new ApiNamespace(...)` is public until it awaits a guard, so a forgotten guard, or one called without `await`, serves the data to anyone, and nothing warns you. Define the namespace with `auth.protect` instead. It takes two method factories: `methods`, which runs only after the session check and gets the signed-in user, and `public` (optional), for methods anyone may call.
 
 ```ts
-// aws-blocks/index.ts
-import { Auth, KVStore, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { Auth, KVStore, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
@@ -361,8 +361,8 @@ The frontend calls every method, public and protected, like any other namespace:
 
 ```ts
 // src/main.ts
-import { isBlocksError } from '@aws-blocks/blocks/client';
-import { notesApi } from 'aws-blocks';
+import { isBlocksError } from 'aws-cdk-blocks/client';
+import { notesApi } from 'cdk-blocks';
 
 await notesApi.health(); // works signed out
 try {
@@ -387,8 +387,8 @@ A lint rule does not replace `protect`. Biome's `noFloatingPromises` does not fl
 Turn MFA on. The sign-in state machine (`authApi = auth.createApi()`) then also enrols an authenticator app for a signed-in user, so there is no backend code to write:
 
 ```ts
-// aws-blocks/index.ts
-import { Auth, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { Auth, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
@@ -404,8 +404,8 @@ The `Authenticator` asks for the 6-digit code at sign-in once a user is enrolled
 
 ```ts
 // src/main.ts
-import { Authenticator, MfaSettings } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { Authenticator, MfaSettings } from 'aws-cdk-blocks/ui';
+import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(Authenticator(authApi));
 
@@ -424,7 +424,7 @@ A custom UI submits the same actions. Each returns an `AuthState`:
 
 ```ts
 // src/account.ts
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 const setup = await authApi.setAuthState({ action: 'setUpTotp' });
 const verify = setup.actions.find((a) => a.name === 'verifyTotpSetup');
@@ -447,8 +447,8 @@ Locally the user pool accepts any 6-digit code unless you opt in to real verific
 A signed-in user holds a session row in the block's table and the Cognito tokens inside it. The `session` options set how long each lives:
 
 ```ts
-// aws-blocks/index.ts
-import { Auth, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { Auth, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
@@ -481,8 +481,8 @@ The two limits work together: the session ends at the earlier of `ttlSeconds` wi
 Declare the groups, opt in to `auth.admin`, and gate the method with `requireRole`:
 
 ```ts
-// aws-blocks/index.ts
-import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { ApiNamespace, Auth, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
@@ -527,11 +527,11 @@ users: {
 
 ```sh
 # Local pool (.bb-data/): stop the dev server first (npm run dev:stop), start it again afterwards.
-npx @aws-blocks/bb-auth users add-to-group you@example.com admin
+npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin
 
 # The pool a deployed stage owns, with your AWS credentials (--profile / --region, or AWS_PROFILE / AWS_REGION).
 # Without --yes it checks the stack, the user and the group, prints what it would do, and changes nothing.
-npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes
+npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes
 ```
 
 - `<user>` is the username, or the user's **verified** email or phone number. An unverified one is refused. So is a value that is one user's username and another user's verified email. Name the account outright with `--username <name>` or `--email <address>` (verified only) in place of `<user>`.
@@ -540,7 +540,7 @@ npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --
 - `--stage sandbox` is this checkout's sandbox and `--stage prod` the production stack (the names `npm run sandbox` and `npm run deploy` give them); `--stack <name>` names any other stack.
 - A block with `userPool: Auth.fromExisting(…)` is refused: manage that pool's groups where it is managed.
 - With more than one `Auth` block, pick one with `--block <id>` (its id, or its full id when ids overlap, e.g. `auth` and `oidc-auth`).
-- `remove-from-group <user> <group>` undoes it, and `list-groups [<user>]` lists the block's groups, or the groups a user is in. Every write to a deployed pool needs `--yes`. Run `npx @aws-blocks/bb-auth users --help` for the rest.
+- `remove-from-group <user> <group>` undoes it, and `list-groups [<user>]` lists the block's groups, or the groups a user is in. Every write to a deployed pool needs `--yes`. Run `npx @aws-cdk-blocks/bb-auth users --help` for the rest.
 
 Once the first admin exists, have them manage groups through an admin-only method that calls `auth.admin.addUserToGroup` / `removeUserFromGroup` (the [Roles](#roles-and-an-admin-only-user-list) recipe).
 
@@ -553,8 +553,8 @@ Once the first admin exists, have them manage groups through an admin-only metho
 - With `userPool: Auth.fromExisting(…)`, check that the pool's other app clients leave `email_verified` out of their `WriteAttributes` as well (Cognito's default, with no `WriteAttributes`, is every standard and custom attribute): a user who can write the flag can mark any address verified.
 
 ```ts
-// aws-blocks/index.ts
-import { Auth, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { Auth, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const ADMIN_EMAILS = new Set(['you@example.com']);
@@ -582,8 +582,8 @@ The hook works the same locally and deployed. Once the first admin exists, empty
 A provider secret is a reference, never a string: a string-valued `Secret` (AWS Secrets Manager), or an `AppSetting` created with `secret: true` (an SSM SecureString). The value stays in Secrets Manager or SSM and never enters the template. Either works for any provider; this app uses one of each:
 
 ```ts
-// aws-blocks/index.ts
-import { AppSetting, Auth, Scope, Secret } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { AppSetting, Auth, Scope, Secret } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 
@@ -611,7 +611,7 @@ export const authApi = auth.createApi();
 
 1. **Set the secret values**, in the account and Region you deploy to. Each deploy re-registers the providers with the current values, so to rotate a secret, set the new value and deploy again.
    - **`Secret`:** deploy once (it creates `my-app/GOOGLE_CLIENT_SECRET` with the `generate: true` placeholder), run `npm run secret -- set GOOGLE_CLIENT_SECRET --prefix my-app`, then deploy again. The command prompts for the value; `--value-stdin` reads it from a pipe; add `--region <region>` if your shell's default Region differs.
-     - Without `generate: true` the first deploy fails, because the secret has no value yet. Synth warns about it (`@aws-blocks/bb-auth:ProviderSecretWithoutValue`).
+     - Without `generate: true` the first deploy fails, because the secret has no value yet. Synth warns about it (`@aws-cdk-blocks/bb-auth:ProviderSecretWithoutValue`).
      - If that deploy already failed and the retained secret now makes the next one fail with "already exists": set its value with `npm run secret` and wrap it with `Secret.fromExisting('<secret ARN>')`, or delete it (`aws secretsmanager delete-secret --secret-id my-app/GOOGLE_CLIENT_SECRET --force-delete-without-recovery`) and deploy again with `generate: true`.
      - Without an explicit `name`, the secret is named after the block's `fullId`; set it with `aws secretsmanager put-secret-value` instead.
      - For a secret that already exists, wrap it: `new Secret(scope, 'google-client-secret', { secret: Secret.fromExisting('<secret ARN>') })`.
@@ -625,11 +625,11 @@ export const authApi = auth.createApi();
 
 ### End-to-end tests: emailed codes and two users at once
 
-Against the local pool (`npm run dev`), a test reads the code a user was "sent" with `getLastAuthCode`, and acts as several users at once with `createTestClient`, which gives each user the app's typed clients with their own cookie jar. Both come from `@aws-blocks/blocks/utils` (`getLastAuthCode` also from `@aws-blocks/bb-auth/testing`), are Node-only, and belong in test code:
+Against the local pool (`npm run dev`), a test reads the code a user was "sent" with `getLastAuthCode`, and acts as several users at once with `createTestClient`, which gives each user the app's typed clients with their own cookie jar. Both come from `aws-cdk-blocks/utils` (`getLastAuthCode` also from `@aws-cdk-blocks/bb-auth/testing`), are Node-only, and belong in test code:
 
 ```ts
-// aws-blocks/index.ts
-import { ApiNamespace, Auth, KVStore, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { ApiNamespace, Auth, KVStore, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const notes = new KVStore(scope, 'notes');
@@ -652,9 +652,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // test/e2e.test.ts
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode } from 'aws-cdk-blocks/utils';
 
-const app = await import('aws-blocks');
+const app = await import('cdk-blocks');
 
 /** A new user, signed up and signed in, with a session of their own. */
 async function newUser(email: string) {
@@ -676,7 +676,7 @@ test('each user reads only their own note', async () => {
 ```
 
 - `getLastAuthCode(username, { block?, purpose?, cwd? })` takes the name the user signs in with (their email on an email sign-in pool). It reads the codes the local pool still holds, so a user's code stays readable after another user's was sent. It throws when there is no such code, and when there is no local pool: against a deployed backend Cognito emails the code.
-- Run the test from the directory the dev server runs in (the project root), under `tsx -C browser` so `import('aws-blocks')` is the generated client, as the scaffolded `npm run test:e2e` does.
+- Run the test from the directory the dev server runs in (the project root), under `tsx -C browser` so `import('cdk-blocks')` is the generated client, as the scaffolded `npm run test:e2e` does.
 - `createTestClient(app)` returns the clients typed as passed. One user's clients share a jar, so a session `authApi` starts is sent by `api` too; the shared jar `installCookieJar()` installs is never involved.
 
 ### Tell the user what a password needs
@@ -684,8 +684,8 @@ test('each user reads only their own note', async () => {
 Set the policy, and branch on the error the client receives:
 
 ```ts
-// aws-blocks/index.ts
-import { Auth, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts
+import { Auth, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
@@ -696,9 +696,9 @@ export const authApi = auth.createApi();
 
 ```ts
 // src/main.ts
-import { hasAuthError } from '@aws-blocks/blocks/client';
-import { submitAuthAction } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { hasAuthError } from 'aws-cdk-blocks/client';
+import { submitAuthAction } from 'aws-cdk-blocks/ui';
+import { authApi } from 'cdk-blocks';
 
 const next = await submitAuthAction(authApi, {
   action: 'signUp',
@@ -716,7 +716,7 @@ For what the policy covers and what the message says, see [Password policy](#pas
 ## Sign-out and password reset
 
 - `signOut()` clears the session cookie first, then deletes the session row. Deleting the row is what stops a copied cookie from authenticating.
-- If that delete fails (a transient session-store error), `signOut()` rejects with `AuthErrors.SignOutIncomplete` (`SignOutIncompleteException`, 503): this device is signed out, but the session is not. `setAuthState({ action: 'signOut' })` returns a signed-out state with that `errorName`, and `POST /aws-blocks/auth/signout` answers `503 { error, name }` to an API client.
+- If that delete fails (a transient session-store error), `signOut()` rejects with `AuthErrors.SignOutIncomplete` (`SignOutIncompleteException`, 503): this device is signed out, but the session is not. `setAuthState({ action: 'signOut' })` returns a signed-out state with that `errorName`, and `POST /cdk-blocks/auth/signout` answers `503 { error, name }` to an API client.
 - On AWS, signing out a user of a default-store `providers` entry (social, SAML, `type: 'oidc'`) also ends the Cognito managed-login session, so the next sign-in asks the provider again.
 - Once `confirmResetPassword` (or the `createApi()` action of that name) succeeds, every session the user had is rejected from the next request on, with 401 `NotAuthenticatedException` and the cookie cleared, locally and on AWS. The user signs in again with the new password.
 - On AWS the reset also revokes the user's Cognito refresh tokens, so an Amplify or native client using bearer tokens can't refresh. An access token it already holds stays valid until it expires (1 hour by default).
@@ -727,18 +727,18 @@ For what the policy covers and what the message says, see [Password policy](#pas
 
 With `allowBearerAuth: true`, the guards also accept `Authorization: Bearer <access token>` from a hand-written native or CLI client:
 
-- On a `store: 'builtin'` block: the provider's access token, the one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/exchange/refresh` renews.
+- On a `store: 'builtin'` block: the provider's access token, the one `/cdk-blocks/auth/exchange` returns and `/cdk-blocks/auth/exchange/refresh` renews.
 - On the default store: a user-pool user's Cognito access token.
 - With `allowBearerAuth: { clientIds }` (default store only): also access tokens from other app clients of the same pool, for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)).
 - The session cookie wins when a request carries both.
 - A bearer token stays valid after `signOut()` until it expires.
-- The AWS Blocks native SDKs use the session cookie, not a bearer token.
+- The AWS CDK Blocks native SDKs use the session cookie, not a bearer token.
 
 Details: [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth--bearerts).
 
 ## Changes the block refuses
 
-Cognito cannot apply some changes to an existing user pool. The block refuses them at synth, against a baseline file it writes to `aws-blocks/baselines/`, and again at deploy, before the pool is updated. Commit the baseline file.
+Cognito cannot apply some changes to an existing user pool. The block refuses them at synth, against a baseline file it writes to `cdk-blocks/baselines/`, and again at deploy, before the pool is updated. Commit the baseline file.
 
 - Refused at synth and at deploy: a change to the sign-in attributes (`users.signInWith`), to username case sensitivity (`users.caseSensitive`) or to the required attributes, and changing or removing a custom attribute.
 - Refused at synth, once a committed baseline records the pool: a change that would remove the pool. That includes renaming or deleting the `Auth` block, which would make CloudFormation delete the pool and every user in it ([details](./DESIGN.md#renaming-or-removing-an-auth-block)).
@@ -755,7 +755,7 @@ Every self-service sign-up confirms the email address with an emailed code. With
 Cognito's default email sender is limited to 50 emails per day (confirmation, password-reset and email-MFA codes all count). That is enough for development, not for production. Before launch, send through your own Amazon SES identity with `email`:
 
 ```ts
-import { Auth } from '@aws-blocks/bb-auth';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const auth = new Auth(scope, 'auth', {
   email: { fromAddress: 'no-reply@example.com', fromName: 'Example App' },
@@ -799,8 +799,8 @@ The recipe [Tell the user what a password needs](#tell-the-user-what-a-password-
 `validateUser` is called before any user is created and before any session is issued, whatever the mechanism. Throw to reject; a thrown `ApiError` reaches the client by its `name` and message.
 
 ```typescript
-import { ApiError } from '@aws-blocks/core';
-import { Auth, AuthErrors } from '@aws-blocks/bb-auth';
+import { ApiError } from '@aws-cdk-blocks/core';
+import { Auth, AuthErrors } from '@aws-cdk-blocks/bb-auth';
 
 const auth = new Auth(scope, 'auth', {
   validateUser: async ({ email }) => {
@@ -858,7 +858,7 @@ Editors and `tsc --pretty` show both lines; plain `tsc` output (as in CI logs) s
 Pass options inline, or keep them in a variable declared `as const satisfies AuthOptions`. Plain `satisfies AuthOptions` keeps the gates but widens arrays: with `users: { groups: ['admins', 'readers'] }`, `user.groups` becomes `string[]` and `requireRole` accepts any string, with no error anywhere. A variable annotated `: AuthOptions` loses every narrowing.
 
 ```typescript
-import { Auth, type AuthOptions } from '@aws-blocks/bb-auth';
+import { Auth, type AuthOptions } from '@aws-cdk-blocks/bb-auth';
 
 const options = {
   store: 'builtin',
@@ -938,17 +938,17 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
-To check authenticator-app codes locally as Cognito does (RFC 6238: HMAC-SHA-1, 6 digits, 30-second steps), set the local-only `totpVerification: 'rfc6238'`. A wrong secret or `otpauth://` URI then fails in `npm run dev` and in tests, not only on a deployed pool. Tests answer with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils` (also `@aws-blocks/bb-auth/testing`), the code an authenticator app would show:
+To check authenticator-app codes locally as Cognito does (RFC 6238: HMAC-SHA-1, 6 digits, 30-second steps), set the local-only `totpVerification: 'rfc6238'`. A wrong secret or `otpauth://` URI then fails in `npm run dev` and in tests, not only on a deployed pool. Tests answer with `totpCodeFor(sharedSecret)` from `aws-cdk-blocks/utils` (also `@aws-cdk-blocks/bb-auth/testing`), the code an authenticator app would show:
 
 ```typescript
-// aws-blocks/index.ts
+// cdk-blocks/index.ts
 const auth = new Auth(scope, 'auth', {
   mfa: { mode: 'optional', types: ['TOTP'] },
   totpVerification: 'rfc6238', // local only; the default 'any' accepts any six digits
 });
 
 // test/mfa.test.ts
-import { totpCodeFor } from '@aws-blocks/blocks/utils';
+import { totpCodeFor } from 'aws-cdk-blocks/utils';
 
 const setup = await authApi.setAuthState({ action: 'setUpTotp' });
 const sharedSecret = setup.actions[0]?.fields.find((f) => f.name === 'sharedSecret')?.defaultValue ?? '';
@@ -957,11 +957,11 @@ await authApi.setAuthState({ action: 'verifyTotpSetup', code: totpCodeFor(shared
 
 ## Sign-in UI
 
-`@aws-blocks/bb-auth/ui` re-exports the shared sign-in UI from `@aws-blocks/auth-common/ui` (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`, `MfaSettings`, `onAuthChange`, `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`) and adds `authOverrides()`, which type-checks `Authenticator` options against `Auth`'s action, next-step and field names:
+`@aws-cdk-blocks/bb-auth/ui` re-exports the shared sign-in UI from `@aws-cdk-blocks/auth-common/ui` (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`, `MfaSettings`, `onAuthChange`, `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`) and adds `authOverrides()`, which type-checks `Authenticator` options against `Auth`'s action, next-step and field names:
 
 ```typescript
-import { Authenticator, authOverrides } from '@aws-blocks/bb-auth/ui';
-import { authApi } from 'aws-blocks';
+import { Authenticator, authOverrides } from '@aws-cdk-blocks/bb-auth/ui';
+import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(Authenticator(authApi, authOverrides({
   hideActions: ['signUp'],
@@ -974,8 +974,8 @@ Federated providers appear as `signIn:<id>` actions that carry a `url`. The `Aut
 In a custom UI, navigate to the action's `url`: `setAuthState({ action: 'signIn:<id>' })` answers an `InvalidParameterException` state. The typed action names are `FederatedActionNameOf<O>`, `` `signIn:${id}` `` for each configured provider id:
 
 ```typescript
-// aws-blocks/index.ts — the backend
-import { Auth, type AuthOptions, type FederatedActionNameOf, Scope } from '@aws-blocks/blocks';
+// cdk-blocks/index.ts — the backend
+import { Auth, type AuthOptions, type FederatedActionNameOf, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('app');
 const authOptions = {
@@ -991,7 +991,7 @@ export type ProviderAction = FederatedActionNameOf<typeof authOptions>;
 
 ```typescript
 // src/main.ts — the browser
-import { authApi, type ProviderAction } from 'aws-blocks';
+import { authApi, type ProviderAction } from 'cdk-blocks';
 
 const okta: ProviderAction = 'signIn:okta'; // 'signIn:otka' is a compile error
 const state = await authApi.getAuthState();
@@ -1003,8 +1003,8 @@ if (action?.url) window.location.assign(action.url);
 
 ```typescript
 // src/main.ts — the browser
-import { onAuthChange } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { onAuthChange } from 'aws-cdk-blocks/ui';
+import { authApi } from 'cdk-blocks';
 
 onAuthChange(authApi, (user) => {
   // With users: { groups: ['admins', 'readers'] }: user.groups is ('admins' | 'readers')[]
@@ -1018,13 +1018,13 @@ The test ids e2e suites target (`authenticator-username`, `authenticator-action-
 
 ## Frontend on a different origin
 
-When the frontend and the API share an origin (`Hosting`'s default), the `Authenticator`'s "Sign in with …" links are all you need. When the frontend is served from another origin, for example `https://app.example.com` calling `https://api.example.com`, use the browser redirect client from `@aws-blocks/bb-auth/browser-client` (also exported from `@aws-blocks/blocks/ui`). It signs in with a federated provider through the block's own routes, then reads and ends the session:
+When the frontend and the API share an origin (`Hosting`'s default), the `Authenticator`'s "Sign in with …" links are all you need. When the frontend is served from another origin, for example `https://app.example.com` calling `https://api.example.com`, use the browser redirect client from `@aws-cdk-blocks/bb-auth/browser-client` (also exported from `aws-cdk-blocks/ui`). It signs in with a federated provider through the block's own routes, then reads and ends the session:
 
 ```typescript
-import { createAuthClient } from '@aws-blocks/bb-auth/browser-client';
+import { createAuthClient } from '@aws-cdk-blocks/bb-auth/browser-client';
 
 const auth = createAuthClient<'okta'>({
-  baseUrl: 'https://api.example.com',            // where /aws-blocks/auth/* is served
+  baseUrl: 'https://api.example.com',            // where /cdk-blocks/auth/* is served
   redirectUri: 'https://app.example.com/return', // the page that calls handleSignInRedirect()
 });
 
@@ -1064,8 +1064,8 @@ new Auth(scope, 'auth', {
 A native app signs in with a federated provider through the SDK's OIDC client, which uses the block's relay routes. Export the client next to `createApi()`:
 
 ```typescript
-import { Auth, relayOrigin } from '@aws-blocks/bb-auth';
-import { Scope } from '@aws-blocks/core';
+import { Auth, relayOrigin } from '@aws-cdk-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 const auth = new Auth(scope, 'auth', {
@@ -1127,7 +1127,7 @@ final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.okta, launch
   ```
 
   ```typescript
-  // aws-blocks/index.ts
+  // cdk-blocks/index.ts
   const auth = new Auth(scope, 'auth', {
     // At synth these are tokens; in the Lambda they're unset, and the block reads
     // the deployed pool and client ids from its own config.
@@ -1138,11 +1138,11 @@ final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.okta, launch
 
   A Gen 2 pool is deleted with its stack by default, so retain it before you hand it over.
 
-  **A client of the block's own pool** is created after the block, so its id can't be passed to the constructor as a token. Add it in `aws-blocks/index.cdk.ts`, then list the id the first deploy printed:
+  **A client of the block's own pool** is created after the block, so its id can't be passed to the constructor as a token. Add it in `cdk-blocks/index.cdk.ts`, then list the id the first deploy printed:
 
   <!-- doc-snippet: fragment — continues the CDK entry file after its `blocksStack` is created -->
   ```typescript
-  // aws-blocks/index.cdk.ts — after `const blocksStack = await BlocksStack.create(...)`
+  // cdk-blocks/index.cdk.ts — after `const blocksStack = await BlocksStack.create(...)`
   import * as cdk from 'aws-cdk-lib';
   import * as cognito from 'aws-cdk-lib/aws-cognito';
 
@@ -1153,7 +1153,7 @@ final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.okta, launch
   ```
 
   ```typescript
-  // aws-blocks/index.ts
+  // cdk-blocks/index.ts
   const auth = new Auth(scope, 'auth', {
     users: { signInWith: ['email'], caseSensitive: false },
     allowBearerAuth: { clientIds: ['<AmplifyWebClientId from the stack output>'] },
@@ -1163,4 +1163,4 @@ final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.okta, launch
 
 ## Migrating from `AuthBasic`, `AuthCognito` or `AuthOIDC`
 
-See [MIGRATION.md](./MIGRATION.md): per-block before → after code, what happens to deployed pools, users and sessions, and the codemod (`npx @aws-blocks/bb-auth migrate --dry-run`). The one rule: never change the block's id argument.
+See [MIGRATION.md](./MIGRATION.md): per-block before → after code, what happens to deployed pools, users and sessions, and the codemod (`npx @aws-cdk-blocks/bb-auth migrate --dry-run`). The one rule: never change the block's id argument.
