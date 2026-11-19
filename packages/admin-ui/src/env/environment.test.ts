@@ -148,7 +148,7 @@ describe('environmentStatuses', () => {
 		assert.equal(local?.id, 'local');
 		assert.equal(local?.state, 'local');
 		assert.equal(local?.selectable, true);
-		assert.match(String(local?.detail), /\.bb-data/);
+		assert.match(String(local?.detail), /\.cdk-blocks\/local\/data/);
 	});
 
 	it('offers a deployed stage with nothing to explain', () => {

@@ -48,10 +48,10 @@ import type { CfnResourceJson, CfnTemplateJson } from './cdk-synth.js';
 export const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', '__fixtures__');
 
 /** Where the mocks persist, relative to the test's working directory (the package root). */
-export const MOCK_DATA_DIR = '.bb-data';
+export const MOCK_DATA_DIR = '.cdk-blocks/local/data';
 
 /**
- * One old-mock scenario as it was left behind: every file under `.bb-data/`,
+ * One old-mock scenario as it was left behind: every file under `.cdk-blocks/local/data/`,
  * the cookies the browser held, and the wall-clock moment the capture was
  * taken. Tests that restore it pin `Date` to `capturedAt`, so the captured
  * tokens and TTLs are exactly as fresh as they were when the old block wrote
@@ -64,7 +64,7 @@ export interface MockStateCapture {
 	rootId: string;
 	/** `Date.now()` right after the scenario finished. */
 	capturedAt: number;
-	/** Path relative to `.bb-data/` → file contents, byte for byte. */
+	/** Path relative to `.cdk-blocks/local/data/` → file contents, byte for byte. */
 	files: Record<string, string>;
 	/** The browser's cookie jar (name → value) after the scenario. */
 	cookies: Record<string, string>;
@@ -88,7 +88,7 @@ export function mockStateCapture(name: string): MockStateCapture {
 	return capture;
 }
 
-/** Write a capture's files back under `.bb-data/`, exactly as the old block left them. */
+/** Write a capture's files back under `.cdk-blocks/local/data/`, exactly as the old block left them. */
 export function restoreMockFiles(capture: MockStateCapture): void {
 	for (const [rel, text] of Object.entries(capture.files)) {
 		const abs = join(MOCK_DATA_DIR, rel);
@@ -97,7 +97,10 @@ export function restoreMockFiles(capture: MockStateCapture): void {
 	}
 }
 
-/** Every file under `.bb-data/`, relative path → contents (the capture side of {@link restoreMockFiles}). */
+/**
+ * Every file under `.cdk-blocks/local/data/`, relative path → contents (the capture side of
+ * {@link restoreMockFiles}).
+ */
 export function readMockFiles(): Record<string, string> {
 	const out: Record<string, string> = {};
 	const walk = (dir: string): void => {

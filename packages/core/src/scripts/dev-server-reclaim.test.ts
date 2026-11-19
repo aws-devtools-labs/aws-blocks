@@ -363,7 +363,8 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
   });
 
   it("refuses while the app's dev server on another port is alive, names that port, and removes its own record", () => {
-    // Two dev servers of one app share its .bb-data: the second one, on another port, must not start either.
+    // Two dev servers of one app share its .cdk-blocks/local/data: the second one, on another port, must not start
+    // either.
     const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const owner = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a', parentCommand: 'q' });
     const foreign = '/elsewhere/.cdk-blocks-sandbox/dev-server.4200.pid';

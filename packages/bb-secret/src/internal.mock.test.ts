@@ -13,10 +13,15 @@ import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
 import { Scope } from '@aws-cdk-blocks/core';
 import { frameworkKey } from './internal.mock.js';
 
-const BB_DATA = join(process.cwd(), '.bb-data');
+const BB_DATA = join(process.cwd(), '.cdk-blocks/local/data');
+// Also reset the pre-consolidation directory: `getMockDataDir` carries it
+// across on first use, so a stale one left by an older run would seed keys
+// into these assertions.
+const LEGACY_BB_DATA = join(process.cwd(), '.bb-data');
 
 beforeEach(() => {
 	rmSync(BB_DATA, { recursive: true, force: true });
+	rmSync(LEGACY_BB_DATA, { recursive: true, force: true });
 });
 
 test('mock: get() returns a stable non-empty key across instances', async () => {

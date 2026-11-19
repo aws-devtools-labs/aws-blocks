@@ -20,7 +20,7 @@
   "include": [
     "vite.config.ts",
     "test/**/*",
-    ".blocks/**/*.d.ts"
+    ".cdk-blocks/**/*.d.ts"
   ],
   "references": [
     {

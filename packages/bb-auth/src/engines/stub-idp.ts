@@ -38,7 +38,7 @@
  * **No per-process state is needed to verify anything.** The signing key, the
  * code-signing key and the refresh-token key are all derived (HKDF-SHA256)
  * from the `Auth` block's session secret (on AWS the `session-secret`
- * framework key, in Secrets Manager or SSM per `defaults.secretsStore`; locally `.bb-data/<fullId>/state.json`), with a per-provider
+ * framework key, in Secrets Manager or SSM per `defaults.secretsStore`; locally `.cdk-blocks/local/data/<fullId>/state.json`), with a per-provider
  * label. So every Lambda instance (and every dev-server restart) signs with
  * the same key and serves the same JWKS: a token minted by one instance
  * verifies on another, and an authorize answered by one instance redeems at
@@ -48,7 +48,7 @@
  * deployment's own secret, not a constant in this file, nobody can mint a
  * code or token for a user the stub did not sign in.
  *
- * The user directory: the provider's inline `users` → `.bb-data/<fullId>/users.json`
+ * The user directory: the provider's inline `users` → `.cdk-blocks/local/data/<fullId>/users.json`
  * (the `bb-auth-oidc` fixture file) → one deterministic default user.
  *
  * Not a security boundary — a test double. `bb-auth-oidc`'s keys and refresh
@@ -334,7 +334,7 @@ export function redirectUriRejectionReason(uri: string): string | null {
 interface StubInstance {
 	providerId: string;
 	settings: StubIdpSettings;
-	/** `.bb-data/<fullId>/` for the `users.json` fixture; `undefined` when deployed. */
+	/** `.cdk-blocks/local/data/<fullId>/` for the `users.json` fixture; `undefined` when deployed. */
 	dataDir: () => string | undefined;
 	client: StubClientRegistration;
 	/** The issuer URL for a request (see `stubIssuerUrl`). */
@@ -835,7 +835,7 @@ export interface StubIdpConfig {
 	/** The provider's `stubIdp` settings. */
 	settings: StubIdpSettings;
 	/**
-	 * `.bb-data/<fullId>/`, resolved per request so `users.json` edits apply
+	 * `.cdk-blocks/local/data/<fullId>/`, resolved per request so `users.json` edits apply
 	 * without a restart. The deployed stub has none (`() => undefined`).
 	 */
 	dataDir: () => string | undefined;

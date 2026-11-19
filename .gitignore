@@ -48,10 +48,13 @@ test-apps/.upgrade-in-place/
 !/packages/create-blocks-app/templates/*/src/app/.blocks-sandbox/
 
 # Per-project telemetry/config state (auto-generated, contains UUIDs)
-.blocks/
-# ... except test-apps configs (committed for e2e projectId identification)
-!test-apps/**/.blocks/
-!test-apps/**/.blocks/**
+.cdk-blocks/
+# ... except each test app's committed config.json, which pins its e2e projectId.
+!test-apps/**/.cdk-blocks/
+# The data stays out of git by a rule here as well as the runtime marker, as the
+# templates do: re-including the directory above un-ignores everything under it.
+test-apps/**/.cdk-blocks/local/
+!test-apps/**/.cdk-blocks/config.json
 
 # generated docs artifacts
 docs/tech-design-output

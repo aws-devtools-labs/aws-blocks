@@ -411,11 +411,11 @@ class SnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             app = root / 'todo-app'
-            for path in ('node_modules/pkg', 'cdk-blocks/node_modules/nested', '.bb-data/app-todos', 'src'):
+            for path in ('node_modules/pkg', 'cdk-blocks/node_modules/nested', '.cdk-blocks/local/data/app-todos', 'src'):
                 (app / path).mkdir(parents=True)
             (app / 'node_modules/pkg/index.js').write_text('x')
             (app / 'cdk-blocks/node_modules/nested/index.js').write_text('x')
-            (app / '.bb-data/app-todos/store.json').write_text('{"1": {"title": "survival-a"}}')
+            (app / '.cdk-blocks/local/data/app-todos/store.json').write_text('{"1": {"title": "survival-a"}}')
             (app / 'package-lock.json').write_text('{}')
             (app / 'src/index.ts').write_text('export {}')
             os.symlink('../package-lock.json', app / 'src/lock')
@@ -429,8 +429,8 @@ class SnapshotTests(unittest.TestCase):
             with tarfile.open(target) as archive:
                 names = set(archive.getnames())
                 self.assertEqual(archive.extractfile('verifier-state.json').read(), state.read_bytes())
-            self.assertEqual(names, {'todo-app', 'todo-app/.bb-data', 'todo-app/.bb-data/app-todos',
-                                     'todo-app/.bb-data/app-todos/store.json', 'todo-app/cdk-blocks',
+            self.assertEqual(names, {'todo-app', 'todo-app/.cdk-blocks', 'todo-app/.cdk-blocks/local', 'todo-app/.cdk-blocks/local/data', 'todo-app/.cdk-blocks/local/data/app-todos',
+                                     'todo-app/.cdk-blocks/local/data/app-todos/store.json', 'todo-app/cdk-blocks',
                                      'todo-app/package-lock.json', 'todo-app/src', 'todo-app/src/index.ts',
                                      'todo-app/src/lock', 'verifier-state.json'})
             self.assertFalse((root / 'snapshot.tar.gz.partial').exists())

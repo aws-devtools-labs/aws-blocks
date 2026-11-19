@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOTS = ['templates', 'resources'].map((d) => join(packageRoot, d));
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'cdk.out', '.bb-data', '.cdk-blocks-sandbox']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'cdk.out', '.cdk-blocks', '.cdk-blocks-sandbox']);
 const TEXT = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.md', '.json', '.html', '.css', '']);
 const SOURCE = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
 

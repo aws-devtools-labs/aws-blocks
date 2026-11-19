@@ -71,7 +71,7 @@ function isSameOriginRequest(ctx: BlocksContext): boolean {
 export interface BuiltinRoutesOptions {
 	/**
 	 * `true` only when called by the LOCAL dev server. Enables the convenience of
-	 * opening `.bb-data/settings.json` in the developer's editor from
+	 * opening `.cdk-blocks/local/data/settings.json` in the developer's editor from
 	 * `GET /cdk-blocks/settings`. Every other caller — the deployed Lambda, CDK
 	 * synth — leaves it unset, so an anonymous GET can never spawn a process
 	 * there.
@@ -100,7 +100,7 @@ export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void 
 					ctx.response.status = 200;
 					ctx.response.headers.set('Content-Type', 'text/html');
 					ctx.response.send(
-						`<!DOCTYPE html><html><head><title>Resources</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}p{line-height:1.6}code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em}</style></head><body><h1>Resources</h1><p>Locally, each Building Block persists data to <code>.bb-data/</code> in your project root. Tables, buckets, queues, and other state live under <code>.bb-data/{id}/</code>.</p><p>For deployed apps, this page automatically redirects to the Resources group in the AWS console.</p></body></html>`,
+						`<!DOCTYPE html><html><head><title>Resources</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}p{line-height:1.6}code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em}</style></head><body><h1>Resources</h1><p>Locally, each Building Block persists data to <code>.cdk-blocks/local/data/</code> in your project root. Tables, buckets, queues, and other state live under <code>.cdk-blocks/local/data/{id}/</code>.</p><p>For deployed apps, this page automatically redirects to the Resources group in the AWS console.</p></body></html>`,
 					);
 					return;
 				}
@@ -129,12 +129,12 @@ export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void 
 						ctx.response.send('Forbidden: open /cdk-blocks/settings from the app or the address bar.\n');
 						return;
 					}
-					const settingsPath = join(process.cwd(), '.bb-data', 'settings.json');
+					const settingsPath = join(process.cwd(), '.cdk-blocks/local/data', 'settings.json');
 					openInEditor(settingsPath);
 					ctx.response.status = 200;
 					ctx.response.headers.set('Content-Type', 'text/html');
 					ctx.response.send(
-						`<!DOCTYPE html><html><head><title>Settings</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}p{line-height:1.6}code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em}a{color:#0066cc}</style></head><body><h1>Settings</h1><p>Opening <code>.bb-data/settings.json</code> in your default editor.</p><p>All AppSetting and Secret values are stored as <code>{ "key": value }</code> entries. Edit and save -- changes take effect on the next <code>get()</code> call.</p><p>File location: <code>${escapeHtml(settingsPath)}</code></p></body></html>`,
+						`<!DOCTYPE html><html><head><title>Settings</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}p{line-height:1.6}code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em}a{color:#0066cc}</style></head><body><h1>Settings</h1><p>Opening <code>.cdk-blocks/local/data/settings.json</code> in your default editor.</p><p>All AppSetting and Secret values are stored as <code>{ "key": value }</code> entries. Edit and save -- changes take effect on the next <code>get()</code> call.</p><p>File location: <code>${escapeHtml(settingsPath)}</code></p></body></html>`,
 					);
 					return;
 				}

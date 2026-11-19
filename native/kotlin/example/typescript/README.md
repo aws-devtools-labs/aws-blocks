@@ -100,7 +100,7 @@ Read the sandbox host out of `.cdk-blocks-sandbox/config.sandbox.json` (`apiUrl`
 
 #### Local (`npm run dev`)
 
-Values live in `.bb-data/settings.json`, keyed by each setting's full id. Start the dev server once so the file is created, then replace the generated placeholder with the real value:
+Values live in `.cdk-blocks/local/data/settings.json`, keyed by each setting's full id. Start the dev server once so the file is created, then replace the generated placeholder with the real value:
 
 ```jsonc
 {
@@ -108,7 +108,7 @@ Values live in `.bb-data/settings.json`, keyed by each setting's full id. Start 
 }
 ```
 
-The dev server re-reads the file on every request, so no restart is needed. `.bb-data/` is gitignored — the secret stays on your machine. `rm -rf .bb-data` wipes it along with the rest of the local data, and the next startup re-seeds the key with a random placeholder.
+The dev server re-reads the file on every request, so no restart is needed. `.cdk-blocks/local/data/` is gitignored — the secret stays on your machine. `rm -rf .cdk-blocks/local/data .bb-data` wipes it along with the rest of the local data, and the next startup re-seeds the key with a random placeholder.
 
 #### Sandbox (`npm run sandbox`)
 

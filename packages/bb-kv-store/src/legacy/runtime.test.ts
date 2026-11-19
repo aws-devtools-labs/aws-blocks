@@ -17,6 +17,7 @@ import { KVStore, KVStoreErrors, LegacyKVStore } from '../index.mock.js';
 
 beforeEach(() => {
 	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	} catch {}
 });
@@ -28,7 +29,7 @@ const FAR = 4102444800;
 
 /** The data file of the store `id` under `scope`, as a release up to 0.4.0 writes it. */
 function releaseFile(scope: { id: string }, id: string, entries: Record<string, unknown>): string {
-	const dir = join('.bb-data', `${scope.id}-${id}`);
+	const dir = join('.cdk-blocks/local/data', `${scope.id}-${id}`);
 	mkdirSync(dir, { recursive: true });
 	const path = join(dir, 'store.json');
 	writeFileSync(path, JSON.stringify(entries, null, 2));
@@ -243,7 +244,7 @@ describe('mock: reads the data file of a release up to 0.4.0', () => {
 	test('starts empty with no data file; reports a file that is not a file of a release, and leaves it as it is', async () => {
 		const scope = testScope();
 		assert.deepEqual(await Array.fromAsync(new LegacyKVStore(scope, 'none').scan()), []);
-		const dir = join('.bb-data', `${scope.id}-broken`);
+		const dir = join('.cdk-blocks/local/data', `${scope.id}-broken`);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, 'store.json'), 'not json');
 		const { warnings, logger } = recorder();

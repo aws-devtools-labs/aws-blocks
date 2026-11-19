@@ -216,12 +216,12 @@ export const banner = config('BANNER', { schema: z.object({ text: z.string().nul
 		});
 	});
 
-	void it('does not descend into node_modules / dist / .blocks', async () => {
+	void it('does not descend into node_modules / dist / .cdk-blocks', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('KEEP');`,
 			'node_modules/pkg/index.ts': `secret('FROM_NODE_MODULES');`,
 			'dist/index.js': `secret('FROM_DIST');`,
-			'.blocks/hosting-values.d.ts': `secret('FROM_BLOCKS');`,
+			'.cdk-blocks/hosting-values.d.ts': `secret('FROM_BLOCKS');`,
 		});
 		const scan = await scanValueKeys({ cwd });
 		assert.deepEqual(scan.secretKeys, ['KEEP']);
@@ -275,7 +275,7 @@ void describe('generateHostingValuesDts()', () => {
 		});
 		assert.equal(code, 1);
 		assert.ok(messages.some((m) => /out of date/.test(m)));
-		await assert.rejects(readFile(join(cwd, '.blocks', 'hosting-values.d.ts'), 'utf-8'));
+		await assert.rejects(readFile(join(cwd, '.cdk-blocks', 'hosting-values.d.ts'), 'utf-8'));
 
 		// Generate, then --check passes.
 		await runTypegenCli(['--cwd', cwd], { log: () => {}, error: () => {} });
@@ -293,7 +293,7 @@ void describe('watchHostingValues()', () => {
 		// polling fallback (Linux, where recursive fs.watch is unavailable).
 		const stop = await watchHostingValues({ cwd, debounceMs: 20, pollMs: 50, log: () => {}, error: () => {} });
 		try {
-			const outFile = join(cwd, '.blocks', 'hosting-values.d.ts');
+			const outFile = join(cwd, '.cdk-blocks', 'hosting-values.d.ts');
 			assert.ok((await readFile(outFile, 'utf-8')).includes('"K1": string;'));
 
 			// Add a new key → the watcher should regenerate with it.

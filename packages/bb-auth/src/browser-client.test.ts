@@ -350,9 +350,10 @@ describe('browser-client — mock runtime (the dev server)', () => {
 	after(async () => server.close());
 	beforeEach(() => {
 		clearRouteRegistry();
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	});
-	afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+	afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 	browserClientSuite({
 		base: () => server.origin,
@@ -369,6 +370,7 @@ describe('browser-client — AWS runtime (behind an API Gateway stage)', () => {
 	let rootId = '';
 	beforeEach(() => {
 		clearRouteRegistry();
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 		gw = installFakeGateway();
 		// A deployed stub IdP is served on a sandbox deployment only (`getDeploymentType()`).
@@ -378,6 +380,7 @@ describe('browser-client — AWS runtime (behind an API Gateway stage)', () => {
 		delete process.env.BLOCKS_DEPLOYMENT_TYPE;
 		gw.uninstall();
 		delete process.env[stubIdpConfigKeys(`${rootId}-auth`).API_URL];
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	});
 

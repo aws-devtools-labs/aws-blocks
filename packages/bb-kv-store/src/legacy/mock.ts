@@ -50,7 +50,7 @@ const MAX_ITEM_BYTES = 400 * 1024;
  *
  * **What it does to the table:** Nothing. The deploy keeps the table as it is,
  * with its items. The app's role keeps read and write access to it. Locally,
- * it reads the data file of the old store, `.bb-data/{fullId}/store.json`.
+ * it reads the data file of the old store, `.cdk-blocks/local/data/{fullId}/store.json`.
  *
  * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
  *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the

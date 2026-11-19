@@ -804,7 +804,7 @@ export interface AppSettingRef {
  * deploy again to re-register the provider with it. For a directly federated
  * provider the value is read at request time through the `Secret` itself.
  * Locally, the value comes from the `Secret`'s local store
- * (`.bb-data/settings.json`).
+ * (`.cdk-blocks/local/data/settings.json`).
  */
 export interface SecretRef {
 	/** The `Secret`'s scoped id. */
@@ -1140,7 +1140,7 @@ export type OnStubAuthorize = (req: StubAuthorizeRequest) => StubUser | undefine
 export interface StubIdpSettings {
 	/**
 	 * The local identity directory for the account picker and `onAuthorize`.
-	 * When set (and non-empty) it wins over a `.bb-data/<fullId>/users.json`
+	 * When set (and non-empty) it wins over a `.cdk-blocks/local/data/<fullId>/users.json`
 	 * fixture, which in turn wins over the single built-in default user.
 	 */
 	users?: readonly StubUser[];
@@ -2694,7 +2694,7 @@ export type CodeDeliveryFn = (username: string, code: string, purpose: CodeDeliv
  *
  * The default entry's `Auth` accepts these; the AWS runtime ignores them
  * (Cognito delivers codes itself). Locally, every code is also written to
- * `.bb-data/<fullId>/last-code.json`.
+ * `.cdk-blocks/local/data/<fullId>/last-code.json`.
  *
  * Both fields belong to the user pool, so only the Cognito arm
  * ({@link CognitoAuthMockOptions}) has them.

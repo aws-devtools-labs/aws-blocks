@@ -709,7 +709,7 @@ describe('a stack name that starts with "aws" is an error at synth', () => {
 		assert.ok(errors[0].includes(`Stack name '${name}' starts with 'aws'`), errors[0]);
 		assert.ok(errors[0].includes(`'${groupPrefix}-resources' and '${groupPrefix}-settings'`), errors[0]);
 		assert.match(errors[0], /AWS Resource Groups refuses a group name/);
-		assert.match(errors[0], /"stackId" in \.blocks\/config\.json/);
+		assert.match(errors[0], /"stackId" in \.cdk-blocks\/config\.json/);
 	};
 
 	test('BlocksStack: the error names the stack and says what to change, in any letter case', async () => {

@@ -20,8 +20,8 @@ import { ApiNamespace } from '@aws-cdk-blocks/core';
 import { createLambdaHandler } from '@aws-cdk-blocks/core/lambda-handler';
 import { Auth } from './index.mock.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** The backend module an app would write (`cdk-blocks/index.ts`). */
 function backend() {

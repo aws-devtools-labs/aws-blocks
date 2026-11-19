@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // `types` and `status` for a block whose cluster the block provisions (`--block <id>`). Such a block has no
-// connection string: its schema is its migration files, and its local database is PGlite under `.bb-data/`.
+// connection string: its schema is its migration files, and its local database is PGlite under
+// `.cdk-blocks/local/data/`.
 
 import { constants, cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { LEGACY_MOCK_DATA_DIR, MOCK_DATA_DIR } from '@aws-cdk-blocks/core/bb-utils';
 import { pgliteUnrefTimersExtension } from '../common/pglite-process.js';
 import { DEFAULT_MIGRATIONS_ROOT } from '../constants.js';
 import { RulesEngine } from '../dialect/rules-engine.js';
@@ -50,7 +52,7 @@ function blockMigrationsDir(flags: BlockFlags): string {
 /**
  * Writes the `Tables` interface of a block from its migration files. The files are applied to a new local
  * database in a temporary directory, by the code `npm run dev` runs them with, so the result does not depend on
- * the state of `.bb-data/` and a running dev server is not touched.
+ * the state of `.cdk-blocks/local/data/` and a running dev server is not touched.
  */
 export async function blockTypes(flags: BlockFlags & { out?: string }): Promise<TypesResult> {
 	const dir = blockMigrationsDir(flags);
@@ -73,9 +75,23 @@ export async function blockTypes(flags: BlockFlags & { out?: string }): Promise<
 	}
 }
 
-/** The directory under `.bb-data/` of the block, or of its cluster: the id, after the ids of its scopes. */
+/**
+ * The block or cluster database directory under `.cdk-blocks/local/data/`, falling back to `.bb-data/`: the
+ * id, after the ids of its scopes.
+ */
 function localDataDir(owner: string): string | undefined {
-	const root = resolve('.bb-data');
+	// Reads only, so it also looks in the pre-consolidation directory: the carry-over runs when the BLOCK
+	// first opens its store, and `npm run db -- status` and `-- types` are usually what an upgrading project runs
+	// before that. Reporting "no local database" for one that is plainly there would be wrong.
+	for (const relative of [MOCK_DATA_DIR, LEGACY_MOCK_DATA_DIR]) {
+		const found = localDataDirUnder(resolve(relative), owner);
+		if (found !== undefined) return found;
+	}
+	return undefined;
+}
+
+/** The same search within one data root, or `undefined` when that root holds no database of `owner`. */
+function localDataDirUnder(root: string, owner: string): string | undefined {
 	if (!existsSync(root)) return undefined;
 	const hasDatabase = (name: string) => existsSync(join(root, name, PGLITE_SUBDIR, 'PG_VERSION'));
 	if (hasDatabase(owner)) return join(root, owner, PGLITE_SUBDIR);
@@ -101,7 +117,7 @@ export async function blockStatus(flags: BlockFlags): Promise<StatusResult> {
 			applied: [],
 			pending: files,
 			note:
-				`No local database of '${flags.cluster ?? flags.block}' is under .bb-data/. The block creates it, and applies ` +
+				`No local database of '${flags.cluster ?? flags.block}' is under .cdk-blocks/local/data/. The block creates it, and applies ` +
 				'the files, at its first statement. For a block on a DatabaseCluster, pass --cluster <id>.',
 		};
 	}

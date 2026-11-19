@@ -23,7 +23,7 @@ What each one does locally and deployed:
 |----------------|---------------------|----------|
 | Logger | One JSON line per call in the terminal | CloudWatch Logs |
 | Metrics | EMF JSON lines in the terminal | CloudWatch metrics, extracted from the logs |
-| Tracer | Last 100 traces in `.bb-data/`, each also printed | AWS X-Ray |
+| Tracer | Last 100 traces in `.cdk-blocks/local/data/`, each also printed | AWS X-Ray |
 | Dashboard | Open `http://localhost:3001/cdk-blocks/dashboard` for the local overview; no AWS credentials needed | A CloudWatch Dashboard; the route redirects to it |
 
 `test:e2e` reads the log and metric lines from the dev server it starts. If a
@@ -59,7 +59,7 @@ npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a term
 npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
 npm run secret set KEY # Set a secret (also list, remove KEY)
 npm run config set KEY value # Set a config value (also list, remove KEY)
-npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
+npm run typegen          # Regenerate secret/config key types; run once and commit .cdk-blocks/hosting-values.d.ts before gating CI on -- --check
 ```
 
 Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
@@ -107,9 +107,9 @@ curl -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/cdk-blocks/api \
 
 ## Stack naming
 
-Your CloudFormation stack names are derived from the `stackId` in `.blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
+Your CloudFormation stack names are derived from the `stackId` in `.cdk-blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
 
-To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `cdk-blocks/index.cdk.ts` directly.
+To change the stack name, edit `stackId` in `.cdk-blocks/config.json`. For dynamic naming logic, modify `cdk-blocks/index.cdk.ts` directly.
 
 ## Adding a Frontend Later
 

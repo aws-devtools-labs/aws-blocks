@@ -20,7 +20,7 @@ import { freshScope, installLocalTestHooks, scopeId } from './test-support/lifec
 import { queryAsAdmin, resetMockSchema } from './test-support/mock-schema.js';
 import { simulateConflict } from './testing.js';
 
-const DATA_DIR = join(process.cwd(), '.bb-data');
+const DATA_DIR = join(process.cwd(), '.cdk-blocks/local/data');
 const app = () => freshScope('bbdb');
 const limitExceeded = (e: unknown) => isBlocksError(e, DatabaseErrors.TransactionRowLimitExceeded);
 

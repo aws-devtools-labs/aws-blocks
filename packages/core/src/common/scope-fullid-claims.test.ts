@@ -6,7 +6,7 @@
  * reported with a warning when the second is constructed. Scope ids are joined
  * with `-`, so `user-service › sessions` and `user › service-sessions` both
  * yield `user-service-sessions`, and the two blocks share their SDK identifier
- * registry entry and local `.bb-data` directory.
+ * registry entry and local `.cdk-blocks/local/data` directory.
  *
  * The claims are process-wide, so each test uses its own root id.
  */

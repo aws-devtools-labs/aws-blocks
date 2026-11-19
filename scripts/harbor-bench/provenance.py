@@ -52,7 +52,7 @@ def verify(registry=Path('/opt/registry'), app=Path('/app/todo-app'),
     for required in ('aws-cdk-blocks', '@aws-cdk-blocks/core'):
         assert any(p['name'] == required for p in checked), required
     sources = '\n'.join(p.read_text() for p in (app / 'cdk-blocks').rglob('*.ts') if 'node_modules' not in p.parts)
-    # Persistence is a separate verify.py heuristic: verifier records must appear under .bb-data.
+    # Persistence is a separate verify.py heuristic: verifier records must appear under .cdk-blocks/local/data.
     # Matches the unscoped umbrella and, as a substring, every `@aws-cdk-blocks/*` import: both are
     # supported ways to write the backend, so requiring the scope would fail a correct one.
     assert 'aws-cdk-blocks' in sources and 'ApiNamespace' in sources, 'backend must expose a Blocks ApiNamespace'
@@ -60,12 +60,22 @@ def verify(registry=Path('/opt/registry'), app=Path('/app/todo-app'),
             'manifest_sha256': hashlib.sha256((registry / 'publish-manifest.json').read_bytes()).hexdigest()}
 
 
+
+MOCK_DATA_PARTS = ('.cdk-blocks', 'local', 'data')
+
+
+def _windows(parts, size):
+    """Every `size`-long run of consecutive `parts`."""
+    return [parts[i:i + size] for i in range(len(parts) - size + 1)]
+
 def stored_in_blocks(app, titles):
-    """Titles absent from every file under the app's Blocks mock data (.bb-data)."""
+    """Titles absent from every file under the app's Blocks mock data (.cdk-blocks/local/data)."""
     missing = {title.encode() for title in titles}
     for top, dirs, files in os.walk(app):
         dirs[:] = [d for d in dirs if d != 'node_modules']
-        if '.bb-data' not in Path(top).relative_to(app).parts:
+        # Compared as path SEGMENTS: the mock data directory is three of them now, and
+        # a multi-segment string can never equal a single entry of `.parts`.
+        if MOCK_DATA_PARTS not in _windows(Path(top).relative_to(app).parts, len(MOCK_DATA_PARTS)):
             continue
         for file in files:
             if missing:

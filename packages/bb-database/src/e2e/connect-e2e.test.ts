@@ -79,7 +79,7 @@ describe('bb-database connect E2E: Supabase', { skip }, () => {
 	const onSupabasePooler = host.endsWith('.pooler.supabase.com');
 	let ws: Workspace;
 
-	const stored = () => existsSync(join(ws.cwd, '.bb-data', 'settings.json'));
+	const stored = () => existsSync(join(ws.cwd, '.cdk-blocks/local/data', 'settings.json'));
 
 	before(() => {
 		ws = workspace('bbdb-connect-e2e-');
@@ -222,7 +222,7 @@ describe('bb-database connect E2E: Supabase', { skip }, () => {
 		assert.strictEqual(connected.name, 'e2e');
 		assert.strictEqual(connected.stored, 'local');
 		assert.deepStrictEqual(connected.tls, { verified: true, trust: 'ca' });
-		assert.ok(stored(), '<cwd>/.bb-data/settings.json exists');
+		assert.ok(stored(), '<cwd>/.cdk-blocks/local/data/settings.json exists');
 
 		// One module per connection name; the default name `db-url` has the plain `database.ca.ts`.
 		const caModule = join(ws.cwd, 'cdk-blocks', 'database.e2e.ca.ts');

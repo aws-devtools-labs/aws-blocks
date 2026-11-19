@@ -1,10 +1,11 @@
 dist
 node_modules
 .cdk-blocks-sandbox
+.cdk-blocks/local/
+.bb-data/
 cdk.out/
 cdk-blocks/client.js
 cdk-blocks/blocks.spec.json
-.bb-data/
 .hosting/
 
 # Secrets and key material — never commit

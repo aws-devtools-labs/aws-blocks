@@ -20,8 +20,8 @@ import { Browser } from './test-helpers.js';
 import { PACKAGE_DIR } from './test-support/typecheck.js';
 import type { AuthenticatedUser, CodeDeliveryPurpose } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 const ADMIN_EMAILS = new Set(['you@example.com']);

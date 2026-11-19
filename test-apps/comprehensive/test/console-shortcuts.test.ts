@@ -40,7 +40,7 @@ export function consoleShortcutTests() {
         const contentType = res.headers.get('content-type');
         assert.ok(contentType?.includes('text/html'), `Expected text/html, got: ${contentType}`);
         const body = await res.text();
-        assert.ok(body.includes('.bb-data'), 'HTML should mention .bb-data');
+        assert.ok(body.includes('.cdk-blocks/local/data'), 'HTML should mention .cdk-blocks/local/data');
       }
     });
 
@@ -58,7 +58,7 @@ export function consoleShortcutTests() {
         const contentType = res.headers.get('content-type');
         assert.ok(contentType?.includes('text/html'), `Expected text/html, got: ${contentType}`);
         const body = await res.text();
-        assert.ok(body.includes('.bb-data/settings'), 'HTML should mention .bb-data/settings');
+        assert.ok(body.includes('.cdk-blocks/local/data/settings'), 'HTML should mention .cdk-blocks/local/data/settings');
       }
     });
 

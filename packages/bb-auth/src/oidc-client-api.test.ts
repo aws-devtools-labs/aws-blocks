@@ -32,9 +32,10 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** Call `getClient()` on the namespace `createOidcApi()` returned, as the RPC dispatcher does. */
 async function getClient<P extends string>(api: unknown, ctx: BlocksContext): Promise<OidcClientHandle<P>> {

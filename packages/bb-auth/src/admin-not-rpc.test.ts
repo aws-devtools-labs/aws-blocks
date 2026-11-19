@@ -19,9 +19,10 @@ import { Browser } from './test-helpers.js';
 import { makeAwsAuth } from './test-support/aws-harness.js';
 import type { CodeDeliveryPurpose } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 afterEach(() => {
 	mock.restoreAll();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
 

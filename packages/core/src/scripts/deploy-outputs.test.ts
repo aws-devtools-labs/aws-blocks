@@ -25,8 +25,8 @@ describe('OUTPUTS_FILE — one document per stage', () => {
 		);
 	});
 
-	// Both documents are per-deploy, account-specific local state. They sit in
-	// the directory that is already ignored, rather than the committed `.blocks/`,
+	// Both documents are per-deploy, account-specific local state. They sit in the
+	// directory that is already ignored, rather than the committed `.cdk-blocks/`,
 	// so neither can be committed by forgetting an ignore entry.
 	it('keeps both documents in the ignored state directory', () => {
 		for (const file of Object.values(OUTPUTS_FILE)) {

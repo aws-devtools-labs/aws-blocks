@@ -32,7 +32,7 @@ The block owns every top-level attribute name that starts with `_bkv_` ("Blocks 
 
 `put` also rejects a value that has a field named `__proto__`, at any depth, with `ValidationFailedException`. DynamoDB cannot store that field name: the DynamoDB document client drops the field without an error, so the mock would keep a field that the AWS runtime loses. Both runtimes reject it in `buildItem`, before any I/O, so the same value gives the same stored item or the same error in both.
 
-The layout is implemented once, in `src/item.ts`, and both runtimes call it: `normalizeKey`, `mergeKeyIntoValue`, `buildItem`, `readItem`, the condition planners, and the cursor codec. The mock persists the exact DynamoDB items to `.bb-data/{fullId}/store.json`, in a file with a version (`{ "version": 2, "items": [...] }`), so a mock file shows what DynamoDB would hold.
+The layout is implemented once, in `src/item.ts`, and both runtimes call it: `normalizeKey`, `mergeKeyIntoValue`, `buildItem`, `readItem`, the condition planners, and the cursor codec. The mock persists the exact DynamoDB items to `.cdk-blocks/local/data/{fullId}/store.json`, in a file with a version (`{ "version": 2, "items": [...] }`), so a mock file shows what DynamoDB would hold.
 
 ## Key model
 
@@ -187,7 +187,7 @@ Release 0.4.0 or earlier keys its table by `pk` and keeps the value as JSON text
 
 **The AWS runtime** (`legacy/aws.ts`) reads with `GetItem` and `Scan`, writes with `PutItem`, and deletes with `DeleteItem`. The layout is in `legacy/layout.ts`: a value is `JSON.parse` of the `value` attribute, and an item whose `value` is not JSON text is a `ValidationFailed` error that names the key. The key check, the cursor, the page logic (`requestResults` in `item.ts`), and the expiry filter are those of `KVStore`, over a key model with `pk` and `ttl`.
 
-**The mock** (`legacy/mock.ts`) holds the same items as the table: `loadReleaseFile` in `mock-file.ts` reads the data file of the old store, `.bb-data/{fullId}/store.json`, as items in the layout of release 0.4.0. So the mock and the AWS runtime share the reader, the key check, the cursor, and the expiry filter, and a cursor of one reads on in the other. An entry is read as release 0.4.0 reads it, and an entry that release 0.4.0 leaves out is left out. The load keeps an expired item, so `includeExpired` works as on AWS. The load does not change the file.
+**The mock** (`legacy/mock.ts`) holds the same items as the table: `loadReleaseFile` in `mock-file.ts` reads the data file of the old store, `.cdk-blocks/local/data/{fullId}/store.json`, as items in the layout of release 0.4.0. So the mock and the AWS runtime share the reader, the key check, the cursor, and the expiry filter, and a cursor of one reads on in the other. An entry is read as release 0.4.0 reads it, and an entry that release 0.4.0 leaves out is left out. The load keeps an expired item, so `includeExpired` works as on AWS. The load does not change the file.
 
 If the app ran once on this release with the old line unchanged, the mock of `KVStore` loaded that directory first. It converted `store.json`, or it could not convert it and set it aside. Both leave the file of release 0.4.0 as a copy, `store.json.bak` (the loader of `KVStore` keeps that copy before it converts), and `loadReleaseFile` reads the copy. It does not turn a converted file back: a conversion under the options of the old line (`ttl: true`) does not keep the expiry where a read can find it. What that `KVStore` wrote to the converted file is not read. A `put` or a `delete` writes `store.json` as a version 1 file.
 
@@ -199,11 +199,11 @@ If the app ran once on this release with the old line unchanged, the mock of `KV
 
 ## Mock implementation
 
-- Data is stored in `.bb-data/{scope.fullId}/store.json` through `getMockDataDir()` from core, as `{ "version": 2, "items": [...] }`, where each entry of `items` is the exact DynamoDB item. The file format and its loader are in `src/mock-file.ts` (D-KV-19).
+- Data is stored in `.cdk-blocks/local/data/{scope.fullId}/store.json` through `getMockDataDir()` from core, as `{ "version": 2, "items": [...] }`, where each entry of `items` is the exact DynamoDB item. The file format and its loader are in `src/mock-file.ts` (D-KV-19).
 - The loader converts the two earlier formats, and keeps a copy of a version 1 `store.json` as `store.json.bak` before the store writes the file again. Version 1 is the `store.json` of `KVStore` before the merge: an object of key to JSON string, or of key to `{ value, ttl }`. The other is the `data.json` of `DistributedTable`, which the loader reads when the directory has no `store.json`. A conversion uses the layout of a write and is all or nothing. The store then writes `store.json` in the current format. A `data.json` stays where it is.
 - An entry of a current-format file that is not an item of the store (a corrupt entry) is left out. The mock keeps a copy of the file as `store.json.bak` and reports it once at warn level.
 - A file in any other shape is renamed to a `.bak` file and reported once at warn level, and the store starts empty. The mock does not write over a file that it cannot read.
-- Data persists across dev server restarts. Customers can delete it with `rm -rf .bb-data`.
+- Data persists across dev server restarts. Customers can delete it with `rm -rf .cdk-blocks/local/data .bb-data`.
 - The mock drops an item whose expiry has passed when it loads its file, so the file does not grow with expired items. This takes the place of the background deletion that DynamoDB does.
 - `scan` sorts the items by base key once and reuses that order until the next write.
 - Every write stores a copy of the item made with `marshall` then `unmarshall` from `@aws-sdk/util-dynamodb`, with the options the AWS runtime passes to its DocumentClient (`MARSHALL_OPTIONS` in `src/item.ts`). A value that DynamoDB cannot store (an empty Set, a `Date`, `NaN`, a class instance, an integer above `Number.MAX_SAFE_INTEGER`) fails locally with the marshaller's error. A value that the marshaller converts reads back converted: a `Map` as an object, `-0` as `0`, a `bigint` as a number, and `undefined` dropped at any depth. Every read returns a copy, so changing an object after `put` or changing a returned value never changes the stored item.

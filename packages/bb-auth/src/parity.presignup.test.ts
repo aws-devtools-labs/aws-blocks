@@ -29,8 +29,8 @@ import { makeAwsAuth, wireView } from './test-support/aws-harness.js';
 import { cognitoWithTrigger } from './test-support/cognito-trigger.js';
 import type { CognitoAuthOptions, UserCandidate } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 let n = 0;
 const root = (): ScopeParent => ({ id: `presignupparity${process.pid}x${++n}` });

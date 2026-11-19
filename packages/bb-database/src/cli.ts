@@ -53,7 +53,7 @@ For a block that provisions its cluster (no connection string), name the block:
       --type aurora, or --cluster with the id of its DatabaseCluster, for a block that is not on its own
       Aurora DSQL cluster.
   status [dir] --block <id> [--cluster <id>] [--schema <schema>]
-      List the applied and the pending files in the block's local database under .bb-data/.
+      List the applied and the pending files in the block's local database under .cdk-blocks/local/data/.
 
 Options for every command:
   --output json|text   json prints one object on stdout and nothing else (default text)

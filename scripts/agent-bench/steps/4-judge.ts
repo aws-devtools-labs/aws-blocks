@@ -35,12 +35,15 @@ import { stringifyRedacted } from './lib/secrets.mjs';
 // Physical spec-blinding: the judge grades a SOURCE-ONLY COPY (JUDGE_SRC) with these excluded, so the
 // objective test can't anchor the score — blinding by ABSENCE.
 //   - STAGE_EXCLUDE_DIRS: node_modules, .git, dist, the staged `bench-tests/` spec dir,
-//     `.cdk-blocks-sandbox` (a build-time artifact), and `.bb-data` (the PGlite/BB mock datadir — runtime
+//     `.cdk-blocks-sandbox` (a build-time artifact), and `.cdk-blocks/local/data` (the PGlite/BB mock datadir — runtime
 //     state, not source; copying it across the judge's UID boundary throws EACCES on internal files
 //     like pg_logical/replorigin_checkpoint). Also the grep exclude-dirs in collectBlocksImports.
 //   - EXCLUDED_FILE_RE: the objective *.spec.{js,ts,jsx,tsx,cjs,mjs} test CODE files — deliberately
 //     NOT framework *.spec.json manifests (e.g. blocks.spec.json), which are legit app source.
-const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.cdk-blocks-sandbox', '.bb-data']);
+const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.cdk-blocks-sandbox']);
+// Matched as consecutive path SEGMENTS: the mock data directory is three of them, and a
+// multi-segment string can never equal a single entry of the set above.
+const STAGE_EXCLUDE_PATHS = [['.cdk-blocks', 'local', 'data']];
 const EXCLUDED_FILE_RE = /\.spec\.[cm]?[jt]sx?$/;
 
 const WORKSPACE = required('WORKSPACE', '[judge]');
@@ -89,6 +92,11 @@ function stageFilter(src: string): boolean {
 	if (rel === '') return true; // the root itself
 	const parts = rel.split(sep);
 	if (parts.some((seg) => STAGE_EXCLUDE_DIRS.has(seg))) return false;
+	for (const want of STAGE_EXCLUDE_PATHS) {
+		for (let i = 0; i + want.length <= parts.length; i++) {
+			if (want.every((seg, j) => parts[i + j] === seg)) return false;
+		}
+	}
 	return !EXCLUDED_FILE_RE.test(parts[parts.length - 1] ?? '');
 }
 cpSync(WORKSPACE, JUDGE_SRC, { recursive: true, filter: stageFilter });

@@ -23,8 +23,8 @@ import type { CfnTemplateJson } from './test-support/cdk-synth.js';
 import { synthIdentity } from './test-support/identity.js';
 import type { AuthOptions } from './types.js';
 
-before(() => rmSync('.bb-data', { recursive: true, force: true }));
-after(() => rmSync('.bb-data', { recursive: true, force: true }));
+before(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+after(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** A plausible answer for every command the engine may send. */
 const REPLIES: Record<string, () => unknown> = {

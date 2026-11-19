@@ -142,10 +142,10 @@ async function waitForRecord(predicate: (record: Record<string, unknown>) => boo
   return undefined;
 }
 
-// The Tracer mock keeps its traces in .bb-data/<tracer id>/traces.json, under
+// The Tracer mock keeps its traces in .cdk-blocks/local/data/<tracer id>/traces.json, under
 // the dev server's working directory: this app's directory.
 function savedTraces() {
-  const root = join(process.cwd(), '.bb-data');
+  const root = join(process.cwd(), '.cdk-blocks/local/data');
   if (!existsSync(root)) return [];
   return readdirSync(root).flatMap((dir) => {
     const file = join(root, dir, 'traces.json');

@@ -138,7 +138,7 @@ By default `getSecret` / `getConfig` accept any `string`. Run `hosting-typegen`
 them **type-safe with no call-site change**:
 
 ```bash
-npx hosting-typegen           # scan secret()/config() calls → .blocks/hosting-values.d.ts
+npx hosting-typegen           # scan secret()/config() calls → .cdk-blocks/hosting-values.d.ts
 npx hosting-typegen --watch   # regenerate on every save (run alongside your dev server)
 npx hosting-typegen --check   # CI: fail if that file is stale
 ```
@@ -164,7 +164,7 @@ Add the generated file to your `tsconfig.json` `include` and let the tool own it
 (it is regenerated, never hand-edited):
 
 ```jsonc
-{ "include": ["src", "cdk-blocks", ".blocks/**/*.d.ts"] }
+{ "include": ["src", "cdk-blocks", ".cdk-blocks/**/*.d.ts"] }
 ```
 
 The keys come straight from your `secret()`/`config()` calls — the single source of

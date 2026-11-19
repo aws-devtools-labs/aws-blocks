@@ -131,7 +131,7 @@ export function fixtureApp(pkg: Record<string, unknown> = { dependencies: { vite
 	mkdirSync(join(root, 'cdk-blocks'));
 	writeFileSync(join(root, 'cdk-blocks', 'index.ts'), 'export {};\n');
 	writeFileSync(join(root, 'cdk-blocks', 'index.cdk.ts'), 'export {};\n');
-	mkdirSync(join(root, '.blocks'));
-	writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'demo' }));
+	mkdirSync(join(root, '.cdk-blocks'));
+	writeFileSync(join(root, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'demo' }));
 	return root;
 }

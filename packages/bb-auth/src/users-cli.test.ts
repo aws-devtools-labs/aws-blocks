@@ -5,7 +5,7 @@
  * `npx @aws-cdk-blocks/bb-auth users …` — the supported way to make the first admin.
  *
  * The local path runs against a real local pool (`Auth` from the mock entry,
- * persisted to `.bb-data/`), and a second `Auth` instance with the same id —
+ * persisted to `.cdk-blocks/local/data/`), and a second `Auth` instance with the same id —
  * what a restarted dev server constructs — checks that `requireRole` sees the
  * change. The deployed path runs SDK clients whose `send` is replaced, so the
  * exact CloudFormation and Cognito calls are pinned without AWS.
@@ -27,8 +27,8 @@ import type { DeployedClients } from './users-cli/deployed.js';
 import { parseUsersArgs, runUsersCli, type UsersCliDeps } from './users-cli/cli.js';
 import { PACKAGE_DIR } from './test-support/typecheck.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 
@@ -91,7 +91,7 @@ describe('users CLI: local pool', () => {
 	test('add-to-group by verified email makes the first admin; remove-from-group undoes it', async () => {
 		const auth = makeAuth();
 		await register(auth, 'owner', 'you@example.com');
-		const before = JSON.parse(readFileSync(join('.bb-data', auth.fullId, 'state.json'), 'utf8'));
+		const before = JSON.parse(readFileSync(join('.cdk-blocks/local/data', auth.fullId, 'state.json'), 'utf8'));
 		assert.strictEqual(await isAdmin('owner'), false);
 
 		const added = await cli(['add-to-group', 'you@example.com', 'admin']);
@@ -101,7 +101,7 @@ describe('users CLI: local pool', () => {
 		assert.strictEqual(await isAdmin('owner'), true);
 
 		// Every other key of the file is kept: users, codes, the session secret.
-		const after = JSON.parse(readFileSync(join('.bb-data', auth.fullId, 'state.json'), 'utf8'));
+		const after = JSON.parse(readFileSync(join('.cdk-blocks/local/data', auth.fullId, 'state.json'), 'utf8'));
 		assert.strictEqual(after.sessionSecret, before.sessionSecret);
 		assert.deepStrictEqual(after.users, before.users);
 
@@ -119,7 +119,7 @@ describe('users CLI: local pool', () => {
 	test('refuses a group the block does not declare, and changes nothing', async () => {
 		const auth = makeAuth();
 		await register(auth, 'owner', 'you@example.com');
-		const file = join('.bb-data', auth.fullId, 'state.json');
+		const file = join('.cdk-blocks/local/data', auth.fullId, 'state.json');
 		const before = readFileSync(file, 'utf8');
 		const r = await cli(['add-to-group', 'owner', 'admins']);
 		assert.strictEqual(r.code, 1);
@@ -203,7 +203,7 @@ describe('users CLI: local pool', () => {
 		});
 		await pool.admin.createUser('owner', { attributes: { email: 'boss@example.org', email_verified: 'true' } });
 		await pool.signUp('boss@example.org', PASSWORD, { attributes: { email: 'eve@example.com' } });
-		const file = join('.bb-data', pool.fullId, 'state.json');
+		const file = join('.cdk-blocks/local/data', pool.fullId, 'state.json');
 		const admins = () => JSON.parse(readFileSync(file, 'utf8')).groups.admin;
 
 		const r = await cli(['add-to-group', 'boss@example.org', 'admin']);
@@ -374,8 +374,8 @@ describe('users CLI: deployed pool', () => {
 	let project: string;
 	beforeEach(() => {
 		project = mkdtempSync(join(tmpdir(), 'bb-auth-users-deployed-'));
-		mkdirSync(join(project, '.blocks'));
-		writeFileSync(join(project, '.blocks', 'config.json'), JSON.stringify({ stackId: 'my-app' }));
+		mkdirSync(join(project, '.cdk-blocks'));
+		writeFileSync(join(project, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'my-app' }));
 	});
 	afterEach(() => rmSync(project, { recursive: true, force: true }));
 

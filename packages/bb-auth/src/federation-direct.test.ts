@@ -167,7 +167,8 @@ describe('DirectFederationEngine', () => {
 			'the log names the unset secret',
 		);
 
-		// Set it (locally: the Secret's `.bb-data` store): the next sign-in reads it — `null` was not memoized.
+		// Set it (locally: the Secret's `.cdk-blocks/local/data` store): the next sign-in reads it — `null` was not
+		// memoized.
 		await secret.put('sm-s3cret');
 		const identity = await signIn(idp, engine);
 		assert.strictEqual(identity.kind, 'direct');

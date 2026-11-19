@@ -29,8 +29,8 @@ import {
 import { Browser, makeAuth, makeContext, sdkError } from './test-helpers.js';
 import type { AppSettingRef, SignInNextStep } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const secret: AppSettingRef = { fullId: 's', get: async () => 's' };
 const delivery = { destination: 'a***@e***', deliveryMedium: 'EMAIL' as const, attributeName: 'email' };

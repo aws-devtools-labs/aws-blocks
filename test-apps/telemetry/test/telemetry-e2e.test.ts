@@ -64,7 +64,7 @@ function createTmpDir(prefix = 'blocks-telemetry-e2e'): string {
 }
 
 function installationIdPath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), '.blocks', 'telemetry', 'installation-id');
+  return join(homeDir ?? homedir(), '.cdk-blocks', 'telemetry', 'installation-id');
 }
 
 function seedPinnedInstallationId(homeDir?: string): void {
@@ -320,7 +320,7 @@ interface CloudGroup {
 const CLOUD_GROUPS_DIR = join(APP_ROOT, '.e2e-groups');
 
 /** App entries a group copy needs. The generated client is left out. */
-const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'cdk-blocks'];
+const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.cdk-blocks', 'cdk-blocks'];
 
 /**
  * App entries a group copy leaves out: the tests and docs, state the CLI, the
@@ -332,7 +332,7 @@ const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'cd
  */
 const APP_EXCLUDED = [
   'test', 'README.md', '.gitignore', 'node_modules', 'dist',
-  'cdk.out', 'cdk.context.json', '.cdk-blocks-sandbox', '.bb-data', '.e2e-groups',
+  'cdk.out', 'cdk.context.json', '.cdk-blocks-sandbox', '.cdk-blocks/local/data', '.e2e-groups',
   '.DS_Store', '.idea', '.vscode',
 ];
 
@@ -566,10 +566,10 @@ describe('Telemetry E2E', { timeout: SUITE_TIMEOUT_MS, concurrency: true }, () =
     prepareCliGroup();
   });
 
-  // Clean up: remove the seeded .blocks directory and the group copies
+  // Clean up: remove the seeded .cdk-blocks directory and the group copies
   // (rmSync removes the links in them, not what they point to).
   after(() => {
-    rmSync(join(homedir(), '.blocks', 'telemetry'), { recursive: true, force: true });
+    rmSync(join(homedir(), '.cdk-blocks', 'telemetry'), { recursive: true, force: true });
     rmSync(CLOUD_GROUPS_DIR, { recursive: true, force: true });
   });
 

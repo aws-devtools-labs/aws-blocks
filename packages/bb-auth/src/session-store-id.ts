@@ -6,7 +6,7 @@
  * holds the server-side sessions. The CDK entry and both runtimes build the
  * store under this one id. It gives the table its name
  * (`<fullId>-session-store`) and its logical id, and gives the mock its data
- * directory (`.bb-data/<fullId>-session-store/`).
+ * directory (`.cdk-blocks/local/data/<fullId>-session-store/`).
  *
  * `AuthCognito` and `AuthOIDC` kept their sessions under the child id
  * `sessions`. The `KVStore` of this release keeps an item under another key

@@ -14,8 +14,9 @@ dist/
 
 # Blocks
 /.cdk-blocks-sandbox/
+/.cdk-blocks/local/
+/.bb-data/
 cdk.out/
-.bb-data/
 
 # Secrets and key material — never commit
 .env

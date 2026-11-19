@@ -24,9 +24,12 @@ function makeRoot(): string {
 	return root;
 }
 
-/** Writes `<root>/.bb-data/<store>/<file>`. A string `content` is written verbatim. */
+/**
+ * Writes `<root>/.cdk-blocks/local/data/<store>/<file>`. A string `content` is written
+ * verbatim.
+ */
 function writeStore(root: string, store: string, file: string, content: unknown): string {
-	const dir = join(root, '.bb-data', store);
+	const dir = join(root, '.cdk-blocks/local/data', store);
 	mkdirSync(dir, { recursive: true });
 	const path = join(dir, file);
 	// 2-space indent + trailing newline, matching what the dev server writes, so
@@ -360,7 +363,7 @@ describe('refusals that precede any write', () => {
 		assert.strictEqual(result.refusalCode, 'STORE_NOT_FOUND');
 	});
 
-	it('refuses a block with no .bb-data store at all with STORE_NOT_FOUND', async () => {
+	it('refuses a block with no .cdk-blocks/local/data store at all with STORE_NOT_FOUND', async () => {
 		const root = makeRoot();
 
 		const result = await putLocalRecord(contextFor(root, SINGLE), { id: 'a' }, 'create');
@@ -455,7 +458,7 @@ describe('key round-trips through the reader', () => {
 });
 
 describe('a KVStore data file (store.json)', () => {
-	/** `.bb-data/<store>/store.json` as the KVStore mock writes it. */
+	/** `.cdk-blocks/local/data/<store>/store.json` as the KVStore mock writes it. */
 	function writeKvStore(root: string, store: string, items: unknown[]): string {
 		return writeStore(root, store, 'store.json', { version: 2, items });
 	}

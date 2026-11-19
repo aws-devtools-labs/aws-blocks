@@ -83,9 +83,10 @@ after(async () => {
 beforeEach(() => {
 	clearRouteRegistry();
 	cognito.reset();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** Point the fake at this test's front door (the CDK layer registers exactly these). */
 function registerFrontDoor(origin: string, signOutPath = '/cdk-blocks/auth/signout') {

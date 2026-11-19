@@ -67,7 +67,7 @@ export interface ExistingClusterOptions {
 	 * SecureString `/<stackName>-<name>`, so each stage has its own value;
 	 * `npm run db -- connect --name <name> --stage <stage>` stores it. In local
 	 * mode the block reads the value that `npm run db -- connect --name <name>`
-	 * stored under `.bb-data/`.
+	 * stored under `.cdk-blocks/local/data/`.
 	 */
 	name?: string;
 	/**

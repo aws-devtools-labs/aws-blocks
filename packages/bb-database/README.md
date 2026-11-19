@@ -185,7 +185,7 @@ const open = await db.query<{ id: string; title: string }>(sql`SELECT id, title 
 
 | Option | Type | Description |
 |---|---|---|
-| `name` | `string` | A short name for the connection string. On AWS the block reads the SSM SecureString `/<stackName>-<name>`, so each stage has its own value. Locally it reads the value stored under `.bb-data/`. `npm run db connect` writes both. |
+| `name` | `string` | A short name for the connection string. On AWS the block reads the SSM SecureString `/<stackName>-<name>`, so each stage has its own value. Locally it reads the value stored under `.cdk-blocks/local/data/`. `npm run db connect` writes both. |
 | `connectionString` | `AppSetting` or `Secret` | Your own store, in place of `name`, for an app that manages the value itself. The block calls `get()` with its first statement. Give exactly one of `name`, `connectionString` and `dataApi`. |
 | `dataApi` | `{ clusterArn, secretArn, database }` | An Aurora PostgreSQL cluster that the block reaches through the RDS Data API. See [An Aurora cluster through the Data API](#an-aurora-cluster-through-the-data-api). |
 | `ca` | `string` | The certificate authority that signed the server certificate, as PEM text. Supabase uses its own authority, so it needs one. Without `ca`, Node's trust store applies. |
@@ -401,8 +401,8 @@ npm run db -- status --block orders --cluster main                # a block on t
 
 | Command | What it does |
 |---|---|
-| `types [dir] --block <id> [--type dsql\|aurora] [--cluster <id>] [--schema <schema>] [--out <file>]` | Writes one `Tables` interface for Kysely from the block's migration files (`cdk-blocks/migrations/<id>`, or `dir` for a block with `migrationsPath`). The files are applied to a new local database in a temporary directory, with the code `npm run dev` runs them with, so the result does not depend on `.bb-data/` and a running dev server is not touched. Pass `--type aurora` for a block on an `aurora` cluster. Run it again after you add a file. |
-| `status [dir] --block <id> [--cluster <id>] [--schema <schema>]` | Lists the applied and the pending files in the block's local database under `.bb-data/`. For a block on a `DatabaseCluster`, pass the cluster's id as `--cluster`. It reads a copy of the database, so it is safe while `npm run dev` runs; it then shows what the dev server had written to disk. It does not read a deployed stage. |
+| `types [dir] --block <id> [--type dsql\|aurora] [--cluster <id>] [--schema <schema>] [--out <file>]` | Writes one `Tables` interface for Kysely from the block's migration files (`cdk-blocks/migrations/<id>`, or `dir` for a block with `migrationsPath`). The files are applied to a new local database in a temporary directory, with the code `npm run dev` runs them with, so the result does not depend on `.cdk-blocks/local/data/` and a running dev server is not touched. Pass `--type aurora` for a block on an `aurora` cluster. Run it again after you add a file. |
+| `status [dir] --block <id> [--cluster <id>] [--schema <schema>]` | Lists the applied and the pending files in the block's local database under `.cdk-blocks/local/data/`. For a block on a `DatabaseCluster`, pass the cluster's id as `--cluster`. It reads a copy of the database, so it is safe while `npm run dev` runs; it then shows what the dev server had written to disk. It does not read a deployed stage. |
 
 `connect` and `migrate` are for an [existing database](#existing-database): a block that provisions its cluster applies its files itself.
 
@@ -566,7 +566,7 @@ try {
 
 ## Local mode
 
-`npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS.
+`npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.cdk-blocks/local/data/`, with one schema per block, as on AWS.
 
 A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text) and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production. An `aurora` cluster is PostgreSQL on both sides and needs neither. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them.
 
@@ -579,7 +579,7 @@ Your DSQL migration files run unchanged. `ASYNC` index builds and constraint val
 | | Owned default | `DatabaseCluster` |
 |---|---|---|
 | Engine | PGlite with `dsql-lint` and the DSQL limits | One PGlite per cluster, one schema per block; the DSQL checks for `type: 'dsql'`, plain PostgreSQL for `type: 'aurora'` |
-| Data | `.bb-data/{fullId}/pglite/` | `.bb-data/{clusterFullId}/pglite/` |
+| Data | `.cdk-blocks/local/data/{fullId}/pglite/` | `.cdk-blocks/local/data/{clusterFullId}/pglite/` |
 | Migrations | Before the block's first query | Same, per block, into its schema |
 
 PGlite has one session, so local work on a cluster runs one statement or transaction at a time. Bugs that need two requests to overlap do not reproduce locally; `simulateConflict()` from `@aws-cdk-blocks/bb-database/testing` covers the retry path.

@@ -4,7 +4,7 @@
 /**
  * `npm run config` — manage a Blocks app's non-sensitive **config** values (SSM
  * Parameter Store), pinned to the Blocks `/blocks/<stackId>/config` namespace
- * (scoped to the app's stable `stackId` from `.blocks/config.json`). Thin wrapper
+ * (scoped to the app's stable `stackId` from `.cdk-blocks/config.json`). Thin wrapper
  * over the shared `@aws-cdk-blocks/hosting` CLI with the kind fixed to `config`. The
  * `secret` counterpart is `./secret.ts`.
  *

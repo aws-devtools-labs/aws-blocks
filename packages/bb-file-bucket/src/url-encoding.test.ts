@@ -15,7 +15,7 @@ import { FileBucket } from './index.mock.js';
 const scope = new Scope('enc');
 
 beforeEach(() => {
-	const dir = '.bb-data';
+	const dir = '.cdk-blocks/local/data';
 	try {
 		if (existsSync(dir)) {
 			for (const entry of readdirSync(dir)) {
