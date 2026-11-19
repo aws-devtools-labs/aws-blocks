@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/hosting": patch
+"@aws-cdk-blocks/hosting": patch
 ---
 
 fix(hosting): infer schema-typed `config()` and `secret()` types with the tsconfig that compiles each file

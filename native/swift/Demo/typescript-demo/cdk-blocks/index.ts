@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiNamespace, Scope, KVStore, Auth, Realtime, FileBucket } from '@aws-blocks/blocks';
-import type { RealtimeChannel } from '@aws-blocks/blocks';
-export type { RealtimeChannel } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, Auth, Realtime, FileBucket } from 'aws-cdk-blocks';
+import type { RealtimeChannel } from 'aws-cdk-blocks';
+export type { RealtimeChannel } from 'aws-cdk-blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 

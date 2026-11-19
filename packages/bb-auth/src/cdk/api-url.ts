@@ -15,7 +15,7 @@
  * @internal
  */
 
-import { type BuildingBlockScope, getBlocksRoot } from '@aws-blocks/core/cdk';
+import { type BuildingBlockScope, getBlocksRoot } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 
 /** The RPC prefix the backend's `apiUrl` ends with (`BLOCKS_RPC_PREFIX` in core). */

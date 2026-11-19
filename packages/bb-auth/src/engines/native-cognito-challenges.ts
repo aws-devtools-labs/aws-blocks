@@ -17,8 +17,8 @@
  */
 
 import crypto from 'node:crypto';
-import { ApiError } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { ApiError } from '@aws-cdk-blocks/core';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { ChallengeNameType, type DeliveryMediumType } from '@aws-sdk/client-cognito-identity-provider';
 import { AuthErrors } from '../errors.js';
 import type { CodeDeliveryDetails, PreferredChallenge, SignInNextStep } from '../types.js';

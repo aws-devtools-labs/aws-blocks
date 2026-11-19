@@ -1,8 +1,8 @@
 ---
-"@aws-blocks/bb-container-compute": patch
-"@aws-blocks/core": patch
-"@aws-blocks/bb-async-job": patch
-"@aws-blocks/bb-compute": patch
+"@aws-cdk-blocks/bb-container-compute": patch
+"@aws-cdk-blocks/core": patch
+"@aws-cdk-blocks/bb-async-job": patch
+"@aws-cdk-blocks/bb-compute": patch
 ---
 
 fix(bb-container-compute): deploys no longer reset an autoscaled container's task count

@@ -6,7 +6,7 @@ import { basename } from 'node:path';
 /**
  * A stage that deploys a CloudFormation stack, and so has an outputs document.
  *
- * Named for the outputs rather than the deploy because `@aws-blocks/core`
+ * Named for the outputs rather than the deploy because `@aws-cdk-blocks/core`
  * already exports a `DeployStage` (the pipeline construct) from its CDK entry
  * point. Local development is absent on purpose: `npm run dev` never invokes
  * the CDK CLI, so it has no outputs document to name.

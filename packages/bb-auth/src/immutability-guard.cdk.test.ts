@@ -620,9 +620,9 @@ describe('the baseline file', () => {
 		assert.ok(!result.ok, 'synth must fail');
 		assert.match(
 			result.stderr,
-			/uses format version 2, written by a newer\s+version of @aws-blocks\/bb-auth or @aws-blocks\/core/,
+			/uses format version 2, written by a newer\s+version of @aws-cdk-blocks\/bb-auth or @aws-cdk-blocks\/core/,
 		);
-		assert.match(result.stderr, /Upgrade @aws-blocks\/bb-auth and @aws-blocks\/core/);
+		assert.match(result.stderr, /Upgrade @aws-cdk-blocks\/bb-auth and @aws-cdk-blocks\/core/);
 		assert.strictEqual(readFileSync(file, 'utf8'), content, 'the newer file is not overwritten');
 	});
 
@@ -661,7 +661,7 @@ describe('the baseline file', () => {
 			assert.ok(warning, `expected the pool-deletion warning, got ${JSON.stringify(first.warnings)}`);
 			assert.deepStrictEqual(rest, [], 'one warning per block');
 			assert.match(warning, /^Auth 'TestStack-auth': this is the block's first baseline/);
-			assert.match(warning, /see MIGRATION\.md in @aws-blocks\/bb-auth/);
+			assert.match(warning, /see MIGRATION\.md in @aws-cdk-blocks\/bb-auth/);
 			assert.match(warning, /Deploy the migrated code unchanged first, commit its baseline/);
 			const baseline = JSON.parse(readFileSync(defaultBaselineFile(dir), 'utf8')) as Record<string, unknown>;
 			assert.strictEqual(baseline.ownsPool, false);

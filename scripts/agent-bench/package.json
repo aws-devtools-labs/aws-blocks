@@ -1,5 +1,5 @@
 {
-	"name": "@aws-blocks/agent-bench",
+	"name": "@aws-cdk-blocks/agent-bench",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",

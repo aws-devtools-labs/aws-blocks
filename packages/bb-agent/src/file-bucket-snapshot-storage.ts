@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { SnapshotStorage, SnapshotLocation, Snapshot, SnapshotManifest } from '@strands-agents/sdk';
-import type { FileBucket } from '@aws-blocks/bb-file-bucket';
+import type { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
 
 /**
  * SnapshotStorage backed by FileBucket BB.

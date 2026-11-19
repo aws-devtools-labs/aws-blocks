@@ -13,10 +13,10 @@ import {
   Realtime,
   RealtimeChannel,
   FileBucket,
-} from '@aws-blocks/blocks';
-import { Auth, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
-import type { AuthenticatedUser, AuthOptions, CodeDeliveryPurpose, SignInResult } from '@aws-blocks/bb-auth';
-export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
+} from 'aws-cdk-blocks';
+import { Auth, relayOrigin, stubIdp } from '@aws-cdk-blocks/bb-auth';
+import type { AuthenticatedUser, AuthOptions, CodeDeliveryPurpose, SignInResult } from '@aws-cdk-blocks/bb-auth';
+export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from 'aws-cdk-blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 

@@ -17,7 +17,7 @@
  * every entry point.
  */
 
-import { brandBlocksError } from '@aws-blocks/core';
+import { brandBlocksError } from '@aws-cdk-blocks/core';
 import type { RelayOrigin } from './types.js';
 
 /** Result of {@link validateRelay}. Failure arms carry a `reason` (on the wire). */

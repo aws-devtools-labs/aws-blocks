@@ -27,7 +27,7 @@
  * Launched by the CodeZip artifact as: ['main.js'] (the co-bundle from agentcore-bundle.ts).
  */
 
-import { loadConfigToProcessEnv } from '@aws-blocks/core';
+import { loadConfigToProcessEnv } from '@aws-cdk-blocks/core';
 import { BedrockAgentCoreApp } from 'bedrock-agentcore/runtime';
 import { getAgentInstance } from './agent.js';
 import { handleInvocation, requestSchema } from './agentcore-invocation.js';

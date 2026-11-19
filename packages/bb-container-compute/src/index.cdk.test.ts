@@ -16,8 +16,8 @@ import { dirname, join } from 'node:path';
  */
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
-import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute';
+import { BlocksPresets, BlocksStack } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { containerMainEntry } from './bundle.js';
@@ -146,12 +146,12 @@ describe('ContainerCompute — review-finding fixes', () => {
 		});
 		// Register at least one config entry so finalizeConfigRegistry creates the
 		// BucketDeployment the service must order itself after.
-		const { registerConfig } = await import('@aws-blocks/core/cdk');
+		const { registerConfig } = await import('@aws-cdk-blocks/core/cdk');
 		registerConfig(compute as never, 'BLOCKS_SMOKE_FLAG', 'on');
 
 		// finalizeConfigRegistry runs before compute.finalize() in create(); mirror
 		// that ordering here so the deployment exists when finalize wires the dep.
-		const { finalizeConfigRegistry } = await import('@aws-blocks/core/cdk');
+		const { finalizeConfigRegistry } = await import('@aws-cdk-blocks/core/cdk');
 		finalizeConfigRegistry(stack as never, (stack as never as { executionRole: unknown }).executionRole as never, [
 			compute as never,
 		]);
@@ -400,9 +400,9 @@ describe('ContainerCompute — the default image runs as a non-root user', () =>
 		// Run the generated entry against stub modules and read the path it sets,
 		// rather than matching its source text.
 		const dir = join(tmpDir, 'entry-run');
-		const coreDir = join(dir, 'node_modules', '@aws-blocks', 'core');
+		const coreDir = join(dir, 'node_modules', '@aws-cdk-blocks', 'core');
 		mkdirSync(coreDir, { recursive: true });
-		writeFileSync(join(coreDir, 'package.json'), '{"name":"@aws-blocks/core","type":"module","main":"index.js"}');
+		writeFileSync(join(coreDir, 'package.json'), '{"name":"@aws-cdk-blocks/core","type":"module","main":"index.js"}');
 		writeFileSync(
 			join(coreDir, 'index.js'),
 			'export const loadConfigToProcessEnv = async () => {};\n' +

@@ -1,8 +1,8 @@
 ---
-'@aws-blocks/core': minor
-'@aws-blocks/blocks': patch
-'@aws-blocks/bb-compute': patch
-'@aws-blocks/bb-container-compute': patch
+'@aws-cdk-blocks/core': minor
+'aws-cdk-blocks': patch
+'@aws-cdk-blocks/bb-compute': patch
+'@aws-cdk-blocks/bb-container-compute': patch
 ---
 
 On the `apiFrontDoor: 'cloudfront'` tier, CloudFront now routes an API namespace on a `container` compute straight to the container's load balancer, instead of through the shared API gateway — from the backend's managed distribution, or from `Hosting`'s default CloudFront door when it fronts the API. A call can run up to 60 seconds (CloudFront's origin read timeout) instead of the gateway's ~29, and skips a hop.

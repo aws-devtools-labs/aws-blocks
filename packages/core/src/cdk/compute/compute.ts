@@ -88,7 +88,7 @@ export type ComputeApiIngress =
  * every compute when the app contains a `Tracer` (presence-gated).
  *
  * The abstract base lives in core (a framework primitive); concrete computes
- * live in their own packages (e.g. `LambdaCompute` in `@aws-blocks/bb-lambda-compute`).
+ * live in their own packages (e.g. `LambdaCompute` in `@aws-cdk-blocks/bb-lambda-compute`).
  *
  * A `ComputeBase` is itself a {@link ComputeProvider} that provides itself, so a
  * raw backing is interchangeable with the public `Compute` block wherever a

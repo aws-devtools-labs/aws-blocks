@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { sanitizeConfigKey } from '@aws-cdk-blocks/core/bb-utils';
 import type { CronJobEvent } from './types.js';
 
 /**

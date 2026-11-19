@@ -10,8 +10,8 @@
 
 import assert from 'node:assert';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { Secret } from '@aws-blocks/bb-secret';
-import { ApiError, type BlocksContext, isBlocksError, isWireSafeError, Scope } from '@aws-blocks/core';
+import { Secret } from '@aws-cdk-blocks/bb-secret';
+import { ApiError, type BlocksContext, isBlocksError, isWireSafeError, Scope } from '@aws-cdk-blocks/core';
 import { resolveProviders } from './auth-base.js';
 import { DirectFederationEngine, pkceChallenge } from './engines/federation-direct.js';
 import { idpRefusedMessage } from './engines/idp-callback-error.js';

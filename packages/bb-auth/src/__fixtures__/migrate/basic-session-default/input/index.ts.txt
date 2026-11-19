@@ -1,4 +1,4 @@
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { AuthBasic } from '@aws-blocks/bb-auth-basic';
 
 // AuthBasic sessions lasted 24 hours unless sessionDuration was set; Auth's

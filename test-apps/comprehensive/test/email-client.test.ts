@@ -3,8 +3,8 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
-import { EmailErrors } from '@aws-blocks/bb-email-client';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { EmailErrors } from '@aws-cdk-blocks/bb-email-client';
 import type { api as apiType } from 'cdk-blocks';
 
 export function emailClientTests(getApi: () => typeof apiType) {

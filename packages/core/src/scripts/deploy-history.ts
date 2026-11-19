@@ -23,7 +23,7 @@ import { getStackName } from './stack-id.js';
  * deterministically, instead of trusting ambient AWS_REGION/IMDS at
  * read time — those can and do differ from where the deploy went.
  *
- * The record shape mirrors DeploymentRecord in @aws-blocks/admin-ui's
+ * The record shape mirrors DeploymentRecord in @aws-cdk-blocks/admin-ui's
  * src/contract/v1.ts (kept in sync manually — core must not depend on the
  * opt-in admin-ui package).
  */

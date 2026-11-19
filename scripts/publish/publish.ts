@@ -12,7 +12,10 @@ import { LocalPublisher } from "./publishers/local.ts";
 import type { PackageInfo, PackResult, Publisher } from "./publishers/types.ts";
 import { generateRegistryMetadata, parseExistingMetadata } from "./registry.ts";
 
-const SCOPE = "@aws-blocks/";
+const SCOPE = "@aws-cdk-blocks/";
+// The umbrella publishes unscoped, so a scope test alone would skip it.
+const UMBRELLA_PKG = "aws-cdk-blocks";
+const isReleasedPackage = (name: string): boolean => name.startsWith(SCOPE) || name === UMBRELLA_PKG;
 const REGISTRY_PREFIX = "registry/";
 const ROOT = resolve(import.meta.dirname, "../..");
 const PACKAGES_DIR = join(ROOT, "packages");
@@ -29,7 +32,7 @@ async function discoverPackages(): Promise<PackageInfo[]> {
 		try {
 			const raw = await readFile(pkgJsonPath, "utf-8");
 			const pkgJson = JSON.parse(raw);
-			if (typeof pkgJson.name === "string" && pkgJson.name.startsWith(SCOPE)) {
+			if (typeof pkgJson.name === "string" && isReleasedPackage(pkgJson.name)) {
 				packages.push({
 					name: pkgJson.name,
 					version: pkgJson.version,
@@ -50,7 +53,7 @@ async function discoverPackages(): Promise<PackageInfo[]> {
 
 /**
  * Find all template package.json files inside create-blocks-app/templates/.
- * These contain @aws-blocks/* dependency versions that must be pinned
+ * These contain @aws-cdk-blocks/* dependency versions that must be pinned
  * during canary publishes so scaffolded apps resolve the canary version.
  */
 async function discoverTemplatePackageJsons(): Promise<string[]> {
@@ -133,7 +136,7 @@ async function packPackage(pkg: PackageInfo): Promise<PackResult> {
 	// SHA-1 hex
 	const shasum = createHash("sha1").update(tarballBuf).digest("hex");
 
-	// S3 key: registry/@aws-blocks/core/-/core-0.1.0.tgz
+	// S3 key: registry/@aws-cdk-blocks/core/-/core-0.1.0.tgz
 	const shortName = pkg.name.replace(SCOPE, "");
 	const tarballS3Key = `${REGISTRY_PREFIX}${pkg.name}/-/${shortName}-${pkg.version}.tgz`;
 

@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { DatabaseErrors } from '../errors.js';
 import { runInTransactionScope, TransactionScope } from '../runtime/tx-scope.js';
 import { installLocalTestHooks } from '../test-support/lifecycle.js';

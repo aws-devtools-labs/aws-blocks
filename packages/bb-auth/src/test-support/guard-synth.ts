@@ -64,9 +64,9 @@ export function synthGuarded(options: GuardSynthOptions): GuardSynthResult {
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { Auth } from '@aws-blocks/bb-auth';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { DEFAULT_NODE_RUNTIME } from '@aws-cdk-blocks/core/cdk';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
 
 const app = new cdk.App({ context: { 'aws:cdk:enable-path-metadata': true } });
 const stack = new cdk.Stack(app, 'TestStack');

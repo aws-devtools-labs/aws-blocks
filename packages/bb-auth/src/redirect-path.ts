@@ -25,7 +25,7 @@
  * @internal
  */
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 
 /** A placeholder origin no real request can have (`.invalid` is reserved, RFC 6761). */

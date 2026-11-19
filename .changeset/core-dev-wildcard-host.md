@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(core): a dev server bound to all interfaces (`--host 0.0.0.0` or `::`) gives a browser the API at the address it opened the app on

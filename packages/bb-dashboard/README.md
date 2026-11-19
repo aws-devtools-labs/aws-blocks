@@ -1,4 +1,4 @@
-# @aws-blocks/bb-dashboard
+# @aws-cdk-blocks/bb-dashboard
 
 Auto-generated CloudWatch Dashboard for application observability.
 
@@ -17,7 +17,7 @@ Auto-generated CloudWatch Dashboard for application observability.
 ## Installation
 
 ```bash
-npm install @aws-blocks/bb-dashboard
+npm install @aws-cdk-blocks/bb-dashboard
 ```
 
 ## Quick Start
@@ -25,7 +25,7 @@ npm install @aws-blocks/bb-dashboard
 ### Minimal
 
 ```typescript
-import { Dashboard } from '@aws-blocks/bb-dashboard';
+import { Dashboard } from '@aws-cdk-blocks/bb-dashboard';
 
 const dashboard = new Dashboard(scope, 'dashboard');
 // After deploy: a CloudWatch Dashboard with a health + logs section for every
@@ -43,8 +43,8 @@ namespace isn't tied to a compute), so they're passed explicitly, one section
 per namespace.
 
 ```typescript
-import { Metrics } from '@aws-blocks/bb-metrics';
-import { Tracer } from '@aws-blocks/bb-tracer';
+import { Metrics } from '@aws-cdk-blocks/bb-metrics';
+import { Tracer } from '@aws-cdk-blocks/bb-tracer';
 
 new Tracer(scope, 'tracing');    // → traces section on every compute
 const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
@@ -143,7 +143,7 @@ Configuration for a single pre-registered CloudWatch metric.
 ## Error Constants
 
 ```typescript
-import { DashboardErrors } from '@aws-blocks/bb-dashboard';
+import { DashboardErrors } from '@aws-cdk-blocks/bb-dashboard';
 
 DashboardErrors.InvalidMetricConfig // 'InvalidMetricConfigException'
 ```

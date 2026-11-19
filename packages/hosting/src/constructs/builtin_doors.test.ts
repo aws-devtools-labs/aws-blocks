@@ -486,7 +486,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     });
 
     it('outside a sandbox, `allowPlainHttp: true` synthesizes a plain-HTTP door with an API, with an acknowledgeable production warning', () => {
-      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const ID = '@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction';
       const synthProd = (frontDoor: HostingConstructProps['frontDoor'], acknowledge = false) => {
         const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
         new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, backendApi: { url: API_URL } });
@@ -509,7 +509,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
         assert.match(text, /sign-in, session cookies and every RPC/);
         assert.match(text, /session cookie without `Secure`/);
         assert.match(text, /trusted network/);
-        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-blocks\/hosting:PlainHttpAllowedInProduction'\)/);
+        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-cdk-blocks\/hosting:PlainHttpAllowedInProduction'\)/);
         assert.equal(synthProd(door, true).allowed.length, 0, `${door.kind}: acknowledged on the stack`);
       }
       // `allowPlainHttp: false` keeps the refusal.
@@ -533,7 +533,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       const warn = (extra: Partial<HostingConstructProps> = {}, acknowledge = false) => {
         const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
         new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: 'none', ...extra });
-        if (acknowledge) CdkAnnotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+        if (acknowledge) CdkAnnotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFrontDoor');
         return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
       };
       // The S3 website's URL is a token at synth; its handle says it is plain HTTP.
@@ -545,7 +545,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
         assert.match(text, /The 'none' front door serves the app from the public S3 website endpoint over plain HTTP \(an S3 website has no TLS\)/);
         assert.match(text, /the HTML and scripts can be read or altered in transit/);
         assert.match(text, /Use the CloudFront door for HTTPS/);
-        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-blocks\/hosting:PlainHttpFrontDoor'\)/);
+        assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-cdk-blocks\/hosting:PlainHttpFrontDoor'\)/);
         assert.doesNotMatch(text, /same-origin API|drops `Secure`/, "'none' has no same-origin API, so no cookie clause");
         assert.equal((text.match(/no TLS|no certificate/g) ?? []).length, 1, 'says there is no TLS once');
         // The remedy the message names clears it.

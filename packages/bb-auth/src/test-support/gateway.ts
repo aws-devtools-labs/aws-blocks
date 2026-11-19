@@ -19,8 +19,8 @@
  */
 
 import type { AsyncLocalStorage } from 'node:async_hooks';
-import { type BlocksContext, matchRoute } from '@aws-blocks/core';
-import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import { type BlocksContext, matchRoute } from '@aws-cdk-blocks/core';
+import { getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 
 // Importing core registers the per-request base-URL store the transports fill.
 void getRequestBaseUrl;

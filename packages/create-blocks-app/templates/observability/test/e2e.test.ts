@@ -4,7 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { getLastAuthCode, installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.

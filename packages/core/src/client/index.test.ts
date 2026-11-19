@@ -274,13 +274,13 @@ describe('ApiNamespaceClient namespace identity', () => {
 });
 
 describe('ApiNamespaceClient — per-call fetch (test clients)', () => {
-  // `@aws-blocks/blocks/utils`'s createTestClient runs each call inside an
+  // `aws-cdk-blocks/utils`'s createTestClient runs each call inside an
   // AsyncLocalStorage whose store is the fetch to use (one cookie jar per test
   // user). The client reads it through a `Symbol.for` key on globalThis
   // (client/fetch-store.ts).
   const KEY = Symbol.for('blocks:ClientFetch');
 
-  it('the key is exported once, from @aws-blocks/core/bb-utils', async () => {
+  it('the key is exported once, from @aws-cdk-blocks/core/bb-utils', async () => {
     const { CLIENT_FETCH_STORE } = await import('../bb-utils.js');
     assert.strictEqual(CLIENT_FETCH_STORE, KEY);
   });

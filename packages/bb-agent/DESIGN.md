@@ -2,7 +2,7 @@
 
 Design document for the Agent Building Block. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-agent`
+**Package:** `@aws-cdk-blocks/bb-agent`
 **Type:** Composite (uses KVStore, Realtime, FileBucket internally) + an AgentCore Runtime
 **AWS Services:** Bedrock AgentCore Runtime, Bedrock, DynamoDB, S3, API Gateway (WebSocket)
 **Agent Framework:** [Strands Agents SDK](https://strandsagents.com/)

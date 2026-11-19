@@ -50,7 +50,7 @@ describe('isApiErrorLike', () => {
   });
 
   it('matches an ApiError-shaped error from a SEPARATELY bundled copy of core', () => {
-    // A duplicated @aws-blocks/core defines its own ApiError class, so a real
+    // A duplicated @aws-cdk-blocks/core defines its own ApiError class, so a real
     // instanceof check fails. The constructor-stamped brand + numeric status let
     // the serializer still recognize it. Simulate the foreign instance.
     const foreign = Object.assign(new Error('stale'), { name: 'ConditionalCheckFailedException', status: 409 });

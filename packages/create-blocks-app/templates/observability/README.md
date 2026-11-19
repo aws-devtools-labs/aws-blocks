@@ -1,6 +1,6 @@
 # Blocks Observability Application
 
-Backend-only AWS Blocks app showing the observability Building Blocks on one
+Backend-only AWS CDK Blocks app showing the observability Building Blocks on one
 API call. `api.placeOrder(item)` writes a structured log line (**Logger**),
 emits an `OrdersPlaced` metric (**Metrics**) and runs inside a `placeOrder`
 trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.
@@ -8,7 +8,7 @@ trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.
 needs a signed-in user. Sign-up confirms the email with a 6-digit code, which
 `npm run dev` prints in its terminal locally. No frontend included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template observability`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template observability`
 
 ## Getting Started
 
@@ -149,7 +149,7 @@ This template is backend-only. To add a frontend:
 
 3. **Add Hosting to `cdk-blocks/index.cdk.ts`:**
    ```ts
-   import { Hosting } from '@aws-blocks/blocks/cdk';
+   import { Hosting } from 'aws-cdk-blocks/cdk';
 
    if (!sandboxMode) {
      new Hosting(blocksStack, 'Hosting', {

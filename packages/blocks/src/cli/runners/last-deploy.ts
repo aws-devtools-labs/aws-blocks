@@ -20,7 +20,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
+import type * as CoreScriptsModule from '@aws-cdk-blocks/core/scripts';
 
 export const LAST_DEPLOY_FILE = join('.cdk-blocks-sandbox', 'last-deploy.json');
 

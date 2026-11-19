@@ -11,7 +11,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import { type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
+import { type BlocksContext, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { pkceChallenge } from './engines/federation-direct.js';
 import { Auth, stubIdp } from './index.mock.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';

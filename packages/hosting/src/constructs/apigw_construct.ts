@@ -22,7 +22,7 @@
  * response headers and error pages are applied by the asset proxy with the
  * CloudFront door's semantics; responses routed straight to the server, the
  * image function or the backend don't pass through it, which synth reports
- * (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  *
  * Not provided: no global edge cache, no per-route response headers on
  * server/API responses (synth names them), no skew protection, buffered SSR
@@ -350,7 +350,7 @@ export class ApiGatewayConstruct extends Construct {
 }
 
 /**
- * Warn at synth (`@aws-blocks/hosting:RouteNotExpressible`) for route-table
+ * Warn at synth (`@aws-cdk-blocks/hosting:RouteNotExpressible`) for route-table
  * patterns API Gateway has no path form for (a wildcard inside a segment):
  * the door's default integration serves them instead.
  *
@@ -359,14 +359,14 @@ export class ApiGatewayConstruct extends Construct {
 export const warnInexpressibleRoutes = (scope: Construct, door: string, patterns: readonly string[]): void => {
   if (patterns.length === 0) return;
   Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:RouteNotExpressible',
+    '@aws-cdk-blocks/hosting:RouteNotExpressible',
     `The ${door} front door can't express these route patterns (a wildcard inside a path segment), so its default ` +
       `integration serves them: ${patterns.join(', ')}.`,
   );
 };
 
 /**
- * Warn at synth (`@aws-blocks/hosting:RedirectNotExpressible`) for redirect
+ * Warn at synth (`@aws-cdk-blocks/hosting:RedirectNotExpressible`) for redirect
  * sources API Gateway has no path form for (a wildcard inside a segment, e.g.
  * `/old/*.html`) on a door whose default integration is the server: no route
  * sends them to the asset proxy, which applies redirects, so the server
@@ -377,7 +377,7 @@ export const warnInexpressibleRoutes = (scope: Construct, door: string, patterns
 export const warnUnroutedRedirects = (scope: Construct, door: string, sources: readonly string[]): void => {
   if (sources.length === 0) return;
   Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:RedirectNotExpressible',
+    '@aws-cdk-blocks/hosting:RedirectNotExpressible',
     `The ${door} front door can't route these redirect sources (a wildcard inside a path segment), so the redirects ` +
       `never apply and the server answers those requests: ${sources.join(', ')}. Use a whole trailing segment ` +
       "(`/path/*`), or the CloudFront or ALB door.",

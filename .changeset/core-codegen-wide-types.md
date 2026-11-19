@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": minor
+"@aws-cdk-blocks/core": minor
 ---
 
 The OpenRPC spec generator describes every schema under a type name with the right shape, and gets an experimental tag for Building Block authors.

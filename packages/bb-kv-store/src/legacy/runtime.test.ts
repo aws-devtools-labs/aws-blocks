@@ -10,8 +10,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, test } from 'node:test';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { isBlocksError } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { LegacyKVStore as AwsLegacyKVStore } from '../index.aws.js';
 import { KVStore, KVStoreErrors, LegacyKVStore } from '../index.mock.js';
 

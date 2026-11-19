@@ -16,7 +16,7 @@ interface DatabaseLike {
  * comes from the cluster itself, and during CDK synth.
  *
  * @example
- * import { simulateConflict } from '@aws-blocks/bb-database/testing';
+ * import { simulateConflict } from '@aws-cdk-blocks/bb-database/testing';
  *
  * simulateConflict(shop);
  * // The callback runs twice: the first commit conflicts, the retry commits.

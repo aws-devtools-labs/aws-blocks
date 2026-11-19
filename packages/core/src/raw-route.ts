@@ -117,7 +117,7 @@ export interface RegisteredRoute {
 }
 
 /**
- * Registry state shared by every copy of `@aws-blocks/core` in the process.
+ * Registry state shared by every copy of `@aws-cdk-blocks/core` in the process.
  *
  * A bundle can end up carrying more than one physical copy of this package
  * (an unlucky dependency tree, no dedupe). With module-local state each copy
@@ -147,7 +147,7 @@ interface RawRouteRegistryState {
  *
  * **The key is a permanent contract — do not bump it.** `_V1_` names the shape
  * this file introduced; it is not a license to mint `_V2_`. The copies that
- * share a process are usually *different versions* of `@aws-blocks/core` — that
+ * share a process are usually *different versions* of `@aws-cdk-blocks/core` — that
  * is how a tree ends up with duplicates in the first place — so a copy reading
  * a different key does not get a private namespace, it re-splits the registry:
  * routes registered through one key, dispatched through the other, 404. And
@@ -203,9 +203,9 @@ function getState(): RawRouteRegistryState {
     state.copies += 1;
     if (state.copies > 1) {
       console.warn(
-        `AWS Blocks: ${state.copies} copies of @aws-blocks/core loaded in this process. ` +
+        `AWS Blocks: ${state.copies} copies of @aws-cdk-blocks/core loaded in this process. ` +
           'They now share one RawRoute registry, but duplicate copies indicate a ' +
-          'dependency-tree problem — deduplicate @aws-blocks/core.',
+          'dependency-tree problem — deduplicate @aws-cdk-blocks/core.',
       );
     }
   }
@@ -214,7 +214,7 @@ function getState(): RawRouteRegistryState {
 }
 
 /**
- * Number of `@aws-blocks/core` copies taking part in the shared route registry.
+ * Number of `@aws-cdk-blocks/core` copies taking part in the shared route registry.
  *
  * `1` for a healthy install. A higher number means the dependency tree carries
  * duplicates — routes still work (the registry is shared), but it is worth

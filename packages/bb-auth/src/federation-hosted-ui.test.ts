@@ -39,8 +39,8 @@ import {
 	registerSdkIdentifiers,
 	Scope,
 	unlockRouteRegistry,
-} from '@aws-blocks/core';
-import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
+} from '@aws-cdk-blocks/core';
+import { createLambdaHandler } from '@aws-cdk-blocks/core/lambda-handler';
 import { resolveProviders } from './auth-base.js';
 import { cognitoConfigKeys, federationConfigKeys } from './cdk/contract.js';
 import { DirectFederationEngine } from './engines/federation-direct.js';

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The browser redirect client (`@aws-blocks/bb-auth/browser-client`): a
+ * The browser redirect client (`@aws-cdk-blocks/bb-auth/browser-client`): a
  * web frontend on ANOTHER origin than the API signs in with a federated
  * provider, reads its session and signs out — against the running backend
  * (the dev server locally; the deployed stack in sandbox / production).
@@ -23,9 +23,9 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import { createAuthClient, type AuthClientEnvironment } from '@aws-blocks/bb-auth/browser-client';
-import { isBlocksError } from '@aws-blocks/core';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { createAuthClient, type AuthClientEnvironment } from '@aws-cdk-blocks/bb-auth/browser-client';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { testBaseUrl } from './api-url.js';
 
 const SPA = 'http://127.0.0.1:5173';

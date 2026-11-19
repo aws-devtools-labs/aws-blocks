@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-auth': minor
-'@aws-blocks/blocks': minor
+'@aws-cdk-blocks/bb-auth': minor
+'aws-cdk-blocks': minor
 ---
 
 `Auth` lets you keep end users from writing an attribute your app relies on for authorization.

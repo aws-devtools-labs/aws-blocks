@@ -487,7 +487,7 @@ describe('ApiError status ↔ JSON-RPC error code', () => {
   });
 
   it('encodes an ApiError built by a SEPARATELY bundled copy of core with its status, name and retriable intact', () => {
-    // Reproduces the real failure: a duplicated `@aws-blocks/core` nests a private
+    // Reproduces the real failure: a duplicated `@aws-cdk-blocks/core` nests a private
     // copy under a dependency (e.g. bb-kv-store), so the ApiError thrown
     // there is NOT `instanceof` the ApiError class this serializer imports. A plain
     // `instanceof` check misses it and collapses the deliberate 409 into a nameless

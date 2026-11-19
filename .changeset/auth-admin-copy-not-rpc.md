@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": patch
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/bb-auth": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(bb-auth): copies of `auth.admin` methods are never served over RPC

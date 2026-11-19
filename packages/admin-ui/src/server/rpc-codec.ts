@@ -6,7 +6,7 @@
  *
  * SOURCE OF TRUTH: `packages/core/src/rpc.ts`. This is a deliberate
  * reimplementation of ~30 lines rather than an import, because `admin-ui` does
- * not depend on `@aws-blocks/core` and should not start: the dashboard installs
+ * not depend on `@aws-cdk-blocks/core` and should not start: the dashboard installs
  * into a *user's* project, so a core dependency would have to match whichever
  * core version that app pins, and a mismatch would be a silently wrong codec
  * rather than an install error.

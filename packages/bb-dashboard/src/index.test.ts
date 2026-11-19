@@ -11,7 +11,7 @@ import {
 	buildMetricsWidgets,
 	resolveConfig,
 } from './widgets.js';
-import type { ComputeDashboardSection } from '@aws-blocks/core/cdk/internal';
+import type { ComputeDashboardSection } from '@aws-cdk-blocks/core/cdk/internal';
 import type { DashboardOptions } from './types.js';
 import { DashboardErrors } from './errors.js';
 import { GraphWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -52,9 +52,9 @@ function stubComputeSections(
 		},
 	];
 }
-import { Scope, getRegisteredRoutes, clearRouteRegistry } from '@aws-blocks/core';
+import { Scope, getRegisteredRoutes, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 
 /** Flatten widget rows into a flat list of JSON objects produced by toJson(). */
 function flattenWidgetJson(rows: IWidget[][]): any[] {

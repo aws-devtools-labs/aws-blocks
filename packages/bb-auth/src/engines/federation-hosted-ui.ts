@@ -57,7 +57,7 @@
  */
 
 import crypto from 'node:crypto';
-import { ApiError, type BlocksContext, getSdkIdentifiers, registerSdkIdentifiers } from '@aws-blocks/core';
+import { ApiError, type BlocksContext, getSdkIdentifiers, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import {
 	FetchError,

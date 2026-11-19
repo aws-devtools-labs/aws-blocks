@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK tests for `frameworkKey()` (`@aws-blocks/bb-secret/internal`).
+ * CDK tests for `frameworkKey()` (`@aws-cdk-blocks/bb-secret/internal`).
  *
  * Run with `--conditions=cdk` (see the package `test` script) so the nested
  * `AppSetting` resolves to its CDK construct, as it does in a customer's
@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
 import {
 	type BlocksDefaults,
 	BlocksPresets,
@@ -19,8 +19,8 @@ import {
 	finalizeConfigRegistry,
 	getRegisteredConfigValue,
 	Scope,
-} from '@aws-blocks/core/cdk';
-import type { ComputeBase } from '@aws-blocks/core/cdk/internal';
+} from '@aws-cdk-blocks/core/cdk';
+import type { ComputeBase } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';

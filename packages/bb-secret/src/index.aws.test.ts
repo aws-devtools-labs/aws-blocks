@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, mock, test } from 'node:test';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import { ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Secret, SecretErrors } from './index.aws.js';

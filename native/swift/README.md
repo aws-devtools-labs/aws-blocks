@@ -1,6 +1,6 @@
-# AWS Blocks Swift
+# AWS CDK Blocks Swift
 
-A Swift Package and code generator that produces type-safe Swift client code from an AWS Blocks spec. It reads your spec at build time and emits idiomatic Swift `struct`s, `enum`s, and `async throws` API methods that call your backend with full type safety on iOS and macOS.
+A Swift Package and code generator that produces type-safe Swift client code from an AWS CDK Blocks spec. It reads your spec at build time and emits idiomatic Swift `struct`s, `enum`s, and `async throws` API methods that call your backend with full type safety on iOS and macOS.
 
 ## Quick Start
 

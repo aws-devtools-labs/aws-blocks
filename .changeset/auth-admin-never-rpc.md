@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-auth": patch
+"@aws-cdk-blocks/bb-auth": patch
 ---
 
 fix(bb-auth): never serve the `auth.admin` handle over RPC

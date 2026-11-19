@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-auth': patch
-'@aws-blocks/blocks': patch
+'@aws-cdk-blocks/bb-auth': patch
+'aws-cdk-blocks': patch
 ---
 
 `relayOrigin()`'s `RelayConfigError` keeps its name when it crosses the wire, and sign-in failures from an identity provider never carry the provider's raw text.

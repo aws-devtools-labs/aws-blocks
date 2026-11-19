@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-secret": patch
+"@aws-cdk-blocks/bb-secret": patch
 ---
 
 The `Secret` README now has a complete example of a key the app generates and rotates itself:

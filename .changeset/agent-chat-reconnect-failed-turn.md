@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-agent": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-agent": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(bb-agent): report a turn that failed while the chat was disconnected

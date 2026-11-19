@@ -5,7 +5,7 @@
  * Shared types for FileBucket. Imported by mock, aws, and browser entry points.
  * This file has zero runtime dependencies — types only.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 // ── Constructor options ─────────────────────────────────────────────────────
 

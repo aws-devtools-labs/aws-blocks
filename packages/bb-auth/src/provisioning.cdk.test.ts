@@ -111,7 +111,7 @@ function sessionsTableOf(template: CfnTemplateJson): CfnResourceJson {
 }
 
 const removalWarnings = (s: SynthesizedAuth) =>
-	s.warnings.filter((w) => w.message.includes('@aws-blocks/bb-auth:RemovalPolicyUnset'));
+	s.warnings.filter((w) => w.message.includes('@aws-cdk-blocks/bb-auth:RemovalPolicyUnset'));
 
 describe('Auth — conditional provisioning', () => {
 	test('default: pool, client and session-secret keep the AuthCognito identity; the session store is the new table', () => {
@@ -146,7 +146,7 @@ describe('Auth — conditional provisioning', () => {
 
 		test('with an OAuth 2.0 provider (github()) too: still only the session store and `session-secret`', () => {
 			const s = synthIdentity(CONFIGS.directAndOauth2, undefined, [
-				"import { github } from '@aws-blocks/bb-auth';",
+				"import { github } from '@aws-cdk-blocks/bb-auth';",
 			]);
 			assert.deepStrictEqual(cognitoResources(s.template), []);
 			assert.deepStrictEqual(

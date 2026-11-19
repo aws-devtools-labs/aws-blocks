@@ -12,7 +12,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { AuthErrors } from '@aws-blocks/bb-auth';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
 import type { authSocialApi as authSocialApiType } from 'cdk-blocks';
 import { testBaseUrl } from './api-url.js';
 

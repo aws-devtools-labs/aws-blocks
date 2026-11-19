@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-kv-store": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-kv-store": patch
+"aws-cdk-blocks": patch
 ---
 
 The local `KVStore` now stores and returns copies of items that went through the same DynamoDB marshalling as the deployed table. Changing an object after `put()`, or a value returned by a read, no longer changes what the next read returns.

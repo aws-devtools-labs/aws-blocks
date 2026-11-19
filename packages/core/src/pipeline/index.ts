@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { __PIPELINE_STAGE_SCOPE__, DeployStage, Pipeline as LeafPipeline } from '@aws-blocks/pipeline';
+import { __PIPELINE_STAGE_SCOPE__, DeployStage, Pipeline as LeafPipeline } from '@aws-cdk-blocks/pipeline';
 import type {
 	BranchConfig,
 	DeployStageProps,
@@ -9,7 +9,7 @@ import type {
 	PipelineSourceConfig,
 	PipelineStageConfig,
 	PipelineSynthConfig,
-} from '@aws-blocks/pipeline';
+} from '@aws-cdk-blocks/pipeline';
 import type { Construct } from 'constructs';
 import { blocksStoreConfig } from '../secret-naming.js';
 
@@ -40,7 +40,7 @@ function withBlocksDefaults<TConfig>(props: PipelineProps<TConfig>): PipelinePro
 }
 
 /**
- * Blocks `Pipeline` — the framework-neutral `@aws-blocks/pipeline` construct with
+ * Blocks `Pipeline` — the framework-neutral `@aws-cdk-blocks/pipeline` construct with
  * the Blocks value namespace pinned. It defaults `secretStore` / `configStore` to
  * `/blocks/secrets` and `/blocks/config` (the prefixes the Blocks `secret` /
  * `config` CLIs write), mirroring how the Blocks `Hosting` block pins the same

@@ -1,14 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Pre-bundle the Lambda handlers that ship inside @aws-blocks/hosting into
+// Pre-bundle the Lambda handlers that ship inside @aws-cdk-blocks/hosting into
 // self-contained `.mjs` files at BUILD time, so the runtime construct can use a
 // plain `Code.fromAsset(...)` (no `NodejsFunction`, no `projectRoot` /
 // `depsLockFilePath` discovery).
 //
 // Why: `NodejsFunction` re-bundles `entry` at SYNTH time and requires `entry`
 // to sit under a `projectRoot` that also has a lockfile. That only holds inside
-// this monorepo — once @aws-blocks/hosting is installed from npm the handler
+// this monorepo — once @aws-cdk-blocks/hosting is installed from npm the handler
 // lives under the consumer's `node_modules/`, `projectRoot` resolves into
 // `node_modules/` (no package-lock there), and synth fails with PathNotUnderRoot.
 // Bundling here removes that dependency entirely: the consumer ships a ready

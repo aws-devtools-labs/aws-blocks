@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
-import { Scope } from '@aws-blocks/core/cdk';
+import { Scope } from '@aws-cdk-blocks/core/cdk';
 import { __BB_CLASS__ } from './index.cdk.js';
 
 // Minimal BlocksStack-shaped parent so __BB_CLASS__ can grant IAM on

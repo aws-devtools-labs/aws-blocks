@@ -336,7 +336,7 @@ export interface SanitizedError {
 export function sanitizeCaughtError(error: unknown): SanitizedError {
   // Branch 1 matches an ApiError by SHAPE (`isApiErrorLike`), not a bare
   // `instanceof ApiError`, so an ApiError built by a separately bundled copy of
-  // core (a duplicated `@aws-blocks/core` under a dependency) is still recognized
+  // core (a duplicated `@aws-cdk-blocks/core` under a dependency) is still recognized
   // and its HTTP status / name / retriable survive — a plain `instanceof` would
   // miss it and collapse a deliberate 409 into a nameless 500 (branch 3).
   if (isApiErrorLike(error)) {

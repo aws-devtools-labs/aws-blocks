@@ -578,7 +578,7 @@ test.describe('Secrets & config (secret() → Secrets Manager, config() → SSM)
 
     // Write both values out of band via the shipped CLI helpers (same code path
     // as `npm run secret -- set` / `npm run config -- set`, region from AWS_REGION).
-    const { setSecret, setConfig, removeSecret, removeConfig } = await import('@aws-blocks/blocks/scripts');
+    const { setSecret, setConfig, removeSecret, removeConfig } = await import('aws-cdk-blocks/scripts');
     const demoSecret = `sk_e2e_${randomBytes(12).toString('hex')}`;
     const demoConfig = JSON.stringify({ beta: true, run: randomBytes(4).toString('hex') });
 

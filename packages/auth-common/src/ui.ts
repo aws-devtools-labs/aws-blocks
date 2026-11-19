@@ -170,7 +170,7 @@ export interface AuthStateApi<I extends AuthActionInput = AuthActionInput, U ext
  *
  * @example
  * ```typescript
- * import type { AuthUserOf } from '@aws-blocks/auth-common';
+ * import type { AuthUserOf } from '@aws-cdk-blocks/auth-common';
  * import type { authApi } from 'cdk-blocks';
  *
  * type User = AuthUserOf<typeof authApi>; // groups, attributes, userSub, …
@@ -188,7 +188,7 @@ function stateOf<A extends AuthStateApi<never>>(_api: A, state: AuthState): Auth
 	return state as AuthState<AuthUserOf<A>>;
 }
 
-/** The key under which `@aws-blocks/core`'s `ApiNamespaceClient` answers with its namespace. */
+/** The key under which `@aws-cdk-blocks/core`'s `ApiNamespaceClient` answers with its namespace. */
 const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
 
 /**
@@ -204,7 +204,7 @@ function apiIdOf(api: AuthStateApi<never>): string | undefined {
 /**
  * Whether a broadcast is for `api`: it names `api`'s namespace, or it names
  * none (sent by `broadcastAuthChange`, or by a tab running an older
- * `@aws-blocks/auth-common`), or `api` has no namespace to compare.
+ * `@aws-cdk-blocks/auth-common`), or `api` has no namespace to compare.
  */
 function isForApi(data: { api?: unknown } | undefined, api: AuthStateApi<never>): boolean {
 	const tag = data?.api;
@@ -615,7 +615,7 @@ function subscribe(api: AuthStateApi, listener: ((state: AuthState) => void) | S
  *
  * @example
  * ```typescript
- * import { submitAuthAction } from '@aws-blocks/blocks/ui';
+ * import { submitAuthAction } from 'aws-cdk-blocks/ui';
  * import { authApi } from 'cdk-blocks';
  *
  * const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
@@ -686,7 +686,7 @@ export async function submitAuthAction<A extends AuthStateApi<never>>(
  * @example
  * ```tsx
  * import { useSyncExternalStore } from 'react';
- * import { subscribeAuthState, getAuthStateSnapshot } from '@aws-blocks/blocks/ui';
+ * import { subscribeAuthState, getAuthStateSnapshot } from 'aws-cdk-blocks/ui';
  * import { authApi } from 'cdk-blocks';
  *
  * const subscribe = (cb: () => void) => subscribeAuthState(authApi, cb);
@@ -748,7 +748,7 @@ function displayNameOf(user: AuthUser): string {
  * ignore it, so signing in to one auth block never hands its user to
  * another's listener. Without `api` (or for an `api` that is not a generated
  * client), the message is untagged and reaches every API's listeners, as do
- * messages from a tab running an older `@aws-blocks/auth-common`.
+ * messages from a tab running an older `@aws-cdk-blocks/auth-common`.
  */
 export function broadcastAuthChange(user: AuthUser | null, api?: AuthStateApi<never>): void {
 	const id = api ? apiIdOf(api) : undefined;
@@ -797,7 +797,7 @@ function sameAuthUser(a: AuthUser | null, b: AuthUser | null): boolean {
  * Only `api`'s own sign-ins and sign-outs reach `callback`: `submitAuthAction`
  * tags its broadcasts with the API's RPC namespace, and a message tagged with
  * another one is skipped. An untagged message (from {@link broadcastAuthChange},
- * or from a tab running an older `@aws-blocks/auth-common`) reaches every API's
+ * or from a tab running an older `@aws-cdk-blocks/auth-common`) reaches every API's
  * listeners, as before.
  *
  * It also follows the shared store, so it ends where {@link subscribeAuthState}
@@ -1094,20 +1094,20 @@ export interface AuthenticatorOptions {
  *   for e2e suites. Federated action names keep their provider suffix, so
  *   `signIn:google` gives `authenticator-action-signIn:google`. Presentational
  *   markup (hint text, layout wrappers) carries no hook. The full contract is
- *   in CUSTOMIZING-AUTH-UI.md (shipped with `@aws-blocks/bb-auth`); treat the
+ *   in CUSTOMIZING-AUTH-UI.md (shipped with `@aws-cdk-blocks/bb-auth`); treat the
  *   names as public API.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param options - Optional customization. See {@link AuthenticatorOptions}.
  *   For overrides with autocomplete-grade types, import
- *   `authOverrides` from `@aws-blocks/bb-auth/ui` (it replaces
+ *   `authOverrides` from `@aws-cdk-blocks/bb-auth/ui` (it replaces
  *   `cognitoOverrides` from the removed `@aws-blocks/bb-auth-cognito/ui`) and
  *   pass its result here.
  * @returns An HTMLElement that shows auth UI when signed out, signed-in state when authenticated
  *
  * @example
  * ```typescript
- * import { Authenticator } from '@aws-blocks/auth-common/ui';
+ * import { Authenticator } from '@aws-cdk-blocks/auth-common/ui';
  * import { authApi } from 'cdk-blocks';
  *
  * document.body.appendChild(Authenticator(authApi));
@@ -1824,7 +1824,7 @@ function groupSetupKey(secret: string): string {
  *
  * @example
  * ```typescript
- * import { MfaSettings } from '@aws-blocks/blocks/ui';
+ * import { MfaSettings } from 'aws-cdk-blocks/ui';
  * import { authApi } from 'cdk-blocks';
  *
  * declare function qrCodeDataUrl(text: string): string; // from your QR library (optional)
@@ -2042,7 +2042,7 @@ export function MfaSettings(api: AuthStateApi, options?: MfaSettingsOptions): HT
  *
  * @example
  * ```typescript
- * import { AccountMenuBar } from '@aws-blocks/auth-common/ui';
+ * import { AccountMenuBar } from '@aws-cdk-blocks/auth-common/ui';
  * import { authApi } from 'cdk-blocks';
  *
  * document.body.prepend(AccountMenuBar(authApi));
@@ -2204,7 +2204,7 @@ export interface StatusMessageOptions {
  *
  * @example
  * ```ts
- * import { StatusMessage } from '@aws-blocks/auth-common/ui';
+ * import { StatusMessage } from '@aws-cdk-blocks/auth-common/ui';
  *
  * const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
  * document.querySelector('#app-status')!.replaceWith(status.element);

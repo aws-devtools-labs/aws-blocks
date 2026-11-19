@@ -181,7 +181,7 @@ async function resolveValue(kind: ValueKind, key: string): Promise<unknown> {
  * `secret('...')` calls and generates a `.d.ts` that augments it. To do it manually:
  *
  * ```ts
- * declare module '@aws-blocks/hosting' {
+ * declare module '@aws-cdk-blocks/hosting' {
  *   interface HostingSecretRegistry {
  *     STRIPE_KEY: string;
  *   }

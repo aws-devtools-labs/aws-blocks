@@ -1,8 +1,8 @@
 ---
-'@aws-blocks/core': minor
-'@aws-blocks/bb-container-compute': minor
-'@aws-blocks/bb-compute': patch
-'@aws-blocks/blocks': minor
+'@aws-cdk-blocks/core': minor
+'@aws-cdk-blocks/bb-container-compute': minor
+'@aws-cdk-blocks/bb-compute': patch
+'aws-cdk-blocks': minor
 ---
 
 An API namespace can run on a `container` compute:

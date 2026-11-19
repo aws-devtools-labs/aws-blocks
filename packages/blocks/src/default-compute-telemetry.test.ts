@@ -16,7 +16,7 @@ import { describe, test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 const lambdaComputeVersion: string = JSON.parse(
-	readFileSync(join(dirname(require.resolve('@aws-blocks/bb-lambda-compute')), '..', 'package.json'), 'utf-8'),
+	readFileSync(join(dirname(require.resolve('@aws-cdk-blocks/bb-lambda-compute')), '..', 'package.json'), 'utf-8'),
 ).version;
 
 function registryAfterUmbrellaImport(
@@ -28,12 +28,12 @@ function registryAfterUmbrellaImport(
 	customBlocksCount: number;
 } {
 	const script =
-		"const m = await import('@aws-blocks/blocks');" +
+		"const m = await import('aws-cdk-blocks');" +
 		`${body}let r;for(let i=0;i<${reads};i++){r=m.Scope.getRegisteredBlocks();}` +
 		"console.log('__REGISTRY__' + JSON.stringify(r));";
 	const out = execFileSync('node', ['--input-type=module', '-e', script], {
 		encoding: 'utf-8',
-		cwd: join(dirname(require.resolve('@aws-blocks/blocks')), '..'),
+		cwd: join(dirname(require.resolve('aws-cdk-blocks')), '..'),
 		env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' },
 		timeout: 60_000,
 	});

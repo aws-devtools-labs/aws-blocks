@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -240,7 +240,7 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
   // isBlocksError is client-safe (the browser bundle re-exports it); the error
   // name is asserted as a literal string because KVStoreErrors is a
   // server-only value and is not present in the client bundle this test runs in.
-  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  const { isBlocksError } = await import('aws-cdk-blocks/client');
   const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';
 
   const username = `e2e-lock-${Date.now().toString(36)}@example.com`;

@@ -24,7 +24,7 @@ export const globToProxyPath = (pattern: string): string | null => {
 };
 
 /**
- * Warn at synth (`@aws-blocks/hosting:CatchAllApiPathNotRouted`) when the
+ * Warn at synth (`@aws-cdk-blocks/hosting:CatchAllApiPathNotRouted`) when the
  * backend's raw routes include the catch-all `/*` (e.g.
  * `RawRoute('/{proxy+}')`): routing it to the API would send every page and
  * asset there, so the regional doors leave it out and the site keeps its own
@@ -39,7 +39,7 @@ export const routableApiPaths = (scope: IConstruct, door: string, patterns: Iter
 	const routable = all.filter((p) => globToProxyPath(p) !== null);
 	if (routable.length < all.length) {
 		Annotations.of(scope).addWarningV2(
-			'@aws-blocks/hosting:CatchAllApiPathNotRouted',
+			'@aws-cdk-blocks/hosting:CatchAllApiPathNotRouted',
 			`The ${door} front door does not route the backend's catch-all raw route ('/*'): it would send every page ` +
 				'and asset to the API. Register the raw routes under a path prefix (`/hooks/*`).',
 		);

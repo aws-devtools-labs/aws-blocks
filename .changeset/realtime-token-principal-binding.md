@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-realtime": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-realtime": minor
+"aws-cdk-blocks": minor
 ---
 
 feat(bb-realtime): bind channel handles to the signed-in user, re-check subscriptions on ping, and add `revokeAccess()`

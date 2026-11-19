@@ -1,9 +1,9 @@
 // Generates cdk-blocks/blocks.spec.json from the backend entry point.
 //
 // Mirrors server.ts / deploy-sandbox.ts: a tsx script that imports the helper from
-// `@aws-blocks/blocks/scripts` to exercise the native declarations directly.
+// `aws-cdk-blocks/scripts` to exercise the native declarations directly.
 // Running under tsx lets writeSpec load the TypeScript backend directly.
-import { readNativeDeclarations, writeSpec } from '@aws-blocks/blocks/scripts';
+import { readNativeDeclarations, writeSpec } from 'aws-cdk-blocks/scripts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 

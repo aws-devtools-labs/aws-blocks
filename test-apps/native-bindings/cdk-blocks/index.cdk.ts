@@ -18,7 +18,7 @@
 // Minimal variant of the comprehensive app's index.cdk.ts (no sandbox-id salt).
 
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, registerConfig } from 'aws-cdk-blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 

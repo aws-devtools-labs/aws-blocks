@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert';
 import { afterEach, mock, test } from 'node:test';
-import { _resetConfigCache, isBlocksError, loadConfigToProcessEnv, Scope } from '@aws-blocks/core';
+import { _resetConfigCache, isBlocksError, loadConfigToProcessEnv, Scope } from '@aws-cdk-blocks/core';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SSMClient } from '@aws-sdk/client-ssm';

@@ -1,11 +1,11 @@
 // The sign-in page, with typed overrides for the Cognito vocabulary.
-import { Authenticator } from '@aws-blocks/auth-common/ui';
+import { Authenticator } from '@aws-cdk-blocks/auth-common/ui';
 import {
 	authOverrides,
 	type AuthActionName,
 	type AuthTypedActionOverride,
 	type AuthTypedAuthenticatorOptions,
-} from '@aws-blocks/bb-auth/ui';
+} from '@aws-cdk-blocks/bb-auth/ui';
 import { authApi } from 'cdk-blocks';
 
 const hidden: AuthActionName[] = ['signUp'];

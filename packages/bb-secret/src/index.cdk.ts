@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';

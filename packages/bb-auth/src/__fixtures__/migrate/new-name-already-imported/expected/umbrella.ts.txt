@@ -1,6 +1,6 @@
-import { Auth } from '@aws-blocks/blocks';
-import { Auth as Cognito, AuthErrors } from '@aws-blocks/bb-auth';
-import { Scope } from '@aws-blocks/core';
+import { Auth } from 'aws-cdk-blocks';
+import { Auth as Cognito, AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 export const users = new Auth(scope, 'users', {});

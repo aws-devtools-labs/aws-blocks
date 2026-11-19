@@ -211,7 +211,7 @@ export interface CloudFrontHelpers {
    * server rendering uncached. The catch-all route (`/*`) is skipped — that is
    * the distribution's `defaultBehavior`. Records each origin as wired. A
    * distribution allows 25 behaviors by default (24 besides the default); the
-   * wiring check warns past that (`@aws-blocks/hosting:FrontDoorBehaviorLimit`).
+   * wiring check warns past that (`@aws-cdk-blocks/hosting:FrontDoorBehaviorLimit`).
    *
    * @param routes the app's routes (`input.app.routes`).
    * @returns `additionalBehaviors` entries, keyed by path pattern.

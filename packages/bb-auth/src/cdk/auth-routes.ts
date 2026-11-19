@@ -9,7 +9,7 @@
  * @internal
  */
 
-import { canonicalBlocksPath } from '@aws-blocks/core';
+import { canonicalBlocksPath } from '@aws-cdk-blocks/core';
 import { STUB_IDP_ROUTES, stubIssuerPath } from '../engines/stub-idp-routes.js';
 import type { ResolvedAuthOptions } from '../resolve-options.js';
 import type { StubUser } from '../types.js';

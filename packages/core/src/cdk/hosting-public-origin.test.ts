@@ -30,7 +30,7 @@ import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import { cf, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+import { cf, defineFrontDoor } from '@aws-cdk-blocks/hosting/constructs';
 import type { ScopeParent } from '../common/index.js';
 import { buildConfigJson, Hosting, type HostingProps } from '../hosting.js';
 import { ComputeBase } from './compute/compute.js';

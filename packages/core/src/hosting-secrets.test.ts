@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { config, secret } from '@aws-blocks/hosting';
+import { config, secret } from '@aws-cdk-blocks/hosting';
 import {
 	collectSynthMarkers,
 	partitionEnvironment,

@@ -1,6 +1,6 @@
-# AWS Blocks App (bare)
+# AWS CDK Blocks App (bare)
 
-Minimal full-stack TypeScript app with the AWS Blocks framework.
+Minimal full-stack TypeScript app with the AWS CDK Blocks framework.
 
 ## Getting Started
 

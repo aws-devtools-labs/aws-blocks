@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/create-blocks-app': minor
-'@aws-blocks/blocks': minor
+'@aws-cdk-blocks/create-blocks-app': minor
+'aws-cdk-blocks': minor
 ---
 
 **Breaking: the `telemetry` app task is gone.** A scaffolded app no longer gets a `"telemetry"` package script, and `npm run migrate` no longer adds one, so `npm run telemetry` in a new or migrated app fails with npm's "Missing script" error.

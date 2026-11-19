@@ -19,7 +19,7 @@
  * `client.js` is correct regardless of how the task was invoked.
  *
  * For a TypeScript foundation the worker is loaded with `--import <tsx loader>`:
- * the app's own `tsx` when it is installed, else the one `@aws-blocks/blocks`
+ * the app's own `tsx` when it is installed, else the one `aws-cdk-blocks`
  * depends on, by absolute URL, so that the worker finds it from any app.
  */
 
@@ -54,7 +54,7 @@ if (!existsSync(foundationPath)) {
 	process.exit(2);
 }
 
-// The worker lives in @aws-blocks/core; `generate-client-worker.js` runs it through
+// The worker lives in @aws-cdk-blocks/core; `generate-client-worker.js` runs it through
 // this package's own dependency, so consuming apps don't need a direct core dependency.
 const workerPath = fileURLToPath(new URL('./generate-client-worker.js', import.meta.url));
 

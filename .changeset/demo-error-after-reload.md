@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 fix(create-blocks-app): keep todo errors visible in the demo template

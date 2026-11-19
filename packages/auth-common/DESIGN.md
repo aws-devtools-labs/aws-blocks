@@ -2,9 +2,9 @@
 
 Design document for the auth common package. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/auth-common`
+**Package:** `@aws-cdk-blocks/auth-common`
 **Type:** Shared interface (not a standalone Building Block)
-**AWS Service:** None — defines the contract that `Auth` (`@aws-blocks/bb-auth`) implements.
+**AWS Service:** None — defines the contract that `Auth` (`@aws-cdk-blocks/bb-auth`) implements.
 
 ## Purpose
 
@@ -48,7 +48,7 @@ States are intentionally minimal — only states where the client must act are r
 
 ### Auth Flows
 
-How `Auth` (`@aws-blocks/bb-auth`) drives the state machine. Fields marked hidden are pre-filled by the server and sent back unchanged.
+How `Auth` (`@aws-cdk-blocks/bb-auth`) drives the state machine. Fields marked hidden are pre-filled by the server and sent back unchanged.
 
 #### Sign Up with Email Confirmation
 
@@ -226,7 +226,7 @@ That gives two views of one source:
 
 The store's only inputs are hydration (one shared in-flight `getAuthState()` per `api`), `submitAuthAction`, and a cross-tab refetch: a broadcast from another tab triggers one `getAuthState()` per `api` that has store subscribers (the `Authenticator` is one), installed with the first subscriber and removed with the last. The refetch is skipped when the broadcast names the user the store shows, the store is in no flow, and nothing was sent after the answer it shows: no request in flight can then have seen the session before the other tab's change or after it. A same-window broadcast is not refetched, because `submitAuthAction` already wrote the store. The snapshot keeps its identity between writes, as `useSyncExternalStore` requires.
 
-`submitAuthAction` tags its broadcast, in this window and to other tabs, with the RPC namespace of the API it ran on (the generated client answers `Symbol.for('aws-blocks.apiNamespace')` with it, the same in every tab): another API's `onAuthChange` skips the message and its store does not refetch, so signing in to one auth block never hands its user to another's listener. An untagged message (`broadcastAuthChange(user)` without an `api`, or a tab running an older `@aws-blocks/auth-common`) reaches every API; so does any message for an API that is not a generated client. The id includes an overridden URL: on one backend, `generateClient({ url: X }).authApi` is `X#authApi` and the default client's `authApi` is `authApi`, so neither gets the other's tagged messages.
+`submitAuthAction` tags its broadcast, in this window and to other tabs, with the RPC namespace of the API it ran on (the generated client answers `Symbol.for('aws-blocks.apiNamespace')` with it, the same in every tab): another API's `onAuthChange` skips the message and its store does not refetch, so signing in to one auth block never hands its user to another's listener. An untagged message (`broadcastAuthChange(user)` without an `api`, or a tab running an older `@aws-cdk-blocks/auth-common`) reaches every API; so does any message for an API that is not a generated client. The id includes an overridden URL: on one backend, `generateClient({ url: X }).authApi` is `X#authApi` and the default client's `authApi` is `authApi`, so neither gets the other's tagged messages.
 
 ### Ordering answers
 

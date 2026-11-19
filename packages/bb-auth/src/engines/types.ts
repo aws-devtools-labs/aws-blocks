@@ -71,8 +71,8 @@
  * @internal
  */
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, Scope } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, Scope } from '@aws-cdk-blocks/core';
 import type { FederationRouteHost } from '../federation-routes.js';
 import type {
 	OidcProviderOptions,

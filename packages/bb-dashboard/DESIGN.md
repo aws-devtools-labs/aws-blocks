@@ -2,7 +2,7 @@
 
 Design document for Dashboard. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-dashboard`
+**Package:** `@aws-cdk-blocks/bb-dashboard`
 **Type:** Primitive (creates new infrastructure)
 **AWS Service:** Amazon CloudWatch Dashboards
 

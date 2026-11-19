@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-knowledge-base": patch
+"@aws-cdk-blocks/bb-knowledge-base": patch
 ---
 
 docs: the KnowledgeBase docs state when `isSynced()` returns `true` without an ingestion job

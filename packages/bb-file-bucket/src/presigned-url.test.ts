@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { Scope, isBlocksError, isWireSafeError } from '@aws-blocks/core';
+import { Scope, isBlocksError, isWireSafeError } from '@aws-cdk-blocks/core';
 import { FileBucket as AwsFileBucket } from './index.aws.js';
 import { FileBucket as MockFileBucket } from './index.mock.js';
 import { validatePresignedUrlExpiry } from './presigned-url.js';

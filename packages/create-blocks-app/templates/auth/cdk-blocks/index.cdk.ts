@@ -1,9 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 
-import { Hosting, HostingPresets, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { Hosting, HostingPresets, BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { getStackName } from '@aws-blocks/blocks/scripts';
+import { getStackName } from 'aws-cdk-blocks/scripts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

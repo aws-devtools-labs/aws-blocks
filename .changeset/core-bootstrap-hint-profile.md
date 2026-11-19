@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): the CDK bootstrap command in the "not bootstrapped" message names the profile the deploy uses

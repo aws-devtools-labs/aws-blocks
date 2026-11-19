@@ -116,13 +116,13 @@ export interface BlocksBackendProps {
 
 /**
  * Core's `create()` props: the public {@link BlocksBackendProps} plus the
- * required `defaultComputeFactory`, spread on by the umbrella (`@aws-blocks/blocks`).
+ * required `defaultComputeFactory`, spread on by the umbrella (`aws-cdk-blocks`).
  * Customers use {@link BlocksBackendProps} and never set the factory.
  *
  * @internal
  */
 export interface CoreBlocksBackendProps extends BlocksBackendProps {
-	/** Builds the backend's default compute. Injected by `@aws-blocks/blocks`. */
+	/** Builds the backend's default compute. Injected by `aws-cdk-blocks`. */
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
@@ -215,7 +215,7 @@ export function assertBlocksDefaults(
 	}
 	throw new Error(
 		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
-			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
+			"  import { BlocksPresets } from 'aws-cdk-blocks/cdk';\n" +
 			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
 			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
 			`cdk-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
@@ -771,7 +771,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Lambda function (the shared gateway's target), and a block reading
 		// `this.compute` in its constructor (during that import) must resolve to
 		// it. The factory is supplied by the umbrella
-		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+		// aws-cdk-blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		backend._defaultCompute = props.defaultComputeFactory(backend);
 		// file:// URL (not a raw path) so the cache-busting query works on Windows,

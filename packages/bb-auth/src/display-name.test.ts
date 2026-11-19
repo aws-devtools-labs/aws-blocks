@@ -15,8 +15,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import { type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
+import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { type BlocksContext, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { Auth, stubIdp } from './index.mock.js';
 import { displayNameOf } from './state-machine.js';
 import { Browser } from './test-helpers.js';

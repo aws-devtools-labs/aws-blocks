@@ -23,9 +23,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, describe, test } from 'node:test';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import { Auth as AwsAuth } from './index.aws.js';
 import { Auth as CdkAuth } from './index.cdk.js';

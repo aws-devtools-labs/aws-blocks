@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, Auth, Agent, BedrockModels } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, Auth, Agent, BedrockModels } from 'aws-cdk-blocks';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.

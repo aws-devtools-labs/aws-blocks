@@ -26,8 +26,8 @@
 
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/core';
-import { getConfigDeployment, getConfigLocation } from '@aws-blocks/core/cdk';
+import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-cdk-blocks/core';
+import { getConfigDeployment, getConfigLocation } from '@aws-cdk-blocks/core/cdk';
 import {
 	API_LISTENER_PORTS,
 	CONTAINER_HTTP_PORT,
@@ -42,7 +42,7 @@ import {
 	initializeVpc,
 	registerVpcRequirements,
 	sourceScopedConditions,
-} from '@aws-blocks/core/cdk/internal';
+} from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
@@ -612,7 +612,7 @@ export class ContainerCompute extends ComputeBase {
 		taken.set(priority, { path, compute: this.node.path });
 		if (taken.size === DEFAULT_RULES_PER_LOAD_BALANCER + 1) {
 			cdk.Annotations.of(listener).addWarningV2(
-				'@aws-blocks/bb-container-compute:api-rule-quota',
+				'@aws-cdk-blocks/bb-container-compute:api-rule-quota',
 				`More than ${DEFAULT_RULES_PER_LOAD_BALANCER} container API namespaces share one load balancer, over its ` +
 					`default quota of ${DEFAULT_RULES_PER_LOAD_BALANCER} listener rules: request an increase of "Rules per ` +
 					'Application Load Balancer" before deploying.',

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Exercises the real production wiring: `@aws-blocks/blocks`'s `BlocksStack` /
+ * Exercises the real production wiring: `aws-cdk-blocks`'s `BlocksStack` /
  * `BlocksBackend` wrappers inject `LambdaCompute` as the default-compute factory
  * into core's `create()`. Core's own tests use an inline stub compute and
  * `bb-lambda-compute`'s tests inject a factory by hand, so nothing else covers
@@ -18,9 +18,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
-import { ApiNamespace, Compute, CronJob, Scope } from '@aws-blocks/blocks';
-import { BlocksBackend, BlocksPresets, BlocksStack, Hosting } from '@aws-blocks/blocks/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute';
+import { ApiNamespace, Compute, CronJob, Scope } from 'aws-cdk-blocks';
+import { BlocksBackend, BlocksPresets, BlocksStack, Hosting } from 'aws-cdk-blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -64,7 +64,7 @@ before(() => {
 	computeBackendPath = join(tmpDir, 'backend-compute.mjs');
 	writeFileSync(
 		computeBackendPath,
-		"import { ApiNamespace, AsyncJob, Compute, Scope } from '@aws-blocks/blocks';\n" +
+		"import { ApiNamespace, AsyncJob, Compute, Scope } from 'aws-cdk-blocks';\n" +
 			"const scope = new Scope('app');\n" +
 			"const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 512 });\n" +
 			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
@@ -77,7 +77,7 @@ before(() => {
 	scopeComputeBackendPath = join(tmpDir, 'backend-scope-compute.mjs');
 	writeFileSync(
 		scopeComputeBackendPath,
-		"import { ApiNamespace, AsyncJob, Compute, CronJob, RawRoute, Realtime, Scope } from '@aws-blocks/blocks';\n" +
+		"import { ApiNamespace, AsyncJob, Compute, CronJob, RawRoute, Realtime, Scope } from 'aws-cdk-blocks';\n" +
 			"const scope = new Scope('app');\n" +
 			"const scoped = new Compute(scope, 'scoped', { type: 'serverless', memory: 640 });\n" +
 			"const own = new Compute(scope, 'own', { type: 'serverless', memory: 768 });\n" +
@@ -98,7 +98,7 @@ before(() => {
 	containerScopeApiBackendPath = join(tmpDir, 'backend-container-scope-api.mjs');
 	writeFileSync(
 		containerScopeApiBackendPath,
-		"import { ApiNamespace, Compute, Scope } from '@aws-blocks/blocks';\n" +
+		"import { ApiNamespace, Compute, Scope } from 'aws-cdk-blocks';\n" +
 			"const scope = new Scope('app');\n" +
 			"const worker = new Compute(scope, 'worker', { type: 'container' });\n" +
 			"const jobs = new Scope('jobs', { parent: scope, compute: worker });\n" +
@@ -107,7 +107,7 @@ before(() => {
 	containerScopeCronBackendPath = join(tmpDir, 'backend-container-scope-cron.mjs');
 	writeFileSync(
 		containerScopeCronBackendPath,
-		"import { Compute, CronJob, Scope } from '@aws-blocks/blocks';\n" +
+		"import { Compute, CronJob, Scope } from 'aws-cdk-blocks';\n" +
 			"const scope = new Scope('app');\n" +
 			"const worker = new Compute(scope, 'worker', { type: 'container' });\n" +
 			"const jobs = new Scope('jobs', { parent: scope, compute: worker });\n" +
@@ -119,7 +119,7 @@ before(() => {
 	containerBackendPath = join(tmpDir, 'backend-container.mjs');
 	writeFileSync(
 		containerBackendPath,
-		"import { ApiNamespace, AsyncJob, Compute, Scope } from '@aws-blocks/blocks';\n" +
+		"import { ApiNamespace, AsyncJob, Compute, Scope } from 'aws-cdk-blocks';\n" +
 			"const scope = new Scope('app');\n" +
 			"const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 1, memory: 2048 } });\n" +
 			"const batchCompute = new Compute(scope, 'batch', { type: 'container' });\n" +
@@ -135,7 +135,7 @@ before(() => {
 	manyContainerNamespacesBackendPath = join(tmpDir, 'backend-container-many.mjs');
 	writeFileSync(
 		manyContainerNamespacesBackendPath,
-		"import { ApiNamespace, Compute, Scope } from '@aws-blocks/blocks';\n" +
+		"import { ApiNamespace, Compute, Scope } from 'aws-cdk-blocks';\n" +
 			"const scope = new Scope('app');\n" +
 			"const wide = new Compute(scope, 'wide', { type: 'container' });\n" +
 			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
@@ -469,13 +469,13 @@ describe('apiFrontDoor: cloudfront', () => {
 	});
 });
 
-describe('@aws-blocks/blocks/cdk public surface', () => {
-	// Framework-internal seams live on `@aws-blocks/core/cdk/internal`; the
-	// umbrella re-exports `@aws-blocks/core/cdk` wholesale, so this pins that
+describe('aws-cdk-blocks/cdk public surface', () => {
+	// Framework-internal seams live on `@aws-cdk-blocks/core/cdk/internal`; the
+	// umbrella re-exports `@aws-cdk-blocks/core/cdk` wholesale, so this pins that
 	// none of them reach customers through it (`check:api` does not report the
 	// cdk entry).
 	test('does not re-export the baseline protocol or the deploy-time Lambda helpers', async () => {
-		const umbrella: Record<string, unknown> = await import('@aws-blocks/blocks/cdk');
+		const umbrella: Record<string, unknown> = await import('aws-cdk-blocks/cdk');
 		assert.ok('BlocksStack' in umbrella, 'resolved the cdk entry');
 		for (const name of [
 			'BASELINE_FORMAT_VERSION',
@@ -486,7 +486,7 @@ describe('@aws-blocks/blocks/cdk public surface', () => {
 			'deployTimeLambdaCode',
 			'deployTimeLambdaEntry',
 		]) {
-			assert.ok(!(name in umbrella), `${name} must not be on @aws-blocks/blocks/cdk`);
+			assert.ok(!(name in umbrella), `${name} must not be on aws-cdk-blocks/cdk`);
 		}
 	});
 });
@@ -1175,7 +1175,7 @@ describe('Scope-level compute', () => {
 		const backendCDKPath = join(tmpDir, 'backend-container-scope-api-min-zero.mjs');
 		writeFileSync(
 			backendCDKPath,
-			"import { ApiNamespace, AsyncJob, Compute, Scope } from '@aws-blocks/blocks';\n" +
+			"import { ApiNamespace, AsyncJob, Compute, Scope } from 'aws-cdk-blocks';\n" +
 				"const scope = new Scope('app');\n" +
 				"const worker = new Compute(scope, 'worker', { type: 'container', scaling: { minInstances: 0, maxInstances: 2 } });\n" +
 				"const jobs = new Scope('jobs', { parent: scope, compute: worker });\n" +
@@ -1224,13 +1224,13 @@ describe('a compute bound to another backend fails synth (multi-backend)', () =>
 	const writeBackend = (name: string, body: string) => {
 		writeFileSync(
 			join(tmpDir, `computes-${name}.mjs`),
-			"import { Compute, Scope } from '@aws-blocks/blocks';\n" +
+			"import { Compute, Scope } from 'aws-cdk-blocks';\n" +
 				"export const heavy = new Compute(new Scope('shared'), 'heavy', { type: 'serverless', memory: 1024 });\n",
 		);
 		const backend = join(tmpDir, `backend-foreign-${name}.mjs`);
 		writeFileSync(
 			backend,
-			"import { AsyncJob, CronJob, Scope } from '@aws-blocks/blocks';\n" +
+			"import { AsyncJob, CronJob, Scope } from 'aws-cdk-blocks';\n" +
 				`import { heavy } from './computes-${name}.mjs';\n` +
 				"const scope = new Scope('app');\n" +
 				body,

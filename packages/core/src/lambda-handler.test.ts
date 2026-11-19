@@ -824,7 +824,7 @@ describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
       });
 
       assert.ok(
-        logged.some((line) => line.includes('2 copies of @aws-blocks/core are loaded')),
+        logged.some((line) => line.includes('2 copies of @aws-cdk-blocks/core are loaded')),
         `expected the copy count in the diagnostic, got: ${JSON.stringify(logged)}`,
       );
     } finally {
@@ -2514,7 +2514,7 @@ function dispatchBackend() {
     plainApi: { async ping() { return 'pong'; } },
     notes: new FakeBlock(),
     // A secret() marker whose (callable) schema must not become an endpoint.
-    stripeKey: { [Symbol.for('@aws-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
+    stripeKey: { [Symbol.for('@aws-cdk-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
   };
 }
 

@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/core": minor
-"@aws-blocks/bb-compute": patch
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/core": minor
+"@aws-cdk-blocks/bb-compute": patch
+"aws-cdk-blocks": minor
 ---
 
 feat(core): `defaults.strictNamespacePlacement` serves each API namespace only on the compute it is placed on

@@ -157,7 +157,7 @@ export interface ApiNamespaceOptions {
    * The compute this namespace's methods run on. Omit to run on the app's
    * default compute, like every namespace before.
    *
-   * Pass a `Compute` block (from `@aws-blocks/blocks`) to give a namespace its
+   * Pass a `Compute` block (from `aws-cdk-blocks`) to give a namespace its
    * own function — for example more memory (and CPU) than the rest of the API,
    * or its own scaling separate from the other namespaces:
    *
@@ -337,7 +337,7 @@ export interface ApiNamespaceOptions {
  * 
  * The local mock applies no auth either, so an ungated method passes every
  * local check and still ships callable by anyone. See the `Auth` README
- * (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+ * (`@aws-cdk-blocks/bb-auth`) for `requireAuth` / `requireRole`.
  *
  * A guard protects only when awaited: `auth.requireRole(context, 'admins')`
  * without `await` lets the method return before the check fails. To make a

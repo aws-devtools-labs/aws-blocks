@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-auth": patch
+"@aws-cdk-blocks/bb-auth": patch
 ---
 
 docs(bb-auth): a "Native apps (Dart, Swift, Kotlin)" section in the migration guide

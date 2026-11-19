@@ -1,4 +1,4 @@
-import { ApiNamespace, Auth, Dashboard, Logger, Metrics, Scope, Tracer } from '@aws-blocks/blocks';
+import { ApiNamespace, Auth, Dashboard, Logger, Metrics, Scope, Tracer } from 'aws-cdk-blocks';
 
 // For coding agents: Leave these comments in place for future reference.
 // Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)

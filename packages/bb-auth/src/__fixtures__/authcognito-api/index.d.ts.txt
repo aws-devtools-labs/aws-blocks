@@ -1,8 +1,8 @@
-import { Scope } from '@aws-blocks/core';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import type { AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import type { AuthStateApi, BlocksAuth } from '@aws-cdk-blocks/auth-common';
 import { makeExternalUserPoolRef, type AdminGetterOf, type AuthCognitoMockOptions, type AttrOf, type AuthSession, type CognitoUser, type ConfirmSignInOptions, type ConfirmSignInResponse, type DeviceRecord, type CompletePasskeyRegistrationResult, type PasskeyDescription, type StartPasskeyRegistrationResult, type FetchAuthSessionOptions, type GroupOf, type MFAPreference, type MFAPreferenceInput, type ReadAttrOf, type ResetPasswordResult, type SignInOptions, type SignInResult, type SignUpOptions, type ConfirmSignUpResult, type SignUpResult, type UpdateAttributeOutcome } from './types.js';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 export * from './types.js';
 export { SessionStore, type SessionRecord } from './sessions.js';
 /**

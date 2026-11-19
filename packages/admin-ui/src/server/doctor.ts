@@ -319,7 +319,7 @@ function actionableCheck(
  * individually guarded, because a report about a broken environment that itself
  * fails on a broken environment is worthless.
  *
- * Also the CLI entry — core lazily imports `@aws-blocks/admin-ui/doctor` and
+ * Also the CLI entry — core lazily imports `@aws-cdk-blocks/admin-ui/doctor` and
  * calls `runDoctor({ projectRoot, profile, region })`.
  *
  * @param probes - Test seams. Defaulted to the real AWS/network probes so both

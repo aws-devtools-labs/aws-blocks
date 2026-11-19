@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-agent": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-agent": minor
+"aws-cdk-blocks": minor
 ---
 
 fix(bb-agent): scope `inferenceOnly` sessions to the user by default

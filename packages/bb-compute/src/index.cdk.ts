@@ -15,11 +15,11 @@
  * const jobs = new AsyncJob(scope, 'jobs', { compute: worker, handler });
  * ```
  */
-import type { ComputeType, ScopeParent } from '@aws-blocks/core';
-import type { ComputeBase, ComputeProvider } from '@aws-blocks/core/cdk/internal';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
+import type { ComputeType, ScopeParent } from '@aws-cdk-blocks/core';
+import type { ComputeBase, ComputeProvider } from '@aws-cdk-blocks/core/cdk/internal';
+import { BuildingBlockScope } from '@aws-cdk-blocks/core/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import { ContainerCompute } from '@aws-cdk-blocks/bb-container-compute/cdk';
 import type { ComputeProps } from './types.js';
 
 export type { ComputeProps } from './types.js';

@@ -1,7 +1,7 @@
 import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 import { AuthOIDC as Federated, github } from '@aws-blocks/bb-auth-oidc';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Scope } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });

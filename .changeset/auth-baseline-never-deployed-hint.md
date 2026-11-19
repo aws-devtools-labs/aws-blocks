@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-auth": patch
+"aws-cdk-blocks": patch
 ---
 
 When synth refuses a change against the user-pool immutability baseline, the error names the case it cannot tell apart from a deployed change: one that was synthesized but never deployed. The baseline is rewritten on every passing synth, not after a deploy. So if you synthesize a new custom attribute or `users.caseSensitive` setting and then undo it, synth refuses the undo even though no pool ever had the setting.

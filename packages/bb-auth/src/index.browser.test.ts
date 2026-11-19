@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Bundle hygiene for the browser-facing entries: `@aws-blocks/bb-auth` under
- * the `browser` condition and `@aws-blocks/bb-auth/ui`.
+ * Bundle hygiene for the browser-facing entries: `@aws-cdk-blocks/bb-auth` under
+ * the `browser` condition and `@aws-cdk-blocks/bb-auth/ui`.
  *
  * - Walks the **built** import graph (`dist/*.js`, resolved the way a browser
  *   bundler resolves it: `browser` → `import` → `default`) and asserts it
@@ -135,7 +135,7 @@ const SERVER_FILES = [
 ].map((f) =>
 	realpathSync(join(distDir, f)),
 );
-const FORBIDDEN_PACKAGES = /^(@aws-sdk\/|@smithy\/|aws-cdk-lib|constructs$|@aws-blocks\/core\/cdk)/;
+const FORBIDDEN_PACKAGES = /^(@aws-sdk\/|@smithy\/|aws-cdk-lib|constructs$|@aws-cdk-blocks\/core\/cdk)/;
 
 function assertBrowserSafe(entry: string) {
 	const graph = importGraph(entry);
@@ -147,7 +147,7 @@ function assertBrowserSafe(entry: string) {
 		assert.ok(!graph.files.has(server), `${entry} must not reach ${server}`);
 	}
 	// core's browser condition is `dist/client/index.js`; its server entry is `dist/index.js`.
-	const coreClient = resolveBare('@aws-blocks/core', join(packageRoot, 'package.json'));
+	const coreClient = resolveBare('@aws-cdk-blocks/core', join(packageRoot, 'package.json'));
 	const coreServer = realpathSync(join(dirname(coreClient), '..', 'index.js'));
 	assert.ok(!graph.files.has(coreServer), "core's server entry is not in the browser graph");
 	return graph;
@@ -189,15 +189,15 @@ describe('Auth browser entry', () => {
 	});
 
 	test('loads under --conditions=browser and is a named-export superset of the default entry', () => {
-		const browserNames = loadExports('@aws-blocks/bb-auth', 'browser');
-		const defaultNames = loadExports('@aws-blocks/bb-auth');
+		const browserNames = loadExports('@aws-cdk-blocks/bb-auth', 'browser');
+		const defaultNames = loadExports('@aws-cdk-blocks/bb-auth');
 		const missing = defaultNames.filter((n) => !browserNames.includes(n));
 		assert.deepStrictEqual(missing, [], 'every default-entry export exists in the browser entry');
 		assert.ok(browserNames.includes('Auth') && browserNames.includes('AuthErrors'));
 	});
 
 	test('./ui loads under --conditions=browser', () => {
-		const names = loadExports('@aws-blocks/bb-auth/ui', 'browser');
+		const names = loadExports('@aws-cdk-blocks/bb-auth/ui', 'browser');
 		for (const expected of ['Authenticator', 'submitAuthAction', 'subscribeAuthState', 'authOverrides']) {
 			assert.ok(names.includes(expected), `./ui exports ${expected}`);
 		}

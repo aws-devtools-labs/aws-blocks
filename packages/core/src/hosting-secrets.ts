@@ -3,9 +3,9 @@
 
 /**
  * Resolution glue between the dependency-free `secret()` / `config()` markers
- * (defined in `@aws-blocks/hosting`) and the `Hosting` CDK block.
+ * (defined in `@aws-cdk-blocks/hosting`) and the `Hosting` CDK block.
  *
- * Delegates to the shared `@aws-blocks/hosting` engine, pinning only the Blocks
+ * Delegates to the shared `@aws-cdk-blocks/hosting` engine, pinning only the Blocks
  * namespaces (`/blocks/secrets`, `/blocks/config`). The store is derived from the
  * marker's kind (`secret` → Secrets Manager, `config` → SSM), and BYO
  * `ISecret`/`IParameter` handles are wired identically.
@@ -13,7 +13,7 @@
  * @module
  */
 
-import type { ManagedValue } from '@aws-blocks/hosting';
+import type { ManagedValue } from '@aws-cdk-blocks/hosting';
 import {
 	type ByoBinding,
 	type DomainNameInput as LeafDomainNameInput,
@@ -27,7 +27,7 @@ import {
 	type StoreConfig,
 	wireByo as leafWireByo,
 	wireManagedValue as leafWireManagedValue,
-} from '@aws-blocks/hosting/constructs';
+} from '@aws-cdk-blocks/hosting/constructs';
 import { blocksStoreConfig } from './secret-naming.js';
 
 /**

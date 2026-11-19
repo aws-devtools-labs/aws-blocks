@@ -4,7 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { testBaseUrl } from './api-url.js';
-import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
+import { AuthErrors, isAuthError } from '@aws-cdk-blocks/bb-auth';
 import type { api as apiType } from 'cdk-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 import { getTestSupport } from './test-support.js';

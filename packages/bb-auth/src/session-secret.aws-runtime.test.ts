@@ -17,8 +17,8 @@
 
 import assert from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, mock, test } from 'node:test';
-import type { BlocksContext } from '@aws-blocks/core';
-import { _resetConfigCache, clearRouteRegistry, loadConfigToProcessEnv, Scope } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { _resetConfigCache, clearRouteRegistry, loadConfigToProcessEnv, Scope } from '@aws-cdk-blocks/core';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SSMClient } from '@aws-sdk/client-ssm';
@@ -99,7 +99,7 @@ function stubStores(responses: { sm?: () => unknown; ssm?: () => unknown }) {
 }
 
 /** Whether `frameworkKey()` resolved its AWS entry (this pass runs under `aws-runtime`). */
-const internalIsAws = import.meta.resolve('@aws-blocks/bb-secret/internal').endsWith('/internal.aws.js');
+const internalIsAws = import.meta.resolve('@aws-cdk-blocks/bb-secret/internal').endsWith('/internal.aws.js');
 
 describe('Auth session secret store (aws-runtime)', {
 	skip: !internalIsAws && 'runs under --conditions=aws-runtime',

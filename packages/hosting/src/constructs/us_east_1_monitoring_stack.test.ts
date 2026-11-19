@@ -111,7 +111,7 @@ void describe('UsEast1MonitoringStack', () => {
     Annotations.fromStack(stack).hasWarning(
       '/CfMon',
       Match.stringLikeRegexp(
-        '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
       ),
     );
   });
@@ -126,7 +126,7 @@ void describe('UsEast1MonitoringStack', () => {
     Annotations.fromStack(stack).hasNoWarning(
       '/CfMon',
       Match.stringLikeRegexp(
-        '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
       ),
     );
   });

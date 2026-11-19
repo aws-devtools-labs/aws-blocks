@@ -3,7 +3,7 @@
 > **AWS Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `cdk-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
 
 ## How to work here
-You're an engineer working **on AWS Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS Blocks, this is the wrong doc → run `npm create @aws-blocks/blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
+You're an engineer working **on AWS Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS Blocks, this is the wrong doc → run `npm create @aws-cdk-blocks/blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
 
 - **Default to making the change** — implement it, don't just describe it.
 - **Definition of done = the "Before you open a PR" checklist passes** (build, lint, tests, changeset, docs).
@@ -20,7 +20,7 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 3. Inject BB config with **`registerConfig()`**, never `handler.addEnvironment()` (Lambda env has a ~4 KB cap).
 4. Call BB data methods **only inside request/job handlers** — never at module top level or during synth (the CDK class stubs them with `synthGuard` to throw).
 5. **Never attach `Error.cause` enumerably** — it leaks SDK metadata (`$metadata`, ARNs) when an error is serialized to the client.
-6. Errors cross the wire by **`name`, not `code`** — match with `isBlocksError(e, SomeErrors.Foo)` (works the same server- and client-side). A named error's `name` only survives the RPC serializer when the error is **branded** as an intentional BB error: throw it through `blocksError()`, or stamp a hand-built named `Error` with `brandBlocksError()` (both from `@aws-blocks/core`). An unbranded named `Error` collapses to a nameless `500` — that is deliberate, so a raw driver/SDK class name (`PostgresError`) never leaks.
+6. Errors cross the wire by **`name`, not `code`** — match with `isBlocksError(e, SomeErrors.Foo)` (works the same server- and client-side). A named error's `name` only survives the RPC serializer when the error is **branded** as an intentional BB error: throw it through `blocksError()`, or stamp a hand-built named `Error` with `brandBlocksError()` (both from `@aws-cdk-blocks/core`). An unbranded named `Error` collapses to a nameless `500` — that is deliberate, so a raw driver/SDK class name (`PostgresError`) never leaks.
 7. **`get()`-style reads return `null`** for not-found — throw only for violated preconditions (e.g. a failed conditional write). Without this → callers need try/catch for normal control flow, and missing-item checks become invisible.
 8. Keep customer-facing code cast-free: **no `as any` / `: any` / `@ts-ignore`** (a cast usually means a public type is wrong — fix the type).
 9. Every API method is a public, internet-reachable RPC endpoint with no auth by default — **gate inside each method** with `await auth.requireAuth(context)`.
@@ -52,15 +52,15 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 ### Core API & glossary
 | Symbol | From | What it is |
 |---|---|---|
-| `Scope` | `@aws-blocks/core` (runtime/mock) **or** `@aws-blocks/core/cdk` (CDK) | base class every BB extends (CDK layers extend its subclass `BuildingBlockScope`, which also declares the block's VPC needs) |
-| `ScopeParent` | `@aws-blocks/core` (always) | the parent argument type |
-| `ApiNamespace`, `ApiError`, `isBlocksError` | `@aws-blocks/core` | RPC wrapper · HTTP-mapped error · typed-error guard |
-| `registerSdkIdentifiers`, `getSdkIdentifiers` | `@aws-blocks/core` | register (in mock/runtime ctor) / resolve (at call time) a BB's resource names |
-| `registerConfig`, `synthGuard` | `@aws-blocks/core/cdk` | inject Lambda config at synth · `(): never` stub for runtime-only methods |
+| `Scope` | `@aws-cdk-blocks/core` (runtime/mock) **or** `@aws-cdk-blocks/core/cdk` (CDK) | base class every BB extends (CDK layers extend its subclass `BuildingBlockScope`, which also declares the block's VPC needs) |
+| `ScopeParent` | `@aws-cdk-blocks/core` (always) | the parent argument type |
+| `ApiNamespace`, `ApiError`, `isBlocksError` | `@aws-cdk-blocks/core` | RPC wrapper · HTTP-mapped error · typed-error guard |
+| `registerSdkIdentifiers`, `getSdkIdentifiers` | `@aws-cdk-blocks/core` | register (in mock/runtime ctor) / resolve (at call time) a BB's resource names |
+| `registerConfig`, `synthGuard` | `@aws-cdk-blocks/core/cdk` | inject Lambda config at synth · `(): never` stub for runtime-only methods |
 | `scope.registerClientMiddleware(pkg)` | `Scope` method (codegen) | registers the client-plugin **package specifier** that hydrates a Transferable into a live client object — the plugin does the hydration, this just registers it |
-| `getMockDataDir` | `@aws-blocks/core/bb-utils` | mock persistence dir → `.bb-data/{fullId}/` |
-| `auth.requireAuth(context)` | `Auth` (`@aws-blocks/bb-auth`) | gate a method; returns the user or throws 401 |
-| `RawRoute` | `@aws-blocks/core` | escape hatch for a raw HTTP route when JSON-RPC isn't enough |
+| `getMockDataDir` | `@aws-cdk-blocks/core/bb-utils` | mock persistence dir → `.bb-data/{fullId}/` |
+| `auth.requireAuth(context)` | `Auth` (`@aws-cdk-blocks/bb-auth`) | gate a method; returns the user or throws 401 |
+| `RawRoute` | `@aws-cdk-blocks/core` | escape hatch for a raw HTTP route when JSON-RPC isn't enough |
 | `fullId` | — | a BB instance's unique scoped id (drives resource + mock-data naming) |
 | reference object | — | the lightweight handle `fromExisting()` returns (e.g. `{ tableName }`), passed into a constructor — not a constructed BB |
 | Transferable | — | a server value that serializes (`toJSON()` → `{__blocks: …}`) and re-hydrates into a live client object via client middleware. Canonical example: `bb-realtime` |
@@ -145,7 +145,7 @@ async get(key: string): Promise<T | null> {
 }
 
 // index.cdk.ts — provisions infra; does NOT register identifiers (it derives the same name)
-import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-cdk-blocks/core/cdk';
 static fromExisting(tableName: string): ExternalTableRef { return { __brand: 'ExternalTableRef', tableName }; }
 constructor(...) {
   super(id, { parent: scope, bbName: BB_NAME, vpc: {} });                // bbName records the block on the stack; `vpc` = VPC needs ({} if none)
@@ -200,7 +200,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 3. Root `README.md` — how conditional exports work
 
 ### Discovering Building Block Documentation
-When working in an AWS Blocks application (not this monorepo), Building Block documentation ships in `@aws-blocks/blocks`, and `npm run docs` prints it for the installed version: `npm run docs` lists all Building Blocks with their package names, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). Use `npm run docs:search <term>` to search or `npm run docs:api <Block>` for signatures. Structured tasks print text on a terminal and JSON when piped; use `npm run -s docs KVStore` in pipelines to suppress npm’s banner.
+When working in an AWS Blocks application (not this monorepo), Building Block documentation ships in `aws-cdk-blocks`, and `npm run docs` prints it for the installed version: `npm run docs` lists all Building Blocks with their package names, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). Use `npm run docs:search <term>` to search or `npm run docs:api <Block>` for signatures. Structured tasks print text on a terminal and JSON when piped; use `npm run -s docs KVStore` in pipelines to suppress npm’s banner.
 
 ---
 
@@ -210,7 +210,7 @@ When working in an AWS Blocks application (not this monorepo), Building Block do
 |---|---|
 | Linter/formatter | **Biome** (not ESLint/Prettier): tabs (width 4), 120 cols, single quotes, trailing commas everywhere, semicolons always. `biome check` = lint + format + import-sort. |
 | Modules | **ESM everywhere**; relative imports carry the `.js` extension. `strict: true`, ES2022, `moduleResolution: bundler`. |
-| Naming | BB class `PascalCase`, no "BB" prefix (`KVStore`). pkg `@aws-blocks/bb-{kebab}`. errors `{Class}Errors`. The **`BLOCKS_` env prefix is framework-reserved** — not for example app code. Auth identifiers lead with `Auth` (`Auth`, `AuthOptions`, `AuthErrors`; packages `bb-auth`, `auth-common` — D-004), and there is one auth BB: add a sign-in method as an `Auth` option rather than a new block (D-023). |
+| Naming | BB class `PascalCase`, no "BB" prefix (`KVStore`). pkg `@aws-cdk-blocks/bb-{kebab}`. errors `{Class}Errors`. The **`BLOCKS_` env prefix is framework-reserved** — not for example app code. Auth identifiers lead with `Auth` (`Auth`, `AuthOptions`, `AuthErrors`; packages `bb-auth`, `auth-common` — D-004), and there is one auth BB: add a sign-in method as an `Auth` option rather than a new block (D-023). |
 | Schema validation | When a BB accepts a user-provided validation schema, type it as **`StandardSchemaV1`** (Zod/Valibot/ArkType) — don't pull a schema lib into the BB's runtime deps (it's the consumer's choice); if your own tests use `zod`, keep it a `devDependency`. (A BB may take a schema lib as a real `dependency` only for its *own* internal needs, e.g. `bb-agent`.) Validate via `schema['~standard'].validate(value)`, before conditional checks. |
 | Tests | **`node:test` + `node:assert`** (not Jest/Vitest), run on compiled `dist/`. Reset `.bb-data` between tests. Mock tests can't catch AWS-path serialization bugs — serialization/behavior changes also need a sandbox e2e. |
 | Async | `async/await` only; prefer **`Array.fromAsync()`** over `for await` push-loops. |
@@ -290,7 +290,7 @@ Leaving sandboxes running wastes AWS resources.
 | `npx changeset add` | required for any published-package change |
 
 - Node **22** (`.nvmrc`). Mock data → `.bb-data/{fullId}/`.
-- Stages: a transient **sandbox** vs **production**. Spin a sandbox via the scripts in `@aws-blocks/blocks/scripts` (`startSandbox`/`startDevServer`); run `test:e2e:sandbox` to validate the real AWS path; tear it down (`npm run destroy`) when done.
+- Stages: a transient **sandbox** vs **production**. Spin a sandbox via the scripts in `aws-cdk-blocks/scripts` (`startSandbox`/`startDevServer`); run `test:e2e:sandbox` to validate the real AWS path; tear it down (`npm run destroy`) when done.
 
 ---
 
@@ -333,4 +333,4 @@ Check correctness/security, mock↔aws↔cdk↔browser consistency + conditional
 - `packages/hosting/README.md` — SPA/SSR frontend hosting
 - `packages/bb-database/README.md` — DB migrations
 - `native/*` — Kotlin/Swift/Dart client codegen
-- per-template `AGENTS.md` (via `npm create @aws-blocks/blocks-app@latest my-app`) — building an app *with* AWS Blocks.
+- per-template `AGENTS.md` (via `npm create @aws-cdk-blocks/blocks-app@latest my-app`) — building an app *with* AWS Blocks.

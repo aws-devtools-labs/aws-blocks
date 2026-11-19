@@ -18,10 +18,10 @@ import { describe, it } from "node:test";
 
 const GENERATOR_SRC = join(import.meta.dirname, "generate-dependency-changeset.ts");
 
-const UMBRELLA = "@aws-blocks/blocks";
-const SIBLING = "@aws-blocks/core";
+const UMBRELLA = "aws-cdk-blocks";
+const SIBLING = "@aws-cdk-blocks/core";
 // Published, but not re-exported by the umbrella.
-const CREATE_APP = "@aws-blocks/create-blocks-app";
+const CREATE_APP = "@aws-cdk-blocks/create-blocks-app";
 
 const GIT_ENV = {
 	...process.env,
@@ -66,7 +66,7 @@ function baseRepo(t, files = {}) {
 		"packages/create-blocks-app/package.json": pkgJson(CREATE_APP),
 		"packages/create-blocks-app/templates/react/package.json": pkgJson("template-react"),
 		"packages/create-blocks-app/templates/amplify/cdk-blocks/package.json": pkgJson("template-amplify"),
-		"packages/internal-tool/package.json": pkgJson("@aws-blocks/internal-tool", { private: true }),
+		"packages/internal-tool/package.json": pkgJson("@aws-cdk-blocks/internal-tool", { private: true }),
 		"test-apps/comprehensive/package.json": pkgJson("bb-test-comprehensive"),
 		".changeset/README.md": "# Changesets\n",
 		...files,
@@ -93,7 +93,7 @@ function generate(dir, base) {
 	);
 }
 
-/** The changesets the generator wrote, as { file: entries } with entries like `"@aws-blocks/core": patch`. */
+/** The changesets the generator wrote, as { file: entries } with entries like `"@aws-cdk-blocks/core": patch`. */
 function written(dir) {
 	const out = {};
 	for (const file of readdirSync(join(dir, ".changeset"))) {
@@ -112,7 +112,8 @@ describe("generate-dependency-changeset", () => {
 		commitBump(dir, { "packages/core/package.json": bumped(SIBLING) });
 
 		generate(dir, base);
-		assert.deepEqual(Object.values(written(dir)), [[`"${UMBRELLA}": patch`, `"${SIBLING}": patch`]]);
+		// Alphabetical: the scoped sibling sorts before the unscoped umbrella.
+		assert.deepEqual(Object.values(written(dir)), [[`"${SIBLING}": patch`, `"${UMBRELLA}": patch`]]);
 	});
 
 	it("patches create-blocks-app for a template-only bump", (t) => {
@@ -137,7 +138,7 @@ describe("generate-dependency-changeset", () => {
 		const { dir, base } = baseRepo(t);
 		commitBump(dir, {
 			"test-apps/comprehensive/package.json": bumped("bb-test-comprehensive"),
-			"packages/internal-tool/package.json": bumped("@aws-blocks/internal-tool", { private: true }),
+			"packages/internal-tool/package.json": bumped("@aws-cdk-blocks/internal-tool", { private: true }),
 		});
 
 		assert.match(generate(dir, base), /No published packages changed/);
@@ -186,6 +187,6 @@ describe("generate-dependency-changeset", () => {
 
 		generate(dir, base);
 		assert.equal(readFileSync(join(dir, ".changeset", `dependency-bump-${date}.md`), "utf-8"), existing);
-		assert.deepEqual(written(dir)[`dependency-bump-${date}-2.md`], [`"${UMBRELLA}": patch`, `"${SIBLING}": patch`]);
+		assert.deepEqual(written(dir)[`dependency-bump-${date}-2.md`], [`"${SIBLING}": patch`, `"${UMBRELLA}": patch`]);
 	});
 });

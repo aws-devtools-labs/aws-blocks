@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-knowledge-base": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-knowledge-base": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(bb-knowledge-base): keep raw ingestion failure text out of client errors

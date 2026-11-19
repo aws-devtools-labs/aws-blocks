@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
-import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import { markBlocksOwned } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { connectionParameterName } from './constants.js';
 import { ClusterInfra, ownedDsqlClusterLogicalId } from './deploy/cluster-infra.js';

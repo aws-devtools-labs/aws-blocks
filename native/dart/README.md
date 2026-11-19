@@ -1,12 +1,12 @@
-# AWS Blocks Dart
+# AWS CDK Blocks Dart
 
-The Dart SDK for AWS Blocks.
+The Dart SDK for AWS CDK Blocks.
 
-AWS Blocks lets you define a backend in TypeScript — APIs, auth, databases, realtime channels, file storage — and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
+AWS CDK Blocks lets you define a backend in TypeScript — APIs, auth, databases, realtime channels, file storage — and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
 
 ## How it works
 
-You write your backend. AWS Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions — ready to drop into your Flutter app.
+You write your backend. AWS CDK Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions — ready to drop into your Flutter app.
 
 ```
 Your backend (TypeScript)  →  blocks.spec.json  →  blocks_codegen  →  Typed Dart client
@@ -376,7 +376,7 @@ native/dart/
 
 - Dart 3.3+
 - Flutter (for the demo app — the SDK itself is pure Dart)
-- Node.js 22+ (for running the AWS Blocks backend locally)
+- Node.js 22+ (for running the AWS CDK Blocks backend locally)
 
 ## How the codegen works
 

@@ -22,8 +22,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import { isBlocksError } from '@aws-blocks/core';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { api as apiType } from 'cdk-blocks';
 import { isDeployedE2e } from './test-support.js';
 import { testBaseUrl } from './api-url.js';

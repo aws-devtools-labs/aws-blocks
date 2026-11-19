@@ -17,7 +17,7 @@
 import { before, describe, test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient } from 'aws-cdk-blocks/client';
 import type { ComputeTestContext } from './context.js';
 
 type WhereAmI = { computeId: string | null; functionName: string | null; requestUrl: string };

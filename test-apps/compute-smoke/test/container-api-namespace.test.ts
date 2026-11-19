@@ -20,7 +20,7 @@ import { before, describe, test } from 'node:test';
 import assert from 'node:assert';
 import { request } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient } from 'aws-cdk-blocks/client';
 import { METHOD_NOT_FOUND, requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
 type WhereAmI = {

@@ -55,7 +55,7 @@ for (let attempt = 1; attempt <= 10 && before === undefined; attempt++) {
 }
 if (before === undefined) throw new Error('could not read the build id the e2e suite left serving');
 process.chdir(appDir);
-const { startSandbox } = await import('@aws-blocks/blocks/scripts');
+const { startSandbox } = await import('aws-cdk-blocks/scripts');
 await startSandbox({ backendPath: join(appDir, 'cdk-blocks', 'index.cdk.ts'), deployOnly: true });
 const url = hostingUrl();
 

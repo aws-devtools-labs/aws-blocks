@@ -8,11 +8,11 @@
  * CDK block's `ComputeProvider` shape so a `ComputeProvider` reference resolves in
  * every phase.
  */
-import type { ComputeType, ScopeParent } from '@aws-blocks/core';
-import { Scope } from '@aws-blocks/core';
-import type { ComputeBase, ComputeProvider } from '@aws-blocks/core/cdk/internal';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
-import { ContainerCompute } from '@aws-blocks/bb-container-compute';
+import type { ComputeType, ScopeParent } from '@aws-cdk-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ComputeBase, ComputeProvider } from '@aws-cdk-blocks/core/cdk/internal';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute';
+import { ContainerCompute } from '@aws-cdk-blocks/bb-container-compute';
 import type { ComputeProps } from './types.js';
 
 export type { ComputeProps } from './types.js';

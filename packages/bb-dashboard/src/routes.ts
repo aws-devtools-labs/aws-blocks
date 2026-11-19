@@ -9,8 +9,8 @@
  * (set by the CDK layer) in AWS, or from the provided fallback in local mode.
  */
 
-import { RawRoute, type BlocksContext } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { RawRoute, type BlocksContext } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 
 /** Environment variable key used to pass the dashboard URL from CDK to runtime. */
 export const BB_DASHBOARD_URL_ENV = 'BB_DASHBOARD_URL';

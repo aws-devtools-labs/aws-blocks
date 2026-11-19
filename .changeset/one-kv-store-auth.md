@@ -1,10 +1,10 @@
 ---
-"@aws-blocks/bb-auth": minor
+"@aws-cdk-blocks/bb-auth": minor
 ---
 
 feat(bb-auth): the session store has a new table, on the new `KVStore` layout
 
-`Auth` follows `@aws-blocks/bb-kv-store` to its new version. Its public API does not change.
+`Auth` follows `@aws-cdk-blocks/bb-kv-store` to its new version. Its public API does not change.
 
 - **The session store is a new table, `<fullId>-session-store`.** `AuthCognito` and `AuthOIDC` kept their sessions in `<fullId>-sessions`. The new `KVStore` stores an item under another key attribute (`_bkv_pk`, was `pk`) and keeps the expiry in `_bkv_ttl` (was `ttl`), and a DynamoDB table cannot change its key. So the store has a new child id, `session-store`, and an upgrade is one successful deploy: CloudFormation creates the new table and removes the old one from the stack.
 - **The old `sessions` table** is deleted when its removal policy is `destroy`, and is left in the account, outside the stack, when it is `retain`. A table that is left behind still holds the session rows until they expire; delete it when the upgrade is done (see "The session store" in `MIGRATION.md`).

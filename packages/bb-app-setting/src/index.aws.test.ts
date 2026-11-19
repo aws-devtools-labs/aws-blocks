@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import { describe, test, mock } from 'node:test';
 import { ParameterNotFound, SSMClient } from '@aws-sdk/client-ssm';
-import { isBlocksError, isWireSafeError, Scope } from '@aws-blocks/core';
+import { isBlocksError, isWireSafeError, Scope } from '@aws-cdk-blocks/core';
 import { AppSetting, AppSettingErrors } from './index.aws.js';
 
 const TEST_CMK = 'arn:aws:kms:us-east-1:111122223333:key/abcd1234-5678-90ab-cdef-1234567890ab';

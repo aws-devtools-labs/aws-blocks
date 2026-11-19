@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(core): a failed sandbox deploy suggests destroying the sandbox only when a stack is actually left failed

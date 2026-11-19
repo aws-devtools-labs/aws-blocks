@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-agent": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-agent": minor
+"aws-cdk-blocks": minor
 ---
 
 fix(bb-agent): check conversation ownership in `stream()`, `resume()`, `getConversation()` and `getPendingInterrupts()`, and scope `getChannel()` to the caller

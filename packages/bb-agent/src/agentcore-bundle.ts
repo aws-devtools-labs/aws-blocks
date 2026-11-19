@@ -111,15 +111,15 @@ function copyDynamicDeps(outDir: string): void {
  */
 export function bundleAgentCoreAsset(backendModulePath: string, outDir: string): string {
 	// Generated entry: load config, import the backend (constructs + registers the Agent),
-	// then serve. `resolveDir` = bb-agent package root so `@aws-blocks/*` and this package's
+	// then serve. `resolveDir` = bb-agent package root so `@aws-cdk-blocks/*` and this package's
 	// own `serve` resolve via node_modules; the backend is imported by absolute PATH (esbuild
 	// resolves paths, not file:// URLs) so it's bundled into the SAME graph and its
-	// `@aws-blocks/*` deps dedupe to one instance.
+	// `@aws-cdk-blocks/*` deps dedupe to one instance.
 	// Wrapped in an async IIFE (not top-level await) because the bundle is emitted as CJS,
 	// which does not support top-level await.
 	const entrySource = [
-		"import { loadConfigToProcessEnv } from '@aws-blocks/core';",
-		"import { serve } from '@aws-blocks/bb-agent/agentcore';",
+		"import { loadConfigToProcessEnv } from '@aws-cdk-blocks/core';",
+		"import { serve } from '@aws-cdk-blocks/bb-agent/agentcore';",
 		'(async () => {',
 		'  await loadConfigToProcessEnv();',
 		`  await import(${JSON.stringify(backendModulePath)});`,
@@ -143,7 +143,7 @@ export function bundleAgentCoreAsset(backendModulePath: string, outDir: string):
 		// CJS (not ESM) so the harness's createRequire + our _resolveFilename patch work.
 		format: 'cjs',
 		minify: true,
-		// Resolve @aws-blocks/* (and the backend's BB constructions) to their AWS-runtime
+		// Resolve @aws-cdk-blocks/* (and the backend's BB constructions) to their AWS-runtime
 		// variants, exactly as core bundles the Lambda handler.
 		conditions: ['aws-runtime', 'node'],
 		banner: { js: CJS_BANNER },

@@ -14,7 +14,7 @@
  *
  * ```ts
  * import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
- * import { cf, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+ * import { cf, defineFrontDoor } from '@aws-cdk-blocks/hosting/constructs';
  *
  * export const myDoor = defineFrontDoor({
  *   service: 'my-cdn',
@@ -44,7 +44,7 @@
  * {@link DoorInput}.
  *
  * These are CDK types by design: this module ships from the CDK entry
- * (`@aws-blocks/hosting/constructs`), where door authors are writing CDK.
+ * (`@aws-cdk-blocks/hosting/constructs`), where door authors are writing CDK.
  *
  * @module
  */
@@ -304,7 +304,7 @@ export type FrontDoorResult = {
    *
    * Declare them under the door's `scope` (or a construct inside it): those
    * also wait for the uploads AWS Blocks declares later (the
-   * `@aws-blocks/core` `Hosting` uploads the resolved runtime config after
+   * `@aws-cdk-blocks/core` `Hosting` uploads the resolved runtime config after
    * the door). A resource created directly under the stack is not ordered
    * after that later upload.
    */
