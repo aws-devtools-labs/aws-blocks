@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Checks that all aws-blocks/package.json files in the repo have consistent
+ * Checks that all cdk-blocks/package.json files in the repo have consistent
  * export conditions required for SSR (react-server, import).
  *
  * Required conditions in exports["."] :
@@ -38,7 +38,7 @@ function findAwsBlocksPackageJsons(): string[] {
     const templates = readdirSync(templatesDir, { withFileTypes: true });
     for (const t of templates) {
       if (t.isDirectory()) {
-        const pkgPath = join("packages/create-blocks-app/templates", t.name, "aws-blocks/package.json");
+        const pkgPath = join("packages/create-blocks-app/templates", t.name, "cdk-blocks/package.json");
         try {
           readFileSync(resolve(ROOT, pkgPath));
           results.push(pkgPath);
@@ -57,7 +57,7 @@ function findAwsBlocksPackageJsons(): string[] {
     const apps = readdirSync(testAppsDir, { withFileTypes: true });
     for (const a of apps) {
       if (a.isDirectory()) {
-        const pkgPath = join("test-apps", a.name, "aws-blocks/package.json");
+        const pkgPath = join("test-apps", a.name, "cdk-blocks/package.json");
         try {
           readFileSync(resolve(ROOT, pkgPath));
           results.push(pkgPath);
@@ -122,7 +122,7 @@ function main() {
   const files = findAwsBlocksPackageJsons();
 
   if (files.length === 0) {
-    console.error("ERROR: No aws-blocks/package.json files found!");
+    console.error("ERROR: No cdk-blocks/package.json files found!");
     process.exit(1);
   }
 
@@ -148,7 +148,7 @@ function main() {
       console.error(`  • ${err}`);
     }
     console.error(
-      `\nAll aws-blocks/package.json files must have these export conditions:`
+      `\nAll cdk-blocks/package.json files must have these export conditions:`
     );
     for (const [condition, value] of Object.entries(REQUIRED_CONDITIONS)) {
       console.error(`  "${condition}": "${value}"`);

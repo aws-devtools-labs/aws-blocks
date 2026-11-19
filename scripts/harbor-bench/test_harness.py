@@ -136,7 +136,7 @@ class ProvenanceTests(unittest.TestCase):
             (app / 'package-lock.json').write_text(json.dumps({'packages': entries}))
             (registry / 'publish-manifest.json').write_text(json.dumps({'packages': manifest}))
             (app / 'aws-blocks').mkdir()
-            (app / 'aws-blocks/index.ts').write_text('import { ApiNamespace, KVStore } from "@aws-blocks/blocks";')
+            (app / 'cdk-blocks/index.ts').write_text('import { ApiNamespace, KVStore } from "@aws-blocks/blocks";')
             ledger = root / 'ledger.jsonl'
             ledger.write_text('\n'.join(served))
             self.assertEqual([p['name'] for p in verify(registry, app, ledger)['packages']],

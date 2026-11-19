@@ -20,7 +20,7 @@ import { Browser } from './test-helpers.js';
 import { PACKAGE_DIR, REPO_ROOT, removeScratch, scratchDir, typecheck, writeFiles } from './test-support/typecheck.js';
 
 /**
- * `packages/create-blocks-app/templates/auth-cognito/aws-blocks/index.ts` as it
+ * `packages/create-blocks-app/templates/auth-cognito/cdk-blocks/index.ts` as it
  * was before the templates moved to `Auth` — vendored, so this test keeps
  * exercising real `AuthCognito` app code after the templates (and later the old
  * packages) change.
@@ -90,7 +90,7 @@ describe('bb-auth migrate — end to end, typechecked against the real Auth type
 	test('the auth-cognito template: compiles before (AuthCognito) and after (Auth)', async () => {
 		const dir = scratch('template');
 		const source = readFileSync(TEMPLATE, 'utf8');
-		const [file] = writeFiles(dir, { 'aws-blocks/index.ts': source });
+		const [file] = writeFiles(dir, { 'cdk-blocks/index.ts': source });
 		assert.ok(file);
 		assert.deepStrictEqual(
 			typecheck([file], beforeCutover(scratch('authcognito-api'))),
@@ -99,7 +99,7 @@ describe('bb-auth migrate — end to end, typechecked against the real Auth type
 		);
 
 		const changed = await migrateDir(dir);
-		assert.deepStrictEqual(changed, [join('aws-blocks', 'index.ts')]);
+		assert.deepStrictEqual(changed, [join('cdk-blocks', 'index.ts')]);
 		const out = readFileSync(file, 'utf8');
 		assert.match(out, /new Auth\(scope, 'auth', \{/);
 		assert.doesNotMatch(out, /new AuthCognito|import \{[^}]*\bAuthCognito\b/, 'no AuthCognito left in code');
@@ -116,7 +116,7 @@ describe('bb-auth migrate — end to end, typechecked against the real Auth type
 	test('an app importing @aws-blocks/bb-auth-cognito directly compiles against @aws-blocks/bb-auth', async () => {
 		const dir = scratch('direct');
 		const files = writeFiles(dir, {
-			'aws-blocks/auth.ts': `import { AuthCognito, AuthCognitoErrors, type CognitoUser } from '@aws-blocks/bb-auth-cognito';
+			'cdk-blocks/auth.ts': `import { AuthCognito, AuthCognitoErrors, type CognitoUser } from '@aws-blocks/bb-auth-cognito';
 import { ApiNamespace, Scope, isBlocksError } from '@aws-blocks/core';
 
 const scope = new Scope('app');
@@ -163,7 +163,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 	},
 }));
 `,
-			'aws-blocks/routes.ts': `import type { BlocksContext } from '@aws-blocks/core';
+			'cdk-blocks/routes.ts': `import type { BlocksContext } from '@aws-blocks/core';
 import { auth } from './auth.js';
 
 export async function devices(context: BlocksContext) {
@@ -177,7 +177,7 @@ export async function devices(context: BlocksContext) {
 			'compiles against the frozen AuthCognito API before the run',
 		);
 		const changed = await migrateDir(dir);
-		assert.deepStrictEqual([...changed].sort(), [join('aws-blocks', 'auth.ts'), join('aws-blocks', 'routes.ts')]);
+		assert.deepStrictEqual([...changed].sort(), [join('cdk-blocks', 'auth.ts'), join('cdk-blocks', 'routes.ts')]);
 		const out = readFileSync(files[0] ?? '', 'utf8');
 		assert.match(out, /from '@aws-blocks\/bb-auth';/);
 		assert.match(out, /mfa: \{ mode: 'optional', types: \['TOTP'\] \}/);
@@ -208,7 +208,7 @@ export const step: CognitoNextStepName = 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP';
 export type SignInField = CognitoActionFields['signIn'];
 export const el: HTMLElement = Authenticator(authApi, cognitoOverrides(options));
 `,
-			'aws-blocks/index.ts': `import * as blocks from '@aws-blocks/blocks';
+			'cdk-blocks/index.ts': `import * as blocks from '@aws-blocks/blocks';
 
 const scope = new blocks.Scope('app');
 export const auth = new blocks.AuthCognito(scope, 'auth', { selfSignUp: true, sessionTtlSeconds: 3600 });
@@ -235,7 +235,7 @@ export const api = new blocks.ApiNamespace(scope, 'api', (context) => ({
 			'compiles against the frozen AuthCognito API (with /ui) before the run',
 		);
 		const changed = await migrateDir(dir);
-		assert.deepStrictEqual([...changed].sort(), [join('aws-blocks', 'index.ts'), join('src', 'sign-in.ts')]);
+		assert.deepStrictEqual([...changed].sort(), [join('cdk-blocks', 'index.ts'), join('src', 'sign-in.ts')]);
 		const ui = readFileSync(files[0] ?? '', 'utf8');
 		assert.match(ui, /from '@aws-blocks\/bb-auth\/ui';/);
 		assert.match(ui, /authOverrides\(options\)/);
@@ -309,7 +309,7 @@ export async function confirm(username: string, context: BlocksContext) {
 			'input',
 			'index.ts.txt',
 		);
-		const [file] = writeFiles(dir, { 'aws-blocks/index.ts': readFileSync(input, 'utf8') });
+		const [file] = writeFiles(dir, { 'cdk-blocks/index.ts': readFileSync(input, 'utf8') });
 		assert.ok(file);
 		await migrateDir(dir);
 		assert.match(readFileSync(file, 'utf8'), /store: 'builtin',\n\tproviders: \{/);

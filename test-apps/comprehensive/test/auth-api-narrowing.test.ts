@@ -9,7 +9,7 @@ import type {
   authApi as authApiType,
   authCApi as authCApiType,
   oidcAuthApi as oidcAuthApiType,
-} from 'aws-blocks';
+} from 'cdk-blocks';
 import { codePoller } from './poll-for-code.js';
 
 /** The generated clients of two `createApi()` namespaces, as a frontend imports them. */

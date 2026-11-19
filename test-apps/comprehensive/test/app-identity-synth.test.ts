@@ -49,7 +49,7 @@ describe('defaults.appIdentity: every Building Block stays inside the app', () =
       execFileSync(
         'npx',
         [
-          'cdk', 'synth', '--app', 'npx tsx -C cdk aws-blocks/index.cdk.ts', '--output', outdir, '--quiet',
+          'cdk', 'synth', '--app', 'npx tsx -C cdk cdk-blocks/index.cdk.ts', '--output', outdir, '--quiet',
           '--context', 'sandboxMode=true', '--context', 'blocksPermissionsBoundary=apps-boundary',
           '--context', `blocksAppId=${APP_ID}`, '--context', 'blocksAppStrict=true',
           // On a shared platform each app's bootstrap qualifier is its app id.

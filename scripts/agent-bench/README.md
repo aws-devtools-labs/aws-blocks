@@ -310,7 +310,7 @@ every `*.spec.{ts,tsx,js,jsx,cjs,mjs}` CODE file are excluded from the copy, so
 the judge is blinded by ABSENCE — no `cat`/`grep`/`find` can reach a spec that
 physically isn't there — and a post-copy `find` (`4-judge.ts`
 `assertNoSpecLeak`) fails loudly if one ever leaks in. Framework-generated
-`*.spec.json` manifests (e.g. `aws-blocks/blocks.spec.json`, the OpenRPC
+`*.spec.json` manifests (e.g. `cdk-blocks/blocks.spec.json`, the OpenRPC
 contract) are deliberately NOT treated as leaks: they are build artifacts, not
 the bench objective.
 

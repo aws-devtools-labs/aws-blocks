@@ -1,4 +1,4 @@
-import { api, authApi } from 'aws-blocks';
+import { api, authApi } from 'cdk-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/bb-auth/ui';
 
 document.addEventListener('DOMContentLoaded', () => {

@@ -112,7 +112,7 @@ describe('groupResources', () => {
 		id,
 		fullId,
 		category: 'data',
-		file: 'aws-blocks/backend.ts',
+		file: 'cdk-blocks/backend.ts',
 		line: 12,
 	});
 

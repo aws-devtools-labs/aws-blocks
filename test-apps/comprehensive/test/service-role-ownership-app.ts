@@ -42,8 +42,8 @@ interface TrustStatement {
 
 const app = new cdk.App({ context: { sandboxMode: 'true' } });
 const stack = await BlocksStack.create(app, 'bb-test-role-ownership', {
-  backendHandlerPath: join(__dirname, '..', 'aws-blocks', 'index.handler.ts'),
-  backendCDKPath: join(__dirname, '..', 'aws-blocks', 'index.ts'),
+  backendHandlerPath: join(__dirname, '..', 'cdk-blocks', 'index.handler.ts'),
+  backendCDKPath: join(__dirname, '..', 'cdk-blocks', 'index.ts'),
   defaults: BlocksPresets.sandbox,
 });
 

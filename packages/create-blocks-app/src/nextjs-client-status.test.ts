@@ -21,12 +21,12 @@ let greet: (name: string) => Promise<Greeting> = async () => {
 let workDir: string;
 let loads = 0;
 
-// Compiles the template's real client.tsx. Only the generated `aws-blocks` client is stubbed;
+// Compiles the template's real client.tsx. Only the generated `cdk-blocks` client is stubbed;
 // React and the StatusMessage primitive are the real packages. Each call returns a fresh module
 // instance so the server render and the browser render each evaluate it in their own environment.
 async function loadClientGreeting(): Promise<ComponentType> {
 	const specifiers: Record<string, string> = {
-		'aws-blocks': pathToFileURL(join(workDir, 'aws-blocks.mjs')).href,
+		'cdk-blocks': pathToFileURL(join(workDir, 'cdk-blocks.mjs')).href,
 		react: import.meta.resolve('react'),
 		'react/jsx-runtime': import.meta.resolve('react/jsx-runtime'),
 		'@aws-blocks/blocks/theme': import.meta.resolve('@aws-blocks/blocks/theme'),
@@ -50,7 +50,7 @@ describe('Next.js template ClientGreeting status line', () => {
 	before(() => {
 		workDir = mkdtempSync(join(tmpdir(), 'nextjs-client-'));
 		writeFileSync(
-			join(workDir, 'aws-blocks.mjs'),
+			join(workDir, 'cdk-blocks.mjs'),
 			'export const api = { greet: (name) => globalThis.__blocksGreetStub(name) };\n',
 		);
 		Object.assign(globalThis, { __blocksGreetStub: (name: string) => greet(name) });

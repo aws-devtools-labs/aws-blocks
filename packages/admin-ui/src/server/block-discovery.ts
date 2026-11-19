@@ -19,7 +19,7 @@ import type {
 import { BLOCK_CATALOG } from './block-catalog.generated.js';
 
 /**
- * Block inventory read out of the user's own `aws-blocks/**\/*.ts` sources.
+ * Block inventory read out of the user's own `cdk-blocks/**\/*.ts` sources.
  *
  * DECLARATION SIDE ONLY. Everything here comes from the AST, so it describes
  * what the app *declares*; it never claims anything about what is deployed.
@@ -103,7 +103,7 @@ const EXCLUDED_FILE_NAMES = new Set(['index.cdk.ts', 'index.handler.ts']);
 export type BlocksResult = Omit<BlocksResponse, 'apiVersion'>;
 
 export interface DiscoverBlocksOptions {
-	/** App root — the directory that contains `aws-blocks/`. */
+	/** App root — the directory that contains `cdk-blocks/`. */
 	projectRoot: string;
 	/** Cap on files parsed. Default {@link DEFAULT_MAX_FILES}. */
 	maxFiles?: number;
@@ -655,11 +655,11 @@ export function discoverBlocks(options: DiscoverBlocksOptions): BlocksResult {
 	const { projectRoot } = options;
 	const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
 	try {
-		const blocksDir = join(projectRoot, 'aws-blocks');
+		const blocksDir = join(projectRoot, 'cdk-blocks');
 		if (!existsSync(blocksDir) || !statSync(blocksDir).isDirectory()) {
 			return unavailable(
 				projectRoot,
-				`No aws-blocks/ directory in ${projectRoot}. Run the dashboard from the root of a Blocks app (the directory containing aws-blocks/), or create aws-blocks/index.ts to declare your first block.`,
+				`No cdk-blocks/ directory in ${projectRoot}. Run the dashboard from the root of a Blocks app (the directory containing cdk-blocks/), or create cdk-blocks/index.ts to declare your first block.`,
 				'NOT_A_BLOCKS_PROJECT',
 			);
 		}
@@ -705,10 +705,10 @@ export function discoverBlocks(options: DiscoverBlocksOptions): BlocksResult {
 		if (state.scope) result.scope = state.scope;
 		if (state.fileErrors.length > 0) {
 			result.blocksErrorCode = 'PARSE_FAILED';
-			result.blocksError = `Could not read ${state.fileErrors.length} of ${files.length} file(s) under aws-blocks/: ${state.fileErrors.join('; ')}. Blocks declared in those files are missing from this list — fix the syntax error and reload.`;
+			result.blocksError = `Could not read ${state.fileErrors.length} of ${files.length} file(s) under cdk-blocks/: ${state.fileErrors.join('; ')}. Blocks declared in those files are missing from this list — fix the syntax error and reload.`;
 		}
 		if (allFiles.length > files.length) {
-			const capNote = `Stopped after ${files.length} of ${allFiles.length} file(s) under aws-blocks/ (maxFiles=${maxFiles}); blocks declared later are missing from this list.`;
+			const capNote = `Stopped after ${files.length} of ${allFiles.length} file(s) under cdk-blocks/ (maxFiles=${maxFiles}); blocks declared later are missing from this list.`;
 			result.blocksError = result.blocksError ? `${result.blocksError} ${capNote}` : capNote;
 			result.blocksErrorCode = result.blocksErrorCode ?? 'UNKNOWN';
 		}
@@ -716,7 +716,7 @@ export function discoverBlocks(options: DiscoverBlocksOptions): BlocksResult {
 	} catch (error) {
 		return unavailable(
 			projectRoot,
-			`Unexpected error scanning aws-blocks/ in ${projectRoot}: ${(error as Error).message}`,
+			`Unexpected error scanning cdk-blocks/ in ${projectRoot}: ${(error as Error).message}`,
 			'UNKNOWN',
 		);
 	}

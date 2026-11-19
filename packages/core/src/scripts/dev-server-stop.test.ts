@@ -27,7 +27,7 @@ function seq(states: boolean[]): () => Promise<boolean> {
   return async () => states[Math.min(i++, states.length - 1)];
 }
 
-const TSX = 'node /app/node_modules/.bin/tsx watch aws-blocks/scripts/server.ts';
+const TSX = 'node /app/node_modules/.bin/tsx watch cdk-blocks/scripts/server.ts';
 
 function makeDeps(overrides: Partial<StopDevServerDeps> = {}): {
   deps: StopDevServerDeps;
@@ -130,7 +130,7 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
   it('never SIGKILLs a watcher whose reload started a new runner since the stop read the record', async () => {
     // The record names the runner that exited for a reload; tsx watch has started its successor,
     // which takes the record over in place. A SIGKILL of the watcher would orphan that runner.
-    const SERVER = 'node aws-blocks/scripts/server.ts';
+    const SERVER = 'node cdk-blocks/scripts/server.ts';
     let pidfile = JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, command: SERVER });
     const waits: Array<[number, number]> = [];
     const { deps, sigs, removed } = makeDeps({

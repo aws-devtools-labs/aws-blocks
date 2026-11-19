@@ -6,7 +6,7 @@ import {
 	type AuthTypedActionOverride,
 	type AuthTypedAuthenticatorOptions,
 } from '@aws-blocks/bb-auth/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 const hidden: AuthActionName[] = ['signUp'];
 

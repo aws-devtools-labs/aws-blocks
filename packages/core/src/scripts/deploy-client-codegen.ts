@@ -29,7 +29,7 @@ export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
  * deploy with a `tsx` the app may not resolve itself (the task runner) sets
  * {@link TSX_IMPORT_ENV} to that loader's file URL instead.
  *
- * @param foundationPath - Absolute path to the backend definition (`aws-blocks/index.ts`).
+ * @param foundationPath - Absolute path to the backend definition (`cdk-blocks/index.ts`).
  * @param clientPath - Where to write the generated client.
  */
 export async function generateDeployClient(foundationPath: string, clientPath: string): Promise<void> {

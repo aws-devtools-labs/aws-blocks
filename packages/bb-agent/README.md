@@ -995,7 +995,7 @@ You get all of this with **no app code** when you use `realtimeTransport` — it
 
 import { useRef, useState, useEffect } from 'react';
 import { createChat, realtimeTransport, type ChatMessage } from '@aws-blocks/bb-agent/client';
-import { api } from 'aws-blocks'; // your typed backend client
+import { api } from 'cdk-blocks'; // your typed backend client
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1132,7 +1132,7 @@ await chat.respondToInterrupt([{ interruptId: 'x', approved: true }]);
 
 Complete wiring showing the backend API and frontend `useChat` connected together.
 
-**Backend** (`aws-blocks/index.ts`):
+**Backend** (`cdk-blocks/index.ts`):
 
 ```typescript
 import { Scope, ApiNamespace } from '@aws-blocks/core';
@@ -1224,7 +1224,7 @@ The example above is framework-agnostic on purpose — `useChat` has no React im
 
 import { useRef, useState, useEffect } from 'react';
 import { useChat, type ChatMessage } from '@aws-blocks/bb-agent/client';
-import { api } from './api'; // your generated aws-blocks API client
+import { api } from './api'; // your generated cdk-blocks API client
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

@@ -23,7 +23,7 @@ function makeBlock(overrides: Partial<DiscoveredBlock> = {}): DiscoveredBlock {
 		id: 'todos',
 		fullId: 'my-app-todos',
 		category: 'data',
-		file: 'aws-blocks/app.ts',
+		file: 'cdk-blocks/app.ts',
 		line: 12,
 		...overrides,
 	};

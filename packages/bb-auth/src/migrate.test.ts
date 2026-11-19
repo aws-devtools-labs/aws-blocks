@@ -181,7 +181,7 @@ export const auth = new AuthCognito(scope, 'auth', {
 			assert.strictEqual(printed.split("WARNING: preferredChallenge 'EMAIL_OTP'").length - 1, 1, 'printed once');
 			assert.match(
 				printed,
-				/Deploy this output with no other configuration change, then commit aws-blocks\/baselines\//,
+				/Deploy this output with no other configuration change, then commit cdk-blocks\/baselines\//,
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

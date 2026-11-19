@@ -1,5 +1,5 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
-import { api, authApi } from 'aws-blocks';
+import { api, authApi } from 'cdk-blocks';
 import { Authenticator, onAuthChange, injectTheme } from '@aws-blocks/blocks/ui';
 
 injectTheme();

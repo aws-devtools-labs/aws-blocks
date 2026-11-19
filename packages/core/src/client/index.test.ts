@@ -140,7 +140,7 @@ console.log(JSON.stringify({ result: await api.hello(), calls }));
 `, {});
     assert.deepStrictEqual(JSON.parse(result.split('\n').at(-1) ?? ''), {
       result: 'ok',
-      calls: ['/.cdk-blocks-sandbox/config.json', '/aws-blocks/api/greet'],
+      calls: ['/.blocks-sandbox/config.json', '/aws-blocks/api/greet'],
     });
   });
 });
@@ -455,7 +455,7 @@ describe('Client bundle safety (React Native / Hermes)', () => {
     assert.deepStrictEqual(clientGraph().nonRelativeImports, []);
   });
 
-  /** Run `fn` in a project directory whose `.cdk-blocks-sandbox/config.json` names an API URL. */
+  /** Run `fn` in a project directory whose `.blocks-sandbox/config.json` names an API URL. */
   function withConfigFile(fn: (projectDir: string) => void): void {
     const projectDir = mkdtempSync(join(tmpdir(), 'blocks-client-cwd-'));
     try {
@@ -470,7 +470,7 @@ describe('Client bundle safety (React Native / Hermes)', () => {
     }
   }
 
-  it('still reads .cdk-blocks-sandbox/config.json from the working directory under Node', () => {
+  it('still reads .blocks-sandbox/config.json from the working directory under Node', () => {
     withConfigFile((projectDir) => {
       const result = runScript(`
 globalThis.fetch = async (url) => {
@@ -505,7 +505,7 @@ try {
 `, {}, projectDir);
       // The only request is the fetch step: the apiUrl in the config file is never used.
       const requests = result.split('\n').filter((line) => line.startsWith('FETCH:'));
-      assert.deepStrictEqual(requests, ['FETCH:/.cdk-blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
+      assert.deepStrictEqual(requests, ['FETCH:/.blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
       assert.ok(result.includes('ERROR:Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
       assert.ok(result.includes('that needs Node.js 22.3 or later'), `Expected the error to name the Node.js requirement, got: ${result}`);
     });
@@ -513,7 +513,7 @@ try {
 });
 
 describe('Node.js client and a config.json an older deploy wrote', () => {
-  /** Run a client call in a fresh app whose `.cdk-blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
+  /** Run a client call in a fresh app whose `.blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
   async function callWith(config: (stub: string) => object, env: (stub: string) => Record<string, string> = () => ({})) {
     let calls = 0;
     const server = createServer((_req, res) => {

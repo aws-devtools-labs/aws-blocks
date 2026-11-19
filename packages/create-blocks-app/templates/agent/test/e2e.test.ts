@@ -11,7 +11,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
+import type { api as ApiType, authApi as AuthApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -28,12 +28,12 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 // API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
 // a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
-const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // The canned-provider assertions below only hold in the local mock runtime; a
 // deployed sandbox runs a real Bedrock model whose text is non-deterministic.
 // So no test drives a deployed turn: the deployed path relies on `model.deployed`
-// in aws-blocks/index.ts naming a valid model. The readiness config.json
+// in cdk-blocks/index.ts naming a valid model. The readiness config.json
 // carries which runtime we hit; against TEST_URL, the canned tests skip.
 let isLocalMock = false;
 
@@ -88,9 +88,9 @@ test.before(async () => {
   process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
-  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
   // stale client that lacks namespaces exported since the last generation.
-  const mod = await import('aws-blocks');
+  const mod = await import('cdk-blocks');
   api = mod.api;
   authApi = mod.authApi;
 });

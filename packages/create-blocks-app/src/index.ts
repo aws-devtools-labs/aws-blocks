@@ -244,8 +244,8 @@ function isWorkspaceMember(workspaces: string[], member: string): boolean {
  * app is not a workspace of any root, so it installs on its own.
  *
  * npm installs a workspace's dependencies at that root and does not nest workspaces, so it
- * ignores the app's own `"workspaces": ["aws-blocks"]`: `aws-blocks` is linked only when the
- * root lists the app's `aws-blocks/` folder too, and only by an install at the root. When the
+ * ignores the app's own `"workspaces": ["cdk-blocks"]`: `cdk-blocks` is linked only when the
+ * root lists the app's `cdk-blocks/` folder too, and only by an install at the root. When the
  * root does not list it, this refuses (exit 1) before anything is written, with the entry to add.
  */
 async function enclosingWorkspaceRoot(appDir: string): Promise<string | undefined> {
@@ -256,13 +256,13 @@ async function enclosingWorkspaceRoot(appDir: string): Promise<string | undefine
       const patterns = workspaces.filter((p): p is string => typeof p === 'string');
       const member = relative(root, appDir).split(sep).join('/');
       if (isWorkspaceMember(patterns, member)) {
-        if (isWorkspaceMember(patterns, `${member}/aws-blocks`)) return root;
+        if (isWorkspaceMember(patterns, `${member}/cdk-blocks`)) return root;
         console.error(`Error: ${appDir} is a workspace of the npm workspace root ${root}.`);
         console.error('npm installs its dependencies at that root and does not read the app\'s own');
-        console.error('"workspaces": ["aws-blocks"], so the app\'s aws-blocks/ package would never be linked.');
+        console.error('"workspaces": ["cdk-blocks"], so the app\'s cdk-blocks/ package would never be linked.');
         console.error('');
-        console.error(`Add the app's aws-blocks/ folder to "workspaces" in ${join(root, 'package.json')}:`);
-        console.error(`  "workspaces": [${[...workspaces.map((p) => JSON.stringify(p)), JSON.stringify(`${member}/aws-blocks`)].join(', ')}]`);
+        console.error(`Add the app's cdk-blocks/ folder to "workspaces" in ${join(root, 'package.json')}:`);
+        console.error(`  "workspaces": [${[...workspaces.map((p) => JSON.stringify(p)), JSON.stringify(`${member}/cdk-blocks`)].join(', ')}]`);
         console.error('then run this command again; it installs at that root. Nothing was written.');
         process.exit(1);
       }
@@ -296,8 +296,8 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
   let out = guide.replaceAll('http://localhost:3000/', `http://localhost:${port}/`);
   if (dev?.frontend === false) {
     out = out.replace(
-      '1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)',
-      '1. Make changes to the backend (`aws-blocks/index.ts`). This app has no frontend (`"blocks.dev.frontend": false`): its clients call the API',
+      '1. Make changes to backend (`cdk-blocks/index.ts`) or frontend (`src/`)',
+      '1. Make changes to the backend (`cdk-blocks/index.ts`). This app has no frontend (`"blocks.dev.frontend": false`): its clients call the API',
     );
   }
   return out;
@@ -387,11 +387,11 @@ function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'u
 }
 
 /**
- * Adds the aws-blocks workspace to an existing project's package.json.
+ * Adds the cdk-blocks workspace to an existing project's package.json.
  * Shared between `integrateWithExistingProject()` and `integrateWithAmplify()`.
  *
  * Handles:
- * - Adding "aws-blocks" to workspaces (array or Yarn Classic object format)
+ * - Adding "cdk-blocks" to workspaces (array or Yarn Classic object format)
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
  * - Adding CDK Blocks task settings (`package.json#blocks`) when the project has none
@@ -436,8 +436,8 @@ async function addBlocksWorkspace(targetDir: string, options: {
   // like nohoist. Acceptable trade-off for our target audience (npm/Yarn Modern).
   if (!pkg.workspaces) pkg.workspaces = [];
   if (!Array.isArray(pkg.workspaces)) pkg.workspaces = pkg.workspaces?.packages || [];
-  if (!pkg.workspaces.includes('aws-blocks')) {
-    pkg.workspaces.push('aws-blocks');
+  if (!pkg.workspaces.includes('cdk-blocks')) {
+    pkg.workspaces.push('cdk-blocks');
   }
 
   // Add dependencies
@@ -821,7 +821,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('\n🔍 Detected Amplify Gen 2 project (amplify/backend.ts found)\n');
   console.log('This will add Blocks to your existing Amplify project:');
   console.log('');
-  console.log('  CREATE  aws-blocks/           (Blocks backend workspace)');
+  console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  amplify/blocks.ts     (wires Blocks into Amplify backend)');
   console.log('  MODIFY  amplify/backend.ts    (adds import for blocks.ts)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
@@ -839,13 +839,13 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   console.log('\n📦 Scaffolding Blocks...\n');
 
-  // 1. Copy aws-blocks/ template. Its package.json declares its own
+  // 1. Copy cdk-blocks/ template. Its package.json declares its own
   // `@aws-blocks/*` placeholders, which the published CLI stamps too; they are
   // stamped in memory before the copy, so a placeholder with no range throws
   // before anything is written (see the version stamping section above).
   const templateDir = join(__dirname, '../templates/amplify');
-  const awsBlocksSrc = join(templateDir, 'aws-blocks');
-  const awsBlocksDest = join(targetDir, 'aws-blocks');
+  const awsBlocksSrc = join(templateDir, 'cdk-blocks');
+  const awsBlocksDest = join(targetDir, 'cdk-blocks');
   const stampedVersions = (await isLocalMonorepo()) ? null : await loadStampedVersions();
   let workspacePkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
   if (stampedVersions) {
@@ -874,7 +874,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   }
   const amplifyPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
   await writeBackendTsconfig(awsBlocksDest, amplifyPkg);
-  console.log('  ✓ Created aws-blocks/');
+  console.log('  ✓ Created cdk-blocks/');
 
   // 2. Copy amplify/blocks.ts
   const blocksTsSrc = join(templateDir, 'amplify-blocks.ts');
@@ -924,7 +924,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   const standalone = JSON.parse(await readFile(join(__dirname, '../templates/default/package.json'), 'utf-8'));
-  const clientScript = 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts';
+  const clientScript = 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx cdk-blocks/scripts/generate-client.ts';
   const scripts = await addBlocksWorkspace(targetDir, {
     // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
     deps: { '@aws-blocks/blocks': '*' },
@@ -947,7 +947,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
     // so `"frontend": false` stops the dev task from detecting the app's vite or next.
-    // `"generateClient": false` keeps the overlay's own aws-blocks/client.js (the Cognito token
+    // `"generateClient": false` keeps the overlay's own cdk-blocks/client.js (the Cognito token
     // and the amplify_outputs.json API URL): the dev server would replace it with the generic one.
     blocksConfig: { dev: { port: 3001, frontend: false, generateClient: false } },
     gitignoreEntries: ['.cdk-blocks-sandbox', '.bb-data/'],
@@ -977,7 +977,7 @@ function printMigrationInstructions(sandboxTask: string, standaloneSandboxScript
   console.log('');
   console.log('To make your app "Blocks-native with Amplify as a guest":');
   console.log('');
-  console.log('1. Move CDK orchestration from amplify/backend.ts to aws-blocks/index.cdk.ts');
+  console.log('1. Move CDK orchestration from amplify/backend.ts to cdk-blocks/index.cdk.ts');
   console.log('   - Use BlocksStack.create() instead of BlocksBackend.create()');
   console.log('   - Import Amplify resources into the Blocks stack');
   console.log('');
@@ -988,7 +988,7 @@ function printMigrationInstructions(sandboxTask: string, standaloneSandboxScript
   console.log('');
   console.log('3. Update amplify.yml to use CDK deploy directly:');
   console.log('   backend.phases.build.commands:');
-  console.log('     - npx cdk deploy --require-approval never --app="npx tsx -C cdk aws-blocks/index.cdk.ts"');
+  console.log('     - npx cdk deploy --require-approval never --app="npx tsx -C cdk cdk-blocks/index.cdk.ts"');
   console.log('');
   console.log('This gives you full control over the CDK stack while keeping');
   console.log('Amplify Hosting for CI/CD and frontend deployment.');
@@ -1076,7 +1076,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
   console.log('');
-  console.log('  CREATE  aws-blocks/           (Blocks backend workspace)');
+  console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  cdk.json              (CDK configuration)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
   console.log('  MODIFY  .gitignore            (adds Blocks entries, node_modules if missing, and secret and key-material patterns)');
@@ -1095,15 +1095,15 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const blocksDeps = { '@aws-blocks/blocks': '*' };
   if (!(await isLocalMonorepo())) stampBlocksVersions({ ...blocksDeps }, await loadStampedVersions());
 
-  // 1. Copy aws-blocks/ from the requested template. The dev task detects the
+  // 1. Copy cdk-blocks/ from the requested template. The dev task detects the
   // project's own frontend dev server (`next dev` or `vite`) from its dependencies,
   // so only the template's backend settings are copied below.
   const templateDir = join(__dirname, '../templates', templateName);
-  const awsBlocksSrc = join(templateDir, 'aws-blocks');
-  const awsBlocksDest = join(targetDir, 'aws-blocks');
+  const awsBlocksSrc = join(templateDir, 'cdk-blocks');
+  const awsBlocksDest = join(targetDir, 'cdk-blocks');
 
   if (await exists(awsBlocksDest)) {
-    console.error('  ✗ aws-blocks/ already exists. Aborting to avoid overwriting.');
+    console.error('  ✗ cdk-blocks/ already exists. Aborting to avoid overwriting.');
     process.exit(1);
   }
 
@@ -1118,7 +1118,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
 
-  console.log('  ✓ Created aws-blocks/');
+  console.log('  ✓ Created cdk-blocks/');
 
   // 2. Copy cdk.json
   const cdkJsonDest = join(targetDir, 'cdk.json');
@@ -1136,7 +1136,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const tasks = templateTasks(templatePkg.scripts);
   const scripts = await addBlocksWorkspace(targetDir, {
     // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
-    // The copied aws-blocks/ backend validates its API input with zod, at the template's version.
+    // The copied cdk-blocks/ backend validates its API input with zod, at the template's version.
     deps: { ...blocksDeps, ...(templatePkg.dependencies?.zod && { zod: templatePkg.dependencies.zod }) },
     devDeps: {
       'aws-cdk-lib': tplDevDeps['aws-cdk-lib'] || '2.257.0',
@@ -1148,7 +1148,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     },
     scripts: { ...tasks, 'dev:server': tasks.dev },
     blocksConfig: backendDevConfig(templatePkg.blocks),
-    gitignoreEntries: ['.cdk-blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
+    gitignoreEntries: ['.cdk-blocks-sandbox', 'cdk.out/', 'cdk-blocks/client.js', 'cdk-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });
@@ -1163,7 +1163,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   printTaskNames(scripts);
   console.log('');
   console.log('Import your API in frontend code:');
-  console.log('  import { api } from \'aws-blocks\'');
+  console.log('  import { api } from \'cdk-blocks\'');
   console.log('');
   printTypeScriptSteps(existingPkg);
 }
@@ -1184,10 +1184,10 @@ function usesNext(pkg: PackageDeps): boolean {
 }
 
 /**
- * Gives the copied backend its own TypeScript project, `aws-blocks/tsconfig.json`,
+ * Gives the copied backend its own TypeScript project, `cdk-blocks/tsconfig.json`,
  * with Node types (see printTypeScriptSteps): the template's, or the default
  * template's when the template ships none (the backend-only templates, the Amplify
- * overlay). Not in a Next.js project, which typechecks aws-blocks/ as part of the
+ * overlay). Not in a Next.js project, which typechecks cdk-blocks/ as part of the
  * app: nothing there would build the project, and editors and the deploy bundling
  * (esbuild) would read it for backend files instead of the app's tsconfig.json,
  * without the app's "paths".
@@ -1197,25 +1197,25 @@ async function writeBackendTsconfig(awsBlocksDest: string, pkg: PackageDeps): Pr
   if (usesNext(pkg)) {
     await rm(backendTsconfig, { force: true });
   } else if (!(await exists(backendTsconfig))) {
-    await cp(join(__dirname, '../templates/default/aws-blocks/tsconfig.json'), backendTsconfig);
+    await cp(join(__dirname, '../templates/default/cdk-blocks/tsconfig.json'), backendTsconfig);
   }
 }
 
 /**
  * Prints how to make an existing project's TypeScript build read the backend through
- * the project in `aws-blocks/tsconfig.json`, which typechecks it with Node types.
+ * the project in `cdk-blocks/tsconfig.json`, which typechecks it with Node types.
  * Printed, never applied: the project's tsconfig and scripts are its own. A Next.js
  * project gets no steps: `next build` ignores project references when it
- * type-checks, so it keeps checking `aws-blocks/` as part of the app.
+ * type-checks, so it keeps checking `cdk-blocks/` as part of the app.
  */
 function printTypeScriptSteps(pkg: PackageDeps): void {
   if (usesNext(pkg)) {
-    console.log('TypeScript: leave your Next.js tsconfig.json as it is. `next build` typechecks aws-blocks/');
+    console.log('TypeScript: leave your Next.js tsconfig.json as it is. `next build` typechecks cdk-blocks/');
     console.log('as part of your app, with the Node types your tsconfig.json has when it sets no "types".');
   } else {
-    console.log('TypeScript: aws-blocks/tsconfig.json typechecks the backend with Node types. To keep them out');
-    console.log('of your frontend, add "references": [{ "path": "./aws-blocks" }] to the tsconfig that compiles');
-    console.log('the code importing \'aws-blocks\', and typecheck with `tsc -b --force` instead of `tsc`');
+    console.log('TypeScript: cdk-blocks/tsconfig.json typechecks the backend with Node types. To keep them out');
+    console.log('of your frontend, add "references": [{ "path": "./cdk-blocks" }] to the tsconfig that compiles');
+    console.log('the code importing \'cdk-blocks\', and typecheck with `tsc -b --force` instead of `tsc`');
     console.log('(if the script used --noEmit, set "noEmit": true in that tsconfig instead).');
   }
   console.log(`Details: ${TYPESCRIPT_STEPS_URL}`);
@@ -1245,7 +1245,7 @@ The mode is auto-detected based on the target directory:
      Integrates Blocks into your Amplify Gen 2 backend.
 
   2. Existing project detected (package.json exists, no Amplify):
-     Adds the aws-blocks/ backend workspace to your project.
+     Adds the cdk-blocks/ backend workspace to your project.
      Works with any framework — Vite, Next.js, SvelteKit, Astro, etc.
 
   3. Empty or new directory:
@@ -1260,7 +1260,7 @@ Arguments:
 Options:
   --template <name>      Template to use. For fresh projects it selects the
                          starter app; when adding to an existing project it
-                         selects which aws-blocks/ workspace to copy, e.g.
+                         selects which cdk-blocks/ workspace to copy, e.g.
                          "nextjs" for a Next.js dev server (default: "default")
 
                          Available templates: ${names.join(', ')}

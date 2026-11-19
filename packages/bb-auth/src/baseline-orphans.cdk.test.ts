@@ -53,13 +53,13 @@ function deployedAppDir(build: string, stack = 'TestStack'): string {
 		deployed.set(key, source);
 	}
 	const dir = appDir();
-	mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
-	cpSync(join(source, 'aws-blocks', 'baselines'), join(dir, 'aws-blocks', 'baselines'), { recursive: true });
+	mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
+	cpSync(join(source, 'cdk-blocks', 'baselines'), join(dir, 'cdk-blocks', 'baselines'), { recursive: true });
 	return dir;
 }
 
 function baselines(dir: string, stack = 'TestStack'): string[] {
-	const d = join(dir, 'aws-blocks', 'baselines', stack);
+	const d = join(dir, 'cdk-blocks', 'baselines', stack);
 	return existsSync(d) ? readdirSync(d).sort() : [];
 }
 
@@ -87,9 +87,9 @@ describe('the baseline of a block that owns its pool carries a removal guard', (
 			rebaselineEnv: 'BLOCKS_AUTH_REBASELINE',
 			runbook: '"Renaming or removing an Auth block" in the @aws-blocks/bb-auth DESIGN.md',
 		});
-		const handler = join(dir, 'aws-blocks', 'index.handler.ts');
+		const handler = join(dir, 'cdk-blocks', 'index.handler.ts');
 		assert.strictEqual(
-			baselinePath(join(dir, 'aws-blocks'), 'TestStack', 'TestStack-auth'),
+			baselinePath(join(dir, 'cdk-blocks'), 'TestStack', 'TestStack-auth'),
 			join(baselineDir({ backendHandlerPath: handler, stack: 'TestStack' }), 'TestStack-auth.auth-pool.json'),
 		);
 	});

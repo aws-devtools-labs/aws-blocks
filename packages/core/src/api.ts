@@ -268,7 +268,7 @@ export interface ApiNamespaceOptions {
  * 
  * ## Usage
  * 
- * Define your API in the backend (`aws-blocks/index.ts`):
+ * Define your API in the backend (`cdk-blocks/index.ts`):
  * 
  * ```typescript
  * const scope = new Scope('my-app');
@@ -289,7 +289,7 @@ export interface ApiNamespaceOptions {
  * Import and call from the frontend with full type safety:
  * 
  * ```typescript
- * import { api } from 'aws-blocks';
+ * import { api } from 'cdk-blocks';
  * 
  * const result = await api.greet('World'); // Fully typed
  * ```

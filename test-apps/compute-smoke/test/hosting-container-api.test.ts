@@ -4,7 +4,7 @@
 /**
  * The container namespace through a Hosting distribution: on the `cloudfront`
  * leg, Hosting's default CloudFront door fronts the API as well (see
- * aws-blocks/index.cdk.ts), and routes `/aws-blocks/api/containerApi` straight
+ * cdk-blocks/index.cdk.ts), and routes `/aws-blocks/api/containerApi` straight
  * to the container's load balancer through a VPC origin of its own — with its
  * own response-headers policy and its own copy of the viewer-request function
  * that stamps the forwarded host. The typed client calls

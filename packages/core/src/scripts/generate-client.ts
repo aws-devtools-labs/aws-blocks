@@ -74,7 +74,7 @@ export async function generateClientCode(foundationPath: string): Promise<string
 }
 
 /**
- * Generate client code and write it to the aws-blocks subpackage.
+ * Generate client code and write it to the cdk-blocks subpackage.
  */
 export async function writeClientCode(foundationPath: string, outputPath: string): Promise<void> {
 	const code = await generateClientCode(foundationPath);

@@ -2086,7 +2086,7 @@ export type FederatedActionNameOf<O extends AuthOptions> = `signIn:${ProviderIdO
  * @example
  * ```typescript
  * import { onAuthChange } from '@aws-blocks/bb-auth/ui';
- * import { authApi } from 'aws-blocks';
+ * import { authApi } from 'cdk-blocks';
  *
  * onAuthChange(authApi, (user) => {
  *   const isAdmin = user?.groups.includes('admins') ?? false; // groups typed by users.groups

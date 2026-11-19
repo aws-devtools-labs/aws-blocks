@@ -15,7 +15,7 @@ function block(id: string, secret = false): DiscoveredBlock {
 		id,
 		fullId: `shop-${id}`,
 		category: 'config',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 1,
 		setting: { parameterName: `/shop-${id}`, nameSource: 'derived', secret, hasSchema: false, external: false },
 	};

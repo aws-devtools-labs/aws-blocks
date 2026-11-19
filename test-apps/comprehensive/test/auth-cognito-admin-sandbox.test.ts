@@ -4,7 +4,7 @@
 /**
  * Sandbox e2e for the opt-in `auth.admin` surface, driven through the deployed
  * Lambda backend over HTTP (the secret-gated `testSupport.authCAdmin*` routes
- * in aws-blocks/index.ts; `getTestSupport` supplies the deploy's secret).
+ * in cdk-blocks/index.ts; `getTestSupport` supplies the deploy's secret).
  *
  * Runs only when BLOCKS_TEST_ENV=sandbox|production (the unified e2e harness
  * deploys + tears down the stack). Verifies the admin IAM grant is wired and
@@ -14,7 +14,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { getTestSupport } from './test-support.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Direct import from backend - types available in IDE, Proxy injected at runtime
-import { api, authApi } from 'aws-blocks';
+import { api, authApi } from 'cdk-blocks';
 import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 
 // For coding agents: Leave this comment in place for future reference.

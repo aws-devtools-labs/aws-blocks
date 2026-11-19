@@ -1,6 +1,6 @@
 # Shared Example Backend
 
-The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `aws-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
+The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `cdk-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
 
 > **Upgrading a deployed stack:** todos are now keyed on the owner's `userSub` instead of `userId`. A table's key can't change in place, so a stack deployed from an earlier version of this example fails to update — destroy it (`npm run sandbox:destroy`) and deploy again. Existing todos are not carried over.
 
@@ -34,7 +34,7 @@ To switch the apps between local and sandbox, regenerate the spec the other way.
 `npm install` fetches `@aws-blocks/blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
 
 ```bash
-mkdir -p node_modules && ln -sfn ../aws-blocks node_modules/aws-blocks
+mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
 
 npm run dev:server   # the dev server on :3001
 node ../../../../node_modules/@aws-blocks/core/dist/scripts/generate-spec-cli.js   # the spec (after the dev server has run once)
@@ -43,7 +43,7 @@ npm test             # typecheck + test:e2e; starts its own dev server, so stop 
 
 ## Configuring OIDC
 
-`aws-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (`store: 'builtin'`: no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
+`cdk-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (`store: 'builtin'`: no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
 
 ```typescript
 const GOOGLE_CLIENT_ID = 'replace-me.apps.googleusercontent.com';
@@ -94,7 +94,7 @@ Read the sandbox host out of `.cdk-blocks-sandbox/config.sandbox.json` (`apiUrl`
 
 ### 3. Provide the client ID and secret
 
-**The client ID** goes in the code: replace the `GOOGLE_CLIENT_ID` placeholder in `aws-blocks/index.ts`. It is the same for every environment. Restart `npm run dev` (or re-run `npm run sandbox`) after changing it.
+**The client ID** goes in the code: replace the `GOOGLE_CLIENT_ID` placeholder in `cdk-blocks/index.ts`. It is the same for every environment. Restart `npm run dev` (or re-run `npm run sandbox`) after changing it.
 
 **The client secret** is a secret `AppSetting`, stored per environment.
 
@@ -136,7 +136,7 @@ Notes:
 
 ### Skipping Google entirely
 
-To exercise sign-in without any Google setup, swap the provider for the stub IdP in `aws-blocks/index.ts`:
+To exercise sign-in without any Google setup, swap the provider for the stub IdP in `cdk-blocks/index.ts`:
 
 ```typescript
 import { Auth, stubIdp, relayOrigin } from '@aws-blocks/blocks';
@@ -157,7 +157,7 @@ It is a real OIDC provider served by the dev server, with an account picker; it 
 
 | Symptom | Cause |
 |---|---|
-| Google shows `invalid_client` or `The OAuth client was not found` | `GOOGLE_CLIENT_ID` in `aws-blocks/index.ts` is still the placeholder, or the backend wasn't restarted after you changed it. |
+| Google shows `invalid_client` or `The OAuth client was not found` | `GOOGLE_CLIENT_ID` in `cdk-blocks/index.ts` is still the placeholder, or the backend wasn't restarted after you changed it. |
 | Sign-in returns to the app but the exchange fails | The client secret is still a placeholder, or the parameter/settings key is missing. |
 | `ProviderNotConfiguredException` | The app asked for a provider id that isn't a key of `providers`. |
 | Google shows `redirect_uri_mismatch` | The registered URI doesn't match the server the app is pointed at — check the `Servers` entry in the generated code against the table above. |

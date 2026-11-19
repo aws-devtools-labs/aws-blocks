@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "aws-blocks", "test"]
+  "include": ["src", "cdk-blocks", "test"]
 }

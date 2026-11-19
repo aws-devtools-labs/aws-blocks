@@ -7,22 +7,22 @@
   "type": "module",
   "description": "Test backend for native client bindings (Swift, Kotlin, Dart) — exercises auth, realtime, file, and KV blocks",
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ],
   "scripts": {
-    "spec": "tsx aws-blocks/scripts/generate-spec.ts",
+    "spec": "tsx cdk-blocks/scripts/generate-spec.ts",
     "test": "echo 'E2E tests run via the native-sdk-e2e workflow (deploy + Dart suite)'",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:server": "tsx watch cdk-blocks/scripts/server.ts",
     "dev:client": "vite",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "sandbox": "tsx cdk-blocks/scripts/sandbox.ts",
+    "sandbox:destroy": "tsx -C cdk cdk-blocks/scripts/sandbox-destroy.ts",
+    "cleanup": "tsx cdk-blocks/scripts/cleanup.ts",
     "preview": "vite preview",
     "deploy": "npm run deploy:sandbox",
-    "deploy:sandbox": "tsx aws-blocks/scripts/deploy-sandbox.ts",
+    "deploy:sandbox": "tsx cdk-blocks/scripts/deploy-sandbox.ts",
     "destroy": "npm run sandbox:destroy",
-    "seed:cognito": "tsx aws-blocks/scripts/seed-cognito-user.ts",
+    "seed:cognito": "tsx cdk-blocks/scripts/seed-cognito-user.ts",
     "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
   },
   "dependencies": {

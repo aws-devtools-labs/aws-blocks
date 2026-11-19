@@ -574,7 +574,7 @@ describe('destroy call sites', () => {
 			} as unknown as CloudFormationClient;
 		};
 		const s3 = { send: async () => ({}) } as unknown as S3Client;
-		const deps = sandboxDestroyDeps('/app/aws-blocks/index.ts', {}, { cfnFor, s3 });
+		const deps = sandboxDestroyDeps('/app/cdk-blocks/index.ts', {}, { cfnFor, s3 });
 		const stacks = [{ stackName: 's', region: 'eu-west-1' }];
 		assert.ok(deps.isThrottled, 'isThrottled is wired');
 		assert.deepStrictEqual(deps.attemptOutput?.(), [], 'attemptOutput is wired (nothing retained while uncurated)');
@@ -582,7 +582,7 @@ describe('destroy call sites', () => {
 		assert.deepStrictEqual(calls, ['s:0']);
 		// The previous attempt's failure time reaches the check, so its throttle is not counted again.
 		const stale = fakeCfn({ s: shortPreviousAttempt() });
-		const staleDeps = sandboxDestroyDeps('/app/aws-blocks/index.ts', {}, { cfnFor: () => stale.cfn, s3 });
+		const staleDeps = sandboxDestroyDeps('/app/cdk-blocks/index.ts', {}, { cfnFor: () => stale.cfn, s3 });
 		assert.ok(staleDeps.isThrottled);
 		assert.strictEqual(await staleDeps.isThrottled(stacks, SINCE), true, 'without previousFailureAt the skew window lets it in');
 		assert.strictEqual(await staleDeps.isThrottled(stacks, SINCE, SINCE - 20_000), false);

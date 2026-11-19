@@ -30,7 +30,7 @@ npm run deploy      # Deploy to production
 
 ## Architecture
 
-- **Backend:** `aws-blocks/index.ts` - Define APIs and Building Blocks
+- **Backend:** `cdk-blocks/index.ts` - Define APIs and Building Blocks
 - **Frontend:** `src/index.ts` - Import backend APIs directly (type-safe)
 - **Infrastructure:** Inferred from code, works locally and on AWS
 

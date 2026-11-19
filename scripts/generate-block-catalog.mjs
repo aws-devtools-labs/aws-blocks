@@ -6,7 +6,7 @@
  * Generates block-catalog.generated.ts for @aws-blocks/admin-ui.
  *
  * The dashboard's block discovery has to recognise the block classes a user
- * instantiates in their own `aws-blocks/` source. Hardcoding that list is how
+ * instantiates in their own `cdk-blocks/` source. Hardcoding that list is how
  * it rots: a new Building Block package ships and the dashboard silently stops
  * seeing it. So the list is derived from the same source of truth
  * scripts/generate-bb-names.mjs uses — the vendorize map in

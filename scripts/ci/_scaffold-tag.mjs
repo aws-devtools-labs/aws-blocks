@@ -16,7 +16,7 @@ const STACK_EXPORT = /^export const blocksStack = /m;
 
 /**
  * Append `cdk.Tags.of(blocksStack).add('blocks:purpose', purpose)` to a
- * scaffolded `aws-blocks/index.cdk.ts`. Throws when the file doesn't import
+ * scaffolded `cdk-blocks/index.cdk.ts`. Throws when the file doesn't import
  * `cdk` or export `blocksStack` (the template changed shape), so the run fails
  * up front instead of deploying an untagged stack.
  */

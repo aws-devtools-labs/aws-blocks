@@ -7,20 +7,20 @@
     "node": ">=22.0.0"
   },
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:server": "tsx watch cdk-blocks/scripts/server.ts",
     "dev:client": "vite",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "sandbox:console": "tsx aws-blocks/scripts/console.ts",
-    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "sandbox": "tsx cdk-blocks/scripts/sandbox.ts",
+    "sandbox:destroy": "tsx -C cdk cdk-blocks/scripts/sandbox-destroy.ts",
+    "sandbox:console": "tsx cdk-blocks/scripts/console.ts",
+    "cleanup": "tsx cdk-blocks/scripts/cleanup.ts",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "deploy": "tsx aws-blocks/deploy.ts",
+    "deploy": "tsx cdk-blocks/deploy.ts",
     "test": "npm run typecheck && npm run test:e2e",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "docs": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs",

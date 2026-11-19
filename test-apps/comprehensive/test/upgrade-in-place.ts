@@ -352,15 +352,15 @@ async function removeCreatedBaseTree(opts: HarnessOptions): Promise<void> {
 function materializeApp(treeRoot: string, variant: Variant): string {
 	const dir = join(treeRoot, MATERIALIZED_DIR, variant);
 	rmSync(dir, { recursive: true, force: true });
-	for (const sub of ['aws-blocks', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
-	copyFileSync(join(APP_TEMPLATE_DIR, 'index.cdk.ts'), join(dir, 'aws-blocks', 'index.cdk.ts'));
+	for (const sub of ['cdk-blocks', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	copyFileSync(join(APP_TEMPLATE_DIR, 'index.cdk.ts'), join(dir, 'cdk-blocks', 'index.cdk.ts'));
 	// The BEFORE backend is stored as `.ts.txt`: it imports `@aws-blocks/bb-auth-cognito`, which
 	// exists only in the pre-refactor checkout, so nothing in this workspace may compile or resolve it.
 	const backend = variant === 'auth-cognito' ? 'backend.auth-cognito.ts.txt' : `backend.${variant}.ts`;
-	copyFileSync(join(APP_TEMPLATE_DIR, backend), join(dir, 'aws-blocks', 'index.ts'));
+	copyFileSync(join(APP_TEMPLATE_DIR, backend), join(dir, 'cdk-blocks', 'index.ts'));
 	if (variant === 'auth-cognito') assertOldBlockFromBaseTree(dir, treeRoot);
 	writeFileSync(
-		join(dir, 'aws-blocks', 'index.handler.ts'),
+		join(dir, 'cdk-blocks', 'index.handler.ts'),
 		"import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';\n\n" +
 			"export const handler = createLambdaHandler(() => import('./index.js'));\n",
 	);
@@ -368,7 +368,7 @@ function materializeApp(treeRoot: string, variant: Variant): string {
 	copyFileSync(join(APP_TEMPLATE_DIR, 'destroy.ts'), join(dir, 'scripts', 'destroy.ts'));
 	writeFileSync(
 		join(dir, 'cdk.json'),
-		`${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk aws-blocks/index.cdk.ts` }, null, 2)}\n`,
+		`${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk cdk-blocks/index.cdk.ts` }, null, 2)}\n`,
 	);
 	writeFileSync(
 		join(dir, '.blocks', 'config.json'),
@@ -386,7 +386,7 @@ function materializeApp(treeRoot: string, variant: Variant): string {
 function assertOldBlockFromBaseTree(appDir: string, treeRoot: string): void {
 	let resolved: string;
 	try {
-		resolved = realpathSync(createRequire(join(appDir, 'aws-blocks', 'index.ts')).resolve(LEGACY_PACKAGE_NAME));
+		resolved = realpathSync(createRequire(join(appDir, 'cdk-blocks', 'index.ts')).resolve(LEGACY_PACKAGE_NAME));
 	} catch (error) {
 		throw new UsageError(
 			`the pre-refactor app cannot resolve ${LEGACY_PACKAGE_NAME} from ${treeRoot} (run its npm ci + build): ${String(error)}`,

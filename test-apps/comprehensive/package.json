@@ -7,13 +7,13 @@
   "type": "module",
   "description": "Comprehensive test application for Blocks - covers all Building Blocks",
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ],
   "scripts": {
-    "dev:server": "tsx aws-blocks/scripts/server.ts",
-    "dev": "tsx aws-blocks/scripts/server.ts",
+    "dev:server": "tsx cdk-blocks/scripts/server.ts",
+    "dev": "tsx cdk-blocks/scripts/server.ts",
     "test": "tsx --test test/upgrade-in-place/lib.test.ts test/test-support-synth.test.ts test/test-support-secret.test.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "destroy": "tsx cdk-blocks/scripts/destroy.ts",
     "test:local": "BLOCKS_TEST_ENV=local tsx -C browser test/e2e.test.ts",
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox tsx -C browser test/e2e.test.ts",
     "test:production": "BLOCKS_TEST_ENV=production tsx -C browser test/e2e.test.ts",

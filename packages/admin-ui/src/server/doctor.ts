@@ -155,8 +155,8 @@ function localDevServerCheck(input: DoctorCheckInput): DoctorCheck {
 	const { serverUp, serverUrl, port, portSource, namespaces } = input.localDevServer;
 	const portNote =
 		portSource === 'server-script'
-			? `port ${port} from aws-blocks/scripts/server.ts`
-			: `port ${port} assumed — not discovered from aws-blocks/scripts/server.ts`;
+			? `port ${port} from cdk-blocks/scripts/server.ts`
+			: `port ${port} assumed — not discovered from cdk-blocks/scripts/server.ts`;
 
 	if (!serverUp) {
 		// WARN, not FAIL: the local dev server is optional. The dashboard reads

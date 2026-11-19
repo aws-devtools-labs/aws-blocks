@@ -16,7 +16,7 @@ import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/blocks/client';
 import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
 
-type App = typeof import('aws-blocks');
+type App = typeof import('cdk-blocks');
 
 const isLocal = (process.env.BLOCKS_TEST_ENV || 'local') === 'local';
 const password = 'TestPass123!';

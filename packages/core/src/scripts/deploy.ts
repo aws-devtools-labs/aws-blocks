@@ -286,7 +286,7 @@ async function runDeploy(options: DeployOptions) {
     // never by importing the backend here: an in-process import loads the local
     // mock layer, whose runtimes (PGlite, CronJob schedulers, …) kept this
     // process alive forever after the deploy finished.
-    const foundationPath = resolve(options.projectRoot, 'aws-blocks/index.ts');
+    const foundationPath = resolve(options.projectRoot, 'cdk-blocks/index.ts');
     const clientPath = join(dirname(foundationPath), 'client.js');
     log.progress('📝 Generating client code...');
     await generateDeployClient(foundationPath, clientPath);

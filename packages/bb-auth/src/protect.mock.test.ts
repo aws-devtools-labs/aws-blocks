@@ -27,7 +27,7 @@ afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
 let instance = 0;
 
-/** The backend module an app would write (`aws-blocks/index.ts`). */
+/** The backend module an app would write (`cdk-blocks/index.ts`). */
 function backend() {
 	const codes = new Map<string, string>();
 	const scope = { id: `protect${process.pid}x${++instance}` };

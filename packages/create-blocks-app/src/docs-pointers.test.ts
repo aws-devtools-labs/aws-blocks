@@ -28,7 +28,7 @@ const NATIVE_APPS = ['native/swift/Demo/typescript-demo', 'native/kotlin/example
 );
 const NATIVE_READ = [
 	join(repoRoot, 'native/swift/Demo/typescript-demo'),
-	join(repoRoot, 'native/kotlin/example/typescript/aws-blocks'),
+	join(repoRoot, 'native/kotlin/example/typescript/cdk-blocks'),
 	join(repoRoot, 'native/kotlin/example/typescript/src'),
 ];
 const TEMPLATES = readdirSync(join(packageRoot, 'templates'))
@@ -69,11 +69,11 @@ describe('the docs pointers of a scaffolded app', () => {
 		assert.ok(withReadme.length >= 10, `templates with a README: ${withReadme.length}`);
 		for (const dir of withReadme) {
 			assert.ok(pointsAt(join(dir, 'README.md')), `${relative(repoRoot, dir)}/README.md`);
-			const backend = join(dir, 'aws-blocks', 'index.ts');
+			const backend = join(dir, 'cdk-blocks', 'index.ts');
 			if (existsSync(backend)) assert.ok(pointsAt(backend), relative(repoRoot, backend));
 		}
 		for (const dir of NATIVE_APPS) {
-			for (const file of ['aws-blocks/index.ts', 'src/index.ts']) {
+			for (const file of ['cdk-blocks/index.ts', 'src/index.ts']) {
 				assert.ok(pointsAt(join(dir, file)), `${relative(repoRoot, dir)}/${file}`);
 			}
 		}

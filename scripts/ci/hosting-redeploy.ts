@@ -7,7 +7,7 @@
 // asset proxy's build prefix, listener rules) would pass. This redeploys the
 // sandbox the e2e suite left running (BLOCKS_SANDBOX_KEEP=1) — a new build id
 // — and requires the door to serve the new build:
-// - `/.cdk-blocks-sandbox/config.json` names the new build id;
+// - `/.blocks-sandbox/config.json` names the new build id;
 // - `/` serves the SPA shell, and its hashed script loads;
 // - the API still answers same-origin.
 //
@@ -41,7 +41,7 @@ const tryFetch = async (url: string, init?: RequestInit): Promise<Response | und
   }
 };
 const buildIdAt = async (url: string): Promise<string | undefined> => {
-  const res = await tryFetch(`${url}/.cdk-blocks-sandbox/config.json?__redeploy=${Date.now()}`);
+  const res = await tryFetch(`${url}/.blocks-sandbox/config.json?__redeploy=${Date.now()}`);
   if (res?.status !== 200) return undefined;
   return ((await res.json()) as { __blocksBuildId?: string }).__blocksBuildId;
 };
@@ -56,7 +56,7 @@ for (let attempt = 1; attempt <= 10 && before === undefined; attempt++) {
 if (before === undefined) throw new Error('could not read the build id the e2e suite left serving');
 process.chdir(appDir);
 const { startSandbox } = await import('@aws-blocks/blocks/scripts');
-await startSandbox({ backendPath: join(appDir, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
+await startSandbox({ backendPath: join(appDir, 'cdk-blocks', 'index.cdk.ts'), deployOnly: true });
 const url = hostingUrl();
 
 let last = 'no response';

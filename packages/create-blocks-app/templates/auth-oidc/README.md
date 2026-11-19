@@ -22,7 +22,7 @@ Open http://localhost:3000 after `npm run dev`.
 (and from a sandbox deployment), so sign-in runs the same authorize → callback →
 token-verify path a real provider drives, with no IdP account. Its `onAuthorize`
 hook decides who signs in (here, a single demo user). Synth refuses `stubIdp()`
-for production, so `aws-blocks/index.ts` picks the provider with
+for production, so `cdk-blocks/index.ts` picks the provider with
 `getDeploymentType()`: before `npm run deploy`, replace the production entry's
 `issuer` and `clientId` with your IdP's (Okta, Entra ID, Auth0, any OIDC
 provider) and register `<your origin>/aws-blocks/auth/callback` as its redirect
@@ -32,7 +32,7 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: `Auth` (`store: 'builtin'`, stub provider locally), KVStore, an `auth.protect` API |
+| `cdk-blocks/index.ts` | Backend: `Auth` (`store: 'builtin'`, stub provider locally), KVStore, an `auth.protect` API |
 | `src/index.ts` | Frontend: Authenticator sign-in + per-user KV demo |
 | `test/e2e.test.ts` | Tests exercising the public and protected API |
 | `index.html` | HTML shell |
@@ -62,7 +62,7 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
-| `npm run deploy` | Deploy to production (configure the real OIDC provider in `aws-blocks/index.ts` first) |
+| `npm run deploy` | Deploy to production (configure the real OIDC provider in `cdk-blocks/index.ts` first) |
 | `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
 | `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
 | `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
@@ -79,7 +79,7 @@ Your CloudFormation stack names are derived from the `stackId` in
 `.blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
@@ -87,5 +87,5 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
 (frontend). Test via `npm run test:e2e`.

@@ -120,7 +120,7 @@ updates:
       - /packages/create-blocks-app/templates/*
       # amplify's top-level package.json is an overlay with no dependencies and
       # no workspaces; its dependencies live one level down.
-      - /packages/create-blocks-app/templates/amplify/aws-blocks
+      - /packages/create-blocks-app/templates/amplify/cdk-blocks
     schedule:
       interval: weekly
       day: monday

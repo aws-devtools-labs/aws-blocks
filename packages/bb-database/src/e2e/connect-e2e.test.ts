@@ -225,7 +225,7 @@ describe('bb-database connect E2E: Supabase', { skip }, () => {
 		assert.ok(stored(), '<cwd>/.bb-data/settings.json exists');
 
 		// One module per connection name; the default name `db-url` has the plain `database.ca.ts`.
-		const caModule = join(ws.cwd, 'aws-blocks', 'database.e2e.ca.ts');
+		const caModule = join(ws.cwd, 'cdk-blocks', 'database.e2e.ca.ts');
 		assert.ok(typeof connected.caModule === 'string', 'connect reports the CA module it wrote');
 		assert.strictEqual(realpathSync(resolve(ws.cwd, connected.caModule)), caModule);
 		const written = readFileSync(caModule, 'utf8');

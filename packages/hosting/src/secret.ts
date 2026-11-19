@@ -190,7 +190,8 @@ export function isManagedValue(v: unknown): v is ManagedValue {
 // value. Deep re-validation still needs the schema re-declared on the far side (the
 // runtime getter is parse-only regardless — see `secret-runtime`).
 
-/** Stable tag identifying the JSON-transport form of a {@link ManagedValue}. */
+/** Stable tag identifying the JSON-transport form of a {@link ManagedValue}. Fixed on the wire:
+ * renaming it stops an older producer's value reviving at the same {@link MANAGED_VALUE_JSON_VERSION}. */
 export const MANAGED_VALUE_JSON_TAG = '$aws-blocks/hosting.ManagedValue' as const;
 
 /**

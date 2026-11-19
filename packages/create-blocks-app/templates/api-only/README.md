@@ -122,7 +122,7 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 
 Your CloudFormation stack names derive from the `stackId` in
 `.blocks/config.json`, generated at scaffold time. Edit `stackId` to rename, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## Adding a frontend later
 
