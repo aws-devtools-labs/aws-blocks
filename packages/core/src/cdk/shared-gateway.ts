@@ -220,7 +220,8 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	// without the proxy's integration: a MOCK with no request template, which
 	// answers `GET /` with a 500. Give the root the function first (the proxy
 	// skips a method the root already has); it answers 404 for `/`, like any
-	// path with no route.
+	// path with no route. `matchRoute` never matches the root, so a `/*`
+	// RawRoute does not run for it either.
 	restApi.root.addMethod('ANY', defaultIntegration);
 	restApi.root.addProxy({ defaultIntegration, anyMethod: true });
 
