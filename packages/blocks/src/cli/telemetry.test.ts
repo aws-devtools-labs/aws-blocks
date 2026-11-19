@@ -99,7 +99,15 @@ describe('withCommandTelemetry', () => {
 	for (const behave of ['ok', 'throw-before', 'throw-after', 'wrong-code'] as const) {
 		it(`returns the command's exit code, and runs it once, when the tracker is ${behave}`, async () => {
 			let calls = 0;
-			const code = await withCommandTelemetry(['whoami'], () => undefined, async () => (calls++, 3), tracker(behave));
+			const code = await withCommandTelemetry(
+				['whoami'],
+				() => undefined,
+				async () => {
+					calls++;
+					return 3;
+				},
+				tracker(behave),
+			);
 			assert.equal(code, 3);
 			assert.equal(calls, 1);
 		});
@@ -115,7 +123,12 @@ describe('withCommandTelemetry', () => {
 
 	it('runs the command untracked when the project root lookup throws', async () => {
 		let tracked = false;
-		const load: LoadTelemetry = async () => ({ trackExitCode: async (_c, fn) => ((tracked = true), fn()) });
+		const load: LoadTelemetry = async () => ({
+			trackExitCode: async (_c, fn) => {
+				tracked = true;
+				return fn();
+			},
+		});
 		const code = await withCommandTelemetry(['docs'], () => { throw new Error('no cwd'); }, async () => 0, load);
 		assert.equal(code, 0);
 		assert.equal(tracked, false);

@@ -108,7 +108,13 @@ describe('telemetry/trackExitCode', () => {
     assert.throws(() => process.cwd());
 
     let calls = 0;
-    assert.strictEqual(await trackExitCode('config', async () => (calls++, 0)), 0);
+    assert.strictEqual(
+      await trackExitCode('config', async () => {
+        calls++;
+        return 0;
+      }),
+      0,
+    );
     assert.strictEqual(calls, 1);
 
     let ran = false;
