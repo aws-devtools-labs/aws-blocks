@@ -99,7 +99,7 @@ Each chunk published to the Realtime channel has a `type` and type-specific fiel
 |------|--------|-------------|
 | `text-delta` | `text: string` | Incremental text token (in `'token'` streaming mode) or full block (in `'block'` mode). |
 | `tool-call` | `toolName: string`, `input: JSONValue` | Agent is calling a tool. Published only for a call that runs: not for a tool the user denied, nor for one stopped by `maxToolIterations`. A tool that needs approval publishes it after the approval, once the turn resumes. |
-| `tool-result` | `toolName: string`, `text: string` | Tool returned a result. Published only after the call's `tool-call` chunk. |
+| `tool-result` | `toolName: string` | The tool finished. Read its output from `metadata.toolOutput` in the persisted conversation history, not from the chunk. |
 | `done` | `text: string`, `usage: TokenUsage` | Agent finished. `text` contains the full response. `usage` has `{ inputTokens, outputTokens, totalTokens }`. |
 | `error` | `error: string`, `errorName?: string` | Agent encountered an error. `errorName` is set when the failure was classified — e.g. `ModelUnavailableException` when Bedrock refuses to invoke the model for this account. |
 | `interrupt` | `interrupts: Array<{ id, name, reason }>` | Agent paused for approval. See [Tool Approval](#tool-approval-human-in-the-loop). |
@@ -142,7 +142,7 @@ A `bedrock` model without a `modelId` and a model with an unknown `provider` fai
 
 - With persistence enabled: `getConversation()`, `getPendingInterrupts()` or `getChannel()` is called without an options object containing the caller's `userId`.
 - On an `inferenceOnly` agent with `sessionScope: 'user'` (the default): `stream()`, `resume()` or `getChannel()` is called without a `userId`.
-- On an `inferenceOnly` agent with `sessionScope: 'shared'`: any `resume()` call.
+- On an `inferenceOnly` agent with `sessionScope: 'shared'`: `resume()` with nonempty `responses`. Empty `responses` are rejected first with `InterruptRequired`.
 - `stream()`, `resume()` or `getChannel()` is called with a `userId` that can't be encoded into a channel key (an unpaired surrogate), or with a `channelId` and `userId` that don't form a valid Realtime channel name (an empty, `.` or `..` segment, or a leading or trailing `/`).
 - `chat.subscribe()` of `createChat` is called without a `channelId` before a conversation exists.
 
@@ -188,7 +188,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 - The session is keyed by the `conversationId` alone and the channel by the bare `channelId`. Anyone who passes the same `conversationId` continues that session, and anyone who passes the same `channelId` receives its chunks.
 - Use it only when your app never lets a caller choose the `conversationId` or `channelId` (for example, the server generates them and keeps them to itself).
 - `stream()` doesn't need a `userId`, and `getChannel()` ignores it. Pass the session's `userId` to `getChannel()` anyway, not a placeholder.
-- `resume()` throws `AgentErrors.InvalidUsage`: a session with no owner can't tell who may approve its pending tool calls.
+- A shared session can't resume a turn: it has no owner to authorize an approval. See [Errors](#errors) for the validation order.
 - For the same reason, the constructor throws `AgentErrors.InvalidModelConfig` when a tool sets `needsApproval` or `interrupt`. An agent with approval steps needs `'user'` or persistence.
 - Switching an existing agent between `'shared'` and `'user'` starts new sessions; sessions stored under the other key are not resumed.
 
@@ -687,6 +687,7 @@ const agent = new Agent(scope, 'chat', {
 
 // Any Auth sign-in method works (email + password, OIDC, social).
 const auth = new Auth(scope, 'auth');
+export const authApi = auth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async agentCreateConversationId() {
@@ -724,7 +725,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-**Frontend:**
+**Frontend:** Mount the [Auth sign-in UI](../bb-auth/README.md) with `authApi`. Call `sendGreeting()` from the signed-in UI, not during module initialization: every chat method requires a session.
 
 ```typescript
 // src/chat.ts
@@ -766,13 +767,16 @@ const chat = createChat({
   refresh: async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' }),
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange:  (loading) => updateSpinner(loading),
+  onError: (message) => console.error(message),
   onInterrupt: async (interrupts) => {
     const decisions = await showApprovalUI(interrupts);       // e.g. [{ interruptId, approved: true }]
     await chat.sendMessage({ interruptResponses: decisions }); // same call resumes the turn
   },
 });
 
-await chat.sendMessage('Hello!');
+export function sendGreeting() {
+  return chat.sendMessage('Hello!');
+}
 ```
 
 `createChat(options)` is a factory, not a React hook: call it once (outside a component or in a ref).
@@ -798,15 +802,15 @@ await chat.sendMessage('Hello!');
 |--------|---------|-------------|
 | `sendMessage(input)` | `Promise<boolean>` | Starts a turn (`input` is a string) or resumes a paused one (`{ interruptResponses }`), and consumes its chunks. Resolves `false` when a turn is already in flight and the input was dropped. |
 | `run(input)` | `Promise<{ channelId }>` | Starts or resumes a turn without consuming its chunks. |
-| `subscribe({ channelId?, observer? })` | `ChunkStream` | The chunks of a channel as an async iterable. `channelId` defaults to the current conversation; on an `inferenceOnly` agent pass the `channelId` that `run()` returned. |
+| `subscribe({ channelId?, observer? })` | `ChunkStream` | An async iterable of live chunks; `channelId` defaults to the current conversation. A late subscriber only receives future chunks. |
 | `loadConversation(conversationId)` | `Promise<void>` | Switches to an existing conversation and loads its history and pending interrupts. It does not subscribe to the channel. |
 | `newConversation()` | `void` | Starts a fresh conversation; the next turn creates it. |
 | `getMessages()` | `ChatMessage[]` | The messages to render. |
 | `isLoading()` | `boolean` | Whether a turn is in flight. |
 | `getConversationId()` | `string \| null` | The current conversation id; `null` until the first turn. |
-| `destroy()` | `void` | Cancels the subscription of a turn in flight. |
+| `destroy()` | `void` | Tears down the controller and its active turn subscription. Create a new controller to chat again. |
 
-Use `run()` and `subscribe()` when several clients watch one channel or a client only observes. `sendMessage()` does both.
+For fan-out, attach observers to a known channel and await `stream.established` before starting the turn with `run()`. When the channel ID isn't known until the turn starts, use `sendMessage()` on the sending client: it establishes the subscription before dispatch. Subscribing after `run()` returns can miss even the final chunk.
 
 ### Reconnect recovery
 
@@ -821,7 +825,7 @@ See [DESIGN.md](./DESIGN.md#reconnect-recovery-createchat--usechat) for the inte
 
 ### React: hold the instance once, drive `useState` from the callbacks
 
-`createChat` must not run on every render: that recreates the instance and drops its subscription and conversation state. Create the instance once in a `useRef`, and pass `setState` functions as the callbacks so that React re-renders when the instance changes:
+Create the controller in an effect and destroy that same instance in its cleanup. Store it in a ref for event handlers. This keeps ordinary renders from replacing the controller and gives React Strict Mode a fresh instance when it replays the effect.
 
 ```tsx
 'use client'; // Next.js only — createChat opens a browser WebSocket, so it must run in a Client Component. Plain React (Vite/CRA) can omit this.
@@ -838,11 +842,9 @@ export function Chat() {
   // Interrupts need a typed initializer — a bare useState([]) infers never[] and rejects the payload.
   const [interrupts, setInterrupts] = useState<Array<{ interruptId: string; name: string; reason?: unknown }>>([]);
 
-  // Create the instance exactly once. Type the ref as `| undefined` and initialize it
-  // with `undefined` — under @types/react 19 a bare useRef<T>() does not compile.
   const chatRef = useRef<ReturnType<typeof createChat> | undefined>(undefined);
-  if (!chatRef.current) {
-    chatRef.current = createChat({
+  useEffect(() => {
+    const chat = createChat({
       transport,
       api: {
         createConversation:   () => api.agentCreateConversationId(),
@@ -852,17 +854,19 @@ export function Chat() {
       // Bridge the mutable instance into React state — these fire on every change.
       onMessagesChange: setMessages,
       onLoadingChange: setIsLoading,
+      onError: (message) => console.error(message),
       onInterrupt: setInterrupts,
     });
-  }
-  const chat = chatRef.current!; // guaranteed set by the block above
-
-  // Tear down the WebSocket subscription when the component unmounts.
-  useEffect(() => () => chat.destroy(), [chat]);
+    chatRef.current = chat;
+    return () => {
+      chatRef.current = undefined;
+      chat.destroy();
+    };
+  }, []);
 
   async function approve(interruptId: string, approved: boolean) {
     setInterrupts([]);
-    await chat.sendMessage({ interruptResponses: [{ interruptId, approved }] }); // same call resumes
+    await chatRef.current?.sendMessage({ interruptResponses: [{ interruptId, approved }] });
   }
 
   // `ChatMessage` is a discriminated union on `role`: narrowing to 'approval'
@@ -881,7 +885,7 @@ export function Chat() {
           <button onClick={() => approve(i.interruptId, false)}>Deny</button>
         </p>
       ))}
-      <button disabled={isLoading} onClick={() => chat.sendMessage('Hello!')}>Send</button>
+      <button disabled={isLoading} onClick={() => chatRef.current?.sendMessage('Hello!')}>Send</button>
     </div>
   );
 }

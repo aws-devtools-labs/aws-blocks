@@ -64,7 +64,9 @@ const agent = new Agent(scope, 'agent', {
 });
 ```
 
-`identifier` takes a guardrail id or ARN. Create the guardrail outside AWS CDK Blocks (console, CLI, or a CDK `CfnGuardrail`). Setting `guardrail` on any other provider (including `canned`) throws `InvalidModelConfig`. The `guardrails` field (plural) is deprecated: it has no effect, and the agent logs a warning when it is set.
+`identifier` takes a guardrail id or ARN. Create the guardrail outside AWS CDK Blocks (console, CLI, or a CDK `CfnGuardrail`). If the selected provider isn't `bedrock`, `guardrail` fails the turn: `complete()` rejects with `StreamFailed`, carrying the configuration error's message. See [Errors](./README.md#errors).
+
+The `guardrails` field (plural) is deprecated: it has no effect, and the agent logs a warning when it is set.
 
 ## Health Checks
 
@@ -97,6 +99,7 @@ const openaiKey = new AppSetting(scope, 'openai-key', {
 });
 
 const agent = new Agent(scope, 'agent', {
+  systemPrompt: 'You are a helpful assistant.',
   model: {
     deployed: {
       provider: 'openai-api',

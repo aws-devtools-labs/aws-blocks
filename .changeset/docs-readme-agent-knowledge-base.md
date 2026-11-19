@@ -22,6 +22,7 @@ docs(bb-agent, bb-knowledge-base): the Agent README shows the backend that the `
 - `### Options` has a Default column and rows for `removalPolicy` and `logger`. `## Errors` has an `error.name` column.
 - Tables for the `createChat` options, the methods of the controller it returns, the `ConversationManagerConfig` fields and the `InterruptResponse` fields; the two rules for the `refresh` callback.
 - The backend sample defines `agentGetRawDescriptor` and the frontend sample passes it to `refresh`. Both samples name their file (`cdk-blocks/index.ts`, `src/chat.ts`) and declare the UI functions they call, so the code-sample check of the shipped docs compiles them together.
+- The client starts chat from the signed-in UI. The React example creates and destroys its controller in the same effect so Strict Mode can mount it again. Observers must subscribe before a turn to receive every chunk.
 
 **`bb-agent` README, moved and removed**
 
@@ -33,7 +34,7 @@ docs(bb-agent, bb-knowledge-base): the Agent README shows the backend that the `
 
 **`bb-agent` `MODELS.md`**
 
-- `## AWS Credentials (Bedrock)` is `## Bedrock model access` and leads with a table of error message, cause and fix: the use case details form, the AWS Marketplace subscription, account availability, and global versus regional inference profiles.
+- “Bedrock model access” lists invocation errors with their causes and fixes. The guardrail example distinguishes a configuration error inside a turn from the `StreamFailed` rejection seen by `complete()`.
 
 **`bb-knowledge-base` README**
 
