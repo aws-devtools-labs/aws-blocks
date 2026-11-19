@@ -80,7 +80,10 @@ random ID, and asserts it was created correctly.
   their failure paths.
 - **Network resilience**: broken endpoint is invisible to users, visible with
   NODE_DEBUG, and does not crash or delay the command.
-- **Disable mechanisms**: env var, global config, project config.
+- **Disable mechanisms**: env var, global config, project config. A disabled
+  command must log no send at all, and no send worker may run.
+- **Collector delivery**: the telemetry endpoint answers an event with
+  `status=200`; the case sends up to three events before it fails.
 - **Schema forward-compatibility**: payload is JSON-serializable with all
   required fields.
 - **Environment metadata**: nodeVersion, os, ci fields validated.
@@ -107,5 +110,13 @@ credentials — in CI these are provided by `aws-actions/configure-aws-credentia
 FAIL paths are exercised by clearing credential env vars so CDK fails fast.
 
 The `--telemetry-file` flag captures the event payload to disk for structure
-assertions, while `NODE_DEBUG=blocks-telemetry` stderr output verifies actual
-delivery to the telemetry endpoint (`sent (status=200)`).
+assertions, while `NODE_DEBUG=blocks-telemetry` stderr output shows the send.
+Each command case asserts that the CLI sent its event (`sending event to …`),
+that the send worker finished, and that the endpoint did not reject it (any
+`sent (status=…)` is 200). A `timed out` or network `error:` passes there: the
+worker stops waiting for an answer after 500 ms, even when the endpoint already
+has the event, and in CI about one send in 500 gets no answer in that time. The
+"collector delivery" case requires `sent (status=200)` instead.
+
+The commands send to `BLOCKS_TELEMETRY_ENDPOINT` when it is set, so a local run
+can point them at a local HTTP server instead of the real endpoint.
