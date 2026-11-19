@@ -65,6 +65,7 @@ import { assertCacheGuardIgnoredCookies } from './ssr_cache_guard.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
+  IMAGE_FORMAT_CACHE_KEY_HEADER,
   ORIGIN_ID,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
@@ -817,6 +818,17 @@ export class CdnConstruct extends Construct {
       'next-router-segment-prefetch',
       'next-action',
     ];
+    // With an image origin, the router puts the formats the viewer accepts
+    // into IMAGE_FORMAT_CACHE_KEY_HEADER on image routes (and drops it on all
+    // others). Image requests reach the image origin through the default
+    // behavior, so this cache policy is their cache key: without the header the
+    // first viewer's format would be served to every later one (CloudFront
+    // ignores `Vary: Accept`). `accept` itself stays out of the key, so pages
+    // keep one cache entry whatever `Accept` a browser sends.
+    // It takes a cache-key header slot only when one is free: an app already at
+    // the cap with its own cacheKeyHeaders keeps synthesizing as before, with a
+    // warning that image formats aren't in the key.
+    const hasImageOrigin = computeOrigins.has('image-optimization');
     const RESERVED_SSR_CACHE_COOKIES = [
       '__prerender_bypass',
       '__next_preview_data',
@@ -840,6 +852,19 @@ export class CdnConstruct extends Construct {
     const extraCacheKeyCookies = [
       ...new Set(props.cacheKeyCookies ?? []),
     ].filter((c) => !ROUTER_RESERVED_COOKIES.includes(c));
+    const keyImageFormat =
+      hasImageOrigin &&
+      !extraCacheKeyHeaders.includes(IMAGE_FORMAT_CACHE_KEY_HEADER) &&
+      extraCacheKeyHeaders.length + RESERVED_SSR_CACHE_HEADERS.length < CLOUDFRONT_CACHE_KEY_HEADER_CAP;
+    if (hasImageOrigin && !keyImageFormat && !extraCacheKeyHeaders.includes(IMAGE_FORMAT_CACHE_KEY_HEADER)) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:ImageFormatNotInCacheKey',
+        `cdn.cacheKeyHeaders uses every cache-key header slot, so ${IMAGE_FORMAT_CACHE_KEY_HEADER} is not in the ` +
+          'cache key: CloudFront serves one cached image format per image URL, whatever the viewer accepts. ' +
+          `Free a slot (at most ${CLOUDFRONT_CACHE_KEY_HEADER_CAP - RESERVED_SSR_CACHE_HEADERS.length - 1} cacheKeyHeaders), ` +
+          'or raise quotas.cacheKeyHeaders if AWS granted your account a higher limit.',
+      );
+    }
     const hasCacheKeyCredentials =
       extraCacheKeyHeaders.length > 0 || extraCacheKeyCookies.length > 0;
     // ssrDefaultTtl may be an unresolved CDK token. Same-unit conversion
@@ -977,6 +1002,9 @@ export class CdnConstruct extends Construct {
             // cache key for correctness.
             // See: node_modules/@opennextjs/aws/dist/core/routing/cacheInterceptor.js
             'next-action',
+            // The image formats the viewer accepts, on image routes (see
+            // RESERVED_SSR_CACHE_HEADERS above).
+            ...(keyImageFormat ? [IMAGE_FORMAT_CACHE_KEY_HEADER] : []),
             // Caller-supplied credential-bearing headers (e.g. 'authorization')
             // so authenticated SSR responses vary per credential in the key.
             ...extraCacheKeyHeaders,

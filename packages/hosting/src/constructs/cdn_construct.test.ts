@@ -24,7 +24,7 @@ import { CdnConstruct } from './cdn_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
-import { ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
+import { IMAGE_FORMAT_CACHE_KEY_HEADER, ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
 
 // ---- KVS edge-router helpers ----
 //
@@ -2210,6 +2210,83 @@ void describe('CdnConstruct', () => {
       });
       return Template.fromStack(stack);
     };
+
+    // The image route reaches the image origin through the default behavior,
+    // so the default behavior's (SSR) cache policy is its cache key. That key
+    // must vary by the format the viewer accepts, or the first viewer's format
+    // (WebP/AVIF or the source PNG) is served to every later one.
+    /** The SSR cache policy's cache-key header names in a synthesized template. */
+    const ssrCacheKeyHeaders = (template: Template): string[] => {
+      const ssrPolicy = Object.values(template.findResources('AWS::CloudFront::CachePolicy')).find((r) => {
+        const cfg = (r as { Properties: { CachePolicyConfig: { Comment?: string } } }).Properties.CachePolicyConfig;
+        return typeof cfg.Comment === 'string' && cfg.Comment.includes('SSR');
+      }) as { Properties: { CachePolicyConfig: Record<string, any> } } | undefined;
+      assert.ok(ssrPolicy, 'Should have an SSR CachePolicy');
+      return ssrPolicy.Properties.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.HeadersConfig.Headers ?? [];
+    };
+
+    void it('keys the default behavior on the image format the router derives from Accept, when an image origin exists', () => {
+      const template = withImageOpt(createStack(), {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+      });
+      const headers = ssrCacheKeyHeaders(template);
+      assert.ok(
+        headers.includes(IMAGE_FORMAT_CACHE_KEY_HEADER),
+        `the SSR cache key must include ${IMAGE_FORMAT_CACHE_KEY_HEADER}: ${headers.join(', ')}`,
+      );
+      // The raw Accept stays out: browsers send many different Accept values for
+      // HTML, so keying every page on it would split the page cache.
+      assert.ok(!headers.includes('accept'), 'the SSR cache key must not include accept');
+    });
+
+    void it('keeps an app at the cache-key header cap synthesizing, with a warning, when there is an image origin', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const imageFn = new LambdaFunction(stack, 'ImageFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: {
+          ...ssrManifest,
+          imageOptimization: { bundle: '/tmp/img', handler: 'index.handler', formats: ['webp'], sizes: [640] },
+        },
+        securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+        computeFunctionUrls: new Map([
+          ['default', fnUrl],
+          ['image-optimization', imageFn.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM })],
+        ]),
+        computeFunctions: new Map([
+          ['default', fn],
+          ['image-optimization', imageFn],
+        ]),
+        cacheKeyHeaders: ['h1', 'h2', 'h3', 'h4', 'h5'],
+      });
+      const template = Template.fromStack(stack);
+      assert.ok(!ssrCacheKeyHeaders(template).includes(IMAGE_FORMAT_CACHE_KEY_HEADER));
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('ImageFormatNotInCacheKey'));
+      assert.equal(warnings.length, 1);
+    });
+
+    void it('leaves the image-format header out of the cache key when there is no image origin', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+      });
+      assert.ok(!ssrCacheKeyHeaders(Template.fromStack(stack)).includes(IMAGE_FORMAT_CACHE_KEY_HEADER));
+    });
 
     void it('IPX image Lambda (baseURL set) gets its own API Gateway, next to the SSR one', () => {
       const stack = createStack();

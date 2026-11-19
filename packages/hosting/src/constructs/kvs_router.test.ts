@@ -20,6 +20,7 @@ import {
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
   generateEdgeBasePathStripCode,
+  IMAGE_FORMAT_CACHE_KEY_HEADER,
   ORIGIN_ID,
 } from './kvs_router.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -351,6 +352,65 @@ void describe('generated request fn — image origin basePath strip', () => {
     });
     assert.equal(selectedOrigin, ORIGIN_ID.image);
     assert.equal(output.uri, '/_ipx/w_256/blocks-photo.png');
+  });
+});
+
+void describe('generated request fn — image format in the cache key', () => {
+  // The image route shares the default behavior's cache key. The router puts
+  // the format the viewer accepts into a cache-key header, so a viewer that
+  // can't decode WebP/AVIF never gets the cached copy made for one that can.
+  const manifest = baseManifest({
+    routes: [
+      { pattern: '/_next/image*', target: 'image-optimization' },
+      { pattern: '/*', target: 'compute' },
+    ],
+  });
+  const entries = buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: true });
+  const code = generateKvsRouterRequestCode();
+  const imageRequest = (headers: Record<string, { value: string }>) =>
+    runRequestFn(code, entries, {
+      uri: '/_next/image',
+      querystring: { url: { value: '%2Fphoto.png' }, w: { value: '640' }, q: { value: '75' } },
+      headers: { host: { value: 'x.test' }, ...headers },
+      cookies: {},
+    });
+
+  for (const [accept, expected] of [
+    ['image/avif,image/webp,image/apng,*/*;q=0.8', 'avifwebp'],
+    ['image/webp,*/*', 'webp'],
+    ['image/avif,*/*', 'avif'],
+  ] as const) {
+    void it(`sets ${IMAGE_FORMAT_CACHE_KEY_HEADER}: ${expected} for Accept: ${accept}`, async () => {
+      const { output, selectedOrigin } = await imageRequest({ accept: { value: accept } });
+      assert.equal(selectedOrigin, ORIGIN_ID.image);
+      assert.deepEqual(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], { value: expected });
+    });
+  }
+
+  void it('sends no format header for a viewer that accepts neither WebP nor AVIF', async () => {
+    const cases: Record<string, { value: string }>[] = [{ accept: { value: '*/*' } }, {}];
+    for (const headers of cases) {
+      const { output } = await imageRequest(headers);
+      assert.equal(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], undefined);
+    }
+  });
+
+  void it('replaces a format header the viewer sent on an image route', async () => {
+    const { output } = await imageRequest({
+      accept: { value: '*/*' },
+      [IMAGE_FORMAT_CACHE_KEY_HEADER]: { value: 'webp' },
+    });
+    assert.equal(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], undefined);
+  });
+
+  void it('drops a format header the viewer sent on a page route, so it cannot split the page cache', async () => {
+    const { output, selectedOrigin } = await runRequestFn(code, entries, {
+      uri: '/about',
+      headers: { host: { value: 'x.test' }, [IMAGE_FORMAT_CACHE_KEY_HEADER]: { value: 'webp' } },
+      cookies: {},
+    });
+    assert.equal(selectedOrigin, ORIGIN_ID.server);
+    assert.equal(output.headers[IMAGE_FORMAT_CACHE_KEY_HEADER], undefined);
   });
 });
 
