@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(core): the dev-server pidfile never goes missing while a reload takes it over

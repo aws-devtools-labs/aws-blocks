@@ -35,7 +35,7 @@ The dev server starts at:
 
 ```
 native-bindings/
-├── aws-blocks/
+├── cdk-blocks/
 │   ├── index.ts          ← Backend definition (all blocks + API methods)
 │   ├── client.js         ← Auto-generated client proxy
 │   ├── package.json
@@ -60,7 +60,7 @@ Point native SDKs at the API server base URL:
 
 ### Auth Flows
 
-All four auth blocks are `Auth` (`@aws-blocks/bb-auth`). Errors cross the wire by name: the canonical `AuthErrors` names (`NotAuthenticatedException`, `NotAuthorizedException`, `CodeMismatchException`, …) in the JSON-RPC `error.data.name`.
+All four auth blocks are `Auth` (`@aws-cdk-blocks/bb-auth`). Errors cross the wire by name: the canonical `AuthErrors` names (`NotAuthenticatedException`, `NotAuthorizedException`, `CodeMismatchException`, …) in the JSON-RPC `error.data.name`.
 
 **Email + password (`auth-basic`)** — cookie sessions. Every sign-up confirms the email address with a code, and confirming it signs the user in (auto sign-in). Native clients call:
 - `basicSignUp(username, password, email)` → `basicGetLastCode(username)` (local dev server only) → `basicConfirmSignUp(username, code)`

@@ -210,7 +210,7 @@ describe('Harbor approval summary: revisions step', () => {
 	]) it(`writes the changed-file table to the run summary (${label})`, async () => {
 		const pr = {
 			state: 'open',
-			head: { sha: 'h'.repeat(40), repo: { full_name: 'someone/aws-blocks' } },
+			head: { sha: 'h'.repeat(40), repo: { full_name: 'someone/cdk-blocks' } },
 			base: { ref: 'main', sha: 'b'.repeat(40) },
 			changed_files: 2,
 		};

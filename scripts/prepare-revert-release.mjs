@@ -14,7 +14,10 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const SCOPE = "@aws-blocks/";
+const SCOPE = "@aws-cdk-blocks/";
+// The umbrella publishes unscoped, so a scope test alone would leave it out of the revert.
+const UMBRELLA_PKG = "aws-cdk-blocks";
+const isReleasedPackage = (name) => name.startsWith(SCOPE) || name === UMBRELLA_PKG;
 const KEEP = new Set(["package.json", "CHANGELOG.md"]); // reverting these would undo the version bump
 const FORCE = process.env.FORCE === "true";
 const REASON = (process.env.REASON ?? "").trim();
@@ -57,7 +60,7 @@ const packages = [];
 for (const dir of [...dirs].sort()) {
 	try {
 		const { name } = JSON.parse(git(["show", `HEAD:packages/${dir}/package.json`]));
-		if (typeof name === "string" && name.startsWith(SCOPE)) packages.push(name);
+		if (typeof name === "string" && isReleasedPackage(name)) packages.push(name);
 	} catch {
 		// no package.json at HEAD (package added in the reverted release) — skip
 	}

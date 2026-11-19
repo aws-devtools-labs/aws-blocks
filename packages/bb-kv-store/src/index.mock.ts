@@ -1,11 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
-import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
-import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
+import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {

@@ -24,9 +24,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
-import { type BuildingBlockScope, DEFAULT_NODE_RUNTIME, getBlocksRoot, registerConfig } from '@aws-blocks/core/cdk';
-import { deployTimeLambdaCode } from '@aws-blocks/core/cdk/internal';
+import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-cdk-blocks/bb-app-setting';
+import { type BuildingBlockScope, DEFAULT_NODE_RUNTIME, getBlocksRoot, registerConfig } from '@aws-cdk-blocks/core/cdk';
+import { deployTimeLambdaCode } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -182,7 +182,7 @@ export function validateHostedUiFederation(scope: BuildingBlockScope, options: R
 	return idpRegistrations(options);
 }
 
-/** Set by `@aws-blocks/bb-secret`'s CDK layer on a stack-managed `Secret` (see there). */
+/** Set by `@aws-cdk-blocks/bb-secret`'s CDK layer on a stack-managed `Secret` (see there). */
 const SECRET_HAS_INITIAL_VALUE = Symbol.for('blocks:SecretHasInitialValue');
 
 /** Every hosted-UI provider secret in `options`, with the option path that names it. */
@@ -223,7 +223,7 @@ function warnOnValuelessProviderSecrets(scope: BuildingBlockScope, options: Reso
 	for (const { what, ref } of hostedUiProviderSecrets(options)) {
 		if (managedSecretHasInitialValue(ref) !== false) continue;
 		cdk.Annotations.of(scope).addWarningV2(
-			'@aws-blocks/bb-auth:ProviderSecretWithoutValue',
+			'@aws-cdk-blocks/bb-auth:ProviderSecretWithoutValue',
 			`Auth '${scope.fullId}': ${what} is the Secret '${ref.fullId}', which this stack creates with no value. ` +
 				'The provider is registered with Cognito during the same deploy, so the first deploy fails reading it. ' +
 				'Give the Secret `generate: true` (a placeholder value; set the real one after the deploy, e.g. ' +
@@ -357,7 +357,7 @@ export function provisionHostedUiFederation(
 /**
  * Directory of the esbuild-bundled registration handler (`npm run build:lambda`).
  * A vendorized copy has no `dist/`, so its source is bundled at synth instead
- * (`deployTimeLambdaCode` in `@aws-blocks/core/cdk/internal`).
+ * (`deployTimeLambdaCode` in `@aws-cdk-blocks/core/cdk/internal`).
  */
 const REGISTRATION_LAMBDA = {
 	moduleUrl: import.meta.url,

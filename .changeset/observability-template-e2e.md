@@ -1,10 +1,10 @@
 ---
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 feat: add an `observability` template with Logger, Metrics, Tracer and Dashboard
 
-`npx @aws-blocks/create-blocks-app my-app --template observability` scaffolds a
+`npx @aws-cdk-blocks/create-blocks-app my-app --template observability` scaffolds a
 backend-only app whose `placeOrder` method, gated by `Auth`, writes a
 structured log line, emits an `OrdersPlaced` metric and runs inside a trace
 segment, with a CloudWatch

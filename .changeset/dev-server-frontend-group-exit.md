@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): the dev server exits only after its whole frontend has

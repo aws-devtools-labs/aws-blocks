@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-auth': patch
-'@aws-blocks/blocks': patch
+'@aws-cdk-blocks/bb-auth': patch
+'aws-cdk-blocks': patch
 ---
 
 Under `npm run dev`, `Auth` checks user attributes against your user pool's schema, as Amazon Cognito does on AWS, so an invalid write fails locally instead of only after you deploy. (`AuthCognito`'s mock stored any attribute it was sent.) `signUp`, `updateUserAttributes` and `admin.createUser` fail with `InvalidParameterException` for an attribute that is neither a standard attribute nor declared in `users.attributes`, a value that isn't a string, or a value longer than 2,048 characters. Updating a custom attribute declared `mutable: false` also fails with `InvalidParameterException`. Setting `email_verified` or `phone_number_verified` through `signUp` or `updateUserAttributes` fails with `NotAuthorizedException`; `admin.createUser` can set them. To store a custom attribute, declare it in `users: { attributes: [{ name: 'team' }] }`, then write it as `team` or `custom:team`.

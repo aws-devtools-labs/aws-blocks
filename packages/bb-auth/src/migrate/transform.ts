@@ -21,13 +21,14 @@
  * before anything is written.
  *
  * The `typescript` module is passed in, never imported: the CLI loads the
- * consumer's own copy lazily, so `@aws-blocks/bb-auth` carries no TypeScript
+ * consumer's own copy lazily, so `@aws-cdk-blocks/bb-auth` carries no TypeScript
  * dependency at runtime.
  */
 
 import { dirname, resolve } from 'node:path';
 import type * as TS from 'typescript';
 import {
+	AUTH_COMMON_MODULE_RENAMES,
 	AUTH_ERROR_NAMES,
 	BASIC_STRING_RENAMES,
 	COGNITO_METHOD_RENAMES,
@@ -54,6 +55,7 @@ import {
 	type SUMMARY_WARNINGS,
 	TODO_TAG,
 	TODOS,
+	renameUmbrellaSpecifier,
 	UMBRELLA_MODULES,
 	umbrellaBlockFor,
 	unknownOldSubpath,
@@ -182,7 +184,7 @@ function oldClassLocals(ts: TypeScript, sf: TS.SourceFile): Map<string, OldBlock
 	return out;
 }
 
-/** Local names of `import * as x from '@aws-blocks/blocks'` (or `/cdk`). */
+/** Local names of `import * as x from 'aws-cdk-blocks'` (or `/cdk`). */
 function umbrellaNamespaceLocals(ts: TypeScript, sf: TS.SourceFile): Set<string> {
 	const out = new Set<string>();
 	for (const stmt of sf.statements) {
@@ -201,7 +203,7 @@ function unwrap(ts: TypeScript, node: TS.Expression): TS.Expression {
 }
 
 /**
- * Local name → imported name of each value binding of an import of `@aws-blocks/bb-auth` or the umbrella
+ * Local name → imported name of each value binding of an import of `@aws-cdk-blocks/bb-auth` or the umbrella
  * that is not in `skip` (the declarations the codemod rewrites).
  */
 function newNameBindings(ts: TypeScript, sf: TS.SourceFile, skip: ReadonlySet<TS.Node>): Map<string, string> {
@@ -478,7 +480,7 @@ class FileMigrator {
 	/** The `providers` values of the old blocks' options: a factory call outside them is built elsewhere. */
 	private readonly providerValues: [number, number][] = [];
 	private readonly importJobs: ImportJob[] = [];
-	/** Local names of `import * as x from '@aws-blocks/blocks'` (or `/cdk`). */
+	/** Local names of `import * as x from 'aws-cdk-blocks'` (or `/cdk`). */
 	private readonly umbrellaNamespaces = new Set<string>();
 	private readonly attention: string[] = [];
 	private authTouching = false;
@@ -538,7 +540,7 @@ class FileMigrator {
 			const spec = moduleText(ts, stmt.moduleSpecifier);
 			if (spec === undefined) continue;
 			if (isImport && spec.startsWith('.')) this.scanRelativeImport(stmt, spec, takenNames);
-			if (isImport && (spec === NEW_MODULE || UMBRELLA_MODULES.has(spec) || spec === '@aws-blocks/auth-common')) {
+			if (isImport && (spec === NEW_MODULE || UMBRELLA_MODULES.has(spec) || AUTH_COMMON_MODULE_RENAMES.has(spec))) {
 				const b = stmt.importClause?.namedBindings;
 				if (b && ts.isNamedImports(b)) {
 					for (const el of b.elements) {
@@ -555,7 +557,10 @@ class FileMigrator {
 			const subpath = own(OLD_SUBPATHS, spec);
 			const oldBlock = own(OLD_MODULES, spec);
 			const umbrella = UMBRELLA_MODULES.has(spec);
-			if (!subpath && !oldBlock && !umbrella) {
+			// Any umbrella subpath, not just the root and /cdk, so its specifier is rewritten.
+			const renamed = renameUmbrellaSpecifier(spec) ?? AUTH_COMMON_MODULE_RENAMES.get(spec);
+			const specRenamed = renamed !== undefined && renamed !== spec;
+			if (!subpath && !oldBlock && !umbrella && !specRenamed) {
 				if (unknownOldSubpath(spec)) {
 					this.authTouching = true;
 					this.todo(stmt, IMPORT_TODOS.unknownSubpath);
@@ -576,8 +581,14 @@ class FileMigrator {
 					this.importJobs.push({ decl: stmt, specs: [], newModule: NEW_MODULE });
 				} else if (ts.isNamespaceImport(bindings)) {
 					// `import * as blocks from '@aws-blocks/blocks'`: its old members are
-					// renamed where they are used (`blocks.AuthCognito` → `blocks.Auth`).
-					this.umbrellaNamespaces.add(bindings.name.text);
+					// renamed where they are used (`blocks.AuthCognito` → `blocks.Auth`),
+					// and an old-named specifier is rewritten to the renamed umbrella. Only
+					// the root and /cdk carry the old names, so only those become a namespace.
+					if (umbrella) this.umbrellaNamespaces.add(bindings.name.text);
+					if (specRenamed) {
+						this.authTouching = true;
+						this.importJobs.push({ decl: stmt, specs: [], newModule: renamed });
+					}
 				}
 				continue;
 			}
@@ -593,8 +604,12 @@ class FileMigrator {
 			});
 			for (const el of elements) {
 				const imported = (el.propertyName ?? el.name).text;
+				// Only the root and /cdk ever exported the old auth classes, so a subpath
+				// import gets its specifier rewritten but none of its names renamed.
 				const umbrellaBlock =
-					SHARED_FACTORY_NAMES.has(imported) && !oidcStyle ? undefined : umbrellaBlockFor(imported);
+					!umbrella || (SHARED_FACTORY_NAMES.has(imported) && !oidcStyle)
+						? undefined
+						: umbrellaBlockFor(imported);
 				const block = oldBlock ?? umbrellaBlock;
 				const rule = block ? own(NAME_RULES[block], imported) : undefined;
 				const s: ImportedSpec = {
@@ -620,9 +635,13 @@ class FileMigrator {
 					else s.local = imported;
 				}
 			}
-			if (oldBlock || touched) {
+			// An old-named umbrella or auth-common import is rewritten even when it carries
+			// no old auth name: the old package is gone after the upgrade, so leaving it
+			// would emit a file importing from both `@aws-blocks/*` and the renamed package.
+			if (oldBlock || touched || specRenamed) {
 				this.authTouching = true;
-				this.importJobs.push({ decl: stmt, specs, ...(oldBlock ? { newModule: NEW_MODULE } : {}) });
+				const newModule = oldBlock ? NEW_MODULE : specRenamed ? renamed : undefined;
+				this.importJobs.push({ decl: stmt, specs, ...(newModule ? { newModule } : {}) });
 			}
 		}
 	}
@@ -650,7 +669,7 @@ class FileMigrator {
 		return s;
 	}
 
-	/** `@aws-blocks/bb-auth-cognito/ui` → `@aws-blocks/bb-auth/ui`, renaming every name it exported. */
+	/** `@aws-blocks/bb-auth-cognito/ui` → `@aws-cdk-blocks/bb-auth/ui`, renaming every name it exported. */
 	private scanSubpath(
 		stmt: TS.ImportDeclaration | TS.ExportDeclaration,
 		spec: string,
@@ -672,7 +691,7 @@ class FileMigrator {
 
 	/**
 	 * `@aws-blocks/bb-auth-oidc/middleware` / `/client`: no replacement module.
-	 * Names `@aws-blocks/bb-auth` also exports (the provider helpers, `relayOrigin`,
+	 * Names `@aws-cdk-blocks/bb-auth` also exports (the provider helpers, `relayOrigin`,
 	 * the error constants and types) move there; the rest (`AuthOIDCClient`,
 	 * `handle401`, …) stay on the old path under a TODO.
 	 */
@@ -739,7 +758,7 @@ class FileMigrator {
 	private queueImportJobs(): void {
 		const seenByModule = new Map<string, Set<string>>();
 		const planned: PlannedImport[] = [];
-		// `import { Auth } from '@aws-blocks/bb-auth'` already there: a renamed `AuthCognito` must not bind it twice.
+		// `import { Auth } from '@aws-cdk-blocks/bb-auth'` already there: a renamed `AuthCognito` must not bind it twice.
 		const bound = newNameBindings(this.ts, this.sf, new Set(this.importJobs.map((j) => j.decl)));
 		for (const job of this.importJobs) {
 			const { decl } = job;
@@ -766,7 +785,7 @@ class FileMigrator {
 		}
 		// Every declaration that moves to the same module (and kind) becomes one:
 		// `import { AuthCognito as A } …-cognito` + `import { AuthCognitoErrors } …-cognito`
-		// would otherwise be two imports of `@aws-blocks/bb-auth`.
+		// would otherwise be two imports of `@aws-cdk-blocks/bb-auth`.
 		const hosts = new Map<string, PlannedImport>();
 		for (const p of planned) {
 			const clause = this.ts.isImportDeclaration(p.job.decl) ? p.job.decl.importClause : undefined;

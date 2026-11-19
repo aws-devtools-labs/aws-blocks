@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @aws-blocks/bb-realtime — Local dev (mock) entry point.
+ * @aws-cdk-blocks/bb-realtime — Local dev (mock) entry point.
  *
  * Provides the `Realtime` class for typed real-time pub/sub channels.
  * In local dev, uses EventEmitter for in-process pub/sub and a WebSocket
@@ -11,8 +11,8 @@
  * Resolved via the `default` condition in package.json.
  */
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
 import type {
@@ -28,10 +28,10 @@ import type {
 import { RealtimeErrors } from './errors.js';
 import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, validatePrincipal, validateRevokePrincipal } from './utils.js';
 import { getBroadcastBus, LOCAL_TOKEN_SECRET, revokePrincipal } from './local-dev.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import { assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-realtime');
@@ -83,7 +83,7 @@ globalEmitter.setMaxListeners(1000);
  *
  * @example
  * ```typescript
- * import { Realtime } from '@aws-blocks/bb-realtime';
+ * import { Realtime } from '@aws-cdk-blocks/bb-realtime';
  * import { z } from 'zod';
  *
  * const cursorSchema = z.object({ userId: z.string(), x: z.number(), y: z.number() });
@@ -116,8 +116,8 @@ export const Realtime: {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 
-		this.registerClientMiddleware('@aws-blocks/bb-realtime/mock-middleware');
-		this.registerDevAttachment('@aws-blocks/bb-realtime/ws-server');
+		this.registerClientMiddleware('@aws-cdk-blocks/bb-realtime/mock-middleware');
+		this.registerDevAttachment('@aws-cdk-blocks/bb-realtime/ws-server');
 
 		this._namespaces = new Map();
 		for (const [name, config] of Object.entries(options.namespaces)) {

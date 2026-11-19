@@ -58,7 +58,7 @@
  */
 
 import crypto from 'node:crypto';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import {
 	ApiError,
 	BLOCKS_AUTH_PREFIX,
@@ -68,7 +68,7 @@ import {
 	RawRouteErrors,
 	type RegisteredRoute,
 	type Scope,
-} from '@aws-blocks/core';
+} from '@aws-cdk-blocks/core';
 import { bearerAuthEnabled } from './cdk/contract.js';
 import { clearPendingAuth, hasPendingAuth, readPendingAuth } from './engines/pending-auth.js';
 import type {
@@ -264,7 +264,7 @@ function sendUnavailablePage(
 		`<h1>${escapeHtml(title)}</h1>`,
 		`<p><strong>${escapeHtml(unavailable.hint)}</strong></p>`,
 		`<p>${escapeHtml(unavailable.message)}</p>`,
-		`<p>Error: <code>${escapeHtml(AuthErrors.ProviderUnavailable)}</code>. See "Social sign-in" in the Auth README (<code>@aws-blocks/bb-auth</code>).</p>`,
+		`<p>Error: <code>${escapeHtml(AuthErrors.ProviderUnavailable)}</code>. See "Social sign-in" in the Auth README (<code>@aws-cdk-blocks/bb-auth</code>).</p>`,
 		'<p><a href="/">Back to the app</a></p>',
 		'</main>',
 		'</body>',

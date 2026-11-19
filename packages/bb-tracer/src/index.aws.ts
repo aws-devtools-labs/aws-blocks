@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import AWSXRay from 'aws-xray-sdk-core';
-import { Scope } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { TracerOptions, Segment as ISegment, AnnotationValue } from './types.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { TracerOptions, Segment, AnnotationValue } from './types.js';

@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, isBlocksError } from '@aws-blocks/core';
+import { ApiNamespace, Scope, isBlocksError } from '@aws-cdk-blocks/core';
 import {
 	AuthCognito,
 	AuthCognitoErrors,

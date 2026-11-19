@@ -157,7 +157,7 @@ export interface ApiNamespaceOptions {
    * The compute this namespace's methods run on. Omit to run on the app's
    * default compute, like every namespace before.
    *
-   * Pass a `Compute` block (from `@aws-blocks/blocks`) to give a namespace its
+   * Pass a `Compute` block (from `aws-cdk-blocks`) to give a namespace its
    * own function — for example more memory (and CPU) than the rest of the API,
    * or its own scaling separate from the other namespaces:
    *
@@ -268,7 +268,7 @@ export interface ApiNamespaceOptions {
  * 
  * ## Usage
  * 
- * Define your API in the backend (`aws-blocks/index.ts`):
+ * Define your API in the backend (`cdk-blocks/index.ts`):
  * 
  * ```typescript
  * const scope = new Scope('my-app');
@@ -289,7 +289,7 @@ export interface ApiNamespaceOptions {
  * Import and call from the frontend with full type safety:
  * 
  * ```typescript
- * import { api } from 'aws-blocks';
+ * import { api } from 'cdk-blocks';
  * 
  * const result = await api.greet('World'); // Fully typed
  * ```
@@ -337,7 +337,7 @@ export interface ApiNamespaceOptions {
  * 
  * The local mock applies no auth either, so an ungated method passes every
  * local check and still ships callable by anyone. See the `Auth` README
- * (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+ * (`@aws-cdk-blocks/bb-auth`) for `requireAuth` / `requireRole`.
  *
  * A guard protects only when awaited: `auth.requireRole(context, 'admins')`
  * without `await` lets the method return before the check fails. To make a

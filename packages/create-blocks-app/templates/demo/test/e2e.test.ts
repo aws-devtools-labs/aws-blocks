@@ -4,9 +4,9 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isBlocksError } from '@aws-blocks/blocks/client';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
+import { isBlocksError } from 'aws-cdk-blocks/client';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
+import type { api as apiType, authApi as authApiType, hello as helloType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -14,7 +14,7 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
-let app: typeof import('aws-blocks');
+let app: typeof import('cdk-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 let hello: typeof helloType;
@@ -24,7 +24,7 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 // API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
 // client resolves BLOCKS_API_URL first, so a deploy, which records its URL in config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
-const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // Locally no email is sent: `getLastAuthCode(name)` reads the verification code
 // the local auth block just issued for `name` (it finds the block's .bb-data/
@@ -63,9 +63,9 @@ test.before(async () => {
   process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
-  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
   // stale client that lacks namespaces exported since the last generation.
-  app = await import('aws-blocks');
+  app = await import('cdk-blocks');
   api = app.api;
   authApi = app.authApi;
   hello = app.hello;
@@ -373,7 +373,7 @@ test('EmailClient - a sent welcome mail reaches the local outbox', async () => {
 // The mock runs the same address checks as the deployed client, so a bad
 // address fails here exactly as it would against SES.
 test('EmailClient - an invalid recipient is rejected by name', async () => {
-  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  const { isBlocksError } = await import('aws-cdk-blocks/client');
   await signUp(`email-bad-${uniqueSuffix()}`);
   await assert.rejects(
     api.sendWelcome('not-an-email-address'),
@@ -414,7 +414,7 @@ test('Database - a transfer moves both balances atomically', async () => {
 // the RPC boundary and the client can match it; the decisive proof is behavioral:
 // the call rejects with that branded error AND neither balance moved.
 test('Database - a declined transfer rolls back atomically', async () => {
-  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  const { isBlocksError } = await import('aws-cdk-blocks/client');
 
   await signUp(`ledger-${uniqueSuffix()}`);
   await api.openAccount('carol', 50);
@@ -454,7 +454,7 @@ test('Database - a declined transfer rolls back atomically', async () => {
 // Accounts belong to the user who opened them: another user neither sees them
 // nor can move money into or out of them, even using the same account names.
 test("Database - a user cannot read, debit or credit another user's accounts", async () => {
-  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  const { isBlocksError } = await import('aws-cdk-blocks/client');
 
   const owner = `ledger-owner-${uniqueSuffix()}`;
   await signUp(owner);

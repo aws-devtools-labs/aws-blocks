@@ -77,7 +77,7 @@ function resolveWithApiUrl(projectRoot: string, apiUrl: string): Promise<Endpoin
 describe('resolveRpcEndpoint — local mode', () => {
 	it('uses the port discovered in the app server script', async () => {
 		const root = deployedProject({
-			'aws-blocks/scripts/server.ts': 'startDevServer({\n\tbackendPath: x,\n\tport: 4321,\n});\n',
+			'cdk-blocks/scripts/server.ts': 'startDevServer({\n\tbackendPath: x,\n\tport: 4321,\n});\n',
 		});
 		const result = assertOk(await resolveRpcEndpoint({ projectRoot: root, stage: 'sandbox', mode: 'local' }));
 		assert.strictEqual(result.endpoint, 'http://localhost:4321/aws-blocks/api');

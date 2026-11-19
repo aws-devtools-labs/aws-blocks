@@ -56,7 +56,7 @@ export type DeployManifest = {
      * Glob patterns (relative to `directory`) of files that must never
      * be cached. These receive `Cache-Control: no-cache, no-store,
      * must-revalidate`. Use for runtime config files (e.g.
-     * `.cdk-blocks-sandbox/config.json`) that change between deploys and
+     * `.blocks-sandbox/config.json`) that change between deploys and
      * must never serve stale content even briefly.
      */
     noCachePaths?: string[];

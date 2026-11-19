@@ -397,4 +397,4 @@ export function diffImmutables(before: PoolImmutables, after: PoolImmutables, op
 /** The remedy every violation shares, pointing at the `DESIGN.md` runbook. */
 export const REMEDY =
 	'Revert the change. A deployed pool cannot take it: changing it means a new user pool and a user migration — ' +
-	'see "Changing an immutable pool property" in the @aws-blocks/bb-auth DESIGN.md.';
+	'see "Changing an immutable pool property" in the @aws-cdk-blocks/bb-auth DESIGN.md.';

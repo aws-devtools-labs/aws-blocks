@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/create-block": patch
+"@aws-cdk-blocks/core": patch
+"@aws-cdk-blocks/create-block": patch
 ---
 
 Run the CDK commands of the sandbox, deploy and destroy scripts without a shell

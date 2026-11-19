@@ -20,5 +20,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.cdk-blocks-sandbox).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.blocks-sandbox).*)'],
 };

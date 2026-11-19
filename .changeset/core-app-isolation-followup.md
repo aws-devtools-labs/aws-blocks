@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): `defaults.appIdentity` reports more of what reaches outside the app

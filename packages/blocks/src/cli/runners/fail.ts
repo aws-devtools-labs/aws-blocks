@@ -4,7 +4,7 @@
 /** How a lifecycle runner reports an error that ends it. */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { log } from '@aws-blocks/core/scripts';
+import { log } from '@aws-cdk-blocks/core/scripts';
 import { DEV_FAILURE_FILE_ENV, DEV_STATE, devCrashState } from './launch.js';
 
 /** The exit code of an operation that the operator stopped, by core's `operatorSignal`: 128 + the signal number. */

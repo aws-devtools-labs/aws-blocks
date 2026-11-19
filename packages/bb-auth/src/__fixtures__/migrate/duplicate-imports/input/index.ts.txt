@@ -2,7 +2,7 @@ import { AuthCognito as Cognito } from '@aws-blocks/bb-auth-cognito';
 import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 import type { CognitoUser } from '@aws-blocks/bb-auth-cognito';
 import type { MFAPreference } from '@aws-blocks/bb-auth-cognito';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 export const auth = new Cognito(scope, 'auth', {});

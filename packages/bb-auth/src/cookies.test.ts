@@ -6,7 +6,7 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { S3Client } from '@aws-sdk/client-s3';
-import { _resetConfigCache, isBlocksError, preloadConfig } from '@aws-blocks/core';
+import { _resetConfigCache, isBlocksError, preloadConfig } from '@aws-cdk-blocks/core';
 import {
 	assertSessionCookieTransport,
 	clearAutoSignInCookie,

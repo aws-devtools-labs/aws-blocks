@@ -3,12 +3,12 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import type { api as apiType } from 'aws-blocks';
-import { isBlocksError } from '@aws-blocks/core';
-import { AgentErrors } from '@aws-blocks/bb-agent';
-import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
-import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
-import type { RealtimeSubscription } from '@aws-blocks/bb-realtime';
+import type { api as apiType } from 'cdk-blocks';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { AgentErrors } from '@aws-cdk-blocks/bb-agent';
+import { createChat, realtimeTransport } from '@aws-cdk-blocks/bb-agent/client';
+import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-cdk-blocks/bb-agent/client';
+import type { RealtimeSubscription } from '@aws-cdk-blocks/bb-realtime';
 // The agent per-user isolation test needs two distinct signed-in users; it does
 // not test sign-up itself. On a deployed stack they are provisioned through the
 // secret-gated `testSupport.provisionUser` (no mailbox needed), locally through
@@ -175,7 +175,7 @@ export function agentTests(getApi: () => typeof apiType) {
             const fresh = await api.agentGetRawDescriptor(conversationId);
             return { ...fresh, __blocks: 'realtime/channel' };
           },
-        } satisfies import('aws-blocks').SubscribeOptions<any>);
+        } satisfies import('cdk-blocks').SubscribeOptions<any>);
 
         try {
           await sub.established;

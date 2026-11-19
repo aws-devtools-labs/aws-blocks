@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Templates with a Vite frontend typecheck it and their backend as separate
-// TypeScript projects: `aws-blocks/tsconfig.json` sees Node types, the browser
+// TypeScript projects: `cdk-blocks/tsconfig.json` sees Node types, the browser
 // code in `src/` does not, and reads the backend through a project reference that
 // `tsc -b` builds. These tests keep every Vite template on that layout, and keep
 // `nextjs` off it: `next build` ignores project references when it type-checks.
@@ -58,7 +58,7 @@ describe('template TypeScript projects', () => {
 			);
 			for (const leaf of ['tsconfig.app.json', 'tsconfig.node.json']) {
 				const config = readTsconfig(join(dir, leaf));
-				assert.deepStrictEqual(config.references, [{ path: './aws-blocks' }], `${name}/${leaf}`);
+				assert.deepStrictEqual(config.references, [{ path: './cdk-blocks' }], `${name}/${leaf}`);
 				// In the leaf config, because `tsc -b --noEmit` fails with TS6310 on the composite backend.
 				assert.strictEqual(config.compilerOptions?.noEmit, true, `${name}/${leaf}`);
 			}
@@ -68,7 +68,7 @@ describe('template TypeScript projects', () => {
 				['vite/client'],
 				`${name}: src/ must not see Node types`,
 			);
-			assert.ok(existsSync(join(dir, 'aws-blocks', 'tsconfig.json')), `${name}: no aws-blocks/tsconfig.json`);
+			assert.ok(existsSync(join(dir, 'cdk-blocks', 'tsconfig.json')), `${name}: no cdk-blocks/tsconfig.json`);
 			// Build mode builds the backend's declarations first; plain `tsc` would fail with TS6305 without them.
 			// `--force`, because TypeScript 5.x build mode does not notice a changed dependency's declarations.
 			const { scripts } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'));
@@ -80,7 +80,7 @@ describe('template TypeScript projects', () => {
 	});
 
 	it('every TypeScript file of a Vite template is in exactly one project, and src/ in the browser one', () => {
-		const projects = { app: 'tsconfig.app.json', node: 'tsconfig.node.json', backend: 'aws-blocks/tsconfig.json' };
+		const projects = { app: 'tsconfig.app.json', node: 'tsconfig.node.json', backend: 'cdk-blocks/tsconfig.json' };
 		for (const name of viteTemplates) {
 			const dir = join(templatesDir, name);
 			const owners = new Map<string, string[]>();
@@ -109,8 +109,8 @@ describe('template TypeScript projects', () => {
 		}
 	});
 
-	it('every aws-blocks/tsconfig.json is the same Node project of every backend file', () => {
-		const defaultPath = join(templatesDir, 'default', 'aws-blocks', 'tsconfig.json');
+	it('every cdk-blocks/tsconfig.json is the same Node project of every backend file', () => {
+		const defaultPath = join(templatesDir, 'default', 'cdk-blocks', 'tsconfig.json');
 		const backend = readTsconfig(defaultPath);
 		assert.strictEqual(backend.compilerOptions?.composite, true);
 		assert.deepStrictEqual(backend.compilerOptions?.types, ['node']);
@@ -120,29 +120,29 @@ describe('template TypeScript projects', () => {
 		// Adding Blocks to an existing project, or to an Amplify app, copies the default template's
 		// file when a template has none, and the upgrade guide links to it.
 		const expected = readFileSync(defaultPath, 'utf-8');
-		const copies = templates.filter((name) => existsSync(join(templatesDir, name, 'aws-blocks', 'tsconfig.json')));
+		const copies = templates.filter((name) => existsSync(join(templatesDir, name, 'cdk-blocks', 'tsconfig.json')));
 		assert.deepStrictEqual(copies.sort(), [...viteTemplates].sort());
 		const guide = readFileSync(
 			join(__dirname, '..', '..', '..', 'docs', 'guides', 'upgrading-older-apps.md'),
 			'utf-8',
 		);
-		assert.ok(guide.includes('](../../packages/create-blocks-app/templates/default/aws-blocks/tsconfig.json)'));
+		assert.ok(guide.includes('](../../packages/create-blocks-app/templates/default/cdk-blocks/tsconfig.json)'));
 		for (const name of copies) {
-			const path = join(templatesDir, name, 'aws-blocks', 'tsconfig.json');
+			const path = join(templatesDir, name, 'cdk-blocks', 'tsconfig.json');
 			assert.strictEqual(
 				readFileSync(path, 'utf-8'),
 				expected,
-				`${name}/aws-blocks/tsconfig.json differs from default's`,
+				`${name}/cdk-blocks/tsconfig.json differs from default's`,
 			);
 		}
 	});
 
 	it('nextjs keeps one tsconfig with global Node types', () => {
 		// `next build` ignores project references when it type-checks (vercel/next.js#67372), so it
-		// checks aws-blocks/ with this tsconfig.json either way, and that needs Node types.
+		// checks cdk-blocks/ with this tsconfig.json either way, and that needs Node types.
 		const config = readTsconfig(join(templatesDir, 'nextjs', 'tsconfig.json'));
 		assert.strictEqual(config.references, undefined);
 		assert.strictEqual(config.compilerOptions?.types, undefined);
-		assert.ok(!existsSync(join(templatesDir, 'nextjs', 'aws-blocks', 'tsconfig.json')));
+		assert.ok(!existsSync(join(templatesDir, 'nextjs', 'cdk-blocks', 'tsconfig.json')));
 	});
 });

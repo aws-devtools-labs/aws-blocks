@@ -1,6 +1,6 @@
 // TODO(aws-blocks-auth-migrate): Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage. Native apps: export auth.createOidcApi() on the backend and keep calling getClient() (MIGRATION.md, "Native apps").
 import '@aws-blocks/bb-auth-oidc/middleware';
-import { oidcAuthApi } from 'aws-blocks';
+import { oidcAuthApi } from 'cdk-blocks';
 
 export async function signIn(): Promise<void> {
 	// TODO(aws-blocks-auth-migrate): getClient() is gone from the web with AuthOIDC: federated sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Native apps: export auth.createOidcApi() on the backend and keep calling getClient() (MIGRATION.md, "Native apps").

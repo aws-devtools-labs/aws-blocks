@@ -4,10 +4,10 @@
 // Fixture of `upgrade-sql-blocks.ts --scenario aurora`: the app on the last release of `Database` in
 // `@aws-blocks/bb-data`.
 
-import { ApiNamespace, Database, Scope, sql } from '@aws-blocks/blocks';
+import { ApiNamespace, Database, Scope, sql } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
-const main = new Database(scope, 'main', { migrationsPath: './aws-blocks/migrations' });
+const main = new Database(scope, 'main', { migrationsPath: './cdk-blocks/migrations' });
 
 export const api = new ApiNamespace(scope, 'api', () => ({
 	async seed() {

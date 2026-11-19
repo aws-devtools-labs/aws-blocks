@@ -1,6 +1,6 @@
 # Design draft — a scaffolder for new Building Blocks (`create-block`)
 
-> Status: **Implemented** as `@aws-blocks/create-block` (this PR). This doc records
+> Status: **Implemented** as `@aws-cdk-blocks/create-block` (this PR). This doc records
 > the original design rationale — what a Block is, what wiring a new one requires,
 > and why the CLI is shaped the way it is. The §7 open questions are all resolved:
 > one auto-detecting CLI (contributor / customer / external), a single
@@ -12,7 +12,7 @@
 A command that generates a new Building Block (BB) — the `bb-*` package skeleton
 (all conditional-export layers, tests, docs, version script) **and** wires up every
 registration touchpoint so the block is buildable, exported from the umbrella
-`@aws-blocks/blocks`, and exercised by the comprehensive test app in one step.
+`aws-cdk-blocks`, and exercised by the comprehensive test app in one step.
 
 Today this is a ~30-minute, error-prone, copy-`bb-kv-store`-and-gut-it ritual with
 **6 hand-edited touchpoints** across the monorepo (see §4). It's exactly the kind of
@@ -85,7 +85,7 @@ are hand-edited and **none** are generated from the block's source:
    `aws-blocks.vendorize` map (`pkg → [ClassName]`).
 4. **root `package.json` `workspaces`** — append `"packages/bb-{name}"`.
 5. **`test-apps/comprehensive`** — dep as `"*"` + a `new {Class}(scope, ...)` instance in
-   `aws-blocks/index.ts` + a `test/{name}.test.ts` (zero casts).
+   `cdk-blocks/index.ts` + a `test/{name}.test.ts` (zero casts).
 6. **`npx changeset add`.**
 
 **Derived artifacts are already automated — the generator should *call* these, not
@@ -120,7 +120,7 @@ Mirror `create-blocks-app` exactly (it's the house style): **zero runtime deps**
 prompts, `--yes` to skip. Templates are real directories copied with `cp` + structural
 edits (not string templating).
 
-- **Invocation:** `npm create @aws-blocks/block@latest MyBlock` (a new
+- **Invocation:** `npm create @aws-cdk-blocks/block@latest MyBlock` (a new
   `packages/create-block` package, bin `create-block`), plus a repo convenience alias
   `npm run new:bb` for contributors.
 - **Auto-detect mode** (same trick as `create-blocks-app` detecting Amplify), in priority
@@ -145,7 +145,7 @@ edits (not string templating).
   `index*.ts` re-export lists, kept alphabetical), then runs `npm run sync-docs` and
   prints the remaining human step (add a real instance + assertions to comprehensive —
   we scaffold a stub, the author fleshes it out).
-- **Verifies:** ends by running `npm run build -w @aws-blocks/bb-{name} && npm test -w …`
+- **Verifies:** ends by running `npm run build -w @aws-cdk-blocks/bb-{name} && npm test -w …`
   (skippable) so the author starts from green.
 
 ## 7. Decisions (resolved — reflected in the implementation)
@@ -157,6 +157,6 @@ edits (not string templating).
    `Scope` skeleton). Composite and client-facing shapes are deferred to a
    follow-up, keeping the initial surface small.
 3. **Packaging** — ✅ both: a publishable `create-block` bin (`npm create
-   @aws-blocks/block`) and the repo `npm run new:bb`.
+   @aws-cdk-blocks/block`) and the repo `npm run new:bb`.
 4. **Umbrella re-export editing** — ✅ HTML markers in `index.ts` / `index.cdk.ts`
    (idempotent, re-runnable).

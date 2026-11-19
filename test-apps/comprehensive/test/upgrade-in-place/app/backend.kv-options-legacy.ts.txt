@@ -1,7 +1,7 @@
 // Fixture of `upgrade-legacy-kv-store.ts --mode options`. Each store of `backend.kv-options-release`, as a
 // `LegacyKVStore` with the same id and the same options. The third deploy is this file without those lines.
-import { KVStore, LegacyKVStore } from '@aws-blocks/bb-kv-store';
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { KVStore, LegacyKVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
 new LegacyKVStore(scope, 's0'); // legacy

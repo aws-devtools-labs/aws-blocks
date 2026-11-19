@@ -10,9 +10,9 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
 	bin: Record<string, string>;
 };
 
-const taskEntry = ['--input-type=module', '-e', `import '@aws-blocks/blocks/run'`, '--'];
+const taskEntry = ['--input-type=module', '-e', `import 'aws-cdk-blocks/run'`, '--'];
 
-describe('the bin map of @aws-blocks/blocks', () => {
+describe('the bin map of aws-cdk-blocks', () => {
 	it('does not install a standalone Blocks command', () => {
 		assert.strictEqual(Object.hasOwn(manifest.bin, 'cdk-blocks'), false);
 		assert.strictEqual(Object.hasOwn(manifest.bin, 'blocks'), false);

@@ -7,21 +7,21 @@
   "type": "module",
   "description": "Manual test app for Auth passkey (WebAuthn) sign-in + management.",
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:server": "tsx watch cdk-blocks/scripts/server.ts",
     "dev:client": "vite",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
+    "sandbox": "tsx cdk-blocks/scripts/sandbox.ts",
+    "sandbox:destroy": "tsx -C cdk cdk-blocks/scripts/sandbox-destroy.ts",
     "build": "tsc && vite build",
     "test": "npm run typecheck"
   },
   "dependencies": {
-    "@aws-blocks/bb-auth": "*",
-    "@aws-blocks/blocks": "*",
+    "@aws-cdk-blocks/bb-auth": "*",
+    "aws-cdk-blocks": "*",
     "zod": "^4.6.7"
   },
   "devDependencies": {

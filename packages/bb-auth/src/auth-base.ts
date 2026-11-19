@@ -24,11 +24,11 @@
  * with {@link defineAuthLayer}.
  */
 
-import type { AuthActionInput, AuthState } from '@aws-blocks/auth-common';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { ApiError, ApiNamespace, DEFAULT_API_ERROR_NAME, isBlocksError, Scope } from '@aws-blocks/core';
+import type { AuthActionInput, AuthState } from '@aws-cdk-blocks/auth-common';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { ApiError, ApiNamespace, DEFAULT_API_ERROR_NAME, isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import { buildAdminSurface, markServerOnly } from './auth-admin.js';
 import { bearerTokenOf, poolBearerIdentity } from './bearer.js';
 import { bearerAuthEnabled, requiresUserPool } from './cdk/contract.js';
@@ -369,7 +369,7 @@ function layerFor(target: object): AuthLayer {
 		const layer = LAYERS.get(c);
 		if (layer) return layer;
 	}
-	throw new Error('Auth: no runtime layer is registered for this class. Import Auth from @aws-blocks/bb-auth.');
+	throw new Error('Auth: no runtime layer is registered for this class. Import Auth from @aws-cdk-blocks/bb-auth.');
 }
 
 /**

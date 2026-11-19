@@ -11,7 +11,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import { requiresUserPool } from './cdk/contract.js';
 import { Auth, stubIdp } from './index.cdk.js';

@@ -201,11 +201,11 @@ export interface BlocksDefaults {
 	 * `getChannel()` again. To keep an existing stack's keys where they are, set
 	 * this before you deploy a version that reads it.
 	 *
-	 * Synth emits the warning `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
+	 * Synth emits the warning `@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
 	 * when this is `'ssm'` and the stack looks like production: the
 	 * `sandboxMode` context is not `'true'`, {@link removalPolicy} is `RETAIN`,
 	 * or {@link deletionProtection} is on. Acknowledge it with
-	 * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
+	 * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
 	 * if SSM is a deliberate choice.
 	 *
 	 * The local mock ignores this field; local development behaves the same in

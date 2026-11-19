@@ -155,8 +155,8 @@ function localDevServerCheck(input: DoctorCheckInput): DoctorCheck {
 	const { serverUp, serverUrl, port, portSource, namespaces } = input.localDevServer;
 	const portNote =
 		portSource === 'server-script'
-			? `port ${port} from aws-blocks/scripts/server.ts`
-			: `port ${port} assumed — not discovered from aws-blocks/scripts/server.ts`;
+			? `port ${port} from cdk-blocks/scripts/server.ts`
+			: `port ${port} assumed — not discovered from cdk-blocks/scripts/server.ts`;
 
 	if (!serverUp) {
 		// WARN, not FAIL: the local dev server is optional. The dashboard reads
@@ -319,7 +319,7 @@ function actionableCheck(
  * individually guarded, because a report about a broken environment that itself
  * fails on a broken environment is worthless.
  *
- * Also the CLI entry — core lazily imports `@aws-blocks/admin-ui/doctor` and
+ * Also the CLI entry — core lazily imports `@aws-cdk-blocks/admin-ui/doctor` and
  * calls `runDoctor({ projectRoot, profile, region })`.
  *
  * @param probes - Test seams. Defaulted to the real AWS/network probes so both

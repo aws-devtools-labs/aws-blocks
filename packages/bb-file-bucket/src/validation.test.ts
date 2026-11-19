@@ -9,7 +9,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { ApiError, isBlocksError, isWireSafeError } from '@aws-blocks/core';
+import { ApiError, isBlocksError, isWireSafeError } from '@aws-cdk-blocks/core';
 import { assertValidKey, assertValidPrefix } from './validation.js';
 
 describe('assertValidKey rejects invalid keys with a ValidationFailed error', () => {

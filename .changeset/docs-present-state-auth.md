@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": patch
-"@aws-blocks/auth-common": patch
+"@aws-cdk-blocks/bb-auth": patch
+"@aws-cdk-blocks/auth-common": patch
 ---
 
 docs: the Auth docs describe the installed version

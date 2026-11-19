@@ -11,12 +11,12 @@ import { fileURLToPath } from 'node:url';
  * the real Building Blocks and their handler closures) AND core's
  * `runContainer()` entry — from a SINGLE module graph, so every BB's module
  * singletons (the event-handler map, the SDK-identifier registry) are shared.
- * Bundled separately they'd each get their own `@aws-blocks/core` copy, a job's
+ * Bundled separately they'd each get their own `@aws-cdk-blocks/core` copy, a job's
  * handler would register in one map and the poller would read the other, and no
  * job would ever run.
  *
  * We esbuild-bundle a tiny generated entry that imports both from the same
- * graph, resolving `@aws-blocks/*` to their `aws-runtime` variants exactly as
+ * graph, resolving `@aws-cdk-blocks/*` to their `aws-runtime` variants exactly as
  * core bundles the Lambda handler. `esbuild.buildSync()` is called directly
  * (not via CDK's `NodejsFunction`) to avoid the `PathNotUnderRoot` failure it
  * hits for npm-installed packages; `buildSync` because CDK synth is synchronous.
@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
  * the asset + command override are wired, and `bootstrap.mjs` for the fetch.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { CONTAINER_SERVES_API_ENV } from '@aws-blocks/core/cdk/internal';
+import { CONTAINER_SERVES_API_ENV } from '@aws-cdk-blocks/core/cdk/internal';
 import { buildSync } from 'esbuild';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -61,7 +61,7 @@ const CJS_BANNER = 'const importMetaUrl = require("url").pathToFileURL(__filenam
  */
 export function containerMainEntry(backendModulePath: string): string {
 	return [
-		"import { loadConfigToProcessEnv, runContainer } from '@aws-blocks/core';",
+		"import { loadConfigToProcessEnv, runContainer } from '@aws-cdk-blocks/core';",
 		'(async () => {',
 		'  await loadConfigToProcessEnv();',
 		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
@@ -82,7 +82,7 @@ export function containerMainEntry(backendModulePath: string): string {
  * @param backendModulePath - absolute path to the app's backend module (the
  *   BlocksStack/BlocksBackend `backendCDKPath`). Imported by absolute PATH (not a
  *   `file://` URL — esbuild resolves paths) so it lands in the SAME module graph
- *   and its `@aws-blocks/*` deps dedupe to one instance.
+ *   and its `@aws-cdk-blocks/*` deps dedupe to one instance.
  * @param outDir - directory to write the asset into (a stable, synth-scoped path
  *   under `cdk.out`), uploaded as-is by `aws-s3-assets.Asset`.
  * @returns `outDir`, ready to hand to `new s3assets.Asset({ path: outDir })`.
@@ -96,7 +96,7 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 		target: 'node24',
 		format: 'cjs',
 		minify: true,
-		// Resolve @aws-blocks/* (and the backend's BB constructions) to their
+		// Resolve @aws-cdk-blocks/* (and the backend's BB constructions) to their
 		// AWS-runtime variants, exactly as core bundles the Lambda handler.
 		conditions: ['aws-runtime', 'node'],
 		banner: { js: CJS_BANNER },
@@ -115,8 +115,8 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 	// thread), then runs the single job the parent handed it via workerData,
 	// resolving the handler by fullId from the AsyncJob registry.
 	const workerEntry = [
-		"import { loadConfigToProcessEnv, runJobWorker } from '@aws-blocks/core';",
-		"import { getAsyncJob } from '@aws-blocks/bb-async-job/job-registry';",
+		"import { loadConfigToProcessEnv, runJobWorker } from '@aws-cdk-blocks/core';",
+		"import { getAsyncJob } from '@aws-cdk-blocks/bb-async-job/job-registry';",
 		'(async () => {',
 		'  await loadConfigToProcessEnv();',
 		`  await import(${JSON.stringify(backendModulePath)});`,
@@ -137,7 +137,7 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 	// Ship the fetch-and-run bootstrap alongside the bundles. It is a committed,
 	// dependency-free ESM script (see bootstrap.mjs) — copied verbatim so the
 	// container's command override can run it from the pulled asset. No esbuild:
-	// it must use ONLY Node built-ins (no @aws-blocks/*, no SDK), because it runs
+	// it must use ONLY Node built-ins (no @aws-cdk-blocks/*, no SDK), because it runs
 	// before the app bundles exist on disk.
 	copyFileSync(join(PKG_ROOT, 'src', 'bootstrap.mjs'), join(outDir, 'bootstrap.mjs'));
 

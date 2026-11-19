@@ -1,6 +1,6 @@
 # Telemetry E2E Test App
 
-Isolated end-to-end tests for the AWS Blocks telemetry system.
+Isolated end-to-end tests for the AWS CDK Blocks telemetry system.
 
 ## Isolation
 
@@ -84,8 +84,8 @@ random ID, and asserts it was created correctly.
 - **Schema forward-compatibility**: payload is JSON-serializable with all
   required fields.
 - **Environment metadata**: nodeVersion, os, ci fields validated.
-- **Consent CLI**: `telemetry` task: help, disable, enable, status,
-  --global variants.
+- **CDK opt-out**: `CDK_DISABLE_CLI_TELEMETRY`, and `cli-telemetry: false` in
+  `cdk.context.json`, `cdk.json` or `~/.cdk.json`.
 
 ## Running
 

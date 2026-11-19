@@ -380,7 +380,7 @@ export interface DevServerOptions {
    */
   typegen?: boolean;
   /**
-   * Regenerate `aws-blocks/client.js` from the backend at startup (local mode
+   * Regenerate `cdk-blocks/client.js` from the backend at startup (local mode
    * only; sandbox mode never does). Set `false` for an app that ships its own
    * client, such as the Amplify overlay, whose `client.js` reads
    * `amplify_outputs.json` and adds the Cognito token. When omitted, the dev
@@ -392,7 +392,7 @@ export interface DevServerOptions {
 
 /**
  * `package.json#blocks.dev.generateClient` in `root`: `false` keeps a
- * hand-written `aws-blocks/client.js`. `undefined` when the package.json, the
+ * hand-written `cdk-blocks/client.js`. `undefined` when the package.json, the
  * key or a boolean value is missing; a non-boolean value is warned about and
  * ignored, since it's an option the dev server can work without.
  */
@@ -432,7 +432,7 @@ export function typegenWatchOptions(): { unref: true; log: (msg: string) => void
 
 async function startTypegenWatch(): Promise<(() => void) | undefined> {
   try {
-    const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
+    const { scanValueKeys, watchHostingValues } = await import('@aws-cdk-blocks/hosting/scripts');
     const scan = await scanValueKeys();
     if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
       return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
@@ -956,7 +956,7 @@ export function devStopCommand(port: number): string {
   return port === 3000 ? 'npm run dev:stop' : `npm run dev:stop -- --port ${port}`;
 }
 
-/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-blocks/bb-database`). */
+/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-cdk-blocks/bb-database`). */
 const LOCAL_ENGINE_CLOSERS = Symbol.for('aws-blocks.local-engine-closers');
 
 /** How long {@link closeLocalEngines} waits for the engines: within `tsx watch`'s 5 s, with the frontend's teardown. */
@@ -1512,7 +1512,7 @@ export async function startDevServer(options: DevServerOptions) {
   if (!isSandbox) {
     const clientPath = join(dirname(resolvedPath), 'client.js');
     if ((options.generateClient ?? readDevGenerateClient(process.cwd())) === false) {
-      log.detail('📝 Keeping aws-blocks/client.js (generateClient is false).');
+      log.detail('📝 Keeping cdk-blocks/client.js (generateClient is false).');
     } else {
       log.progress('📝 Generating client code...');
       await writeClientCode(resolvedPath, clientPath);
@@ -1566,7 +1566,7 @@ export async function startDevServer(options: DevServerOptions) {
       try { recorded = parsePidRecord(readFileSync(pidfilePath, 'utf-8')); } catch { /* no pidfile */ }
       if (recorded?.pid !== process.pid) claimDevPidfile(pidfilePath, selfRecord);
     } catch { /* best effort: the server runs on, as it would without a record */ }
-    console.log(`AWS Blocks local server running on ${frontDoor}`);
+    console.log(`AWS CDK Blocks local server running on ${frontDoor}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
     // Spawn frontend dev server after Blocks server is ready

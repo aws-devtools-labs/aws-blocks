@@ -307,7 +307,7 @@ export function assertBearerClientIds(fullId: string, options: ResolvedAuthOptio
 
 /**
  * The reserved route subtree every auth route lives under. Identical to
- * `BLOCKS_AUTH_PREFIX` in `@aws-blocks/core` (kept a literal so this module stays
+ * `BLOCKS_AUTH_PREFIX` in `@aws-cdk-blocks/core` (kept a literal so this module stays
  * dependency-free; `federation.cdk.test.ts` pins the two together). Core's
  * Hosting proxies the whole subtree to the API with one CloudFront behavior.
  *

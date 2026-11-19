@@ -1,12 +1,12 @@
 # Blocks Auth App
 
-A frontend on AWS Blocks that exercises the `Auth` Building Block end to end:
+A frontend on AWS CDK Blocks that exercises the `Auth` Building Block end to end:
 email + password sign-up confirmed by an emailed code, groups and role-gated
 methods, profile attributes, password change and sign-out everywhere. Backed by
 Amazon Cognito once deployed; fully local with `npm run dev`. Vite + vanilla DOM
 frontend.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template auth`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template auth`
 > (`--template auth-cognito` is an alias for `auth`).
 
 ## Getting Started
@@ -30,7 +30,7 @@ emails the codes instead: the hook never runs there and `getLastCode` returns
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: Auth, KVStore, per-user todos, API |
+| `cdk-blocks/index.ts` | Backend: Auth, KVStore, per-user todos, API |
 | `src/index.ts` | Frontend: sign-up / sign-in flow and app UI |
 | `test/e2e.test.ts` | Tests exercising the public, protected and role-gated API |
 | `index.html` | HTML shell |
@@ -94,7 +94,7 @@ Your CloudFormation stack names are derived from the `stackId` in
 `.blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
@@ -102,5 +102,5 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
 (frontend). Test via `npm run test:e2e`.

@@ -37,6 +37,7 @@ import {
 	snapshotChildren,
 } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { enableRolePolicyPacking } from './role-policy-packing.js';
 import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
 import { applyAppIdentity } from './app-identity.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
@@ -115,13 +116,13 @@ export interface BlocksBackendProps {
 
 /**
  * Core's `create()` props: the public {@link BlocksBackendProps} plus the
- * required `defaultComputeFactory`, spread on by the umbrella (`@aws-blocks/blocks`).
+ * required `defaultComputeFactory`, spread on by the umbrella (`aws-cdk-blocks`).
  * Customers use {@link BlocksBackendProps} and never set the factory.
  *
  * @internal
  */
 export interface CoreBlocksBackendProps extends BlocksBackendProps {
-	/** Builds the backend's default compute. Injected by `@aws-blocks/blocks`. */
+	/** Builds the backend's default compute. Injected by `aws-cdk-blocks`. */
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
@@ -187,7 +188,7 @@ export const UPGRADE_GUIDE_URL =
 
 /**
  * Fail fast with an actionable message if `defaults` is missing. TypeScript
- * callers get a compile error, but `cdk` runs `aws-blocks/index.cdk.ts` through a
+ * callers get a compile error, but `cdk` runs `cdk-blocks/index.cdk.ts` through a
  * loader that doesn't type-check, so an app scaffolded before `defaults` became
  * required (or a plain-JS caller, `as any`, or a dynamically built props object)
  * reaches the constructors without it, which then throw a cryptic
@@ -214,10 +215,10 @@ export function assertBlocksDefaults(
 	}
 	throw new Error(
 		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
-			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
+			"  import { BlocksPresets } from 'aws-cdk-blocks/cdk';\n" +
 			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
 			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
-			`aws-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
+			`cdk-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
 	);
 }
 
@@ -271,6 +272,12 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
+	// Merge combinable statements before CDK packs any overflow into managed
+	// policies, give those overflow policies content-derived logical IDs so a
+	// deploy adds moved statements before it removes them, and fail synth with a
+	// fix if the role would exceed the managed-policies-per-role quota
+	// (role-policy-packing.ts).
+	enableRolePolicyPacking(executionRole, scope);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
 	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an
@@ -764,7 +771,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Lambda function (the shared gateway's target), and a block reading
 		// `this.compute` in its constructor (during that import) must resolve to
 		// it. The factory is supplied by the umbrella
-		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+		// aws-cdk-blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		backend._defaultCompute = props.defaultComputeFactory(backend);
 		// file:// URL (not a raw path) so the cache-busting query works on Windows,

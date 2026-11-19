@@ -1,6 +1,6 @@
 name: Canary
 
-# Scaffolds a fresh app from a locally-published @aws-blocks registry.
+# Scaffolds a fresh app from a locally-published @aws-cdk-blocks registry.
 # Tests the full packaging + scaffold + build + e2e + cdk synth path using
 # published artifacts (not workspace links). No AWS credentials are configured,
 # so the synth step also proves each template synthesizes without an account.
@@ -37,10 +37,10 @@ permissions:
 
 env:
   NODE_OPTIONS: '--test-reporter=spec'
-  # Disable Blocks CLI telemetry for canary runs. Telemetry is on by default and
-  # CI detection alone does not suppress it, so set the official opt-out env var
-  # (packages/core/src/telemetry/consent.ts) to stop any events being sent.
-  AWS_BLOCKS_DISABLE_TELEMETRY: '1'
+  # Disable CLI telemetry for canary runs. Telemetry is on by default and CI
+  # detection alone does not suppress it, so set CDK's opt-out env var, which is
+  # the only one (read in packages/core/src/telemetry/cdk-consent.ts).
+  CDK_DISABLE_CLI_TELEMETRY: '1'
 
 jobs:
   # Discover the matrix from the source of truth rather than hard-coding it.
@@ -111,7 +111,7 @@ jobs:
         run: |
           npx tsx scripts/publish/serve-local-registry.ts &
           for i in $(seq 1 15); do
-            if curl -sf http://localhost:4873/registry/@aws-blocks/blocks > /dev/null 2>&1; then
+            if curl -sf http://localhost:4873/registry/aws-cdk-blocks > /dev/null 2>&1; then
               echo "Registry ready"
               break
             fi

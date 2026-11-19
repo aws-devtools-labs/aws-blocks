@@ -178,11 +178,11 @@ describe('installClientUserAgent middleware', () => {
     const fc = fakeClient();
     installClientUserAgent(fc.client);
     const headers = await als.run('client/swift/0.1.1', () =>
-      fc.run({ 'user-agent': 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 bb/KVStore/0.1.1' }),
+      fc.run({ 'user-agent': 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0 bb/KVStore/0.1.1' }),
     );
     assert.strictEqual(
       headers['user-agent'],
-      'aws-sdk-js/3.700.0 aws-blocks/0.5.0 bb/KVStore/0.1.1 client/swift/0.1.1',
+      'aws-sdk-js/3.700.0 cdk-blocks/0.5.0 bb/KVStore/0.1.1 client/swift/0.1.1',
     );
   });
 
@@ -213,9 +213,9 @@ describe('installClientUserAgent middleware', () => {
     const fc = fakeClient();
     installClientUserAgent(fc.client);
     const headers = await als.run('client/swift/0.1.1', () =>
-      fc.run({ 'user-agent': '', 'x-amz-user-agent': 'aws-sdk-js/3.700.0 aws-blocks/0.5.0' }),
+      fc.run({ 'user-agent': '', 'x-amz-user-agent': 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0' }),
     );
-    assert.strictEqual(headers['x-amz-user-agent'], 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/0.1.1');
+    assert.strictEqual(headers['x-amz-user-agent'], 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0 client/swift/0.1.1');
   });
 
   test('is a no-op when no token is set for the request', async () => {

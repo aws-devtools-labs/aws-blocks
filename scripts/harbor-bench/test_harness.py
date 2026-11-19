@@ -114,8 +114,11 @@ class ProvenanceTests(unittest.TestCase):
             registry, app = root / 'registry', root / 'todo-app'
             registry.mkdir()
             manifest, served, entries = [], [], {}
-            for short in ('create-blocks-app', 'blocks', 'core'):
-                name = '@aws-blocks/' + short
+            # The umbrella publishes unscoped while its directory is still `blocks`, and
+            # publish.ts names a tarball by the package name with the scope stripped, which
+            # for an unscoped name is the whole thing.
+            for name in ('@aws-cdk-blocks/create-blocks-app', 'aws-cdk-blocks', '@aws-cdk-blocks/core'):
+                short = name.replace('@aws-cdk-blocks/', '')
                 key = f'registry/{name}/-/{short}-1.0.0.tgz'
                 tarball = registry / key
                 tarball.parent.mkdir(parents=True)
@@ -132,15 +135,15 @@ class ProvenanceTests(unittest.TestCase):
                 (app / location).mkdir(parents=True)
                 (app / location / 'package.json').write_bytes(content)
                 entries[location] = {'version': '1.0.0', 'integrity': 'sha512-test', 'resolved': 'http://localhost:4873/' + key}
-            entries['node_modules/@aws-blocks/core/node_modules/zod'] = {'version': '3.0.0'}
+            entries['node_modules/@aws-cdk-blocks/core/node_modules/zod'] = {'version': '3.0.0'}
             (app / 'package-lock.json').write_text(json.dumps({'packages': entries}))
             (registry / 'publish-manifest.json').write_text(json.dumps({'packages': manifest}))
             (app / 'aws-blocks').mkdir()
-            (app / 'aws-blocks/index.ts').write_text('import { ApiNamespace, KVStore } from "@aws-blocks/blocks";')
+            (app / 'cdk-blocks/index.ts').write_text('import { ApiNamespace, KVStore } from "aws-cdk-blocks";')
             ledger = root / 'ledger.jsonl'
             ledger.write_text('\n'.join(served))
             self.assertEqual([p['name'] for p in verify(registry, app, ledger)['packages']],
-                             ['@aws-blocks/blocks', '@aws-blocks/core'])
+                             ['aws-cdk-blocks', '@aws-cdk-blocks/core'])
             ledger.write_text('\n'.join(served[1:]))
             with self.assertRaisesRegex(AssertionError, 'scaffolder was not served'):
                 verify(registry, app, ledger)
@@ -148,16 +151,16 @@ class ProvenanceTests(unittest.TestCase):
             lock_path = app / 'package-lock.json'
             original = lock_path.read_text()
             lock = json.loads(original)
-            lock['packages']['node_modules/@aws-blocks/core']['resolved'] = 'https://registry.npmjs.org/core.tgz'
+            lock['packages']['node_modules/@aws-cdk-blocks/core']['resolved'] = 'https://registry.npmjs.org/core.tgz'
             lock_path.write_text(json.dumps(lock))
             with self.assertRaisesRegex(AssertionError, 'wrong registry'):
                 verify(registry, app, ledger)
-            lock['packages']['node_modules/@aws-blocks/core']['link'] = True
+            lock['packages']['node_modules/@aws-cdk-blocks/core']['link'] = True
             lock_path.write_text(json.dumps(lock))
             with self.assertRaisesRegex(AssertionError, 'workspace link'):
                 verify(registry, app, ledger)
             lock_path.write_text(original)
-            (app / 'node_modules/@aws-blocks/core/package.json').write_text('modified')
+            (app / 'node_modules/@aws-cdk-blocks/core/package.json').write_text('modified')
             with self.assertRaisesRegex(AssertionError, 'modified package'):
                 verify(registry, app, ledger)
 

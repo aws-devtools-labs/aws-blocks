@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 
 /**
  * The canonical auth error vocabulary shared by AWS Blocks auth Building Blocks.
@@ -9,7 +9,7 @@ import { isBlocksError } from '@aws-blocks/core';
  * Each value is the `name` of the `ApiError` an auth BB throws (and the
  * `errorName` it puts on a failed `AuthState`). Errors cross the wire by
  * `name`, so these values are a public contract: match on them with
- * {@link isAuthError} (or `isBlocksError` from `@aws-blocks/core`) on a thrown
+ * {@link isAuthError} (or `isBlocksError` from `@aws-cdk-blocks/core`) on a thrown
  * error, and with `hasAuthError(state, AuthErrors.X)` on a returned
  * `AuthState` — both work the same server- and client-side.
  *
@@ -20,11 +20,11 @@ import { isBlocksError } from '@aws-blocks/core';
  * `Auth` throws these names, as `AuthCognito` and `AuthOIDC` did. The removed
  * `AuthBasic` threw its own `AuthBasicErrors` names (for example
  * `SessionExpiredException` rather than `NotAuthenticatedException`); code moving
- * from it must switch to these names (see `@aws-blocks/bb-auth`'s `MIGRATION.md`).
+ * from it must switch to these names (see `@aws-cdk-blocks/bb-auth`'s `MIGRATION.md`).
  *
  * @example
  * ```typescript
- * import { AuthErrors, isAuthError } from '@aws-blocks/auth-common';
+ * import { AuthErrors, isAuthError } from '@aws-cdk-blocks/auth-common';
  *
  * try {
  *   await api.getProfile();
@@ -210,7 +210,7 @@ export function isAuthErrorName(value: unknown): value is AuthErrorName {
  * Type guard for narrowing an `unknown` catch variable against the
  * {@link AuthErrors} vocabulary.
  *
- * - With a `name`, it is `isBlocksError` from `@aws-blocks/core` restricted to
+ * - With a `name`, it is `isBlocksError` from `@aws-cdk-blocks/core` restricted to
  *   auth names, so a typo or a name outside the vocabulary is a compile error.
  * - Without a `name`, it matches any error whose `name` is in
  *   {@link AuthErrors}. This checks vocabulary membership only: names such as

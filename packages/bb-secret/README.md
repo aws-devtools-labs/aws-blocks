@@ -59,8 +59,8 @@ This also applies to a secret wrapped via `fromExisting` — it is read-only unl
 ### Error handling
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { Secret, SecretErrors } from '@aws-blocks/bb-secret';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { Secret, SecretErrors } from '@aws-cdk-blocks/bb-secret';
 
 const secret = new Secret(scope, 'api-key', { allowRuntimeWrite: true });
 
@@ -159,7 +159,7 @@ const legacy = new Secret(scope, 'legacy-key', {
 const value = await legacy.get();
 ```
 
-AWS Blocks will not create, seed, or delete the referenced secret — it only reads its value (and writes it when `allowRuntimeWrite: true`) and grants the app access.
+AWS CDK Blocks will not create, seed, or delete the referenced secret — it only reads its value (and writes it when `allowRuntimeWrite: true`) and grants the app access.
 
 ## Managing secret values
 
@@ -171,7 +171,7 @@ Pass `generate: true` and never call `put()`: the secret is created with a **ran
 
 ### 2. Set via the settings endpoint → console — the default for most apps
 
-Every AWS Blocks app exposes a built-in **`/aws-blocks/settings`** route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.bb-data/settings.json`, where secret values live next to settings (plaintext, dev-only). One route, one place, local and deployed.
+Every AWS CDK Blocks app exposes a built-in **`/aws-blocks/settings`** route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.bb-data/settings.json`, where secret values live next to settings (plaintext, dev-only). One route, one place, local and deployed.
 
 ### 3. Well-known `name` + the `aws` CLI — for CI/CD-driven workflows
 
@@ -199,7 +199,7 @@ Without an explicit `name`, the secret name is derived from the scope tree; find
 
 ### As an `Auth` provider secret
 
-A string-valued `Secret` can be the `clientSecret` (or Sign in with Apple's `privateKey`) of an `Auth` provider. For a provider that federates through Cognito (a social or `type: 'oidc'` entry on `Auth`'s default store), the deploy reads the value and registers it with the user pool, so set the value and **deploy again** for a new value to take effect — and give the secret `generate: true`, so the first deploy has a placeholder value to register. See the `Auth` README's social sign-in recipe (`@aws-blocks/bb-auth`).
+A string-valued `Secret` can be the `clientSecret` (or Sign in with Apple's `privateKey`) of an `Auth` provider. For a provider that federates through Cognito (a social or `type: 'oidc'` entry on `Auth`'s default store), the deploy reads the value and registers it with the user pool, so set the value and **deploy again** for a new value to take effect — and give the secret `generate: true`, so the first deploy has a placeholder value to register. See the `Auth` README's social sign-in recipe (`@aws-cdk-blocks/bb-auth`).
 
 ### Rotating & removing
 
@@ -225,10 +225,10 @@ A key the app generates and rotates itself is **one** `Secret` with `generate: t
 
 ```typescript
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { CronJob } from '@aws-blocks/bb-cron-job';
-import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-import { Secret } from '@aws-blocks/bb-secret';
-import { isBlocksError } from '@aws-blocks/core';
+import { CronJob } from '@aws-cdk-blocks/bb-cron-job';
+import { KVStore, KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
+import { Secret } from '@aws-cdk-blocks/bb-secret';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 
 const signingKey = new Secret(scope, 'signing-key', { generate: true, allowRuntimeWrite: true });
 const rotations = new KVStore(scope, 'signing-key-rotations'); // one marker per tick, never key material
@@ -304,6 +304,6 @@ Delete the key to simulate an unset secret (`get()` returns `null`). A value wri
 
 `Secret` runs server-side only. Importing and instantiating it in browser/client code throws `SecretErrors.NotSupported` — a secret read in the browser would expose it to the client.
 
-## Keys AWS Blocks generates for its own blocks
+## Keys AWS CDK Blocks generates for its own blocks
 
-Keys that AWS Blocks generates for its own blocks are created through an internal part of this package. Where they are stored follows the stack's `defaults.secretsStore`: a `Secret` in Secrets Manager (`'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset). This covers the `Auth` session secret and the `Realtime` connection token key. That internal part is for AWS Blocks' own blocks only and is not a public API; it does not change the defaults of a `Secret` you declare.
+Keys that AWS CDK Blocks generates for its own blocks are created through an internal part of this package. Where they are stored follows the stack's `defaults.secretsStore`: a `Secret` in Secrets Manager (`'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset). This covers the `Auth` session secret and the `Realtime` connection token key. That internal part is for AWS CDK Blocks' own blocks only and is not a public API; it does not change the defaults of a `Secret` you declare.

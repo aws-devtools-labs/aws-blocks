@@ -4,7 +4,7 @@ Status: implemented for `dsql` clusters, `aurora` clusters and existing database
 
 ## Abstract
 
-`@aws-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` runs on one of three kinds of cluster:
+`@aws-cdk-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` runs on one of three kinds of cluster:
 
 - An Aurora DSQL cluster that the block owns. This is the default.
 - A `DatabaseCluster` of type `dsql` or `aurora` that several blocks share.
@@ -152,7 +152,7 @@ Both engines settle a handle on the first of `commitTransaction()` and `rollback
 
 ### 4.4 Kysely
 
-`DatabaseDialect` (`src/kysely.ts`, the `@aws-blocks/bb-database/kysely` entry) is a Kysely dialect over the block's engine. It uses Kysely's PostgreSQL query compiler, adapter and introspector with the block's own driver.
+`DatabaseDialect` (`src/kysely.ts`, the `@aws-cdk-blocks/bb-database/kysely` entry) is a Kysely dialect over the block's engine. It uses Kysely's PostgreSQL query compiler, adapter and introspector with the block's own driver.
 
 **Kysely is optional.** `src/kysely.ts` is the only module that imports Kysely, which is an optional peer dependency. No entry point of the block imports that module, and `kysely-free.test.ts` fails if one of them loads Kysely. An application that does not use Kysely does not install or load it.
 
@@ -291,7 +291,7 @@ Three properties of an existing database shape this section:
 - The application connects as the role that the connection string names.
 - The path from a Lambda function to the database usually goes through a connection pooler in transaction mode.
 
-**Where the connection string is.** With `name`, every layer derives the same SSM SecureString name, `/<stackName>-<name>`, from one function (`dbConnectionParameterName` in `@aws-blocks/core`):
+**Where the connection string is.** With `name`, every layer derives the same SSM SecureString name, `/<stackName>-<name>`, from one function (`dbConnectionParameterName` in `@aws-cdk-blocks/core`):
 
 - The CDK entry point grants the execution role read access to the parameter.
 - The Lambda entry point reads the parameter through an `AppSetting` with the first statement.
@@ -303,7 +303,7 @@ Locally the value is an `AppSetting` under one fixed scope, keyed by the name. T
 
 **The driver never sees the connection string.** `pg` merges a connection string over the programmatic config, and a TLS parameter in the string replaces the `ssl` object. For example, `sslmode=no-verify` turns verification off. `src/external/connection.ts` therefore splits the value with `new URL()` into host, port, user, password and database, and refuses the TLS parameters. It also replaces the parser's own error, because that error carries the value in its `input` field. The pool always gets an `ssl` value, `{ ca }` or `true`. With no value, `pg` reads `PGSSLMODE`.
 
-**The certificate authority.** `ca` is an option in code, per connection. `npm run db -- connect --ca <file>` writes it to one module per connection name: `aws-blocks/database.ca.ts` for the default name, and `aws-blocks/database.<name>.ca.ts` for another. Every command for that connection verifies the server with that module. A `connect` without `--ca` does the same, so the command checks what the application checks.
+**The certificate authority.** `ca` is an option in code, per connection. `npm run db -- connect --ca <file>` writes it to one module per connection name: `cdk-blocks/database.ca.ts` for the default name, and `cdk-blocks/database.<name>.ca.ts` for another. Every command for that connection verifies the server with that module. A `connect` without `--ca` does the same, so the command checks what the application checks.
 
 **Session state does not cross a transaction pooler.** Through such a pooler, a session `SET` can reach another client or be lost, and a session advisory lock can stay held. Nothing that the block does on an existing database depends on session state:
 

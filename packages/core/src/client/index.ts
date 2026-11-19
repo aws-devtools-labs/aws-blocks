@@ -167,7 +167,7 @@ async function resolveApiUrl(): Promise<string> {
     'Blocks API URL not configured. Ensure:\n' +
     '1. A dev server is running (`npm run dev` writes .cdk-blocks-sandbox/config.json), OR\n' +
     '2. BLOCKS_API_URL is set (Hosting sets it on SSR functions), OR\n' +
-    '3. config.json is served at /.cdk-blocks-sandbox/config.json (the dev server and Hosting serve it)' +
+    `3. config.json is served at ${BLOCKS_SANDBOX_PREFIX}/config.json (the dev server and Hosting serve it)` +
     (configFileNeedsNewerNode
       ? `\nNode.js ${process.versions.node} cannot read .cdk-blocks-sandbox/config.json from the working directory; ` +
         'that needs Node.js 22.3 or later. Upgrade Node.js or set BLOCKS_API_URL.'
@@ -345,11 +345,11 @@ const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
  *
  * ```typescript
  * // Generated client.js
- * import { ApiNamespaceClient } from '@aws-blocks/core/client';
+ * import { ApiNamespaceClient } from '@aws-cdk-blocks/core/client';
  * export const api = ApiNamespaceClient('api');
  *
- * // Frontend usage — fully typed via the 'aws-blocks' types export
- * import { api } from 'aws-blocks';
+ * // Frontend usage — fully typed via the 'cdk-blocks' types export
+ * import { api } from 'cdk-blocks';
  * const user = await api.getUser('123');
  * ```
  *
@@ -379,7 +379,7 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
     options?.retryStaleConnection === false
       ? (url, init) => (contextFetch() ?? fetch)(url, init)
       : (url, init) => fetchWithStaleConnectionRetry(url, init, contextFetch());
-  // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
+  // The namespace this client calls, the same in every tab: `@aws-cdk-blocks/auth-common` tags its
   // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
   const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;
   return new Proxy({} as any, {

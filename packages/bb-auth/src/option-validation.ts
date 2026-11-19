@@ -51,7 +51,7 @@
  * @internal
  */
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type {
 	AdminOptions,
 	AmazonProvider,

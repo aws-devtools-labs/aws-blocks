@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `npm run docs`: the docs that @aws-blocks/blocks ships in its `docs/` folder
+ * `npm run docs`: the docs that aws-cdk-blocks ships in its `docs/` folder
  * (generated at prebuild and prepack by scripts/gen-block-docs.mjs), looked up by
  * name instead of by path. A block is named by its class, its folder or its folder
  * without `bb-`; an export or an option by its name in the blocks' API reports.
@@ -61,7 +61,7 @@ export function docsForms(command: string): string[] {
 const DOCS_OPTIONS = [
 	"  --api                  the block's API report (exact signatures) instead of its README",
 	'  --section <topic>      the part of the docs about a topic; repeatable; with no topic, the headings',
-	'  --exports [filter...]  the names @aws-blocks/blocks and its entries export, and which entry to use',
+	'  --exports [filter...]  the names aws-cdk-blocks and its entries export, and which entry to use',
 	'  --search <term>        matching lines in every doc, or in the named blocks, with their section',
 	'  --output text|json     text on a terminal; JSON when piped, each doc in it named by "doc"',
 ];
@@ -135,18 +135,18 @@ export interface DocsIndex {
 	/** Member name → the declarations that have it. */
 	members: Map<string, Declaration[]>;
 	/**
-	 * Every name `import { … } from '@aws-blocks/blocks'` takes, with the declaration it resolves to: the umbrella's
+	 * Every name `import { … } from 'aws-cdk-blocks'` takes, with the declaration it resolves to: the umbrella's
 	 * own declarations, then the names it exports one by one (`import { PutOptions as KVPutOptions } from
-	 * '@aws-blocks/bb-kv-store'` and `export { KVPutOptions }`), then everything of the packages it
-	 * re-exports whole (`export * from "@aws-blocks/core"`), each followed to the package that declares it (core's
+	 * '@aws-cdk-blocks/bb-kv-store'` and `export { KVPutOptions }`), then everything of the packages it
+	 * re-exports whole (`export * from "@aws-cdk-blocks/core"`), each followed to the package that declares it (core's
 	 * `config` is hosting's). An earlier name shadows a later one, as in TypeScript.
 	 */
 	umbrellaExports: Map<string, ExportRef>;
-	/** Blocks whose exports @aws-blocks/blocks re-exports whole, directly or through another such block. */
+	/** Blocks whose exports aws-cdk-blocks re-exports whole, directly or through another such block. */
 	wildcardBlocks: Set<string>;
 	/**
-	 * What the installed @aws-blocks/blocks exports outside its main entry, read from its package.json and type files:
-	 * each app-facing subpath entry (`@aws-blocks/blocks/client`, `/ui`, `/utils`, …; not `/cdk`, which is the main
+	 * What the installed aws-cdk-blocks exports outside its main entry, read from its package.json and type files:
+	 * each app-facing subpath entry (`aws-cdk-blocks/client`, `/ui`, `/utils`, …; not `/cdk`, which is the main
 	 * entry for CDK code) and the main entry under the browser condition, which browser code and tests get
 	 * (`npm run test:e2e` runs `tsx -C browser`). Each maps a name to whether it is a type only. `files` has the type
 	 * file of every entry, the main one included, for the declarations no API report in the docs has. Undefined when
@@ -179,7 +179,7 @@ export interface DocsRequest {
 	toc: boolean;
 	sections: string[];
 	search?: string;
-	/** List the names @aws-blocks/blocks exports; `names` filter the list. */
+	/** List the names aws-cdk-blocks exports; `names` filter the list. */
 	exports?: boolean;
 }
 
@@ -221,7 +221,7 @@ export interface ExportRow {
 	entry: string;
 	import: string;
 	also?: string[];
-	/** The name in its own package, when @aws-blocks/blocks exports it under another (KVPutOptions: PutOptions). */
+	/** The name in its own package, when aws-cdk-blocks exports it under another (KVPutOptions: PutOptions). */
 	original?: string;
 }
 
@@ -237,19 +237,19 @@ interface Section {
 	end: number;
 }
 
-/** The root doc that owns @aws-blocks/blocks' own API report (`npm run docs guide -- --api`). */
+/** The root doc that owns aws-cdk-blocks' own API report (`npm run docs guide -- --api`). */
 const UMBRELLA = 'guide';
 
-/** The package a declaration is in: the umbrella's own are @aws-blocks/blocks'. */
+/** The package a declaration is in: the umbrella's own are aws-cdk-blocks'. */
 function packageOf(block: string): string {
-	return `@aws-blocks/${block === UMBRELLA ? 'blocks' : block}`;
+	return block === UMBRELLA ? 'aws-cdk-blocks' : `@aws-cdk-blocks/${block}`;
 }
 
 const ROOT_DOCS = [
 	{
 		name: 'guide',
 		file: 'README.md',
-		aliases: ['guide', 'readme', 'blocks', '@aws-blocks/blocks'],
+		aliases: ['guide', 'readme', 'blocks', 'aws-cdk-blocks'],
 		purpose: 'How an app fits together, the block catalog, local dev, deploy and testing.',
 	},
 	{
@@ -277,7 +277,7 @@ export async function docs(ctx: Context, input: CommandInput): Promise<number> {
 	return ExitCode.Ok;
 }
 
-/** The docs folder of this installed @aws-blocks/blocks (compiled to dist/cli/, so two levels up). */
+/** The docs folder of this installed aws-cdk-blocks (compiled to dist/cli/, so two levels up). */
 export function shippedDocsDir(): string {
 	return fileURLToPath(new URL('../../docs/', import.meta.url));
 }
@@ -289,8 +289,8 @@ export function loadDocs(
 	entries: DocsIndex['entries'] = readEntries(join(dir, '..')),
 ): DocsIndex {
 	if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-		throw new CliError('the installed @aws-blocks/blocks has no docs folder.', {
-			hint: 'it is generated when @aws-blocks/blocks is built or packed; reinstall the package',
+		throw new CliError('the installed aws-cdk-blocks has no docs folder.', {
+			hint: 'it is generated when aws-cdk-blocks is built or packed; reinstall the package',
 		});
 	}
 	const classMap = vendorize ?? readVendorize(dir);
@@ -400,7 +400,7 @@ export function loadDocs(
 				}
 			}
 		}
-		const named = classMap[`@aws-blocks/${folder}`] ?? [];
+		const named = classMap[`@aws-cdk-blocks/${folder}`] ?? [];
 		const declaredClasses = declared
 			.filter((d) => d.kind === 'class' || (d.kind === 'const' && /:\s*\w+Constructor\b/.test(d.lines[0])))
 			.map((d) => d.name);
@@ -417,7 +417,7 @@ export function loadDocs(
 	}
 	const umbrella = rootFiles.includes('API.md') ? readFileSync(join(dir, 'API.md'), 'utf-8') : '';
 	// The umbrella's own declarations (getSdkIdentifiers' typed overloads) belong to the guide: they are
-	// @aws-blocks/blocks' own exports, and they shadow the same name from a package it re-exports whole.
+	// aws-cdk-blocks' own exports, and they shadow the same name from a package it re-exports whole.
 	const own = parseApiReport(umbrella, UMBRELLA);
 	for (const decl of own) {
 		push(declarations, decl.name, decl);
@@ -437,7 +437,8 @@ export function loadDocs(
 	const externals = new Map<string, { from: string; type: boolean; blocks: string[] }>();
 	for (const [block, report] of [...reportTexts, [UMBRELLA, umbrella] as [string, string]]) {
 		for (const m of report.matchAll(/^import (type )?\{ ([\w$]+) \} from ['"]([^'"]+)['"]/gm)) {
-			if (m[3].startsWith('@aws-blocks/')) continue;
+			if (m[3].startsWith('@aws-cdk-blocks/') || m[3] === 'aws-cdk-blocks' || m[3].startsWith('aws-cdk-blocks/'))
+				continue;
 			const known = externals.get(m[2]);
 			if (known) known.blocks.push(block);
 			else externals.set(m[2], { from: m[3], type: m[1] !== undefined, blocks: [block] });
@@ -463,7 +464,7 @@ export function loadDocs(
  * no runtime class (bb-secret's CDK entry has no SecretImpl, so `Secret.get` had no member).
  */
 function blockTypesFile(require: NodeJS.Require, folder: string): string | undefined {
-	const name = `@aws-blocks/${folder}`;
+	const name = `@aws-cdk-blocks/${folder}`;
 	let entry: string;
 	try {
 		entry = require.resolve(name);
@@ -499,9 +500,9 @@ function readPackageName(file: string): string | undefined {
 /** What one API report declares and re-exports. */
 interface Report {
 	own: Set<string>;
-	/** Names it exports one by one from another package: `import { A as B } from '@aws-blocks/x'` + `export { B }`. */
+	/** Names it exports one by one from another package: `import { A as B } from '@aws-cdk-blocks/x'` + `export { B }`. */
 	named: Map<string, ExportRef>;
-	/** Packages it re-exports whole: `export * from '@aws-blocks/x'`. */
+	/** Packages it re-exports whole: `export * from '@aws-cdk-blocks/x'`. */
 	wildcards: string[];
 }
 
@@ -521,7 +522,7 @@ function exportedNames(report: string): Set<string> {
 
 function parseReexports(report: string): Pick<Report, 'named' | 'wildcards'> {
 	const imported = new Map(
-		[...report.matchAll(/^import \{ ([\w$]+)(?: as ([\w$]+))? \} from ['"]@aws-blocks\/([^'"]+)['"]/gm)].map(
+		[...report.matchAll(/^import \{ ([\w$]+)(?: as ([\w$]+))? \} from ['"]@aws-cdk-blocks\/([^'"]+)['"]/gm)].map(
 			(m) => [m[2] ?? m[1], { block: m[3], name: m[1] }],
 		),
 	);
@@ -532,7 +533,7 @@ function parseReexports(report: string): Pick<Report, 'named' | 'wildcards'> {
 			if (ref) named.set(n, ref);
 		}
 	}
-	const wildcards = [...report.matchAll(/^export \* from ['"]@aws-blocks\/([^'"]+)['"]/gm)].map((m) => m[1]);
+	const wildcards = [...report.matchAll(/^export \* from ['"]@aws-cdk-blocks\/([^'"]+)['"]/gm)].map((m) => m[1]);
 	return { named, wildcards };
 }
 
@@ -557,7 +558,7 @@ function exportsOf(reports: Map<string, Report>, block: string, seen = new Set<s
 }
 
 /** The umbrella package, and its entry that browser code and tests import values from. */
-const BLOCKS = '@aws-blocks/blocks';
+const BLOCKS = 'aws-cdk-blocks';
 const CLIENT = `${BLOCKS}/client`;
 
 /**
@@ -955,7 +956,7 @@ function decodeEntities(text: string): string {
 
 /**
  * A block by folder name, folder without `bb-`, the class that names it, or a root doc's name; a doc path names its
- * folder (`bb-cron-job/DESIGN.md`, `node_modules/@aws-blocks/blocks/docs/bb-kv-store/README.md`), and a root doc's
+ * folder (`bb-cron-job/DESIGN.md`, `node_modules/aws-cdk-blocks/docs/bb-kv-store/README.md`), and a root doc's
  * file name (`README.md`, `API.md`: the headers of the root docs) its root doc.
  */
 export function findBlock(index: DocsIndex, name: string): DocsBlock | undefined {
@@ -964,7 +965,7 @@ export function findBlock(index: DocsIndex, name: string): DocsBlock | undefined
 		.toLowerCase()
 		.replace(/^.*\/docs\//, '')
 		.replace(/\/[^/]+\.md$/, '')
-		.replace(/^@aws-blocks\//, '')
+		.replace(/^@aws-cdk-blocks\//, '')
 		.replace(/\/+$/, '');
 	const root = ROOT_DOCS.find((r) => r.aliases.includes(key));
 	if (root) return index.blocks.find((b) => b.name === root.name);
@@ -981,14 +982,17 @@ export function findBlock(index: DocsIndex, name: string): DocsBlock | undefined
 }
 
 /**
- * The names of a subpath entry named as `ui`, `/ui`, `blocks/ui` or `@aws-blocks/blocks/ui`, with the import they take;
+ * The names of a subpath entry named as `ui`, `/ui`, `blocks/ui` or `aws-cdk-blocks/ui`, with the import they take;
  * undefined for any other name.
  */
 function entryListing(index: DocsIndex, name: string): ExportsAnswer | undefined {
 	const key = name
 		.trim()
 		.toLowerCase()
-		.replace(/^@aws-blocks\//, '')
+		// The umbrella publishes unscoped, so its own name is a prefix in its own right;
+		// `blocks/` stays accepted because that is still its directory.
+		.replace(/^aws-cdk-blocks\//, '')
+		.replace(/^@aws-cdk-blocks\//, '')
 		.replace(/^blocks\//, '')
 		.replace(/^\//, '');
 	const entry = [...(index.entries?.subpaths ?? [])].find(([e]) => e.toLowerCase() === `${BLOCKS}/${key}`);
@@ -1067,7 +1071,7 @@ function checkNameLength(name: string): void {
 }
 
 /**
- * Declarations named `name` (exact case first), else the declaration a public name of @aws-blocks/blocks is
+ * Declarations named `name` (exact case first), else the declaration a public name of aws-cdk-blocks is
  * (`KVPutOptions`), else the declarations that have a member `name`; `Owner.member` (`FileBucket.put`) is that
  * member of that declaration only, else of the nearest base it inherits the member from (`Auth.protect` is
  * AuthBase's protect), with a note that says so. `name` in the result is the name looked up (export, public or
@@ -1320,10 +1324,10 @@ function subpathsOf(index: DocsIndex, name: string): [string, boolean][] {
 }
 
 /**
- * How code imports `publicName`. From @aws-blocks/blocks when it exports the name (`backend`): a type with
+ * How code imports `publicName`. From aws-cdk-blocks when it exports the name (`backend`): a type with
  * `import type`, which browser code and tests can use too (the import is erased, and TypeScript reads the types
- * entry); a value in backend code, with the @aws-blocks/blocks/client import for browser code and tests when that
- * entry has it, since their browser condition gets no value from @aws-blocks/blocks. Otherwise from each subpath
+ * entry); a value in backend code, with the aws-cdk-blocks/client import for browser code and tests when that
+ * entry has it, since their browser condition gets no value from aws-cdk-blocks. Otherwise from each subpath
  * entry that exports it.
  */
 function importLine(index: DocsIndex, publicName: string, backend: boolean, kind: NameKind): string {
@@ -1344,7 +1348,7 @@ function importLine(index: DocsIndex, publicName: string, backend: boolean, kind
 }
 
 /**
- * The spelling `input` has among the names @aws-blocks/blocks (`backend`) or a subpath entry exports, with its
+ * The spelling `input` has among the names aws-cdk-blocks (`backend`) or a subpath entry exports, with its
  * declaration from the installed type file of the first entry that has one, and that entry.
  */
 function entryName(
@@ -1365,7 +1369,7 @@ function entryName(
 }
 
 /**
- * A name no API report in the docs declares: one that @aws-blocks/blocks or a subpath entry exports (hosting's
+ * A name no API report in the docs declares: one that aws-cdk-blocks or a subpath entry exports (hosting's
  * `config`, `onAuthChange` of /ui), or one that the API reports import from another package (`StandardSchemaV1`).
  * Its import, its declaration and doc comment from the installed type file when one has it, then the doc lines
  * that mention it.
@@ -1434,7 +1438,7 @@ function importCard(index: DocsIndex, input: string): Answer | undefined {
 	};
 }
 
-/** A type file's package (the nearest package.json's name) and its path in that package: `@aws-blocks/auth-common/dist/ui.d.ts`. */
+/** A type file's package (the nearest package.json's name) and its path in that package: `@aws-cdk-blocks/auth-common/dist/ui.d.ts`. */
 function typeFile(file: string): { pkg: string; path: string } {
 	for (let dir = dirname(file); dir !== dirname(dir); dir = dirname(dir)) {
 		const pkgFile = join(dir, 'package.json');
@@ -1446,7 +1450,7 @@ function typeFile(file: string): { pkg: string; path: string } {
 }
 
 /**
- * Every name `import { … } from '@aws-blocks/blocks'` can take ({@link DocsIndex.umbrellaExports}), with the
+ * Every name `import { … } from 'aws-cdk-blocks'` can take ({@link DocsIndex.umbrellaExports}), with the
  * declaration an alias stands for, and the names of its subpath entries (`/client`, which browser code and tests
  * import values from, `/ui`, `/utils`, …). Without filters, one line per package and per entry; with filters
  * (case-insensitive substrings), one line per name. A filter that names an entry (`utils`, `/client`) lists that
@@ -1500,7 +1504,7 @@ function exportsList(index: DocsIndex, filters: string[]): ExportsAnswer {
 		const external = [...index.externals]
 			.filter(([n, x]) => has(n) || has(x.from))
 			.map(([n, x]) => `${n} (from ${x.from})`);
-		// Declared by a block that @aws-blocks/blocks does not re-export it from: RealtimeErrors of bb-realtime.
+		// Declared by a block that aws-cdk-blocks does not re-export it from: RealtimeErrors of bb-realtime.
 		const unexported = [...index.declarations]
 			.filter(([n]) => has(n))
 			.flatMap(([n, ds]) =>
@@ -1510,12 +1514,12 @@ function exportsList(index: DocsIndex, filters: string[]): ExportsAnswer {
 			)
 			.slice(0, NAMES_LISTED);
 		if (!members.length && !external.length && !unexported.length) {
-			throw new CliError(`@aws-blocks/blocks exports no name containing ${quoted}.`, {
+			throw new CliError(`aws-cdk-blocks exports no name containing ${quoted}.`, {
 				hint: `${CLI} -- --exports, or npm run docs:search ${JSON.stringify(filters[0])}`,
 			});
 		}
 		const lines = [
-			`@aws-blocks/blocks exports no name containing ${quoted}.`,
+			`aws-cdk-blocks exports no name containing ${quoted}.`,
 			...(unexported.length ? [`Declared by a block it does not re-export: ${unexported.join('; ')}`] : []),
 			...(members.length ? [`Members that contain it: ${members.join('; ')}`] : []),
 			...(external.length ? [`Names from other packages: ${external.join('; ')}`] : []),
@@ -1546,7 +1550,7 @@ function exportsList(index: DocsIndex, filters: string[]): ExportsAnswer {
 		};
 	});
 	const backend = shown.filter(([, e]) => e.block !== undefined);
-	const head = `Names you can import from @aws-blocks/blocks in backend code${wanted.length ? ` containing ${quoted}` : ''} (${backend.length}): import { <name> } from '@aws-blocks/blocks';`;
+	const head = `Names you can import from aws-cdk-blocks in backend code${wanted.length ? ` containing ${quoted}` : ''} (${backend.length}): import { <name> } from 'aws-cdk-blocks';`;
 	let browser: string | undefined;
 	if (index.entries) {
 		const values = [...index.entries.browserMain].filter(([, type]) => !type).map(([name]) => name);
@@ -1603,9 +1607,9 @@ function listing(index: DocsIndex, version: string): Answer {
 		return `  ${b.name.padEnd(width)}  ${what}`;
 	});
 	// A root doc is a name for a file, not a folder: `guide` is the package README.
-	const files = roots.map((b) => `  ${b.name.padEnd(width)}  ${b.main} of @aws-blocks/blocks: ${b.purpose}`);
+	const files = roots.map((b) => `  ${b.name.padEnd(width)}  ${b.main} of aws-cdk-blocks: ${b.purpose}`);
 	const text = [
-		`AWS Blocks docs for @aws-blocks/blocks ${version}`,
+		`AWS Blocks docs for aws-cdk-blocks ${version}`,
 		'',
 		`Usage: ${CLI} [name...] [-- options]`,
 		'',
@@ -1675,7 +1679,7 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 		out.push(line);
 		summary.push(line);
 	} else {
-		// One line per declaration shown (once for overloads), with the name @aws-blocks/blocks exports it under
+		// One line per declaration shown (once for overloads), with the name aws-cdk-blocks exports it under
 		// (KVPutOptions for bb-kv-store's PutOptions), or its own package when the umbrella does not.
 		const lines = new Set<string>();
 		for (const decl of decls.filter((d) => owners.slice(0, CARD_OWNERS).includes(d.block))) {
@@ -1688,7 +1692,7 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 					? `${name}: ${what} in ${where}, not exported${decl.standsFor?.length ? `: it is ${decl.standsFor.join(', ')}` : ''}.`
 					: publicName
 						? `${name}: ${what} in ${where}. ${importLine(index, publicName, true, TYPE_KINDS.has(decl.kind) ? 'type' : 'value')}`
-						: `${name}: ${what} in ${where}. import ${TYPE_KINDS.has(decl.kind) ? 'type ' : ''}{ ${decl.name} } from '${where}'; (not re-exported by @aws-blocks/blocks)`,
+						: `${name}: ${what} in ${where}. import ${TYPE_KINDS.has(decl.kind) ? 'type ' : ''}{ ${decl.name} } from '${where}'; (not re-exported by aws-cdk-blocks)`,
 			);
 		}
 		out.push(...lines);
@@ -1779,7 +1783,7 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 }
 
 /**
- * The import line of a card's declaration, or for a member that of its owner: the name @aws-blocks/blocks exports
+ * The import line of a card's declaration, or for a member that of its owner: the name aws-cdk-blocks exports
  * for it, else for the export that stands for it (Vault for VaultImpl) or the constructor that returns it (Hub for
  * HubServer, first for a member), else its own package's. Undefined for a declaration that nothing exports.
  */
@@ -2093,7 +2097,7 @@ function search(index: DocsIndex, term: string, only: DocsBlock[]): Answer {
 		const { hits, total, filesHit } = searchHits(index, match, scope, SEARCH_HITS);
 		if (total === 0) continue;
 		const out = [
-			`search "${term}" in the docs of @aws-blocks/blocks`,
+			`search "${term}" in the docs of aws-cdk-blocks`,
 			...(note ? [note] : []),
 			...hits.map(formatHit),
 		];
@@ -2288,7 +2292,7 @@ function parseCatalog(readme: string): Map<string, string> {
 	return purposes;
 }
 
-/** The `aws-blocks.vendorize` map of @aws-blocks/blocks' package.json: package → class names. */
+/** The `aws-blocks.vendorize` map of aws-cdk-blocks' package.json: package → class names. */
 function readVendorize(docsDir: string): Record<string, string[]> {
 	try {
 		const pkg = JSON.parse(readFileSync(join(docsDir, '..', 'package.json'), 'utf-8')) as {

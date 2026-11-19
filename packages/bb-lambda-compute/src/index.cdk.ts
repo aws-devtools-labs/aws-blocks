@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME, getVpcContext } from '@aws-blocks/core/cdk';
-import { ComputeBase } from '@aws-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME, getVpcContext } from '@aws-cdk-blocks/core/cdk';
+import { ComputeBase } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Architecture, type IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -37,8 +37,8 @@ const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
  * never caller-supplied — so every compute in an app runs the same backend and
  * agrees on the runtime resource-name namespace.
  *
- * @internal Not re-exported from `@aws-blocks/blocks`. Apps select it through
- * the public `Compute` block (`{ type: 'serverless' }`, from `@aws-blocks/bb-compute`),
+ * @internal Not re-exported from `aws-cdk-blocks`. Apps select it through
+ * the public `Compute` block (`{ type: 'serverless' }`, from `@aws-cdk-blocks/bb-compute`),
  * and the umbrella constructs it as the app's default compute.
  */
 export class LambdaCompute extends ComputeBase {

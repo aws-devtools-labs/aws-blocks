@@ -1,5 +1,5 @@
-import { Scope } from '@aws-blocks/core';
-import { Auth, stubIdp } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
+import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('app');
 

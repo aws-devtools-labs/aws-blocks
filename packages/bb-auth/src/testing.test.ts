@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `getLastAuthCode` (`@aws-blocks/bb-auth/testing`) against real local pools:
+ * `getLastAuthCode` (`@aws-cdk-blocks/bb-auth/testing`) against real local pools:
  * it finds the code wherever the block's data directory is, so renaming the
  * scope or the block does not break a test; it keeps working when another
  * user's code has overwritten `last-code.json`; and it says why when there is

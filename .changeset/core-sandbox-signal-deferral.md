@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): a stray SIGTERM no longer orphans cdk during a sandbox deploy or a destroy

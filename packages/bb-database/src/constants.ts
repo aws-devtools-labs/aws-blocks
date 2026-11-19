@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import { escapeRegExp, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
-import { DEFAULT_DB_CONNECTION_NAME, dbConnectionParameterName } from '@aws-blocks/core/db-naming';
+import { escapeRegExp, sanitizeConfigKey } from '@aws-cdk-blocks/core/bb-utils';
+import { DEFAULT_DB_CONNECTION_NAME, dbConnectionParameterName } from '@aws-cdk-blocks/core/db-naming';
 import type { ClusterType } from './types.js';
 
 export const MIGRATION_LAMBDA_TIMEOUT_MINUTES = 10;
@@ -109,7 +109,7 @@ export const CONNECTION_NAME_RULE =
 
 export const DEFAULT_SCHEMA = 'public';
 
-export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
+export const DEFAULT_MIGRATIONS_ROOT = './cdk-blocks/migrations';
 
 const DB_ROLE_PREFIX = 'blocks_app_';
 

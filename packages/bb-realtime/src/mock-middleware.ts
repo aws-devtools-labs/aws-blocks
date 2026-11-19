@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @aws-blocks/bb-realtime/mock-middleware
+ * @aws-cdk-blocks/bb-realtime/mock-middleware
  *
  * Self-registering client middleware for local dev.
  * Hydrates { __blocks: 'realtime/channel' } descriptors into
  * live channel clients over the local dev server's WebSocket.
  */
 
-import { registerMiddleware } from '@aws-blocks/core/client';
-import { blocksError, brandBlocksError } from '@aws-blocks/core';
+import { registerMiddleware } from '@aws-cdk-blocks/core/client';
+import { blocksError, brandBlocksError } from '@aws-cdk-blocks/core';
 import { poolKey, principalOfToken } from './pool-key.js';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
 

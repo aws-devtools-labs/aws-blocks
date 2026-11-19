@@ -42,7 +42,7 @@ const FIXTURES = JSON.parse(
 	readFileSync(fileURLToPath(new URL('../../test-fixtures/migrate-apps.json', import.meta.url)), 'utf-8'),
 ) as Record<string, FixtureApp>;
 
-const task = (command: string): string => `node --input-type=module -e "import '@aws-blocks/blocks/run'" -- ${command}`;
+const task = (command: string): string => `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- ${command}`;
 
 const TEMPLATES_DIR = fileURLToPath(new URL('../../../create-blocks-app/templates/', import.meta.url));
 
@@ -599,7 +599,6 @@ describe('cdk-blocks migrate', () => {
 			'docs:api': task('docs --api'),
 			'db': task('db'),
 			'whoami': task('whoami'),
-			'telemetry': task('telemetry'),
 			'migrate': task('migrate'),
 			'help': task('--help'),
 			'generate-client': task('generate client'),
@@ -867,7 +866,6 @@ describe('cdk-blocks migrate', () => {
 			'generate-client',
 			'help',
 			'migrate',
-			'telemetry',
 			'whoami',
 		]);
 		assert.strictEqual(result.devConfig, null);

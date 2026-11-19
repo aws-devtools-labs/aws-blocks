@@ -39,9 +39,9 @@
  */
 
 import crypto from 'node:crypto';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { EventSourceMapping } from '@aws-cdk-blocks/core/bb-utils';
 import { cognitoConfigKeys, ownsPreSignUpTrigger, preSignUpTriggerConfigKey } from '../cdk/contract.js';
 import type { NativeEngine } from '../engines/types.js';
 import { Auth } from '../index.aws.js';

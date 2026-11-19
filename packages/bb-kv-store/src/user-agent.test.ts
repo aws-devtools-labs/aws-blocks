@@ -4,9 +4,9 @@
 import assert from 'node:assert';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
-import { Scope } from '@aws-blocks/core';
-import { CORE_VERSION } from '@aws-blocks/core/version';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import { CORE_VERSION } from '@aws-cdk-blocks/core/version';
 import { KVStore } from './index.aws.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 

@@ -1,7 +1,7 @@
 ---
-'@aws-blocks/bb-kv-store': patch
-'@aws-blocks/bb-app-setting': patch
-'@aws-blocks/core': patch
+'@aws-cdk-blocks/bb-kv-store': patch
+'@aws-cdk-blocks/bb-app-setting': patch
+'@aws-cdk-blocks/core': patch
 ---
 
 docs: KVStore's 409 and local data file, AppSetting's local data file, and RawRoute params locally

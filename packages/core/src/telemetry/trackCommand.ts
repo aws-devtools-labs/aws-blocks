@@ -57,8 +57,8 @@ export function classifyError(error: unknown): { code: string; phase: string } {
  * after the command completes (success or failure). The telemetry send is fire-and-forget
  * and bounded by a 500ms timeout — it will never delay the command or affect its exit code.
  *
- * If telemetry is disabled (via env var or config), the function is executed directly
- * with zero overhead.
+ * When the user has opted out of CDK CLI telemetry, which is the only opt-out
+ * ({@link isTelemetryEnabled}), the function is executed directly and nothing is sent.
  *
  * @param commandName - The command being tracked
  * @param fn - The async function to execute
@@ -76,7 +76,7 @@ export async function trackCommand(
   fn: () => Promise<void>,
   options?: TrackCommandOptions,
 ): Promise<void> {
-  if (!isTelemetryEnabled()) {
+  if (!isTelemetryEnabled(options?.projectRoot)) {
     return fn();
   }
 
@@ -96,6 +96,7 @@ export async function trackCommand(
       command: commandName,
       state,
       duration,
+      ...(options?.projectRoot && { projectRoot: options.projectRoot }),
       ...(errorInfo && { error: errorInfo }),
       ...(options && {
         product: {

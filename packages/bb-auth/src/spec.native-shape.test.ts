@@ -27,8 +27,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { generateSpec } from '@aws-blocks/core/scripts';
+import { ApiNamespace, Scope } from '@aws-cdk-blocks/core';
+import { generateSpec } from '@aws-cdk-blocks/core/scripts';
 import { Auth } from './index.mock.js';
 import type { AuthOptions } from './types.js';
 
@@ -74,8 +74,8 @@ const OPTIONS: Record<Block, AuthOptions> = {
 };
 
 const BACKEND = `
-import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { Auth, type MfaPreferenceInput } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Scope } from '@aws-cdk-blocks/core';
+import { Auth, type MfaPreferenceInput } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('shape');
 ${NAMES.map((b) => `const ${b}Options = ${BLOCKS[b]} as const;\nconst ${b} = new Auth(scope, '${b}', ${b}Options);`).join('\n')}
@@ -115,7 +115,7 @@ function inProcessBackend(): Record<string, unknown> {
 	return backend;
 }
 
-// Inside the package, so `@aws-blocks/*` resolve through the workspace's node_modules.
+// Inside the package, so `@aws-cdk-blocks/*` resolve through the workspace's node_modules.
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dir = mkdtempSync(join(packageRoot, '.spec-native-shape-'));
 after(() => rmSync(dir, { recursive: true, force: true }));

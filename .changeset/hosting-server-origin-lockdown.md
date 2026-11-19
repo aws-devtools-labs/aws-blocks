@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/hosting": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/hosting": minor
+"aws-cdk-blocks": minor
 ---
 
 feat(hosting): lock the CloudFront door's server origin with a random secret, a regional web ACL and opt-in access logs

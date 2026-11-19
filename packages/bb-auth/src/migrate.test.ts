@@ -92,7 +92,7 @@ describe('bb-auth migrate — the block id is never rewritten', () => {
 
 	test('the guard refuses an output whose id changed', () => {
 		const before = "import { AuthCognito } from '@aws-blocks/bb-auth-cognito';\nnew AuthCognito(scope, 'auth');\n";
-		const after = "import { Auth } from '@aws-blocks/bb-auth';\nnew Auth(scope, 'users');\n";
+		const after = "import { Auth } from '@aws-cdk-blocks/bb-auth';\nnew Auth(scope, 'users');\n";
 		assert.throws(() => assertIdsPreserved(ts, 'x.ts', before, after), IdPreservationError);
 	});
 
@@ -155,7 +155,7 @@ describe('bb-auth migrate — TODOs where a person must decide', () => {
 			writeFileSync(
 				join(dir, 'index.ts'),
 				`import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 export const auth = new AuthCognito(scope, 'auth', {
@@ -181,7 +181,7 @@ export const auth = new AuthCognito(scope, 'auth', {
 			assert.strictEqual(printed.split("WARNING: preferredChallenge 'EMAIL_OTP'").length - 1, 1, 'printed once');
 			assert.match(
 				printed,
-				/Deploy this output with no other configuration change, then commit aws-blocks\/baselines\//,
+				/Deploy this output with no other configuration change, then commit cdk-blocks\/baselines\//,
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -222,7 +222,7 @@ describe('bb-auth migrate — never a silent empty import', () => {
 	test('a /ui import keeps (and renames) every name: never `import {  }`', () => {
 		const input = "import { cognitoOverrides, type CognitoActionName } from '@aws-blocks/bb-auth-cognito/ui';\n";
 		const r = transformFile(ts, '/app/x.ts', input, project);
-		assert.strictEqual(r.output, "import { authOverrides, type AuthActionName } from '@aws-blocks/bb-auth/ui';\n");
+		assert.strictEqual(r.output, "import { authOverrides, type AuthActionName } from '@aws-cdk-blocks/bb-auth/ui';\n");
 		assert.deepStrictEqual(r.attention, []);
 	});
 
@@ -320,7 +320,7 @@ describe('bb-auth migrate — a class re-exported by a local barrel', () => {
 	}
 
 	const scope =
-		"import type { BlocksContext } from '@aws-blocks/core';\nimport { Scope } from '@aws-blocks/core';\nconst scope = new Scope('app');\n";
+		"import type { BlocksContext } from '@aws-cdk-blocks/core';\nimport { Scope } from '@aws-cdk-blocks/core';\nconst scope = new Scope('app');\n";
 
 	test('AuthBasic: the same option mapping, kept defaults and TODOs as a direct import', async () => {
 		const body = `${scope}export const auth = new AuthBasic(scope, 'auth', { passwordPolicy: { requireSpecialChars: true } });
@@ -405,7 +405,7 @@ describe('bb-auth migrate — dry run and file handling', () => {
 		assert.strictEqual(umbrellaBlockFor('AuthFlowType'), 'cognito');
 		assert.strictEqual(umbrellaBlockFor('AuthBasicUser'), 'basic');
 		assert.strictEqual(umbrellaBlockFor('github'), 'oidc');
-		// Re-exported by the umbrella from @aws-blocks/bb-auth / @aws-blocks/auth-common: left alone.
+		// Re-exported by the umbrella from @aws-cdk-blocks/bb-auth / @aws-cdk-blocks/auth-common: left alone.
 		assert.strictEqual(umbrellaBlockFor('SignInResult'), undefined);
 		assert.strictEqual(umbrellaBlockFor('AuthState'), undefined);
 		assert.strictEqual(umbrellaBlockFor('BlocksAuth'), undefined);

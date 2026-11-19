@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Repo invariant: a value reaches `new RegExp(…)` only as a constant or through
-// an escape (`escapeRegExp` from `@aws-blocks/core/bb-utils`, or a same-named
+// an escape (`escapeRegExp` from `@aws-cdk-blocks/core/bb-utils`, or a same-named
 // helper that escapes every metacharacter). Unescaped, a configured
 // `example.com` also matches `exampleXcom`, and `a|.*` matches everything.
 //
@@ -54,7 +54,7 @@ const ALLOWLIST = [
 		reason: 'Joins the keys of the NETWORK_ERRORS object literal (Node error codes such as ECONNREFUSED) declared in this file.',
 	},
 	{
-		at: 'packages/hosting/src/adapters/nextjs.ts:1045',
+		at: 'packages/hosting/src/adapters/nextjs.ts:1049',
 		reason: '`key` is one of the literal OpenNext option names passed by the callers in this file; `value` goes through escapeRegex().',
 	},
 	{

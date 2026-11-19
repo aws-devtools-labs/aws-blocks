@@ -32,7 +32,7 @@ describe('generateDeployClient — the client-generation step of deploy()', () =
 	let tmp: string;
 	let result: ReturnType<typeof spawnSync>;
 	let stdout: string;
-	const clientPath = () => join(tmp, 'aws-blocks', 'client.js');
+	const clientPath = () => join(tmp, 'cdk-blocks', 'client.js');
 
 	before(() => {
 		tmp = mkdtempSync(join(tmpdir(), 'blocks-deploy-codegen-'));
@@ -61,8 +61,8 @@ new Scope('thing', { bbName: 'KVStore', bbVersion: '9.9.9' });`;
 		// client is written, or `deploy()` blocks on it.
 		writeFileSync(join(bb, 'aws.mjs'), `${register}\nsetInterval(() => {}, 1000);\n`);
 
-		mkdirSync(join(tmp, 'aws-blocks'), { recursive: true });
-		const foundationPath = join(tmp, 'aws-blocks', 'index.ts');
+		mkdirSync(join(tmp, 'cdk-blocks'), { recursive: true });
+		const foundationPath = join(tmp, 'cdk-blocks', 'index.ts');
 		writeFileSync(foundationPath, `import 'fake-bb';\nexport const api = { hello: async () => 'hi' };\n`);
 
 		const coreCommonUrl = pathToFileURL(join(distScripts, '..', 'common', 'index.js')).href;
@@ -121,7 +121,7 @@ console.log('REGISTRY ' + JSON.stringify(Scope.getRegisteredBlocks()));
 describe('generateDeployClient — the tsx loader', () => {
 	let tmp: string;
 	let runner: string;
-	const clientPath = () => join(tmp, 'aws-blocks', 'client.js');
+	const clientPath = () => join(tmp, 'cdk-blocks', 'client.js');
 	// An app that cannot resolve `tsx` itself: a directory with no node_modules on its path.
 	const run = (env: NodeJS.ProcessEnv) =>
 		spawnSync(process.execPath, [runner], {
@@ -135,8 +135,8 @@ describe('generateDeployClient — the tsx loader', () => {
 	before(() => {
 		tmp = mkdtempSync(join(tmpdir(), 'blocks-deploy-codegen-tsx-'));
 		writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'fixture-app', type: 'module' }));
-		mkdirSync(join(tmp, 'aws-blocks'), { recursive: true });
-		const foundationPath = join(tmp, 'aws-blocks', 'index.ts');
+		mkdirSync(join(tmp, 'cdk-blocks'), { recursive: true });
+		const foundationPath = join(tmp, 'cdk-blocks', 'index.ts');
 		writeFileSync(foundationPath, `export const api = { hello: async (): Promise<string> => 'hi' };\n`);
 		runner = join(tmp, 'runner.mjs');
 		writeFileSync(

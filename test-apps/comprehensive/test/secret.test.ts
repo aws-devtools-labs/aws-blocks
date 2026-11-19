@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { getTestSupport } from './test-support.js';
 
 /**
@@ -129,7 +129,7 @@ export function secretTests(_getApi: () => typeof apiType) {
     // allowRuntimeWrite matrix — the three cases, asserted end to end.
     //
     // Build/type behavior is proven in the backend module itself
-    // (aws-blocks/index.ts `_secretWriteTypeAssertions`): the read-only secrets
+    // (cdk-blocks/index.ts `_secretWriteTypeAssertions`): the read-only secrets
     // carry `@ts-expect-error` on `.put`, and the writable one calls `.put` with
     // a correctly-typed value and `@ts-expect-error` on a wrong-typed value. That
     // module is compiled as part of this e2e build/synth, so a regression (put

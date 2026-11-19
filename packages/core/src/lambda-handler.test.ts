@@ -824,7 +824,7 @@ describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
       });
 
       assert.ok(
-        logged.some((line) => line.includes('2 copies of @aws-blocks/core are loaded')),
+        logged.some((line) => line.includes('2 copies of @aws-cdk-blocks/core are loaded')),
         `expected the copy count in the diagnostic, got: ${JSON.stringify(logged)}`,
       );
     } finally {
@@ -2412,7 +2412,7 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
           installClientUserAgent(client);
           const request = new HttpRequest({
             hostname: 'example.com',
-            headers: { 'user-agent': 'aws-sdk-js/3.700.0 aws-blocks/0.5.0' },
+            headers: { 'user-agent': 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0' },
           });
           await mw(async (a: any) => ({ output: a }))({ request });
           return request.headers['user-agent'];
@@ -2430,26 +2430,26 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
   it('appends a valid inbound token to the outgoing SDK user agent', async () => {
     const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9'));
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0 client/swift/9.9.9');
   });
 
   it('drops a malformed inbound token without changing the outgoing user agent', async () => {
     // Uppercase language: the validator rejects it, so nothing is appended.
     const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-Swift/0.1.1'));
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0');
   });
 
   it('appends the token when the client also sends appended metadata', async () => {
     const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9 os/android#14'));
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0 client/swift/9.9.9');
   });
 
   it('leaves the outgoing user agent unchanged when no token header is present', async () => {
     const result = await invoke(uaProbeBackend(), probeEvent(undefined));
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0');
   });
 
 });
@@ -2514,7 +2514,7 @@ function dispatchBackend() {
     plainApi: { async ping() { return 'pong'; } },
     notes: new FakeBlock(),
     // A secret() marker whose (callable) schema must not become an endpoint.
-    stripeKey: { [Symbol.for('@aws-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
+    stripeKey: { [Symbol.for('@aws-cdk-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
   };
 }
 

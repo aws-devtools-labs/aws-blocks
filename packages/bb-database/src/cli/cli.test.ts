@@ -120,7 +120,7 @@ describe('bb-database command line', () => {
 
 describe('bb-database command line, for a block that provisions its cluster', () => {
 	const INDEX_MOCK = fileURLToPath(new URL('../index.mock.js', import.meta.url));
-	const dir = join(cwd, 'aws-blocks', 'migrations', 'main');
+	const dir = join(cwd, 'cdk-blocks', 'migrations', 'main');
 
 	before(() => {
 		mkdirSync(dir, { recursive: true });
@@ -150,7 +150,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 		const result = await run(
 			[
 				'types',
-				'../aws-blocks/migrations/main',
+				'../cdk-blocks/migrations/main',
 				'--block',
 				'main',
 				'--out',
@@ -172,7 +172,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 	});
 
 	test('a file the cluster type cannot run names the option for the other type', async () => {
-		const aurora = join(cwd, 'aws-blocks', 'migrations', 'tasks');
+		const aurora = join(cwd, 'cdk-blocks', 'migrations', 'tasks');
 		mkdirSync(aurora, { recursive: true });
 		writeFileSync(
 			join(aurora, '001_tasks.sql'),
@@ -209,7 +209,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 		// The block, as `npm run dev` runs it: its first statement applies the file.
 		const script =
 			`const { Database, sql } = await import(${JSON.stringify(INDEX_MOCK)});` +
-			`const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-blocks/core'))});` +
+			`const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-cdk-blocks/core'))});` +
 			"await new Database(new Scope('app'), 'main').query(sql`SELECT 1`);";
 		await new Promise<void>((resolve, reject) =>
 			execFile(process.execPath, ['--input-type=module', '-e', script], { cwd }, (error, _out, stderr) =>

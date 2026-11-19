@@ -11,8 +11,8 @@ capability inference.
 
 `new Compute(scope, id, { type, ... })` constructs and owns:
 
-- `type: 'serverless'` → a `LambdaCompute` (from `@aws-blocks/bb-lambda-compute`)
-- `type: 'container'` → a `ContainerCompute` (from `@aws-blocks/bb-container-compute`)
+- `type: 'serverless'` → a `LambdaCompute` (from `@aws-cdk-blocks/bb-lambda-compute`)
+- `type: 'container'` → a `ContainerCompute` (from `@aws-cdk-blocks/bb-container-compute`)
 
 `Compute` is a **composition**: it `extends BuildingBlockScope`, constructs the
 backing as a child, and holds it in a private `#backing` exposed through a

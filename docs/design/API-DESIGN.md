@@ -604,7 +604,7 @@ const auth = new Auth(scope, 'auth');
 export const authApi = auth.createApi();
 
 // Frontend — imports and uses it like any other ApiNamespace
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 const state = await authApi.getAuthState();
 ```
 
@@ -685,7 +685,7 @@ The exported `{Name}Errors` object with all typed error names.
 
 What AWS resources are created, with what configuration. Include partition keys, billing modes, permissions, naming conventions, and removal policies. For composites, state that infrastructure is inherited.
 
-**Important:** Use `registerConfig(scope, key, value)` from `@aws-blocks/core/cdk` to pass resource identifiers (ARNs, URLs, paths) to the Lambda runtime. Do **not** use `handler.addEnvironment()` — Lambda env vars have a 4KB combined limit. See `packages/core/src/cdk/config-registry.ts`.
+**Important:** Use `registerConfig(scope, key, value)` from `@aws-cdk-blocks/core/cdk` to pass resource identifiers (ARNs, URLs, paths) to the Lambda runtime. Do **not** use `handler.addEnvironment()` — Lambda env vars have a 4KB combined limit. See `packages/core/src/cdk/config-registry.ts`.
 
 **7. Mock Implementation**
 

@@ -16,13 +16,13 @@ Distributed tracing backed by AWS X-Ray.
 ## Installation
 
 ```bash
-npm install @aws-blocks/bb-tracer
+npm install @aws-cdk-blocks/bb-tracer
 ```
 
 ## Quick Usage
 
 ```typescript
-import { Tracer } from '@aws-blocks/bb-tracer';
+import { Tracer } from '@aws-cdk-blocks/bb-tracer';
 
 const tracer = new Tracer(scope, 'my-tracer');
 

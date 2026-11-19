@@ -4,7 +4,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync, existsSync, readdirSync } from 'node:fs';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { FileBucket, FileBucketErrors } from './index.mock.js';
 
 const scope = new Scope('idx');

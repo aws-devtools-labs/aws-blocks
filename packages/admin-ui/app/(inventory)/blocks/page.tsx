@@ -331,7 +331,7 @@ export default function BlocksPage() {
 					{data.blocksErrorCode === 'NOT_A_BLOCKS_PROJECT' && (
 						<CardContent>
 							<p className="text-[13px] text-fg-soft">
-								The dashboard found no <code className="font-mono">aws-blocks/index.ts</code> under the project it was
+								The dashboard found no <code className="font-mono">cdk-blocks/index.ts</code> under the project it was
 								started from, so there is no declaration source to scan. Start the dashboard from your app directory, or
 								pass the project root explicitly.
 							</p>
@@ -345,10 +345,10 @@ export default function BlocksPage() {
 					<CardHeader>
 						<CardTitle className="text-base">No blocks found</CardTitle>
 						<CardDescription>
-							Nothing was declared in <code className="font-mono">aws-blocks/</code>.{' '}
+							Nothing was declared in <code className="font-mono">cdk-blocks/</code>.{' '}
 							{data?.scannedFiles ?? 0} file{(data?.scannedFiles ?? 0) === 1 ? '' : 's'} parsed — a{' '}
 							<code className="font-mono">new</code> block in a file outside{' '}
-							<code className="font-mono">aws-blocks/</code> is not scanned.
+							<code className="font-mono">cdk-blocks/</code> is not scanned.
 						</CardDescription>
 					</CardHeader>
 				</Card>
@@ -392,7 +392,7 @@ export default function BlocksPage() {
 							<CardDescription>
 								These are reported rather than skipped: each one is a{' '}
 								<code className="font-mono">new X(scope, &apos;id&apos;)</code> in{' '}
-								<code className="font-mono">aws-blocks/</code> that the dashboard could not resolve to a block it knows.
+								<code className="font-mono">cdk-blocks/</code> that the dashboard could not resolve to a block it knows.
 								A newly-added or third-party block type shows up here instead of vanishing.
 							</CardDescription>
 						</CardHeader>

@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/bb-container-compute": minor
-"@aws-blocks/core": patch
-"@aws-blocks/bb-compute": patch
+"@aws-cdk-blocks/bb-container-compute": minor
+"@aws-cdk-blocks/core": patch
+"@aws-cdk-blocks/bb-compute": patch
 ---
 
 feat(bb-container-compute): scale a container compute to zero between jobs

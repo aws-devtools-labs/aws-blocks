@@ -1,9 +1,9 @@
 ---
-'@aws-blocks/core': minor
-'@aws-blocks/blocks': patch
-'@aws-blocks/bb-compute': patch
-'@aws-blocks/bb-container-compute': patch
-'@aws-blocks/bb-auth': patch
+'@aws-cdk-blocks/core': minor
+'aws-cdk-blocks': patch
+'@aws-cdk-blocks/bb-compute': patch
+'@aws-cdk-blocks/bb-container-compute': patch
+'@aws-cdk-blocks/bb-auth': patch
 ---
 
 Behind a Blocks CloudFront front door, a Lambda handler's `ctx.request.url` is now the URL the client called: the distribution's domain, or the custom domain it was called at (`https://d111.cloudfront.net/aws-blocks/api/orders`, not `https://<id>.execute-api.<region>.amazonaws.com/aws-blocks/api/orders`). Links and redirects a handler builds from it stay on the public domain, where the app's cookies are scoped. A container namespace behind the same door already reported that URL; the two compute types now agree. `getRequestBaseUrl()` is unchanged: it stays the gateway's origin and stage, for code that must reach the gateway directly.

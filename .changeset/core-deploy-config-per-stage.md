@@ -1,8 +1,8 @@
 ---
-"@aws-blocks/core": minor
-"@aws-blocks/blocks": patch
-"@aws-blocks/create-blocks-app": patch
-"@aws-blocks/admin-ui": patch
+"@aws-cdk-blocks/core": minor
+"aws-cdk-blocks": patch
+"@aws-cdk-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/admin-ui": patch
 ---
 
 fix(core,blocks,create-blocks-app): a deploy no longer points the local dev loop at AWS

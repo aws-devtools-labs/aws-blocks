@@ -14,7 +14,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient } from 'aws-cdk-blocks/client';
 import { METHOD_NOT_FOUND, requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
 type WhereAmI = { functionName: string | null; memoryMb: string | null; requestUrl: string };

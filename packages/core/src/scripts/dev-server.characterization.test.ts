@@ -290,7 +290,7 @@ const CASES: Record<string, Case> = {
   'raw route out-of-range status': { method: 'GET', path: '/bad-status' },
   'raw route with the wrong method falls through to the frontend': { method: 'DELETE', path: '/users/1' },
   'unknown path falls through to the frontend': { method: 'GET', path: '/not-a-route' },
-  'runtime config endpoint': { method: 'GET', path: '/.cdk-blocks-sandbox/config.json' },
+  'runtime config endpoint': { method: 'GET', path: '/.blocks-sandbox/config.json' },
 };
 
 // The dev server answers RawRoute and JSON-RPC requests through the same
@@ -1308,7 +1308,7 @@ import { startDevServer } from ${JSON.stringify(join(__dirname, 'dev-server.js')
 startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port, typegen: false })});
 `);
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
-    const env: NodeJS.ProcessEnv = { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1' };
+    const env: NodeJS.ProcessEnv = { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' };
     // Log at the default level so the request log lines are part of the characterization.
     delete env.BLOCKS_DEV_QUIET;
     delete env.BLOCKS_LOG_LEVEL;
@@ -1320,7 +1320,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
     devProcess.stderr?.on('data', chunk => { output.stderr += chunk.toString(); });
 
     const deadline = Date.now() + 20_000;
-    while (!output.stdout.includes('AWS Blocks local server running')) {
+    while (!output.stdout.includes('AWS CDK Blocks local server running')) {
       if (Date.now() > deadline || devProcess.exitCode !== null) {
         assert.fail(`Dev server did not start\nstdout: ${output.stdout}\nstderr: ${output.stderr}`);
       }

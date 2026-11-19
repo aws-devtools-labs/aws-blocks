@@ -1,13 +1,13 @@
 # Blocks Agent App
 
-A frontend on AWS Blocks with an **AI Agent** — model inference and tool
+A frontend on AWS CDK Blocks with an **AI Agent** — model inference and tool
 calling — end to end. Locally the agent runs on the
 built-in **`canned` provider**: a deterministic, keyword-driven fake model that
 speaks the real model-stream protocol with no AWS and no LLM, so `npm run dev`
 and the e2e tests are fully reproducible. On deploy it runs against Amazon
 Bedrock. Vite + vanilla DOM frontend.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template agent`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template agent`
 
 ## Getting Started
 
@@ -25,14 +25,14 @@ agent to "save a note" to see it call a tool.
 canned provider returns keyword-based text and, when a prompt mentions a tool's
 name, emits a tool call so the agent runs your handler — all deterministic. To
 use a real model in dev, set `model.local` to a `bedrock` or `openai-api`
-provider in `aws-blocks/index.ts`. The deployed model is `model.deployed`
+provider in `cdk-blocks/index.ts`. The deployed model is `model.deployed`
 (`BedrockModels` presets, or a specific `modelId`).
 
 ## Project Structure
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: Agent (canned local model) + a `saveNote` tool, Auth, requireAuth-gated API |
+| `cdk-blocks/index.ts` | Backend: Agent (canned local model) + a `saveNote` tool, Auth, requireAuth-gated API |
 | `src/index.ts` | Frontend: Authenticator sign-in + a chat box |
 | `test/e2e.test.ts` | Tests exercising a plain-text turn and a tool-calling turn |
 | `index.html` | HTML shell |
@@ -80,7 +80,7 @@ Your CloudFormation stack names are derived from the `stackId` in
 `.blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
@@ -88,5 +88,5 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
 (frontend). Test via `npm run test:e2e`.

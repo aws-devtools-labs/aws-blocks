@@ -4,11 +4,11 @@
 
 /**
  * Internal helper for `npm run generate-client [foundationPath] [outputPath]`.
- * It regenerates the app's typed client (`aws-blocks/client.js`).
+ * It regenerates the app's typed client (`cdk-blocks/client.js`).
  *
  * Defaults:
- *   foundationPath = ./aws-blocks/index.ts
- *   outputPath     = ./aws-blocks/client.js
+ *   foundationPath = ./cdk-blocks/index.ts
+ *   outputPath     = ./cdk-blocks/client.js
  *
  * The emitted client is not condition-independent: Building Block constructors
  * register their client middleware when the backend is imported, and which
@@ -19,7 +19,7 @@
  * `client.js` is correct regardless of how the task was invoked.
  *
  * For a TypeScript foundation the worker is loaded with `--import <tsx loader>`:
- * the app's own `tsx` when it is installed, else the one `@aws-blocks/blocks`
+ * the app's own `tsx` when it is installed, else the one `aws-cdk-blocks`
  * depends on, by absolute URL, so that the worker finds it from any app.
  */
 
@@ -30,8 +30,8 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const [foundationArg, outputArg] = process.argv.slice(2);
-const foundationPath = resolvePath(foundationArg ?? './aws-blocks/index.ts');
-const outputPath = resolvePath(outputArg ?? './aws-blocks/client.js');
+const foundationPath = resolvePath(foundationArg ?? './cdk-blocks/index.ts');
+const outputPath = resolvePath(outputArg ?? './cdk-blocks/client.js');
 
 function resolvePath(p: string): string {
 	return isAbsolute(p) ? p : resolve(process.cwd(), p);
@@ -54,7 +54,7 @@ if (!existsSync(foundationPath)) {
 	process.exit(2);
 }
 
-// The worker lives in @aws-blocks/core; `generate-client-worker.js` runs it through
+// The worker lives in @aws-cdk-blocks/core; `generate-client-worker.js` runs it through
 // this package's own dependency, so consuming apps don't need a direct core dependency.
 const workerPath = fileURLToPath(new URL('./generate-client-worker.js', import.meta.url));
 
@@ -80,7 +80,7 @@ if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
  * `tsconfig.json` in the working directory, and a root that only lists project
  * references (the Vite templates) lists no file, so the backend would load without
  * its `jsx` or `paths`. Point `tsx` at the `tsconfig.json` next to the backend entry
- * (`aws-blocks/tsconfig.json`) when there is one, unless `TSX_TSCONFIG_PATH` is set.
+ * (`cdk-blocks/tsconfig.json`) when there is one, unless `TSX_TSCONFIG_PATH` is set.
  */
 function workerEnv(): NodeJS.ProcessEnv {
 	if (process.env.TSX_TSCONFIG_PATH) return process.env;

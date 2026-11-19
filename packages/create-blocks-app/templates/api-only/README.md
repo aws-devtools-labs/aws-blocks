@@ -1,6 +1,6 @@
 # Blocks API-Only Application
 
-A headless JSON API service on AWS Blocks — no frontend. The starting point for a
+A headless JSON API service on AWS CDK Blocks — no frontend. The starting point for a
 backend behind a mobile app, a CLI, or a third-party client. Ships a public
 health check plus an auth-gated CRUD resource with per-user isolation.
 
@@ -8,7 +8,7 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 > over JSON-RPC. It still owns backend state (here a `KVStore`); a real
 > API almost always does.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template api-only`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template api-only`
 
 ## For Coding Agents
 
@@ -122,7 +122,7 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 
 Your CloudFormation stack names derive from the `stackId` in
 `.blocks/config.json`, generated at scaffold time. Edit `stackId` to rename, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## Adding a frontend later
 

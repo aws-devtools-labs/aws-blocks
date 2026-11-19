@@ -1,12 +1,12 @@
 # Blocks Scheduled Jobs Application
 
-Backend-only AWS Blocks app with scheduled **CronJobs**. A `heartbeat` job runs
+Backend-only AWS CDK Blocks app with scheduled **CronJobs**. A `heartbeat` job runs
 every minute and records each run in a `KVStore`; a second job shows
 `enabled: false`. Deployed, the jobs run on EventBridge Scheduler; under
 `npm run dev` the local server fires them on the same schedule. No frontend
 included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template cron`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template cron`
 
 ## Getting Started
 
@@ -73,13 +73,13 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 curl -X POST http://localhost:3001/aws-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.lastRun","params":["heartbeat"],"id":1}'
-# method = "<namespace>.<methodName>" (namespace = the exported variable name in aws-blocks/index.ts: `export const api = …` → api); params = positional array.
+# method = "<namespace>.<methodName>" (namespace = the exported variable name in cdk-blocks/index.ts: `export const api = …` → api); params = positional array.
 # Errors return HTTP 200 with an {"error":{...}} body (JSON-RPC), not a non-2xx status.
 ```
 
 ## Architecture
 
-- **Backend:** `aws-blocks/index.ts` — Define APIs and Building Blocks
+- **Backend:** `cdk-blocks/index.ts` — Define APIs and Building Blocks
 - **Infrastructure:** Inferred from code, works locally and on AWS
 
 **Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more).**
@@ -88,7 +88,7 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 
 Your CloudFormation stack names are derived from the `stackId` in `.blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
 
-To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
+To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `cdk-blocks/index.cdk.ts` directly.
 
 ## Adding a Frontend Later
 
@@ -122,13 +122,13 @@ This template is backend-only. To add a frontend:
 
 2. **Import APIs in your frontend:**
    ```ts
-   import { api } from 'aws-blocks';
+   import { api } from 'cdk-blocks';
    const run = await api.lastRun('heartbeat');
    ```
 
-3. **Add Hosting to `aws-blocks/index.cdk.ts`:**
+3. **Add Hosting to `cdk-blocks/index.cdk.ts`:**
    ```ts
-   import { Hosting } from '@aws-blocks/blocks/cdk';
+   import { Hosting } from 'aws-cdk-blocks/cdk';
 
    if (!sandboxMode) {
      new Hosting(blocksStack, 'Hosting', {
@@ -140,4 +140,4 @@ This template is backend-only. To add a frontend:
    }
    ```
 
-The `aws-blocks` workspace package re-exports a type-safe client that works in both Node.js and browser environments.
+The `cdk-blocks` workspace package re-exports a type-safe client that works in both Node.js and browser environments.

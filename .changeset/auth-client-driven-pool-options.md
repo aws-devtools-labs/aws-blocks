@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-auth': minor
-'@aws-blocks/blocks': minor
+'@aws-cdk-blocks/bb-auth': minor
+'aws-cdk-blocks': minor
 ---
 
 `Auth` can share its user pool with a frontend that signs in directly against Cognito, such as one built with the Amplify client libraries. All three options are opt-in.

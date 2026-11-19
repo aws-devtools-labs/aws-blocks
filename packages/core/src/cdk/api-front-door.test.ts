@@ -60,7 +60,7 @@ describe('httpOriginFromEndpoint', () => {
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		const api = new cdk.aws_apigateway.RestApi(stack, 'Api');
 		api.root.addMethod('ANY');
-		const gatewayUrl = `${api.url}aws-blocks/api`;
+		const gatewayUrl = `${api.url}cdk-blocks/api`;
 		distributionWith(stack, httpOriginFromEndpoint(gatewayUrl));
 
 		const origin = soleDistributionConfig(stack).Origins[0];

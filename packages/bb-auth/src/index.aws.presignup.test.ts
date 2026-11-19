@@ -17,8 +17,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import { ApiError, type BlocksContext } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { ApiError, type BlocksContext } from '@aws-cdk-blocks/core';
 import { cognitoConfigKeys, ownsPreSignUpTrigger, preSignUpTriggerConfigKey } from './cdk/contract.js';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.aws.js';

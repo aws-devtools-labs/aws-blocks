@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-kv-store": minor
+"@aws-cdk-blocks/bb-kv-store": minor
 ---
 
 feat(bb-kv-store): add a `consistentRead` option to `get()`

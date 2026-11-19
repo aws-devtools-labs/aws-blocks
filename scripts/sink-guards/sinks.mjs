@@ -173,7 +173,7 @@ function calleeName(call) {
 	return undefined;
 }
 
-const BB_UTILS = /^@aws-blocks\/core\/bb-utils$/;
+const BB_UTILS = /^@aws-cdk-blocks\/core\/bb-utils$/;
 
 /** The module a namespace import binds `id` to (`import * as u from '…'`), if any. */
 function namespaceImportSource(id) {
@@ -189,7 +189,7 @@ function namespaceImportSource(id) {
  * `escapeRegExp`/`escapeRegex`/`escapeHtml`/`escapeAttr`/`esc` by name, which is
  * only sound because `findWeakEscapeHelpers` checks every declaration of those
  * names in the tree. So only a bare call (`esc(x)`) or a call on a namespace
- * import of `@aws-blocks/core/bb-utils` (`u.escapeHtml(x)`) counts: a method
+ * import of `@aws-cdk-blocks/core/bb-utils` (`u.escapeHtml(x)`) counts: a method
  * (`util.esc(x)`) can resolve to code the integrity check never sees.
  */
 function trustedCallName(call) {

@@ -1,10 +1,10 @@
 # Blocks SQL Application
 
-Backend-only TypeScript API on a PostgreSQL database — the AWS Blocks
+Backend-only TypeScript API on a PostgreSQL database — the AWS CDK Blocks
 `Database` Building Block on Aurora DSQL. Relational modeling with foreign keys,
 transactions, and version-controlled SQL migrations. No frontend included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template sql`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template sql`
 
 ## For Coding Agents
 
@@ -17,11 +17,11 @@ The `Database` API and migration model are documented in
 
 ## What ships
 
-- **`aws-blocks/index.ts`** — a relational **notebooks → notes** API: create/list
+- **`cdk-blocks/index.ts`** — a relational **notebooks → notes** API: create/list
   notebooks, add/list notes, and delete a notebook (with its notes, in one
   transaction). Every query is parameterized via the `sql` tagged template
   (injection-safe) and scoped to the signed-in user.
-- **`aws-blocks/migrations/main/`** — the schema as numbered `.sql` files, in a
+- **`cdk-blocks/migrations/main/`** — the schema as numbered `.sql` files, in a
   directory named after the `Database` block's id (`main`):
   - `001_create_notebooks.sql` — notebooks, unique name per owner
   - `002_create_notes.sql` — notes, foreign key to notebooks
@@ -38,7 +38,7 @@ The `Database` API and migration model are documented in
 
 Migrations run automatically — on first query locally, and during the deploy on
 AWS, before the new code goes live. Each file runs once. Add a migration by
-dropping a higher-numbered `.sql` file into `aws-blocks/migrations/main/`.
+dropping a higher-numbered `.sql` file into `cdk-blocks/migrations/main/`.
 
 ### Writing SQL for Aurora DSQL
 
@@ -101,7 +101,7 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 
 Your CloudFormation stack names derive from the `stackId` in
 `.blocks/config.json`, generated at scaffold time. Edit `stackId` to rename, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## Adding a frontend later
 

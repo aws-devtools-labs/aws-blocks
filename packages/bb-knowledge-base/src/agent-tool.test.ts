@@ -5,7 +5,7 @@ import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert';
 import { rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import { KnowledgeBase, KnowledgeBaseErrors } from './index.mock.js';
 
 const CORPUS = 'test-agent-tool-corpus';

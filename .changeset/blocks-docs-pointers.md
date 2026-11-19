@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/blocks": patch
+"aws-cdk-blocks": patch
 ---
 
 The JSDoc on each Building Block re-export now points at the docs bundled in

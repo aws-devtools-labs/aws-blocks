@@ -14,7 +14,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-cdk-blocks/core/cdk';
 import { FileBucket } from './index.cdk.js';
 import { deriveBucketName } from './bucket-name.js';
 
@@ -661,7 +661,7 @@ test('CDK: encryption / objectLock alongside fromExisting warn that they are ign
   );
   assert.strictEqual(warnings.length, 1);
   assert.match(String(warnings[0].entry.data), /encryption, objectLock/);
-  assert.match(String(warnings[0].entry.data), /\[ack: @aws-blocks\/bb-file-bucket:OptionsIgnoredForExisting\]/);
+  assert.match(String(warnings[0].entry.data), /\[ack: @aws-cdk-blocks\/bb-file-bucket:OptionsIgnoredForExisting\]/);
 });
 
 test('CDK: fromExisting without encryption / objectLock emits no ignored-options warning', () => {

@@ -1,4 +1,4 @@
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 /**
  * Projection of a {@link SessionRecord}'s `idToken` claims into the fields
  * customers see as `CognitoUser`. See {@link decodeIdToken}.

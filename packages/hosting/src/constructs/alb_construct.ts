@@ -14,7 +14,7 @@
  * same target share a rule (up to 5 condition values each), and trailing rules
  * that only repeat the default target are dropped; synth warns when the rules
  * exceed the default quota of 100 per load balancer
- * (`@aws-blocks/hosting:AlbRuleLimit`).
+ * (`@aws-cdk-blocks/hosting:AlbRuleLimit`).
  *
  * What the ALB does NOT have (it has no edge): global edge caching, skew
  * protection, geo restriction. Unsupported settings are a type error in
@@ -25,7 +25,7 @@
  * by the asset proxy (and the headers by the API forwarder) with the CloudFront
  * door's semantics; responses the ALB sends straight to the server or image
  * function don't pass through them, which synth reports
- * (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  *
  * With a custom domain (`domain`) the listener is HTTPS (TLS 1.2+, the
  * `RECOMMENDED_TLS` policy) with a port 80 → 443 redirect, Route 53 alias
@@ -518,7 +518,7 @@ export class AlbConstruct extends Construct {
     }
     if (ruleCount > ALB_DEFAULT_RULE_QUOTA) {
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:AlbRuleLimit',
+        '@aws-cdk-blocks/hosting:AlbRuleLimit',
         `The ALB front door needs ${ruleCount} listener rules; a load balancer allows ${ALB_DEFAULT_RULE_QUOTA} by default, ` +
           'so the deploy fails unless the quota (Elastic Load Balancing: Rules per Application Load Balancer) was raised. ' +
           'Group routes and redirects under fewer path prefixes, or use the CloudFront door.',
@@ -596,7 +596,7 @@ export class AlbConstruct extends Construct {
       // No zone: nothing in the stack resolves the name to the ALB. Behind the
       // stacked door the edge connects to that name, so it fails until a record exists.
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:AlbDomainWithoutRecords',
+        '@aws-cdk-blocks/hosting:AlbDomainWithoutRecords',
         `The ALB serves ${domain.names.join(', ')} but has no hosted zone, so no DNS records are created. ` +
           (originSecret
             ? 'The stacked door\'s edge connects to that name, so requests fail until it resolves to the ALB. '

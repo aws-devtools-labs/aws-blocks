@@ -39,8 +39,8 @@ writeFileSync(markerFile, original.replace(/DEPLOY_MARKER = '[^']*'/, `DEPLOY_MA
 
 try {
   process.chdir(appDir);
-  const { startSandbox } = await import('@aws-blocks/blocks/scripts');
-  await startSandbox({ backendPath: join(appDir, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
+  const { startSandbox } = await import('aws-cdk-blocks/scripts');
+  await startSandbox({ backendPath: join(appDir, 'cdk-blocks', 'index.cdk.ts'), deployOnly: true });
 
   const outputs = JSON.parse(readFileSync(join(appDir, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
     string,

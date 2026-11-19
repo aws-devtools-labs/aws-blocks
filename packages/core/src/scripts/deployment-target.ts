@@ -24,6 +24,8 @@ export interface DeploymentTarget {
 	/**
 	 * The `@aws-cdk/core:bootstrapQualifier` context value, if any: from `cdk.json`, then
 	 * `cdk.context.json`, then `~/.cdk.json`, the order in which CDK looks it up.
+	 * `readCdkTelemetryContext` in `telemetry/cdk-consent.ts` walks the same three bags
+	 * in the same order for the telemetry opt-out, so a CDK order change moves both.
 	 */
 	bootstrapQualifier?: string;
 }

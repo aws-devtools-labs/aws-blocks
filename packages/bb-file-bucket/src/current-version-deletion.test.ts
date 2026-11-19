@@ -5,7 +5,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { FileBucket } from './index.mock.js';
 import { contentPath, metaPath, deleteMarkerPath, versionContentPath, versionMetaPath } from './paths.js';
 

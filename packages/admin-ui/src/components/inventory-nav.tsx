@@ -214,7 +214,7 @@ function NavEmptyState({ status }: { status: NavStatus }) {
 
 	return (
 		<p className="px-1 text-[11px] leading-snug text-fg-dim">
-			Nothing is declared in <code className="font-mono">aws-blocks/</code> yet. A block declared in a file outside
+			Nothing is declared in <code className="font-mono">cdk-blocks/</code> yet. A block declared in a file outside
 			that directory is not scanned.
 		</p>
 	);

@@ -50,7 +50,7 @@ const bucket = new FileBucket(scope, id, options?)
 
 All FileBucket-provisioned buckets **enforce TLS unconditionally** (`enforceSSL: true`) — CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`, closing the in-transit exposure gap. This is not configurable.
 
-The S3 bucket name is derived from the scope chain: the FileBucket id joined to its parent scope ids with `-`. If that name fits S3's 63-character limit, it is used as-is. If it is longer, it is shortened to the start of the name plus `-` and an 8-character hash. The shortened name is the same on every deploy and different from the names of other buckets. A name that breaks any other S3 naming rule (for example, one with uppercase letters) still fails `cdk synth` with a `ValidationFailed` error. To read the resolved name, call `getSdkIdentifiers(bucket).bucketName` (from `@aws-blocks/blocks`).
+The S3 bucket name is derived from the scope chain: the FileBucket id joined to its parent scope ids with `-`. If that name fits S3's 63-character limit, it is used as-is. If it is longer, it is shortened to the start of the name plus `-` and an 8-character hash. The shortened name is the same on every deploy and different from the names of other buckets. A name that breaks any other S3 naming rule (for example, one with uppercase letters) still fails `cdk synth` with a `ValidationFailed` error. To read the resolved name, call `getSdkIdentifiers(bucket).bucketName` (from `aws-cdk-blocks`).
 
 ### PutOptions
 
@@ -135,8 +135,8 @@ Invalid input — a key or `scan()` prefix that breaks the [key rules](#object-k
 | `FileBucketErrors.PresignedUploadUnsupported` | `PresignedUploadUnsupported` | Thrown by `putUrl()` and `createUploadHandle()` on a bucket with `objectLock` — see [Object Lock](./PRODUCTION.md#object-lock). |
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { FileBucketErrors } from '@aws-cdk-blocks/bb-file-bucket';
 
 try {
   await bucket.restoreVersion('report.pdf', 'non-existent-version');
@@ -157,7 +157,7 @@ FileBucket has no per-object permissions of its own. Every API method reads and 
 - Accept only a file *name* from the client and wrap it in `encodeURIComponent()`, so it stays a single path segment and can't add `/` to reach another prefix. FileBucket rejects `.`/`..` segments and other unsafe keys with `ValidationFailed`; see [Object keys](#object-keys).
 - For a resource shared between users (a document, a team folder), check that the caller may access it — for example by looking up an ownership record — before building its key.
 
-The examples below assume an auth block (`Auth` from `@aws-blocks/bb-auth`) and a helper that builds the caller's keys:
+The examples below assume an auth block (`Auth` from `@aws-cdk-blocks/bb-auth`) and a helper that builds the caller's keys:
 
 ```typescript
 const auth = new Auth(scope, 'auth');
@@ -309,7 +309,7 @@ const bucket = new FileBucket(scope, 'uploads', {
 });
 ```
 
-`aws-blocks/index.ts` is shared by sandbox and production deploys, so this rule also allows `http://localhost:3000` on the production bucket. Only a sandbox needs it; leaving it in production is low-risk because presigned URLs authenticate through their query-string signature, not ambient browser credentials.
+`cdk-blocks/index.ts` is shared by sandbox and production deploys, so this rule also allows `http://localhost:3000` on the production bucket. Only a sandbox needs it; leaving it in production is low-risk because presigned URLs authenticate through their query-string signature, not ambient browser credentials.
 
 - `GET` covers `download()` and `fetch()` on a `getUrl()` URL; `PUT` covers `upload()` and a `putUrl()` URL.
 - `allowedHeaders` must list every header the browser sends. A cross-origin `PUT` always triggers a CORS preflight, and S3 rejects the preflight if a request header — such as the `Content-Type` that `upload()` sends — is not allowed.

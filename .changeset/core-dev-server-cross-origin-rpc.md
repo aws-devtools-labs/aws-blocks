@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": minor
+"@aws-cdk-blocks/core": minor
 ---
 
 Hardening for the local dev server (`npm run dev`, including sandbox mode, where it forwards API requests to the deployed sandbox API) only; deployed APIs are unchanged. A page on another site could send a `text/plain` `POST` to `http://localhost:3000/aws-blocks/api`, which the browser sends without a CORS preflight, and run an API method against your local data. The dev server now refuses such requests, before it runs them locally or forwards them to a sandbox:

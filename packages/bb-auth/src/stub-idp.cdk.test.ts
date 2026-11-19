@@ -18,7 +18,7 @@ const SANDBOX = { sandboxMode: 'true' };
 
 function synth(construct: string, apiUrl?: string | null, context: Record<string, unknown> | undefined = SANDBOX) {
 	return synthUnderCdkConditions({
-		imports: "import { Auth, stubIdp } from '@aws-blocks/bb-auth';",
+		imports: "import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';",
 		build: `const auth = ${construct};\nreport.fullId = auth.fullId;`,
 		apiUrl,
 		context,
@@ -31,7 +31,7 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 			`new Auth(stack, 'auth', { store: 'builtin', providers: { corp: stubIdp({ users: [${ALICE}] }) } })`,
 		);
 		const fullId = String(report.fullId);
-		const stubWarnings = warnings.filter((w) => w.message.includes('@aws-blocks/bb-auth:StubIdpDeployed'));
+		const stubWarnings = warnings.filter((w) => w.message.includes('@aws-cdk-blocks/bb-auth:StubIdpDeployed'));
 		assert.strictEqual(stubWarnings.length, 1, JSON.stringify(warnings));
 		const [warning] = stubWarnings;
 		assert.strictEqual(warning?.path, '/TestStack/auth');
@@ -64,7 +64,7 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 		assert.throws(
 			() =>
 				synthUnderCdkConditions({
-					imports: "import { Auth, stubIdp } from '@aws-blocks/bb-auth';",
+					imports: "import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';",
 					build: `stack._defaultCompute = {};\n${construct};`,
 					apiUrl: null,
 					context: SANDBOX,
@@ -167,7 +167,7 @@ describe('stubIdp() at synth outside a sandbox', () => {
 			undefined,
 			{ sandboxMode: true },
 		);
-		assert.ok(warnings.some((w) => w.message.includes('@aws-blocks/bb-auth:StubIdpDeployed')));
+		assert.ok(warnings.some((w) => w.message.includes('@aws-cdk-blocks/bb-auth:StubIdpDeployed')));
 	});
 
 	test('every stub provider is named, next to a real one', () => {

@@ -1,5 +1,5 @@
 import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 
 export function isWrongCode(e: unknown): boolean {
 	return isBlocksError(e, AuthBasicErrors.InvalidCode);

@@ -2,10 +2,10 @@
  * Frontend — src/index.ts
  *
  * Real-time todo app. Uses lit-html for declarative rendering with @event binding.
- * Imports the typed backend API via `aws-blocks` (auto-generated proxy).
+ * Imports the typed backend API via `cdk-blocks` (auto-generated proxy).
  */
-import { api, authApi } from 'aws-blocks';
-import { AccountMenuBar, AuthenticatedContent, injectTheme, StatusMessage } from '@aws-blocks/blocks/ui';
+import { api, authApi } from 'cdk-blocks';
+import { AccountMenuBar, AuthenticatedContent, injectTheme, StatusMessage } from 'aws-cdk-blocks/ui';
 import { html, render } from 'lit-html';
 
 injectTheme();

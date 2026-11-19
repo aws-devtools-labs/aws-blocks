@@ -101,7 +101,7 @@ export const GENERATED_WRAPPERS: Readonly<Record<WrapperFile, readonly string[]>
 
 /**
  * The `package.json#blocks.dev` settings that migrate moves out of a generated `server.ts`.
- * `generateClient` is read by the dev server in `@aws-blocks/core`, not by the CLI.
+ * `generateClient` is read by the dev server in `@aws-cdk-blocks/core`, not by the CLI.
  */
 export type MigratedDevConfig = Pick<DevPackageConfig, 'port' | 'frontendCommand' | 'frontendPort' | 'frontend'> & {
 	generateClient?: false;
@@ -166,19 +166,19 @@ function isAmplifyOverlay(root: string): boolean {
 	return text !== undefined && AMPLIFY_CLIENT_GENERATORS.includes(sourceHash(text));
 }
 
-const RUN = `node --input-type=module -e "import '@aws-blocks/blocks/run'" --`;
+const RUN = `node --input-type=module -e "import 'aws-cdk-blocks/run'" --`;
 const USER_TASKS: Readonly<Record<string, string>> = {
 	'docs': 'docs',
 	'docs:search': 'docs --search',
 	'docs:api': 'docs --api',
 	'db': 'db',
 	'whoami': 'whoami',
-	'telemetry': 'telemetry',
 	'migrate': 'migrate',
 	'help': '--help',
 };
 
-/** The generated npm-script commands, and the `cdk-blocks` alias that replaces each one. */
+/** The generated npm-script commands, and the `cdk-blocks` alias that replaces each one.
+ *  The keys are the pre-rename strings a scaffolded app holds, so they stay `aws-blocks`. */
 export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: WrapperFile }>> = {
 	'tsx watch aws-blocks/scripts/server.ts': { alias: 'cdk-blocks dev', wrapper: 'server.ts' },
 	'tsx aws-blocks/scripts/stop.ts': { alias: 'cdk-blocks dev stop', wrapper: 'stop.ts' },
@@ -273,6 +273,7 @@ function stackIdProblem(root: string): string | null {
 		: `.blocks/config.json has no string "stackId": ${STACK_ID_HINT}`;
 }
 
+/** The pre-rename layout migrate reads; never `cdk-blocks` (`LEGACY_BLOCKS_BACKEND_DIR`). */
 const SCRIPTS_DIR = join('aws-blocks', 'scripts');
 
 /** Whitespace-insensitive form of a source file: CRLF, indentation and blank lines do not matter. */
@@ -357,10 +358,10 @@ function findWrappers(root: string): Wrapper[] {
 }
 
 /**
- * The state directory's name before the `cdk-blocks` rename (D-030). An app this
+ * The state directory's name before the `cdk-blocks` rename (D-031). An app this
  * command is migrating predates the rename, so it still holds its state — and a CDK
  * cloud assembly — under this name. Mirrors `LEGACY_SANDBOX_DIR` in
- * `@aws-blocks/core`, which is internal to that package.
+ * `@aws-cdk-blocks/core`, which is internal to that package.
  */
 const LEGACY_SANDBOX_DIR = '.blocks-sandbox';
 
@@ -1128,7 +1129,8 @@ function refusal(ctx: Context, error: unknown): unknown {
 }
 
 export async function migrate(ctx: Context, input: CommandInput): Promise<number> {
-	const root = ctx.requireRoot();
+	// migrate reads a pre-rename app, so it also accepts the legacy `aws-blocks/`.
+	const root = ctx.requireRoot({ allowLegacyBackendDir: true });
 	const dryRun = input.flags['dry-run'] === true;
 	let git: GitView;
 	try {

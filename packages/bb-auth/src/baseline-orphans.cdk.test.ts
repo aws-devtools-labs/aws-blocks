@@ -9,7 +9,7 @@
  * reads the old baseline: CloudFormation deletes the pool and every user, with
  * no warning — and the deploy-time guard is removed with the last pool.
  *
- * The stack-level check in `@aws-blocks/core` (on every `BlocksStack` /
+ * The stack-level check in `@aws-cdk-blocks/core` (on every `BlocksStack` /
  * `BlocksBackend`) closes that: a committed baseline that records an owned
  * pool (`removalGuard`) and that no block in this stack claims fails synth.
  * Real `BlocksStack.create()` synths here, under `--conditions=cdk`, in
@@ -20,7 +20,7 @@ import assert from 'node:assert';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
-import { baselineDir } from '@aws-blocks/core/cdk/internal';
+import { baselineDir } from '@aws-cdk-blocks/core/cdk/internal';
 import { baselinePath } from './cdk/immutability-baseline.js';
 import { type BlocksAppSynthResult, synthBlocksApp } from './test-support/blocks-app-synth.js';
 import { defaultBaselineFile, freshAppDir } from './test-support/guard-synth.js';
@@ -53,13 +53,13 @@ function deployedAppDir(build: string, stack = 'TestStack'): string {
 		deployed.set(key, source);
 	}
 	const dir = appDir();
-	mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
-	cpSync(join(source, 'aws-blocks', 'baselines'), join(dir, 'aws-blocks', 'baselines'), { recursive: true });
+	mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
+	cpSync(join(source, 'cdk-blocks', 'baselines'), join(dir, 'cdk-blocks', 'baselines'), { recursive: true });
 	return dir;
 }
 
 function baselines(dir: string, stack = 'TestStack'): string[] {
-	const d = join(dir, 'aws-blocks', 'baselines', stack);
+	const d = join(dir, 'cdk-blocks', 'baselines', stack);
 	return existsSync(d) ? readdirSync(d).sort() : [];
 }
 
@@ -73,7 +73,7 @@ function assertOrphanError(result: BlocksAppSynthResult, fullId: string): void {
 	assert.match(result.stderr, new RegExp(`Restore the old id, so its fullId is '${fullId}' again`));
 	assert.match(result.stderr, /removalPolicy: 'retain'/);
 	assert.match(result.stderr, new RegExp(`BLOCKS_AUTH_REBASELINE=${fullId} <your synth/deploy command>`));
-	assert.match(result.stderr, /"Renaming or removing an Auth block" in the @aws-blocks\/bb-auth DESIGN\.md/);
+	assert.match(result.stderr, /"Renaming or removing an Auth block" in the @aws-cdk-blocks\/bb-auth DESIGN\.md/);
 }
 
 describe('the baseline of a block that owns its pool carries a removal guard', () => {
@@ -85,11 +85,11 @@ describe('the baseline of a block that owns its pool carries a removal guard', (
 		assert.deepStrictEqual(baseline.removalGuard, {
 			deletes: "the Cognito user pool 'TestStack-auth' and every user in it",
 			rebaselineEnv: 'BLOCKS_AUTH_REBASELINE',
-			runbook: '"Renaming or removing an Auth block" in the @aws-blocks/bb-auth DESIGN.md',
+			runbook: '"Renaming or removing an Auth block" in the @aws-cdk-blocks/bb-auth DESIGN.md',
 		});
-		const handler = join(dir, 'aws-blocks', 'index.handler.ts');
+		const handler = join(dir, 'cdk-blocks', 'index.handler.ts');
 		assert.strictEqual(
-			baselinePath(join(dir, 'aws-blocks'), 'TestStack', 'TestStack-auth'),
+			baselinePath(join(dir, 'cdk-blocks'), 'TestStack', 'TestStack-auth'),
 			join(baselineDir({ backendHandlerPath: handler, stack: 'TestStack' }), 'TestStack-auth.auth-pool.json'),
 		);
 	});

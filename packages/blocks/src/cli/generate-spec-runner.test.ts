@@ -15,10 +15,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { readNativeDeclarations } from '@aws-blocks/core/scripts';
+import { readNativeDeclarations } from '@aws-cdk-blocks/core/scripts';
 import { runnerArgs, runnerPath } from './runners/launch.js';
 
-const coreDist = dirname(fileURLToPath(import.meta.resolve('@aws-blocks/core')));
+const coreDist = dirname(fileURLToPath(import.meta.resolve('@aws-cdk-blocks/core')));
 
 function runSpec(env: NodeJS.ProcessEnv) {
 	const dir = mkdtempSync(join(tmpdir(), 'blocks-spec-runner-'));

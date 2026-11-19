@@ -28,16 +28,16 @@ type Manifest = {
 const readManifest = (path: string): Manifest => JSON.parse(readFileSync(path, 'utf-8'));
 const cliManifest = readManifest(join(PKG_DIR, 'package.json'));
 
-/** The `@aws-blocks/*` entries of a manifest's dependencies and devDependencies. */
+/** The monorepo's own entries of a manifest's dependencies and devDependencies. */
 function blocksDeps(pkg: Manifest): [string, string][] {
   return [...Object.entries(pkg.dependencies ?? {}), ...Object.entries(pkg.devDependencies ?? {})]
-    .filter(([name]) => name.startsWith('@aws-blocks/'));
+    .filter(([name]) => name.startsWith('@aws-cdk-blocks/') || name === 'aws-cdk-blocks');
 }
 
-/** Assert every `@aws-blocks/*` dependency carries the range the CLI ships for it. */
+/** Assert every monorepo dependency carries the range the CLI ships for it. */
 function assertStamped(pkg: Manifest, label: string): void {
   const deps = blocksDeps(pkg);
-  assert.ok(deps.length > 0, `${label}: expected at least one @aws-blocks/* dependency`);
+  assert.ok(deps.length > 0, `${label}: expected at least one aws-cdk-blocks dependency`);
   for (const [name, range] of deps) {
     assert.notStrictEqual(range, '*', `${label}: ${name} is still the "*" placeholder`);
     assert.strictEqual(
@@ -53,13 +53,13 @@ let cli: string;
 
 /**
  * Copy what `npm publish` ships (the package.json `files` list plus the
- * manifest) into `<tmp>/node_modules/@aws-blocks/create-blocks-app`, next to
+ * manifest) into `<tmp>/node_modules/@aws-cdk-blocks/create-blocks-app`, next to
  * a link to each of the CLI's runtime dependencies. Nothing in that tree has a
  * sibling `core/package.json`, so the CLI takes its published-registry path.
  */
 before(() => {
   root = mkdtempSync(join(tmpdir(), 'cba-published-'));
-  const dest = join(root, 'node_modules', '@aws-blocks', 'create-blocks-app');
+  const dest = join(root, 'node_modules', '@aws-cdk-blocks', 'create-blocks-app');
   for (const entry of ['package.json', ...(cliManifest.files ?? [])]) {
     if (existsSync(join(PKG_DIR, entry))) cpSync(join(PKG_DIR, entry), join(dest, entry), { recursive: true });
   }
@@ -82,7 +82,7 @@ function run(args: string[], cwd: string): { output: string; exitCode: number } 
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        CDK_DISABLE_CLI_TELEMETRY: '1',
         BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
       },
     });
@@ -93,7 +93,7 @@ function run(args: string[], cwd: string): { output: string; exitCode: number } 
 }
 
 describe('create-blocks-app version stamping from the published package', () => {
-  it('stamps every @aws-blocks/* dependency of every fresh template', () => {
+  it('stamps every @aws-cdk-blocks/* dependency of every fresh template', () => {
     const templatesDir = join(PKG_DIR, 'templates');
     const templates = readdirSync(templatesDir).filter((name) => {
       const pkgPath = join(templatesDir, name, 'package.json');
@@ -109,7 +109,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     }
   });
 
-  it('stamps @aws-blocks/blocks when adding Blocks to an existing project', () => {
+  it('stamps aws-cdk-blocks when adding Blocks to an existing project', () => {
     const project = join(root, 'existing');
     mkdirSync(project, { recursive: true });
     writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'existing', version: '1.0.0' }));
@@ -118,23 +118,23 @@ describe('create-blocks-app version stamping from the published package', () => 
     assert.strictEqual(result.exitCode, 0, result.output);
     const pkg = readManifest(join(project, 'package.json'));
     assertStamped(pkg, 'existing project');
-    assert.ok(pkg.dependencies?.['@aws-blocks/blocks'], 'existing project should depend on @aws-blocks/blocks');
+    assert.ok(pkg.dependencies?.['aws-cdk-blocks'], 'existing project should depend on aws-cdk-blocks');
   });
 
-  it('keeps an @aws-blocks/* range the existing project already declares', () => {
+  it('keeps an @aws-cdk-blocks/* range the existing project already declares', () => {
     const project = join(root, 'existing-pinned');
     mkdirSync(project, { recursive: true });
     writeFileSync(
       join(project, 'package.json'),
-      JSON.stringify({ name: 'existing-pinned', version: '1.0.0', dependencies: { '@aws-blocks/blocks': '~0.1.0' } }),
+      JSON.stringify({ name: 'existing-pinned', version: '1.0.0', dependencies: { 'aws-cdk-blocks': '~0.1.0' } }),
     );
 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
-    assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['@aws-blocks/blocks'], '~0.1.0');
+    assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['aws-cdk-blocks'], '~0.1.0');
   });
 
-  it('stamps the root and the aws-blocks/ workspace when adding Blocks to an Amplify Gen 2 project', () => {
+  it('stamps the root and the cdk-blocks/ workspace when adding Blocks to an Amplify Gen 2 project', () => {
     const project = join(root, 'amplify-app');
     mkdirSync(join(project, 'amplify'), { recursive: true });
     writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'amplify-app', version: '1.0.0' }));
@@ -143,29 +143,29 @@ describe('create-blocks-app version stamping from the published package', () => 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
     assertStamped(readManifest(join(project, 'package.json')), 'Amplify project root');
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
-    assertStamped(workspace, 'Amplify aws-blocks/ workspace');
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
+    assertStamped(workspace, 'Amplify cdk-blocks/ workspace');
     assert.deepStrictEqual(
       blocksDeps(workspace).map(([name]) => name),
-      ['@aws-blocks/blocks'],
-      'the Amplify workspace should take every block from @aws-blocks/blocks',
+      ['aws-cdk-blocks'],
+      'the Amplify workspace should take every block from aws-cdk-blocks',
     );
   });
 
-  it('gives the Amplify aws-blocks/ workspace the range the project root already lists', () => {
+  it('gives the Amplify cdk-blocks/ workspace the range the project root already lists', () => {
     const project = join(root, 'amplify-pinned');
     mkdirSync(join(project, 'amplify'), { recursive: true });
     writeFileSync(
       join(project, 'package.json'),
-      JSON.stringify({ name: 'amplify-pinned', version: '1.0.0', dependencies: { '@aws-blocks/blocks': '~0.1.0' } }),
+      JSON.stringify({ name: 'amplify-pinned', version: '1.0.0', dependencies: { 'aws-cdk-blocks': '~0.1.0' } }),
     );
     writeFileSync(join(project, 'amplify', 'backend.ts'), 'const backend = defineBackend({});\n');
 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
-    assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['@aws-blocks/blocks'], '~0.1.0');
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
-    assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.0', 'workspace should follow the root range');
+    assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['aws-cdk-blocks'], '~0.1.0');
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
+    assert.strictEqual(workspace.dependencies?.['aws-cdk-blocks'], '~0.1.0', 'workspace should follow the root range');
   });
 
   it('in the Amplify workspace, prefers a root devDependency range over a dependencies range', () => {
@@ -176,16 +176,16 @@ describe('create-blocks-app version stamping from the published package', () => 
       JSON.stringify({
         name: 'amplify-dev-range',
         version: '1.0.0',
-        dependencies: { '@aws-blocks/blocks': '^0.1.0' },
-        devDependencies: { '@aws-blocks/blocks': '~0.1.2' },
+        dependencies: { 'aws-cdk-blocks': '^0.1.0' },
+        devDependencies: { 'aws-cdk-blocks': '~0.1.2' },
       }),
     );
     writeFileSync(join(project, 'amplify', 'backend.ts'), 'const backend = defineBackend({});\n');
 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
-    assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.2', 'the root devDependency range wins');
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
+    assert.strictEqual(workspace.dependencies?.['aws-cdk-blocks'], '~0.1.2', 'the root devDependency range wins');
   });
 
   it('in the Amplify workspace, stamps over a path spec the root lists', () => {
@@ -196,17 +196,17 @@ describe('create-blocks-app version stamping from the published package', () => 
       JSON.stringify({
         name: 'amplify-path',
         version: '1.0.0',
-        dependencies: { '@aws-blocks/blocks': './vendor/blocks' },
+        dependencies: { 'aws-cdk-blocks': './vendor/blocks' },
       }),
     );
     writeFileSync(join(project, 'amplify', 'backend.ts'), 'const backend = defineBackend({});\n');
 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
     assert.strictEqual(
-      workspace.dependencies?.['@aws-blocks/blocks'],
-      cliManifest.devDependencies?.['@aws-blocks/blocks'],
+      workspace.dependencies?.['aws-cdk-blocks'],
+      cliManifest.devDependencies?.['aws-cdk-blocks'],
       'a path spec is not copied into the workspace',
     );
   });
@@ -215,13 +215,13 @@ describe('create-blocks-app version stamping from the published package', () => 
     const manifestPath = join(dirname(dirname(cli)), 'package.json');
     const original = readFileSync(manifestPath, 'utf-8');
     const broken = readManifest(manifestPath);
-    delete broken.devDependencies?.['@aws-blocks/hosting'];
+    delete broken.devDependencies?.['@aws-cdk-blocks/hosting'];
     writeFileSync(manifestPath, JSON.stringify(broken));
     try {
       const app = join(root, 'fresh-missing-range');
       const result = run([app, '--template', 'default', '--skip-install'], root);
       assert.notStrictEqual(result.exitCode, 0, result.output);
-      assert.match(result.output, /no version to pin @aws-blocks\/hosting/);
+      assert.match(result.output, /no version to pin @aws-cdk-blocks\/hosting/);
       assert.strictEqual(existsSync(app), false, 'nothing should be written for a failed scaffold');
     } finally {
       writeFileSync(manifestPath, original);
@@ -232,7 +232,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     const manifestPath = join(dirname(dirname(cli)), 'package.json');
     const original = readFileSync(manifestPath, 'utf-8');
     const broken = readManifest(manifestPath);
-    delete broken.devDependencies?.['@aws-blocks/blocks'];
+    delete broken.devDependencies?.['aws-cdk-blocks'];
     writeFileSync(manifestPath, JSON.stringify(broken));
     const project = join(root, 'existing-missing-range');
     mkdirSync(project, { recursive: true });
@@ -241,7 +241,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     try {
       const result = run(['.', '--yes', '--skip-install'], project);
       assert.notStrictEqual(result.exitCode, 0, result.output);
-      assert.match(result.output, /no version to pin @aws-blocks\/blocks/);
+      assert.match(result.output, /no version to pin aws-cdk-blocks/);
       assert.deepStrictEqual(readdirSync(project), ['package.json'], 'nothing else should be written');
       assert.strictEqual(readFileSync(join(project, 'package.json'), 'utf-8'), before);
     } finally {

@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/blocks": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(blocks): a closed terminal or pipe no longer kills AWS Blocks package tasks while its runner still works

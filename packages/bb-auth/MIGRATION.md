@@ -1,6 +1,6 @@
 # Migrating to `Auth`
 
-`Auth` (`@aws-blocks/bb-auth`) replaces `AuthBasic`, `AuthCognito` and `AuthOIDC`. The three old packages are removed in the same release, with no compatibility layer. This guide covers what changes for each of them, what happens to your deployed resources and signed-in users, and the codemod that does the mechanical part of the work.
+`Auth` (`@aws-cdk-blocks/bb-auth`) replaces `AuthBasic`, `AuthCognito` and `AuthOIDC`. The three old packages are removed in the same release, with no compatibility layer. This guide covers what changes for each of them, what happens to your deployed resources and signed-in users, and the codemod that does the mechanical part of the work.
 
 > ## ⚠️ The one rule: never change the block's `id` argument
 >
@@ -8,7 +8,7 @@
 >
 > The codemod never edits the first two constructor arguments. If an id expression mentions the old class name (for example `AuthCognito.name`), the codemod leaves it unchanged and adds a TODO, because that expression would now evaluate to a different string. Replace it with the string it used to produce.
 
-Snippets in this guide import from `@aws-blocks/bb-auth`. If your app imports Building Blocks from `@aws-blocks/blocks`, import the same names from there instead (`Auth`, `AuthErrors`, `stubIdp`, `github`, `customOauth2`, `relayOrigin` and the option types).
+Snippets in this guide import from `@aws-cdk-blocks/bb-auth`. If your app imports Building Blocks from `aws-cdk-blocks` (formerly `@aws-blocks/blocks`), import the same names from there instead (`Auth`, `AuthErrors`, `stubIdp`, `github`, `customOauth2`, `relayOrigin` and the option types).
 
 ## Contents
 
@@ -29,16 +29,16 @@ Snippets in this guide import from `@aws-blocks/bb-auth`. If your app imports Bu
 From your app's root directory:
 
 ```bash
-npx @aws-blocks/bb-auth migrate --dry-run   # print a unified diff, write nothing
-npx @aws-blocks/bb-auth migrate             # rewrite the files
-npx @aws-blocks/bb-auth migrate aws-blocks src   # or name the files or directories to migrate
+npx @aws-cdk-blocks/bb-auth migrate --dry-run   # print a unified diff, write nothing
+npx @aws-cdk-blocks/bb-auth migrate             # rewrite the files
+npx @aws-cdk-blocks/bb-auth migrate aws-blocks src   # or name the files or directories to migrate
 ```
 
-The codemod uses your project's own `typescript` package to parse your code. If the project doesn't have one, run `npx -p typescript -p @aws-blocks/bb-auth bb-auth migrate`.
+The codemod uses your project's own `typescript` package to parse your code. If the project doesn't have one, run `npx -p typescript -p @aws-cdk-blocks/bb-auth bb-auth migrate`.
 
 What it does:
 
-- Rewrites imports. `@aws-blocks/bb-auth-basic`, `-cognito` and `-oidc` become `@aws-blocks/bb-auth`, and `@aws-blocks/bb-auth-cognito/ui` becomes `@aws-blocks/bb-auth/ui`, with its names renamed (`cognitoOverrides` → `authOverrides`, …; see [Names](#names-methods-and-types)). Names imported from `@aws-blocks/bb-auth-oidc/client` or `/middleware` that `@aws-blocks/bb-auth` also exports (the provider helpers, `relayOrigin`, the error constants and types) move to `@aws-blocks/bb-auth`; the rest stay, with a TODO. Old names imported from `@aws-blocks/blocks` are renamed, and the import itself keeps pointing at `@aws-blocks/blocks`. So are old names reached through `import * as blocks from '@aws-blocks/blocks'` (`new blocks.AuthCognito(…)` → `new blocks.Auth(…)`). Several old imports that end up on the same module are merged into one.
+- Rewrites imports. `@aws-blocks/bb-auth-basic`, `-cognito` and `-oidc` become `@aws-cdk-blocks/bb-auth`, and `@aws-blocks/bb-auth-cognito/ui` becomes `@aws-cdk-blocks/bb-auth/ui`, with its names renamed (`cognitoOverrides` → `authOverrides`, …; see [Names](#names-methods-and-types)). Names imported from `@aws-blocks/bb-auth-oidc/client` or `/middleware` that `@aws-cdk-blocks/bb-auth` also exports (the provider helpers, `relayOrigin`, the error constants and types) move to `@aws-cdk-blocks/bb-auth`; the rest stay, with a TODO. Old names imported from `aws-cdk-blocks` are renamed, and the import itself keeps pointing at `aws-cdk-blocks`. So are old names reached through `import * as blocks from 'aws-cdk-blocks'` (`new blocks.AuthCognito(…)` → `new blocks.Auth(…)`). Several old imports that end up on the same module are merged into one.
 - Renames the classes, types and error constants, and maps each old options object onto the `Auth` shape (see [Option mapping](#option-mapping)). That includes `AuthOIDC`'s `providers` array, which becomes the `providers` record keyed by provider id, each entry tagged with its `type` (the old `name` is the key). An `AuthOIDC` block with any directly federated provider gets `store: 'builtin'`. One whose providers are all `cognitoFederated()` stays on the default store (a Cognito user pool), with `emailPassword: false` and `type: 'google'` (and the other social types) or `type: 'oidc'` entries. A block that mixed the two gets `store: 'builtin'` and a TODO to move the `cognitoFederated()` entries to a second `Auth` block. `AuthBasic` and `AuthCognito` blocks get no `store`: the default is theirs.
 - Renames the methods that changed (`fetch*` → `get*` / `scan*`, `updateUserAttribute` → `updateUserAttributes`, …) on any receiver it can trace to an old block: a local variable, an import of an exported instance, or a parameter typed with the old class.
 - Leaves a `// TODO(aws-blocks-auth-migrate): …` comment wherever you have to decide something. That covers every `AuthBasic` block, every `hasAuthError` / `isBlocksError` / `isAuthError` check on an auth error, error names that split, `cognitoFederated()` providers, options it can't see (passed by reference or spread in), and every case in [What the codemod can't map](#what-the-codemod-cant-map).
@@ -49,7 +49,7 @@ Comments and formatting are preserved, except where an options object is regroup
 
 After it runs:
 
-1. Replace `@aws-blocks/bb-auth-basic` / `-cognito` / `-oidc` in `package.json` with `@aws-blocks/bb-auth`. Apps that depend only on `@aws-blocks/blocks` just update it. Then run `npm install`.
+1. Replace `@aws-blocks/bb-auth-basic` / `-cognito` / `-oidc` with `@aws-cdk-blocks/bb-auth`, `@aws-blocks/blocks` with `aws-cdk-blocks`, and every other `@aws-blocks/*` dependency with its `@aws-cdk-blocks/*` name. Then run `npm install`.
 2. Search for `TODO(aws-blocks-auth-migrate)` and resolve every hit. The TypeScript compiler flags most of the remaining work.
 3. Typecheck, run your tests and `npm run dev`, then work through [the checklist](#before-every-deploy-the-checklist) before you deploy. Its first item matters most: deploy the codemod's output **unchanged**, commit the baseline it writes, and only then change the configuration.
 
@@ -99,8 +99,8 @@ const attrs = await auth.fetchUserAttributes(context);
 
 ```ts
 // After (Auth)
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
-import { Auth, AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
+import { Auth, AuthErrors, isAuthError } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
@@ -143,7 +143,7 @@ What changes, and why it matters:
 
 `AuthCognito` kept its `session-secret` (the HMAC key that signs session cookies and sign-in challenge envelopes) in an SSM SecureString. `Auth` keeps it where the stack's `defaults.secretsStore` says. `BlocksPresets.production` sets `'secrets-manager'`, so on the first `Auth` deploy a production stack gets a **new** key in Secrets Manager, and the old SSM parameter is deleted. Every signed-in user is signed out once, which the new [session store](#the-session-store) causes in any case, and a sign-in that is halfway through a challenge (MFA, a new password) has to start again. Users and passwords are not affected.
 
-To keep the key across the switch, set `secretsStore: 'ssm'` **before** the first `Auth` deploy, for example `defaults: { ...BlocksPresets.production, secretsStore: 'ssm' }` in `BlocksStack.create()`. A sign-in that is in progress during the deploy is then not interrupted. Signed-in sessions end in both cases, because the session store is a new table. Synth then warns (`@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`), because production keys belong in Secrets Manager; acknowledge the warning if you keep SSM on purpose. Setting it after a deploy that already moved the key does not bring the old key back. Under `BlocksPresets.sandbox` the store is already `'ssm'`, so a sandbox stack keeps its key.
+To keep the key across the switch, set `secretsStore: 'ssm'` **before** the first `Auth` deploy, for example `defaults: { ...BlocksPresets.production, secretsStore: 'ssm' }` in `BlocksStack.create()`. A sign-in that is in progress during the deploy is then not interrupted. Signed-in sessions end in both cases, because the session store is a new table. Synth then warns (`@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`), because production keys belong in Secrets Manager; acknowledge the warning if you keep SSM on purpose. Setting it after a deploy that already moved the key does not bring the old key back. Under `BlocksPresets.sandbox` the store is already `'ssm'`, so a sandbox stack keeps its key.
 
 ## `AuthOIDC`, direct federation
 
@@ -170,8 +170,8 @@ const auth = new AuthOIDC(scope, 'auth', {
 
 ```ts
 // After (Auth)
-import { AppSetting, KVStore, Scope } from '@aws-blocks/blocks';
-import { Auth, github, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
+import { AppSetting, KVStore, Scope } from 'aws-cdk-blocks';
+import { Auth, github, relayOrigin, stubIdp } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('my-app');
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
@@ -205,7 +205,7 @@ What changes:
 - **The user object:** `OIDCUser` becomes `AuthenticatedUser`. `user.userId` and `user.username` are unchanged. `email` / `name` are now `user.attributes.email` / `user.attributes.name`, and `provider` is now `user.signInProvider`. `iss` and `sub` are gone: `userId` still carries `` `${iss}:${sub}` ``, `attributes` holds the string claims, and `user.claims` is still there: the provider's verified ID-token claims, so `user.claims.sub` is the raw provider `sub`. It is optional on `AuthenticatedUser` (set for users of a `store: 'builtin'` block, absent for user-pool users), so read it as `user.claims?.sub`. It is server-side only: `getAuthState()` and the sign-in routes don't send it to the browser.
 - **No client handle.** `authApi.getClient()` and the `@aws-blocks/bb-auth-oidc/middleware` (or `/client`) import are gone. Federated sign-in buttons come from `getAuthState()`: each provider is a `signIn:<id>` action that carries a `url`, and the `Authenticator` renders it. `auth.handleCallback*`, `handleExchange`, `getAuthorizeParams` and `refreshBearerTokens` are gone too, because `Auth` serves those routes itself under the same `/aws-blocks/auth/*` paths.
 - **Native apps (Swift, Kotlin, Dart) that called `oidcAuthApi.getClient()`** keep doing so: export `auth.createOidcApi()` under the name the app already uses (`export const oidcAuthApi = auth.createOidcApi();`), next to `auth.createApi()` under another name if the backend also serves the web `Authenticator`. `getClient()` returns the same `oidc/client` descriptor `AuthOIDC` did, built from the block's own routes, so the generated clients and their typed providers work unchanged. Keep the app's scheme in `redirects.allowedRelayOrigins`. The codemod leaves a TODO on a migrated `AuthOIDC` block's `createApi()` saying so. See the README, *Native apps*, and [Native apps (Dart, Swift, Kotlin)](#native-apps-dart-swift-kotlin) below.
-- **A frontend on a different origin than the API** used `getClient()`'s browser PKCE flow, which `AuthOIDC`'s README said was required there. Use `createAuthClient()` from `@aws-blocks/bb-auth/browser-client` (also in `@aws-blocks/blocks/ui`) instead; see the README, *Frontend on a different origin*. The calls map as follows: `getClient().signIn(provider)` → `signInWithRedirect({ provider })`; `handleRedirectCallback()` → `handleSignInRedirect()`; reading the user → `getCurrentUser()` / `fetchAuthSession()`; sign-out → `signOut()`. On the backend, add the frontend's origin to `redirects.allowedRelayOrigins` with `relayOrigin()`. The provider's `redirect_uri` is now the block's own callback, not a page of the frontend, so update it in the provider's console if you had registered the frontend's page.
+- **A frontend on a different origin than the API** used `getClient()`'s browser PKCE flow, which `AuthOIDC`'s README said was required there. Use `createAuthClient()` from `@aws-cdk-blocks/bb-auth/browser-client` (also in `aws-cdk-blocks/ui`) instead; see the README, *Frontend on a different origin*. The calls map as follows: `getClient().signIn(provider)` → `signInWithRedirect({ provider })`; `handleRedirectCallback()` → `handleSignInRedirect()`; reading the user → `getCurrentUser()` / `fetchAuthSession()`; sign-out → `signOut()`. On the backend, add the frontend's origin to `redirects.allowedRelayOrigins` with `relayOrigin()`. The provider's `redirect_uri` is now the block's own callback, not a page of the frontend, so update it in the provider's console if you had registered the frontend's page.
 - **Redirect options** (`callbackPath`, `signOutPath`, `postSignInPath`, `allowedRelayOrigins`) move under `redirects`. `crossDomain` moves to `session.crossDomain`.
 - **The old cookie secret is deleted.** `AuthOIDC` signed its session cookie with an SSM parameter `/<fullId>-cookie-secret-<id>`. `Auth` doesn't use it, so the first deploy deletes it. It only signed the old cookie, which is already ignored, so users see nothing beyond the one re-login.
 - **`stubIdp()` is local and sandbox only** — as with `AuthOIDC`; see below.
@@ -215,8 +215,8 @@ What changes:
 A native app that called `oidcAuthApi.getClient()` keeps that call. The backend exports the block twice, once per job:
 
 ```ts
-import { Scope } from '@aws-blocks/blocks';
-import { Auth, relayOrigin } from '@aws-blocks/bb-auth';
+import { Scope } from 'aws-cdk-blocks';
+import { Auth, relayOrigin } from '@aws-cdk-blocks/bb-auth';
 
 const auth = new Auth(new Scope('my-app'), 'auth', {
 	store: 'builtin',
@@ -255,12 +255,12 @@ export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs
 
 `AuthOIDC` serves a `stubIdp()` provider in local development and on sandbox deployments only, and so does `Auth`: it runs in `npm run dev`, a sandbox (`npm run sandbox`) serves it from the deployed backend under `/aws-blocks/auth/idp/<id>/`, and synthesizing any other deployment with it fails. Its issuer on a sandbox is the API Gateway URL, the same one `AuthOIDC`'s deployed stub used, so its users keep their `userId`. The codemod moves each `stubIdp(…)` across unchanged.
 
-A sandbox stub signs users in **without credentials**: anyone who can reach the sandbox can open its account picker and sign in as any of its users (or its built-in default user), with every claim and group they carry. Synth says so with a `@aws-blocks/bb-auth:StubIdpDeployed` warning.
+A sandbox stub signs users in **without credentials**: anyone who can reach the sandbox can open its account picker and sign in as any of its users (or its built-in default user), with every claim and group they carry. Synth says so with a `@aws-cdk-blocks/bb-auth:StubIdpDeployed` warning.
 
 If the same backend module also deploys to production, select providers with `getDeploymentType()` (`'local'`, `'sandbox'` or `'production'`), which reports the same value at synth and in the deployed Lambda:
 
 ```ts
-import { Auth, Scope, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
+import { Auth, Scope, getDeploymentType, stubIdp } from 'aws-cdk-blocks';
 
 const corp = getDeploymentType() === 'production'
 	? ({ type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' } as const)
@@ -274,8 +274,8 @@ This is the one `AuthOIDC` setup that loses resources on upgrade. `AuthOIDC` fed
 
 ```ts
 // After (Auth): cognitoFederated({ identityProvider: 'Google' }) and a custom OIDC IdP
-import { AppSetting, Scope } from '@aws-blocks/blocks';
-import { Auth } from '@aws-blocks/bb-auth';
+import { AppSetting, Scope } from 'aws-cdk-blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('my-app');
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
@@ -325,8 +325,8 @@ The old key is derivable from the new user. Cognito names a federated user `<Pro
 Re-key lazily on each user's first sign-in, and key new data on `userSub` from then on:
 
 ```ts
-import { KVStore, Scope } from '@aws-blocks/blocks';
-import { Auth, type AppSettingRef } from '@aws-blocks/bb-auth';
+import { KVStore, Scope } from 'aws-cdk-blocks';
+import { Auth, type AppSettingRef } from '@aws-cdk-blocks/bb-auth';
 
 declare const scope: Scope;
 declare const googleSecret: AppSettingRef;
@@ -383,8 +383,8 @@ const auth = new AuthBasic(scope, 'auth', {
 
 ```ts
 // After (Auth)
-import { Scope } from '@aws-blocks/blocks';
-import { Auth } from '@aws-blocks/bb-auth';
+import { Scope } from 'aws-cdk-blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
@@ -430,9 +430,9 @@ Behaviour that changes for your users and your code:
 
 ## Before every deploy: the checklist
 
-- [ ] **First deploy the codemod's output unchanged, commit the generated baseline, and only then change the configuration.** An `AuthCognito` app has no baseline, so the first `Auth` synth has nothing to compare against: it writes the baseline from whatever the configuration is, and passes. If that first configuration drops the pool, the deploy removes `pool` from the template and CloudFormation applies the **old** template's deletion policy. `AuthCognito`'s was `DESTROY` unless you set `removalPolicy: 'retain'`, so the pool and every user in it are deleted. Two configurations do this: `emailPassword: false` with only directly federated OIDC providers, and `userPool: Auth.fromExisting(<the block's own pool id>)`. Synth only warns (`@aws-blocks/bb-auth:FirstBaselineWithoutPool`), and the deploy-time guard exists only while the block owns a pool. An unchanged first deploy closes that gap twice over. The committed baseline then records the pool, so synth refuses to remove it. And that same deploy moves a production-preset pool to `DeletionPolicy: Retain` with deletion protection on ([`AuthCognito`](#authcognito), "Deletion policy follows the stack preset"), so a later mistake can no longer delete it. Under the sandbox preset the pool stays `Delete`; adding `removalPolicy: 'retain'` to this first deploy is safe and recommended for any pool that holds real users. The one change the first deploy may need is resolving the codemod's TODOs (for example, removing `preferredChallenge: 'EMAIL_OTP'`, see [`AuthCognito`](#authcognito)).
+- [ ] **First deploy the codemod's output unchanged, commit the generated baseline, and only then change the configuration.** An `AuthCognito` app has no baseline, so the first `Auth` synth has nothing to compare against: it writes the baseline from whatever the configuration is, and passes. If that first configuration drops the pool, the deploy removes `pool` from the template and CloudFormation applies the **old** template's deletion policy. `AuthCognito`'s was `DESTROY` unless you set `removalPolicy: 'retain'`, so the pool and every user in it are deleted. Two configurations do this: `emailPassword: false` with only directly federated OIDC providers, and `userPool: Auth.fromExisting(<the block's own pool id>)`. Synth only warns (`@aws-cdk-blocks/bb-auth:FirstBaselineWithoutPool`), and the deploy-time guard exists only while the block owns a pool. An unchanged first deploy closes that gap twice over. The committed baseline then records the pool, so synth refuses to remove it. And that same deploy moves a production-preset pool to `DeletionPolicy: Retain` with deletion protection on ([`AuthCognito`](#authcognito), "Deletion policy follows the stack preset"), so a later mistake can no longer delete it. Under the sandbox preset the pool stays `Delete`; adding `removalPolicy: 'retain'` to this first deploy is safe and recommended for any pool that holds real users. The one change the first deploy may need is resolving the codemod's TODOs (for example, removing `preferredChallenge: 'EMAIL_OTP'`, see [`AuthCognito`](#authcognito)).
 - [ ] **The id argument of every auth block is exactly what it was.** So is the scope it is constructed under.
-- [ ] **Commit the immutability baseline.** On the first synth, `Auth` writes `aws-blocks/baselines/<stack>/<fullId>.auth-pool.json` and reports "commit it". The file records the user-pool properties that Cognito can't change on an existing pool (sign-in attributes, username case sensitivity, required attributes, existing custom attributes). From then on, synth refuses a change to them, and the deploy refuses it again before the pool is updated. Without the committed file, CI's synth can't see the change. If you deploy only from CI, make the deploy workflow commit the baselines its synth writes (see "The CI caveat" in [DESIGN.md](./DESIGN.md#immutability-guard)); otherwise the production baseline never reaches the repository and synth never refuses anything.
+- [ ] **Commit the immutability baseline.** On the first synth, `Auth` writes `cdk-blocks/baselines/<stack>/<fullId>.auth-pool.json` and reports "commit it". The file records the user-pool properties that Cognito can't change on an existing pool (sign-in attributes, username case sensitivity, required attributes, existing custom attributes). From then on, synth refuses a change to them, and the deploy refuses it again before the pool is updated. Without the committed file, CI's synth can't see the change. If you deploy only from CI, make the deploy workflow commit the baselines its synth writes (see "The CI caveat" in [DESIGN.md](./DESIGN.md#immutability-guard)); otherwise the production baseline never reaches the repository and synth never refuses anything.
 - [ ] **Don't rename or remove an `Auth` block by accident.** Synth fails when a committed baseline belongs to a block that no longer exists, because CloudFormation would delete its pool and every user in it. If you really mean it, set `removalPolicy: 'retain'` and deploy first, then re-baseline deliberately with `BLOCKS_AUTH_REBASELINE=<fullId>` on the synth/deploy command, and commit the deleted baseline file. The variable must name the block; `=1` does nothing.
 - [ ] **Review every auth error check** (the codemod marks each one). `InvalidCodeException` is now two names. See [Error names](#error-names).
 - [ ] **Expect every user to sign in once.** The session store is a new table, and nothing reads the old one, so `AuthCognito` sessions end too ([The session store](#the-session-store)). `AuthBasic` and `AuthOIDC` users are also signed out by the cookie cutover. Under `BlocksPresets.production` the session secret moves to Secrets Manager as well, so a sign-in that is halfway through a challenge starts again ([details](#the-session-secret-moves-to-secrets-manager)).
@@ -511,7 +511,7 @@ Behaviour that changes for your users and your code:
 | `auth.setUpTOTP()` / `verifyTOTPSetup()` / `updateMFAPreference()` | `auth.setUpTotp()` / `verifyTotpSetup()` / `updateMfaPreference()` |
 | `auth.updateUserAttribute(ctx, name, value)` | `auth.updateUserAttributes(ctx, { [name]: value })`, which returns a record keyed by attribute name |
 | `auth.confirmSignIn(session, { code }, ctx)` | `auth.confirmSignIn(session, code, ctx)` |
-| `@aws-blocks/bb-auth-cognito/ui` | `@aws-blocks/bb-auth/ui` |
+| `@aws-blocks/bb-auth-cognito/ui` | `@aws-cdk-blocks/bb-auth/ui` |
 | `cognitoOverrides()` (`/ui`) | `authOverrides()` |
 | `CognitoActionName`, `CognitoNextStepName`, `CognitoActionFields` (`/ui`) | `AuthActionName`, `AuthNextStepName`, `AuthActionFields` |
 | `CognitoActionOverride`, `CognitoAuthenticatorOptions` (`/ui`) | `AuthTypedActionOverride`, `AuthTypedAuthenticatorOptions` |
@@ -551,10 +551,10 @@ These get a TODO (or a compile error) and need a person:
 - **`AuthBasic` error names as plain strings anywhere:** once any file imports `AuthBasic`, the codemod rewrites every string literal in the project that equals an `AuthBasic` error name (`'InvalidCodeException'`, …), whatever it is compared with. Check that none of them is an unrelated name of your own, such as a custom `InvalidCodeException`.
 - **`AuthOIDC` members with no equivalent:** `getClient()` on the web (native apps use `createOidcApi()`, above), the side-effect `/middleware` import, and what `/middleware` and `/client` exported for the client handle (`AuthOIDCClient`, `handle401`, `AuthStateMeta`, …), `handleCallback`, `handleCallbackDispatch`, `handleExchange`, `getAuthorizeParams`, `refreshBearerTokens`, `signInRoutePath`, `signInBasePath`, and the `providers` / `callbackPath` / `signOutPath` / `postSignInPath` / `allowBearerAuth` getters.
 - **`OIDCUser` fields** `iss`, `sub`, `provider`, `email` and `name` read in `onSignIn` / `onSignOut` (TODO), or anywhere else (compile error). `claims` is still there but now optional (TODO in `onSignIn` / `onSignOut`).
-- **Exports that are gone:** `makeExternalUserPoolRef` (use `Auth.fromExisting`), `envVarNames`, `isRetriableAuthError`, `AuthFlowType`, `SignInWith`, `ConfirmSignInResponse`, `OIDCClient`, `SessionStore`, `SessionRecord`, and the `@aws-blocks/auth-common` types that `@aws-blocks/bb-auth-basic` re-exported (import them from `@aws-blocks/blocks`).
+- **Exports that are gone:** `makeExternalUserPoolRef` (use `Auth.fromExisting`), `envVarNames`, `isRetriableAuthError`, `AuthFlowType`, `SignInWith`, `ConfirmSignInResponse`, `OIDCClient`, `SessionStore`, `SessionRecord`, and the `@aws-cdk-blocks/auth-common` types that `@aws-blocks/bb-auth-basic` re-exported (import them from `aws-cdk-blocks`).
 - **Method calls it can't trace to an old block:** for example `ctx.auth.fetchDevices()`. In a file that uses an old block, these get a TODO naming the new method.
 - **`stubIdp()` on a production deployment:** `Auth` runs the stub only in `npm run dev` and on sandbox deployments, and refuses to synthesize any other deployment with it; `AuthOIDC` did not. Each moved `stubIdp()` gets a TODO: if the module is also deployed to production, pick the provider with `getDeploymentType()` ([README](./README.md#usage)).
 - **A class re-exported through more than one local barrel:** a block constructed from a class your own module re-exports (`export { AuthCognito } from '@aws-blocks/bb-auth-cognito'`, `export *`) is migrated like a direct import, but only one re-export deep. Error constants imported through a barrel aren't renamed or re-keyed: check them against [Error names](#error-names).
-- **Namespace imports of the old packages** (`import * as cognito from '@aws-blocks/bb-auth-cognito'`), uses of an `@aws-blocks/blocks` namespace it can't follow (`blocks['AuthCognito']`, `const { AuthCognito } = blocks`), and dynamic `import()` / `require()` of the old packages.
+- **Namespace imports of the old packages** (`import * as cognito from '@aws-blocks/bb-auth-cognito'`), uses of an `aws-cdk-blocks` namespace it can't follow (`blocks['AuthCognito']`, `const { AuthCognito } = blocks`), and dynamic `import()` / `require()` of the old packages.
 - **An import that names nothing** (`import {} from '@aws-blocks/bb-auth-cognito/ui'`): left as it is, with a TODO, and the summary lists the file as needing attention.
 - **`package.json`:** the codemod rewrites only source files. Swap the dependencies yourself.

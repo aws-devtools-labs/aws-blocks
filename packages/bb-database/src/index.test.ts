@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
-import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
+import { ApiError, blocksError, isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { LOCAL_APP_ROLE } from './constants.js';
@@ -603,7 +603,7 @@ describe('construction-time rules', () => {
 		);
 	});
 
-	test('an explicit migrationsPath must exist; the default is ./aws-blocks/migrations/{id}, when present', () => {
+	test('an explicit migrationsPath must exist; the default is ./cdk-blocks/migrations/{id}, when present', () => {
 		const root = tempDir();
 		assert.throws(() => resolveMigrationsPath('./nope/missing', 'a', 'app-a', root), {
 			name: 'DatabaseConfigurationError',
@@ -615,10 +615,10 @@ describe('construction-time rules', () => {
 			undefined,
 			'the default may be absent',
 		);
-		const inv = join(root, 'aws-blocks', 'migrations', 'inv');
+		const inv = join(root, 'cdk-blocks', 'migrations', 'inv');
 		mkdirSync(inv, { recursive: true });
 		assert.strictEqual(resolveMigrationsPath(undefined, 'inv', 'app-inv', root), inv);
-		assert.strictEqual(resolveMigrationsPath('./aws-blocks/migrations/inv', 'x', 'app-x', root), inv);
+		assert.strictEqual(resolveMigrationsPath('./cdk-blocks/migrations/inv', 'x', 'app-x', root), inv);
 		assert.strictEqual(resolveMigrationsPath(inv, 'x', 'app-x', root), inv, 'an absolute path is taken as is');
 	});
 

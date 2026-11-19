@@ -6,13 +6,14 @@
  * Internal entry point for the vendorize task.
  *
  * Usage: npm run vendorize <package-name> [-- --force]
- * Example: npm run vendorize @aws-blocks/bb-kv-store
+ * Example: npm run vendorize @aws-cdk-blocks/bb-kv-store
  *
  * `-h`/`--help` anywhere prints the usage and exits 0 before anything is copied
  * or installed.
  */
 import { vendorize } from './vendorize/index.js';
-import { trackCommand } from '@aws-blocks/core/scripts';
+import { findProjectRoot } from './cli/context.js';
+import { trackCommand } from '@aws-cdk-blocks/core/scripts';
 
 const USAGE = `Usage: npm run vendorize <package-name> [-- --force]
 
@@ -24,7 +25,7 @@ Options:
   --force       Delete an existing vendor/<name>/ first and copy it again.
   -h, --help    Print this help and exit.
 
-Example: npm run vendorize @aws-blocks/bb-kv-store`;
+Example: npm run vendorize @aws-cdk-blocks/bb-kv-store`;
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -36,10 +37,12 @@ const packageName = args.find(a => !a.startsWith('--'));
 
 if (!packageName) {
   console.error('Usage: npm run vendorize <package-name> [-- --force]');
-  console.error('Example: npm run vendorize @aws-blocks/bb-kv-store');
+  console.error('Example: npm run vendorize @aws-cdk-blocks/bb-kv-store');
   process.exit(1);
 }
 
+// This bin never chdirs to the project root, so consent would otherwise resolve CDK's
+// context from the shell's directory and miss the project's own opt-out.
 trackCommand('vendorize', async () => {
   vendorize(packageName, { force });
-});
+}, { projectRoot: findProjectRoot(process.cwd()) });

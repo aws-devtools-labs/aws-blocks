@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `npx @aws-blocks/bb-auth users …` — the supported way to make the first admin.
+ * `npx @aws-cdk-blocks/bb-auth users …` — the supported way to make the first admin.
  *
  * The local path runs against a real local pool (`Auth` from the mock entry,
  * persisted to `.bb-data/`), and a second `Auth` instance with the same id —
@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { STSClient } from '@aws-sdk/client-sts';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
@@ -243,7 +243,7 @@ describe('users CLI: local pool', () => {
 		]) {
 			const r = await cli(argv);
 			assert.strictEqual(r.code, 2, `${argv.join(' ')}: ${r.err}`);
-			assert.match(r.err, /Usage: npx @aws-blocks\/bb-auth users/);
+			assert.match(r.err, /Usage: npx @aws-cdk-blocks\/bb-auth users/);
 		}
 		assert.strictEqual((await cli(['--help'])).code, 0);
 	});
@@ -634,20 +634,20 @@ describe('users CLI: the bb-auth bin', () => {
 		const bin = join(PACKAGE_DIR, 'dist', 'bin.js');
 		const users = spawnSync(process.execPath, [bin, 'users', '--help'], { encoding: 'utf8' });
 		assert.strictEqual(users.status, 0, users.stderr);
-		assert.match(users.stdout, /Usage: npx @aws-blocks\/bb-auth users <command>/);
+		assert.match(users.stdout, /Usage: npx @aws-cdk-blocks\/bb-auth users <command>/);
 		const migrate = spawnSync(process.execPath, [bin, 'migrate', '--help'], { encoding: 'utf8' });
 		assert.strictEqual(migrate.status, 0, migrate.stderr);
-		assert.match(migrate.stdout, /Usage: npx @aws-blocks\/bb-auth migrate/);
+		assert.match(migrate.stdout, /Usage: npx @aws-cdk-blocks\/bb-auth migrate/);
 		const unknown = spawnSync(process.execPath, [bin, 'promote'], { encoding: 'utf8' });
 		assert.strictEqual(unknown.status, 2);
 	});
 });
 
 describe('users CLI: documented commands', () => {
-	test('every `npx @aws-blocks/bb-auth users …` line in the README and the usage text parses', async () => {
+	test('every `npx @aws-cdk-blocks/bb-auth users …` line in the README and the usage text parses', async () => {
 		const { USERS_USAGE } = await import('./users-cli/cli.js');
 		const readme = readFileSync(join(PACKAGE_DIR, 'README.md'), 'utf8');
-		const lines = [...`${readme}\n${USERS_USAGE}`.matchAll(/npx @aws-blocks\/bb-auth users ([^`\n]*)/g)].map((m) =>
+		const lines = [...`${readme}\n${USERS_USAGE}`.matchAll(/npx @aws-cdk-blocks\/bb-auth users ([^`\n]*)/g)].map((m) =>
 			m[1].trim(),
 		);
 		assert.ok(lines.length >= 4, `found ${lines.length}`);

@@ -1,6 +1,6 @@
-# AWS Blocks App (bare)
+# AWS CDK Blocks App (bare)
 
-Minimal full-stack TypeScript app with the AWS Blocks framework.
+Minimal full-stack TypeScript app with the AWS CDK Blocks framework.
 
 ## Getting Started
 
@@ -17,7 +17,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: APIs and Building Blocks |
+| `cdk-blocks/index.ts` | Backend: APIs and Building Blocks |
 | `src/index.ts` | Frontend: imports backend APIs directly |
 | `test/e2e.test.ts` | Tests: verifies API via direct imports |
 | `index.html` | HTML shell |
@@ -48,7 +48,7 @@ The dev server settings are in `package.json` under `"blocks": { "dev": … }`; 
 
 Your CloudFormation stack names are derived from the `stackId` in `.blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
 
-To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
+To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `cdk-blocks/index.cdk.ts` directly.
 
 ## For Agents
 
@@ -56,4 +56,4 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all data persistence and cloud abstractions (they mock locally and deploy to AWS automatically).
 
-Start in `aws-blocks/index.ts` (backend) and `src/index.ts` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /aws-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.greet"`); there are no per-namespace paths like `/aws-blocks/authApi`. See `npm run docs troubleshooting` for curl examples.
+Start in `cdk-blocks/index.ts` (backend) and `src/index.ts` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /aws-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.greet"`); there are no per-namespace paths like `/aws-blocks/authApi`. See `npm run docs troubleshooting` for curl examples.

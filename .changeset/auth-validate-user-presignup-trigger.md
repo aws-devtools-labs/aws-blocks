@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": minor
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-auth": minor
+"aws-cdk-blocks": patch
 ---
 
 feat(bb-auth): `validateUser` also guards users created outside your app, through a Cognito PreSignUp trigger

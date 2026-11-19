@@ -1,12 +1,12 @@
-# AWS Blocks Dart
+# AWS CDK Blocks Dart
 
-The Dart SDK for AWS Blocks.
+The Dart SDK for AWS CDK Blocks.
 
-AWS Blocks lets you define a backend in TypeScript (APIs, auth, databases, realtime channels, file storage) and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
+AWS CDK Blocks lets you define a backend in TypeScript (APIs, auth, databases, realtime channels, file storage) and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
 
 ## How it works
 
-You write your backend. AWS Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions, ready to drop into your Flutter app.
+You write your backend. AWS CDK Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions, ready to drop into your Flutter app.
 
 ```
 Your backend (TypeScript)  →  blocks.spec.json  →  blocks_codegen  →  Typed Dart client
@@ -54,7 +54,7 @@ You need Node.js 22 or later for the backend, and Flutter 3.41 or later (Dart 3.
 Create a backend with the `api-only` template, which has no web frontend:
 
 ```bash
-npm create @aws-blocks/blocks-app@latest my-backend -- --template api-only
+npm create @aws-cdk-blocks/blocks-app@latest my-backend -- --template api-only
 cd my-backend
 npm run dev
 ```
@@ -69,7 +69,7 @@ In a second terminal, in `my-backend`:
 npm run spec
 ```
 
-This writes `aws-blocks/blocks.spec.json`, which describes every method the backend exports. It also records the URL of the dev server that last ran, so the generated client calls it by default. Run `npm run spec` again after you change the backend. To point the client at AWS instead, deploy a sandbox with `npm run sandbox:deploy` and then run `BLOCKS_SPEC_STAGE=sandbox npm run spec`; the spec then names the deployed API URL, stage segment included. `npm run sandbox:destroy` deletes the sandbox.
+This writes `cdk-blocks/blocks.spec.json`, which describes every method the backend exports. It also records the URL of the dev server that last ran, so the generated client calls it by default. Run `npm run spec` again after you change the backend. To point the client at AWS instead, deploy a sandbox with `npm run sandbox:deploy` and then run `BLOCKS_SPEC_STAGE=sandbox npm run spec`; the spec then names the deployed API URL, stage segment included. `npm run sandbox:destroy` deletes the sandbox.
 
 ### 3. Add the packages to your app
 
@@ -98,7 +98,7 @@ dev_dependencies:
 Copy the spec into `lib/` and run the builder:
 
 ```bash
-cp ../my-backend/aws-blocks/blocks.spec.json lib/
+cp ../my-backend/cdk-blocks/blocks.spec.json lib/
 dart run build_runner build
 ```
 
@@ -138,7 +138,7 @@ An `Auth` block's `createApi()` export (here `authApi`) is a state machine: `get
 Federated sign-in and sign-out go through the `OidcClient` the block's `createOidcApi()` export (here `oidcApi`) returns from `getClient()`. Render one sign-in button per provider in that client's `providers`, and have it call `oidc.signIn(provider)`. Don't render the state machine's `signIn:<id>` actions as buttons: their `url` starts a browser-cookie flow whose cookie never reaches the app, and the client already lists the providers it can sign in with. A provider whose discovery failed on the server is left out of `providers`, so it gets no button. Call `getClient()` once per block and keep that client for the app's lifetime.
 
 ```ts
-// aws-blocks/index.ts
+// cdk-blocks/index.ts
 export const authApi = auth.createApi();
 export const oidcApi = auth.createOidcApi();
 ```
@@ -442,7 +442,7 @@ native/dart/
 
 - Dart 3.11+
 - Flutter 3.41+, for `blocks_runtime_flutter` (`blocks_runtime` and `blocks_codegen` are pure Dart)
-- Node.js 22+, for running the AWS Blocks backend locally
+- Node.js 22+, for running the AWS CDK Blocks backend locally
 
 ## How the codegen works
 

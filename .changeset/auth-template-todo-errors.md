@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 fix(create-blocks-app): show todo and last-code errors in the `auth` template

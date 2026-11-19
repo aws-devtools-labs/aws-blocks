@@ -1,11 +1,11 @@
 # Blocks Demo App
 
-A fuller example app on AWS Blocks. It wires together several Building Blocks in
+A fuller example app on AWS CDK Blocks. It wires together several Building Blocks in
 one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
 loose key/value data, and a second `KVStore` with a `schema` and a `key` for a
 sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template demo`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template demo`
 
 ## Getting Started
 
@@ -22,7 +22,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: auth, KVStore, todo table, API methods |
+| `cdk-blocks/index.ts` | Backend: auth, KVStore, todo table, API methods |
 | `src/index.ts` | Frontend: sign-in, key/value demo, sortable todo UI |
 | `test/e2e.test.ts` | Tests exercising the public and protected API |
 | `index.html` | HTML shell |
@@ -42,11 +42,11 @@ Open http://localhost:3000 after `npm run dev`.
   content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
   methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
   `requireAuth`; `getFlag` and `jobRan` stay public.
-  The EmailClient sender is the `EMAIL_SENDER` constant in `aws-blocks/index.ts`.
+  The EmailClient sender is the `EMAIL_SENDER` constant in `cdk-blocks/index.ts`.
   Its placeholder works locally (the mock sends nothing), but replace it with a
   verified SES identity before deploying to production: the placeholder is on the
   reserved `.invalid` domain, which SES can never verify, so every send from it
-  fails on AWS. Synth warns (`@aws-blocks/bb-email-client:UnverifiableSender`)
+  fails on AWS. Synth warns (`@aws-cdk-blocks/bb-email-client:UnverifiableSender`)
   until you do.
 - **KVStore with a `schema` and a `key`** — per-user todos, stored as records
   you list or query as a collection (a store fixes its key when you create
@@ -89,7 +89,7 @@ Your CloudFormation stack names are derived from the `stackId` in
 `.blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
@@ -97,5 +97,5 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
 (frontend). Test via `npm run test:e2e`.

@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/auth-common": patch
+"@aws-cdk-blocks/auth-common": patch
 ---
 
 The client auth-state store (`subscribeAuthState`, `getAuthStateSnapshot`, the `Authenticator`) and `onAuthChange` now end at the session's real state when requests overlap: another tab's broadcast, a hydration still in flight, answers that arrive out of order, and failed requests.

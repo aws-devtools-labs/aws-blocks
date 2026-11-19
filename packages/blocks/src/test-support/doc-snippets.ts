@@ -8,19 +8,19 @@
  * package's public entries.
  *
  * Every ```ts / ```js block gets the light check, which suits fragments:
- *  - each name imported from an `@aws-blocks/*` entry is exported by it;
+ *  - each name imported from an `@aws-cdk-blocks/*` entry is exported by it;
  *  - `new X(…)` and `X.member` on such a name exist;
  *  - a PascalCase name used with `new` or `.` that the doc neither declares nor
- *    imports, and that is not a global, is exported by an `@aws-blocks/blocks`
+ *    imports, and that is not a global, is exported by an `aws-cdk-blocks`
  *    entry (the umbrella an app imports from) with that member, or by some
  *    module the docs import elsewhere (`Duration` from `aws-cdk-lib`). This is
  *    what catches a fragment that still constructs a removed block.
  *
  * A block that is one complete file — its first line names the file
- * (`// aws-blocks/index.ts`), no other line does, and it has an import — is
+ * (`// cdk-blocks/index.ts`), no other line does, and it has an import — is
  * typechecked in full instead. Complete files under the same heading form one
- * app, as in bb-auth's README recipes: `'aws-blocks'` resolves to that app's
- * `aws-blocks/index.ts`.
+ * app, as in bb-auth's README recipes: `'cdk-blocks'` resolves to that app's
+ * `cdk-blocks/index.ts`.
  *
  * Markers, each with its reason:
  *  - `<!-- doc-snippet: skip — "before" code of a migration -->`, directly above
@@ -35,6 +35,15 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import ts from 'typescript';
+
+/** The scope every block package publishes under. */
+const SCOPE = '@aws-cdk-blocks/';
+/** The umbrella publishes unscoped, so a scope test alone would not recognise it. */
+const UMBRELLA = 'aws-cdk-blocks';
+
+/** Whether `specifier` resolves into this monorepo, including the umbrella and its subpaths. */
+const isBlocksSpecifier = (specifier: string): boolean =>
+	specifier.startsWith(SCOPE) || specifier === UMBRELLA || specifier.startsWith(`${UMBRELLA}/`);
 
 /** One markdown document to check. `source` is the path findings report (the repo path). */
 export interface DocInput {
@@ -140,19 +149,19 @@ function parseBlocks(doc: DocInput, findings: Finding[]): Block[] {
 
 interface Analysis {
 	readonly block: Block;
-	/** `@aws-blocks/*` import declarations, one per line; a repeated local name is aliased. */
+	/** `@aws-cdk-blocks/*` import declarations, one per line; a repeated local name is aliased. */
 	readonly blocksImports: string[];
-	/** Local name → `@aws-blocks/*` specifier it was imported from. */
+	/** Local name → `@aws-cdk-blocks/*` specifier it was imported from. */
 	readonly blocksNames: Set<string>;
 	/** Every name the block declares or imports (from any module). */
 	readonly declared: Set<string>;
-	/** Bare (non-relative, non-`aws-blocks`) module specifiers the block imports. */
+	/** Bare (non-relative, non-`cdk-blocks`) module specifiers the block imports. */
 	readonly modules: Set<string>;
 	/** `new X` / `X.member` uses on bare identifiers: name → members (`''` for `new`). */
 	readonly uses: Map<string, Set<string>>;
 	/** The path of a complete file, if the block is one. */
 	readonly completeFile: string | undefined;
-	/** Value imports from `@aws-blocks/*` in browser files (`// src/…`, `// test/…`, `// frontend/…`), one per line. */
+	/** Value imports from `@aws-cdk-blocks/*` in browser files (`// src/…`, `// test/…`, `// frontend/…`), one per line. */
 	readonly browserImports: string[];
 }
 
@@ -206,7 +215,7 @@ function analyze(block: Block): Analysis {
 			hasImport = true;
 			const spec = node.moduleSpecifier.text;
 			const clause = node.importClause;
-			if (!spec.startsWith('.') && spec !== 'aws-blocks') modules.add(spec);
+			if (!spec.startsWith('.') && spec !== 'cdk-blocks') modules.add(spec);
 			if (clause?.name) declared.add(clause.name.text);
 			const nb = clause?.namedBindings;
 			if (nb && ts.isNamespaceImport(nb)) declared.add(nb.name.text);
@@ -214,7 +223,7 @@ function analyze(block: Block): Analysis {
 			// In a browser file, each value it imports must exist under the `browser` condition too (a namespace
 			// import of an empty module is not an error, so only named and default imports are checked).
 			const file = fileAt(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line);
-			if (spec.startsWith('@aws-blocks/') && clause && !clause.isTypeOnly && file && BROWSER_FILE.test(file)) {
+			if (isBlocksSpecifier(spec) && clause && !clause.isTypeOnly && file && BROWSER_FILE.test(file)) {
 				const names = [
 					...(clause.name ? ['default'] : []),
 					...(nb && ts.isNamedImports(nb)
@@ -225,7 +234,7 @@ function analyze(block: Block): Analysis {
 				const bindings = names.map((name, k) => `${name} as __b${n}_${k}`).join(', ');
 				if (names.length > 0) browserImports.push(`import { ${bindings} } from '${spec}';`);
 			}
-			if (spec.startsWith('@aws-blocks/') && clause) {
+			if (isBlocksSpecifier(spec) && clause) {
 				const parts: string[] = [];
 				if (clause.name) parts.push(`default as ${local(clause.name.text)}`);
 				if (nb && ts.isNamespaceImport(nb))
@@ -335,10 +344,10 @@ interface Origin {
 
 /**
  * Check every code block of `docs` against the packages resolvable from
- * `scratchBase` (a directory inside a package's `dist/`, so `@aws-blocks/*`
+ * `scratchBase` (a directory inside a package's `dist/`, so `@aws-cdk-blocks/*`
  * resolve through the workspace `node_modules` as an app's would).
  *
- * @param entrySpecifiers - The `@aws-blocks/blocks` entries an undeclared name may come from, root first.
+ * @param entrySpecifiers - The `aws-cdk-blocks` entries an undeclared name may come from, root first.
  */
 export function checkDocs(
 	docs: readonly DocInput[],
@@ -357,8 +366,8 @@ export function checkDocs(
 	);
 	const candidates = [
 		...entrySpecifiers,
-		...imported.filter((m) => m.startsWith('@aws-blocks/')),
-		...imported.filter((m) => !m.startsWith('@aws-blocks/')),
+		...imported.filter((m) => isBlocksSpecifier(m)),
+		...imported.filter((m) => !isBlocksSpecifier(m)),
 	];
 
 	mkdirSync(scratchBase, { recursive: true });
@@ -413,11 +422,11 @@ export function checkDocs(
 						if (!from) {
 							findings.push({
 								at,
-								message: `uses \`${name}\`, which this doc never declares or imports and no @aws-blocks/blocks entry exports`,
+								message: `uses \`${name}\`, which this doc never declares or imports and no aws-cdk-blocks entry exports`,
 							});
 							continue;
 						}
-						if (!from.startsWith('@aws-blocks/')) continue;
+						if (!isBlocksSpecifier(from)) continue;
 						header.push(`import { ${name} } from '${from}';`);
 						headerOrigins.push({ at, what: `${name} (from ${from})` });
 					}
@@ -439,15 +448,15 @@ export function checkDocs(
 			}
 
 			for (const a of apps) {
-				const backend = a.files.has('aws-blocks/index.ts') ? join(a.dir, 'aws-blocks', 'index.js') : undefined;
+				const backend = a.files.has('cdk-blocks/index.ts') ? join(a.dir, 'cdk-blocks', 'index.js') : undefined;
 				for (const [path, code] of a.files) {
 					const abs = join(a.dir, path);
 					mkdirSync(dirname(abs), { recursive: true });
 					let text = code;
-					if (backend && path !== 'aws-blocks/index.ts') {
+					if (backend && path !== 'cdk-blocks/index.ts') {
 						let rel = relative(dirname(abs), backend);
 						if (!rel.startsWith('.')) rel = `./${rel}`;
-						text = text.replace(/(['"])aws-blocks\1/g, `'${rel}'`);
+						text = text.replace(/(['"])cdk-blocks\1/g, `'${rel}'`);
 					}
 					writeFileSync(abs, `${text}\nexport {};\n`);
 					roots.push(abs);
@@ -472,7 +481,7 @@ export function checkDocs(
 		}
 
 		// Browser files again, resolved as a browser bundle (and `tsx -C browser`) resolves them: the root
-		// `@aws-blocks/blocks` is an empty module there, so a value import from it is undefined at runtime.
+		// `aws-cdk-blocks` is an empty module there, so a value import from it is undefined at runtime.
 		const browserProgram = ts.createProgram(
 			[...browserFiles.keys()],
 			{ ...COMPILER_OPTIONS, customConditions: ['browser'] },

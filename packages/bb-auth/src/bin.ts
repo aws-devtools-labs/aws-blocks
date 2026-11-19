@@ -5,8 +5,8 @@
 /**
  * The `bb-auth` bin. It dispatches on the first argument:
  *
- * - `npx @aws-blocks/bb-auth migrate [paths…] [--dry-run]` — the codemod; see `migrate/cli.ts`.
- * - `npx @aws-blocks/bb-auth users <command> …` — group membership (the first
+ * - `npx @aws-cdk-blocks/bb-auth migrate [paths…] [--dry-run]` — the codemod; see `migrate/cli.ts`.
+ * - `npx @aws-cdk-blocks/bb-auth users <command> …` — group membership (the first
  *   admin), locally or on a deployed stack; see `users-cli/cli.ts`.
  *
  * Anything else (no command, `--help`, an unknown command) goes to `migrate`'s

@@ -19,7 +19,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import { ApiError, type BlocksContext, clearRouteRegistry, RawRoute, type ScopeParent } from '@aws-blocks/core';
+import { ApiError, type BlocksContext, clearRouteRegistry, RawRoute, type ScopeParent } from '@aws-cdk-blocks/core';
 import { SignJWT } from 'jose';
 import { pkceChallenge } from './engines/federation-direct.js';
 import { AuthErrors } from './errors.js';

@@ -8,7 +8,7 @@
  * response, and the Lambda invocation itself succeeds, so Lambda's `Errors`
  * metric (and any alarm on it) never counts it. Each failed call therefore
  * writes one line in CloudWatch embedded metric format (EMF): Lambda's log
- * pipeline turns it into the `AWSBlocks` / `RpcErrors` metric with no SDK call
+ * pipeline turns it into the `CDKBlocks` / `RpcErrors` metric with no SDK call
  * and no extra IAM permission.
  *
  * Dimensions are kept to `FunctionName` and `StatusClass` (`4xx` or `5xx`), so a
@@ -19,7 +19,7 @@
  */
 
 /** CloudWatch namespace of the RPC error metric. */
-export const RPC_ERROR_METRIC_NAMESPACE = 'AWSBlocks';
+export const RPC_ERROR_METRIC_NAMESPACE = 'CDKBlocks';
 
 /** Name of the RPC error metric. */
 export const RPC_ERROR_METRIC_NAME = 'RpcErrors';

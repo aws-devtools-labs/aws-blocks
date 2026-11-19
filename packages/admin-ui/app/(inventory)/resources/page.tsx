@@ -134,7 +134,7 @@ export default function ResourcesPage() {
 													{group.blockFullId}
 												</CardTitle>
 												{group.blockType && (
-													<Badge variant="outline" title="Block type declared in aws-blocks/">
+													<Badge variant="outline" title="Block type declared in cdk-blocks/">
 														{group.blockType}
 													</Badge>
 												)}

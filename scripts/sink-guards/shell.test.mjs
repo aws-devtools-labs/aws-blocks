@@ -35,15 +35,15 @@ const APP_COMMAND =
 	"Runs the app's own configured command (the developer's package.json / defineHosting() config) by design; it has the trust of the app's own code.";
 
 const ALLOWLIST = [
-	{ at: 'native/kotlin/example/typescript/aws-blocks/scripts/cleanup.ts:12', reason: LSOF_CLEANUP },
-	{ at: 'native/kotlin/example/typescript/aws-blocks/scripts/cleanup.ts:14', reason: LSOF_CLEANUP },
-	{ at: 'native/swift/Demo/typescript-demo/aws-blocks/scripts/cleanup.ts:12', reason: LSOF_CLEANUP },
-	{ at: 'native/swift/Demo/typescript-demo/aws-blocks/scripts/cleanup.ts:14', reason: LSOF_CLEANUP },
+	{ at: 'native/kotlin/example/typescript/cdk-blocks/scripts/cleanup.ts:12', reason: LSOF_CLEANUP },
+	{ at: 'native/kotlin/example/typescript/cdk-blocks/scripts/cleanup.ts:14', reason: LSOF_CLEANUP },
+	{ at: 'native/swift/Demo/typescript-demo/cdk-blocks/scripts/cleanup.ts:12', reason: LSOF_CLEANUP },
+	{ at: 'native/swift/Demo/typescript-demo/cdk-blocks/scripts/cleanup.ts:14', reason: LSOF_CLEANUP },
 	{ at: 'packages/core/src/scripts/cleanup.ts:17', reason: LSOF_CLEANUP },
 	{ at: 'packages/core/src/scripts/cleanup.ts:22', reason: LSOF_CLEANUP },
-	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
-	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
-	{ at: 'packages/core/src/hosting.ts:1221', reason: `Hosting buildCommand. ${APP_COMMAND}` },
+	{ at: 'test-apps/native-bindings/cdk-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
+	{ at: 'test-apps/native-bindings/cdk-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
+	{ at: 'packages/core/src/hosting.ts:1224', reason: `Hosting buildCommand. ${APP_COMMAND}` },
 	{ at: 'packages/core/src/scripts/dev-server.ts:1278', reason: `Frontend dev command. ${APP_COMMAND}` },
 	{
 		at: 'packages/core/src/scripts/run-command.ts:89',
@@ -53,7 +53,7 @@ const ALLOWLIST = [
 		at: 'packages/core/src/scripts/process-tree.ts:242',
 		reason: 'CIM query of Windows processes: the only interpolated values are pids through Math.trunc into a fixed Get-CimInstance -Filter template, run with -NoProfile -NonInteractive and an argv array.',
 	},
-	{ at: 'packages/create-block/src/index.ts:287', reason: `npm view of an @aws-blocks/* name: ${WINDOWS_NPM}` },
+	{ at: 'packages/create-block/src/index.ts:287', reason: `npm view of an @aws-cdk-blocks/* name: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:632', reason: `npm run build -w <validated name>: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:637', reason: `npm test -w <validated name>: ${WINDOWS_NPM}` },
 	{ at: 'scripts/ci/_proc.mjs:53', reason: CI_WINDOWS },

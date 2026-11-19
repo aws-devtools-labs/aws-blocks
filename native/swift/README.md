@@ -1,6 +1,6 @@
-# AWS Blocks Swift
+# AWS CDK Blocks Swift
 
-A Swift Package and code generator that produces type-safe Swift client code from an AWS Blocks spec. It reads your spec at build time and emits idiomatic Swift `struct`s, `enum`s, and `async throws` API methods that call your backend with full type safety on iOS and macOS.
+A Swift Package and code generator that produces type-safe Swift client code from an AWS CDK Blocks spec. It reads your spec at build time and emits idiomatic Swift `struct`s, `enum`s, and `async throws` API methods that call your backend with full type safety on iOS and macOS.
 
 ## Quick Start
 
@@ -72,7 +72,7 @@ The `Auth` block's `createApi()` namespace (here `authApi`) is a sign-in state m
 Federated sign-in goes through an `OIDCClient`. Export the block's `createOidcApi()` beside `createApi()`, and `getClient()` returns the client, typed by the block's provider ids and carrying the block's own routes:
 
 ```ts
-// aws-blocks/index.ts
+// cdk-blocks/index.ts
 export const authApi = auth.createApi();
 export const oidcAuthApi = auth.createOidcApi();
 ```

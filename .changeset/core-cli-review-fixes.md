@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): production destroy and deploy guidance for AWS Blocks package tasks
@@ -13,8 +13,7 @@ fix(core): production destroy and deploy guidance for AWS Blocks package tasks
 - `getStackId()` says `.blocks/config.json is not valid JSON (<parse error>)` for a file that does not parse, instead of "not found or missing stackId".
 - `readAwsIdentity()` reports a selected profile that is not in the AWS config files even when no Region is set, instead of returning no identity, which `npm run whoami -- --profile <typo>` reported as "no AWS Region is set".
 - The production deploy no longer lists "Frontend hosting (S3 + CloudFront)" for an app without a frontend.
-- The first-run telemetry notice says `To disable: npm run telemetry disable`, and the `blocks-telemetry` usage starts with `npm run telemetry -- [status|enable|disable] [--global]`, AWS Blocks package tasks command, instead of naming only `npx blocks-telemetry --disable`.
 - The production `destroy()` reads only stack ids from `cdk ls`: the frontend build and CDK notices that synthesizing the app prints to stdout are no longer listed as stacks in its "the CDK app defines …" refusal.
 - The `npx cdk bootstrap` command that the bootstrap check prints passes `--profile <profile>` when the deploy uses a profile, so it bootstraps the same account from a shell that does not export `AWS_PROFILE`.
 - `SandboxOptions.onDeployed`, when set, is called with the sandbox stack, its API URL and frontend URL after the first deploy, in watch mode too (before `cdk watch` starts), and awaited.
-- `deployedStackExists({ stackName, region?, env?, projectRoot? })` (from `@aws-blocks/core/scripts`) tells whether CloudFormation has a stack, with the credentials and Region CDK deploys with: `false` only when the stack does not exist, `undefined` when it cannot tell. The production `destroy()` uses it.
+- `deployedStackExists({ stackName, region?, env?, projectRoot? })` (from `@aws-cdk-blocks/core/scripts`) tells whether CloudFormation has a stack, with the credentials and Region CDK deploys with: `false` only when the stack does not exist, `undefined` when it cannot tell. The production `destroy()` uses it.

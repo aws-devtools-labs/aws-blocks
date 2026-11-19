@@ -15,7 +15,7 @@ export const API_VERSION = 1;
 /** GET /api/v1/meta */
 export interface MetaResponse {
 	apiVersion: typeof API_VERSION;
-	/** Version of the @aws-blocks/admin-ui package serving the UI. */
+	/** Version of the @aws-cdk-blocks/admin-ui package serving the UI. */
 	adminUiVersion: string;
 	/** Project name (from the app's package.json). */
 	projectName: string;
@@ -630,7 +630,7 @@ export interface ScopeInfo {
 	line: number;
 }
 
-/** A block declared in the app's `aws-blocks/` source. */
+/** A block declared in the app's `cdk-blocks/` source. */
 export interface DiscoveredBlock {
 	/** Block class name, e.g. 'KVStore'. */
 	type: string;

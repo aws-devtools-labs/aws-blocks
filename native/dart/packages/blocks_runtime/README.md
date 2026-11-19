@@ -17,7 +17,7 @@ An `Auth` block's `createApi()` export (here `authApi`) is a state machine: `get
 Federated sign-in and sign-out go through the `OidcClient` the block's `createOidcApi()` export (here `oidcApi`) returns from `getClient()`. Render one sign-in button per provider in that client's `providers`, and have it call `oidc.signIn(provider)`. Don't render the state machine's `signIn:<id>` actions as buttons: their `url` starts a browser-cookie flow whose cookie never reaches the app, and the client already lists the providers it can sign in with. A provider whose discovery failed on the server is left out of `providers`, so it gets no button. Call `getClient()` once per block and keep that client for the app's lifetime.
 
 ```ts
-// aws-blocks/index.ts
+// cdk-blocks/index.ts
 export const authApi = auth.createApi();
 export const oidcApi = auth.createOidcApi();
 ```
@@ -256,7 +256,7 @@ A read or write that fails never throws into your app: the session keeps working
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.
 
-RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the Blocks server has allowed it since `@aws-blocks/core` 0.6.0.
+RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the Blocks server has allowed it since `@aws-blocks/core` 0.6.0 (and every `@aws-cdk-blocks/core`).
 
 On web the token is dropped on the other paths. The presigned upload and download set `User-Agent`, which browsers ignore because it is a forbidden header name. The WebSocket upgrade omits it because browsers do not allow custom headers on the upgrade request.
 

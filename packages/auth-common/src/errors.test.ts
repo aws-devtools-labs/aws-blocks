@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { type AuthErrorName, AuthErrors, isAuthError, isAuthErrorName } from './errors.js';
 
 const canonicalNames: ReadonlySet<string> = new Set<string>(Object.values(AuthErrors));

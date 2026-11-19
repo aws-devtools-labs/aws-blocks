@@ -11,8 +11,8 @@
     "outDir": "build-temp",
     "baseUrl": ".",
     "paths": {
-      "aws-blocks": ["./aws-blocks/index.ts"]
+      "cdk-blocks": ["./cdk-blocks/index.ts"]
     }
   },
-  "include": ["src/**/*", "aws-blocks/**/*"]
+  "include": ["src/**/*", "cdk-blocks/**/*"]
 }

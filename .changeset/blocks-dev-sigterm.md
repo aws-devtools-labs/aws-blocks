@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/blocks": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(blocks): a SIGTERM to the process group of `npm run dev` or `npm run sandbox` stops it cleanly

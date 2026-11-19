@@ -139,7 +139,7 @@ export interface FlagAliasSpec {
 /** Options accepted at every level. `-v` is `--verbose`; `--version` is long-only. */
 export const GLOBAL_FLAGS: readonly FlagSpec[] = [
 	{ name: 'help', short: 'h', type: 'boolean', description: 'Show help for the current command level' },
-	{ name: 'version', type: 'boolean', description: 'Print the @aws-blocks/blocks version' },
+	{ name: 'version', type: 'boolean', description: 'Print the aws-cdk-blocks version' },
 	{ name: 'quiet', short: 'q', type: 'boolean', description: 'Errors and final results only' },
 	{ name: 'verbose', short: 'v', type: 'boolean', description: 'Include raw output from CDK and child tools' },
 	{ name: 'debug', type: 'boolean', description: 'Verbose, plus stack traces and internal diagnostics' },
@@ -370,7 +370,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Develop',
 		summary: 'Read the AWS Blocks docs: a block, an export or option, one section, or a search',
 		description: [
-			'Print the docs that ship in @aws-blocks/blocks, looked up by name.',
+			'Print the docs that ship in aws-cdk-blocks, looked up by name.',
 			'',
 			...docsForms('npm run docs'),
 			'',
@@ -412,7 +412,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				name: 'exports',
 				type: 'boolean',
 				description:
-					'The names @aws-blocks/blocks and its entries export, and which entry to use; names after it filter the list',
+					'The names aws-cdk-blocks and its entries export, and which entry to use; names after it filter the list',
 			},
 			{
 				name: 'search',
@@ -559,26 +559,6 @@ export const COMMANDS: readonly CommandSpec[] = [
 		aws: true,
 		handler: commands.config,
 	},
-	{
-		path: ['telemetry'],
-		group: 'Configure',
-		summary: 'Show or change telemetry consent',
-		description:
-			'Show or change telemetry consent for this project, or for every project with --global.\n' +
-			'Also accepts --status, --enable and --disable.',
-		args: [{ name: 'action', description: 'status (default) | enable | disable' }],
-		flags: [
-			{ name: 'global', type: 'boolean', description: 'Apply to every project (~/.blocks/config.json)' },
-			{ name: 'status', type: 'boolean', description: 'Same as "status"' },
-			{ name: 'enable', type: 'boolean', description: 'Same as "enable"' },
-			{ name: 'disable', type: 'boolean', description: 'Same as "disable"' },
-		],
-		examples: [
-			{ command: 'npm run telemetry', description: 'Show the telemetry status' },
-			{ command: 'npm run telemetry disable -- --global', description: 'Disable telemetry everywhere' },
-		],
-		handler: commands.telemetry,
-	},
 	// ── Generate ─────────────────────────────────────────────────────────────
 	{
 		path: ['generate'],
@@ -590,18 +570,18 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Generate',
 		summary: 'Generate the typed client',
 		args: [
-			{ name: 'foundation', description: 'Backend entry (default: aws-blocks/index.ts)' },
-			{ name: 'output', description: 'Output file (default: aws-blocks/client.js)' },
+			{ name: 'foundation', description: 'Backend entry (default: cdk-blocks/index.ts)' },
+			{ name: 'output', description: 'Output file (default: cdk-blocks/client.js)' },
 		],
 		flags: [
 			{
 				name: 'force',
 				type: 'boolean',
 				description:
-					'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
+					'Write cdk-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
 			},
 		],
-		examples: [{ command: 'npm run generate-client', description: 'Write aws-blocks/client.js' }],
+		examples: [{ command: 'npm run generate-client', description: 'Write cdk-blocks/client.js' }],
 		handler: commands.generateClient,
 	},
 	{
@@ -609,10 +589,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Generate',
 		summary: 'Generate the OpenRPC spec',
 		args: [
-			{ name: 'backend', description: 'Backend entry (default: aws-blocks/index.ts)' },
+			{ name: 'backend', description: 'Backend entry (default: cdk-blocks/index.ts)' },
 			{ name: 'output', description: 'Output file (default: blocks.spec.json next to the backend)' },
 		],
-		examples: [{ command: 'npm run spec', description: 'Write aws-blocks/blocks.spec.json' }],
+		examples: [{ command: 'npm run spec', description: 'Write cdk-blocks/blocks.spec.json' }],
 		handler: commands.generateSpec,
 	},
 	{
@@ -641,7 +621,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Work with the existing PostgreSQL database of a Database block (DatabaseCluster.fromExisting()):\n' +
 			'connect, migrate, types, status. For a block that provisions its cluster, "types --block <id>" and\n' +
 			'"status --block <id>" work from its migration files and its local database.\n' +
-			'The verb and its arguments go to the bb-database CLI of @aws-blocks/bb-database. After npm’s separator,\n' +
+			'The verb and its arguments go to the bb-database CLI of @aws-cdk-blocks/bb-database. After npm’s separator,\n' +
 			'global options (--profile, --yes, …) apply before a second "--"; --yes and --no-input are passed on.\n' +
 			'For JSON output give the option to the tool: "npm run -s db -- status -- --output json".\n' +
 			'"npm run db -- <verb> --help" shows its options.',
@@ -680,12 +660,12 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Project',
 		summary: 'Copy a Building Block into the app for customization',
 		args: [
-			{ name: 'package', description: 'For example @aws-blocks/bb-kv-store', required: true },
+			{ name: 'package', description: 'For example @aws-cdk-blocks/bb-kv-store', required: true },
 			{ name: 'options', description: '--force overwrites an existing copy', variadic: true },
 		],
 		passthrough: true,
 		examples: [
-			{ command: 'npm run vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' },
+			{ command: 'npm run vendorize @aws-cdk-blocks/bb-kv-store', description: 'Copy KVStore into the app' },
 		],
 		handler: commands.vendorize,
 	},
@@ -694,8 +674,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Project',
 		summary: 'Move an app from generated wrapper scripts to package-manager tasks',
 		description:
-			'Move an app from create-blocks-app wrappers (aws-blocks/scripts/*.ts) to package-manager tasks.\n' +
-			'Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
+			'Move an app from create-blocks-app wrappers (cdk-blocks/scripts/*.ts) to package-manager tasks.\n' +
+			'Scripts whose value is exactly a generated command (for example "tsx cdk-blocks/scripts/deploy.ts")\n' +
 			'are rewritten; missing framework tasks are added without overwriting custom scripts. The options of a\n' +
 			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
 			'app file other than Markdown docs uses any more are deleted. Only the wrappers of public\n' +
@@ -706,7 +686,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'In a monorepo, and in the superproject of a submodule, it also reads every tracked package.json\n' +
 			'and CI, shell, Make and Docker file outside the app (.github/workflows/*, scripts/*.sh,\n' +
 			'ci/Makefile); there a path counts only with the directory of this app\n' +
-			'(apps/web/aws-blocks/scripts/deploy.ts), or in a file that changes into the app\n' +
+			'(apps/web/cdk-blocks/scripts/deploy.ts), or in a file that changes into the app\n' +
 			'(working-directory: apps/web, cd apps/web). In CI, shell and Docker files and in scripts, a bare\n' +
 			'scripts/deploy.ts or deploy.ts counts as a use too.\n' +
 			'Unless you pass --force, it refuses an app outside git (or without git installed), a git working\n' +

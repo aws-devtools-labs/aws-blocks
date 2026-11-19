@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { KVStore as AwsKVStore } from './index.aws.js';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds, TTL_ATTRIBUTE } from './ttl.js';

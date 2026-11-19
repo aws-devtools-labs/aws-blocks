@@ -13,7 +13,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { clientMessageFor } from './error-mapping.js';
 import { AuthErrors } from './index.aws.js';
 import { Browser, cognitoError, makeAwsAuth, signInAs, TEST_POOL_ID, wireView } from './test-support/aws-harness.js';

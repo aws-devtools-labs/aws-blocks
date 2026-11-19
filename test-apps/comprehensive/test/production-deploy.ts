@@ -3,7 +3,7 @@
 
 // Deploys without sandboxMode context — exercises the production GSI path
 // (sequential UpdateTable instead of sandbox drop-and-recreate).
-import { deploy, destroy } from '@aws-blocks/blocks/scripts';
+import { deploy, destroy } from 'aws-cdk-blocks/scripts';
 
 const backendPath = process.argv[2];
 

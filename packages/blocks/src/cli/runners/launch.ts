@@ -5,7 +5,7 @@
  * How the CLI starts the lifecycle runners.
  *
  * Each lifecycle command runs a small runner in a child process with `tsx`,
- * the runtime of the `aws-blocks/scripts/*.ts` wrappers that the npm scripts
+ * the runtime of the `cdk-blocks/scripts/*.ts` wrappers that the npm scripts
  * ran. The dev server runs under `tsx watch`, which restarts it on a change.
  * The other runners run as `node --import <tsx loader>` (with `--conditions=cdk`
  * for `sandbox destroy`), with no `tsx` process between the CLI and the runner:
@@ -16,14 +16,14 @@
  * `BLOCKS_DEV_OPTIONS`, because the sandbox starts it from a shell command string.
  *
  * `tsx` resolves from the app first, so the app's own version runs as it did
- * from the npm scripts, then from `@aws-blocks/blocks`, which depends on it.
+ * from the npm scripts, then from `aws-cdk-blocks`, which depends on it.
  * The runners pass the same `tsx` loader to core's client-generation worker
  * through `BLOCKS_TSX_IMPORT`, so an app without its own `tsx` works there too.
  *
  * `tsx` compiles a file with the options of the `tsconfig.json` in the working
  * directory, and only when that config lists the file. A root that only lists
  * project references (the Vite templates, create-vite apps) lists none, so when
- * the backend is a project of its own (`aws-blocks/tsconfig.json`), the runners
+ * the backend is a project of its own (`cdk-blocks/tsconfig.json`), the runners
  * point `tsx` at it through `TSX_TSCONFIG_PATH` (see {@link tsxTsconfigEnv}).
  */
 
@@ -90,7 +90,7 @@ export const TSX_TSCONFIG_ENV = 'TSX_TSCONFIG_PATH';
 
 /**
  * The environment that points the runners' `tsx` at the backend's own TypeScript
- * project, `aws-blocks/tsconfig.json`, when the app has one: otherwise `tsx`
+ * project, `cdk-blocks/tsconfig.json`, when the app has one: otherwise `tsx`
  * reads the root `tsconfig.json`, which in a Vite template only lists project
  * references, so a backend file would run without its `jsx` or `paths`. The
  * deploy bundling (esbuild) uses the nearest `tsconfig.json`, the same file.
@@ -98,7 +98,7 @@ export const TSX_TSCONFIG_ENV = 'TSX_TSCONFIG_PATH';
  */
 export function tsxTsconfigEnv(root: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	if (env[TSX_TSCONFIG_ENV]) return {};
-	const backend = join(root, 'aws-blocks', 'tsconfig.json');
+	const backend = join(root, 'cdk-blocks', 'tsconfig.json');
 	return existsSync(backend) ? { [TSX_TSCONFIG_ENV]: backend } : {};
 }
 
@@ -109,7 +109,7 @@ export function runnerPath(name: RunnerName): string {
 	return fileURLToPath(new URL(`./${name}.js`, import.meta.url));
 }
 
-/** The absolute path of a `tsx` entry: the app's own, else the one `@aws-blocks/blocks` depends on. */
+/** The absolute path of a `tsx` entry: the app's own, else the one `aws-cdk-blocks` depends on. */
 function resolveTsx(root: string, entry: 'tsx' | 'tsx/cli'): string {
 	for (const from of [join(root, 'package.json'), fileURLToPath(import.meta.url)]) {
 		try {
@@ -121,7 +121,7 @@ function resolveTsx(root: string, entry: 'tsx' | 'tsx/cli'): string {
 	throw new CliError('cannot find tsx, which runs the app TypeScript.', { hint: 'npm install -D tsx' });
 }
 
-/** The `tsx` CLI entry: the app's own, else the one `@aws-blocks/blocks` depends on. */
+/** The `tsx` CLI entry: the app's own, else the one `aws-cdk-blocks` depends on. */
 export function resolveTsxCli(root: string): string {
 	return resolveTsx(root, 'tsx/cli');
 }

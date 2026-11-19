@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-auth': patch
-'@aws-blocks/blocks': patch
+'@aws-cdk-blocks/bb-auth': patch
+'aws-cdk-blocks': patch
 ---
 
 Under `npm run dev`, confirming a sign-up verifies only the contact the confirmation code was sent to, as Amazon Cognito does: the phone number when the pool auto-verifies phone numbers and the user gave one, otherwise the email address. (`AuthCognito`'s mock marked both the email and the phone number verified.) The default pool (`signInWith: ['username', 'email']`) auto-verifies email only, so a user who signs up with an email and a phone number has an unverified phone number, locally and on AWS.

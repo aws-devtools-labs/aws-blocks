@@ -16,7 +16,7 @@
 import { test, describe, mock } from 'node:test';
 import assert from 'node:assert';
 import { SSMClient } from '@aws-sdk/client-ssm';
-import { Scope, isBlocksError } from '@aws-blocks/core';
+import { Scope, isBlocksError } from '@aws-cdk-blocks/core';
 import { AppSetting as MockAppSetting, AppSettingErrors } from './index.mock.js';
 import { AppSetting as AwsAppSetting } from './index.aws.js';
 import type { AppSettingOptions } from './types.js';

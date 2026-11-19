@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/bb-auth": minor
-"@aws-blocks/auth-common": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-auth": minor
+"@aws-cdk-blocks/auth-common": minor
+"aws-cdk-blocks": minor
 ---
 
 feat(bb-auth): show local social and SAML sign-in as unavailable

@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/blocks': patch
-'@aws-blocks/bb-auth': patch
+'aws-cdk-blocks': patch
+'@aws-cdk-blocks/bb-auth': patch
 ---
 
 `getSdkIdentifiers(auth)` for an `Auth` block is typed with optional fields (`userPoolId`, `clientId`, `region`, `hostedUiDomain`, `hostedUiClientId`), matching what `Auth` registers. An `Auth` with `store: 'builtin'` has no user pool and registers none of them, so code that reads `userPoolId` must check that it is defined.

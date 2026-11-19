@@ -3,10 +3,10 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isBlocksError } from '@aws-blocks/blocks/client';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning, totpCodeFor } from '@aws-blocks/blocks/utils';
-import type { AuthState } from '@aws-blocks/blocks';
-import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
+import { isBlocksError } from 'aws-cdk-blocks/client';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning, totpCodeFor } from 'aws-cdk-blocks/utils';
+import type { AuthState } from 'aws-cdk-blocks';
+import type { api as apiType, authApi as authApiType, hello as helloType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -14,13 +14,13 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
-let app: typeof import('aws-blocks');
+let app: typeof import('cdk-blocks');
 let api: typeof apiType;
 let hello: typeof helloType;
 let authApi: typeof authApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
-const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
 // API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
@@ -78,9 +78,9 @@ test.before(async () => {
   process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
-  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
   // stale client that lacks namespaces exported since the last generation.
-  app = await import('aws-blocks');
+  app = await import('cdk-blocks');
   api = app.api;
   hello = app.hello;
   authApi = app.authApi;

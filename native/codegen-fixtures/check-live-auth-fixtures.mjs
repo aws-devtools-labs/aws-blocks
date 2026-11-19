@@ -22,7 +22,7 @@
  *   node native/codegen-fixtures/check-live-auth-fixtures.mjs --generate
  *       regenerate the spec (`npm run spec` in test-apps/native-bindings), then check
  *   node native/codegen-fixtures/check-live-auth-fixtures.mjs [path/to/blocks.spec.json]
- *       check an already-generated spec (default: test-apps/native-bindings/aws-blocks/blocks.spec.json)
+ *       check an already-generated spec (default: test-apps/native-bindings/cdk-blocks/blocks.spec.json)
  *   node native/codegen-fixtures/check-live-auth-fixtures.mjs --write [...]
  *       rewrite the fixtures' spec.json from the live spec; then run
  *       native/codegen-fixtures/regenerate-all.sh and review the golden-file diff
@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 const FIXTURES_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(FIXTURES_DIR, '..', '..');
 const BACKEND_DIR = join(REPO_ROOT, 'test-apps', 'native-bindings');
-const DEFAULT_SPEC = join(BACKEND_DIR, 'aws-blocks', 'blocks.spec.json');
+const DEFAULT_SPEC = join(BACKEND_DIR, 'cdk-blocks', 'blocks.spec.json');
 
 /**
  * Each fixture: the method names it carries → the live method it must equal.

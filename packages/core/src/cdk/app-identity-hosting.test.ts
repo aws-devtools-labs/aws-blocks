@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { config, secret } from '@aws-blocks/hosting';
+import { config, secret } from '@aws-cdk-blocks/hosting';
 import * as cdk from 'aws-cdk-lib';
 import { Hosting } from '../hosting.js';
 import { stubComputeFactory } from './__fixtures__/stub-lambda-compute.js';

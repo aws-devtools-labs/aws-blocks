@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as realCore from '@aws-blocks/core/scripts';
+import * as realCore from '@aws-cdk-blocks/core/scripts';
 import { type ChildResult, type CliDeps, type CoreScripts, PromptInterrupted, type SpawnSpec } from './context.js';
 import { main } from './main.js';
 import { DEV_FAILURE_FILE_ENV, DEV_STATE } from './runners/launch.js';
@@ -106,9 +106,9 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 export function fixtureApp(pkg: Record<string, unknown> = { dependencies: { vite: '*' } }): string {
 	const root = mkdtempSync(join(tmpdir(), 'blocks-cli-'));
 	writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', type: 'module', ...pkg }));
-	mkdirSync(join(root, 'aws-blocks'));
-	writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
-	writeFileSync(join(root, 'aws-blocks', 'index.cdk.ts'), 'export {};\n');
+	mkdirSync(join(root, 'cdk-blocks'));
+	writeFileSync(join(root, 'cdk-blocks', 'index.ts'), 'export {};\n');
+	writeFileSync(join(root, 'cdk-blocks', 'index.cdk.ts'), 'export {};\n');
 	mkdirSync(join(root, '.blocks'));
 	writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'demo' }));
 	return root;

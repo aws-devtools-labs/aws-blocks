@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = join(__dirname, '..');
 const CDK_OUT = join(APP_ROOT, 'cdk.out');
 
-function synth(appFile = 'aws-blocks/pipeline.cdk.ts') {
+function synth(appFile = 'cdk-blocks/pipeline.cdk.ts') {
   rmSync(CDK_OUT, { recursive: true, force: true });
   execSync(
     `npx cdk synth --app "npx tsx -C cdk ${appFile}" --output cdk.out --quiet`,
@@ -148,7 +148,7 @@ describe('Pipeline synth with default appFile', () => {
   });
 
   test('synth succeeds with default appFile (no explicit appFile or stageFactory)', () => {
-    assert.doesNotThrow(() => synth('aws-blocks/pipeline-default.cdk.ts'));
+    assert.doesNotThrow(() => synth('cdk-blocks/pipeline-default.cdk.ts'));
   });
 
   test('default appFile produces pipeline stack with CodePipeline resource', () => {

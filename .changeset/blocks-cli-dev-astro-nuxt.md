@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/blocks": minor
-"@aws-blocks/create-blocks-app": patch
+"aws-cdk-blocks": minor
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 feat(blocks): `npm run dev` starts the Nuxt and Astro dev servers

@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/blocks": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(blocks): `npm run dev:stop` prints a still-bound port on stderr and names the process that holds a port

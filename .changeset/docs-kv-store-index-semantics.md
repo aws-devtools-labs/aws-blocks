@@ -1,5 +1,5 @@
 ---
-'@aws-blocks/bb-kv-store': patch
+'@aws-cdk-blocks/bb-kv-store': patch
 ---
 
 docs: say what a KVStore index returns and how a `null` indexed field behaves

@@ -55,6 +55,50 @@ export const LEGACY_PACKAGE_NAME = '@aws-blocks/bb-auth-cognito';
 /** Repo-relative directory of {@link LEGACY_PACKAGE_NAME} in the base revision. */
 export const LEGACY_PACKAGE_DIR = 'packages/bb-auth-cognito';
 
+/** What a checkout of this repo calls its own packages. */
+export interface BlocksNames {
+	/** The umbrella's package name (`aws-cdk-blocks`, or `@aws-blocks/blocks` before the rename). */
+	umbrella: string;
+	/** The scope the sibling packages publish under, with its trailing slash. */
+	scope: string;
+}
+
+/** What the current checkout publishes; the BEFORE tree's names are read from that tree. */
+export const CURRENT_BLOCKS_NAMES: BlocksNames = { umbrella: 'aws-cdk-blocks', scope: '@aws-cdk-blocks/' };
+
+/**
+ * The names a checkout publishes, from its umbrella's package name alone (read
+ * from that tree's `packages/blocks/package.json`). A scoped umbrella keeps its
+ * own scope (`@aws-blocks/blocks` → `@aws-blocks/`); an unscoped one scopes its
+ * siblings under `@<name>/` (`aws-cdk-blocks` → `@aws-cdk-blocks/`).
+ */
+export function blocksNamesFromUmbrella(umbrella: string): BlocksNames {
+	const scoped = umbrella.match(/^(@[^/]+)\//);
+	return { umbrella, scope: scoped ? `${scoped[1]}/` : `@${umbrella}/` };
+}
+
+/**
+ * Rewrite every import specifier of this repo's own packages in `source` to the
+ * names `names` describes.
+ *
+ * The harness materializes one set of app files into BOTH checkouts, and the
+ * two call the same packages different things: the base revision predates the
+ * rename, so there `aws-cdk-blocks` does not resolve and `@aws-cdk-blocks/core`
+ * does not exist. Retargeting at write time keeps one copy of each fixture
+ * instead of a per-tree duplicate, and keeps working when the names change
+ * again.
+ */
+export function retargetBlocksImports(source: string, names: BlocksNames): string {
+	const { umbrella, scope } = CURRENT_BLOCKS_NAMES;
+	return source
+		.replaceAll(`'${umbrella}'`, `'${names.umbrella}'`)
+		.replaceAll(`"${umbrella}"`, `"${names.umbrella}"`)
+		.replaceAll(`'${umbrella}/`, `'${names.umbrella}/`)
+		.replaceAll(`"${umbrella}/`, `"${names.umbrella}/`)
+		.replaceAll(`'${scope}`, `'${names.scope}`)
+		.replaceAll(`"${scope}`, `"${names.scope}`);
+}
+
 /**
  * The resource type of `Auth`'s deploy-time immutability guard. `Auth`
  * synthesizes one whenever it owns a user pool; `AuthCognito` never did. Its
@@ -192,7 +236,7 @@ function defaultSuffix(env: Readonly<Record<string, string | undefined>>, now: (
 	return `upgrade-${now().toString(36)}`;
 }
 
-/** The CloudFormation stack name for a suffix. Must match `app/aws-blocks/index.cdk.ts`. */
+/** The CloudFormation stack name for a suffix. Must match `app/cdk-blocks/index.cdk.ts`. */
 export function stackNameFor(suffix: string): string {
 	return `${STACK_NAME_PREFIX}${suffix}`;
 }

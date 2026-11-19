@@ -34,7 +34,7 @@
  * response headers and error pages are applied by the asset proxy with the
  * CloudFront door's semantics; responses routed straight to the server, the
  * image function or the backend don't pass through it, which synth reports
- * (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  *
  * Trade-offs: no global edge cache, no per-route response headers on
  * server/API responses (synth names them), no skew protection, a ~10 MB
