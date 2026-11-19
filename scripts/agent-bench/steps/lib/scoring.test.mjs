@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for the bench scoring single-source-of-truth (scoring.mjs): the composite formula,
 // verdict tiers, cell classification, and the headline-mean inclusion rule. Run under bare `node --test`.
 

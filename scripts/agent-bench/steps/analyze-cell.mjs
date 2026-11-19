@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Per-cell analysis: runs INSIDE each matrix cell right after the judge, colocated with that cell's
 // fresh trace/metrics. Reads this cell's result.json + trace.json + metrics.json, asks the judge model
 // (Opus 4.8) for a concise analysis, and writes it back as `analysis` + `analysis_issues[]`

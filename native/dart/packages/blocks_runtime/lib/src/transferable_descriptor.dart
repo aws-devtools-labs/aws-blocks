@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'transferable_exception.dart';
 
 /// Throws a [TransferableException] unless [json] is an object whose `__blocks` is a

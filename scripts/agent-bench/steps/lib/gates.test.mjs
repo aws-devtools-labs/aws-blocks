@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for the merge gate (gates.mjs): the three opt-in gates (floor / regression / harness),
 // each parsed from env, plus the skip/disable branches. Run under bare `node --test`.
 

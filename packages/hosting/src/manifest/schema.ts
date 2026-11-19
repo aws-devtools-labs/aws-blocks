@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { z } from 'zod';
 import { BUILD_ID_PATTERN } from '../defaults.js';
 

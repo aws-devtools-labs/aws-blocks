@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Shared Bedrock invoke-layer retry primitives for the bench steps (pure logic). Both the builder
 // (2-agent-run.ts) and judge (4-judge.ts) invoke() against Bedrock and must survive the account TPM
 // throttle (surfaced as ModelThrottledError or a bare ModelError "Too many tokens"), which is

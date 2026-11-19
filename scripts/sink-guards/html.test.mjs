@@ -48,10 +48,10 @@ const PEER_COLOR =
 const NATIVE_BINDINGS = 'The file is being reworked by open PR #1259, which owns it.';
 
 const ALLOWLIST = [
-	{ at: 'scripts/agent-bench/steps/analyze.mjs:127', reason: BENCH_SUMMARY },
-	{ at: 'scripts/agent-bench/steps/analyze.mjs:135', reason: BENCH_SUMMARY },
+	{ at: 'scripts/agent-bench/steps/analyze.mjs:130', reason: BENCH_SUMMARY },
+	{ at: 'scripts/agent-bench/steps/analyze.mjs:138', reason: BENCH_SUMMARY },
 	{
-		at: 'scripts/build-tech-design-pdf.mjs:92',
+		at: 'scripts/build-tech-design-pdf.mjs:94',
 		reason: 'Base64 of a PNG this script rendered, after a constant data:image/png scheme; the base64 alphabet holds no HTML metacharacters.',
 	},
 	{
@@ -63,12 +63,12 @@ const ALLOWLIST = [
 		reason:
 			'Loopback dashboard URL this process built itself: `http://127.0.0.1:<port>` from the server it just started, plus a hex session token from randomBytes. No external input reaches it, and it is escaped for &, " and < before entering the attribute.',
 	},
-	...[41, 43, 45, 50].map((l) => ({ at: `native/kotlin/example/typescript/src/index.ts:${l}`, reason: TODO_ID })),
-	...[41, 43, 45, 50].map((l) => ({ at: `native/swift/Demo/typescript-demo/src/index.ts:${l}`, reason: TODO_ID })),
+	...[44, 46, 48, 53].map((l) => ({ at: `native/kotlin/example/typescript/src/index.ts:${l}`, reason: TODO_ID })),
+	...[44, 46, 48, 53].map((l) => ({ at: `native/swift/Demo/typescript-demo/src/index.ts:${l}`, reason: TODO_ID })),
 	...[66, 68, 70, 75].map((l) => ({ at: `packages/create-blocks-app/templates/demo/src/index.ts:${l}`, reason: TODO_ID })),
 	...[66, 68, 70, 75].map((l) => ({ at: `test-apps/native-bindings/src/index.ts:${l}`, reason: `${TODO_ID} ${NATIVE_BINDINGS}` })),
-	{ at: 'native/kotlin/example/typescript/src/index.ts:322', reason: PEER_COLOR },
-	{ at: 'native/swift/Demo/typescript-demo/src/index.ts:349', reason: PEER_COLOR },
+	{ at: 'native/kotlin/example/typescript/src/index.ts:325', reason: PEER_COLOR },
+	{ at: 'native/swift/Demo/typescript-demo/src/index.ts:352', reason: PEER_COLOR },
 	{ at: 'test-apps/comprehensive/src/index.ts:229', reason: PEER_COLOR },
 	{
 		at: 'test-apps/native-bindings/src/index.ts:170',

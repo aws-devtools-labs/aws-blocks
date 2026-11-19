@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// `extension type` must precede `extension`: alternation is first-match, so
 /// reversing them captures `type` as the declaration's name.
 final _typeDeclaration = RegExp(

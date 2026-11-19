@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * API Gateway REST API front-door construct — a regional, HTTPS-by-default,
  * no-CloudFront door. The REST sibling of {@link ApiGatewayConstruct} (HTTP API

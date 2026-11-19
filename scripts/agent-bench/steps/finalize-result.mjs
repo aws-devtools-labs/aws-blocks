@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Run as the last step of every cell with `if: always()`. Derives the cell's
 // overall `status` from each step's GitHub outcome and stamps it onto
 // result.json so the summary table can show a precise failed_at — then stamps

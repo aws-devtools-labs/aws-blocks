@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Shared route helpers for the two API Gateway front-door flavors
  * ({@link ApiGatewayConstruct} HTTP API v2 and {@link ApiGatewayRestConstruct}

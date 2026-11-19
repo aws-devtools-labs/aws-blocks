@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Small installed-Claude adapter: Bedrock-only auth and resumed-session accounting."""
 import json
 import os

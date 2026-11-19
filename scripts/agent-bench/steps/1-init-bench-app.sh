@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Step 1: build packages, pack to local registry, scaffold the bench-app, and
 # seed the telemetry canary. Does NOT start a dev server — the verifier (step 3)
 # owns launching + port discovery, so the agent's edit phase (step 2) runs with

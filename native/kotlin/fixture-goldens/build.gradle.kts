@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Compiles every codegen fixture's Kotlin golden against the in-repo runtime, and runs the
 // round-trip tests of the fixtures that have them.
 //

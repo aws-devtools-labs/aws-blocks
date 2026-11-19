@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Test for compile-fixture-goldens.sh. Run from anywhere. macOS only (the
 # script compiles BlocksRuntime with `xcrun swiftc`); CI runs it in the macOS
 # `fixture-goldens` job.

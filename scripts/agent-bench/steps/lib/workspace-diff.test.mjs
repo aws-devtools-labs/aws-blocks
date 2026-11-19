@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Integration + unit tests for the LOC/files workspace-diff helper (workspace-diff.mjs). The
 // begin/finish tests exercise REAL git against a REAL temp workspace (no mocks): scaffold → snapshot →
 // mutate → diff. parseChurn is tested purely on captured git output.

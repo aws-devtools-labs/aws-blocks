@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';
 
 // Lazy import: the handler loads its injected configuration before the backend

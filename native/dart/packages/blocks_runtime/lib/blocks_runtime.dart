@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Blocks Runtime — JSON-RPC 2.0 client, WebSocket realtime, and transferables.
 library;
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Wrap the system chromium so the agent's own ad-hoc `/usr/bin/chromium --headless` CDP launches
 # start cleanly in this runner. Without the flags below chromium aborts at startup on its crashpad
 # handler (chrome_crashpad_handler: --database is required -> FATAL crashpad_linux.cc Check failed),

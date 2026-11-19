@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for lib/secrets.mjs: the env policy for every agent-controlled process and the
 // redaction applied to everything published or sent to a model. Run under bare `node --test`. Every
 // credential-shaped fake is assembled at runtime so no literal here looks like a real key to a

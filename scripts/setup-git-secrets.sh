@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # This script registers AWS secret patterns with git-secrets when available.
 # It runs as part of the repository setup process to ensure developers have
 # proper secret detection configured.

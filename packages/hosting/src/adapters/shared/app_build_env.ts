@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * A `cdk` export condition in a `NODE_OPTIONS` value, with the whitespace
  * after it. Matches `--conditions=cdk`, `--conditions cdk` and `-C cdk`, and

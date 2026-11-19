@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'oidc_exception.dart';
 
 /// Interface for launching OAuth authorize URLs in a browser.

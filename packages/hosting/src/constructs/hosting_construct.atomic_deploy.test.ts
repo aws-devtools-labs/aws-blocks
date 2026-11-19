@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';

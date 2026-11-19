@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { platform } from 'node:os';
 
 import { isCI as ciInfoIsCI } from 'ci-info';

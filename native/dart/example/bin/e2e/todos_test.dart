@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'harness.dart';
 
 /// Todos E2E — the native-bindings KVStore block (with a schema and a key), exposed as a

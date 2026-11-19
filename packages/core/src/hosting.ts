@@ -223,6 +223,9 @@ export interface BlocksStackApi {
  *   • Runs the build command during CDK synth (optional)
  *   • Auto-detects the framework (Next.js / SPA / static)
  *   • Deploys `.cdk-blocks-sandbox/config.json` for client-side config loading
+ *     (public in every stage, production included: it holds only `apiUrl`,
+ *     the build id and `backendConfig`; see "Runtime config" in the
+ *     `@aws-blocks/core` README)
  *   • Injects `BLOCKS_API_URL` + `BLOCKS_CONFIG` env vars into compute functions
  *   • When `api` is provided, adds CloudFront behaviors to proxy API traffic
  *     through the same domain (single-origin architecture)
@@ -2306,6 +2309,11 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
  * is stamped under `__blocksBuildId` so a post-deploy liveness poll can tell
  * this deploy's config from a previously-served one during the CloudFront
  * cutover (see `scripts/wait-live.ts`); the rest of the body is deploy-invariant.
+ *
+ * Every visitor can read this body at `/.cdk-blocks-sandbox/config.json`, in every
+ * stage. Keep it to values the browser receives anyway: never add the account,
+ * the stack name, an ARN, or any other deploy-time value the page does not
+ * already see in its own requests.
  */
 export function buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
   // `frontDoor: 'none'` (S3 website) cannot proxy the API same-origin, so the

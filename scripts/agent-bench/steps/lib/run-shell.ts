@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /** Shared shell Sandbox + backgrounded-process-safe runner for the builder and judge steps. */
 import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';

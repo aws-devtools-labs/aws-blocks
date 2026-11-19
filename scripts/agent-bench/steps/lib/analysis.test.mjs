@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for the PURE analysis helpers (analysis.mjs): trace trimming caps + prompt building for
 // the per-cell and roll-up prompts. Run under bare `node --test`. bedrockConverse (I/O) is not exercised.
 

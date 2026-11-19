@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import * as cdk from 'aws-cdk-lib';
 import type { Construct, IConstruct } from 'constructs';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';

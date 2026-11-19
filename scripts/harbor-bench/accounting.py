@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Claude 2.1.296 result modelUsage is session-cumulative; streams are per invocation.
 
 Per-call input usage in a stream's assistant events is exact; per-call output_tokens there is a

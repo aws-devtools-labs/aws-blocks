@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:http/http.dart' as http;
 
 /// Whether a `BlocksClient` is closed, shared with the `OidcClient`s

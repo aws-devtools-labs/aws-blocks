@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'browser_launcher.dart';
 import 'oidc_auth_state.dart';
 import 'oidc_client.dart';

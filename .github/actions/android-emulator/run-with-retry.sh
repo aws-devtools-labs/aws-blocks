@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Runs an E2E script against a booted emulator, and retries it exactly once when
 # the first failure looks like the device fell out from under the run rather than
 # a test disagreeing with the code.
