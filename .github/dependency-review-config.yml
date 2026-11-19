@@ -41,11 +41,17 @@ allow_licenses:
 # build is verifiably BSD-3-Clause:
 # https://pub.dev/packages/build/license
 #
+# dart_style and pub_semver are verifiably BSD-3-Clause:
+# https://pub.dev/packages/dart_style/license
+# https://pub.dev/packages/pub_semver/license
+#
 # Remove once the upstream parser normalizes license casing:
 # https://github.com/actions/dependency-review-action
 allow_dependencies_licenses:
   - "pkg:pub/flutter_secure_storage"
   - "pkg:pub/build"
+  - "pkg:pub/dart_style"
+  - "pkg:pub/pub_semver"
 
   # sharp's prebuilt libvips binaries (LGPL-3.0-or-later). They reach the
   # lockfile only through the hosting test apps (next in test-apps/hosting-ssr,
