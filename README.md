@@ -42,7 +42,7 @@ AWS CDK Blocks uses Node.js conditional exports to load different code for each 
 
 - **Local development:** Your app runs on your machine. Each Block runs its local implementation and keeps its data in memory or in local files.
 - **CDK synthesis:** Each Block produces CDK constructs. The AWS CDK synthesizes an AWS CloudFormation template from them.
-- **AWS runtime:** Your backend runs on AWS, on AWS Lambda by default. Each Block calls AWS services through the AWS SDK.
+- **AWS runtime:** Your app runs on AWS. Each Block calls AWS services through the AWS SDK.
 
 For example, the line `new KVStore(scope, 'todos')` is a local store in development. At deployment, it becomes an Amazon DynamoDB table. In production, it makes SDK calls to that table. You do not change the code.
 
