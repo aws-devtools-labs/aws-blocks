@@ -1,4 +1,4 @@
-# cdk-blocks-kotlin
+# aws-cdk-blocks-kotlin
 
 ## 1.0.0
 

@@ -1,5 +1,5 @@
 {
-  "name": "cdk-blocks-kotlin",
+  "name": "aws-cdk-blocks-kotlin",
   "version": "1.0.0",
   "private": true,
   "workspaces": [
