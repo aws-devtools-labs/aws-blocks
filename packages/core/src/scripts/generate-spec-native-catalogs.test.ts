@@ -17,6 +17,9 @@ import {
 	type NativeDeclarationSource,
 } from './native-catalogs.js';
 
+// writeSpec sends a usage event; these tests must not.
+process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const builtApiUrl = pathToFileURL(join(__dirname, '..', 'api.js')).href;
 

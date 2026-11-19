@@ -97,7 +97,7 @@ export function attach(httpServer: Server) {
 		}
 
 		const { fullId, path, token, versionId } = parsed;
-		const dataDir = join(process.cwd(), '.bb-data', fullId);
+		const dataDir = join(process.cwd(), '.cdk-blocks/local/data', fullId);
 
 		try {
 			// User keys live under the content root; validate against it so a

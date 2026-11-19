@@ -33,9 +33,10 @@ const TOTP = { mfa: { mode: 'optional', types: ['TOTP'], totpIssuer: 'Acme' } } 
 
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function apiFor<O extends AuthOptions>(auth: Auth<O>, ctx: BlocksContext): AuthStateApi {
 	return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx);

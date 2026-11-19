@@ -169,7 +169,7 @@ These are enforced at CDK synth time and in local development (the mock rejects 
 
 ## Local Development
 
-Mock data persists to disk in the shared `.bb-data/settings.json`, keyed by the setting's `fullId` (the file `Secret` uses too), across dev server restarts. Wipe with `rm -rf .bb-data`. Secrets generate a random value locally (no KMS encryption in mock mode).
+Mock data persists to disk in the shared `.cdk-blocks/local/data/settings.json`, keyed by the setting's `fullId` (the file `Secret` uses too), across dev server restarts. Wipe with `rm -rf .cdk-blocks/local/data .bb-data`. Secrets generate a random value locally (no KMS encryption in mock mode).
 
 
 

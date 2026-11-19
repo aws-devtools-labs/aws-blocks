@@ -103,7 +103,7 @@ async function preflight(request: NextRequest): Promise<Preflight> {
 	// inherit "unlocked" from a browser session somebody left open.
 	//
 	// Cloud only. Local writes are NOT unlock-gated, and the asymmetry is
-	// deliberate (DESIGN.md D7): `.bb-data` is dev fixture data inside the
+	// deliberate (DESIGN.md D7): `.cdk-blocks/local/data` is dev fixture data inside the
 	// user's own git tree, still token-gated and still refused while the dev
 	// server runs, so demanding a production-grade unlock for it would be
 	// friction without a matching blast radius.

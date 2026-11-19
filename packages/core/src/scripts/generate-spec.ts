@@ -40,6 +40,7 @@ import {
 import { validateNativeCatalogs } from './validate-native-catalogs.js';
 import { type SpecValidationError, validateSpec } from './validate-spec.js';
 import { deployedConfigFile } from './deployed-config.js';
+import { trackCommand } from '../telemetry/trackCommand.js';
 
 // ── OpenRPC types (subset) ──────────────────────────────────────────────────
 
@@ -1135,6 +1136,22 @@ export function specConfigFile(stage: string | undefined): string {
  * declarations throw `NativeCatalogError` before any write.
  */
 export async function writeSpec(
+	foundationPath: string,
+	outputPath: string,
+	loader?: FoundationLoader,
+	options?: SpecGenerationOptions,
+): Promise<void> {
+	// One `generate:spec` event per run, from every entry point: core's
+	// `blocks-generate-spec` bin, the CLI's spec runner, and vendored scripts.
+	// The consent lookup reads cdk.json from `process.cwd()` (the default), as
+	// runSecretCli and runConfigCli do: the npm script and the CLI's runner both
+	// run in the project root, while the backend path need not be
+	// `<root>/<dir>/index.ts` (a bare `backend.ts`, or `src/api/cdk-blocks/index.ts`),
+	// so the project root cannot be derived from it.
+	return trackCommand('generate:spec', () => writeSpecUntracked(foundationPath, outputPath, loader, options));
+}
+
+async function writeSpecUntracked(
 	foundationPath: string,
 	outputPath: string,
 	loader?: FoundationLoader,

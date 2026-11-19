@@ -45,7 +45,7 @@ export interface LocalDevServerStatus {
 	portSource: 'server-script' | 'default' | 'indeterminate';
 	/** API namespaces the running server reported, `[]` when unknown. */
 	namespaces: string[];
-	/** `.bb-data` exists — local data has been generated at least once. */
+	/** `.cdk-blocks/local/data` exists — local data has been generated at least once. */
 	bbDataPresent: boolean;
 }
 
@@ -155,7 +155,12 @@ export function stackNameCandidates(projectRoot: string): string[] {
 
 /** Deployed stack id, else the package name. Never throws. */
 function readStackId(projectRoot: string): string | undefined {
+	// The pre-rename file is read before the package name, as core's `getStackId`
+	// does. A scaffolded stackId carries a random suffix, so falling through to the
+	// package name makes the dashboard look up the wrong stack and report a deployed
+	// app as not deployed.
 	return (
+		readJsonString(join(projectRoot, '.cdk-blocks', 'config.json'), 'stackId') ??
 		readJsonString(join(projectRoot, '.blocks', 'config.json'), 'stackId') ??
 		readJsonString(join(projectRoot, 'package.json'), 'name')
 	);
@@ -204,7 +209,7 @@ export async function detectLocalDevServer(
 	const { port, source } = resolveLocalPort(projectRoot);
 	const serverUrl = `http://localhost:${port}`;
 	// Independent of the server: data can be generated and the server stopped.
-	const bbDataPresent = existsSync(join(projectRoot, '.bb-data'));
+	const bbDataPresent = existsSync(join(projectRoot, '.cdk-blocks/local/data'));
 
 	let serverUp = false;
 	let namespaces: string[] = [];

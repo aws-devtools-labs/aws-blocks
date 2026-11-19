@@ -19,16 +19,16 @@ function makeRoot(prefix = 'bb-data-test-'): string {
 	return root;
 }
 
-/** Writes `<root>/.bb-data/<storeName>/<fileName>`. A string `content` is written verbatim. */
+/** Writes `<root>/.cdk-blocks/local/data/<storeName>/<fileName>`; string content is written verbatim. */
 function writeStore(root: string, storeName: string, fileName: string, content: unknown): void {
-	const dir = join(root, '.bb-data', storeName);
+	const dir = join(root, '.cdk-blocks/local/data', storeName);
 	mkdirSync(dir, { recursive: true });
 	const body = typeof content === 'string' ? content : JSON.stringify(content);
 	writeFileSync(join(dir, fileName), body, 'utf-8');
 }
 
 function makeBbData(root: string): string {
-	const dir = join(root, '.bb-data');
+	const dir = join(root, '.cdk-blocks/local/data');
 	mkdirSync(dir, { recursive: true });
 	return dir;
 }
@@ -52,7 +52,7 @@ describe('isSafeBlockFullId', () => {
 });
 
 describe('listLocalStores', () => {
-	it('returns nothing when .bb-data does not exist', () => {
+	it('returns nothing when .cdk-blocks/local/data does not exist', () => {
 		const root = makeRoot();
 		assert.deepStrictEqual(listLocalStores(root, 'blk'), []);
 	});
@@ -65,7 +65,7 @@ describe('listLocalStores', () => {
 
 	it('ignores a directory with no JSON file in it', () => {
 		const root = makeRoot();
-		const dir = join(root, '.bb-data', 'blk');
+		const dir = join(root, '.cdk-blocks/local/data', 'blk');
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, 'notes.txt'), 'hello', 'utf-8');
 		assert.deepStrictEqual(listLocalStores(root, 'blk'), []);
@@ -131,7 +131,7 @@ describe('listLocalStores', () => {
 		assert.deepStrictEqual(listLocalStores(root, 'blk'), listLocalStores(root, 'blk'));
 		assert.strictEqual(listLocalStores(root, 'blk').length, 1);
 
-		for (const hostile of ['blk/../blk', '../.bb-data/blk', 'a/b', 'a\\b', '..', 'blk\0']) {
+		for (const hostile of ['blk/../blk', '../.cdk-blocks/local/data/blk', 'a/b', 'a\\b', '..', 'blk\0']) {
 			assert.deepStrictEqual(listLocalStores(root, hostile), [], `expected rejection: ${hostile}`);
 		}
 	});
@@ -173,7 +173,7 @@ describe('listLocalStores', () => {
 });
 
 describe('readLocalData — unavailable paths', () => {
-	it('reports no store when .bb-data is absent', () => {
+	it('reports no store when .cdk-blocks/local/data is absent', () => {
 		const root = makeRoot();
 		const page = readLocalData({ projectRoot: root, blockFullId: 'blk' });
 		assert.strictEqual(page.source, 'unavailable');
@@ -636,7 +636,7 @@ describe('the display unwrap must not round-trip into the store', () => {
 });
 
 describe('readLocalData — the KVStore data file', () => {
-	/** `.bb-data/<store>/store.json` as the KVStore mock writes it. */
+	/** `.cdk-blocks/local/data/<store>/store.json` as the KVStore mock writes it. */
 	function writeKvStore(root: string, storeName: string, items: unknown[]): void {
 		writeStore(root, storeName, 'store.json', { version: 2, items });
 	}

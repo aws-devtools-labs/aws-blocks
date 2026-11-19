@@ -50,7 +50,7 @@ function pgliteEngine(dataDir: string, kind: ClusterType, schemaName: string): S
  * is Aurora DSQL; `type: 'aurora'` is Aurora PostgreSQL Serverless v2 with the
  * express configuration. Part of the `Database` block, not a block on its own.
  *
- * Locally it is one PGlite under `.bb-data/{fullId}/pglite/`, with DSQL's checks
+ * Locally it is one PGlite under `.cdk-blocks/local/data/{fullId}/pglite/`, with DSQL's checks
  * and limits when the type is `dsql`.
  *
  * @example
@@ -76,7 +76,7 @@ export class DatabaseCluster extends Scope {
 	 * privileges are the block's: a role that owns the tables is not filtered by Row Level Security policies.
 	 *
 	 * The connection string is never written in code. With `name`, the block reads the SSM SecureString
-	 * `/<stackName>-<name>` on AWS and the value under `.bb-data/` locally; `npm run db -- connect --name <name>`
+	 * `/<stackName>-<name>` on AWS and the value under `.cdk-blocks/local/data/` locally; `npm run db -- connect --name <name>`
 	 * checks the database and stores both. With `connectionString`, the block reads your own `AppSetting`
 	 * or `Secret`.
 	 *
@@ -117,7 +117,7 @@ export class DatabaseCluster extends Scope {
  * of the earlier block.
  *
  * On AWS the block reaches the cluster through the RDS Data API, as the earlier block did. Locally the cluster
- * is one PGlite under `.bb-data/{fullId}/pglite/`.
+ * is one PGlite under `.cdk-blocks/local/data/{fullId}/pglite/`.
  *
  * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`. It gets no new features. A
  * new app uses `DatabaseCluster`.
@@ -149,7 +149,7 @@ export class LegacyDatabaseCluster extends Scope {
  * SQL database on PostgreSQL. Omit `cluster` and the block owns an Aurora DSQL
  * cluster; pass a {@link DatabaseCluster} to share one.
  *
- * Locally this is PGlite under `.bb-data/`, with dsql-lint and the DSQL
+ * Locally this is PGlite under `.cdk-blocks/local/data/`, with dsql-lint and the DSQL
  * transaction limits applied when the cluster is `dsql`. Migrations in
  * `./cdk-blocks/migrations/{id}` run on first use. `simulateConflict(db)` from
  * `@aws-cdk-blocks/bb-database/testing` makes the next commit fail with

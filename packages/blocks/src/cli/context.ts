@@ -15,6 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
 import type * as CoreScriptsModule from '@aws-cdk-blocks/core/scripts';
 import { loadCoreScripts } from './core-load.js';
+import { type LoadTelemetry, loadCoreTelemetry } from './telemetry.js';
 import { CliError, UsageError } from './errors.js';
 import { Output, type OutputFormat, type OutputStream } from './output.js';
 import type { Globals, ParsedInvocation } from './parse.js';
@@ -99,6 +100,11 @@ export interface CliDeps {
 	 * `npm run --help` and usage errors do not load core, and tests can replace it.
 	 */
 	core(): Promise<CoreScripts>;
+	/**
+	 * Load `@aws-cdk-blocks/core/track-command`, for the commands the CLI tracks itself
+	 * (see `telemetry.ts`). A seam, so tests never send events.
+	 */
+	telemetry: LoadTelemetry;
 }
 
 export type LogLevel = 'quiet' | 'normal' | 'verbose' | 'debug';
@@ -538,5 +544,6 @@ export function processDeps(): CliDeps {
 		chdir: (dir) => process.chdir(dir),
 		argv: process.argv,
 		core: loadCoreScripts,
+		telemetry: loadCoreTelemetry,
 	};
 }

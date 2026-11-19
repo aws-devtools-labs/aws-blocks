@@ -8,4 +8,4 @@ build-temp
 cdk.out/
 cdk-blocks/client.js
 cdk-blocks/blocks.spec.json
-.bb-data/
+.cdk-blocks/local/data/

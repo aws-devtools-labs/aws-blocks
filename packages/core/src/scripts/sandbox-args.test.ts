@@ -210,7 +210,7 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
   });
 
   function inCleanProject(): void {
-    // No .blocks/config.json, so consent falls back to the enabled default.
+    // No .cdk-blocks/config.json, so consent falls back to the enabled default.
     const tmp = join(tmpdir(), `sandbox-env-test-${Date.now()}`);
     mkdirSync(tmp, { recursive: true });
     process.chdir(tmp);

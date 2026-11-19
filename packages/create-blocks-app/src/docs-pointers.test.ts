@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(packageRoot, '..', '..');
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'cdk.out', '.bb-data', '.cdk-blocks-sandbox']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'cdk.out', '.cdk-blocks', '.cdk-blocks-sandbox']);
 const TEXT = new Set(['.ts', '.tsx', '.js', '.mjs', '.md', '.json', '.html', '']);
 /**
  * The TypeScript apps of the native SDK examples, written like a scaffolded app. The Kotlin app's README is for

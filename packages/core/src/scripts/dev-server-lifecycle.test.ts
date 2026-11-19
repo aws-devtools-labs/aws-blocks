@@ -197,7 +197,8 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
   });
 
   it('refuses a second dev server of the same app on another port, naming the running port', async () => {
-    // Both would open the app's .bb-data: the second PGlite removed the first one's live postmaster.pid (H1).
+    // Both would open the app's .cdk-blocks/local/data: the second PGlite removed the first one's live postmaster.pid
+    // (H1).
     const dir = makeApp();
     const [port, other] = [await freePort(), await freePort()];
     const first = startDev(dir, { port }, { watch: true });

@@ -55,12 +55,12 @@ describe('built-in /cdk-blocks/settings route', () => {
     assert.ok(!res.body.includes(process.cwd()), 'the working directory must not be disclosed');
   });
 
-  it('local dev server opt-in: opens .bb-data/settings.json in the editor', async () => {
+  it('local dev server opt-in: opens .cdk-blocks/local/data/settings.json in the editor', async () => {
     registerBuiltinRoutes({ localDev: true });
     const res = await getSettings();
     assert.strictEqual(res.status, 200);
     assert.strictEqual(opened.length, 1);
-    assert.match(opened[0], /\.bb-data[\\/]settings\.json$/);
+    assert.match(opened[0], /\.cdk-blocks\/local\/data[\\/]settings\.json$/);
   });
 
   it(

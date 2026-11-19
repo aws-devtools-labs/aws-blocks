@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { SettingVersion } from '../contract/v1.js';
 import { awsClientConfig } from './aws-config.js';
@@ -31,7 +31,15 @@ import { decodeSettingValue } from './settings-inventory.js';
 const GET_PARAMETERS_BATCH = 10;
 
 /** Where the mock keeps every setting, keyed by `fullId`. */
-const LOCAL_SETTINGS_FILE = join('.bb-data', 'settings.json');
+const LOCAL_SETTINGS_FILE = join('.cdk-blocks/local/data', 'settings.json');
+
+/**
+ * The pre-consolidation settings file. Read only when the new one is absent:
+ * writing a freshly created file with one edited key would leave the block
+ * runtime's carry-over nothing to do, because it never replaces an entry that
+ * already exists.
+ */
+const LEGACY_LOCAL_SETTINGS_FILE = join('.bb-data', 'settings.json');
 
 /** One parameter as the stage reports it, before any display decision. */
 export interface StoredParameter {
@@ -264,8 +272,18 @@ export function readLocalSettings(projectRoot: string): Map<string, unknown> {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(readFileSync(join(projectRoot, LOCAL_SETTINGS_FILE), 'utf8'));
-	} catch {
-		return values;
+	} catch (error) {
+		// Only an ABSENT new file falls back. One that exists but does not parse reads
+		// as empty, because `writeLocalSetting` writes this map back to the new path:
+		// answering a corrupt file with legacy values would overwrite it with stale
+		// ones. The runtime carry-over treats the new location as authoritative once
+		// present, and this keeps the two in step.
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return values;
+		try {
+			parsed = JSON.parse(readFileSync(join(projectRoot, LEGACY_LOCAL_SETTINGS_FILE), 'utf8'));
+		} catch {
+			return values;
+		}
 	}
 	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return values;
 	for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
@@ -291,5 +309,11 @@ export function writeLocalSetting(projectRoot: string, fullId: string, value: un
 	current.set(fullId, value);
 	const path = join(projectRoot, LOCAL_SETTINGS_FILE);
 	mkdirSync(dirname(path), { recursive: true });
+	// `.cdk-blocks/local/` ignores itself, and `getMockDataDir` writes that marker when a
+	// BLOCK first opens a store. The dashboard can get here first in an upgraded project,
+	// whose gitignore still covers only `.bb-data/`, so write it here too rather than
+	// leaving plaintext settings and secrets stageable by `git add -A`.
+	const localMarker = join(projectRoot, '.cdk-blocks', 'local', '.gitignore');
+	if (!existsSync(localMarker)) writeFileSync(localMarker, '*\n');
 	writeFileSync(path, `${JSON.stringify(Object.fromEntries(current), null, 2)}\n`);
 }

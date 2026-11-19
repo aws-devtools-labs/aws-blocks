@@ -96,12 +96,12 @@ describe('LocalDataProvider settings', () => {
 
 	function makeProject(settingsJson?: Record<string, unknown>): string {
 		tmpDir = join(tmpdir(), `admin-ui-settings-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'shop' }));
-		writeFileSync(join(tmpDir, '.blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
+		writeFileSync(join(tmpDir, '.cdk-blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
 		if (settingsJson) {
-			mkdirSync(join(tmpDir, '.bb-data'), { recursive: true });
-			writeFileSync(join(tmpDir, '.bb-data/settings.json'), JSON.stringify(settingsJson));
+			mkdirSync(join(tmpDir, '.cdk-blocks/local/data'), { recursive: true });
+			writeFileSync(join(tmpDir, '.cdk-blocks/local/data/settings.json'), JSON.stringify(settingsJson));
 		}
 		return tmpDir;
 	}
@@ -320,9 +320,9 @@ describe('LocalDataProvider.writeSetting', () => {
 
 	function makeProject(): string {
 		tmpDir = join(tmpdir(), `admin-ui-settings-write-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'shop' }));
-		writeFileSync(join(tmpDir, '.blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
+		writeFileSync(join(tmpDir, '.cdk-blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
 		return tmpDir;
 	}
 

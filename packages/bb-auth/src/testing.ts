@@ -6,7 +6,7 @@
  * (also re-exported from `aws-cdk-blocks/utils`).
  *
  * **Node only.** `getLastAuthCode` reads the local (mock) user pool's files
- * under `.bb-data/`; `totpCodeFor` computes an authenticator app's code with
+ * under `.cdk-blocks/local/data/`; `totpCodeFor` computes an authenticator app's code with
  * `node:crypto`. Import them from test code, never from a frontend or a backend
  * module.
  *
@@ -22,6 +22,7 @@ import {
 	isRecord,
 	type LocalPoolDir,
 	listLocalPools,
+	listLocalPoolsAcrossRoots,
 	readJson,
 	selectBlocks,
 } from './local-pool-files.js';
@@ -39,7 +40,7 @@ export interface GetLastAuthCodeOptions {
 	purpose?: CodeDeliveryPurpose;
 	/**
 	 * The directory the dev server (or the test that constructs the backend)
-	 * runs in: the one holding `.bb-data/`. Default `process.cwd()`.
+	 * runs in: the one holding `.cdk-blocks/local/data/`. Default `process.cwd()`.
 	 */
 	cwd?: string;
 }
@@ -128,7 +129,7 @@ function describeLastCodes(blocks: readonly LocalPoolDir[]): string {
  *
  * It finds the block's data directory itself, so it does not depend on the
  * scope or block name: it looks at every local `Auth` block under
- * `.bb-data/`, and reads the codes the pool still holds (`state.json`) rather
+ * `.cdk-blocks/local/data/`, and reads the codes the pool still holds (`state.json`) rather
  * than `last-code.json`, which keeps only the block's most recent code. So a
  * user's code stays readable after another user's code was sent, and a code
  * that was used or has expired is not returned.
@@ -154,8 +155,9 @@ function describeLastCodes(blocks: readonly LocalPoolDir[]): string {
  * ```
  */
 export async function getLastAuthCode(username: string, options: GetLastAuthCodeOptions = {}): Promise<string> {
-	const dataDir = dataDirOf(options.cwd ?? process.cwd());
-	const all = listLocalPools(dataDir);
+	const cwd = options.cwd ?? process.cwd();
+	const dataDir = dataDirOf(cwd);
+	const all = listLocalPoolsAcrossRoots(cwd);
 	if (all.length === 0) {
 		throw new Error(
 			`getLastAuthCode: no local Auth data under ${dataDir}. It reads the codes the local (mock) user pool ` +

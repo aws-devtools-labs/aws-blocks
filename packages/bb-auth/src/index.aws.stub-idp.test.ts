@@ -23,7 +23,13 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, mock, test } from 'node:test';
-import { _resetConfigCache, ApiError, clearRouteRegistry, getRegisteredRoutes, preloadConfig } from '@aws-cdk-blocks/core';
+import {
+	_resetConfigCache,
+	ApiError,
+	clearRouteRegistry,
+	getRegisteredRoutes,
+	preloadConfig,
+} from '@aws-cdk-blocks/core';
 import { S3Client } from '@aws-sdk/client-s3';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import { stubIdpConfigKeys } from './cdk/contract.js';
@@ -49,6 +55,7 @@ beforeEach(() => {
 	// synth process sees what `BlocksStack.create` set): a sandbox by default here.
 	process.env.BLOCKS_DEPLOYMENT_TYPE = 'sandbox';
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 	gw = installFakeGateway();
 	rootId = `stubaws${process.pid}x${++n}`;
@@ -64,6 +71,7 @@ afterEach(() => {
 	_resetConfigCache();
 	gw.uninstall();
 	delete process.env[stubIdpConfigKeys(`${rootId}-auth`).API_URL];
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
 

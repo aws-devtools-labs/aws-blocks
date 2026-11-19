@@ -72,7 +72,7 @@ For `AuthCognito`, "kept" assumes the first `Auth` deploy still has a pool-backe
 - **Delete a table that is left behind when the upgrade is done.** It still holds the session rows, with their refresh tokens, until each row expires. Nothing reads it. If deletion protection is on for the table, turn it off first: `aws dynamodb update-table --table-name <fullId>-sessions --no-deletion-protection-enabled`. Then delete it: `aws dynamodb delete-table --table-name <fullId>-sessions`.
 - **Every user signs in once.** `Auth` does not read the old table. A browser that holds a session cookie from before the upgrade gets the signed-out answer: `getCurrentUser()` returns `null`, `requireAuth()` throws 401 `NotAuthenticatedException`, and the cookie is cleared. It is never an error. Users, passwords, groups and attributes are in the user pool and are not affected. The cookie name does not change. The session secret stays in SSM or moves to Secrets Manager, as the stack's `secretsStore` says ([below](#the-session-secret-moves-to-secrets-manager)).
 
-Local development works the same way. The mock keeps the sessions in `.bb-data/<fullId>-session-store/` and does not read `.bb-data/<fullId>-sessions/`, so you sign in once. You can delete the old directory.
+Local development works the same way. The mock keeps the sessions in `.cdk-blocks/local/data/<fullId>-session-store/` and does not read `.cdk-blocks/local/data/<fullId>-sessions/`, so you sign in once. You can delete the old directory.
 
 ## `AuthCognito`
 
@@ -137,7 +137,7 @@ What changes, and why it matters:
 - **`preferredChallenge`** moves to `users.preferredChallenge`, next to `users.authFlow` (was `authFlowType`). Cognito sends `'EMAIL_OTP'` codes only through Amazon SES, so on a pool the block creates, synth fails for it until the pool has an SES sender: add `email: { fromAddress: '<a verified SES address>' }` ([README](./README.md#sign-up-and-email-delivery)), an in-place update of the pool. ⚠️ **Never keep the pool by wrapping the block's own pool** with `userPool: Auth.fromExisting(…)` instead: with `userPool: Auth.fromExisting(<its own pool id>)` the block no longer owns `pool`, so the pool leaves the template and the deploy **deletes it and every user in it** (`AuthCognito`'s pool was `DESTROY` unless you set `removalPolicy: 'retain'`). On the first `Auth` synth nothing refuses this; synth only warns (see [the checklist](#before-every-deploy-the-checklist)). If you have no verified SES identity yet, remove `preferredChallenge` (or pick another first factor) for the first deploy, so users sign in with their password; add `email` and `preferredChallenge` back in a later deploy. The codemod marks every `'EMAIL_OTP'` with this advice and the warning.
 - **Sign-up:** `signUp()` no longer takes `autoSignIn`. It is `emailPassword.autoSignIn` (default `true`), and applies when the call carries a context, and to the sign-in UI. `AuthCognito`'s `signUp()` defaulted it to `false` (its `createApi()` UI turned it on), so unless your app uses `createApi()` or passes `autoSignIn: true`, the codemod writes `emailPassword: { autoSignIn: false }` and `confirmSignUp()` keeps returning `DONE`. If it does use them, `Auth`'s default stays and the codemod marks each `signUp()` with a context that relied on `false`: `confirmSignUp()` now returns `COMPLETE_AUTO_SIGN_IN` there. `confirmSignIn()` takes the answer as a plain string (`{ code }` → `code`). `signIn()` no longer takes `cognitoSession`.
 - **Errors:** `AuthCognito`'s 29 error names are unchanged, but some flows now answer differently. Sign-up through the sign-in UI no longer reveals an existing account by default (`emailPassword.revealExistingUsers`), and an unrecognised Cognito error now reaches the client as `InternalErrorException` instead of under its raw name. Review every auth error check (the codemod marks each one).
-- **Local data:** the local pool lives in the same `.bb-data/<fullId>/state.json` file, so local users survive.
+- **Local data:** the local pool lives in the same `.cdk-blocks/local/data/<fullId>/state.json` file, so local users survive.
 
 ### The session secret moves to Secrets Manager
 
@@ -416,7 +416,7 @@ What happens on the first deploy:
 aws dynamodb scan --table-name <fullId>-users --output json > authbasic-users.json
 ```
 
-Each item is keyed by username and holds the bcrypt hash, which you can't import into Cognito. Delete the export once you've used it. Locally, the mock's data is under `.bb-data/<fullId>-users/`.
+Each item is keyed by username and holds the bcrypt hash, which you can't import into Cognito. Delete the export once you've used it. Locally, the mock's data is under `.cdk-blocks/local/data/<fullId>-users/`.
 
 Behaviour that changes for your users and your code:
 

@@ -15,4 +15,18 @@
  * @module
  */
 
-export { runTypegenCli } from '@aws-cdk-blocks/hosting/scripts';
+import { runTypegenCli as runHostingTypegenCli } from '@aws-cdk-blocks/hosting/scripts';
+import { trackExitCode } from '../telemetry/trackCommand.js';
+
+/**
+ * Run the typegen CLI and send one `generate:types` event for the run (its
+ * outcome from the exit code). Tracked here, not in the CLI, so an app still
+ * running a vendored `aws-blocks/scripts/typegen.ts` sends it too. With
+ * `--watch` the event is sent when the watcher ends, which is when `deps.signal`
+ * is aborted, so a caller wires Ctrl-C (SIGINT) and SIGTERM
+ * to that signal (as the `cdk-blocks` CLI and the `hosting-typegen` bin do) for
+ * the event to be sent.
+ */
+export function runTypegenCli(argv: string[], deps?: Parameters<typeof runHostingTypegenCli>[1]): Promise<number> {
+	return trackExitCode('generate:types', () => runHostingTypegenCli(argv, deps));
+}

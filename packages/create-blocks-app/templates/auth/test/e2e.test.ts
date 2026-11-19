@@ -28,7 +28,7 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 
 // The sign-in tests below read each emailed code with `getLastAuthCode()`, which
-// reads the local mock pool's files (.bb-data/): against a running sandbox the
+// reads the local mock pool's files (.cdk-blocks/local/data/): against a running sandbox the
 // dev server proxies to the deployed Lambda, where Cognito emails the code
 // and each run would create a real user. The readiness config.json says which
 // one we hit.

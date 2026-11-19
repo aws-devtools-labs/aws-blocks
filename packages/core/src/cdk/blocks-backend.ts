@@ -233,7 +233,7 @@ function checkStackNameAllowsResourceGroups(scope: Construct, stackName: string,
 			"that starts with 'AWS' in any letter case, so the deploy would fail in CloudFormation. " +
 			'AWS Systems Manager refuses the same prefix for the parameters that blocks name after the stack. ' +
 			"Use a stack name that does not start with 'aws'. In an app made by create-blocks-app, change " +
-			'"stackId" in .blocks/config.json, for example with the prefix \'app-\'.',
+			'"stackId" in .cdk-blocks/config.json, for example with the prefix \'app-\'.',
 	);
 }
 

@@ -294,7 +294,7 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
       assert.strictEqual(result.status, 0, result.stderr);
       assert.ok(!existsSync(telemetryFile), 'File must not be written when the CDK user config disables telemetry');
       assert.ok(
-        !existsSync(join(home, '.blocks', 'telemetry', 'installation-id')),
+        !existsSync(join(home, '.cdk-blocks', 'telemetry', 'installation-id')),
         'installation-id must not be written',
       );
     } finally {
@@ -538,7 +538,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
 
     try {
       assert.strictEqual(result.status, 0, result.stderr);
-      assert.ok(existsSync(join(home, '.blocks', 'telemetry', 'installation-id')), 'installation-id must be written');
+      assert.ok(existsSync(join(home, '.cdk-blocks', 'telemetry', 'installation-id')), 'installation-id must be written');
       assert.ok(existsSync(telemetryFile), '--telemetry-file must be written');
       assert.strictEqual(JSON.parse(readFileSync(telemetryFile, 'utf-8')).length, 1);
     } finally {
@@ -558,7 +558,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
     const { trackCommand } = await import(moduleUrl);
     try {
       await trackCommand('create', async () => {
-        const d = join(homedir(), '.blocks');
+        const d = join(homedir(), '.cdk-blocks');
         mkdirSync(d, { recursive: true });
         writeFileSync(join(d, 'config.json'), JSON.stringify({ telemetry: { enabled: false } }));
         throw new Error('USER_COMMAND_FAILED');
@@ -602,7 +602,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
     try {
       assert.strictEqual(result.status, 0, result.stderr);
       assert.ok(
-        !existsSync(join(home, '.blocks', 'telemetry', 'installation-id')),
+        !existsSync(join(home, '.cdk-blocks', 'telemetry', 'installation-id')),
         'installation-id must not be written',
       );
       assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
@@ -626,7 +626,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
 
       try {
         assert.strictEqual(result.status, 0, result.stderr);
-        const idFile = join(home, '.blocks', 'telemetry', 'installation-id');
+        const idFile = join(home, '.cdk-blocks', 'telemetry', 'installation-id');
         assert.ok(!existsSync(idFile), 'installation-id must not be written');
         assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
         assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');

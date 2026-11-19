@@ -13,7 +13,7 @@ describe('LocalDataProvider', () => {
 
 	function makeProject(files: Record<string, string>): string {
 		tmpDir = join(tmpdir(), `admin-ui-provider-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
 		mkdirSync(join(tmpDir, '.cdk-blocks-sandbox'), { recursive: true });
 		for (const [rel, content] of Object.entries(files)) {
 			writeFileSync(join(tmpDir, rel), content);
@@ -25,10 +25,10 @@ describe('LocalDataProvider', () => {
 		if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it('reads project name from package.json and stack name from .blocks/config.json', async () => {
+	it('reads project name from package.json and stack name from .cdk-blocks/config.json', async () => {
 		const root = makeProject({
 			'package.json': JSON.stringify({ name: 'my-blocks-app' }),
-			'.blocks/config.json': JSON.stringify({ stackId: 'my-blocks-app-abc123' }),
+			'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-blocks-app-abc123' }),
 		});
 		const meta = await new LocalDataProvider(root).getProjectMeta();
 		assert.strictEqual(meta.projectName, 'my-blocks-app');
@@ -58,7 +58,7 @@ describe('LocalDataProvider', () => {
 			'{ not json',
 			JSON.stringify({ id: 'd2', stage: 'production', startedAt: '2026-08-02T10:00:00Z', status: 'FAILED' }),
 		];
-		const root = makeProject({ '.blocks/deploy-history.jsonl': `${lines.join('\n')}\n` });
+		const root = makeProject({ '.cdk-blocks/deploy-history.jsonl': `${lines.join('\n')}\n` });
 		const deployments = await new LocalDataProvider(root).listDeployments();
 		assert.deepStrictEqual(
 			deployments.map((d) => d.id),
@@ -79,7 +79,7 @@ describe('LocalDataProvider', () => {
 				status: 'SUCCEEDED',
 			}),
 		];
-		const root = makeProject({ '.blocks/deploy-history.jsonl': lines.join('\n') });
+		const root = makeProject({ '.cdk-blocks/deploy-history.jsonl': lines.join('\n') });
 		const deployments = await new LocalDataProvider(root).listDeployments();
 		// d2 has no terminal record (process died mid-deploy) and stays IN_PROGRESS.
 		assert.deepStrictEqual(
@@ -96,7 +96,7 @@ describe('LocalDataProvider', () => {
 			JSON.stringify({ stage: 'sandbox', startedAt: '2026-08-01T10:00:00Z', status: 'SUCCEEDED' }),
 			JSON.stringify({ id: 'ok', stage: 'sandbox', startedAt: '2026-08-02T10:00:00Z', status: 'SUCCEEDED' }),
 		];
-		const root = makeProject({ '.blocks/deploy-history.jsonl': lines.join('\n') });
+		const root = makeProject({ '.cdk-blocks/deploy-history.jsonl': lines.join('\n') });
 		const deployments = await new LocalDataProvider(root).listDeployments();
 		assert.deepStrictEqual(
 			deployments.map((d) => d.id),
@@ -109,7 +109,7 @@ describe('LocalDataProvider', () => {
 			JSON.stringify({ id: 'd1', stage: 'sandbox', startedAt: '2026-08-01T10:00:00Z', status: 'SUCCEEDED' }),
 			JSON.stringify({ id: 'd2', stage: 'production', startedAt: '2026-08-02T10:00:00Z', status: 'SUCCEEDED' }),
 		];
-		const root = makeProject({ '.blocks/deploy-history.jsonl': lines.join('\n') });
+		const root = makeProject({ '.cdk-blocks/deploy-history.jsonl': lines.join('\n') });
 		const deployments = await new LocalDataProvider(root).listDeployments('production');
 		assert.deepStrictEqual(
 			deployments.map((d) => d.id),
@@ -143,8 +143,8 @@ describe('LocalDataProvider', () => {
 				status: 'SUCCEEDED',
 			});
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': historyLine,
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': historyLine,
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			const provider = new LocalDataProvider(root, async (stackName) => cfnEvents(stackName));
 			const deployments = await provider.listDeployments();
@@ -166,8 +166,8 @@ describe('LocalDataProvider', () => {
 				status: 'SUCCEEDED',
 			});
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': historyLine,
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': historyLine,
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			const provider = new LocalDataProvider(root, async (stackName) => cfnEvents(stackName));
 			const deployments = await provider.listDeployments();
@@ -179,8 +179,8 @@ describe('LocalDataProvider', () => {
 
 		it('silently skips backfill when the event fetch fails', async () => {
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': '',
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': '',
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			const provider = new LocalDataProvider(root, async () => {
 				throw new Error('no credentials');
@@ -212,8 +212,8 @@ describe('LocalDataProvider', () => {
 				},
 			];
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': '',
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': '',
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			const provider = new LocalDataProvider(root, async () => failedEvents);
 			const [episode] = await provider.listDeployments();
@@ -265,7 +265,7 @@ describe('LocalDataProvider', () => {
 			let requested: { stackName?: string; region?: string } = {};
 			const provider = providerWith({
 				files: {
-					'.blocks/deploy-history.jsonl': record,
+					'.cdk-blocks/deploy-history.jsonl': record,
 					'.cdk-blocks-sandbox/outputs.json': JSON.stringify({
 						'recorded-sandbox-stack': {
 							ApiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/',
@@ -288,7 +288,7 @@ describe('LocalDataProvider', () => {
 
 		it('applies enrichment metadata including null retention (never expires)', async () => {
 			const provider = providerWith({
-				files: { '.blocks/config.json': JSON.stringify({ stackId: 'my-app' }) },
+				files: { '.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }) },
 				metadata: async (names) => new Map(names.map((n) => [n, { retentionDays: null, storedBytes: 2048 }])),
 			});
 			const result = await provider.listLogGroups('production');
@@ -298,7 +298,7 @@ describe('LocalDataProvider', () => {
 
 		it('reports unavailable with classification when resource listing fails', async () => {
 			const provider = providerWith({
-				files: { '.blocks/config.json': JSON.stringify({ stackId: 'my-app' }) },
+				files: { '.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }) },
 				resources: async () => {
 					throw new Error('The security token included in the request is expired');
 				},
@@ -337,7 +337,7 @@ describe('LocalDataProvider', () => {
 			}>;
 			metadataFor?: string[];
 		}) {
-			const root = makeProject({ '.blocks/config.json': JSON.stringify({ stackId: 'my-app' }) });
+			const root = makeProject({ '.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }) });
 			return new LocalDataProvider(
 				root,
 				async () => [],
@@ -451,7 +451,7 @@ describe('LocalDataProvider', () => {
 
 	describe('listResources & listEnvironments', () => {
 		const files = {
-			'.blocks/deploy-history.jsonl': JSON.stringify({
+			'.cdk-blocks/deploy-history.jsonl': JSON.stringify({
 				id: 'd1',
 				stage: 'production',
 				startedAt: '2026-08-18T10:00:00Z',
@@ -590,7 +590,7 @@ describe('LocalDataProvider', () => {
 
 	describe('getCost', () => {
 		const files = {
-			'.blocks/deploy-history.jsonl': JSON.stringify({
+			'.cdk-blocks/deploy-history.jsonl': JSON.stringify({
 				id: 'd1',
 				stage: 'sandbox',
 				startedAt: '2026-08-19T10:00:00Z',
@@ -704,7 +704,7 @@ describe('LocalDataProvider', () => {
 		});
 
 		it('returns undefined for unknown ids', async () => {
-			const root = makeProject({ '.blocks/deploy-history.jsonl': failedRecord });
+			const root = makeProject({ '.cdk-blocks/deploy-history.jsonl': failedRecord });
 			assert.strictEqual(await new LocalDataProvider(root).getDeployment('nope'), undefined);
 		});
 
@@ -715,7 +715,7 @@ describe('LocalDataProvider', () => {
 				startedAt: '2026-08-18T10:00:00Z',
 				status: 'SUCCEEDED',
 			});
-			const root = makeProject({ '.blocks/deploy-history.jsonl': line });
+			const root = makeProject({ '.cdk-blocks/deploy-history.jsonl': line });
 			const detail = await new LocalDataProvider(root, async () => {
 				throw new Error('must not be called');
 			}).getDeployment('s1');
@@ -725,8 +725,8 @@ describe('LocalDataProvider', () => {
 
 		it('fetches failure events and picks the root cause for a failed production deploy', async () => {
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': failedRecord,
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': failedRecord,
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			let requestedStack: string | undefined;
 			const provider = new LocalDataProvider(root, async (stackName) => {
@@ -763,8 +763,8 @@ describe('LocalDataProvider', () => {
 				status: 'FAILED',
 			});
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': record,
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': record,
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
 			writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'my-abc123\n');
@@ -779,7 +779,7 @@ describe('LocalDataProvider', () => {
 		});
 
 		it('reports unavailable when the stack name cannot be resolved', async () => {
-			const root = makeProject({ '.blocks/deploy-history.jsonl': failedRecord });
+			const root = makeProject({ '.cdk-blocks/deploy-history.jsonl': failedRecord });
 			const detail = await new LocalDataProvider(root).getDeployment('f1');
 			assert.strictEqual(detail?.eventsSource, 'unavailable');
 			assert.match(detail.eventsError ?? '', /stack name/i);
@@ -787,8 +787,8 @@ describe('LocalDataProvider', () => {
 
 		it('reports unavailable when the event fetch throws (e.g. no credentials)', async () => {
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': failedRecord,
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': failedRecord,
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			const provider = new LocalDataProvider(root, async () => {
 				throw new Error('Could not load credentials');
@@ -801,8 +801,8 @@ describe('LocalDataProvider', () => {
 
 		it('classifies expired-token failures and reports the aws context', async () => {
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': failedRecord,
-				'.blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
+				'.cdk-blocks/deploy-history.jsonl': failedRecord,
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'my-app' }),
 			});
 			const provider = new LocalDataProvider(root, async () => {
 				throw new Error('The security token included in the request is expired');
@@ -824,11 +824,11 @@ describe('LocalDataProvider', () => {
 				// Ignored for region resolution; kept here to prove it is ignored.
 				region: 'ap-southeast-2',
 			});
-			// .blocks/config.json deliberately points at a DIFFERENT stackId —
+			// .cdk-blocks/config.json deliberately points at a DIFFERENT stackId —
 			// the recorded stack name must still win over the derived one.
 			const root = makeProject({
-				'.blocks/deploy-history.jsonl': record,
-				'.blocks/config.json': JSON.stringify({ stackId: 'other-app' }),
+				'.cdk-blocks/deploy-history.jsonl': record,
+				'.cdk-blocks/config.json': JSON.stringify({ stackId: 'other-app' }),
 				'.cdk-blocks-sandbox/outputs.production.json': JSON.stringify({
 					'recorded-stack-prod': {
 						ApiUrl: 'https://abc.execute-api.eu-central-1.amazonaws.com/prod/',
@@ -851,7 +851,7 @@ describe('LocalDataProvider', () => {
 		type Args = ConstructorParameters<typeof LocalDataProvider>;
 
 		const deployed = {
-			'.blocks/deploy-history.jsonl': JSON.stringify({
+			'.cdk-blocks/deploy-history.jsonl': JSON.stringify({
 				id: 'd1',
 				stage: 'production',
 				startedAt: '2026-08-18T10:00:00Z',
@@ -1091,7 +1091,7 @@ describe('LocalDataProvider', () => {
 		type CloudDelete = NonNullable<Args[16]>;
 
 		const deployed = {
-			'.blocks/deploy-history.jsonl': JSON.stringify({
+			'.cdk-blocks/deploy-history.jsonl': JSON.stringify({
 				id: 'd1',
 				stage: 'production',
 				startedAt: '2026-08-18T10:00:00Z',

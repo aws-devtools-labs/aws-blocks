@@ -10,7 +10,7 @@ import { runInTransactionScope, TransactionScope } from '../runtime/tx-scope.js'
 import { installLocalTestHooks } from '../test-support/lifecycle.js';
 import { _closeAllPgliteClusters, type SchemaEngine, sharedPgliteCluster } from './pglite-cluster.js';
 
-const DATA_DIR = join(process.cwd(), '.bb-data', `pglite-cluster-test-${process.pid}`);
+const DATA_DIR = join(process.cwd(), '.cdk-blocks/local/data', `pglite-cluster-test-${process.pid}`);
 let counter = 0;
 const cluster = () => sharedPgliteCluster(join(DATA_DIR, `c${++counter}`, 'pglite'), 'dsql');
 

@@ -87,7 +87,7 @@ const claimsOf = (user: SupabaseUser): Record<string, unknown> => ({ ...user.cla
 // Part of every `content` this run writes. Rows of another run on the same project never match it.
 const RUN = `run-${process.pid}-${Date.now().toString(36)}`;
 // The scope of the blocks of this file. Its id is this process's own, so what local mode keeps under
-// `.bb-data/` for it can be removed without touching the data of another process.
+// `.cdk-blocks/local/data/` for it can be removed without touching the data of another process.
 const SCOPE_ID = `bbdb-e2e-${process.pid}`;
 
 const MODES = [
@@ -166,7 +166,7 @@ for (const { id, label, port } of MODES) {
 			// Every row of this group, whichever test wrote it, as the connection role.
 			await db.execute(sql`DELETE FROM todos WHERE content LIKE ${mine}`);
 			// What local mode keeps on disk for the block of this group, if anything.
-			const mockData = join(process.cwd(), '.bb-data');
+			const mockData = join(process.cwd(), '.cdk-blocks/local/data');
 			if (existsSync(mockData)) {
 				for (const entry of readdirSync(mockData)) {
 					if (entry.startsWith(`${SCOPE_ID}-${id}`)) {

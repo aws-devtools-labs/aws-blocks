@@ -4,11 +4,11 @@
 /**
  * Opaque pagination cursors for the data browser.
  *
- * The three stores paginate in three incompatible ways: a local `.bb-data` file
- * is an array we can offset into, DynamoDB hands back a `LastEvaluatedKey`
- * item, and Cognito hands back a `PaginationToken` string. Rather than leaking
- * three shapes into the HTTP contract, all three are encoded into one opaque
- * base64url token that the client echoes back verbatim.
+ * The three stores paginate in three incompatible ways: a local
+ * `.cdk-blocks/local/data` file is an array we can offset into, DynamoDB hands back a
+ * `LastEvaluatedKey` item, and Cognito hands back a `PaginationToken` string.
+ * Rather than leaking three shapes into the HTTP contract, all three are encoded
+ * into one opaque base64url token that the client echoes back verbatim.
  *
  * The reference implementation has no pagination at all: it issues a single
  * 100-item scan, reports `LastEvaluatedKey` only cosmetically in a label, and

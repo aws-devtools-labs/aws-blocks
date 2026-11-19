@@ -26,6 +26,6 @@
   },
   "include": [
     "**/*",
-    "../.blocks/**/*.d.ts"
+    "../.cdk-blocks/**/*.d.ts"
   ]
 }

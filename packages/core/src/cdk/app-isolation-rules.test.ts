@@ -518,7 +518,7 @@ describe('app-isolation rules — CDK cross-region references and Hosting stores
 		for (const s of [sm('blocks/secrets/DEMO_SECRET'), sm('blocks/appb/secrets/X'), cfg('blocks/config/FEATURE_FLAGS'), cfg('blocks/appab/config/X')]) {
 			const v = checkStatement(s, 'appa', 'p');
 			assert.deepStrictEqual(rules(v), ['grant-outside-app'], JSON.stringify(s.Resource));
-			assert.match(v[0].message, /stackId.*\.blocks\/config\.json.*"appa"/);
+			assert.match(v[0].message, /stackId.*\.cdk-blocks\/config\.json.*"appa"/);
 		}
 	});
 });

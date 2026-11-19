@@ -71,7 +71,9 @@ const LEGACY_LEDGER = `
 	)
 `;
 
-/** `connect --name e2e --ca <file> --value-stdin`: stores the string in `<cwd>/.bb-data/settings.json`. */
+/**
+ * `connect --name e2e --ca <file> --value-stdin`: stores the string in `<cwd>/.cdk-blocks/local/data/settings.json`.
+ */
 async function connect(ws: Workspace, connectionString: string): Promise<ConnectReport> {
 	const run = await runCli(
 		['connect', '--name', NAME, '--ca', ws.caFile, '--value-stdin', '--no-input', '--output', 'json'],

@@ -31,8 +31,8 @@ import { Browser } from './test-support/aws-harness.js';
 import { type CfnResourceJson, synthUnderCdkConditions } from './test-support/cdk-synth.js';
 import type { CodeDeliveryPurpose, CognitoAuthOptions, GoogleProvider } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const IMPORTS = "import { Auth } from '@aws-cdk-blocks/bb-auth';";
 const PASSWORD = 'Passw0rd!';

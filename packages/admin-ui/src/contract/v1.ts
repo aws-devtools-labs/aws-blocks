@@ -28,11 +28,11 @@ export interface MetaResponse {
 export interface StageInfo {
 	/** Stage name, e.g. "sandbox" or "production". */
 	name: string;
-	/** CloudFormation stack name, when resolvable from .blocks config. */
+	/** CloudFormation stack name, when resolvable from .cdk-blocks config. */
 	stackName?: string;
 }
 
-/** A single deployment record. Primary source: .blocks/deploy-history.jsonl (M1). */
+/** A single deployment record. Primary source: .cdk-blocks/deploy-history.jsonl (M1). */
 export interface DeploymentRecord {
 	/** Unique id for the deployment (client-generated at deploy time). */
 	id: string;

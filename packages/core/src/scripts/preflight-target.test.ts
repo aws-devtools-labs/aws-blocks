@@ -111,8 +111,8 @@ describe('deploy/sandbox configured target', () => {
 			it(`${command} resolves ${source} for STS and metadata, prints it, and keeps CDK's environment`, async () => {
 				const directory = await mkdtemp(join(tmpdir(), 'blocks-target-'));
 				try {
-					await mkdir(join(directory, '.blocks'));
-					await writeFile(join(directory, '.blocks', 'config.json'), '{"stackId":"fixture"}');
+					await mkdir(join(directory, '.cdk-blocks'));
+					await writeFile(join(directory, '.cdk-blocks', 'config.json'), '{"stackId":"fixture"}');
 					await mkdir(join(directory, '.cdk-blocks-sandbox'));
 					await writeFile(join(directory, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'fixture');
 					const config = join(directory, 'config');

@@ -204,6 +204,62 @@ class EncryptedFileKeyValueStoreTest {
     }
 
     @Test
+    fun discardsOnlyTheOrphanWhenAnotherInstanceAdoptsTheKeyItMinted() = runTest {
+        // The instance that mints publishes the key before it sweeps the directory, so a second
+        // instance created at the same moment adopts that key and writes under it while the sweep
+        // is still to come. That entry belongs to the key in hand and has to survive, or a session
+        // the caller was told was saved is gone — the race
+        // `separateInstancesAgreeOnTheKeyWhenCreatedConcurrently` hits intermittently, ordered here
+        // so it happens every run. The orphan pins the other half of the same condition: nothing
+        // else fails when the sweep deletes nothing at all, because the fingerprint check in `get`
+        // reports an orphan as absent whether or not it was swept.
+        store().put("orphan", "under-the-lost-key")
+        File(storageDir, ".key").delete() shouldBe true
+
+        val published = CountDownLatch(1)
+        val adopted = CountDownLatch(1)
+        val minting = EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") {
+            PausingKeyCustody(FileKeyCustody(it)) {
+                published.countDown()
+                adopted.await(30, TimeUnit.SECONDS)
+            }
+        }
+
+        val pool = Executors.newSingleThreadExecutor()
+        try {
+            val mint = pool.submit { runBlocking { minting.put("minted", "by-the-minter") } }
+            published.await(30, TimeUnit.SECONDS) shouldBe true
+            store().put("adopted", "by-the-adopter")
+            adopted.countDown()
+            mint.get(30, TimeUnit.SECONDS)
+        } finally {
+            pool.shutdownNow()
+        }
+
+        val reader = store()
+        reader.get("adopted") shouldBe "by-the-adopter"
+        reader.get("minted") shouldBe "by-the-minter"
+        // By file rather than through `get`, which cannot tell a swept orphan from one still there.
+        File(storageDir, Base64.getUrlEncoder().encodeToString("orphan".toByteArray()))
+            .exists() shouldBe false
+    }
+
+    /** Runs [afterStoring] once a freshly minted key is installed, before the store is handed it. */
+    private class PausingKeyCustody(
+        private val delegate: KeyCustody,
+        private val afterStoring: () -> Unit,
+    ) : KeyCustody {
+        override val tier get() = delegate.tier
+
+        override fun load(alias: String): ByteArray? = delegate.load(alias)
+
+        override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray =
+            delegate.storeIfAbsent(alias, key).also { afterStoring() }
+
+        override fun delete(alias: String) = delegate.delete(alias)
+    }
+
+    @Test
     fun restrictsStorageToTheCurrentUser() = runTest {
         val store = store()
         store.put("jar", "hello")

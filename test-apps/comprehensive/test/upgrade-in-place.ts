@@ -372,7 +372,7 @@ function materializeApp(treeRoot: string, variant: Variant): string {
 	const copy = (src: string, dest: string): void =>
 		writeFileSync(dest, retargetBlocksImports(readFileSync(src, 'utf-8'), names));
 	rmSync(dir, { recursive: true, force: true });
-	for (const sub of ['cdk-blocks', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	for (const sub of ['cdk-blocks', 'scripts', '.cdk-blocks']) mkdirSync(join(dir, sub), { recursive: true });
 	copy(join(APP_TEMPLATE_DIR, 'index.cdk.ts'), join(dir, 'cdk-blocks', 'index.cdk.ts'));
 	// The BEFORE backend is stored as `.ts.txt`: it imports `@aws-blocks/bb-auth-cognito`, which
 	// exists only in the pre-refactor checkout, so nothing in this workspace may compile or resolve it.
@@ -394,7 +394,7 @@ function materializeApp(treeRoot: string, variant: Variant): string {
 		`${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk cdk-blocks/index.cdk.ts` }, null, 2)}\n`,
 	);
 	writeFileSync(
-		join(dir, '.blocks', 'config.json'),
+		join(dir, '.cdk-blocks', 'config.json'),
 		`${JSON.stringify({ stackId: 'bb-test-upgrade', telemetry: { enabled: false } }, null, 2)}\n`,
 	);
 	return dir;

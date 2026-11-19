@@ -47,7 +47,7 @@ const username = `testuser-${Date.now().toString(36)}@example.com`;
 const password = 'TestPass123!';
 
 // Locally no email is sent: `getLastAuthCode(name)` reads the verification code
-// the local auth block just issued for `name` (it finds the block's .bb-data/
+// the local auth block just issued for `name` (it finds the block's .cdk-blocks/local/data/
 // files itself). On AWS, Cognito emails it instead.
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────

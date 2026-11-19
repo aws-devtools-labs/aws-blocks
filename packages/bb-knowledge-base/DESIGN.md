@@ -126,7 +126,7 @@ Creates the following resources:
 - Documents read from the local folder specified in `options.source` (must be a relative path within the project).
 - Text files chunked per the configured strategy: `'fixed'` uses overlapping word windows (`chunkSize` words, `chunkOverlap` percent overlap), `'none'` keeps each document whole, and `'semantic'`/`'hierarchical'` split on blank-line paragraphs. Chunks under 20 characters are dropped (except the final `'fixed'` window).
 - Relevance scoring via TF-IDF (term frequency–inverse document frequency) — not real embeddings. Algorithm: tokenize → normalized TF → smoothed IDF (`log((N+1)/(df+1)) + 1`) → scores normalized to [0, 1].
-- Chunks cached to `.bb-data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .bb-data`.
+- Chunks cached to `.cdk-blocks/local/data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 - Folder metadata derived from directory structure (top-level subfolder name). Customer-provided `.metadata.json` sidecar files take precedence.
 - Metadata filtering via in-memory equality check with AND semantics.
 - Supported formats: `.md`, `.txt`, `.html`, `.htm`, `.csv`, `.json`.

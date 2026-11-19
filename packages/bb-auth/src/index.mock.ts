@@ -8,7 +8,7 @@
  * `Auth` is the real engine-agnostic `AuthBase` (sessions,
  * cookies, guards, the `createApi()` state machine) over the local user-pool
  * engine (`engines/native-mock.ts`) — users, groups, codes, MFA, devices,
- * passkeys and the admin surface, persisted to `.bb-data/<fullId>/`.
+ * passkeys and the admin surface, persisted to `.cdk-blocks/local/data/<fullId>/`.
  * Federation is real: a direct OIDC / OAuth 2.0 provider talks to its
  * IdP exactly as in Lambda, and a `stubIdp()` provider is served by the
  * in-process stub IdP, so federated sign-in works offline. Hosted-UI providers
@@ -76,7 +76,7 @@ function totpVerificationOf(options: ResolvedAuthOptions): CognitoAuthMockOption
 }
 
 /**
- * The local layer: the session secret lives in `.bb-data/<fullId>/state.json`
+ * The local layer: the session secret lives in `.cdk-blocks/local/data/<fullId>/state.json`
  * (the same file and field `AuthCognito`'s mock uses, so local sessions
  * survive the switch), and the user pool is the local mock engine over the
  * same file.
@@ -156,7 +156,7 @@ const MOCK_LAYER: AuthLayer = {
  * from `aws-cdk-blocks`. See the package README.
  *
  * Locally, `Auth` runs a complete user pool with no AWS account. Every
- * verification code is written to `.bb-data/<fullId>/last-code.json` and
+ * verification code is written to `.cdk-blocks/local/data/<fullId>/last-code.json` and
  * passed to the mock-only `codeDelivery` hook ({@link AuthMockOptions}).
  * Authenticator-app (TOTP) codes are checked as Cognito checks them only with
  * the mock-only `totpVerification: 'rfc6238'`; by default any six digits pass.

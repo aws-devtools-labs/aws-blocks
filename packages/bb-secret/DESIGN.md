@@ -11,7 +11,7 @@ conditional-export shape:
 
 | Entry | Condition | Role |
 |-------|-----------|------|
-| `index.mock.ts` | `default` / `types` | Local dev + tests. Persists plaintext to `.bb-data`. Canonical implementation. |
+| `index.mock.ts` | `default` / `types` | Local dev + tests. Persists plaintext to `.cdk-blocks/local/data`. Canonical implementation. |
 | `index.aws.ts` | `aws-runtime` | Lambda runtime. Calls Secrets Manager via `@aws-sdk/client-secrets-manager`. |
 | `index.cdk.ts` | `cdk` | Provisions the `secretsmanager.Secret`, grants IAM, registers config. |
 | `index.browser.ts` | `browser` | Stub; instantiation throws `NotSupported`. |
@@ -214,12 +214,12 @@ consumer's choice (`zod` is a `devDependency` here, used only by tests).
 
 | Aspect | Mock (`index.mock.ts`) | AWS (`index.aws.ts`) |
 |--------|------------------------|----------------------|
-| Storage | Plaintext entry in the shared `.bb-data/settings.json` (keyed by `name`/`fullId`), alongside `AppSetting` — so the `/cdk-blocks/settings` route surfaces it | Secrets Manager secret (KMS-encrypted) |
+| Storage | Plaintext entry in the shared `.cdk-blocks/local/data/settings.json` (keyed by `name`/`fullId`), alongside `AppSetting` — so the `/cdk-blocks/settings` route surfaces it | Secrets Manager secret (KMS-encrypted) |
 | ARN source | none (keyed by `name`/`fullId`) | `BLOCKS_SECRET_ARN_<FULLID>` config, or `fromExisting` ARN |
 | Unset value | key absent → `null`; `generate: true` seeds a random 32-char value on first construction | empty secret (neither `GenerateSecretString` nor `SecretString`) → `GetSecretValue` has no `SecretString` → `null`; `generate: true` emits `GenerateSecretString` so a random value exists on deploy |
 | Missing value | key absent → `null` | `SecretString` absent / `ResourceNotFound` → `null` |
 | `put` on missing secret | always writes the entry | may throw `SecretNotFound` if the secret resource is gone |
-| Version history | current + previous, in a `.bb-data/secret-versions.json` sidecar (synthetic version ids) | current + previous via `ListSecretVersionIds` with `IncludeDeprecated: false` (labeled only — real version ids + staging labels) |
+| Version history | current + previous, in a `.cdk-blocks/local/data/secret-versions.json` sidecar (synthetic version ids) | current + previous via `ListSecretVersionIds` with `IncludeDeprecated: false` (labeled only — real version ids + staging labels) |
 | Read caching | none — every `get()` reads fresh from `settings.json` (so `cacheTtlSeconds` is a no-op) | per-instance in-memory cache keyed by version selector, cleared by `put()`; entries held for `cacheTtlSeconds` (default 300s, `0` disables) so steady-state reads skip the API |
 | Security | **plaintext, insecure — dev only** | KMS-encrypted at rest |
 

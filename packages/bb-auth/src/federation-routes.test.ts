@@ -44,9 +44,10 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /**
  * Every configured kind of provider, in the two blocks an app needs for them:
@@ -159,7 +160,11 @@ describe('route table', () => {
 			redirects: { callbackPath: '/aws-blocks/auth/callback', signOutPath: '/aws-blocks/auth/signout' },
 		});
 		const paths = table();
-		for (const p of ['GET /cdk-blocks/auth/callback', 'GET /cdk-blocks/auth/signin/corp', 'POST /cdk-blocks/auth/signout']) {
+		for (const p of [
+			'GET /cdk-blocks/auth/callback',
+			'GET /cdk-blocks/auth/signin/corp',
+			'POST /cdk-blocks/auth/signout',
+		]) {
 			assert.ok(paths.includes(p), p);
 		}
 	});
@@ -701,7 +706,11 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		for (const path of ['/cdk-blocks/auth/signout', '/cdk-blocks/auth/signout?format=json']) {
 			const res = await fetch(`${server.origin}${path}`, { ...json, redirect: 'manual' });
 			assert.strictEqual(res.status, 503, path);
-			assert.deepStrictEqual(await res.json(), { error: incomplete.message, name: AuthErrors.SignOutIncomplete }, path);
+			assert.deepStrictEqual(
+				await res.json(),
+				{ error: incomplete.message, name: AuthErrors.SignOutIncomplete },
+				path,
+			);
 		}
 	});
 
@@ -726,12 +735,23 @@ describe("relay re-check: a same-origin relay survives a callback on another of 
 	});
 
 	test('validateRelay allows an HTTPS relay to any host in backendHosts, exact or a wildcard subdomain', () => {
-		const opts = { allowList: [], sameOrigin: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/cdk-blocks/auth/callback') };
+		const opts = {
+			allowList: [],
+			sameOrigin: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/cdk-blocks/auth/callback'),
+		};
 		const backendHosts = ['d111.cloudfront.net', '*.example.com'];
-		assert.deepStrictEqual(validateRelay('https://d111.cloudfront.net/done', { ...opts, backendHosts }), { allowed: true });
-		assert.deepStrictEqual(validateRelay('https://app.eu.example.com/done', { ...opts, backendHosts }), { allowed: true });
+		assert.deepStrictEqual(validateRelay('https://d111.cloudfront.net/done', { ...opts, backendHosts }), {
+			allowed: true,
+		});
+		assert.deepStrictEqual(validateRelay('https://app.eu.example.com/done', { ...opts, backendHosts }), {
+			allowed: true,
+		});
 		// The wildcard covers subdomains, not the apex; a port or plain HTTP is not a served host.
-		for (const relay of ['https://example.com/done', 'https://d111.cloudfront.net:8443/done', 'https://other.net/done']) {
+		for (const relay of [
+			'https://example.com/done',
+			'https://d111.cloudfront.net:8443/done',
+			'https://other.net/done',
+		]) {
 			assert.strictEqual(validateRelay(relay, { ...opts, backendHosts }).allowed, false, relay);
 		}
 		// Without backendHosts, only the callback's own origin is same-origin.
@@ -742,10 +762,16 @@ describe("relay re-check: a same-origin relay survives a callback on another of 
 		const { backendHostsFor } = await import('./relay.js');
 		process.env.BLOCKS_PUBLIC_HOSTS = 'D111.cloudfront.net, *.example.com,';
 		const gateway = 'abc123.execute-api.us-east-1.amazonaws.com';
-		const https = { url: new URL(`https://${gateway}/cdk-blocks/auth/callback`), headers: new Headers({ host: gateway }) };
+		const https = {
+			url: new URL(`https://${gateway}/cdk-blocks/auth/callback`),
+			headers: new Headers({ host: gateway }),
+		};
 		assert.deepStrictEqual(backendHostsFor(https), ['d111.cloudfront.net', '*.example.com', gateway]);
 		// Local dev: the client picks Host, so it never counts.
-		const local = { url: new URL('http://localhost:3000/cdk-blocks/auth/callback'), headers: new Headers({ host: gateway }) };
+		const local = {
+			url: new URL('http://localhost:3000/cdk-blocks/auth/callback'),
+			headers: new Headers({ host: gateway }),
+		};
 		assert.deepStrictEqual(backendHostsFor(local), ['d111.cloudfront.net', '*.example.com']);
 	});
 });

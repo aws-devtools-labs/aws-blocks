@@ -13,6 +13,8 @@ import { spawn } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
+
+/** The hidden folder's pre-rename name. Mirrored from `@aws-cdk-blocks/core`, which this package does not depend on. */
 import { fileURLToPath } from 'node:url';
 import { debuglog } from 'node:util';
 
@@ -135,7 +137,7 @@ https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out
 `;
 
 function getInstallationId(): string {
-  const filePath = join(homedir(), '.blocks', 'telemetry', 'installation-id');
+  const filePath = join(homedir(), '.cdk-blocks', 'telemetry', 'installation-id');
   try {
     const existing = readFileSync(filePath, 'utf-8').trim();
     if (existing) return existing;

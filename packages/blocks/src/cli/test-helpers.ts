@@ -22,6 +22,8 @@ export interface FakeRun {
 	env: NodeJS.ProcessEnv;
 	/** The process argv that in-process core functions read: `node`, the task entry, then the run's argv. */
 	argv: string[];
+	/** The telemetry events the CLI itself sent (see `telemetry.ts`), as `{ command, code }` per run. */
+	events: { command: string; code: number | 'threw'; projectRoot?: string }[];
 }
 
 export interface FakeOptions {
@@ -43,6 +45,12 @@ export interface FakeOptions {
 	/** Called for each child before anything runs it, so before the clean stop above is recorded. */
 	beforeSpawn?: (spec: SpawnSpec) => void;
 	core?: Partial<CoreScripts>;
+	/**
+	 * How the telemetry seam fails, to prove a failure never reaches the command:
+	 * `load` rejects the entry's import, `track` makes the tracker throw before it
+	 * runs the command. Default: a recording tracker that sends nothing.
+	 */
+	telemetryFailure?: 'load' | 'track';
 }
 
 /** Core functions that reach AWS fail unless a test fakes them. */
@@ -75,6 +83,7 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 		prompts: [],
 		env: { HOME: options.cwd, ...options.env },
 		argv: ['node', 'run.js', ...argv],
+		events: [],
 	};
 	const deps: CliDeps = {
 		stdout: { write: (chunk: string) => (run.stdout += chunk), isTTY: options.stdoutIsTTY ?? true },
@@ -97,6 +106,19 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 		chdir: (dir) => run.chdirs.push(dir),
 		argv: run.argv,
 		core: async () => ({ ...realCore, ...NO_AWS, ...options.core }),
+		telemetry: async () => {
+			if (options.telemetryFailure === 'load') throw new Error('telemetry entry failed to load');
+			return {
+				trackExitCode: async (command, fn, trackOptions) => {
+					if (options.telemetryFailure === 'track') throw new Error('telemetry tracker failed');
+					const event: FakeRun['events'][number] = { command, code: 'threw', ...trackOptions };
+					run.events.push(event);
+					const code = await fn();
+					event.code = code;
+					return code;
+				},
+			};
+		},
 	};
 	run.code = await main(argv, deps);
 	return run;
@@ -109,7 +131,7 @@ export function fixtureApp(pkg: Record<string, unknown> = { dependencies: { vite
 	mkdirSync(join(root, 'cdk-blocks'));
 	writeFileSync(join(root, 'cdk-blocks', 'index.ts'), 'export {};\n');
 	writeFileSync(join(root, 'cdk-blocks', 'index.cdk.ts'), 'export {};\n');
-	mkdirSync(join(root, '.blocks'));
-	writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'demo' }));
+	mkdirSync(join(root, '.cdk-blocks'));
+	writeFileSync(join(root, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'demo' }));
 	return root;
 }
