@@ -1156,11 +1156,25 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 	}
 	for (const spec of Array.isArray(flags.module) ? flags.module : []) argv.push('--module', spec);
 	const core = await ctx.core();
+	// `--watch` runs until its signal is aborted, so Ctrl-C (SIGINT) or SIGTERM aborts it here,
+	// as the `hosting-typegen` bin does: the watcher then stops, core's `runTypegenCli` resolves
+	// and records its `generate:types` event, and the CLI exits normally. Without a listener
+	// the signal would kill the process before that. A one-shot run keeps the default
+	// handling, so Ctrl-C still stops it at once.
+	const controller = flags.watch === true ? new AbortController() : undefined;
+	const abort = (): void => controller?.abort();
+	if (controller) {
+		process.once('SIGINT', abort);
+		process.once('SIGTERM', abort);
+	}
 	let code: number;
 	try {
-		code = await core.runTypegenCli(argv);
+		code = await core.runTypegenCli(argv, controller && { signal: controller.signal });
 	} catch (error) {
 		throw new CliError(error instanceof Error ? error.message : String(error), { cause: error });
+	} finally {
+		process.off('SIGINT', abort);
+		process.off('SIGTERM', abort);
 	}
 	return code === 0 ? ExitCode.Ok : ExitCode.Failure;
 }
