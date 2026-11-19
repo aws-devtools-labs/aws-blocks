@@ -111,6 +111,11 @@ jobs:
             printf '%s\n' "$BAD"
             exit 1
           fi
+          # An empty staging directory would otherwise sign and upload nothing.
+          if [ -z "$(find ./com/aws/blocks/kotlin -type f -print -quit 2>/dev/null)" ]; then
+            echo "::error::The staged publication contains no files."
+            exit 1
+          fi
           find . -type f | sort
 
       - name: Configure AWS credentials
