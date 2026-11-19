@@ -31,7 +31,14 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { BlocksPresets, BlocksStack, finalizeDashboards } from '@aws-blocks/core/cdk';
+import { Scope as RuntimeScope } from '@aws-blocks/core';
+import {
+	BlocksPresets,
+	BlocksStack,
+	Scope as CdkScope,
+	finalizeDashboards,
+	getRegisteredConfigValue,
+} from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -181,6 +188,139 @@ describe('Dashboard synth ids', () => {
 			{ path: dash.node.path, logicalIds: Object.keys(resources), names: Object.values(resources).map((r: any) => r.Properties.DashboardName) },
 			{ path: 'DashboardIds/dashboard', logicalIds: ['dashboardE8F903B5'], names: ['DashboardIds-dashboard'] },
 		);
+	});
+});
+
+describe('CDK ↔ AWS runtime dashboard naming (BLOCKS_STACK_NAME)', () => {
+	const REGION = 'eu-central-1';
+
+	/**
+	 * Substitute `region` for `{ Ref: 'AWS::Region' }` in a synthesized
+	 * `Fn::Join` (or plain string) value, giving the URL the deployed output holds.
+	 */
+	function resolveInRegion(value: unknown, region: string): string {
+		if (typeof value === 'string') return value;
+		const join = (value as { 'Fn::Join'?: [string, unknown[]] })['Fn::Join'];
+		assert.ok(join, `expected a string or Fn::Join, got ${JSON.stringify(value)}`);
+		return join[1]
+			.map((part) => {
+				if (typeof part === 'string') return part;
+				assert.deepStrictEqual(part, { Ref: 'AWS::Region' }, 'only the region is a token');
+				return region;
+			})
+			.join(join[0]);
+	}
+
+	test('the runtime names and links the dashboards the CDK layer synthesizes', async () => {
+		// One app tree, built twice: once at synth (CDK layer), once in the Lambda
+		// (AWS runtime). The tree's top scope has no parent in both, so the CDK
+		// layer anchors it to the stack and the runtime to BLOCKS_STACK_NAME.
+		const stack = await makeStack('DashboardParity');
+		const cdkApp = new CdkScope('app');
+		const cdkTeam = new CdkScope('team', { parent: cdkApp });
+		const cdkDashboards = [
+			new Dashboard(cdkApp, 'main', { routePath: false }),
+			new Dashboard(cdkTeam, 'ops', { routePath: false }),
+			new Dashboard(cdkApp, 'named', { routePath: false, dashboardName: 'my.ops/board' }),
+		];
+		finalizeDashboards(stack);
+
+		const template = Template.fromStack(stack);
+		const synthNames = Object.values(template.findResources('AWS::CloudWatch::Dashboard'))
+			.map((r) => r.Properties.DashboardName as string)
+			.sort();
+		const synthUrls = Object.values(template.findOutputs('*'))
+			.filter((o) => JSON.stringify(o.Value).includes('#dashboards/dashboard/'))
+			.map((o) => resolveInRegion(o.Value, REGION))
+			.sort();
+
+		const env = { stack: process.env.BLOCKS_STACK_NAME, region: process.env.AWS_REGION };
+		const ambient = globalThis as { CURRENT_BLOCKS_STACK?: unknown };
+		const savedAmbient = ambient.CURRENT_BLOCKS_STACK;
+		try {
+			// What the Lambda sees: the stack name the CDK layer hands the compute,
+			// the stack's region, and no synth-time ambient stack.
+			process.env.BLOCKS_STACK_NAME = cdkApp.backendStackName;
+			process.env.AWS_REGION = REGION;
+			delete ambient.CURRENT_BLOCKS_STACK;
+
+			const { Dashboard: RuntimeDashboard } = await import('./index.aws.js');
+			const app = new RuntimeScope('app');
+			const team = new RuntimeScope('team', { parent: app });
+			const runtimeDashboards = [
+				new RuntimeDashboard(app, 'main', { routePath: false }),
+				new RuntimeDashboard(team, 'ops', { routePath: false }),
+				new RuntimeDashboard(app, 'named', { routePath: false, dashboardName: 'my.ops/board' }),
+			];
+
+			assert.deepStrictEqual(
+				runtimeDashboards.map((d) => d.fullId),
+				cdkDashboards.map((d) => d.fullId),
+				'same fullIds',
+			);
+			assert.deepStrictEqual(
+				runtimeDashboards.map((d) => d.dashboardName).sort(),
+				synthNames,
+				'runtime dashboardName = synthesized DashboardName',
+			);
+			assert.deepStrictEqual(
+				runtimeDashboards.map((d) => d.url).sort(),
+				synthUrls,
+				'runtime url = synthesized Url output in the stack region',
+			);
+			// Guard against a vacuous pass: the names carry the stack name.
+			assert.deepStrictEqual(synthNames, [
+				'DashboardParity-app-main',
+				'DashboardParity-app-team-ops',
+				'my-ops-board',
+			]);
+		} finally {
+			for (const [key, value] of [
+				['BLOCKS_STACK_NAME', env.stack],
+				['AWS_REGION', env.region],
+			] as const) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			ambient.CURRENT_BLOCKS_STACK = savedAmbient;
+		}
+	});
+});
+
+describe('several Dashboards in one app (synth)', () => {
+	test('each dashboard gets its own name and URL output, and no app-wide URL config key', async () => {
+		const stack = await makeStack('DashboardMulti');
+		// Distinct route paths: the redirect routes share a process-global registry.
+		const dashboards = [
+			new Dashboard(stack, 'main', { routePath: '/multi/main' }),
+			new Dashboard(stack, 'billing', { routePath: '/multi/billing' }),
+			new Dashboard(stack, 'ops', { routePath: '/multi/ops' }),
+		];
+		finalizeDashboards(stack);
+
+		const template = Template.fromStack(stack);
+		const names = Object.values(template.findResources('AWS::CloudWatch::Dashboard')).map(
+			(r) => r.Properties.DashboardName,
+		);
+		assert.deepStrictEqual(names.sort(), ['DashboardMulti-billing', 'DashboardMulti-main', 'DashboardMulti-ops']);
+
+		// Each dashboard's Url output ends with its own dashboard name.
+		const outputs = Object.values(template.findOutputs('*'))
+			.map((o) => JSON.stringify(stack.resolve(o.Value)))
+			.filter((v) => v.includes('#dashboards/dashboard/'));
+		assert.strictEqual(outputs.length, dashboards.length);
+		for (const dash of dashboards) {
+			assert.strictEqual(
+				outputs.filter((v) => v.includes(`#dashboards/dashboard/${dash.dashboardName}"`)).length,
+				1,
+				`one Url output for ${dash.dashboardName}`,
+			);
+			assert.ok(JSON.stringify(stack.resolve(dash.url)).includes(dash.dashboardName));
+		}
+
+		// The runtime derives each URL from its own dashboard name, so the CDK layer
+		// registers no single app-wide URL key that the last dashboard would win.
+		assert.strictEqual(getRegisteredConfigValue(stack, 'BB_DASHBOARD_URL'), undefined);
 	});
 });
 

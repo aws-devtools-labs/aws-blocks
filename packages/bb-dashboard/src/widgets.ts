@@ -12,6 +12,7 @@ import { blocksError } from '@aws-blocks/core';
 import type { ComputeDashboardSection } from '@aws-blocks/core/cdk/internal';
 import type { ResolvedDashboardConfig, ResolvedMetricsSource, DashboardOptions, MetricConfig } from './types.js';
 import { DashboardErrors } from './errors.js';
+import { deriveDashboardName } from './naming.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -211,7 +212,8 @@ export function resolveConfig(id: string, options?: DashboardOptions, scopeFullI
 
 	return {
 		title: options?.title ?? id,
-		dashboardName: (options?.dashboardName ?? scopeFullId ?? id).replace(/[^A-Za-z0-9\-_]/g, '-').substring(0, 255),
+		// Shared with the AWS runtime and the mock, so every layer names the same dashboard.
+		dashboardName: deriveDashboardName(id, options?.dashboardName, scopeFullId),
 		metrics,
 		defaultTimeRange: options?.defaultTimeRange ?? '-PT3H',
 	};

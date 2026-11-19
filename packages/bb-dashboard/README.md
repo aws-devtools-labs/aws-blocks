@@ -92,7 +92,7 @@ Creates a CloudWatch Dashboard with auto-generated widgets.
 
 | Name | Type | Description |
 |------|------|-------------|
-| `url` | `string \| null` | CloudWatch Dashboard console URL (CfnOutput). `string` on the CDK construct; `null` in the default/mock type until deployed |
+| `url` | `string \| null` | This dashboard's CloudWatch console URL (CfnOutput). `string` on the CDK construct; on the AWS runtime, derived from `AWS_REGION` and `dashboardName`; `null` in the default/mock type until deployed |
 | `dashboardName` | `string` | The resolved dashboard name |
 
 ### `DashboardOptions`
@@ -186,6 +186,14 @@ const dashboard = new Dashboard(scope, 'dashboard', {
   routePath: '/ops/dashboard',
 });
 // GET /ops/dashboard → 302 → https://<region>.console.aws.amazon.com/cloudwatch/...
+```
+
+An app can have several dashboards. Give each its own `routePath` (two routes
+can't share a path); each route redirects to its own dashboard:
+
+```typescript
+new Dashboard(scope, 'orders', { routePath: '/ops/orders' });   // → the orders dashboard
+new Dashboard(scope, 'billing', { routePath: '/ops/billing' }); // → the billing dashboard
 ```
 
 ## Log Group

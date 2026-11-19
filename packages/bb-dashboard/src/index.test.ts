@@ -53,8 +53,11 @@ function stubComputeSections(
 	];
 }
 import { Scope, getRegisteredRoutes, clearRouteRegistry } from '@aws-blocks/core';
-import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
+import { mountDashboardRoute } from './routes.js';
 import type { BlocksContext } from '@aws-blocks/core';
+
+/** The app-wide URL key earlier releases set; the route must not read it. */
+const BB_DASHBOARD_URL_ENV = 'BB_DASHBOARD_URL';
 
 /** Flatten widget rows into a flat list of JSON objects produced by toJson(). */
 function flattenWidgetJson(rows: IWidget[][]): any[] {
@@ -612,12 +615,12 @@ describe('mountDashboardRoute', () => {
 		assert.equal(route.method, 'GET');
 	});
 
-	it('handler returns 302 redirect when dashboard URL is available via env', async () => {
+	it('handler redirects to its own URL, not an app-wide BB_DASHBOARD_URL value', async () => {
 		const originalEnv = process.env[BB_DASHBOARD_URL_ENV];
-		process.env[BB_DASHBOARD_URL_ENV] = 'https://us-east-1.console.aws.amazon.com/cloudwatch/home#dashboards/dashboard/test';
+		process.env[BB_DASHBOARD_URL_ENV] = 'https://us-east-1.console.aws.amazon.com/cloudwatch/home#dashboards/dashboard/other';
 
 		try {
-			mountDashboardRoute(null as any, '/aws-blocks/dashboard', null);
+			mountDashboardRoute(null as any, '/aws-blocks/dashboard', 'https://us-east-1.console.aws.amazon.com/cloudwatch/home#dashboards/dashboard/test');
 			const routes = getRegisteredRoutes();
 			const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
 
@@ -653,87 +656,65 @@ describe('mountDashboardRoute', () => {
 	});
 
 	it('handler returns 302 redirect when fallback URL is provided', async () => {
-		const originalEnv = process.env[BB_DASHBOARD_URL_ENV];
-		delete process.env[BB_DASHBOARD_URL_ENV];
+		mountDashboardRoute(null as any, '/aws-blocks/dashboard', 'https://fallback.example.com/dashboard');
+		const routes = getRegisteredRoutes();
+		const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
 
-		try {
-			mountDashboardRoute(null as any, '/aws-blocks/dashboard', 'https://fallback.example.com/dashboard');
-			const routes = getRegisteredRoutes();
-			const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
+		const responseHeaders = new Headers();
+		let sentBody: any;
+		const ctx: BlocksContext = {
+			request: {
+				headers: new Headers(),
+				body: null,
+				json: async () => ({}),
+				text: async () => '',
+				url: new URL('http://localhost/aws-blocks/dashboard'),
+				params: {},
+			},
+			response: {
+				headers: responseHeaders,
+				status: 200,
+				send: (body: any) => { sentBody = body; },
+			},
+		};
 
-			const responseHeaders = new Headers();
-			let sentBody: any;
-			const ctx: BlocksContext = {
-				request: {
-					headers: new Headers(),
-					body: null,
-					json: async () => ({}),
-					text: async () => '',
-					url: new URL('http://localhost/aws-blocks/dashboard'),
-					params: {},
-				},
-				response: {
-					headers: responseHeaders,
-					status: 200,
-					send: (body: any) => { sentBody = body; },
-				},
-			};
-
-			await route.handler(ctx);
-			assert.equal(ctx.response.status, 302);
-			assert.equal(responseHeaders.get('Location'), 'https://fallback.example.com/dashboard');
-			assert.equal(sentBody, '');
-		} finally {
-			if (originalEnv === undefined) {
-				delete process.env[BB_DASHBOARD_URL_ENV];
-			} else {
-				process.env[BB_DASHBOARD_URL_ENV] = originalEnv;
-			}
-		}
+		await route.handler(ctx);
+		assert.equal(ctx.response.status, 302);
+		assert.equal(responseHeaders.get('Location'), 'https://fallback.example.com/dashboard');
+		assert.equal(sentBody, '');
 	});
 
 	it('handler returns 503 when no URL is available', async () => {
-		const originalEnv = process.env[BB_DASHBOARD_URL_ENV];
-		delete process.env[BB_DASHBOARD_URL_ENV];
+		mountDashboardRoute(null as any, '/aws-blocks/dashboard', null);
+		const routes = getRegisteredRoutes();
+		const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
 
-		try {
-			mountDashboardRoute(null as any, '/aws-blocks/dashboard', null);
-			const routes = getRegisteredRoutes();
-			const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
+		const responseHeaders = new Headers();
+		let sentBody: any;
+		const ctx: BlocksContext = {
+			request: {
+				headers: new Headers(),
+				body: null,
+				json: async () => ({}),
+				text: async () => '',
+				url: new URL('http://localhost/aws-blocks/dashboard'),
+				params: {},
+			},
+			response: {
+				headers: responseHeaders,
+				status: 200,
+				send: (body: any) => { sentBody = body; },
+			},
+		};
 
-			const responseHeaders = new Headers();
-			let sentBody: any;
-			const ctx: BlocksContext = {
-				request: {
-					headers: new Headers(),
-					body: null,
-					json: async () => ({}),
-					text: async () => '',
-					url: new URL('http://localhost/aws-blocks/dashboard'),
-					params: {},
-				},
-				response: {
-					headers: responseHeaders,
-					status: 200,
-					send: (body: any) => { sentBody = body; },
-				},
-			};
-
-			await route.handler(ctx);
-			assert.equal(ctx.response.status, 503);
-			assert.equal(responseHeaders.get('Content-Type'), 'application/json');
-			assert.ok(sentBody.message.includes('cloud-only'));
-			assert.ok(sentBody.hint.includes('npx cdk deploy'));
-			assert.ok(sentBody.localObservability.logs);
-			assert.ok(sentBody.localObservability.metrics);
-			assert.ok(sentBody.localObservability.traces);
-		} finally {
-			if (originalEnv === undefined) {
-				delete process.env[BB_DASHBOARD_URL_ENV];
-			} else {
-				process.env[BB_DASHBOARD_URL_ENV] = originalEnv;
-			}
-		}
+		await route.handler(ctx);
+		assert.equal(ctx.response.status, 503);
+		assert.equal(responseHeaders.get('Content-Type'), 'application/json');
+		assert.ok(sentBody.message.includes('cloud-only'));
+		assert.ok(sentBody.hint.includes('npx cdk deploy'));
+		assert.ok(sentBody.localObservability.logs);
+		assert.ok(sentBody.localObservability.metrics);
+		assert.ok(sentBody.localObservability.traces);
 	});
 });
 
@@ -788,13 +769,14 @@ describe('fullId parity with pre-Scope derivation', () => {
 		['top-level Scope parent', () => new Scope('app'), 'app-dashboard'],
 	];
 
-	for (const [entry, nameFrom] of [['./index.mock.js', 'fullId'], ['./index.aws.js', 'id']] as const) {
+	// Both layers name the dashboard from fullId, as the CDK layer's resolveConfig does.
+	for (const entry of ['./index.mock.js', './index.aws.js'] as const) {
 		for (const [label, parent, expected] of cases) {
 			it(`${entry}: ${label}`, async () => {
 				const { Dashboard } = await import(entry);
 				const dash = new Dashboard(parent(), 'dashboard', { routePath: false });
 				assert.strictEqual(dash.fullId, expected);
-				assert.strictEqual(dash.dashboardName, nameFrom === 'fullId' ? expected : 'dashboard');
+				assert.strictEqual(dash.dashboardName, expected);
 			});
 		}
 

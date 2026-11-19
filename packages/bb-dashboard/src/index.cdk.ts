@@ -3,10 +3,11 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerDashboardFinalizer, Scope } from '@aws-blocks/core/cdk';
-import { type ComputeDashboardSection, getComputes, registerSharedConfig } from '@aws-blocks/core/cdk/internal';
+import { type ComputeDashboardSection, getComputes } from '@aws-blocks/core/cdk/internal';
 import { CfnOutput, Fn, Stack } from 'aws-cdk-lib';
 import { Dashboard as CwDashboard } from 'aws-cdk-lib/aws-cloudwatch';
-import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
+import { dashboardConsoleUrl } from './naming.js';
+import { mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { buildDashboardWidgets, resolveConfig } from './widgets.js';
 
@@ -81,7 +82,7 @@ export class Dashboard extends Scope {
 		const showTraces = options?.traces !== false;
 
 		// Create the CloudWatch Dashboard resource eagerly so the URL / redirect
-		// route / config below always point at a resource that exists — never a
+		// route below always point at a resource that exists — never a
 		// dangling link if the finalizer somehow doesn't run. Only the widget
 		// *body* is deferred (added via `addWidgets` at finalize).
 		const dashboard = new CwDashboard(this, 'Resource', {
@@ -133,20 +134,12 @@ export class Dashboard extends Scope {
 			}
 		});
 
-		this.url = Fn.join('', [
-			'https://',
-			Fn.ref('AWS::Region'),
-			'.console.aws.amazon.com/cloudwatch/home?region=',
-			Fn.ref('AWS::Region'),
-			'#dashboards/dashboard/',
-			config.dashboardName,
-		]);
+		this.url = dashboardConsoleUrl(Fn.ref('AWS::Region'), config.dashboardName);
 
-		// Pass the dashboard URL to the runtime Lambda via config registry. One key
-		// per app, while an app may have several dashboards (DESIGN.md), so it keeps
-		// last-one-wins instead of registerConfig's conflict check; each dashboard's
-		// redirect route below gets its own URL directly.
-		registerSharedConfig(this, BB_DASHBOARD_URL_ENV, this.url);
+		// No config is passed to the runtime: the AWS runtime derives this same URL
+		// from its own dashboard name (the `dashboardName` option, else `fullId`) and
+		// the compute's AWS_REGION, so each of an app's dashboards (DESIGN.md) keeps
+		// its own URL at runtime as well as at synth.
 
 		// Register the redirect route so the Lambda handler dispatches it.
 		const routePath = options?.routePath;
