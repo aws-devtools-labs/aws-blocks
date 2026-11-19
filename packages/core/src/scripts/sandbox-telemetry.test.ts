@@ -256,7 +256,7 @@ await startSandbox({ backendPath: ${JSON.stringify(BACKEND_PATH)}, devCommand: $
 	it('the SUCCESS event reports the app’s blocks', () => {
 		assert.strictEqual(success.telemetry.length, 1, success.stdout);
 		const [event] = success.telemetry;
-		assert.deepStrictEqual(event.event.command, 'sandbox');
+		assert.deepStrictEqual(event.event.command, 'sandbox:deploy');
 		assert.deepStrictEqual(event.event.state, 'SUCCESS');
 		assert.deepStrictEqual(event.product.buildingBlocks, [{ name: 'KVStore', version: '9.9.9' }]);
 		assert.strictEqual(event.counters?.blocksCount, 1);

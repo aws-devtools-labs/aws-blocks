@@ -14,7 +14,20 @@ export type CommandName =
   | 'cleanup'
   | 'console'
   | 'dashboard'
-  | 'vendorize';
+  | 'vendorize'
+  | 'sandbox:deploy'
+  | 'sandbox:preview'
+  | 'dev:stop'
+  | 'whoami'
+  | 'secret'
+  | 'config'
+  | 'generate:client'
+  | 'generate:spec'
+  | 'generate:types'
+  | 'db'
+  | 'migrate'
+  | 'docs'
+  | 'help';
 
 /**
  * Terminal state of a command execution.
