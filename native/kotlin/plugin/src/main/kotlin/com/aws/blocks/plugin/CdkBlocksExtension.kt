@@ -82,10 +82,10 @@ abstract class CdkBlocksExtension(project: Project) {
      * ```kotlin
      * cdkBlocks {
      *     servers {
-     *         local("http://10.0.2.2:3001/aws-blocks/api")
-     *         sandbox("https://sandbox.example.com/aws-blocks/api")
-     *         prod("https://api.example.com/aws-blocks/api")
-     *         custom("staging", "https://staging.example.com/aws-blocks/api")
+     *         local("http://10.0.2.2:3001/cdk-blocks/api")
+     *         sandbox("https://sandbox.example.com/cdk-blocks/api")
+     *         prod("https://api.example.com/cdk-blocks/api")
+     *         custom("staging", "https://staging.example.com/cdk-blocks/api")
      *     }
      * }
      * ```
@@ -94,7 +94,7 @@ abstract class CdkBlocksExtension(project: Project) {
      * or are added as new entries if no match exists.
      *
      * Each URL is the RPC URL the generated client posts to, so it carries the
-     * `/aws-blocks/api` path. Code generation rejects a URL that does not parse,
+     * `/cdk-blocks/api` path. Code generation rejects a URL that does not parse,
      * has no `http://` or `https://` scheme or no host, carries a query or
      * fragment, or has no RPC path (nothing but slashes and dot segments),
      * because such a server reaches no RPC.

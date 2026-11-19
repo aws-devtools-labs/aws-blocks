@@ -571,7 +571,7 @@ describe('built-in components use submitAuthAction (R11–R14)', () => {
 		const federated: AuthState = {
 			...signedInState(),
 			actions: [
-				{ name: 'signOut', label: 'Sign Out', fields: [], url: '/aws-blocks/auth/signout', method: 'POST' },
+				{ name: 'signOut', label: 'Sign Out', fields: [], url: '/cdk-blocks/auth/signout', method: 'POST' },
 			],
 		};
 		const api = mockApi(federated);
@@ -591,7 +591,7 @@ describe('built-in components use submitAuthAction (R11–R14)', () => {
 			proto.submit = original;
 		}
 
-		assert.deepStrictEqual(submitted, [{ action: '/aws-blocks/auth/signout', method: 'post' }]);
+		assert.deepStrictEqual(submitted, [{ action: '/cdk-blocks/auth/signout', method: 'post' }]);
 		assert.strictEqual(api.calls.length, 0, 'no setAuthState RPC');
 		assert.strictEqual(delta(), 0, 'no broadcast: the navigation ends the page');
 	});

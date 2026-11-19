@@ -82,7 +82,7 @@ class BlocksEntryPointTest : FunSpec({
     test("the default server carries the rpc path when the spec declares no server") {
         val source = generate(spec())
 
-        source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/aws-blocks/api")"""
+        source shouldContain """BlocksServer(name = "local", url = "http://localhost:3001/cdk-blocks/api")"""
     }
 
     test("a declared server url is used as given") {
@@ -95,14 +95,14 @@ class BlocksEntryPointTest : FunSpec({
 
     test("a declared server url already carrying the rpc path is not appended to again") {
         val source = generate(
-            spec(servers = """[{ "name": "sandbox", "url": "https://api.example.com/prod/aws-blocks/api" }]"""),
+            spec(servers = """[{ "name": "sandbox", "url": "https://api.example.com/prod/cdk-blocks/api" }]"""),
         )
 
         source shouldContain
-            """BlocksServer(name = "sandbox", url = "https://api.example.com/prod/aws-blocks/api")"""
+            """BlocksServer(name = "sandbox", url = "https://api.example.com/prod/cdk-blocks/api")"""
         // A spec's server URL is the whole RPC URL. Nothing may append the path a second time,
         // and the runtime must not either.
-        source shouldNotContain "/aws-blocks/api/aws-blocks/api"
+        source shouldNotContain "/cdk-blocks/api/cdk-blocks/api"
         source shouldNotContain "server.url.toString()"
     }
 
@@ -149,8 +149,8 @@ class BlocksEntryPointTest : FunSpec({
     test("the default server is the first the spec declares, whatever it is named") {
         val twoServers = """
             [
-              { "name": "sandbox", "url": "https://api.example.com/prod/aws-blocks/api" },
-              { "name": "local", "url": "http://localhost:3001/aws-blocks/api" }
+              { "name": "sandbox", "url": "https://api.example.com/prod/cdk-blocks/api" },
+              { "name": "local", "url": "http://localhost:3001/cdk-blocks/api" }
             ]
         """.trimIndent()
 
@@ -159,8 +159,8 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain
             "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.sandbox)"
         // Every declared server keeps its own URL, not just the default.
-        source shouldContain """url = "https://api.example.com/prod/aws-blocks/api""""
-        source shouldContain """url = "http://localhost:3001/aws-blocks/api""""
+        source shouldContain """url = "https://api.example.com/prod/cdk-blocks/api""""
+        source shouldContain """url = "http://localhost:3001/cdk-blocks/api""""
     }
 
     test("reversing the declared order moves the default with it") {

@@ -28,8 +28,11 @@ import type {
   ServerOrigin,
 } from './front_door.js';
 
-/** The backend's reserved RPC + sign-in subtree (`/aws-blocks/*`). */
-export const BLOCKS_API_SUBTREE = '/aws-blocks/*';
+/** The backend's reserved RPC + sign-in subtree (`/cdk-blocks/*`). */
+export const BLOCKS_API_SUBTREE = '/cdk-blocks/*';
+
+/** The legacy `/aws-blocks/*` alias of {@link BLOCKS_API_SUBTREE}, still routed to the backend. */
+export const LEGACY_BLOCKS_API_SUBTREE = '/aws-blocks/*';
 
 /** A Lambda function that can carry a Function URL (any regional function). */
 type UrlCapableFunction = IFunction & {
@@ -81,7 +84,7 @@ const DEFAULT_SKEW_MAX_AGE = 86400;
  * in-template (the URL is a CDK token).
  */
 const apiHostAndStage = (url: string): { host: string; stagePath: string } => {
-  const withoutScheme = Fn.select(1, Fn.split('https://', Fn.select(0, Fn.split('/aws-blocks/api', url))));
+  const withoutScheme = Fn.select(1, Fn.split('https://', Fn.select(0, Fn.split('/cdk-blocks/api', url))));
   return {
     host: Fn.select(0, Fn.split('/', withoutScheme)),
     stagePath: `/${Fn.select(1, Fn.split('/', withoutScheme))}`,
@@ -144,7 +147,7 @@ export function buildDoorInput(params: BuildDoorInputParams): DoorInput {
         kind: 'api',
         url: params.api.url,
         ...apiHostAndStage(params.api.url),
-        paths: [...new Set([BLOCKS_API_SUBTREE, ...(params.api.paths ?? [])])],
+        paths: [...new Set([BLOCKS_API_SUBTREE, LEGACY_BLOCKS_API_SUBTREE, ...(params.api.paths ?? [])])],
       }
     : undefined;
 

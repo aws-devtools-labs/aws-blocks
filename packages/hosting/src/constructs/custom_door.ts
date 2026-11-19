@@ -15,7 +15,11 @@
  *   3. for a bring-your-own door, runs the WIRING CHECK: from what the `cf.*`
  *      helpers recorded, the static assets must be reachable
  *      (`ServeStaticAsset`) and, when the app has an API, at least one of its
- *      paths must reach it (`ProxySameOriginApi`). An API path the door left
+ *      paths must reach it (`ProxySameOriginApi`). A door that wires the legacy
+ *      `/aws-blocks/*` subtree but not the canonical `/cdk-blocks/*` one fails
+ *      the same check, since every current client calls `/cdk-blocks/*` (the
+ *      usual mistake when a door hand-wired the old path before the rename).
+ *      Any other API path the door left
  *      unwired is a synth warning, and so are app redirects, per-pattern
  *      headers or error pages it left unwired (`cf.redirects`, `cf.headers`,
  *      `cf.errorPages` wire them; `cf.recordWired` declares hand-wired ones),
@@ -35,6 +39,7 @@ import { Annotations } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 import { startWiringRecord, type WiringRecord } from './cf_helpers.js';
+import { BLOCKS_API_SUBTREE, LEGACY_BLOCKS_API_SUBTREE } from './door_input.js';
 import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
 import { type OriginHandle, originHandleFromUrl } from './layer.js';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
@@ -133,6 +138,13 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
       problems.push(
         `ProxySameOriginApi: the app has an API, but none of ${api.paths.join(', ')} were wired — use cf.apiBehaviors(origins.api).`,
       );
+    } else if (missing.includes(BLOCKS_API_SUBTREE) && wiring.apiPaths.has(LEGACY_BLOCKS_API_SUBTREE)) {
+      // Only the legacy alias reaches the backend: older clients work, but every
+      // current client (and the generated config) calls `/cdk-blocks/*`.
+      problems.push(
+        `ProxySameOriginApi: ${LEGACY_BLOCKS_API_SUBTREE} was wired but ${BLOCKS_API_SUBTREE} was not, so current clients ` +
+          `can't reach the API — use cf.apiBehaviors(origins.api), or route ${BLOCKS_API_SUBTREE} too.`,
+      );
     } else if (missing.length > 0) {
       Annotations.of(scope).addWarningV2(
         '@aws-cdk-blocks/hosting:FrontDoorApiPathUnwired',
@@ -157,7 +169,7 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
       '@aws-cdk-blocks/hosting:FrontDoorBehaviorLimit',
       `Front door '${service}' asked the cf.* helpers for ${wiring.behaviors.size} cache behaviors; a CloudFront ` +
         `distribution allows ${MAX_ADDITIONAL_BEHAVIORS} besides its default by default, so the deploy fails unless the ` +
-        'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/aws-blocks/`.',
+        'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/cdk-blocks/`.',
     );
   }
   if (problems.length === 0) return;

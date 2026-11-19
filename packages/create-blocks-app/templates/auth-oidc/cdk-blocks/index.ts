@@ -14,7 +14,7 @@ const DEMO_USER = { sub: 'stub-user-1', email: 'alice@stub.invalid', name: 'Alic
 // a real OIDC provider from `npm run dev` and sandboxes, but synth refuses it for
 // production, so production gets a `type: 'oidc'` entry. Replace its issuer and
 // clientId with your IdP's (Okta, Entra ID, Auth0, ...) and register
-// `<your origin>/aws-blocks/auth/callback` as its redirect URI before deploying.
+// `<your origin>/cdk-blocks/auth/callback` as its redirect URI before deploying.
 // See npm run docs Auth.
 const auth = new Auth(scope, 'auth', {
   store: 'builtin',

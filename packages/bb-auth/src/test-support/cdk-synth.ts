@@ -99,7 +99,7 @@ export interface CdkSynthOptions {
 }
 
 /** The harness's default API URL (a literal, so resolved callback URLs are readable). */
-export const HARNESS_API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
+export const HARNESS_API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api';
 
 let probeCounter = 0;
 

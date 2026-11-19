@@ -15,7 +15,7 @@ Your backend (TypeScript)  →  blocks.spec.json  →  blocks_codegen  →  Type
 ## What you get
 
 ```dart
-final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
 
 // Call your API methods with full type safety
 final todo = await blocks.api.createTodo(title: 'Buy milk', priority: 1);
@@ -59,7 +59,7 @@ cd my-backend
 npm run dev
 ```
 
-`npm run dev` starts a local development server for the API at `http://localhost:3001/aws-blocks/api`. Leave it running.
+`npm run dev` starts a local development server for the API at `http://localhost:3001/cdk-blocks/api`. Leave it running.
 
 ### 2. Generate the spec
 
@@ -111,7 +111,7 @@ import 'blocks.blocks.dart';
 
 Future<void> main() async {
   // With no baseUrl, the client calls the server the spec names. Pass
-  // baseUrl: 'https://<your API>/aws-blocks/api' to call another one.
+  // baseUrl: 'https://<your API>/cdk-blocks/api' to call another one.
   final blocks = Blocks();
   final health = await blocks.api.health();
   print(health.status.toJson()); // ok
@@ -280,7 +280,7 @@ class AuthModel extends ChangeNotifier {
 - For `relayTo` on mobile, prefer a verified App Link (Android) or Universal Link (iOS) over a bare custom scheme. Another app can register the same custom scheme and receive the relay redirect; with a custom scheme, PKCE is what stops it from using the code, because only this app holds the verifier.
 - Sign in with `signIn`. `signInDirect`, the direct flow, sends the IdP a custom-scheme `redirect_uri`, which most identity providers reject.
 
-Register the backend's callback with the identity provider, not an address in the app: every platform's `signIn` sends the IdP the backend's HTTPS callback as its `redirect_uri`, and the backend relays the result to the app. That callback is the client's `baseUrl` with its final `/aws-blocks/api` replaced by the block's `redirects.callbackPath`, `/aws-blocks/auth/callback` unless you set one. A deployed API keeps its stage: for `https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api`, register `https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/auth/callback`. If the IdP asks for a sign-out URL, register the same prefix followed by the block's `redirects.postSignOutPath` (`/` by default), here `https://abc123.execute-api.us-west-2.amazonaws.com/prod/`.
+Register the backend's callback with the identity provider, not an address in the app: every platform's `signIn` sends the IdP the backend's HTTPS callback as its `redirect_uri`, and the backend relays the result to the app. That callback is the client's `baseUrl` with its final `/cdk-blocks/api` replaced by the block's `redirects.callbackPath`, `/cdk-blocks/auth/callback` unless you set one. A deployed API keeps its stage: for `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api`, register `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/auth/callback`. If the IdP asks for a sign-out URL, register the same prefix followed by the block's `redirects.postSignOutPath` (`/` by default), here `https://abc123.execute-api.us-west-2.amazonaws.com/prod/`.
 
 ### Federated sign-in on each platform
 
@@ -334,7 +334,7 @@ dependencies:
 and build the client as usual, before or after `runApp`. The app does not have to call `WidgetsFlutterBinding.ensureInitialized()` first:
 
 ```dart
-final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
 // Signed in if the user was signed in before the app restarted.
 final state = await blocks.authApi.getAuthState();
 ```
@@ -349,7 +349,7 @@ To keep the session in memory only, so that it ends when the process does, pass 
 
 ```dart
 final blocks = Blocks(
-  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  baseUrl: 'https://your-api.example.com/cdk-blocks/api',
   sessionStore: InMemorySessionStore(),
 );
 ```
@@ -368,7 +368,7 @@ Future<void> main() async {
     onPersistError: (error, _) => stderr.writeln('session not saved: $error'),
   );
   registerDefaultSessionStore(() => session);
-  final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   // ... sign in ...
 
   // The session is written in the background; wait for it before exit().

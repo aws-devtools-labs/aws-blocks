@@ -94,7 +94,7 @@ export class S3WebsiteConstruct extends Construct {
     // (with the absolute cross-origin `apiUrl` this door needs) is written to the
     // same key by the separate `BlocksConfigDeployment`. Uploading the placeholder
     // here races/clobbers that real config, leaving the SPA with no `apiUrl` (it
-    // then falls back to a relative `/aws-blocks/api`, which the S3 website
+    // then falls back to a relative `/cdk-blocks/api`, which the S3 website
     // 405s). An excluded key is outside a deployment's filter on both sides, so
     // pruning never touches it: the config deployment solely owns it.
     //

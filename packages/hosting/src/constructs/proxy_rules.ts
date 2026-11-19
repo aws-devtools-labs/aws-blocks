@@ -121,7 +121,7 @@ export const warnRulesNotApplied = (scope: IConstruct, what: UnreachedByProxies)
     const missed = [
       what.server ? 'server-rendered (SSR) responses' : undefined,
       what.image ? 'image-optimization responses' : undefined,
-      what.nativeApi ? 'API responses (`/aws-blocks/*` and raw routes)' : undefined,
+      what.nativeApi ? 'API responses (`/cdk-blocks/*` and raw routes)' : undefined,
     ].filter((m): m is string => m !== undefined);
     if (missed.length > 0) {
       notes.push(

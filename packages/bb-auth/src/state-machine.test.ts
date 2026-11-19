@@ -266,14 +266,14 @@ describe('signedOut shapes', () => {
 				name: 'signIn:google',
 				label: 'Sign in with Google',
 				fields: [],
-				url: '/aws-blocks/auth/signin/google',
+				url: '/cdk-blocks/auth/signin/google',
 				method: 'GET',
 			},
 			{
 				name: 'signIn:my okta',
 				label: 'Okta SSO',
 				fields: [],
-				url: '/aws-blocks/auth/signin/my%20okta',
+				url: '/cdk-blocks/auth/signin/my%20okta',
 				method: 'GET',
 			},
 		]);
@@ -317,8 +317,8 @@ describe('signedOut shapes', () => {
 
 	test('a federated signed-in session gets a url-bearing POST signOut', () => {
 		const user = { userId: 'u', username: 'u' };
-		assert.deepStrictEqual(signedIn(user, { federatedSignOutUrl: '/aws-blocks/auth/signout' }).actions, [
-			{ name: 'signOut', label: 'Sign Out', fields: [], url: '/aws-blocks/auth/signout', method: 'POST' },
+		assert.deepStrictEqual(signedIn(user, { federatedSignOutUrl: '/cdk-blocks/auth/signout' }).actions, [
+			{ name: 'signOut', label: 'Sign Out', fields: [], url: '/cdk-blocks/auth/signout', method: 'POST' },
 		]);
 		assert.deepStrictEqual(names(signedIn(user, { passkeys: true })), [
 			'signOut',

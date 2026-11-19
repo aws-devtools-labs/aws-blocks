@@ -18,7 +18,7 @@ const APP = 'https://app.example.com';
 
 /** Where a browser on `APP` lands for `Location: <location>`. */
 function landsOn(location: string): string {
-	return new URL(location, `${APP}/aws-blocks/auth/callback`).origin;
+	return new URL(location, `${APP}/cdk-blocks/auth/callback`).origin;
 }
 
 const UNSAFE = [

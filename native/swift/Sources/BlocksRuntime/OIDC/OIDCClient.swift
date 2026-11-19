@@ -674,11 +674,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// {
     ///   "providers": ["google", "github"],
     ///   "providerConfigs": { "google": { "authorizeUrl": "...", "clientId": "...", "scopes": [...], "kind": "..." } },
-    ///   "exchangePath": "/aws-blocks/auth/exchange",
-    ///   "refreshPath": "/aws-blocks/auth/exchange/refresh",
-    ///   "signOutPath": "/aws-blocks/auth/signout",
-    ///   "callbackPath": "/aws-blocks/auth/callback",
-    ///   "authorizeParamsBasePath": "/aws-blocks/auth/authorize-params"
+    ///   "exchangePath": "/cdk-blocks/auth/exchange",
+    ///   "refreshPath": "/cdk-blocks/auth/exchange/refresh",
+    ///   "signOutPath": "/cdk-blocks/auth/signout",
+    ///   "callbackPath": "/cdk-blocks/auth/callback",
+    ///   "authorizeParamsBasePath": "/cdk-blocks/auth/authorize-params"
     /// }
     /// ```
     ///
@@ -755,24 +755,49 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     /// The exchange path of the `Auth` block's default routes, the block 0.x versions wrote unscoped tokens for.
-    private static var legacyExchangePath: String { "/aws-blocks/auth/exchange" }
+    private static var defaultExchangePath: String { "/cdk-blocks/auth/exchange" }
 
-    /// Moves the unscoped tokens a 0.x version stored into this client's keys, once per `BlocksClient`, unless it
-    /// has its own. Only a client on the default routes (`exchangePath` `/aws-blocks/auth/exchange`) takes them:
-    /// they belong to that block, so a client for another block leaves them in place.
-    private func adoptLegacyTokens() async {
-        guard exchangePath == Self.legacyExchangePath else { return }
-        await client.adoptLegacyTokensOnce { await self.moveLegacyTokens() }
+    private static var canonicalPrefix: String { "/cdk-blocks/" }
+    private static var legacyPrefix: String { "/aws-blocks/" }
+
+    /// The key prefixes earlier versions stored this block's tokens under, newest first: its `/aws-blocks/`
+    /// exchange path, used before the routes moved to `/cdk-blocks/`, then, for the default block, none.
+    private var legacyKeyPrefixes: [String] {
+        var prefixes: [String] = []
+        var canonicalExchangePath = exchangePath
+        if exchangePath.hasPrefix(Self.canonicalPrefix) {
+            prefixes.append("\(Self.legacyPrefix)\(exchangePath.dropFirst(Self.canonicalPrefix.count))#")
+        } else if exchangePath.hasPrefix(Self.legacyPrefix) {
+            canonicalExchangePath = "\(Self.canonicalPrefix)\(exchangePath.dropFirst(Self.legacyPrefix.count))"
+        }
+        if canonicalExchangePath == Self.defaultExchangePath { prefixes.append("") }
+        return prefixes
     }
 
-    private func moveLegacyTokens() async {
+    /// Moves the tokens an earlier version stored under older keys into this client's keys, once per
+    /// `BlocksClient` and block, unless it has its own: the block's `/aws-blocks/` keys, else the unscoped keys
+    /// of a 0.x version. Only a client on the default routes (`/cdk-blocks/auth/exchange`, or its `/aws-blocks/`
+    /// twin) takes the unscoped ones: they belong to that block, so a client for another block leaves them.
+    private func adoptLegacyTokens() async {
+        let prefixes = legacyKeyPrefixes
+        guard !prefixes.isEmpty else { return }
+        await client.adoptLegacyTokensOnce(for: exchangePath) { await self.moveLegacyTokens(from: prefixes) }
+    }
+
+    private func moveLegacyTokens(from prefixes: [String]) async {
         for name in Self.tokenNames where await tokenStore.get(tokenKey(name)) != nil {
             return
         }
-        for name in Self.tokenNames {
-            guard let value = await tokenStore.get(name) else { continue }
-            await tokenStore.set(tokenKey(name), value: value)
-            await tokenStore.delete(name)
+        for prefix in prefixes {
+            let names = prefix.isEmpty ? Self.tokenNames : Self.tokenNames + [Self.sessionCookiesKey]
+            var moved = false
+            for name in names {
+                guard let value = await tokenStore.get(prefix + name) else { continue }
+                await tokenStore.set(tokenKey(name), value: value)
+                await tokenStore.delete(prefix + name)
+                moved = true
+            }
+            if moved { return }
         }
     }
 

@@ -36,7 +36,7 @@ final class DateCodingTests: XCTestCase {
         XCTAssertEqual(date.timeIntervalSince1970, expected.timeIntervalSince1970, accuracy: 0.0005, file: file, line: line)
     }
 
-    private var client: BlocksClient { BlocksClient(url: "http://localhost:3001/aws-blocks/api") }
+    private var client: BlocksClient { BlocksClient(url: "http://localhost:3001/cdk-blocks/api") }
 
     private func string(_ data: Data) -> String { String(bytes: data, encoding: .utf8) ?? "" }
 
@@ -119,7 +119,7 @@ final class DateCodingTests: XCTestCase {
             return (response, Data(#"{"jsonrpc":"2.0","result":null,"id":1}"#.utf8))
         }
         defer { MockURLProtocol.handler = nil }
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api", session: URLSession(configuration: config))
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api", session: URLSession(configuration: config))
         _ = try await client.execute(BlocksRequest(method: "api.schedule", params: [instant], id: 1))
         let body = try XCTUnwrap(sentBody)
         XCTAssertTrue(body.contains(#""params":["\#(wire)"]"#), body)

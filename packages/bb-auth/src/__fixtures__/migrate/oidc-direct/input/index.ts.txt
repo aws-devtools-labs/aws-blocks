@@ -41,7 +41,7 @@ export const auth = new AuthOIDC(scope, 'oidc-auth', {
 		stubIdp({ name: 'corp', users: [{ sub: 'u-1', email: 'a@example.com', name: 'A' }] }),
 	],
 	allowBearerAuth: true,
-	callbackPath: '/aws-blocks/auth/callback',
+	callbackPath: '/cdk-blocks/auth/callback',
 	postSignInPath: '/home',
 	allowedRelayOrigins: [relayOrigin('myapp://auth')],
 	onSignIn: async (user) => {

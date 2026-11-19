@@ -51,7 +51,7 @@ import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 // ================================================================
 
 const MOCK_API: BlocksStackApi = {
-  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api',
+  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api',
 };
 
 /** Helper: create a minimal SPA build output (dist/ with index.html). */
@@ -543,7 +543,7 @@ describe('Hosting', () => {
   });
 
   // A namespace on a container compute: Hosting routes its exact path straight to
-  // the container's load balancer, ahead of the `/aws-blocks/api/*` gateway
+  // the container's load balancer, ahead of the `/cdk-blocks/api/*` gateway
   // behavior that would otherwise match first.
   describe('container API namespaces', () => {
     function hostingWithDirectRoute(id: string, cacheBehaviors?: number) {
@@ -593,8 +593,8 @@ describe('Hosting', () => {
       const patterns: string[] = config.CacheBehaviors.map((b: { PathPattern: string }) => b.PathPattern);
       const direct = patterns.indexOf(`${BLOCKS_RPC_PREFIX}/render`);
       assert.ok(direct !== -1, `behaviors: ${patterns.join(', ')}`);
-      assert.ok(direct < patterns.indexOf(`${BLOCKS_RPC_PREFIX}/*`), 'ahead of /aws-blocks/api/*');
-      assert.ok(direct < patterns.indexOf(BLOCKS_RPC_PREFIX), 'ahead of /aws-blocks/api');
+      assert.ok(direct < patterns.indexOf(`${BLOCKS_RPC_PREFIX}/*`), 'ahead of /cdk-blocks/api/*');
+      assert.ok(direct < patterns.indexOf(BLOCKS_RPC_PREFIX), 'ahead of /cdk-blocks/api');
       const behavior = config.CacheBehaviors[direct];
       const origin = config.Origins.find((o: { Id: string }) => o.Id === behavior.TargetOriginId);
       assert.ok(origin.VpcOriginConfig, 'a VPC origin');
@@ -677,7 +677,7 @@ describe('Hosting', () => {
       const { resources } = hostingWith('HostingPublicHostStamp');
       const [, dist] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::CloudFront::Distribution') ?? [];
       const behaviors = dist?.Properties.DistributionConfig?.CacheBehaviors ?? [];
-      for (const pattern of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, '/aws-blocks/auth/*']) {
+      for (const pattern of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, '/cdk-blocks/auth/*', '/aws-blocks/*']) {
         const behavior = behaviors.find((b) => b.PathPattern === pattern);
         assert.ok(behavior, `a ${pattern} behavior`);
         const forwarded = viewerRequestOf(resources, behavior)({
@@ -945,9 +945,9 @@ describe('Hosting', () => {
       // behavior on the distribution serves responses without security headers.
       createSpaBuildOutput(tmpDir);
 
-      // A raw route outside /aws-blocks/* gets its own behavior too; register
+      // A raw route outside /cdk-blocks/* gets its own behavior too; register
       // one so this test guards the raw-route tagging path, not just the
-      // fixed /aws-blocks/* patterns.
+      // fixed /cdk-blocks/* patterns.
       registerRoute({ method: 'GET', path: '/health', handler: async () => {} });
 
       const app = new App();
@@ -1219,7 +1219,7 @@ describe('Hosting', () => {
       const cacheBehaviors = distConfig.CacheBehaviors ?? [];
       const patterns = cacheBehaviors.map((b: any) => b.PathPattern);
 
-      assert.ok(patterns.includes('/aws-blocks/api/*'), 'Should have /aws-blocks/api/* behavior');
+      assert.ok(patterns.includes('/cdk-blocks/api/*'), 'Should have /cdk-blocks/api/* behavior');
       assert.ok(patterns.includes('/health'), 'Should have /health behavior for RawRoute');
       assert.ok(patterns.includes('/users/*'), 'Should have /users/* behavior for parameterized RawRoute');
     });
@@ -1303,14 +1303,14 @@ describe('Hosting', () => {
       );
     });
 
-    it('proxies the reserved /aws-blocks/auth subtree with a single behavior', () => {
+    it('proxies the reserved /cdk-blocks/auth subtree with a single behavior', () => {
       createSpaBuildOutput(tmpDir);
 
       // A route under the auth subtree (as the auth runtime would mount) must
       // NOT get its own behavior — the subtree wildcard covers it.
       registerRoute({
         method: 'GET',
-        path: '/aws-blocks/auth/callback',
+        path: '/cdk-blocks/auth/callback',
         handler: async () => {},
       });
 
@@ -1328,9 +1328,10 @@ describe('Hosting', () => {
       const cacheBehaviors = distConfig.CacheBehaviors ?? [];
       const patterns = cacheBehaviors.map((b: any) => b.PathPattern);
 
-      assert.ok(patterns.includes('/aws-blocks/auth/*'), 'Should have /aws-blocks/auth/* behavior');
+      assert.ok(patterns.includes('/cdk-blocks/auth/*'), 'Should have /cdk-blocks/auth/* behavior');
+      assert.ok(patterns.includes('/aws-blocks/*'), 'Should keep the legacy /aws-blocks/* behavior');
       assert.ok(
-        !patterns.includes('/aws-blocks/auth/callback'),
+        !patterns.includes('/cdk-blocks/auth/callback'),
         'A route under the auth subtree should be covered by the wildcard, not get its own behavior',
       );
     });
@@ -2062,7 +2063,7 @@ describe('Hosting', () => {
         assert.strictEqual(err.name, 'HttpErrorStatusErrorPagesError');
         assert.match(err.message, /'api'/);
         assert.match(err.message, /404/);
-        assert.match(err.message, /aws-blocks/);
+        assert.match(err.message, /cdk-blocks/);
         assert.match(err.message, /errorPages\.notFound/, 'the message names the fix');
         return true;
       });
@@ -2374,7 +2375,7 @@ describe('Hosting', () => {
       const app = new App();
       const stack = new Stack(app, 'ShopProdStack', { env: { account: ACCOUNT, region: REGION } });
       const api: BlocksStackApi = {
-        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`,
       };
       new Hosting(stack, 'Hosting', { root: tmpDir, api });
 
@@ -2394,9 +2395,9 @@ describe('Hosting', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'ShopWebsiteStack', { env: { account: ACCOUNT, region: REGION } });
-      const publicApiUrl = 'https://d111111abcdef8.cloudfront.net/aws-blocks/api';
+      const publicApiUrl = 'https://d111111abcdef8.cloudfront.net/cdk-blocks/api';
       const api: BlocksStackApi = {
-        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`,
         publicApiUrl,
       };
       new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: 'none' });
@@ -2413,7 +2414,7 @@ describe('Hosting', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'ShopWebsiteDirectStack', { env: { account: ACCOUNT, region: REGION } });
-      const apiUrl = `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`;
+      const apiUrl = `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`;
       new Hosting(stack, 'Hosting', { root: tmpDir, api: { apiUrl }, frontDoor: 'none' });
 
       const { config, raw } = servedConfig(app, stack);
@@ -2429,7 +2430,7 @@ describe('Hosting', () => {
       const app = new App({ context: { sandboxMode: 'true' } });
       const stack = new Stack(app, 'ShopAlbStack', { env: { account: ACCOUNT, region: REGION } });
       const api: BlocksStackApi = {
-        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`,
       };
       new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: { kind: 'alb' } });
 
@@ -3025,7 +3026,7 @@ describe('Hosting', () => {
         waf: { enabled: true, rateLimit: 500 },
         frontDoor: { kind: 'custom', door: edgeDoor(seen) },
       });
-      assert.deepStrictEqual(seen.input?.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*']);
+      assert.deepStrictEqual(seen.input?.origins.api?.paths, ['/cdk-blocks/*', '/aws-blocks/*', '/webhooks/*']);
       assert.strictEqual(seen.input?.origins.api?.url, MOCK_API.apiUrl);
       assert.deepStrictEqual(
         seen.input?.features,
@@ -3158,7 +3159,7 @@ describe('Hosting', () => {
             `${label}: ${json} is built from ${origin.type}.${origin.attr}`,
           );
         };
-        // The trusted origin is the door's only when it serves `/aws-blocks/*`:
+        // The trusted origin is the door's only when it serves `/cdk-blocks/*`:
         // an S3 website doesn't, so `'none'` publishes none.
         if (frontDoor === 'none') assert.strictEqual(entries?.has('BLOCKS_PUBLIC_ORIGIN'), false);
         else expected(stack.resolve(entries?.get('BLOCKS_PUBLIC_ORIGIN')));
@@ -3274,7 +3275,7 @@ describe('Hosting', () => {
       // a SPA's root-absolute asset URLs); no REST API.
       t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
       t.resourceCountIs('AWS::ApiGateway::RestApi', 0);
-      // Same-origin backend proxy (`/aws-blocks/*`) via a native HTTP proxy integration.
+      // Same-origin backend proxy (`/cdk-blocks/*`) via a native HTTP proxy integration.
       t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
       // Private asset bucket read by the asset-proxy Lambda (no public website bucket).
       t.hasResourceProperties('AWS::Lambda::Function', {
@@ -3501,8 +3502,8 @@ describe('Hosting', () => {
         'the static path resolution runs at the edge',
       );
       assert.deepStrictEqual(
-        edge.behaviors.find(([p]) => p === '/aws-blocks/*'),
-        ['/aws-blocks/*', 'alb'],
+        edge.behaviors.find(([p]) => p === '/cdk-blocks/*'),
+        ['/cdk-blocks/*', 'alb'],
         'the API goes through the ALB router',
       );
       // The edge distribution may read (and list, so a miss is a 404) the bucket.
@@ -3599,7 +3600,7 @@ describe('Hosting', () => {
       type B = { PathPattern?: string; CachePolicyId?: unknown; FunctionAssociations?: Array<{ EventType: string; FunctionARN: unknown }> };
       const def = edge.config.DefaultCacheBehavior as unknown as B;
       const behaviors = (edge.config.CacheBehaviors ?? []) as unknown as B[];
-      const api = behaviors.find((b) => b.PathPattern === '/aws-blocks/*');
+      const api = behaviors.find((b) => b.PathPattern === '/cdk-blocks/*');
       assert.ok(api);
       // CachingDisabled (the AWS-managed policy).
       assert.strictEqual(api.CachePolicyId, '4135ea2d-6df8-44a3-9df3-4b5a84be39ad');
@@ -3678,8 +3679,8 @@ describe('Hosting', () => {
       assert.strictEqual(edge.defaultTarget, 'alb');
       const order = edge.behaviors.map(([p, to]) => `${p}→${to}`);
       assert.ok(order.includes('/_next/static/*→s3'), order.join(', '));
-      assert.ok(order.includes('/aws-blocks/*→alb'), order.join(', '));
-      assert.ok(order.indexOf('/aws-blocks/*→alb') < order.indexOf('/_next/static/*→s3'), 'the API keeps precedence');
+      assert.ok(order.includes('/cdk-blocks/*→alb'), order.join(', '));
+      assert.ok(order.indexOf('/cdk-blocks/*→alb') < order.indexOf('/_next/static/*→s3'), 'the API keeps precedence');
     });
 
     it("keeps the router's precedence: a dynamic route listed before an overlapping static one shadows it at the edge", () => {
@@ -3743,7 +3744,7 @@ describe('Hosting', () => {
       assert.strictEqual(edge.behaviors.length, 24, `24 behaviors besides the default (got ${edge.behaviors.length})`);
       // The budget goes to S3: the API paths no static route can shadow are left
       // to the router default (which reaches them), not given behaviors.
-      assert.ok(!edge.behaviors.some(([p]) => p === '/aws-blocks/*'));
+      assert.ok(!edge.behaviors.some(([p]) => p === '/cdk-blocks/*'));
       assert.strictEqual(edge.behaviors[0][0], '/.blocks-sandbox/*');
       const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedEdgeBehaviorLimit'));
       assert.strictEqual(warnings.length, 1);
@@ -3760,7 +3761,7 @@ describe('Hosting', () => {
       const defaultPolicy = policy(edge.config.DefaultCacheBehavior as { ResponseHeadersPolicyId?: unknown });
       assert.ok(defaultPolicy && defaultPolicy !== 'undefined', 'the default behavior has a headers policy');
       const behaviors = (edge.config as { CacheBehaviors?: Array<{ PathPattern: string; ResponseHeadersPolicyId?: unknown }> }).CacheBehaviors ?? [];
-      for (const pattern of ['/aws-blocks/*', '/health']) {
+      for (const pattern of ['/cdk-blocks/*', '/health']) {
         const b = behaviors.find((x) => x.PathPattern === pattern);
         if (!b) continue; // left to the router default, which carries the same policy
         assert.strictEqual(policy(b), defaultPolicy, pattern);

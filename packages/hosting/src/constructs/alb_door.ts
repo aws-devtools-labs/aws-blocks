@@ -48,7 +48,7 @@ export const albDoor = defineFrontDoor<AlbDoorInput, AlbDoorResult>({
   serverResponse: 'buffered',
 
   build(scope, input) {
-    // Route every API path the app has (`/aws-blocks/*` + the raw routes).
+    // Route every API path the app has (`/cdk-blocks/*` + the raw routes).
     const alb = new AlbConstruct(scope, 'Alb', {
       ...input.alb,
       apiPaths: input.alb.apiPaths ?? input.origins.api?.paths,

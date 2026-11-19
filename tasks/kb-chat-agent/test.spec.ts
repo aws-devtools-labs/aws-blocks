@@ -22,7 +22,7 @@ async function ask(
 	ctx: APIRequestContext,
 	message: string,
 ): Promise<{ status: number; body: any; reply: string; toolsUsed: string[]; citations: string[] }> {
-	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
+	const res = await ctx.post(`${BASE}/cdk-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
 		data: { jsonrpc: '2.0', method: 'api.ask', params: [message], id: ++rpcSeq },
 	});

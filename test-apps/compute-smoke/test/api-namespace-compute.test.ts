@@ -80,7 +80,7 @@ export function apiNamespaceComputeTests(ctx: ComputeTestContext) {
     } else {
       test('a call to the bare endpoint runs on the default compute', async () => {
         // Raw HTTP callers, and native clients released before per-namespace paths,
-        // POST every call to the bare `/aws-blocks/api`: it dispatches by the body, on
+        // POST every call to the bare `/cdk-blocks/api`: it dispatches by the body, on
         // the default compute, even for a namespace that has its own.
         const onDefault = await whereAmI('api');
         const reply = await rpcCall(ctx.apiUrl(), 'reports.whereAmI');

@@ -89,8 +89,8 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 ### RPC endpoint (local dev)
 
 ```bash
-# JSON-RPC 2.0 at POST /aws-blocks/api. Auth methods are on the auth namespace.
-curl -X POST http://localhost:3001/aws-blocks/api \
+# JSON-RPC 2.0 at POST /cdk-blocks/api. Auth methods are on the auth namespace.
+curl -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.listNotebooks","params":[],"id":1}'
 # method = "<namespace>.<methodName>"; params = positional array.

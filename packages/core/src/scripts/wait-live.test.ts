@@ -47,14 +47,14 @@ function fakeClock(startMs = 0) {
 }
 
 const BUILD_ID = 'mg7k2p-ab12cd34';
-const REAL = JSON.stringify({ apiUrl: '/aws-blocks/api', environment: 'production' });
+const REAL = JSON.stringify({ apiUrl: '/cdk-blocks/api', environment: 'production' });
 const REAL_WITH_ID = JSON.stringify({
-  apiUrl: '/aws-blocks/api',
+  apiUrl: '/cdk-blocks/api',
   environment: 'production',
   __blocksBuildId: BUILD_ID,
 });
 const REAL_WITH_OLD_ID = JSON.stringify({
-  apiUrl: '/aws-blocks/api',
+  apiUrl: '/cdk-blocks/api',
   environment: 'production',
   __blocksBuildId: 'OLD-9z9z9z-00000000',
 });

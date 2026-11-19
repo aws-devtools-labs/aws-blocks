@@ -814,7 +814,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   }
   console.log(`  npm run dev`);
   if (templatePkg.blocks?.dev?.frontend === false) {
-    console.log(`\nThe API then listens on http://localhost:${devPort}/aws-blocks/api (backend only; README.md has a curl example).`);
+    console.log(`\nThe API then listens on http://localhost:${devPort}/cdk-blocks/api (backend only; README.md has a curl example).`);
   } else {
     console.log(`\nThen open http://localhost:${devPort}`);
   }

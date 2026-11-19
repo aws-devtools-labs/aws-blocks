@@ -171,7 +171,7 @@ Pass `generate: true` and never call `put()`: the secret is created with a **ran
 
 ### 2. Set via the settings endpoint → console — the default for most apps
 
-Every AWS CDK Blocks app exposes a built-in **`/aws-blocks/settings`** route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.bb-data/settings.json`, where secret values live next to settings (plaintext, dev-only). One route, one place, local and deployed.
+Every AWS CDK Blocks app exposes a built-in **`/cdk-blocks/settings`** route. Deployed, it redirects to the stack's *settings* resource group in the AWS console, where your `Secret` values appear alongside your `AppSetting` parameters — set or rotate them in the console UI. Locally, the same route opens `.bb-data/settings.json`, where secret values live next to settings (plaintext, dev-only). One route, one place, local and deployed.
 
 ### 3. Well-known `name` + the `aws` CLI — for CI/CD-driven workflows
 
@@ -292,7 +292,7 @@ For anything deeper than the current/previous pair (full history, custom staging
 
 ## Local development
 
-The mock stores the current value as **plaintext** in the shared `.bb-data/settings.json` (the same file `AppSetting` uses, keyed by the secret's `name` or `fullId`) and logs a one-time warning. This is why the local `/aws-blocks/settings` route surfaces secrets alongside settings. The previous value (for `get({ version: 'previous' })` / `listVersions()`) is kept in a small `.bb-data/secret-versions.json` sidecar — current + previous only; deeper history is an AWS-only capability. It is **not** secure — never use real credentials in local development. Wipe with `rm -rf .bb-data`.
+The mock stores the current value as **plaintext** in the shared `.bb-data/settings.json` (the same file `AppSetting` uses, keyed by the secret's `name` or `fullId`) and logs a one-time warning. This is why the local `/cdk-blocks/settings` route surfaces secrets alongside settings. The previous value (for `get({ version: 'previous' })` / `listVersions()`) is kept in a small `.bb-data/secret-versions.json` sidecar — current + previous only; deeper history is an AWS-only capability. It is **not** secure — never use real credentials in local development. Wipe with `rm -rf .bb-data`.
 
 The mock has no cache: every `get()` reads `.bb-data/settings.json` again, so a value written to that file reaches the next call without a restart. The key is the secret's `name` when you pass one, otherwise its `fullId` (for example `new Secret(new Scope('my-app'), 'stripe-key')` is stored under `my-app-stripe-key`). To simulate an externally set secret in a local test, add the value under that key, keeping the entries already in the file — for the secret declared with `{ name: 'my-app/stripe-key' }` above:
 

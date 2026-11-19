@@ -100,7 +100,7 @@ function namespaceOn(stack: cdk.Stack, compute: ComputeBase, name: string): obje
 
 type CfnResources = Record<string, { Type: string; Properties: Record<string, unknown> }>;
 
-/** Full resource path (`/aws-blocks/api/orders`) for every ApiGateway::Resource, keyed by logical id. */
+/** Full resource path (`/cdk-blocks/api/orders`) for every ApiGateway::Resource, keyed by logical id. */
 function resourcePaths(resources: CfnResources): Record<string, string> {
 	const paths: Record<string, string> = {};
 	const resolve = (id: string): string => {
@@ -188,11 +188,16 @@ describe('createSharedGateway — single shared REST API', () => {
 		const resources = Template.fromStack(stack).toJSON().Resources as CfnResources;
 
 		// A single compute ⇒ no per-namespace resources, only the catch-all tree.
+		// The legacy /aws-blocks tree mirrors the canonical /cdk-blocks one.
 		assert.deepStrictEqual(Object.values(resourcePaths(resources)).sort(), [
 			'/aws-blocks',
 			'/aws-blocks/api',
 			'/aws-blocks/api/{proxy+}',
 			'/aws-blocks/{proxy+}',
+			'/cdk-blocks',
+			'/cdk-blocks/api',
+			'/cdk-blocks/api/{proxy+}',
+			'/cdk-blocks/{proxy+}',
 			'/{proxy+}',
 		]);
 
@@ -201,9 +206,9 @@ describe('createSharedGateway — single shared REST API', () => {
 			.map((m) => m.Properties.HttpMethod);
 		assert.ok(methods.includes('POST'), 'RPC endpoint has POST');
 		assert.ok(methods.includes('OPTIONS'), 'RPC endpoint has OPTIONS');
-		// ANY on /aws-blocks/{proxy+}, /aws-blocks/api/{proxy+}, the root /{proxy+},
-		// and / itself (a root proxy also adds ANY to the root so `/` is reachable).
-		assert.strictEqual(methods.filter((m) => m === 'ANY').length, 4, 'four ANY proxy methods');
+		// ANY on {prefix}/{proxy+} and {prefix}/api/{proxy+} for both prefixes, the root
+		// /{proxy+}, and / itself (a root proxy also adds ANY to the root so `/` is reachable).
+		assert.strictEqual(methods.filter((m) => m === 'ANY').length, 6, 'six ANY proxy methods');
 	});
 
 	test('builds under the given scope with the per-compute gateway construct ids', () => {
@@ -224,7 +229,7 @@ describe('createSharedGateway — single shared REST API', () => {
 			defaults: BlocksPresets.production,
 		});
 
-		assert.ok(gw.apiUrl.endsWith('/aws-blocks/api'), `apiUrl should end with the RPC prefix, got: ${gw.apiUrl}`);
+		assert.ok(gw.apiUrl.endsWith('/cdk-blocks/api'), `apiUrl should end with the RPC prefix, got: ${gw.apiUrl}`);
 		assert.ok(gw.apiUrl.startsWith(gw.restApi.url), 'apiUrl is built from the stage URL');
 	});
 });
@@ -242,7 +247,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 
 	test('routes a non-default namespace by its export name to its own function; the rest stays on the default', () => {
 		const { stack, defaultCompute, ordersCompute, defaultFnId, ordersFnId } = fanOut('FanOut');
-		// Constructed as 'orders', exported as 'shop' — the client calls /aws-blocks/api/shop.
+		// Constructed as 'orders', exported as 'shop' — the client calls /cdk-blocks/api/shop.
 		const backendModule = { shop: namespaceOn(stack, ordersCompute, 'orders') };
 
 		createSharedGateway(stack, {
@@ -253,16 +258,16 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 
 		// Correlate method → integration → function so we PROVE the fan-out.
 		const fnIds = [defaultFnId, ordersFnId];
-		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api/shop', 'ANY', fnIds), ordersFnId);
+		assert.strictEqual(methodTargetFnId(stack, '/cdk-blocks/api/shop', 'ANY', fnIds), ordersFnId);
 		// Everything else stays on the default compute.
-		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api', 'POST', fnIds), defaultFnId);
-		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/api/{proxy+}', 'ANY', fnIds), defaultFnId);
-		assert.strictEqual(methodTargetFnId(stack, '/aws-blocks/{proxy+}', 'ANY', fnIds), defaultFnId);
+		assert.strictEqual(methodTargetFnId(stack, '/cdk-blocks/api', 'POST', fnIds), defaultFnId);
+		assert.strictEqual(methodTargetFnId(stack, '/cdk-blocks/api/{proxy+}', 'ANY', fnIds), defaultFnId);
+		assert.strictEqual(methodTargetFnId(stack, '/cdk-blocks/{proxy+}', 'ANY', fnIds), defaultFnId);
 		assert.strictEqual(methodTargetFnId(stack, '/{proxy+}', 'ANY', fnIds), defaultFnId);
 
 		// Exactly the catch-all tree plus one literal resource: no constructor-name
 		// resource, and no `{proxy+}` subtree (the client POSTs to exactly
-		// /aws-blocks/api/{name}).
+		// /cdk-blocks/api/{name}).
 		const paths = Object.values(resourcePaths(Template.fromStack(stack).toJSON().Resources as CfnResources));
 		assert.deepStrictEqual(paths.sort(), [
 			'/aws-blocks',
@@ -270,6 +275,11 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 			'/aws-blocks/api/shop',
 			'/aws-blocks/api/{proxy+}',
 			'/aws-blocks/{proxy+}',
+			'/cdk-blocks',
+			'/cdk-blocks/api',
+			'/cdk-blocks/api/shop',
+			'/cdk-blocks/api/{proxy+}',
+			'/cdk-blocks/{proxy+}',
 			'/{proxy+}',
 		]);
 	});
@@ -325,7 +335,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		// …and all three namespaces are still routed to that function.
 		const fnIds = [stack.getLogicalId(defaultCompute.fn.node.defaultChild as cdk.CfnElement), ordersFnId];
 		for (const name of ['orders', 'invoices', 'refunds']) {
-			assert.strictEqual(methodTargetFnId(stack, `/aws-blocks/api/${name}`, 'ANY', fnIds), ordersFnId, name);
+			assert.strictEqual(methodTargetFnId(stack, `/cdk-blocks/api/${name}`, 'ANY', fnIds), ordersFnId, name);
 		}
 		assert.match(JSON.stringify(ordersPermissions[0].Properties.SourceArn), /\/\*\/\*\/\*/);
 	});
@@ -340,7 +350,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		});
 
 		const resources = Template.fromStack(stack).toJSON().Resources as CfnResources;
-		assert.strictEqual(Object.keys(resourcePaths(resources)).length, 5, 'only the catch-all tree');
+		assert.strictEqual(Object.keys(resourcePaths(resources)).length, 9, 'only the catch-all trees');
 	});
 
 	test('rejects a namespace on a compute that accepts no API traffic', () => {
@@ -654,8 +664,8 @@ describe('createSharedGateway — load-balanced computes', () => {
 
 	test('routes each namespace path on its compute’s load balancer', () => {
 		assert.deepStrictEqual(loadBalanced().routed, {
-			render: ['/aws-blocks/api/render', '/aws-blocks/api/preview'],
-			batch: ['/aws-blocks/api/batch'],
+			render: ['/cdk-blocks/api/render', '/cdk-blocks/api/preview'],
+			batch: ['/cdk-blocks/api/batch'],
 		});
 	});
 
@@ -668,9 +678,9 @@ describe('createSharedGateway — load-balanced computes', () => {
 				.map((m) => [pathPart(m.Properties.ResourceId.Ref), JSON.stringify(m.Properties.Integration.Uri)]),
 		);
 		assert.deepStrictEqual(Object.keys(byPath).sort(), ['batch', 'preview', 'render']);
-		assert.match(byPath.render, /:10000\/aws-blocks\/api\/render"/);
-		assert.match(byPath.preview, /:10000\/aws-blocks\/api\/preview"/);
-		assert.match(byPath.batch, /:10000\/aws-blocks\/api\/batch"/);
+		assert.match(byPath.render, /:10000\/cdk-blocks\/api\/render"/);
+		assert.match(byPath.preview, /:10000\/cdk-blocks\/api\/preview"/);
+		assert.match(byPath.batch, /:10000\/cdk-blocks\/api\/batch"/);
 	});
 
 	test('each VPC link integration carries the 29s integration timeout', () => {
@@ -678,7 +688,7 @@ describe('createSharedGateway — load-balanced computes', () => {
 		const timeouts = Object.values(resources)
 			.filter((r) => r.Type === 'AWS::ApiGateway::Method' && r.Properties.Integration?.ConnectionType === 'VPC_LINK')
 			.map((m) => m.Properties.Integration.TimeoutInMillis);
-		assert.deepStrictEqual(timeouts, [29_000, 29_000, 29_000]);
+		assert.deepStrictEqual(timeouts, [29_000, 29_000, 29_000, 29_000, 29_000, 29_000]);
 	});
 
 	test('the load balancer admits the VPC link on the listener port range, in one rule', () => {
@@ -716,6 +726,6 @@ describe('createSharedGateway — load-balanced computes', () => {
 		);
 		const types = methods.map((m) => m.Properties.Integration.Type);
 		assert.ok(types.includes('AWS_PROXY'), 'Lambda proxy for the function compute');
-		assert.strictEqual(types.filter((t) => t === 'HTTP_PROXY').length, 1, 'one HTTP proxy for the container namespace');
+		assert.strictEqual(types.filter((t) => t === 'HTTP_PROXY').length, 2, 'one HTTP proxy for the container namespace per prefix');
 	});
 });

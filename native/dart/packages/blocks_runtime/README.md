@@ -159,7 +159,7 @@ class AuthModel extends ChangeNotifier {
 - For `relayTo` on mobile, prefer a verified App Link (Android) or Universal Link (iOS) over a bare custom scheme. Another app can register the same custom scheme and receive the relay redirect; with a custom scheme, PKCE is what stops it from using the code, because only this app holds the verifier.
 - Sign in with `signIn`. `signInDirect`, the direct flow, sends the IdP a custom-scheme `redirect_uri`, which most identity providers reject.
 
-Register the backend's callback with the identity provider, not an address in the app: every platform's `signIn` sends the IdP the backend's HTTPS callback as its `redirect_uri`, and the backend relays the result to the app. That callback is the client's `baseUrl` with its final `/aws-blocks/api` replaced by the block's `redirects.callbackPath`, `/aws-blocks/auth/callback` unless you set one. A deployed API keeps its stage: for `https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api`, register `https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/auth/callback`. If the IdP asks for a sign-out URL, register the same prefix followed by the block's `redirects.postSignOutPath` (`/` by default), here `https://abc123.execute-api.us-west-2.amazonaws.com/prod/`.
+Register the backend's callback with the identity provider, not an address in the app: every platform's `signIn` sends the IdP the backend's HTTPS callback as its `redirect_uri`, and the backend relays the result to the app. That callback is the client's `baseUrl` with its final `/cdk-blocks/api` replaced by the block's `redirects.callbackPath`, `/cdk-blocks/auth/callback` unless you set one. A deployed API keeps its stage: for `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api`, register `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/auth/callback`. If the IdP asks for a sign-out URL, register the same prefix followed by the block's `redirects.postSignOutPath` (`/` by default), here `https://abc123.execute-api.us-west-2.amazonaws.com/prod/`.
 
 ### Federated sign-in on each platform
 
@@ -228,7 +228,7 @@ void main() {
       store: FileTokenStore(applicationId: 'com.example.notes_cli'),
     ),
   );
-  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   print(client.sessionStore is PersistentSessionStore); // true
 }
 ```

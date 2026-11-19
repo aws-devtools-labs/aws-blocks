@@ -133,16 +133,16 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [{name: signIn:okta,<br/>url: "/aws-blocks/auth/signin/okta",<br/>method: GET, fields: []}]
+	S-->>C: state: signedOut<br/>actions: [{name: signIn:okta,<br/>url: "/cdk-blocks/auth/signin/okta",<br/>method: GET, fields: []}]
 
 	Note over C: User clicks "Sign in with Okta"
-	C->>S: GET /aws-blocks/auth/signin/okta
+	C->>S: GET /cdk-blocks/auth/signin/okta
 	S-->>C: 302 → the provider (PKCE, signed state)
 	C->>P: authorize
 
 	Note over P: User authenticates
 
-	P->>S: GET /aws-blocks/auth/callback?code=abc&state=xyz
+	P->>S: GET /cdk-blocks/auth/callback?code=abc&state=xyz
 	Note over S: Check state, exchange code, verify tokens, set cookie
 	S-->>C: 302 → redirects.postSignInPath (default /)
 
@@ -158,7 +158,7 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [<br/>{name: signIn, fields: [username, password]},<br/>{name: signUp, fields: [username, password, email]},<br/>{name: resetPassword, fields: [username]},<br/>{name: signIn:google, url: "/aws-blocks/auth/signin/google", method: GET, fields: []}<br/>]
+	S-->>C: state: signedOut<br/>actions: [<br/>{name: signIn, fields: [username, password]},<br/>{name: signUp, fields: [username, password, email]},<br/>{name: resetPassword, fields: [username]},<br/>{name: signIn:google, url: "/cdk-blocks/auth/signin/google", method: GET, fields: []}<br/>]
 
 	Note over C: Authenticator renders:<br/>- Username/password form<br/>- "Create Account" link<br/>- "Forgot Password" link<br/>- "Sign in with Google" button
 ```

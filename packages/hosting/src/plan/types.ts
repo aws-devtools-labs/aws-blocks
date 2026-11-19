@@ -102,12 +102,12 @@ export type BackendIngress = {
 
 /**
  * One API-namespace → ingress route. This is the neutral form of multi-compute
- * backend routing: a request for `/aws-blocks/api/{namespace}/*` must reach the
+ * backend routing: a request for `/cdk-blocks/api/{namespace}/*` must reach the
  * compute that owns that namespace. A single `namespace: '*'` origin is the common single-compute,
- * same-origin case (the whole `/aws-blocks/*` API subtree proxied to one backend).
+ * same-origin case (the whole `/cdk-blocks/*` API subtree proxied to one backend).
  */
 export type BackendOrigin = {
-  /** The `/aws-blocks/api/{namespace}` segment this ingress owns; `'*'` = the whole API subtree. */
+  /** The `/cdk-blocks/api/{namespace}` segment this ingress owns; `'*'` = the whole API subtree. */
   namespace: string;
   /** Where requests for this namespace are routed. */
   ingress: BackendIngress;

@@ -45,8 +45,8 @@ public final class BlocksClient: Sendable {
     private let url: String
     /// The only path to the session; read by tests.
     let gate: SessionGate
-    /// The one move of tokens saved under the old unscoped keys, shared by every OIDCClient on this client.
-    private let legacyTokenAdoption = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+    /// The one move of tokens saved under older keys per exchange path, shared by every OIDCClient on this client.
+    private let legacyTokenAdoption = OSAllocatedUnfairLock<[String: Task<Void, Never>]>(initialState: [:])
 
     /// Stored cookies persisted in the Keychain so auth sessions survive app restarts.
     /// Shared across all BlocksClient instances.
@@ -84,12 +84,12 @@ public final class BlocksClient: Sendable {
         gate.close()
     }
 
-    /// Runs only the first caller's `move`; every later caller waits for that run instead.
-    func adoptLegacyTokensOnce(_ move: @escaping @Sendable () async -> Void) async {
+    /// Runs only the first caller's `move` for `exchangePath`; every later caller waits for that run instead.
+    func adoptLegacyTokensOnce(for exchangePath: String, _ move: @escaping @Sendable () async -> Void) async {
         let adoption = legacyTokenAdoption.withLock { state in
-            if let existing = state { return existing }
+            if let existing = state[exchangePath] { return existing }
             let started = Task { await move() }
-            state = started
+            state[exchangePath] = started
             return started
         }
         await adoption.value
@@ -116,7 +116,7 @@ public final class BlocksClient: Sendable {
     /// Executes a JSON-RPC request and returns the raw JSON `Data` of the `result` field.
     /// The generated code is responsible for decoding this into typed models.
     ///
-    /// The request is POSTed to `{url}/{namespace}` (e.g. `…/aws-blocks/api/reports` for
+    /// The request is POSTed to `{url}/{namespace}` (e.g. `…/cdk-blocks/api/reports` for
     /// `reports.build`), so a namespace that runs on its own compute is served by it.
     ///
     /// Returns `nil` if the result is JSON `null`.
@@ -248,17 +248,17 @@ public final class BlocksClient: Sendable {
 
     /// Base URL for raw routes — strips the RPC path suffix but keeps the stage prefix.
     /// Base URL for raw routes. Raw routes share the same origin and stage
-    /// prefix as the RPC endpoint but sit outside the RPC path (`/aws-blocks/api`).
+    /// prefix as the RPC endpoint but sit outside the RPC path (`/cdk-blocks/api`).
     /// Derived by stripping the RPC path segments from the end of the URL.
-    /// e.g. `https://host/prod/aws-blocks/api` → `https://host/prod`
-    ///      `http://localhost:3001/aws-blocks/api` → `http://localhost:3001`
-    /// The cut is at the first `aws-blocks` segment, so a doubled `/aws-blocks/api/aws-blocks/api`
+    /// e.g. `https://host/prod/cdk-blocks/api` → `https://host/prod`
+    ///      `http://localhost:3001/cdk-blocks/api` → `http://localhost:3001`
+    /// The cut is at the first `cdk-blocks` (or legacy `aws-blocks`) segment, so a doubled `/cdk-blocks/api/cdk-blocks/api`
     /// gives the origin. A URL with no such segment is used as it is, without a trailing `/`.
     var rawRouteBase: String {
         // `URLComponents` keeps an IPv6 host's brackets and the path's percent-encoding as they were.
         guard var components = URLComponents(string: url), components.host != nil else { return url }
         let segments = components.percentEncodedPath.split(separator: "/")
-        if let idx = segments.firstIndex(of: "aws-blocks") {
+        if let idx = segments.firstIndex(where: { $0 == "cdk-blocks" || $0 == "aws-blocks" }) {
             let kept = segments[..<idx]
             components.percentEncodedPath = kept.isEmpty ? "" : "/" + kept.joined(separator: "/")
             components.query = nil

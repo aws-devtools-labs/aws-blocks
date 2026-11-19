@@ -32,7 +32,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // Astro static (multi-page) deploy. No `compute` block: a static Astro site
 // has no SSR Lambda — every route is prerendered to its own index.html and
 // served from S3. `api: blocksStack` still wires the single-origin
-// /aws-blocks/* CloudFront proxy so client-side fetches reach the backend
+// /cdk-blocks/* CloudFront proxy so client-side fetches reach the backend
 // with no CORS.
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
