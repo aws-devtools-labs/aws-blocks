@@ -192,36 +192,6 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   response. Callers that join a refresh already in flight now get its error
   when it fails; they used to see it succeed and go on with the expired
   token.
-- Add `registerDefaultSessionStore`, which sets the store clients use when
-  given none. A registered store is created
-  once and shared by every such client. Registering a different store after a
-  client has received the default throws a `StateError`; registering the same
-  function again does nothing, and `null` is always accepted.
-- Add `FileTokenStore`, a `TokenStore` for pure Dart programs that keeps each
-  value in a file under `~/.blocks/<applicationId>/dart/`. On Linux and macOS
-  the directory is owner-only (`rwx------`) and each file `rw-------` (with `/bin/chmod` or `/usr/bin/chmod`,
-  not whatever `chmod` is on `PATH`). Values are not encrypted. A `final`
-  class. Not available on the web.
-- `PersistentSessionStore` writes to its `TokenStore` only when the cookies
-  change. It used to write on every response, including the many with no
-  `Set-Cookie`. Writes run one at a time, in order.
-- Add `PersistentSessionStore.flush()`, which completes when the writes
-  queued so far have finished. A program that calls `exit` right after signing
-  in awaits it, or the new session may not be stored.
-- A `TokenStore` error while `PersistentSessionStore` reads or writes no
-  longer escapes as an uncaught error, which ended the process. It is passed to
-  the new `onPersistError` callback; without one it is logged with
-  `dart:developer`'s `log` (name `blocks_runtime.session`, warning level) and
-  written to standard error. Only the first failure is reported until a read
-  or write succeeds again. The cookies keep working from memory. A failed
-  write is retried on the next change. A failed read is retried when a cookie
-  changes, and on a request made at least 30 seconds after the last failed
-  attempt, so a store that was unreadable at launch (a Keychain item while the
-  device is locked) is read once it becomes readable. Nothing is written until the store has been
-  read, so a session that could not be read is not overwritten; a cookie
-  change made meanwhile is written once a read succeeds. Signing out deletes
-  the stored session even while the store can't be read. A stored value
-  that is not a cookie list is now reported before it is deleted.
 - A `restore()` still in flight when a sign-in or sign-out finishes ignores
   its response and returns the current user, or null. A late 401 used to sign
   out, and clear the tokens of, a sign-in that had just finished, and a late
@@ -313,6 +283,36 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `OidcExchangeException`, so an app that calls `exchange` directly and catches
   only `on OidcExchangeException` no longer catches it. Both extend
   `OidcException`.
+- Add `registerDefaultSessionStore`, which sets the store clients use when
+  given none. A registered store is created
+  once and shared by every such client. Registering a different store after a
+  client has received the default throws a `StateError`; registering the same
+  function again does nothing, and `null` is always accepted.
+- Add `FileTokenStore`, a `TokenStore` for pure Dart programs that keeps each
+  value in a file under `~/.blocks/<applicationId>/dart/`. On Linux and macOS
+  the directory is owner-only (`rwx------`) and each file `rw-------` (with `/bin/chmod` or `/usr/bin/chmod`,
+  not whatever `chmod` is on `PATH`). Values are not encrypted. A `final`
+  class. Not available on the web.
+- `PersistentSessionStore` writes to its `TokenStore` only when the cookies
+  change. It used to write on every response, including the many with no
+  `Set-Cookie`. Writes run one at a time, in order.
+- Add `PersistentSessionStore.flush()`, which completes when the writes
+  queued so far have finished. A program that calls `exit` right after signing
+  in awaits it, or the new session may not be stored.
+- A `TokenStore` error while `PersistentSessionStore` reads or writes no
+  longer escapes as an uncaught error, which ended the process. It is passed to
+  the new `onPersistError` callback; without one it is logged with
+  `dart:developer`'s `log` (name `blocks_runtime.session`, warning level) and
+  written to standard error. Only the first failure is reported until a read
+  or write succeeds again. The cookies keep working from memory. A failed
+  write is retried on the next change. A failed read is retried when a cookie
+  changes, and on a request made at least 30 seconds after the last failed
+  attempt, so a store that was unreadable at launch (a Keychain item while the
+  device is locked) is read once it becomes readable. Nothing is written until the store has been
+  read, so a session that could not be read is not overwritten; a cookie
+  change made meanwhile is written once a read succeeds. Signing out deletes
+  the stored session even while the store can't be read. A stored value
+  that is not a cookie list is now reported before it is deleted.
 
 ## 0.2.0
 

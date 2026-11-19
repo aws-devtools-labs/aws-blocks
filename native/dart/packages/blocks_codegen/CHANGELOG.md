@@ -71,9 +71,6 @@
 
 ### Other changes
 
-- A declared native binding whose Dart type is named `FileTokenStore` is
-  rejected, as for every other type `blocks_runtime` exports, because the
-  runtime now exports a class of that name.
 - The generated `Blocks` class has a `close()` that closes its
   `BlocksClient`, as the Kotlin client's `Blocks` does. A call after it
   throws `ClientClosedException`, and so does a call of an `OidcClient` that
@@ -90,6 +87,9 @@
   `OidcProvider` is a generation error, as for every other public
   `blocks_runtime` type, because the generated library imports the runtime
   wholesale and the name would be ambiguous.
+- A declared native binding whose Dart type is named `FileTokenStore` is
+  rejected, as for every other type `blocks_runtime` exports, because the
+  runtime now exports a class of that name.
 
 ## 0.2.0
 
