@@ -9,7 +9,7 @@ Test backend for native client bindings (Swift, Kotlin, Dart). Exercises the Bui
 | Auth (`auth-basic`) | Email + password with session cookies; sign-up is confirmed with an emailed code |
 | Auth (`auth-cognito`) | Email + password with a password policy and groups (`admins`, `users`) |
 | Auth (`auth-oidc`) | OIDC sign-in through the local stub IdP with two providers (`google`, `github2`), relay origins for native custom-scheme redirects (no user pool) |
-| Auth (`auth-sso`) | A second federated block (stub provider `corp`) whose sign-in routes live under `/aws-blocks/auth/sso/` |
+| Auth (`auth-sso`) | A second federated block (stub provider `corp`) whose sign-in routes live under `/cdk-blocks/auth/sso/` |
 | Realtime | WebSocket pub/sub (cursor tracking) |
 | FileBucket | S3 file storage with presigned upload/download handles |
 | KVStore | Key-value storage |
@@ -69,7 +69,7 @@ Errors cross the wire by name: the canonical `AuthErrors` names (`NotAuthenticat
 - `basicSignIn`, `basicSignOut`, `basicCheckAuth`, `basicRequireAuth`, `basicGetCurrentUser`, `basicResendSignUpCode`
 
 **Cognito-style (`auth-cognito`)** — the same flow with a password policy and groups:
-- `cognitoSignUp`, `cognitoGetLastCode`, `cognitoConfirmSignUp`, `cognitoSignIn` (returns `Auth`'s `SignInResult`), `cognitoRequireRole`; `aws-blocks/index.ts` has every `cognito*` method.
+- `cognitoSignUp`, `cognitoGetLastCode`, `cognitoConfirmSignUp`, `cognitoSignIn` (returns `Auth`'s `SignInResult`), `cognitoRequireRole`; `cdk-blocks/index.ts` has every `cognito*` method.
 
 Sign-up codes:
 - Local: no email is sent. The backend's `codeDelivery` hook keeps each code; `*GetLastCode` returns it and the dev-server console prints it.
@@ -89,11 +89,11 @@ AWS_REGION=<region> BLOCKS_STACK_NAME=<stack> npm run seed:cognito
 **Real IdP (optional)** — federate a real IdP instead of the stub on a deployed backend:
 1. Set `NATIVE_E2E_OIDC_ISSUER` and `NATIVE_E2E_OIDC_CLIENT_ID` when you deploy. The `google` provider then federates that IdP as a public PKCE client.
 2. Run the native OIDC suites with `RUN_OIDC=1`.
-3. The IdP must complete authorization without a login page and accept the sandbox's `/aws-blocks/auth/callback` redirect URI; `.github/workflows/native-sdk-e2e.yml` lists the requirements.
+3. The IdP must complete authorization without a login page and accept the sandbox's `/cdk-blocks/auth/callback` redirect URI; `.github/workflows/native-sdk-e2e.yml` lists the requirements.
 
 **Second federated block (`auth-sso`)**: a `store: 'builtin'` block with one stub provider, `corp`.
 - Exports: `ssoOidcApi` (`createOidcApi()`: `getClient()` returns its native OIDC client) and `ssoAuthStateApi` (`createApi()`: its sign-in state machine).
-- Routes: two blocks with `providers` can't share sign-in routes, so this one sets `redirects.callbackPath` to `/aws-blocks/auth/sso/return` and `redirects.signOutPath` to `/aws-blocks/auth/sso/signout`. Its other routes sit beside the callback: `/aws-blocks/auth/sso/{authorize-params/<id>, exchange, session, signin/<id>}`.
+- Routes: two blocks with `providers` can't share sign-in routes, so this one sets `redirects.callbackPath` to `/cdk-blocks/auth/sso/return` and `redirects.signOutPath` to `/cdk-blocks/auth/sso/signout`. Its other routes sit beside the callback: `/cdk-blocks/auth/sso/{authorize-params/<id>, exchange, session, signin/<id>}`.
 - `getAuthState()` shows the `signin/<id>` route as the `signIn:corp` action's URL, and the signed-in `signOut` action's URL is the `signOutPath`.
 - The client from `ssoOidcApi.getClient()` carries these paths, and the callback is deliberately not named `callback`, so a native client that assumes the default names fails here.
 - It accepts the same relay origins as `auth-oidc`, keeps its own session cookie, and has `api.ssoRequireAuth` / `api.ssoGetCurrentUser` to check a sign-in.

@@ -77,7 +77,7 @@ The runner is the sandbox; Bedrock provides the model.
    - runs `npm run build`;
    - launches the dev server fresh;
    - reads the port from the framework's startup banner
-     (`AWS Blocks local server running on http://localhost:<port>`) and exports
+     (`AWS CDK Blocks local server running on http://localhost:<port>`) and exports
      it as `APP_BASE_URL`;
    - runs the task's Playwright spec against it;
    - records build / dev-server / playwright / test signals.
@@ -399,7 +399,7 @@ The judge grades a source-only copy of the workspace. The copy excludes
 `bench-tests/` (where step 3 stages the spec) and every
 `*.spec.{ts,tsx,js,jsx,cjs,mjs}` code file. A post-copy `find`
 (`assertNoSpecLeak` in `steps/4-judge.ts`) fails the step if one is present.
-Framework-generated `*.spec.json` manifests (e.g. `aws-blocks/blocks.spec.json`,
+Framework-generated `*.spec.json` manifests (e.g. `cdk-blocks/blocks.spec.json`,
 the OpenRPC contract) stay in the copy: they are build artifacts, not the
 bench objective.
 

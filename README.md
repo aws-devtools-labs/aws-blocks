@@ -1,10 +1,10 @@
 # AWS CDK Blocks
 
-[![npm version](https://img.shields.io/npm/v/aws-cdk-blocks?color=brightgreen&label=npm%20package)](https://www.npmjs.com/package/aws-cdk-blocks)[![weekly downloads](https://img.shields.io/npm/dw/aws-cdk-blocks)](https://www.npmjs.com/package/aws-cdk-blocks)[![build status](https://img.shields.io/github/actions/workflow/status/aws-devtools-labs/aws-blocks/publish-packages.yml)](https://github.com/aws-devtools-labs/aws-blocks/blob/main/.github/workflows/publish-packages.yml)
+[![npm version](https://img.shields.io/npm/v/aws-cdk-blocks?color=brightgreen&label=npm%20package)](https://www.npmjs.com/package/aws-cdk-blocks)[![weekly downloads](https://img.shields.io/npm/dw/aws-cdk-blocks)](https://www.npmjs.com/package/aws-cdk-blocks)[![build status](https://img.shields.io/github/actions/workflow/status/aws/cdk-blocks/publish-packages.yml)](https://github.com/aws/cdk-blocks/blob/main/.github/workflows/publish-packages.yml)
 
-AWS Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need and compose them; AWS Blocks generates the AWS infrastructure (CDK constructs) for them. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
+AWS CDK Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need and compose them; AWS CDK Blocks generates the AWS infrastructure (CDK constructs) for them. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
 
-Documentation: [AWS Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html), with the full Block catalog and the API reference of each Block.
+Documentation: [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html), with the full Block catalog and the API reference of each Block.
 
 ## Getting started
 
@@ -17,11 +17,11 @@ npm install
 npm run dev
 ```
 
-`npm run dev` starts a local development server at `http://localhost:3000` with every Block running a local implementation. Define your backend in `aws-blocks/index.ts` and your frontend in `src/`; types flow end to end with no code generation step.
+`npm run dev` starts a local development server at `http://localhost:3000` with every Block running a local implementation. Define your backend in `cdk-blocks/index.ts` and your frontend in `src/`; types flow end to end with no code generation step.
 
 - In the installed app, `npm run docs` lists Building Blocks, `npm run docs KVStore` opens a block’s guide, and `npm run help` lists tasks.
-- Start from a specific template with `--template <name>`. `npx @aws-blocks/create-blocks-app --help` lists the templates and describes each.
-- Run the command inside an existing project (omit the directory, or pass `.`) to add an `aws-blocks/` backend to it. The CLI auto-detects an AWS Amplify Gen 2 project and integrates with it.
+- Start from a specific template with `--template <name>`. `npx @aws-cdk-blocks/create-blocks-app --help` lists the templates and describes each.
+- Run the command inside an existing project (omit the directory, or pass `.`) to add a `cdk-blocks/` backend to it. The CLI auto-detects an AWS Amplify Gen 2 project and integrates with it.
 
 For a full walkthrough, see [Getting started with AWS CDK Blocks](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).
 
@@ -37,7 +37,7 @@ The same `new KVStore(scope, 'todos')` line becomes a local store in development
 
 ## Blocks
 
-Each Block is published as an npm package, and the umbrella package [`@aws-blocks/blocks`](https://www.npmjs.com/package/@aws-blocks/blocks) re-exports every Block plus the core runtime.
+Each Block is published as an npm package, and the umbrella package [`aws-cdk-blocks`](https://www.npmjs.com/package/aws-cdk-blocks) re-exports every Block plus the core runtime.
 
 | Category | Blocks |
 | --- | --- |
@@ -63,7 +63,7 @@ Native clients are build-time code generators that produce type-safe client code
 ## Repository layout
 
 ```
-aws-blocks/
+cdk-blocks/
 ├── packages/    # Blocks, the core runtime, and the create-blocks-app CLI (published to npm)
 ├── native/      # Native client SDKs (Kotlin, Swift, Dart)
 ├── test-apps/   # Example applications and end-to-end tests

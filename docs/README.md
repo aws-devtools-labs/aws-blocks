@@ -9,7 +9,7 @@
 
 - [design/API-DESIGN.md](./design/API-DESIGN.md) — Building Block API design guidelines (G1–G18) and preliminary design document template
 - [design/compute-selection-api.md](./design/compute-selection-api.md) — Design of the `Compute` selection API
-- [design/scaffold-new-bb.md](./design/scaffold-new-bb.md) — Design of the `@aws-blocks/create-block` scaffolder for new Building Blocks
+- [design/scaffold-new-bb.md](./design/scaffold-new-bb.md) — Design of the `@aws-cdk-blocks/create-block` scaffolder for new Building Blocks
 
 ## Decisions
 

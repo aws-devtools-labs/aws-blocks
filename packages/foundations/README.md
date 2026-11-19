@@ -2,7 +2,7 @@
 
 Private placeholder package for a consolidated entry point to the common Building Blocks.
 
-`foundations` is not published (`"private": true` in its `package.json`) and its `src/index.ts` exports nothing. The Building Blocks ship as the `packages/bb-*` packages and are re-exported by [`@aws-blocks/blocks`](../blocks/README.md), whose README lists them. Each block's API is documented in its own README (`packages/bb-<name>/README.md`).
+`foundations` is not published (`"private": true` in its `package.json`) and its `src/index.ts` exports nothing. The Building Blocks ship as the `packages/bb-*` packages and are re-exported by [`aws-cdk-blocks`](../blocks/README.md), whose README lists them. Each block's API is documented in its own README (`packages/bb-<name>/README.md`).
 
 ## Auth
 

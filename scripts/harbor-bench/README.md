@@ -1,6 +1,6 @@
 # Harbor agent check
 
-An opt-in GitHub Actions check for AWS Blocks PRs; it is not a required check. It packs the PR head and
+An opt-in GitHub Actions check for AWS CDK Blocks PRs; it is not a required check. It packs the PR head and
 its merge-base, then asks Claude Code to create a todo app, add due dates and add labels in one
 resumed session per trial. The default is one trial per arm
 (see [Trials and statistics](#trials-and-statistics)). Nothing is
