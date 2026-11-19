@@ -12,6 +12,7 @@ import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
+import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { AUDIT_WARNING } from './audit-warning-matcher.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { ComputeBase } from './compute/compute.js';
@@ -170,10 +171,7 @@ describe('ApiUrl output and the Hosting front-door claim', () => {
 		});
 		stack.claimApiFrontDoor('https://d123.cloudfront.net');
 		const value = apiUrlOutput(stack);
-		assert.ok(
-			value.includes('https://d123.cloudfront.net/cdk-blocks/api'),
-			`cloudfront ApiUrl should follow the claim, got ${value}`,
-		);
+		assert.strictEqual(value, JSON.stringify(`https://d123.cloudfront.net${BLOCKS_RPC_PREFIX}`));
 	});
 });
 
