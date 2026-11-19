@@ -76,15 +76,13 @@ const CORE_PROBES: Record<string, { event: string; run: (dir: string) => Promise
 		event: 'generate:client',
 		run: async (dir) => {
 			const bin = fileURLToPath(new URL('../generate-client-cli.js', import.meta.url));
-			spawnSync(
+			const result = spawnSync(
 				process.execPath,
 				[bin, join(dir, 'missing.ts'), `--telemetry-file=${join(dir, 'events.json')}`],
-				{
-					cwd: dir,
-					env: process.env,
-					stdio: 'ignore',
-				},
+				{ cwd: dir, env: process.env, timeout: 30_000, encoding: 'utf-8', stdio: 'pipe' },
 			);
+			// Returned so a failed assertion shows why the bin sent no event.
+			return `generate-client-cli stderr:\n${result.stderr}${result.error ? `\n${result.error.message}` : ''}`;
 		},
 	},
 };
@@ -126,10 +124,12 @@ const CI_VARS = [
 describe('core tracks the commands the CLI leaves to it', () => {
 	const originalEnv = { ...process.env };
 	const originalArgv = [...process.argv];
+	const originalCwd = process.cwd();
 	let dir: string;
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), 'blocks-core-tracked-'));
+		process.chdir(dir);
 		for (const name of CI_VARS) delete process.env[name];
 		delete process.env.CDK_DISABLE_CLI_TELEMETRY;
 		process.env.HOME = dir;
@@ -141,6 +141,7 @@ describe('core tracks the commands the CLI leaves to it', () => {
 	afterEach(() => {
 		process.env = { ...originalEnv };
 		process.argv = originalArgv;
+		process.chdir(originalCwd);
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -160,8 +161,8 @@ describe('core tracks the commands the CLI leaves to it', () => {
 
 	for (const [path, probe] of Object.entries(CORE_PROBES)) {
 		it(`"${path}" sends one ${probe.event} event from core`, async () => {
-			await probe.run(dir);
-			assert.deepEqual(events(), [probe.event]);
+			const detail = await probe.run(dir);
+			assert.deepEqual(events(), [probe.event], typeof detail === 'string' ? detail : undefined);
 		});
 	}
 });
