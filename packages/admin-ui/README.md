@@ -4,7 +4,16 @@ The Blocks Admin UI — a local dashboard for Blocks applications covering deplo
 
 ## How it runs
 
-Users never install this package directly. Running `npm run dashboard` in a Blocks app invokes core's `dashboard.ts`, which:
+From the app directory, launch the dashboard with:
+
+```sh
+node --input-type=module -e "import { dashboard } from 'aws-cdk-blocks/scripts'; await dashboard()"
+```
+
+A fresh tab starts in **local**. Browse the app's blocks and local data without credentials or a deployed
+stack. Selecting a cloud stage enables AWS reads; the tab remembers that selection on reload.
+
+The launcher:
 
 1. Lazily resolves `@aws-cdk-blocks/admin-ui` from the app (offering a one-time install if missing — the dashboard is opt-in and adds no weight for users who don't want it),
 2. generates a crypto-random session token for the process,
@@ -39,5 +48,5 @@ npm test       # node --test on the compiled server modules
 ```
 
 The dev server binds loopback on purpose. With the read opt-in set there is no
-authentication at all, and every read queries AWS with your own credentials, so it
+authentication for reads, and cloud reads use your own AWS credentials, so it
 must not be reachable from another machine. Writes never take the opt-in.

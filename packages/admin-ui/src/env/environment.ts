@@ -49,19 +49,8 @@ export const LOCAL_ENVIRONMENT = 'local';
  */
 export type EnvironmentId = string;
 
-/**
- * `sandbox`, preserving the stage selector's own default.
- *
- * The per-page data switches defaulted to `local` while the header defaulted to
- * `sandbox`; under one axis they must agree, and the ops pillars (Overview,
- * Deployments, Logs, Cost, Resources) are the dashboard's reason for existing —
- * defaulting to `local` would open five of seven pages on "not applicable here".
- * The consequence is deliberate and bounded: a block page now reads the deployed
- * table rather than `.bb-data` on first load, which is a read; nothing is
- * invoked or written without an explicit action, cloud writes stay behind the
- * unlock gate, and an RPC call still names its target before it runs.
- */
-export const DEFAULT_ENVIRONMENT: EnvironmentId = 'sandbox';
+/** Start with local data unless this tab has explicitly selected a deployed stage. */
+export const DEFAULT_ENVIRONMENT: EnvironmentId = LOCAL_ENVIRONMENT;
 
 /**
  * `sessionStorage`, per tab — unlike the theme and the sidebar, which are
@@ -341,7 +330,7 @@ export function environmentBadgeFor(state: EnvironmentState, stackStatus?: strin
 		case 'unknown':
 			return { label: 'unknown', variant: 'warning' };
 		case 'unread':
-			return { label: 'checking…', variant: 'outline' };
+			return { label: 'not checked', variant: 'outline' };
 	}
 }
 

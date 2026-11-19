@@ -254,6 +254,7 @@ export default function OverviewPage() {
 	const { data: envData, isLoading: envLoading } = useQuery({
 		queryKey: ['environments'],
 		queryFn: () => apiGet<EnvironmentsResponse>('/api/v1/environments'),
+		enabled: ready && cloudStage !== undefined,
 		refetchInterval: 30_000,
 	});
 	const { data: deployData } = useQuery({

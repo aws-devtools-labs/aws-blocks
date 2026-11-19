@@ -14,6 +14,7 @@ import {
 import type { ComputeDashboardSection } from '@aws-cdk-blocks/core/cdk/internal';
 import type { DashboardOptions } from './types.js';
 import { DashboardErrors } from './errors.js';
+import { Dashboard as MockDashboard } from './index.mock.js';
 import { GraphWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -588,6 +589,40 @@ describe('Dashboard mock', () => {
 		clearRouteRegistry();
 		const dash = new Dashboard({ id: 'my/stack.scope', fullId: 'my/stack.scope' } as any, 'dashboard');
 		assert.equal(dash.dashboardName, 'my-stack-scope-dashboard');
+	});
+
+	it('serves the configured dashboard locally even with a stale cloud URL', async () => {
+		const original = process.env[BB_DASHBOARD_URL_ENV];
+		process.env[BB_DASHBOARD_URL_ENV] = 'https://example.com/stale-dashboard';
+		try {
+			clearRouteRegistry();
+			new MockDashboard(new Scope('app'), 'dashboard', {
+				routePath: '/ops/dashboard',
+				title: 'Orders <local>',
+				metrics: { metrics: { namespace: 'Shop' }, metricConfigs: [{ name: 'OrdersPlaced' }] },
+			});
+			const route = getRegisteredRoutes().find((r) => r.path === '/ops/dashboard');
+			assert.ok(route);
+			let page: unknown;
+			const request = new Request('http://localhost/ops/dashboard');
+			const response = { status: 200, headers: new Headers(), send: (body: unknown) => { page = body; } };
+			await route.handler({
+				request: {
+					headers: request.headers, body: null, params: {}, url: new URL(request.url),
+					text: () => request.text(), json: () => request.json(),
+				},
+				response,
+			});
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.has('Location'), false);
+			assert.match(response.headers.get('Content-Type') ?? '', /text\/html/);
+			assert.ok(typeof page === 'string');
+			assert.match(page, /Orders &lt;local&gt;/);
+			assert.match(page, /OrdersPlaced/);
+		} finally {
+			if (original === undefined) delete process.env[BB_DASHBOARD_URL_ENV];
+			else process.env[BB_DASHBOARD_URL_ENV] = original;
+		}
 	});
 });
 

@@ -218,12 +218,11 @@ test('Metrics: OrdersPlaced is written as an EMF record', async (t) => {
   assert.deepStrictEqual(directive.Metrics.map((m) => [m.Name, m.Unit]), [['OrdersPlaced', 'Count']]);
 });
 
-// The Dashboard is a CloudWatch resource, so locally its route explains where
-// the local observability data is instead of redirecting.
-test('Dashboard: its route answers locally with a cloud-only notice', async () => {
+test('Dashboard: the dev server shows local observability without a deployment', { skip: testUrl && 'needs a local dev server' }, async () => {
   const response = await fetch(`http://localhost:${serverPort}/cdk-blocks/dashboard`, { redirect: 'manual' });
-  assert.strictEqual(response.status, 503);
-  const body: { message?: string; localObservability?: Record<string, string> } = await response.json();
-  assert.match(body.message ?? '', /cloud-only/);
-  assert.ok(body.localObservability?.logs, 'expected a pointer to the local logs');
+  assert.strictEqual(response.status, 200);
+  assert.match(response.headers.get('content-type') ?? '', /text\/html/);
+  const page = await response.text();
+  assert.match(page, /My App/);
+  assert.match(page, /OrdersPlaced/);
 });

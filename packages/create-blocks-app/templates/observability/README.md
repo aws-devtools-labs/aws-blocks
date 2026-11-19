@@ -24,7 +24,7 @@ What each one does locally and deployed:
 | Logger | One JSON line per call in the terminal | CloudWatch Logs |
 | Metrics | EMF JSON lines in the terminal | CloudWatch metrics, extracted from the logs |
 | Tracer | Last 100 traces in `.bb-data/`, each also printed | AWS X-Ray |
-| Dashboard | `GET /cdk-blocks/dashboard` answers 503 with pointers to the above | A CloudWatch Dashboard; the route redirects to it |
+| Dashboard | Open `http://localhost:3001/cdk-blocks/dashboard` for the local overview; no AWS credentials needed | A CloudWatch Dashboard; the route redirects to it |
 
 `test:e2e` reads the log and metric lines from the dev server it starts. If a
 dev server is already running, it skips those two checks and runs the rest.
