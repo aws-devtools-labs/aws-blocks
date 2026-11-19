@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { Construct } from 'constructs';
 import { Stack, Token } from 'aws-cdk-lib';
 import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';

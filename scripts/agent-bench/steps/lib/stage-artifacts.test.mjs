@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Tests for steps/stage-artifacts.mjs (step 4c): the only copy of a cell's files that is published.
 // Runs the real step in a child with fake job credentials in its env (assembled at runtime so no
 // literal looks like a real key) and checks what lands in STAGE_DIR — and what never does.

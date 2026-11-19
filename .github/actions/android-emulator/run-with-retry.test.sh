@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Tests run-with-retry.sh's one decision: retry, or report the failure as real.
 # Getting that wrong either masks a defect on a required check or leaves a
 # device-level blip costing a manual re-run, and neither is visible until it

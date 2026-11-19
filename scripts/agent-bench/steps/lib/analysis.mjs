@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Shared helpers for the agent-bench analysis feature, generated bottom-up in two places: PER-CELL
 // (analyze-cell.mjs, right after each judge, writes an `analysis` string into result.json) and
 // TOP-LEVEL ROLL-UP (analyze.mjs, synthesizes an exec summary over those). Both are LLM-driven

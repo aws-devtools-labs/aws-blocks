@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Multi-trial, trace and snapshot regression tests; no paid model calls, AWS or Docker."""
 import argparse
 import gzip

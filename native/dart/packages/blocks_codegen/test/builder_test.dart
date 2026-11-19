@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_codegen/src/model.dart';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:test/test.dart';

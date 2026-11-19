@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Base class of every error the Blocks runtime throws.
 ///
 /// Catch this to handle any Blocks failure generically. For finer-grained

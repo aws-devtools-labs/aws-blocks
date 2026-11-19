@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Construct } from 'constructs';
 import { Annotations, Stack, Token } from 'aws-cdk-lib';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';

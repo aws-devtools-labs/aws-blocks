@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Post the bench report as a SINGLE sticky PR comment: find a prior comment carrying our marker and
 # edit it in place, else create one. Keyed by a hidden HTML marker so re-runs update one comment
 # instead of spamming the thread. Best-effort — the caller runs it continue-on-error, so a comment

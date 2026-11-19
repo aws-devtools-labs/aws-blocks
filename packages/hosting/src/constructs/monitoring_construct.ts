@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { Construct } from 'constructs';
 import { Annotations, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {

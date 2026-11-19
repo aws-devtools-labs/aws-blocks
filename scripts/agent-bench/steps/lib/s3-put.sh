@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Best-effort S3 upload for the persist steps. Usage: s3-put.sh <src-file> <s3-uri> <label>
 # Warns (never errors) on a missing source or failed copy, so a persist step stays green.
 set -u

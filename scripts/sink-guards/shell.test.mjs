@@ -35,10 +35,10 @@ const APP_COMMAND =
 	"Runs the app's own configured command (the developer's package.json / defineHosting() config) by design; it has the trust of the app's own code.";
 
 const ALLOWLIST = [
-	{ at: 'native/kotlin/example/typescript/aws-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
-	{ at: 'native/kotlin/example/typescript/aws-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
-	{ at: 'native/swift/Demo/typescript-demo/aws-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
-	{ at: 'native/swift/Demo/typescript-demo/aws-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
+	{ at: 'native/kotlin/example/typescript/aws-blocks/scripts/cleanup.ts:12', reason: LSOF_CLEANUP },
+	{ at: 'native/kotlin/example/typescript/aws-blocks/scripts/cleanup.ts:14', reason: LSOF_CLEANUP },
+	{ at: 'native/swift/Demo/typescript-demo/aws-blocks/scripts/cleanup.ts:12', reason: LSOF_CLEANUP },
+	{ at: 'native/swift/Demo/typescript-demo/aws-blocks/scripts/cleanup.ts:14', reason: LSOF_CLEANUP },
 	{ at: 'packages/core/src/scripts/cleanup.ts:17', reason: LSOF_CLEANUP },
 	{ at: 'packages/core/src/scripts/cleanup.ts:22', reason: LSOF_CLEANUP },
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
@@ -57,13 +57,13 @@ const ALLOWLIST = [
 	{ at: 'packages/create-block/src/index.ts:632', reason: `npm run build -w <validated name>: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:637', reason: `npm test -w <validated name>: ${WINDOWS_NPM}` },
 	{ at: 'scripts/ci/_proc.mjs:53', reason: CI_WINDOWS },
-	{ at: 'scripts/ci/windows-template-e2e.mjs:51', reason: CI_WINDOWS },
+	{ at: 'scripts/ci/windows-template-e2e.mjs:54', reason: CI_WINDOWS },
 	{
-		at: 'scripts/agent-bench/steps/4-judge.ts:125',
+		at: 'scripts/agent-bench/steps/4-judge.ts:128',
 		reason: 'The only value is the judge copy directory, passed through shellQuote() (single-quoted, embedded quotes escaped).',
 	},
 	{
-		at: 'scripts/agent-bench/steps/4-judge.ts:256',
+		at: 'scripts/agent-bench/steps/4-judge.ts:259',
 		reason: 'The only interpolation is --exclude-dir flags built from the constant STAGE_EXCLUDE_DIRS set in this script.',
 	},
 	{

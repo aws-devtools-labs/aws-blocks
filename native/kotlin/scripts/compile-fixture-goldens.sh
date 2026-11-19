@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Compiles every codegen fixture's Kotlin golden against the in-repo runtime (JVM) and
 # fails if any has a compiler error. The goldens are what the Kotlin codegen emits for
 # each spec, so an error here is an error in a customer's generated client. The

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * `cf.redirects`, `cf.headers`, `cf.errorPages`: a bring-your-own door wires
  * the app's redirects, per-pattern headers and error pages the way the built-in

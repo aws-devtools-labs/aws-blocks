@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Abstract interface for persisting OIDC tokens.
 abstract class TokenStore {
   Future<String?> get(String key);

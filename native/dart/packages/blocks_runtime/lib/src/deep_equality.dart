@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Value equality for JSON-shaped data, used by generated models' `==`.
 ///
 /// Dart's [List] and [Map] compare by identity, so two models decoded from the

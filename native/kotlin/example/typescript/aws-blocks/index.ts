@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { ApiNamespace, Scope, KVStore, Auth, AppSetting, Realtime, FileBucket, relayOrigin } from '@aws-blocks/blocks';
 import type { RealtimeChannel } from '@aws-blocks/blocks';
 export type { RealtimeChannel } from '@aws-blocks/blocks';

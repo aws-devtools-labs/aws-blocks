@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// No loopback listener without `dart:io`: a browser app redirects to its own
 /// origin instead.
 bool get loopbackSupported => loopbackSupportedOverride ?? false;

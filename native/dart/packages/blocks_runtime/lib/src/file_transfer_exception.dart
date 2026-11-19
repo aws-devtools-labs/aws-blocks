@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'blocks_exception.dart';
 
 /// Thrown when an upload or download through a file-bucket handle fails: the

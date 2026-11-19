@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Kept short on purpose. Long system prompts in v1 caused the agent to
 // over-iterate. Tool descriptions are where real-tooling guidance belongs.
 

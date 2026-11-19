@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pack one trial's raw evidence with the model credentials redacted; build its private S3 prefix.
 
 Values are never printed. Redaction is exact byte replacement, so binary files are scanned

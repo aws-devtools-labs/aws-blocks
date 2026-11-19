@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * API Gateway (HTTP API v2) front-door construct — a regional,
  * HTTPS-by-default, no-CloudFront door (the serverless sibling of the ALB door:

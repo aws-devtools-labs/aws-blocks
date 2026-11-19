@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 @file:OptIn(InternalBlocksApi::class)
 
 package com.aws.blocks.kotlin.e2e

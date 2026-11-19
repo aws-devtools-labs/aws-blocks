@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Phase snapshot for later replay: the agent's app (no node_modules) and the verifier state."""
 import os
 from pathlib import Path

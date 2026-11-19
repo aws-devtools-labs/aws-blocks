@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // The builder's INCREMENTAL partial-envelope checkpoint, factored out of 2-agent-run.ts so it's
 // unit-testable. WHY: the SIGTERM flush only preserves token spend on a GRACEFUL kill; an ungraceful
 // signal (e.g. the agent's bash pkill storm tearing down the harness) never runs the handler, leaving

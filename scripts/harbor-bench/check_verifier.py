@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise the real browser verifier against a clean app, an app whose label list shares the
 Labels input's accessible name, and two targeted defects; check that an agent user can launch the
 preinstalled Chromium with no Playwright environment; then run the root verifier on an

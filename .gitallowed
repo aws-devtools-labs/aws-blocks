@@ -5,6 +5,9 @@
 222222222222
 333333333333
 123456789012
+# Also in scripts/ci/sweep-cognito-pools.test.mjs (already on main, NOT
+# introduced by the change that added this entry).
+999999999999
 
 # Another dummy account number, already on main in
 # packages/blocks/src/cli/commands.test.ts (NOT introduced by this change). The
@@ -32,3 +35,8 @@ apollo-engine-loader
 #   ASIAEXAMPLEKEY123456 — scripts/harbor-bench/test_trials.py
 AKIAIOSFODNN7EXAMPLE
 ASIAEXAMPLEKEY123456
+
+# AWS's own documented example secret access key, in the benchmark fixture
+# scripts/harbor-bench/test_trials.py (already on main, NOT introduced by the
+# change that added this entry). The `+` is escaped because entries are regexes.
+wJalrXUtnFEMI/K7MDENG\+bPxRfiCYEXAMPLEKEY

@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Render advisory evidence without executing artifact contents or echoing arbitrary strings."""
 import argparse
 import json

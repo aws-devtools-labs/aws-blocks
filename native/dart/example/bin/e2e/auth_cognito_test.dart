@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'harness.dart';
 
 /// Cognito-style `Auth` E2E (native-bindings' `auth-cognito` block).

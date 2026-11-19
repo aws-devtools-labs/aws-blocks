@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Compile-only stub of codegen fixture 27's declared `example-sensor-native`
 /// package: the `blocks-transferable-v1` factory its binding names.
 library;

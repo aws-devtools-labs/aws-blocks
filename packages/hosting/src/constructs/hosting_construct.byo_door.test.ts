@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * `HostingConstruct` with a bring-your-own front door (`frontDoor: { kind:
  * 'custom', door }`): what the door receives, what AWS Blocks does with what it

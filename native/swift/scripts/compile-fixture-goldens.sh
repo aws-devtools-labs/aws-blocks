@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Compiles every codegen fixture's Swift golden as its own module against the
 # in-repo BlocksRuntime, and fails if any doesn't compile. The goldens are what
 # the Swift generator emits for each spec, so an error here is an error in a

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // The merge gate: turns the run's headline numbers into a pass/fail verdict + human reasons. PURE (no
 // fs/env/process) so `node --test` can pin every branch; summary.mjs reads env + calls this. Three
 // independent, opt-in gates — each fires ONLY when its threshold env var is set, so an unconfigured

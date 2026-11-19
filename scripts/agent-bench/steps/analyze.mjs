@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Top-level ROLL-UP of the per-cell analyses. Runs ONCE in the summary job and is BOTTOM-UP: it
 // consumes each cell's `analysis` string + `analysis_issues` array (written by analyze-cell.mjs). It
 // appends three sections to $GITHUB_STEP_SUMMARY — Executive summary (one best-effort Bedrock call,
