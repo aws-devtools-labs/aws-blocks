@@ -530,7 +530,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
     const eol = gitignore.includes('\r\n') ? '\r\n' : '\n';
     const secretLines = secretsToAdd.length > 0 ? [...secretsToAdd, ...exceptions] : [];
     if (dependencyLines.length > 0) gitignore += `${eol}# Dependencies${eol}${dependencyLines.join(eol)}${eol}`;
-    if (toAdd.length > 0) gitignore += `${eol}# AWS Blocks${eol}${toAdd.join(eol)}${eol}`;
+    if (toAdd.length > 0) gitignore += `${eol}# AWS CDK Blocks${eol}${toAdd.join(eol)}${eol}`;
     if (secretLines.length > 0) {
       gitignore += `${eol}# Secrets and key material — never commit${eol}${secretLines.join(eol)}${eol}`;
     }
@@ -697,7 +697,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     console.error('when the CLI detects a compatible existing project. It cannot be');
     console.error('scaffolded as a fresh app.');
     console.error('');
-    console.error('To scaffold a fresh Blocks app, choose a different template:');
+    console.error('To scaffold a fresh AWS CDK Blocks app, choose a different template:');
     console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
     console.error('');
     console.error('To integrate Blocks into an existing project, run this from');
@@ -737,7 +737,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     stampBlocksVersions({ ...templatePkg.devDependencies }, stampedVersions);
   }
 
-  console.log(`Creating Blocks app in ${targetDir}...`);
+  console.log(`Creating AWS CDK Blocks app in ${targetDir}...`);
 
   // Copy template
   await mkdir(targetDir, { recursive: true });
@@ -791,7 +791,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   // The template's local dev port: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
-  console.log('\n✓ Blocks app created!');
+  console.log('\n✓ AWS CDK Blocks app created!');
   console.log(`\nNext steps:`);
   console.log(`  cd ${quoteForShell(targetDir)}`);
   if (skipInstall) {
@@ -819,7 +819,7 @@ function quoteForShell(path: string): string {
 async function integrateWithAmplify(targetDir: string, skipConfirm = false, skipInstall = false) {
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected Amplify Gen 2 project (amplify/backend.ts found)\n');
-  console.log('This will add Blocks to your existing Amplify project:');
+  console.log('This will add AWS CDK Blocks to your existing Amplify project:');
   console.log('');
   console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  amplify/blocks.ts     (wires Blocks into Amplify backend)');
@@ -1074,7 +1074,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   }
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected existing project (package.json found)\n');
-  console.log('This will add AWS Blocks backend to your project:');
+  console.log('This will add an AWS CDK Blocks backend to your project:');
   console.log('');
   console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  cdk.json              (CDK configuration)');
@@ -1154,7 +1154,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   });
   await tailorTaskExamples(awsBlocksDest, scripts, ['index.ts', 'index.cdk.ts']);
 
-  console.log('\n✓ AWS Blocks backend added to your project!\n');
+  console.log('\n✓ AWS CDK Blocks backend added to your project!\n');
   console.log('Next steps:');
   console.log(`  npm run ${scripts.sandbox}  # Deploy backend to your AWS sandbox`);
   console.log(`  npm run ${scripts['dev:server']}  # Run local dev server`);
@@ -1237,7 +1237,7 @@ async function printUsage() {
 
   console.log(`Usage: create-blocks-app [directory] [options]
 
-Create a new AWS Blocks app or add Blocks to an existing project.
+Create a new AWS CDK Blocks app or add AWS CDK Blocks to an existing project.
 
 The mode is auto-detected based on the target directory:
 
@@ -1364,10 +1364,10 @@ async function create() {
       for (const entry of conflicts) console.error(`  ${entry}`);
       console.error('');
     }
-    console.error('To add Blocks to an existing project, run from the project root:');
+    console.error('To add AWS CDK Blocks to an existing project, run from the project root:');
     console.error('  npx @aws-blocks/create-blocks-app');
     console.error('');
-    console.error('To create a fresh Blocks app, specify a new directory:');
+    console.error('To create a fresh AWS CDK Blocks app, specify a new directory:');
     console.error('  npx @aws-blocks/create-blocks-app my-app');
     process.exit(1);
   }, { template: templateName, templateVersion: templatePkgVersion });

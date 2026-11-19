@@ -551,7 +551,7 @@ describe('npm run docs <export or option>', () => {
 	it('says where a name the API reports import from another package comes from', () => {
 		assert.strictEqual(
 			render(['StandardSchemaV1']).split('\n')[0],
-			"StandardSchemaV1: from @standard-schema/spec, not an AWS Blocks package. The API reports of bb-kv-store import it: import type { StandardSchemaV1 } from '@standard-schema/spec';",
+			"StandardSchemaV1: from @standard-schema/spec, not an AWS CDK Blocks package. The API reports of bb-kv-store import it: import type { StandardSchemaV1 } from '@standard-schema/spec';",
 		);
 	});
 
@@ -955,10 +955,10 @@ describe('npm run docs --section, bare and with a topic', () => {
 		assert.match(render(['CUSTOM']), /^# bb-locker\/CUSTOM\.md\n# Custom$/m);
 	});
 
-	it('names what the reports import from a package outside AWS Blocks, named by its package', () => {
+	it('names what the reports import from a package outside AWS CDK Blocks, named by its package', () => {
 		assert.strictEqual(
 			render(['@standard-schema/spec']).split('\n')[0],
-			'@standard-schema/spec: a package outside AWS Blocks. The API reports import from it: StandardSchemaV1 (bb-kv-store)',
+			'@standard-schema/spec: a package outside AWS CDK Blocks. The API reports import from it: StandardSchemaV1 (bb-kv-store)',
 		);
 	});
 
@@ -1124,7 +1124,7 @@ describe('npm run docs --search', () => {
 describe('npm run docs (no name)', () => {
 	it('lists every block with its classes, purpose and other files, then the framework docs as files', () => {
 		const out = render([]);
-		assert.match(out, /^AWS Blocks docs for @aws-blocks\/blocks 1\.2\.3\n/);
+		assert.match(out, /^AWS CDK Blocks docs for @aws-blocks\/blocks 1\.2\.3\n/);
 		assert.match(
 			out,
 			/^ {2}bb-distributed-table {2}DistributedTable: Tables with indexes\. \[API\.md, DESIGN\.md\]$/m,

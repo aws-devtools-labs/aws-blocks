@@ -981,7 +981,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		});
 	}
 	let production: string | null = null;
-	let noProduction = '(not in an AWS Blocks app)';
+	let noProduction = '(not in an AWS CDK Blocks app)';
 	if (root) {
 		try {
 			production = core.getStackName({ sandbox: false, projectRoot: root });
@@ -1010,7 +1010,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		`Identity:    ${result.arn ?? 'unknown'}`,
 		`Credentials: ${result.credentials}`,
 		`Region:      ${region}`,
-		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "npm run sandbox")' : '(not in a CDK Blocks app)')}`,
+		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "npm run sandbox")' : '(not in an AWS CDK Blocks app)')}`,
 		`Production:  ${production ?? noProduction}`,
 	].join('\n');
 	ctx.out.result(result, text);
