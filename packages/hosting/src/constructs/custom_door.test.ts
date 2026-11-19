@@ -190,6 +190,27 @@ describe('buildFrontDoor — the routes/API wiring check', () => {
 		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('/webhooks/\\*'));
 	});
 
+	it('fails with ProxySameOriginApi when only the legacy /aws-blocks/* subtree was wired', () => {
+		const { stack, input } = setup({ api: true });
+		const door = defineFrontDoor({
+			service: 'legacy-only',
+			build(scope, { origins }) {
+				const dist = new Distribution(scope, 'Cdn', {
+					defaultBehavior: { origin: cf.origin(origins.assets) },
+					additionalBehaviors: { '/aws-blocks/*': { origin: cf.origin(origins.api ?? origins.assets) } },
+				});
+				if (origins.api) cf.recordWired(origins.api, ['/aws-blocks/*']);
+				return { url: `https://${dist.distributionDomainName}` };
+			},
+		});
+		assert.throws(
+			() => buildFrontDoor(stack, door, input),
+			(err: Error) =>
+				err.name === 'UnsupportedFrontDoorError' &&
+				/ProxySameOriginApi: \/aws-blocks\/\* was wired but \/cdk-blocks\/\* was not/.test(err.message),
+		);
+	});
+
 	it('warns when the helpers hand out more behaviors than a distribution allows by default (24 + the default)', () => {
 		const warn = (count: number) => {
 			const { stack, input } = setup({ api: true, rawRoutes: Array.from({ length: count }, (_, i) => `/hook${i}/*`) });

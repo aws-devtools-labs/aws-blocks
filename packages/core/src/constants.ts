@@ -46,9 +46,18 @@ export function canonicalBlocksPath(pathname: string): string {
 export const BLOCKS_RPC_PREFIX = '/cdk-blocks/api';
 
 /**
- * Whether a path targets the canonical or legacy RPC endpoint, including a per-namespace path below either.
+ * Whether a request path targets the RPC endpoint or any namespace under it.
  *
- * The whole subtree bypasses RawRoute matching so RPC dispatch can validate the namespace against the JSON-RPC method.
+ * True for {@link BLOCKS_RPC_PREFIX} itself (the back-compat body-addressed
+ * endpoint) and for every per-namespace path beneath it
+ * (`/cdk-blocks/api/{namespace}`). The whole subtree is RPC: dispatch takes the
+ * namespace from the JSON-RPC body, and a per-namespace path must name the same
+ * one (see `parseRpcRequest`), so a caller matching against it must treat the
+ * prefix and its descendants identically — e.g. the handler skips RawRoute
+ * matching for the entire subtree.
+ *
+ * A legacy `/aws-blocks/...` path is matched as its `/cdk-blocks/...` twin (see
+ * {@link canonicalBlocksPath}).
  *
  * @param pathname - The request path, without query string.
  */

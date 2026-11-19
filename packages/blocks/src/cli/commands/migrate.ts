@@ -603,7 +603,7 @@ function entersProject(text: string, dir: string, prefix: string): boolean {
  * In the project, the project path also counts as the end of a longer path.
  * Above it, the project path counts only after the project's own directory
  * ({@link namesProject}: `apps/web/aws-blocks/scripts/deploy.ts`,
- * `../../apps/web/cdk-blocks/…` from `tools/release/package.json`); without a
+ * `../../apps/web/aws-blocks/…` from `tools/release/package.json`); without a
  * directory, the project path and the `bare` words count only in a file that
  * changes into the project ({@link entersProject}). So another app's
  * `apps/api/aws-blocks/scripts/deploy.ts`, or a bare

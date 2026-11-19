@@ -1225,6 +1225,9 @@ its routing, from what the `cf.*` helpers recorded.
 - If nothing reaches the static assets, synth fails with `ServeStaticAsset`.
 - If the app has an API and none of `origins.api.paths` were wired, synth fails
   with `ProxySameOriginApi`.
+- If the door wired the legacy `/aws-blocks/*` subtree but not `/cdk-blocks/*`,
+  synth also fails with `ProxySameOriginApi`: current clients call
+  `/cdk-blocks/*`.
 - If some API paths (for example a raw route) were left unwired, synth warns.
 - If the app has redirects, per-pattern headers or error pages and the door
   wired none of them (`cf.redirects`, `cf.headers`, `cf.errorPages`), synth

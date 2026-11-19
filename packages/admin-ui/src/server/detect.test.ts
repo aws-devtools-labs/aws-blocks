@@ -211,7 +211,7 @@ describe('detectLocalDevServer', () => {
 	});
 
 	it('falls back to the legacy /aws-blocks/api path of an older dev server', async () => {
-		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ port: 4400 });\n' });
+		const root = makeProject({ 'cdk-blocks/scripts/server.ts': 'startDevServer({ port: 4400 });\n' });
 		const seen: string[] = [];
 		const status = await detectLocalDevServer(
 			root,

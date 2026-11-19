@@ -212,6 +212,13 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 
 ### Other changes
 
+- `OidcClient.defaultCallbackPath` and
+  `OidcClient.defaultAuthorizeParamsBasePath` use the backend's new
+  `/cdk-blocks/auth/*` paths. Raw routes and auth requests resolve against the
+  API origin cut at a `cdk-blocks` or legacy `aws-blocks` path segment, so a
+  server URL configured with the old `/aws-blocks/api` path keeps working.
+  Tokens a block stored under its old `/aws-blocks/` exchange path move to its
+  `/cdk-blocks/` keys on first use, so an upgrade keeps the session.
 - A token refresh that a sign-in or sign-out overtakes, even while it is
   still reading the stored refresh token, sends nothing or ignores its
   response. Callers that join a refresh already in flight now get its error
