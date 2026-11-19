@@ -241,9 +241,11 @@ export interface HostingProps {
    * injected into the environment.
    * Omit if the app is already pre-built.
    *
-   * Can be omitted for `nextjs`, `nitro`, `astro` and `sveltekit` too: their
-   * adapters build the app themselves, so a missing build output dir is not an
-   * error then (the adapter builds it).
+   * Can be omitted for `nextjs`, `nitro` (or `nuxt`), `astro` and `sveltekit`
+   * too: their adapters build the app themselves, so a missing build output dir
+   * is not an error then (the adapter builds it). Two exceptions: with a
+   * `customAdapter`, or on a deploy with `BLOCKS_SKIP_FRONTEND_BUILD=1`, the
+   * build output dir still has to exist.
    *
    * Not run on a destroy (`npm run destroy`, `npm run sandbox:destroy`) when a
    * build output already exists, or on a deploy with
@@ -262,6 +264,11 @@ export interface HostingProps {
    * Path to the build output directory (e.g. `'dist'` or `'.next'`).
    * Auto-detected based on framework when omitted: `.next` (Next.js),
    * `.output` (Nitro), `build` (SvelteKit), else `dist`.
+   *
+   * Only the `spa` and `static` adapters deploy from this dir. The `nextjs`,
+   * `nitro`, `astro` and `sveltekit` adapters read their own output dir, so
+   * for them this only sets the dir `Hosting` checks exists after the build,
+   * and without a `buildCommand` (where that check is skipped) it has no effect.
    */
   buildOutputDir?: string;
 
@@ -997,6 +1004,7 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
   sveltekit: 'build',
   nitro: '.output',
+  nuxt: '.output',
   astro: 'dist',
   spa: 'dist',
   static: 'dist',
@@ -1009,7 +1017,7 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
  * adapter, the Nitro preset. With no `buildCommand` there is nothing to build
  * before the adapter runs, and a missing output dir is the adapter's to build.
  */
-const SELF_BUILDING_FRAMEWORKS: ReadonlySet<string> = new Set(['nextjs', 'nitro', 'astro', 'sveltekit']);
+const SELF_BUILDING_FRAMEWORKS: ReadonlySet<string> = new Set(['nextjs', 'nitro', 'nuxt', 'astro', 'sveltekit']);
 
 /**
  * A framework adapter error for a build output that isn't there: the

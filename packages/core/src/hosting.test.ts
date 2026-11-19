@@ -278,18 +278,56 @@ describe('Hosting', () => {
     // An adapter that builds the app itself (SvelteKit, Astro, Nuxt/Nitro, Next.js)
     // needs no build before it runs: with no buildCommand, the missing output dir
     // is the adapter's to build, not a synth error. Each adapter here stops at its
-    // version check (no framework is installed), which proves it ran.
-    for (const [framework, dependency, adapterError] of [
-      ['sveltekit', '@sveltejs/kit', 'UnsupportedSvelteKitVersionError'],
-      ['astro', 'astro', 'UnsupportedAstroVersionError'],
-    ] as const) {
-      it(`runs the ${framework} adapter, which builds the app, when there is no build output and no buildCommand`, () => {
-        fs.writeFileSync(
-          path.join(tmpDir, 'package.json'),
-          JSON.stringify({ name: 'test', dependencies: { [dependency]: '*' } }),
-        );
-        const app = new App();
-        const stack = new Stack(app, `NoBuildYet-${framework}`);
+    // first step that needs the framework (none is installed), which proves it ran:
+    // the SvelteKit and Astro version checks, and the `npm run build` of Nitro and
+    // of Next.js's edge-route pre-build (the package.json has no build script).
+    const SELF_BUILDING: ReadonlyArray<{
+      framework: 'sveltekit' | 'astro' | 'nitro' | 'nuxt' | 'nextjs';
+      dependency: string;
+      adapterError: string;
+      files?: Record<string, string>;
+    }> = [
+      { framework: 'sveltekit', dependency: '@sveltejs/kit', adapterError: 'UnsupportedSvelteKitVersionError' },
+      { framework: 'astro', dependency: 'astro', adapterError: 'UnsupportedAstroVersionError' },
+      { framework: 'nitro', dependency: 'nuxt', adapterError: 'NitroBuildError' },
+      { framework: 'nuxt', dependency: 'nuxt', adapterError: 'NitroBuildError' },
+      {
+        framework: 'nextjs',
+        dependency: 'next',
+        adapterError: 'NextBuildError',
+        files: { 'app/page.tsx': "export const runtime = 'edge';\n" },
+      },
+    ];
+
+    /**
+     * Whether `dependency` resolves from `dir` through a parent `node_modules`
+     * (TMPDIR inside a checkout whose root has the framework installed). The
+     * adapter would then run the real framework build, not stop where these
+     * tests expect.
+     */
+    const resolvesFromParent = (dir: string, dependency: string): boolean => {
+      for (let d = path.dirname(dir); d !== path.dirname(d); d = path.dirname(d)) {
+        if (fs.existsSync(path.join(d, 'node_modules', dependency, 'package.json'))) return true;
+      }
+      return false;
+    };
+
+    const writeProject = (dependency: string, files: Record<string, string> = {}) => {
+      fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'test', dependencies: { [dependency]: '*' } }));
+      for (const [file, content] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(tmpDir, file)), { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, file), content);
+      }
+    };
+
+    for (const { framework, dependency, adapterError, files } of SELF_BUILDING) {
+      it(`runs the ${framework} adapter, which builds the app, when there is no build output and no buildCommand`, (t) => {
+        if (resolvesFromParent(tmpDir, dependency)) {
+          t.skip(`${dependency} resolves from a parent of ${tmpDir}; set TMPDIR outside the checkout`);
+          return;
+        }
+        writeProject(dependency, files);
+        const stack = new Stack(new App(), `NoBuildYet-${framework}`);
         assert.throws(
           () => new Hosting(stack, 'Hosting', { root: tmpDir, framework, api: MOCK_API }),
           (err: Error) => {
@@ -300,6 +338,30 @@ describe('Hosting', () => {
         );
       });
     }
+
+    it('still requires the build output of a self-building framework when a buildCommand writes none', () => {
+      writeProject('astro');
+      const stack = new Stack(new App(), 'NoBuildOutput-astro-buildCommand');
+      assert.throws(
+        () => new Hosting(stack, 'Hosting', { root: tmpDir, framework: 'astro', buildCommand: 'node -e ""', api: MOCK_API }),
+        /Build output directory not found/,
+      );
+    });
+
+    it('still requires the build output of a self-building framework with a customAdapter', () => {
+      writeProject('astro');
+      const stack = new Stack(new App(), 'NoBuildOutput-astro-customAdapter');
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            framework: 'astro',
+            customAdapter: createNextjsFixtureAdapter(tmpDir),
+            api: MOCK_API,
+          }),
+        /Build output directory not found/,
+      );
+    });
 
     it('exposes bucket and distribution resources for composition', () => {
       createSpaBuildOutput(tmpDir);
@@ -4467,6 +4529,20 @@ describe('Hosting — skipping the frontend build', () => {
       return true;
     });
     assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 with no build output fails and names the variable for a self-building framework with no buildCommand', () => {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'skip', dependencies: { '@sveltejs/kit': '*' } }));
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    const stack = new Stack(new App(), 'SkipBuildSvelteKitStack');
+    assert.throws(
+      () => new Hosting(stack, 'Hosting', { root: tmpDir, framework: 'sveltekit', api: MOCK_API }),
+      (err: Error) => {
+        assert.match(err.message, /Build output directory not found/);
+        assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD is set, so the frontend build is skipped/);
+        return true;
+      },
+    );
   });
 
   it('BLOCKS_SKIP_FRONTEND_BUILD=1 names the variable when the adapter output is missing (Next.js: .next without .open-next)', () => {
