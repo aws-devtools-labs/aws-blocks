@@ -609,6 +609,13 @@ export async function watchHostingValues(options: WatchOptions = {}): Promise<()
 
 	await regenerate(); // initial
 
+	// Aborted during the first scan (Ctrl+C before it finished): an `abort` listener added
+	// now would never fire, so don't open any watchers at all.
+	if (options.signal?.aborted) {
+		if (timer) clearTimeout(timer);
+		return () => {};
+	}
+
 	const dirs = [...new Set(include.map((g) => resolve(cwd, staticDirOf(g))))].filter(existsSync);
 	const cleanups: Array<() => void> = [];
 	for (const dir of dirs) {
@@ -697,6 +704,11 @@ export async function runTypegenCli(argv: string[], deps: TypegenCliDeps = {}): 
 		await watchHostingValues({ ...genOptions, log, error: err, signal: deps.signal });
 		// Stay alive until aborted (Ctrl+C in the CLI; the injected signal in tests).
 		return new Promise<number>((resolve) => {
+			// An already-aborted signal never fires `abort` again, so check it first.
+			if (deps.signal?.aborted) {
+				resolve(0);
+				return;
+			}
 			deps.signal?.addEventListener('abort', () => resolve(0), { once: true });
 		});
 	}

@@ -266,7 +266,7 @@ Run `npm run typegen` once and commit `.blocks/hosting-values.d.ts` before gatin
 
 `secret` and `config` take `--stage <name>` with any name; there is no fixed list. A value set with `--stage <name>` is read only by an app whose Hosting `secretStore` (or `configStore`) sets `stage: '<name>'`. Without `--stage`, the value is shared, and every stage falls back to it.
 
-Global options: `-h`/`--help`, `--version`, `-q`/`--quiet`, `-v`/`--verbose`, `--debug`, `--output text|json`, `--query <path>`, `-y`/`--yes`, `--no-input`, `--profile <name>` (sets `AWS_PROFILE`), `--region <region>` (sets `AWS_REGION`), `-C`/`--cwd <dir>` and `--telemetry-file <path>`. The log level is passed to child processes as `BLOCKS_LOG_LEVEL=quiet|normal|verbose|debug`. `--telemetry-file` (also `--telemetry-file=<path>`) is passed to the lifecycle runners, which also write the run's telemetry events to that file: `npm run dev -- --telemetry-file=/tmp/events.json`. A relative path is resolved from the directory you run the command in.
+Global options: `-h`/`--help`, `--version`, `-q`/`--quiet`, `-v`/`--verbose`, `--debug`, `--output text|json`, `--query <path>`, `-y`/`--yes`, `--no-input`, `--profile <name>` (sets `AWS_PROFILE`), `--region <region>` (sets `AWS_REGION`), `-C`/`--cwd <dir>` and `--telemetry-file <path>`. The log level is passed to child processes as `BLOCKS_LOG_LEVEL=quiet|normal|verbose|debug`. `--telemetry-file` (also `--telemetry-file=<path>`) writes the run's telemetry events to that file, for every command: `npm run dev -- --telemetry-file=/tmp/events.json`. A relative path is resolved from the directory you run the command in.
 
 ### Output and exit codes
 

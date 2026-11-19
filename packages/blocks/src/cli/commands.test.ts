@@ -253,6 +253,53 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(argvs, []);
 	});
 
+	it('stops generate types --watch on SIGINT through its signal, and removes its listeners', { timeout: 10_000 }, async () => {
+		const cwd = fixtureApp();
+		const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
+		let received: AbortSignal | undefined;
+		let started!: () => void;
+		const watching = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const core = {
+			// Stands in for hosting's watcher: it only resolves when its signal is aborted.
+			runTypegenCli: async (_argv: string[], deps?: { signal?: AbortSignal }) => {
+				received = deps?.signal;
+				started();
+				await new Promise((resolve) => deps?.signal?.addEventListener('abort', resolve, { once: true }));
+				return 0;
+			},
+		};
+		const run = runCli(['generate', 'types', '--watch'], { cwd, core });
+		await watching;
+		assert.ok(received, 'the watcher was given no signal');
+		// Emitting the event runs the CLI's listener without signalling the test process itself.
+		process.emit('SIGINT');
+		const result = await run;
+		assert.strictEqual(result.code, 0, result.stderr);
+		assert.strictEqual(received.aborted, true);
+		assert.deepStrictEqual(
+			{ SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') },
+			before,
+		);
+	});
+
+	it('passes no signal to a one-shot generate types, so Ctrl-C keeps its default handling', async () => {
+		const cwd = fixtureApp();
+		const seen: Array<{ signal?: AbortSignal } | undefined> = [];
+		const run = await runCli(['generate', 'types'], {
+			cwd,
+			core: {
+				runTypegenCli: async (_argv: string[], deps?: { signal?: AbortSignal }) => {
+					seen.push(deps);
+					return 0;
+				},
+			},
+		});
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(seen, [undefined]);
+	});
+
 	it('runs generate client and spec outside an app when the paths are given', async () => {
 		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
 		writeFileSync(join(outside, 'backend.ts'), 'export {};\n');
@@ -543,7 +590,12 @@ describe('lifecycle commands', () => {
 		await runCli(['--profile', 'prod', 'whoami'], {
 			cwd: root,
 			env: AWS_ENV,
-			core: { readAwsIdentity: async ({ invocation }) => (seen.push(invocation), IDENTITY) },
+			core: {
+				readAwsIdentity: async ({ invocation }) => {
+					seen.push(invocation);
+					return IDENTITY;
+				},
+			},
 		});
 		assert.deepStrictEqual(seen, ['npm run whoami -- --profile prod']);
 	});
@@ -603,7 +655,13 @@ describe('lifecycle commands', () => {
 		const lookups: unknown[] = [];
 		const noId = await runCli(['sandbox', 'console'], {
 			cwd: fixtureApp(),
-			core: { ...core, deployedStackExists: async (options) => (lookups.push(options), true) },
+			core: {
+				...core,
+				deployedStackExists: async (options) => {
+					lookups.push(options);
+					return true;
+				},
+			},
 		});
 		assert.strictEqual(noId.code, 1);
 		assert.match(noId.stderr, /^Error: no sandbox on this machine/);
@@ -615,7 +673,10 @@ describe('lifecycle commands', () => {
 		const lookups: { stackName: string; region?: string; projectRoot?: string; env?: NodeJS.ProcessEnv }[] = [];
 		const withLookup = (exists: boolean | undefined) => ({
 			openConsole: async (options: unknown) => void opened.push(options),
-			deployedStackExists: async (options: (typeof lookups)[number]) => (lookups.push(options), exists),
+			deployedStackExists: async (options: (typeof lookups)[number]) => {
+				lookups.push(options);
+				return exists;
+			},
 		});
 		// A sandbox that the old npm-script wrappers deployed records no last-deploy.json, and a production
 		// deploy then rewrote outputs.json with its own stack alone.
