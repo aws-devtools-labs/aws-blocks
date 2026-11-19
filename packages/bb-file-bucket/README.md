@@ -439,4 +439,6 @@ The dev server enforces what an upload URL signs, as S3 does: an upload whose `C
 
 When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` select the current file.
 
+Local version IDs are opaque strings. New uploads use `v<number>-<UUID>` IDs so permanently deleted IDs are not reused after re-upload or a dev-server restart. Existing `v<number>` versions and saved references remain readable, restorable, and deletable without migration. The numeric prefix orders versions with equal timestamps; it may repeat after deletion and is not a persistent counter. As on S3, store the complete ID returned by `listVersions()` rather than constructing one. This does not repair references already reused by an older mock.
+
 
