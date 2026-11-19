@@ -11,6 +11,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import {
   BENCH_GITHUB_ENVIRONMENT,
+  GITHUB_REPO_SUBJECT,
   buildGithubE2eOidcStack,
   E2E_REGION,
   GITHUB_ENVIRONMENT,
@@ -40,7 +41,7 @@ function assertTrustIsExactly(role: ReturnType<typeof synth>['role'], environmen
   assert.deepEqual(statement.Condition, {
     StringEquals: {
       'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-      'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${environment}`,
+      'token.actions.githubusercontent.com:sub': `${GITHUB_REPO_SUBJECT}:environment:${environment}`,
     },
   });
 }
