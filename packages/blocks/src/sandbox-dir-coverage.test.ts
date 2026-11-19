@@ -76,6 +76,8 @@ const HISTORICAL_FILES: Record<string, string> = {
 		'fixtures of pre-migration apps — the migrate test asserts against the OLD layout',
 	'.changeset/cdk-blocks-sandbox-dir-rename.md':
 		'the release note for the rename itself — it has to name the directory it renames FROM, and tell users which path stops being served',
+	'native/kotlin/.changeset/cdk-blocks-sandbox-dir-rename.md':
+		"the Kotlin release note for the same rename: it names the directory the codegen task's error message used to point at",
 };
 
 /** Published changelog entries describe shipped releases and cannot be rewritten. */
