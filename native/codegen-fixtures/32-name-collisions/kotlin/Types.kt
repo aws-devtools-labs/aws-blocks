@@ -8,16 +8,57 @@ import kotlin.String
 import kotlin.collections.List
 import kotlin.collections.Map
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 
-@Serializable
-public enum class Kind {
-  @SerialName("x")
-  X,
-  @SerialName("y")
-  Y,
+@Serializable(with = Kind.Serializer::class)
+public sealed class Kind {
+  public abstract val `value`: String
+
+  public data object X : Kind() {
+    override val `value`: String = "x"
+  }
+
+  public data object Y : Kind() {
+    override val `value`: String = "y"
+  }
+
+  public data class Unknown(
+    override val `value`: String,
+  ) : Kind()
+
+  public companion object {
+    public val entries: List<Kind> by lazy { listOf(X, Y) }
+
+    public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
+  }
+
+  public object Serializer : KSerializer<Kind> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("com.example.app.Kind", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, `value`: Kind) {
+      encoder.encodeString(value.value)
+    }
+
+    override fun deserialize(decoder: Decoder): Kind = fromValue(decoder.decodeString())
+  }
 }
 
 @Serializable
@@ -54,12 +95,38 @@ public data class Cart(
 public data class Order(
   public val status: Status,
 ) {
-  @Serializable
-  public enum class Status {
-    @SerialName("pending")
-    Pending,
-    @SerialName("shipped")
-    Shipped,
+  @Serializable(with = Status.Serializer::class)
+  public sealed class Status {
+    public abstract val `value`: String
+
+    public data object Pending : Status() {
+      override val `value`: String = "pending"
+    }
+
+    public data object Shipped : Status() {
+      override val `value`: String = "shipped"
+    }
+
+    public data class Unknown(
+      override val `value`: String,
+    ) : Status()
+
+    public companion object {
+      public val entries: List<Status> by lazy { listOf(Pending, Shipped) }
+
+      public fun fromValue(`value`: String): Status = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<Status> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Status", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Status) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Status = fromValue(decoder.decodeString())
+    }
   }
 }
 
@@ -71,33 +138,155 @@ public data class Ticket(
   public val payload: Payload,
   public val payloads: List<Payloads>,
 ) {
-  @Serializable
-  public enum class Kind {
-    @SerialName("bug")
-    Bug,
-    @SerialName("task")
-    Task,
+  @Serializable(with = Kind.Serializer::class)
+  public sealed class Kind {
+    public abstract val `value`: String
+
+    public data object Bug : Kind() {
+      override val `value`: String = "bug"
+    }
+
+    public data object Task : Kind() {
+      override val `value`: String = "task"
+    }
+
+    public data class Unknown(
+      override val `value`: String,
+    ) : Kind()
+
+    public companion object {
+      public val entries: List<Kind> by lazy { listOf(Bug, Task) }
+
+      public fun fromValue(`value`: String): Kind = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<Kind> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Kind", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Kind) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Kind = fromValue(decoder.decodeString())
+    }
   }
 
-  @Serializable
-  public enum class Kinds {
-    @SerialName("urgent")
-    Urgent,
-    @SerialName("later")
-    Later,
+  @Serializable(with = Kinds.Serializer::class)
+  public sealed class Kinds {
+    public abstract val `value`: String
+
+    public data object Urgent : Kinds() {
+      override val `value`: String = "urgent"
+    }
+
+    public data object Later : Kinds() {
+      override val `value`: String = "later"
+    }
+
+    public data class Unknown(
+      override val `value`: String,
+    ) : Kinds()
+
+    public companion object {
+      public val entries: List<Kinds> by lazy { listOf(Urgent, Later) }
+
+      public fun fromValue(`value`: String): Kinds = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<Kinds> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Kinds", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Kinds) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Kinds = fromValue(decoder.decodeString())
+    }
   }
 
-  @Serializable
-  public enum class Status {
-    @SerialName("open")
-    Open,
-    @SerialName("closed")
-    Closed,
+  @Serializable(with = Status.Serializer::class)
+  public sealed class Status {
+    public abstract val `value`: String
+
+    public data object Open : Status() {
+      override val `value`: String = "open"
+    }
+
+    public data object Closed : Status() {
+      override val `value`: String = "closed"
+    }
+
+    public data class Unknown(
+      override val `value`: String,
+    ) : Status()
+
+    public companion object {
+      public val entries: List<Status> by lazy { listOf(Open, Closed) }
+
+      public fun fromValue(`value`: String): Status = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<Status> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Status", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Status) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Status = fromValue(decoder.decodeString())
+    }
   }
 
-  @Serializable
-  @JsonClassDiscriminator("type")
+  @Serializable(with = Payload.PayloadSerializer::class)
   public sealed class Payload {
+    /**
+     * Reads and writes [Payload] with its discriminator `type` as the JSON value
+     * the spec gives it.
+     */
+    public object PayloadSerializer : KSerializer<Payload> {
+      override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Payload")
+
+      override fun serialize(encoder: Encoder, `value`: Payload) {
+        val output = encoder as? JsonEncoder ?: throw SerializationException("Payload can only be written as JSON")
+        val element = when (value) {
+          is Text -> buildJsonObject {
+            put("type", JsonPrimitive("text"))
+            output.json.encodeToJsonElement(Text.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Count -> buildJsonObject {
+            put("type", JsonPrimitive("count"))
+            output.json.encodeToJsonElement(Count.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Unknown -> value.json
+        }
+        output.encodeJsonElement(element)
+      }
+
+      override fun deserialize(decoder: Decoder): Payload {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("Payload can only be read from JSON")
+        val element = input.decodeJsonElement()
+        if (element is JsonObject) {
+          val fields = JsonObject(element - "type")
+          when (element["type"]) {
+            JsonPrimitive("text") -> return input.json.decodeFromJsonElement(Text.serializer(), fields)
+            JsonPrimitive("count") -> return input.json.decodeFromJsonElement(Count.serializer(), fields)
+            else -> if ((element["type"] as? JsonPrimitive)?.isString == true) return Unknown(element)
+          }
+        }
+        throw SerializationException("No variant of Payload matches this JSON value; expected an object with \"type\": \"text\"; or an object with \"type\": \"count\"")
+      }
+    }
+
+    public data class Unknown(
+      public val json: JsonObject,
+    ) : Payload() {
+      public val discriminator: String
+        get() = (json.getValue("type") as JsonPrimitive).content
+    }
+
     @Serializable
     @SerialName("text")
     public data class Text(
@@ -111,9 +300,53 @@ public data class Ticket(
     ) : Payload()
   }
 
-  @Serializable
-  @JsonClassDiscriminator("format")
+  @Serializable(with = Payloads.PayloadsSerializer::class)
   public sealed class Payloads {
+    /**
+     * Reads and writes [Payloads] with its discriminator `format` as the JSON value
+     * the spec gives it.
+     */
+    public object PayloadsSerializer : KSerializer<Payloads> {
+      override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Payloads")
+
+      override fun serialize(encoder: Encoder, `value`: Payloads) {
+        val output = encoder as? JsonEncoder ?: throw SerializationException("Payloads can only be written as JSON")
+        val element = when (value) {
+          is Plain -> buildJsonObject {
+            put("format", JsonPrimitive("plain"))
+            output.json.encodeToJsonElement(Plain.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Rich -> buildJsonObject {
+            put("format", JsonPrimitive("rich"))
+            output.json.encodeToJsonElement(Rich.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Unknown -> value.json
+        }
+        output.encodeJsonElement(element)
+      }
+
+      override fun deserialize(decoder: Decoder): Payloads {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("Payloads can only be read from JSON")
+        val element = input.decodeJsonElement()
+        if (element is JsonObject) {
+          val fields = JsonObject(element - "format")
+          when (element["format"]) {
+            JsonPrimitive("plain") -> return input.json.decodeFromJsonElement(Plain.serializer(), fields)
+            JsonPrimitive("rich") -> return input.json.decodeFromJsonElement(Rich.serializer(), fields)
+            else -> if ((element["format"] as? JsonPrimitive)?.isString == true) return Unknown(element)
+          }
+        }
+        throw SerializationException("No variant of Payloads matches this JSON value; expected an object with \"format\": \"plain\"; or an object with \"format\": \"rich\"")
+      }
+    }
+
+    public data class Unknown(
+      public val json: JsonObject,
+    ) : Payloads() {
+      public val discriminator: String
+        get() = (json.getValue("format") as JsonPrimitive).content
+    }
+
     @Serializable
     @SerialName("plain")
     public data class Plain(

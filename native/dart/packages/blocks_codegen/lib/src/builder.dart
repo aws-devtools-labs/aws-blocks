@@ -86,6 +86,7 @@ const blocksRuntimeTypeNames = {
   'RealtimeChannelClosedException',
   'RealtimeConnectionException',
   'RealtimeException',
+  'RealtimeSubscriptionEndedException',
   'SessionStore',
   'StatePayload',
   'TokenStore',
@@ -93,7 +94,6 @@ const blocksRuntimeTypeNames = {
   'TransportException',
   'TypedOidcClient',
   'UnknownTransferable',
-  'WebSocketPool',
 };
 
 class TransferableBinding {
@@ -349,6 +349,11 @@ class CodegenModel {
   /// naming collisions). Callers (CLI / build_runner) surface these to the user.
   final List<String> warnings;
 
+  /// Old type names kept as deprecated typedefs, each to the type now named
+  /// for it: a union the spec names (`x-blocks-type-name`) was named after
+  /// its first namespace's method and param before.
+  final Map<String, String> deprecatedAliases;
+
   const CodegenModel({
     required this.title,
     required this.version,
@@ -356,6 +361,7 @@ class CodegenModel {
     required this.types,
     this.servers = const [],
     this.warnings = const [],
+    this.deprecatedAliases = const {},
   });
 }
 
@@ -431,7 +437,13 @@ class CodegenModelBuilder {
   final List<(SchemaReference, String)> _refs = [];
   // Non-fatal diagnostics produced during the build.
   final List<String> _warnings = [];
+  // Each param union named by its spec name (`x-blocks-type-name`), with the
+  // name it had before (`<Namespace><Method><Param>`).
+  final Map<SealedClassType, String> _hintedUnions = Map.identity();
   int _anonCounter = 0;
+  // Keys an enum by its values instead of its name (see
+  // [_differOnlyInNestedNames]).
+  bool _keyEnumsByValues = false;
   // Whether an operation returns an `oidc/client` that names its providers,
   // directly or optionally: such a library gets a provider enum and names
   // [oidcRuntimeTypeNames], so it reserves them (see [_assignDartTypeNames]).
@@ -450,6 +462,7 @@ class CodegenModelBuilder {
     _refs.clear();
     _warnings.clear();
     _bindings.clear();
+    _hintedUnions.clear();
     _anonCounter = 0;
     _hasTypedOidcResult = false;
     _warnUnmatchedOptOuts(rpc);
@@ -483,14 +496,30 @@ class CodegenModelBuilder {
       final nsPrefix = _namespacePrefix(method.name);
 
       final params = method.params.map((p) {
+        final computed =
+            '$nsPrefix${_capitalize(opName)}${_capitalize(p.name)}';
+        // A union the spec names (one shared by many namespaces, like
+        // `AuthActionInput`) takes that name, so it doesn't depend on which
+        // namespace comes first.
+        final typeName = switch (p.schema) {
+          DiscriminatedUnionRef(:final typeName) => typeName,
+          _ => null,
+        };
+        final path = '${method.name}#param:${p.name}';
+        // Its arms, and the types nested in them, keep the names they had
+        // (`StartInput` for `run(input: Command)`), so naming the union
+        // renames nothing else.
+        final type = switch (p.schema) {
+          final DiscriminatedUnionRef ref when typeName != null =>
+            _resolveDiscriminatedUnion(ref, typeName, path, const {}, computed),
+          _ => _resolveType(p.schema, computed, false, path),
+        };
+        if (type is SealedClassType && type.name == typeName) {
+          _hintedUnions.putIfAbsent(type, () => computed);
+        }
         return OperationParam(
           name: p.name,
-          type: _resolveType(
-            p.schema,
-            '$nsPrefix${_capitalize(opName)}${_capitalize(p.name)}',
-            false,
-            '${method.name}#param:${p.name}',
-          ),
+          type: type,
           isRequired: p.isRequired,
         );
       }).toList();
@@ -536,6 +565,8 @@ class CodegenModelBuilder {
           );
     }
 
+    _fallBackFromCollidingTypeNames();
+
     // Pass 3: detect (and resolve) display-name collisions among structurally
     // distinct types before generation.
     _resolveNamingCollisions();
@@ -577,6 +608,24 @@ class CodegenModelBuilder {
         .toList();
     _warnIdentifierCollisions(namespaces);
 
+    // The name each spec-named union had before, kept as a deprecated alias.
+    final finalNames = {
+      ..._typeAndArmNames(),
+      for (final ns in namespaces)
+        for (final op in ns.operations)
+          if (op.result
+              case TransferableType(providerEnum: final e?) ||
+                  NullableType(inner: TransferableType(providerEnum: final e?)))
+            e.name,
+    };
+    final deprecatedAliases = <String, String>{
+      for (final MapEntry(key: union, value: old) in _hintedUnions.entries)
+        if (dartIdentifiers([old], reserved: generatedTopLevelNames)[old]
+            case final alias?
+            when alias != union.name && !finalNames.contains(alias))
+          alias: union.name,
+    };
+
     return CodegenModel(
       title: rpc.title,
       version: rpc.version,
@@ -584,7 +633,101 @@ class CodegenModelBuilder {
       types: _types,
       servers: rpc.servers,
       warnings: List.of(_warnings),
+      deprecatedAliases: deprecatedAliases,
     );
+  }
+
+  /// A spec-named param union whose name another type already has keeps the
+  /// name it would have had without one (`<Namespace><Method><Param>`).
+  /// Of distinct unions the spec gives one name, the one with the smallest
+  /// canonical key (its smallest `<method>#param:<name>` origin) keeps it and
+  /// the rest fall back, as in [_resolveNamingCollisions], so spec order
+  /// doesn't matter.
+  void _fallBackFromCollidingTypeNames() {
+    final ranks = Map<SealedClassType, String>.identity();
+    for (final o in _origins) {
+      if (o.type case final SealedClassType u
+          when _hintedUnions.containsKey(u)) {
+        final rank = ranks[u];
+        if (rank == null || o.canonicalKey.compareTo(rank) < 0) {
+          ranks[u] = o.canonicalKey;
+        }
+      }
+    }
+    final unions = _hintedUnions.keys.toList()
+      ..sort((a, b) => (ranks[a] ?? a.name).compareTo(ranks[b] ?? b.name));
+    final kept = <String, SealedClassType>{};
+    for (final union in unions) {
+      final old = _hintedUnions[union]!;
+      final name = union.name;
+      final collides =
+          kept.containsKey(name) ||
+          _schemaTypes.containsKey(name) ||
+          _origins.any(
+            (o) =>
+                !identical(o.type, union) &&
+                // A union the spec gives this name too contends by rank.
+                ((o.name == name && !_hintedUnions.containsKey(o.type)) ||
+                    (o.type is SealedClassType &&
+                        (o.type as SealedClassType).variants.any(
+                          (v) => v.className == name,
+                        ))),
+          );
+      if (!collides) {
+        kept[name] = union;
+        continue;
+      }
+      _renameType(union, old);
+      if (identical(_types[name], union)) _types.remove(name);
+      _types[old] = union;
+      final keeper = kept[name];
+      _warnings.add(
+        keeper != null && _differOnlyInNestedNames(union, keeper)
+            ? 'Naming conflict: union $name is generated as $old, since its '
+                  'copy named $name differs from it only in the names of the '
+                  'types nested in its arms.'
+            : 'Naming conflict: union $name is generated as $old, since '
+                  'another type is named $name.',
+      );
+    }
+    // A later union of the name may have taken the keeper's table entry.
+    for (final MapEntry(key: name, value: union) in kept.entries) {
+      _types[name] = union;
+    }
+    _hintedUnions.removeWhere((union, old) => union.name == old);
+  }
+
+  /// Whether [a] and [b] have one shape once the names of the enums nested in
+  /// their arms are set aside: two namespaces' copies of one spec union whose
+  /// arms were named after each namespace's own old name.
+  bool _differOnlyInNestedNames(SealedClassType a, SealedClassType b) {
+    _keyEnumsByValues = true;
+    try {
+      return _structuralKeyOfSealed(a) == _structuralKeyOfSealed(b);
+    } finally {
+      _keyEnumsByValues = false;
+    }
+  }
+
+  /// The final name of every declared type and union arm.
+  Set<String> _typeAndArmNames() {
+    final names = <String>{};
+    void addUnion(SealedClassType union) {
+      names.add(union.name);
+      for (final v in union.variants) {
+        names.add(v.className);
+        if (v.embeddedUnion case final embedded?) addUnion(embedded);
+      }
+    }
+
+    for (final type in _types.values) {
+      if (type is SealedClassType) {
+        addUnion(type);
+      } else if (_isDeclared(type)) {
+        names.add(_displayName(type));
+      }
+    }
+    return names;
   }
 
   ResolvedType _resolveType(
@@ -705,7 +848,8 @@ class CodegenModelBuilder {
     MapType(valueType: final v) => 'Map<${_typeKey(v)}>',
     SchemaReference(name: final n) => 'ref:$n',
     RecordType() => _structuralKeyOfRecord(t),
-    EnumType(name: final n) => 'ref:$n',
+    EnumType(name: final n, values: final vs) =>
+      _keyEnumsByValues ? 'enum[${vs.join(',')}]' : 'ref:$n',
     SealedClassType() => _structuralKeyOfSealed(t),
     TransferableType(blocksType: final kt, typeArgs: final args) =>
       'xfer:$kt<${args.map(_typeArgKey).join(',')}>',
@@ -844,11 +988,14 @@ class CodegenModelBuilder {
     };
   }
 
+  /// [armBase], when set, names the arms in place of [hint]: a union the
+  /// spec names keeps the arm names its old name gave it.
   ResolvedType _resolveDiscriminatedUnion(
     DiscriminatedUnionRef ref,
     String? hint, [
     String? path,
     Set<String> enclosingKeys = const {},
+    String? armBase,
   ]) {
     final name = hint ?? '_Union${_anonCounter++}';
 
@@ -867,7 +1014,7 @@ class CodegenModelBuilder {
       // (e.g. `IsUpdatedTrue`/`IsUpdatedFalse`), mirroring the Kotlin output.
       final className = ref.discriminantIsBoolean
           ? '${_capitalize(ref.discriminant)}${_capitalize(discValue)}'
-          : '${_capitalize(discValue)}${_inferSuffix(name)}';
+          : '${_capitalize(discValue)}${_inferSuffix(armBase ?? name)}';
       final variantPath = path == null ? null : '$path>$discValue';
 
       final List<RecordField> fields;

@@ -3,6 +3,7 @@
 
 import type { DatabaseEngine, TransactionHandle } from '../common/engine.js';
 import { configError, foreignTransactionHandle, transactionEnded } from '../errors.js';
+import type { DataApiOptions } from '../types.js';
 
 // The handle an engine's `beginTransaction()` returns. `settled` is set by the first of commitTransaction()
 // and rollbackTransaction(), so the connection (or mutex) is freed exactly once and a later call sees it
@@ -142,3 +143,10 @@ export async function withTransaction<T>(
 	await engine.commitTransaction(handle);
 	return result;
 }
+
+/**
+ * The engine of a database behind the RDS Data API. The client of the Data API is loaded here, so an app that
+ * has no such database never loads it.
+ */
+export const dataApiEngine = async (coordinates: DataApiOptions): Promise<RowCountingEngine> =>
+	new (await import('./data-api-engine.js')).DataApiEngine(coordinates);

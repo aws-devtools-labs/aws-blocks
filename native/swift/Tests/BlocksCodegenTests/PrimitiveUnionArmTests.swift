@@ -208,7 +208,10 @@ final class PrimitiveUnionArmTests: XCTestCase {
     func testDiscriminatedUnionWithoutValueArmsOpensTheContainerOnce() throws {
         let kindA = object(["kind": literal("a"), "x": string])
         let kindB = object(["kind": literal("b")])
-        let output = try generate(methods: [method("act", result: oneOf(kindA, kindB))])
+        // A parameter, so the union is closed: an open one (a result) opens a container per known case.
+        let output = try generate(methods: [
+            method("act", params: #"[{ "name": "input", "required": true, "schema": \#(oneOf(kindA, kindB)) }]"#, result: string)
+        ])
 
         assertContains(output.api, """
                     public func encode(to encoder: Encoder) throws {

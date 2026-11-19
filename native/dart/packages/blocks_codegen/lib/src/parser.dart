@@ -299,7 +299,10 @@ class OpenRpcParser {
     if (schema.containsKey('oneOf')) {
       final oneOf = (schema['oneOf'] as List<dynamic>)
           .cast<Map<String, dynamic>>();
-      return _parseOneOf(oneOf);
+      return _parseOneOf(
+        oneOf,
+        typeName: schema['x-blocks-type-name'] as String?,
+      );
     }
 
     final type = schema['type'] as String?;
@@ -421,7 +424,7 @@ class OpenRpcParser {
     return null;
   }
 
-  TypeRef _parseOneOf(List<Map<String, dynamic>> oneOf) {
+  TypeRef _parseOneOf(List<Map<String, dynamic>> oneOf, {String? typeName}) {
     // A `{"type":"null"}` member (e.g. from TS `Partial<Record<K, V>>`) does
     // not participate in discrimination and must not become a sealed-class
     // variant. Strip such members out, and if any were present mark the
@@ -493,6 +496,7 @@ class OpenRpcParser {
           discriminant: discriminant,
           variants: variants,
           discriminantIsBoolean: discriminantIsBoolean,
+          typeName: typeName,
         );
         return hasNullMember ? NullableRef(union) : union;
       }

@@ -541,9 +541,36 @@ void main() {
       String kind(RealtimeException e) => switch (e) {
         RealtimeChannelClosedException() => 'closed',
         RealtimeConnectionException() => 'connection',
+        RealtimeSubscriptionEndedException() => 'ended',
       };
       expect(kind(const RealtimeChannelClosedException()), 'closed');
       expect(kind(const RealtimeConnectionException('c')), 'connection');
+      expect(
+        kind(const RealtimeSubscriptionEndedException('room', null, 'm')),
+        'ended',
+      );
+    });
+
+    test('RealtimeSubscriptionEndedException names the channel and code', () {
+      const e = RealtimeSubscriptionEndedException(
+        'room',
+        'token_expired',
+        'Channel token expired',
+      );
+      expect(e, isA<BlocksException>());
+      expect(
+        e.toString(),
+        'RealtimeSubscriptionEndedException(room, token_expired): '
+        'Channel token expired',
+      );
+      expect(
+        const RealtimeSubscriptionEndedException(
+          'room',
+          null,
+          'refused',
+        ).toString(),
+        'RealtimeSubscriptionEndedException(room): refused',
+      );
     });
   });
 

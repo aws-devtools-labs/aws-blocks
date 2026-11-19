@@ -12,6 +12,7 @@ import {
 	quoteIdent,
 	searchPathFor,
 } from '../constants.js';
+import { dataApiEngine } from '../engines/handle.js';
 import { iamAuthToken, PgEngine } from '../engines/pg-engine.js';
 import {
 	causeChain,
@@ -29,7 +30,7 @@ import { decodeStoredValue, readSsmConnectionString } from '../external/ssm-stor
 import { grantSchemaAccess } from '../migrations/grants.js';
 import { buildMigrationPlan } from '../migrations/plan.js';
 import { ensureMigrationTables, runMigrationPlan } from '../migrations/runner.js';
-import type { ClusterType } from '../types.js';
+import type { ClusterType, DataApiOptions } from '../types.js';
 
 const MAX_RETRIES = 8;
 const INITIAL_DELAY_MS = 1000;
@@ -115,6 +116,11 @@ interface MigrationProperties {
 	connectionParameter?: string;
 	/** An existing database: the Secrets Manager secret that holds the connection string. */
 	connectionSecretArn?: string;
+	/**
+	 * A database that is reached through the RDS Data API: the cluster, the secret and the database name. They
+	 * name the database and are not credentials.
+	 */
+	dataApi?: DataApiOptions;
 }
 
 type IsCompleteEvent = CloudFormationCustomResourceEvent & {
@@ -181,22 +187,26 @@ interface ExternalAsset {
 	ca?: string;
 }
 
-// An existing database: no cluster admin and no app role to provision. The function connects with the stored
-// connection string, as the app does, and runs each pending file in one transaction.
+// An existing database: no cluster admin and no app role to provision. The function reaches the database as the
+// app does, with the stored connection string or through the Data API, and runs each pending file in one
+// transaction.
 async function migrateExternal(props: MigrationProperties): Promise<boolean> {
 	if (!props.migrationsBucket || !props.migrationsKey)
 		throw new Error('migrationsBucket and migrationsKey are required');
 	const schemaName = props.schemaName || DEFAULT_SCHEMA;
 	const [object, stored] = await Promise.all([
 		new S3Client({}).send(new GetObjectCommand({ Bucket: props.migrationsBucket, Key: props.migrationsKey })),
-		readConnectionString(props),
+		props.dataApi ?? readConnectionString(props),
 	]);
 	const asset = JSON.parse((await object.Body?.transformToString()) ?? '{"files":{}}') as ExternalAsset;
-	const engine = externalEngine(parseConnectionString(stored.value, stored.label), {
-		ca: asset.ca,
-		schemaName,
-		poolSize: 1,
-	});
+	const engine =
+		'clusterArn' in stored
+			? await dataApiEngine(stored)
+			: externalEngine(parseConnectionString(stored.value, stored.label), {
+					ca: asset.ca,
+					schemaName,
+					poolSize: 1,
+				});
 	try {
 		const plan = buildMigrationPlan(asset.files, 'external');
 		const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName, boundToInvocation: true }));

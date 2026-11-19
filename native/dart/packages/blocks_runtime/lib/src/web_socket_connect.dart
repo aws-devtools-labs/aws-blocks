@@ -4,5 +4,14 @@ import 'web_socket_connect_web.dart'
     if (dart.library.io) 'web_socket_connect_io.dart'
     as platform;
 
-WebSocketChannel connectWebSocket(Uri uri, Map<String, String> headers) =>
-    platform.connectWebSocket(uri, headers);
+/// Opens a WebSocket to [uri].
+///
+/// [handshakeTimeout] is when the platform gives up on a handshake that hasn't
+/// finished and releases the connection attempt. The caller ends its
+/// subscriptions at the same time.
+WebSocketChannel connectWebSocket(
+  Uri uri,
+  Map<String, String> headers, {
+  required Duration handshakeTimeout,
+}) =>
+    platform.connectWebSocket(uri, headers, handshakeTimeout: handshakeTimeout);

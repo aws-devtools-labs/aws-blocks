@@ -38,10 +38,50 @@ public final nonisolated class Api: Sendable {
                 self.updatedAt = updatedAt
             }
 
-            public enum Status: String, Codable, Sendable {
+            public enum Status: RawRepresentable, Codable, Hashable, Sendable {
                 case active
                 case inactive
                 case pending
+                case unknown(String)
+
+                public init(rawValue: String) {
+                    switch rawValue {
+                    case "active": self = .active
+                    case "inactive": self = .inactive
+                    case "pending": self = .pending
+                    default: self = .unknown(rawValue)
+                    }
+                }
+
+                public var rawValue: String {
+                    switch self {
+                    case .active: return "active"
+                    case .inactive: return "inactive"
+                    case .pending: return "pending"
+                    case .unknown(let value): return value
+                    }
+                }
+
+                public static func == (lhs: Self, rhs: Self) -> Bool {
+                    switch (lhs, rhs) {
+                    case (.active, .active): return true
+                    case (.inactive, .inactive): return true
+                    case (.pending, .pending): return true
+                    case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                    default: return false
+                    }
+                }
+
+                public func hash(into hasher: inout Hasher) {
+                    switch self {
+                    case .active: hasher.combine(0)
+                    case .inactive: hasher.combine(1)
+                    case .pending: hasher.combine(2)
+                    case .unknown(let value):
+                        hasher.combine(3)
+                        hasher.combine(value)
+                    }
+                }
             }
         }
     }

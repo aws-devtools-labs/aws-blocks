@@ -125,9 +125,45 @@ public nonisolated struct Shipment: Codable, Sendable {
                     self.source = source
                 }
 
-                public enum Source: String, Codable, Sendable {
+                public enum Source: RawRepresentable, Codable, Hashable, Sendable {
                     case gps
                     case cell
+                    case unknown(String)
+
+                    public init(rawValue: String) {
+                        switch rawValue {
+                        case "gps": self = .gps
+                        case "cell": self = .cell
+                        default: self = .unknown(rawValue)
+                        }
+                    }
+
+                    public var rawValue: String {
+                        switch self {
+                        case .gps: return "gps"
+                        case .cell: return "cell"
+                        case .unknown(let value): return value
+                        }
+                    }
+
+                    public static func == (lhs: Self, rhs: Self) -> Bool {
+                        switch (lhs, rhs) {
+                        case (.gps, .gps): return true
+                        case (.cell, .cell): return true
+                        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                        default: return false
+                        }
+                    }
+
+                    public func hash(into hasher: inout Hasher) {
+                        switch self {
+                        case .gps: hasher.combine(0)
+                        case .cell: hasher.combine(1)
+                        case .unknown(let value):
+                            hasher.combine(2)
+                            hasher.combine(value)
+                        }
+                    }
                 }
             }
         }

@@ -309,17 +309,15 @@ void main() {
 
   group('an enum value named after an enum built-in', () {
     test('`values`, `index` and `name` are escaped; `ok` is not', () {
-      final level = _decl(
-        _generate(
-          schemas: {
-            'Level': {
-              'type': 'string',
-              'enum': ['values', 'index', 'name', 'toJson', 'hashCode', 'ok'],
-            },
+      final output = _generate(
+        schemas: {
+          'Level': {
+            'type': 'string',
+            'enum': ['values', 'index', 'name', 'toJson', 'hashCode', 'ok'],
           },
-        ),
-        'Level',
+        },
       );
+      final level = _decl(output, 'LevelKnown');
       expect(
         level,
         contains(
@@ -332,12 +330,18 @@ void main() {
       expect(level, contains(r"    index$: 'index',"));
       expect(level, contains('    ok: \'ok\','));
       // `values.byName` and `name` would now name the user's values; the
-      // escaped values go through the maps instead.
+      // escaped values go through the maps instead. `Level` is a result, so
+      // it is open: the maps are on `LevelKnown`, and `Level.fromJson` falls
+      // back to `LevelUnknown`.
       expect(level, contains('  String toJson() => _toJsonMap[this]!;'));
       expect(
-        level,
-        contains('  static Level fromJson(String json) => _jsonMap[json]!;'),
+        output,
+        contains(
+          '  static Level fromJson(String json) => '
+          'LevelKnown._jsonMap[json] ?? LevelUnknown(json);',
+        ),
       );
+      expect(output, contains(r'  static const values$ = LevelKnown.values$;'));
     });
 
     test('a keyword value is escaped too (it used to break the enum)', () {
@@ -350,7 +354,7 @@ void main() {
             },
           },
         ),
-        'Level',
+        'LevelKnown',
       );
       expect(level, contains('  class\$,\n  low\n;'));
       expect(level, contains(r"    'class': class$,"));
@@ -366,7 +370,7 @@ void main() {
             },
           },
         ),
-        'Level',
+        'LevelKnown',
       );
       expect(level, contains('  aB\$,\n  aB\n;'));
       expect(level, contains(r"    'a-b': aB$,"));
@@ -455,7 +459,7 @@ void main() {
     });
 
     test('as an enum value is escaped', () {
-      final level = _decl(output, 'Level');
+      final level = _decl(output, 'LevelKnown');
       expect(level, contains('  String\$,\n  Level\$,\n  low\n;'));
       expect(level, contains(r"    'String': String$,"));
     });
