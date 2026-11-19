@@ -8,7 +8,8 @@
 // `nextjs` off it: `next build` ignores project references when it type-checks.
 
 import assert from 'node:assert';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -134,6 +135,38 @@ describe('template TypeScript projects', () => {
 				expected,
 				`${name}/aws-blocks/tsconfig.json differs from default's`,
 			);
+		}
+	});
+
+	it('every tsconfig that type-checks a backend has the library types of Array.fromAsync', () => {
+		// The Building Block docs list items with `Array.fromAsync(store.query(...))`; a backend whose
+		// `lib` stops at ES2022 fails its type-check with TS2550 on it. nextjs checks aws-blocks/ with its
+		// root tsconfig.json, every other template with aws-blocks/tsconfig.json.
+		const configs = templates
+			.map((name) =>
+				name === 'nextjs' ? join(templatesDir, name, 'tsconfig.json') : join(templatesDir, name, 'aws-blocks', 'tsconfig.json'),
+			)
+			.filter((path) => existsSync(path));
+		assert.ok(configs.some((path) => path.includes(`${sep}nextjs${sep}`)), 'the nextjs tsconfig is checked');
+		const dir = mkdtempSync(join(tmpdir(), 'cba-fromasync-'));
+		try {
+			const file = join(dir, 'list.ts');
+			writeFileSync(file, 'export const items: Promise<number[]> = Array.fromAsync([1, 2]);\n');
+			const failing: string[] = [];
+			for (const path of configs) {
+				const { options } = ts.parseJsonConfigFileContent(readTsconfig(path), ts.sys, dirname(path));
+				// Only the library matters here: no ambient types, no plugins, no emit.
+				const program = ts.createProgram([file], { lib: options.lib, target: options.target, types: [], noEmit: true });
+				const errors = ts.getPreEmitDiagnostics(program);
+				if (errors.length > 0) {
+					failing.push(
+						`${relative(templatesDir, path)}: ${errors.map((e) => ts.flattenDiagnosticMessageText(e.messageText, ' ')).join('; ')}`,
+					);
+				}
+			}
+			assert.deepStrictEqual(failing, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
