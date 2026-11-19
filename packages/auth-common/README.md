@@ -17,7 +17,7 @@ Shared interfaces and UI components for AWS CDK Blocks authentication: the `Bloc
 
 Application code installs `aws-cdk-blocks`, and there the UI import is `aws-cdk-blocks/ui`. It exports the same functions as `@aws-cdk-blocks/auth-common/ui`, and the examples below use either path. Use `aws-cdk-blocks/ui` unless you depend on `auth-common` directly. The root `aws-cdk-blocks` entry does not export the UI.
 
-## Server-Side Interface (`BlocksAuth`)
+## Server-side interface (`BlocksAuth`)
 
 `Auth` implements `BlocksAuth`, and so can a custom auth Building Block. Server-side code is identical regardless of provider:
 
@@ -27,7 +27,7 @@ import { Auth } from '@aws-cdk-blocks/bb-auth';
 const auth = new Auth(scope, 'auth');
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  // Require auth — throws 401 if not signed in
+  // Throws 401 if the caller is not signed in.
   async getProfile() {
     const user = await auth.requireAuth(context);
     return { username: user.username };
@@ -49,34 +49,36 @@ export const authApi = auth.createApi();
 
 ## Auth error names (`AuthErrors`)
 
-`AuthErrors` is the shared vocabulary of auth error names. Each value is the `name` of the `ApiError` an auth BB throws, and the `errorName` it sets on a failed `AuthState`. Errors cross the wire by `name`, so the same check works on the server and in the browser:
+`AuthErrors` lists the names an auth block uses for a thrown `ApiError` or the `errorName` on a failed `AuthState`. In browser application code, use `isBlocksError` from `aws-cdk-blocks/client` to match a caught error by name:
 
 ```typescript
-import { AuthErrors, isAuthError } from '@aws-cdk-blocks/auth-common';
+import { isBlocksError } from 'aws-cdk-blocks/client';
 import { api } from 'cdk-blocks';
 
 try {
   await api.getProfile();
 } catch (e: unknown) {
-  if (isAuthError(e, AuthErrors.NotAuthenticated)) showSignIn(); // your own function
+  if (isBlocksError(e, 'NotAuthenticatedException')) showSignIn(); // your own function
   else throw e;
 }
 ```
 
-- `isAuthError(e, AuthErrors.X)` narrows `e` to `Error & { name: 'X…' }`. It is `isBlocksError` from `@aws-cdk-blocks/core`, restricted to auth names, so a typo or an unknown name fails to compile.
-- `isAuthError(e)` (no name) matches any name in `AuthErrors`. Some names, such as `InvalidParameterException` or `ResourceNotFoundException`, are not unique to auth — prefer passing the specific name you handle.
-- `isAuthErrorName(value)` narrows a string (e.g. `state.errorName` from `setAuthState`) to `AuthErrorName`. To branch on one specific name on that path, use `hasAuthError(state, AuthErrors.X)` from `@aws-cdk-blocks/core`.
+On the server, import `AuthErrors` and `isAuthError` from `aws-cdk-blocks` (or directly from `@aws-cdk-blocks/auth-common`). `isAuthError(e, AuthErrors.NotAuthenticated)` makes the same check as the browser example: `e` must be an `Error` with that exact name. Its name argument is restricted to `AuthErrorName`. Without a name, `isAuthError(e)` matches an `Error` with any name in `AuthErrors`; it does not prove the error came from auth.
+
+If `setAuthState()` returns a failed state instead of throwing, use `hasAuthError(state, 'NotAuthorizedException')` from `aws-cdk-blocks/client` to match `state.errorName`. Use `isAuthErrorName(value)` from `@aws-cdk-blocks/auth-common` to narrow an unknown value to `AuthErrorName`.
 
 The names follow Amazon Cognito's exception names wherever Cognito has one (for example `UsernameExistsException`, `CodeMismatchException`). `Auth` reports every failure with one of these names (an error it does not recognise becomes `InternalErrorException`); only an `ApiError` your own `validateUser` / `onSignIn` hook throws keeps the name you gave it.
 
+For HTTP statuses and their exceptions, see [Errors in `Auth`](../bb-auth/README.md#errors).
+
 | Constant | `error.name` | Meaning |
 |---|---|---|
-| `NotAuthenticated` | `NotAuthenticatedException` | No valid session (401). Send the user to sign-in. |
+| `NotAuthenticated` | `NotAuthenticatedException` | No valid session. Send the user to sign-in. |
 | `NotAuthorized` | `NotAuthorizedException` | Credentials rejected, or the signed-in user lacks the required role. Sign-in reports an unknown user, a wrong password and a disabled user identically under this name. |
 | `PasswordResetRequired` | `PasswordResetRequiredException` | The user must reset their password before they can sign in. |
 | `TokenExpired` | `TokenExpiredException` | The session's refresh token was rejected or has expired. |
 | `ReauthenticationRequired` | `ReauthenticationRequiredException` | The session is valid but too old for an operation that requires a recent sign-in. |
-| `SignOutIncomplete` | `SignOutIncompleteException` | Sign-out cleared the session cookie but could not delete the server-side session (503). |
+| `SignOutIncomplete` | `SignOutIncompleteException` | Sign-out cleared the session cookie but could not delete the server-side session. |
 | `UserAlreadyExists` | `UsernameExistsException` | A user with this username already exists. |
 | `UserNotConfirmed` | `UserNotConfirmedException` | The user signed up but has not confirmed their account. |
 | `UserNotFound` | `UserNotFoundException` | No such user. Privileged (admin) operations only, never a public sign-in path. |
@@ -114,9 +116,9 @@ The names follow Amazon Cognito's exception names wherever Cognito has one (for 
 | `InvalidLambdaResponse` | `InvalidLambdaResponseException` | An auth Lambda trigger returned a malformed response. |
 | `UserLambdaValidation` | `UserLambdaValidationException` | An auth Lambda trigger rejected the request. |
 | `InternalError` | `InternalErrorException` | A service-side failure. Safe to retry with backoff. |
-| `InsecureTransport` | `InsecureTransportException` | The auth block refused to issue a session cookie over a plain-HTTP front door outside a sandbox deploy (500). |
+| `InsecureTransport` | `InsecureTransportException` | The auth block refused to issue a session cookie over a plain-HTTP front door outside a sandbox deploy. |
 
-## Authenticator Component
+## Authenticator component
 
 `Authenticator(authApi, options?)` renders the forms for the current `AuthState`. It works with `Auth`, whatever sign-in methods it is configured with, and with any custom auth BB that serves the same state machine.
 
@@ -143,7 +145,7 @@ import { authApi } from 'cdk-blocks';
 document.body.prepend(AccountMenuBar(authApi));
 ```
 
-Use `AccountMenuBar` for the page header and `Authenticator` when you want a standalone sign-in form (e.g., a dedicated login page).
+Use `AccountMenuBar` for the page header and `Authenticator` when you want a standalone sign-in form (for example, a dedicated login page).
 
 ## AuthenticatedContent
 
@@ -207,7 +209,7 @@ The element is a polite ARIA live region (`role="status"`, `aria-live="polite"`)
 
 Pass `testId` to scope the root (and its `-text` child) when a page renders more than one status region.
 
-## Auth State Change Subscription
+## Auth state change subscription
 
 Subscribe to auth state changes from any source (same window + other tabs):
 
@@ -230,7 +232,7 @@ const unsubscribe = onAuthChange(authApi, (user) => {
 
 The user is typed by the API you pass: with `Auth`'s `authApi` it is that block's `AuthStateUser` (`groups`, `attributes`, `userSub`), so `user?.groups` needs no cast; with a plain `AuthStateApi` it is an `AuthUser`. `AuthUserOf<typeof authApi>` names it.
 
-## Types Reference
+## Types reference
 
 ### `AuthState`
 
@@ -242,7 +244,7 @@ Returned by `getAuthState()` and `setAuthState()`.
 | `user` | `AuthUser?` | Present when `state === 'signedIn'` |
 | `actions` | `AuthAction[]` | Available actions from this state |
 | `error` | `string?` | Error from the last action |
-| `errorName` | `string?` | Machine-readable name of the last action's error, mirroring the thrown `ApiError`'s `name` (e.g. `'NotAuthorizedException'`). Branch on it with `hasAuthError(state, name)` instead of matching the human-facing `error`. Absent on success or a generic `ApiError`. |
+| `errorName` | `string?` | Machine-readable name of the last action's error, mirroring the thrown `ApiError`'s `name` (for example, `'NotAuthorizedException'`). Branch on it with `hasAuthError(state, name)` instead of matching the human-facing `error`. Absent on success or a generic `ApiError`. |
 | `retriable` | `boolean?` | The last action failed recoverably: resubmit on the **same** state (preserving hidden fields such as `session`) and show `error` inline, instead of restarting the flow. |
 
 ### `AuthAction`
@@ -252,7 +254,7 @@ All actions are forms. They differ in where they submit.
 | Field | Type | Description |
 |---|---|---|
 | `name` | `string` | Action name. Used as the `action` discriminant in `setAuthState({ action, ...fields })`. |
-| `label` | `string` | Button label (e.g., "Sign In", "Sign in with Google") |
+| `label` | `string` | Button label (for example, "Sign In", "Sign in with Google") |
 | `fields` | `AuthField[]` | Form fields |
 | `url` | `string?` | External form target. When present, submit an HTML form here instead of calling `setAuthState()`. |
 | `method` | `'GET' \| 'POST'?` | HTTP method for external forms. Default: `'GET'`. |
@@ -274,7 +276,7 @@ All actions are forms. They differ in where they submit.
 | `userId` | `string` | Unique identifier |
 | `username` | `string` | Display name or username |
 
-Auth BBs extend this (e.g., `Auth`'s `AuthenticatedUser` adds `userSub`, `groups`, `attributes` and `signInProvider`).
+Auth BBs extend this (for example, `Auth`'s `AuthenticatedUser` adds `userSub`, `groups`, `attributes` and `signInProvider`).
 
 ## Custom auth UI: `submitAuthAction`
 
@@ -303,10 +305,10 @@ function submitAuthAction<A extends AuthStateApi<never>>(api: A, input: Paramete
 
 It calls `setAuthState(input)` once and resolves to exactly what that returned, then:
 
-- `retriable: true` — changes nothing. Keep the current form (and its hidden fields, such as `session`) and show `error` inline.
-- any other result — updates the shared auth-state store (below), so every mounted `Authenticator` re-renders, mid-flow steps included.
-- a `signedIn` or `signedOut` result — also broadcasts `user ?? null` to the `onAuthChange` subscribers of this `authApi`, in this window and in other tabs. Mid-flow steps are not broadcast. With two auth blocks on a page, another block's `onAuthChange` (and store) ignores it.
-- a rejected call (network, 5xx) — rejects with the same error and changes nothing.
+- `retriable: true` changes nothing. Keep the current form (and its hidden fields, such as `session`) and show `error` inline.
+- any other result updates the shared auth-state store (below), so every mounted `Authenticator` re-renders, mid-flow steps included.
+- a `signedIn` or `signedOut` result also broadcasts `user ?? null` to the `onAuthChange` subscribers of this `authApi`, in this window and in other tabs. Mid-flow steps are not broadcast. With two auth blocks on a page, another block's `onAuthChange` (and store) ignores it.
+- a rejected call (network, 5xx) rejects with the same error and changes nothing.
 
 `input` is the same discriminated `AuthActionInput` as `setAuthState`. Both calls are fully typed, so a custom form needs no `as any`. A literal `action` narrows the input (wrong fields are a compile error), and the result is an `AuthState`. With `Auth`, `input` is also checked against the actions that block's options allow ([Mode gates](../bb-auth/README.md#mode-gates)).
 
@@ -314,7 +316,7 @@ Outside a browser (SSR, Node scripts) the call is only the RPC: nothing is cache
 
 The `Authenticator` and `AccountMenuBar` submit through it too, so each sign-in or sign-out notifies exactly once. For the full custom-UI walkthrough see [Customizing Auth UI](../bb-auth/CUSTOMIZING-AUTH-UI.md).
 
-## Auth State Store (React)
+## Auth state store (React)
 
 `subscribeAuthState` and `getAuthStateSnapshot` expose the same per-`api` state the `Authenticator` renders from, shaped for React's `useSyncExternalStore`:
 
@@ -341,7 +343,7 @@ function getAuthStateSnapshot<A extends AuthStateApi<never>>(api: A): AuthState<
 
 Use the store when you render the auth *flow* (challenge steps, errors). Use `onAuthChange` when you only care about *who* is signed in.
 
-## Broadcasting Auth Changes
+## Broadcasting auth changes
 
 `broadcastAuthChange` is the lower-level primitive `submitAuthAction` uses. You rarely need it directly: call it only when the session changed by some route other than `submitAuthAction`, such as a sign-in your own server endpoint completed.
 
@@ -369,14 +371,9 @@ Pass the signed-in `AuthUser`, or `null` for a sign-out. Pass `api` so that only
 
 The UI components ship a framework-neutral design-token layer. Each component injects one stylesheet into `document.head` the first time it renders, so there is no stylesheet to import.
 
-The stylesheet is CSS custom properties on `:root` (`--bb-color-*`,
-`--bb-space-*`, `--bb-radius-*`, `--bb-font-*`, `--bb-shadow-*`) plus the
-base `.bb-*` component classes the components render against. A light and
-a dark palette are provided; dark is selected automatically by
-`prefers-color-scheme`.
+The stylesheet is CSS custom properties on `:root` (`--bb-color-*`, `--bb-space-*`, `--bb-radius-*`, `--bb-font-*`, `--bb-shadow-*`) plus the base `.bb-*` component classes the components render against. A light and a dark palette are provided; dark is selected automatically by `prefers-color-scheme`.
 
-Because the tokens are on `:root`, your own markup can consume them for a
-consistent look without importing anything:
+Because the tokens are on `:root`, your own markup can consume them for a consistent look without importing anything:
 
 ```css
 .my-button {
@@ -387,17 +384,13 @@ consistent look without importing anything:
 }
 ```
 
-Force a specific palette by setting `data-bb-theme` on any ancestor
-(it wins over the media query):
+Force a specific palette by setting `data-bb-theme` on any ancestor (it wins over the media query):
 
 ```html
 <body data-bb-theme="dark"> ... </body>
 ```
 
-Call `injectTheme()` yourself to make the tokens available before any
-component mounts (for example, to theme your page chrome at startup). It
-is idempotent and SSR-safe — a second call is a no-op, and it returns
-silently when there is no `document`:
+Call `injectTheme()` yourself to make the tokens available before any component mounts (for example, to theme your page chrome at startup). It is idempotent and SSR-safe: a second call is a no-op, and it returns silently when there is no `document`:
 
 ```typescript
 import { injectTheme } from 'aws-cdk-blocks/ui';
@@ -405,9 +398,7 @@ import { injectTheme } from 'aws-cdk-blocks/ui';
 injectTheme();
 ```
 
-`THEME_CSS` (the stylesheet as a string) and `THEME_STYLE_ID` (the
-`<style>` element's id) are also exported for hosts that bundle the CSS
-through a build step or assert against it in tests.
+`THEME_CSS` (the stylesheet as a string) and `THEME_STYLE_ID` (the `<style>` element's id) are also exported for hosts that bundle the CSS through a build step or assert against it in tests.
 
 ## Session-cookie security policy (`/cookies`)
 

@@ -28,10 +28,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-Exporting `authApi` provisions the backend, but **it does not render a login screen**: the SPA shows nothing until you mount an auth component. Mount the UI in the SPA entrypoint and gate the app shell behind a session:
+`new Auth` provisions the backend, and `authApi` exposes the sign-in API. Neither renders a login screen. Mount the UI in the SPA entrypoint and gate the app shell behind a session:
 
 ```typescript
-// src/index.ts — the SPA entrypoint
+// src/index.ts: the SPA entrypoint
 import { api, authApi } from 'cdk-blocks';
 import { AccountMenuBar, AuthenticatedContent } from 'aws-cdk-blocks/ui';
 
@@ -57,135 +57,6 @@ document.getElementById('app')!.appendChild(
 - An API method is public until it awaits a guard (`requireAuth`, `requireRole`). To guard every method of a namespace, use `auth.protect` ([Protect every method](#protect-every-method)).
 - To embed the form inline instead, use `Authenticator(authApi)`. The components are documented in the [`auth-common` README](../auth-common/README.md).
 - Sign-up asks for an emailed code. Locally no email is sent ([Local development](#local-development)).
-
-## Usage
-
-`new Auth(scope, id, options?)`. Pick the block's `store` first ([Where do your users live?](#where-do-your-users-live)); every other setting is a key of the one options object:
-
-- `new Auth(scope, 'auth')` — email + password, the zero-config default.
-- `new Auth(scope, 'auth', { providers: { google: { type: 'google', clientId, clientSecret } } })` — email + password plus Google, federated through Cognito.
-- `new Auth(scope, 'auth', { providers: { okta: { type: 'oidc', issuer, clientId, clientSecret } } })` — email + password plus Okta, federated through Cognito (a client secret is required).
-- `new Auth(scope, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } })` — Okta only, federated directly by your backend. No Cognito user pool is created. For password users as well, add a second block ([below](#where-do-your-users-live)).
-
-The guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, `signOut`) and `createApi()` work the same for every sign-in method. Each method is documented on the exported `AuthShape` type: `npm run docs:api Auth`.
-
-### Options
-
-"Default store only" marks an option that is a compile error with `store: 'builtin'`. A dotted name is a key of that option's object.
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `store` | `'cognito' \| 'builtin'` | `'cognito'` | Where the users live ([Where do your users live?](#where-do-your-users-live)). |
-| `emailPassword` | `boolean \| EmailPasswordOptions` | `true` | Email + password sign-in. `false` makes the password methods compile errors. Default store only. |
-| `emailPassword.selfSignUp` | `boolean` | `true` | Users may register themselves. `false`: users are created only through `auth.admin`. |
-| `emailPassword.passwordPolicy` | `PasswordPolicy` | 8 characters, all four character kinds | [Password policy](#password-policy). |
-| `emailPassword.autoSignIn` | `boolean` | `true` | Sign the user in once they enter the emailed confirmation code ([Sign-up and email delivery](#sign-up-and-email-delivery)). |
-| `emailPassword.revealExistingUsers` | `boolean` | `false` | `false`: the sign-in UI's sign-up form, and the confirmation and password-reset steps, answer the same whether or not the account exists. `true`: they report it (`UsernameExistsException`, …). `auth.signUp()` called from your own code always throws `UsernameExistsException` for an existing user. |
-| `providers` | `Record<string, CognitoProvider>`; with `store: 'builtin'`, `Record<string, BuiltinProvider>` | none | Sign-in providers, keyed by provider id and tagged with their `type`. Required with `store: 'builtin'`. |
-| `users` | `UserPoolOptions` | — | The shape of the user pool. `store: 'builtin'` accepts `users.groups` only. |
-| `users.signInWith` | `('username' \| 'email' \| 'phone')[]` | `['username', 'email']` | What a user types as their username. Fixed once the pool exists. |
-| `users.caseSensitive` | `boolean` | `true` | Whether usernames and sign-in emails match case-sensitively. Fixed once the pool exists. |
-| `users.attributes` | `UserAttribute[]` | none | Custom attributes: `{ name, type?, mutable?, required?, userWritable? }`. Additive only. |
-| `users.groups` | `(string \| { name, description?, precedence? })[]` | none | Groups to create: the roles `requireRole` accepts. |
-| `users.authFlow` | `'USER_PASSWORD_AUTH' \| 'USER_AUTH'` | `'USER_PASSWORD_AUTH'` | `'USER_AUTH'` is required for passkeys and choice-based or passwordless sign-in, and needs a `featurePlan` above `'lite'`. |
-| `users.preferredChallenge` | `'PASSWORD' \| 'EMAIL_OTP' \| 'SMS_OTP' \| 'WEB_AUTHN'` | none: the user picks a factor | The first factor `signIn` requests under `'USER_AUTH'`. `'EMAIL_OTP'` needs `email`. |
-| `users.deviceTracking` | `{ challengeRequiredOnNewDevice?, deviceOnlyRememberedOnUserPrompt? }` | none | Remember devices to skip MFA on a known device. |
-| `mfa` | `'off' \| 'optional' \| 'required' \| MfaOptions` | `'off'` | MFA for email + password users. A string is shorthand for `{ mode }`. Default store only. |
-| `mfa.types` | `('SMS' \| 'TOTP' \| 'EMAIL')[]` | `['SMS', 'TOTP']` | The permitted second factors. `'EMAIL'` needs `email`. |
-| `mfa.totpIssuer` | `string` | the id of the root `Scope` | The name authenticator apps show next to the codes. |
-| `passkeys` | `false \| { relyingPartyId, origins, userVerification? }` | `false` | WebAuthn passkeys. Needs `users.authFlow: 'USER_AUTH'` and a `featurePlan` above `'lite'`, both checked at synth. `userVerification` is `'preferred'` (default) or `'required'`. Default store only. |
-| `session` | `SessionOptions` | — | Session and token lifetimes ([Session lifetime and refresh tokens](#session-lifetime-and-refresh-tokens)). |
-| `redirects.callbackPath` | `string` | `'/cdk-blocks/auth/callback'` | Must start with `/cdk-blocks/auth/`. |
-| `redirects.signOutPath` | `string` | `'/cdk-blocks/auth/signout'` | Must start with `/cdk-blocks/auth/`. |
-| `redirects.postSignInPath` | `string` | `'/'` | Where the browser lands after a federated sign-in. |
-| `redirects.postSignOutPath` | `string` | `'/'` | Where the browser lands after a federated sign-out. A same-origin path. |
-| `redirects.allowedRelayOrigins` | `RelayOrigin[]` | `[]` | Origins a relay sign-in may return to, each built with `relayOrigin()`. Loopback and the API's own origin are always allowed. |
-| `hostedUi.domainPrefix` | `string` | derived from the block's `fullId` | Prefix of the Cognito domain. Create-only. Default store only. |
-| `admin` | `{ actions?: ('groups' \| 'lifecycle')[] }` | omitted: no `auth.admin` | Enables `auth.admin` and its IAM grant. `actions` scopes both; without it everything is granted. Default store only. |
-| `allowBearerAuth` | `boolean \| { clientIds }` | `false` | Accept `Authorization: Bearer` access tokens ([Bearer tokens](#bearer-tokens-allowbearerauth)). The object form is default store only. |
-| `userPool` | `Auth.fromExisting(userPoolId, clientId?)` | the block creates a pool | Wrap an existing Cognito user pool. Default store only. |
-| `featurePlan` | `'lite' \| 'essentials' \| 'plus'` | `'essentials'` | The Cognito feature plan, a pricing decision ([The sign-in methods](#the-sign-in-methods)). Default store only. |
-| `email` | `EmailSenderOptions` | Cognito's default sender | Send the pool's email through Amazon SES ([Sign-up and email delivery](#sign-up-and-email-delivery)). Default store only. |
-| `validateUser` | `(candidate) => Promise<void>` | none | Policy hook for every sign-up and sign-in ([`validateUser`](#validateuser)). |
-| `onSignIn` | `(user, context) => Promise<void>` | none | Called after a successful sign-in. Throwing rolls the sign-in back. |
-| `onSignOut` | `(user, context) => Promise<void>` | none | Called before the session is destroyed. Errors are logged and never block sign-out. |
-| `removalPolicy` | `'destroy' \| 'retain'` | the stack's `defaults.removalPolicy` | What happens to the user pool and the session table when the block leaves the stack. |
-| `deletionProtection` | `boolean` | the stack's `defaults.deletionProtection` | Deletion protection on the user pool and the session table. |
-| `logger` | `ChildLogger` | a `Logger` at `error` level | Where the block logs. |
-| `audit` | `boolean \| ChildLogger` | `false` | Write a log line for each session lifecycle event ([Audit records](#audit-records)). |
-| `codeDelivery` | `(username, code, purpose) => Promise<void>` | none | Local only: called with every verification code ([Local development](#local-development)). Default store only. |
-| `totpVerification` | `'any' \| 'rfc6238'` | `'any'` | Local only: how authenticator-app codes are checked ([Local development](#local-development)). Default store only. |
-
-### The stub IdP (`stubIdp()`)
-
-For local development without an identity provider account, use the stub IdP — a real OIDC provider served by the dev server, with an account picker:
-
-```typescript
-import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';
-
-const auth = new Auth(scope, 'auth', {
-  store: 'builtin',
-  providers: {
-    corp: stubIdp({
-      users: [
-        { sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } },
-        { sub: 'u-2', email: 'bob@example.com', name: 'Bob' },
-      ],
-    }),
-  },
-  users: { groups: ['admin'] },
-});
-```
-
-`stubIdp()`, like `github()` and `customOauth2()`, needs `store: 'builtin'`. On the default store TypeScript reports `Type 'StubProvider' is not assignable to type 'CognitoProvider'` … `Type '"stub"' is not assignable to type '"oidc"'` (`"oauth2"` for the other two): add `store: 'builtin'`, or put the provider in its own `store: 'builtin'` block.
-
-The stub runs in `npm run dev` and on sandbox deployments (`npm run sandbox`) only. Synthesizing any other deployment with a `stubIdp()` provider fails, so a backend module that is also deployed to production must choose its provider by deployment type. `getDeploymentType()` reports the same value at synth and in the deployed Lambda (`'local'`, `'sandbox'` or `'production'`), so both make the same choice.
-
-**The stub in local dev and sandbox, the real provider in production.** Keep one provider id and pick its entry from `getDeploymentType()`, as the two-block example in [Where do your users live?](#where-do-your-users-live) does. The client code (`signIn:<id>`) is then the same everywhere.
-
-A `type: 'oidc'` entry of a `store: 'builtin'` block also works in `npm run dev`, without the stub, if you register `http://localhost:<port>/cdk-blocks/auth/callback` as a redirect URI with the provider.
-
-**The stub on a sandbox.** A sandbox serves the stub from the deployed backend, so an end-to-end test needs no external IdP.
-
-- The stub signs users in without credentials: **anyone who can reach the sandbox can sign in as any of the stub's users**, with their claims and groups.
-- Synth succeeds with a `@aws-cdk-blocks/bb-auth:StubIdpDeployed` warning.
-- A `cdk watch` hotswap alone does not turn the stub on: if the stub answers `501` on a sandbox, restart `npm run sandbox` once.
-- The issuer and signing keys of a deployed stub are described in [DESIGN.md](./DESIGN.md).
-
-**Redirect URIs to register with a provider.**
-
-- `store: 'builtin'`: `<your origin>/cdk-blocks/auth/callback` as the redirect URI, and `<your origin>/` (or `<your origin><redirects.postSignOutPath>`) as the post-logout redirect URI when the IdP supports sign-out.
-- Default store: the Cognito domain's URL ([step 2 of the social sign-in recipe](#social-sign-in-the-client-secret-and-the-callback-url)). The block registers its own callback and sign-out URLs on the Cognito app client.
-
-A `store: 'builtin'` user's `userId` is `` `${issuer}:${sub}` ``, and `requireRole()` reads their groups from the provider's `groupsClaim`.
-
-## Errors
-
-`Auth` throws `ApiError`s. Each `name` is a value of `AuthErrors`, and `setAuthState` returns the same name as `errorName` on a failed `AuthState`. The names are listed in the [`auth-common` README](../auth-common/README.md#auth-error-names-autherrors).
-
-- Match a thrown error on the server with `isAuthError(e, AuthErrors.NotAuthenticated)` (both from `aws-cdk-blocks`). In the browser, use `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client`: the root `aws-cdk-blocks` entry exports nothing to a browser bundle.
-- Match a returned state with `hasAuthError(state, 'InvalidPasswordException')` from `aws-cdk-blocks/client`.
-- An error `Auth` does not recognise becomes `InternalErrorException`. An `ApiError` your own `validateUser` or `onSignIn` hook throws keeps its name and status.
-
-The default HTTP status of each name:
-
-| HTTP status | `error.name` |
-|---|---|
-| 401 | `NotAuthenticatedException`, `NotAuthorizedException`, `ReauthenticationRequiredException`, `TokenExpiredException` |
-| 404 | `UserNotFoundException`, `ResourceNotFoundException` (`AuthErrors.GroupNotFound`) |
-| 409 | `UsernameExistsException`, `EmailPasswordNotEnabledException`, `NoFederatedProviderException`, `PasskeysNotEnabledException`, `MfaNotEnabledException` |
-| 429 | `LimitExceededException`, `TooManyRequestsException`, `TooManyFailedAttemptsException` |
-| 500 | `InternalErrorException`, `InsecureTransportException` |
-| 503 | `SignOutIncompleteException` |
-| 400 | Every other name |
-
-An error `Auth` raises itself can carry another status. The ones an app meets:
-
-- 403 `NotAuthorizedException`: `requireRole`, or `protect` with `role`, for a signed-in user outside the group.
-- 501 `ProviderUnavailableException`: a provider that cannot sign in in this runtime, such as a social provider under `npm run dev`.
-- 501 `InvalidParameterException`: `rememberDevice` on AWS.
-
-`CodeMismatchException`, `EnableSoftwareTokenMFAException`, `InvalidParameterException`, `InvalidPasswordException` and `InternalErrorException` are retriable: `setAuthState` returns them with `retriable: true`, and the form stays on the current step.
 
 ## Which option and why
 
@@ -251,19 +122,19 @@ Two blocks that both have `providers` (say Google on the default store and Okta 
 
 | Option | Configure with | What it's for | Cognito pricing | Works offline in `npm run dev` | Cognito groups / `auth.admin` | MFA | PKCE-only IdPs |
 |---|---|---|---|---|---|---|---|
-| **Email + password** | `emailPassword` (on by default; default store) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes — a local user pool in `.bb-data/` | Yes | Yes — Cognito MFA through `mfa` (TOTP or SMS; email MFA once `email` sends through SES) | — |
-| **Social** | `providers` entry with `type: 'google'`, `'apple'`, `'facebook'` or `'amazon'` (default store) | Consumer "Sign in with Google / Apple / Facebook / Amazon" | Same free tier and rate as email + password | No — sign-in answers an actionable `501` locally; deploy a sandbox to test it | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | — |
-| **Generic OIDC, verified by your backend** | `store: 'builtin'` with `type: 'oidc'` entries (plus `github()`, `customOauth2()`, `stubIdp()`) | Okta, Entra ID, Auth0, GitHub or any other OIDC / OAuth 2.0 provider, verified by your own backend | No Cognito charge — these users never touch Cognito | Yes — with `stubIdp()`, a real OIDC provider served by the dev server | No pool record: `requireRole()` reads groups from the provider's `groupsClaim`; `auth.admin` does not apply | The provider's | Yes — omit `clientSecret` |
-| **Generic OIDC, through Cognito** | `type: 'oidc'` entry on the default store | The same providers, when you need their users in your Cognito user pool | Separate federated meter: 50 free MAUs, then $0.015 per MAU on every feature plan | No — `501` locally, like social | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | No — Cognito requires a client secret |
-| **SAML** | `type: 'saml'` entry (default store) | Enterprise IdPs that only speak SAML 2.0 | Same separate meter as OIDC through Cognito: 50 free MAUs, then $0.015 per MAU | No — `501` locally, like social | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | — (SAML has no PKCE) |
+| **Email + password** | `emailPassword` (on by default; default store) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes: a local user pool in `.bb-data/` | Yes | Yes: Cognito MFA through `mfa` (TOTP or SMS; email MFA once `email` sends through SES) | Not applicable |
+| **Social** | `providers` entry with `type: 'google'`, `'apple'`, `'facebook'` or `'amazon'` (default store) | Consumer "Sign in with Google / Apple / Facebook / Amazon" | Same free tier and rate as email + password | No: sign-in answers an actionable `501` locally; deploy a sandbox to test it | Yes: the user becomes a user-pool user | Handled by the provider; Cognito never challenges a federated user | Not applicable |
+| **Generic OIDC, verified by your backend** | `store: 'builtin'` with `type: 'oidc'` entries (plus `github()`, `customOauth2()`, `stubIdp()`) | Okta, Entra ID, Auth0, GitHub or any other OIDC / OAuth 2.0 provider, verified by your own backend | No Cognito charge: these users never touch Cognito | Yes: with `stubIdp()`, a real OIDC provider served by the dev server | No pool record: `requireRole()` reads groups from the provider's `groupsClaim`; `auth.admin` does not apply | The provider's | Yes: omit `clientSecret` |
+| **Generic OIDC, through Cognito** | `type: 'oidc'` entry on the default store | The same providers, when you need their users in your Cognito user pool | Separate federated meter: 50 free MAUs, then $0.015 per MAU on every feature plan | No: `501` locally, like social | Yes: the user becomes a user-pool user | Handled by the provider; Cognito never challenges a federated user | No: Cognito requires a client secret |
+| **SAML** | `type: 'saml'` entry (default store) | Enterprise IdPs that only speak SAML 2.0 | Same separate meter as OIDC through Cognito: 50 free MAUs, then $0.015 per MAU | No: `501` locally, like social | Yes: the user becomes a user-pool user | Handled by the provider; Cognito never challenges a federated user | Not applicable (SAML has no PKCE) |
 
 MAU = monthly active user. Prices are from [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) as read on 4 October 2026; check it before you ship. The feature-plan rate depends on `featurePlan`:
 
 | `featurePlan` | Rate per MAU | Free tier | Cannot run |
 |---|---|---|---|
-| `'essentials'` (the default) | $0.015 | 10,000 MAUs | — |
+| `'essentials'` (the default) | $0.015 | 10,000 MAUs | None |
 | `'lite'` | $0.0055 | 10,000 MAUs | Passkeys, passwordless sign-in, email MFA |
-| `'plus'` | $0.020 | None | — |
+| `'plus'` | $0.020 | None | None |
 
 Every option also stores sessions in the block's DynamoDB table.
 
@@ -276,7 +147,7 @@ Every option also stores sessions in the block's DynamoDB table.
 - Use `type: 'saml'` only for an IdP that does not speak OIDC.
 - If a frontend may later sign in with the Amplify client libraries against the same pool, read [Planning to use Amplify client libraries?](#planning-to-use-amplify-client-libraries) before the first deploy: some of those choices are permanent.
 
-All five, in the two blocks they need. Both blocks have `providers`, so `sso` gets its own `redirects`: register `<origin>/cdk-blocks/auth/sso/callback` with Okta (`auth` keeps the default `/cdk-blocks/auth/callback`):
+This example configures all five sign-in methods in the two blocks they need. Both blocks have `providers`, so `sso` gets its own `redirects`: register `<origin>/cdk-blocks/auth/sso/callback` with Okta (`auth` keeps the default `/cdk-blocks/auth/callback`):
 
 ```typescript
 import { AppSetting, Auth, Scope } from 'aws-cdk-blocks';
@@ -623,6 +494,49 @@ export const authApi = auth.createApi();
    - The sign-in route answers `501`: an explanatory page for a browser, the `ProviderUnavailableException` JSON error for an API client.
    - For an offline federated sign-in flow, use `stubIdp()` in a `store: 'builtin'` block ([The stub IdP](#the-stub-idp-stubidp)).
 
+### The stub IdP (`stubIdp()`)
+
+For local development without an identity provider account, use the stub IdP. The dev server serves a real OIDC provider with an account picker:
+
+```typescript
+import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';
+
+const auth = new Auth(scope, 'auth', {
+  store: 'builtin',
+  providers: {
+    corp: stubIdp({
+      users: [
+        { sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } },
+        { sub: 'u-2', email: 'bob@example.com', name: 'Bob' },
+      ],
+    }),
+  },
+  users: { groups: ['admin'] },
+});
+```
+
+`stubIdp()`, `github()` and `customOauth2()` require `store: 'builtin'`. On the default store, TypeScript reports that the provider is not assignable to `CognitoProvider`. Set `store: 'builtin'` or put the provider in a separate block with that store.
+
+The stub runs in `npm run dev` and on sandbox deployments (`npm run sandbox`) only. Synthesizing any other deployment with a `stubIdp()` provider fails, so a backend module that is also deployed to production must choose its provider by deployment type. `getDeploymentType()` reports the same value at synth and in the deployed Lambda (`'local'`, `'sandbox'` or `'production'`), so both make the same choice.
+
+**The stub in local dev and sandbox, the real provider in production.** Keep one provider id and pick its entry from `getDeploymentType()`, as the two-block example in [Where do your users live?](#where-do-your-users-live) does. The client code (`signIn:<id>`) is then the same everywhere.
+
+A `type: 'oidc'` entry of a `store: 'builtin'` block also works in `npm run dev`, without the stub, if you register `http://localhost:<port>/cdk-blocks/auth/callback` as a redirect URI with the provider.
+
+**The stub on a sandbox.** A sandbox serves the stub from the deployed backend, so an end-to-end test needs no external IdP.
+
+- The stub signs users in without credentials: **anyone who can reach the sandbox can sign in as any of the stub's users**, with their claims and groups.
+- Synth succeeds with a `@aws-cdk-blocks/bb-auth:StubIdpDeployed` warning.
+- A `cdk watch` hotswap alone does not turn the stub on: if the stub answers `501` on a sandbox, restart `npm run sandbox` once.
+- The issuer and signing keys of a deployed stub are described in [DESIGN.md](./DESIGN.md).
+
+**Redirect URIs to register with a provider.**
+
+- `store: 'builtin'`: `<your origin>/cdk-blocks/auth/callback` as the redirect URI, and `<your origin>/` (or `<your origin><redirects.postSignOutPath>`) as the post-logout redirect URI when the IdP supports sign-out.
+- Default store: the Cognito domain's URL ([step 2 of the social sign-in recipe](#social-sign-in-the-client-secret-and-the-callback-url)). The block registers its own callback and sign-out URLs on the Cognito app client.
+
+A `store: 'builtin'` user's `userId` is `` `${issuer}:${sub}` ``, and `requireRole()` reads their groups from the provider's `groupsClaim`.
+
 ### End-to-end tests: emailed codes and two users at once
 
 Against the local pool (`npm run dev`), a test reads the code a user was "sent" with `getLastAuthCode`, and acts as several users at once with `createTestClient`, which gives each user the app's typed clients with their own cookie jar. Both come from `aws-cdk-blocks/utils` (`getLastAuthCode` also from `@aws-cdk-blocks/bb-auth/testing`), are Node-only, and belong in test code:
@@ -713,6 +627,64 @@ if (hasAuthError(next, 'InvalidPasswordException')) {
 
 For what the policy covers and what the message says, see [Password policy](#password-policy).
 
+## Usage
+
+`new Auth(scope, id, options?)`. Pick the block's `store` first ([Where do your users live?](#where-do-your-users-live)); every other setting is a key of the one options object:
+
+- `new Auth(scope, 'auth')`: email + password, the zero-config default.
+- `new Auth(scope, 'auth', { providers: { google: { type: 'google', clientId, clientSecret } } })`: email + password plus Google, federated through Cognito.
+- `new Auth(scope, 'auth', { providers: { okta: { type: 'oidc', issuer, clientId, clientSecret } } })`: email + password plus Okta, federated through Cognito (a client secret is required).
+- `new Auth(scope, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } })`: Okta only, federated directly by your backend. No Cognito user pool is created. For password users as well, add a second block ([below](#where-do-your-users-live)).
+
+The guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, `signOut`) and `createApi()` work the same for every sign-in method. Each method is documented on the exported `AuthShape` type: `npm run docs:api Auth`.
+
+### Options
+
+"Default store only" marks an option that is a compile error with `store: 'builtin'`. A dotted name is a key of that option's object.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `store` | `'cognito' \| 'builtin'` | `'cognito'` | Where the users live ([Where do your users live?](#where-do-your-users-live)). |
+| `emailPassword` | `boolean \| EmailPasswordOptions` | `true` | Email + password sign-in. `false` makes the password methods compile errors. Default store only. |
+| `emailPassword.selfSignUp` | `boolean` | `true` | Users may register themselves. `false`: users are created only through `auth.admin`. |
+| `emailPassword.passwordPolicy` | `PasswordPolicy` | 8 characters, all four character kinds | [Password policy](#password-policy). |
+| `emailPassword.autoSignIn` | `boolean` | `true` | Sign the user in once they enter the emailed confirmation code ([Sign-up and email delivery](#sign-up-and-email-delivery)). |
+| `emailPassword.revealExistingUsers` | `boolean` | `false` | Whether the sign-in UI reveals that an account exists during sign-up, confirmation or password reset ([Sign-up and email delivery](#sign-up-and-email-delivery)). |
+| `providers` | `Record<string, CognitoProvider>`; with `store: 'builtin'`, `Record<string, BuiltinProvider>` | none | Sign-in providers, keyed by provider id and tagged with their `type`. Required with `store: 'builtin'`. |
+| `users` | `UserPoolOptions` | none | The shape of the user pool. `store: 'builtin'` accepts `users.groups` only. |
+| `users.signInWith` | `('username' \| 'email' \| 'phone')[]` | `['username', 'email']` | What a user types as their username. Fixed once the pool exists. |
+| `users.caseSensitive` | `boolean` | `true` | Whether usernames and sign-in emails match case-sensitively. Fixed once the pool exists. |
+| `users.attributes` | `UserAttribute[]` | none | Custom attributes: `{ name, type?, mutable?, required?, userWritable? }`. Additive only. |
+| `users.groups` | `(string \| { name, description?, precedence? })[]` | none | Groups to create: the roles `requireRole` accepts. |
+| `users.authFlow` | `'USER_PASSWORD_AUTH' \| 'USER_AUTH'` | `'USER_PASSWORD_AUTH'` | `'USER_AUTH'` is required for passkeys and choice-based or passwordless sign-in, and needs a `featurePlan` above `'lite'`. |
+| `users.preferredChallenge` | `'PASSWORD' \| 'EMAIL_OTP' \| 'SMS_OTP' \| 'WEB_AUTHN'` | none: the user picks a factor | The first factor `signIn` requests under `'USER_AUTH'`. `'EMAIL_OTP'` needs `email`. |
+| `users.deviceTracking` | `{ challengeRequiredOnNewDevice?, deviceOnlyRememberedOnUserPrompt? }` | none | Remember devices to skip MFA on a known device. |
+| `mfa` | `'off' \| 'optional' \| 'required' \| MfaOptions` | `'off'` | MFA for email + password users. A string is shorthand for `{ mode }`. Default store only. |
+| `mfa.types` | `('SMS' \| 'TOTP' \| 'EMAIL')[]` | `['SMS', 'TOTP']` | The permitted second factors. `'EMAIL'` needs `email`. |
+| `mfa.totpIssuer` | `string` | the id of the root `Scope` | The name authenticator apps show next to the codes. |
+| `passkeys` | `false \| { relyingPartyId, origins, userVerification? }` | `false` | WebAuthn passkeys. Needs `users.authFlow: 'USER_AUTH'` and a `featurePlan` above `'lite'`, both checked at synth. `userVerification` is `'preferred'` (default) or `'required'`. Default store only. |
+| `session` | `SessionOptions` | none | Session and token lifetimes ([Session lifetime and refresh tokens](#session-lifetime-and-refresh-tokens)). |
+| `redirects.callbackPath` | `string` | `'/cdk-blocks/auth/callback'` | Must start with `/cdk-blocks/auth/`. |
+| `redirects.signOutPath` | `string` | `'/cdk-blocks/auth/signout'` | Must start with `/cdk-blocks/auth/`. |
+| `redirects.postSignInPath` | `string` | `'/'` | Where the browser lands after a federated sign-in. |
+| `redirects.postSignOutPath` | `string` | `'/'` | Where the browser lands after a federated sign-out. A same-origin path. |
+| `redirects.allowedRelayOrigins` | `RelayOrigin[]` | `[]` | Origins a relay sign-in may return to, each built with `relayOrigin()`. Loopback and the API's own origin are always allowed. |
+| `hostedUi.domainPrefix` | `string` | derived from the block's `fullId` | Prefix of the Cognito domain. Create-only. Default store only. |
+| `admin` | `{ actions?: ('groups' \| 'lifecycle')[] }` | omitted: no `auth.admin` | Enables `auth.admin` and its IAM grant. `actions` scopes both; without it everything is granted. Default store only. |
+| `allowBearerAuth` | `boolean \| { clientIds }` | `false` | Accept `Authorization: Bearer` access tokens ([Bearer tokens](#bearer-tokens-allowbearerauth)). The object form is default store only. |
+| `userPool` | `Auth.fromExisting(userPoolId, clientId?)` | the block creates a pool | Wrap an existing Cognito user pool. Default store only. |
+| `featurePlan` | `'lite' \| 'essentials' \| 'plus'` | `'essentials'` | The Cognito feature plan, a pricing decision ([The sign-in methods](#the-sign-in-methods)). Default store only. |
+| `email` | `EmailSenderOptions` | Cognito's default sender | Send the pool's email through Amazon SES ([Sign-up and email delivery](#sign-up-and-email-delivery)). Default store only. |
+| `validateUser` | `(candidate) => Promise<void>` | none | Policy hook for every sign-up and sign-in ([Reject sign-ups and sign-ins](#reject-sign-ups-and-sign-ins-with-validateuser)). |
+| `onSignIn` | `(user, context) => Promise<void>` | none | Called after a successful sign-in. Throwing rolls the sign-in back. |
+| `onSignOut` | `(user, context) => Promise<void>` | none | Called before the session is destroyed. Errors are logged and never block sign-out. |
+| `removalPolicy` | `'destroy' \| 'retain'` | the stack's `defaults.removalPolicy` | What happens to the user pool and the session table when the block leaves the stack. |
+| `deletionProtection` | `boolean` | the stack's `defaults.deletionProtection` | Deletion protection on the user pool and the session table. |
+| `logger` | `ChildLogger` | a `Logger` at `error` level | Where the block logs. |
+| `audit` | `boolean \| ChildLogger` | `false` | Write a log line for each session lifecycle event ([Audit records](#audit-records)). |
+| `codeDelivery` | `(username, code, purpose) => Promise<void>` | none | Local only: called with every verification code ([Local development](#local-development)). Default store only. |
+| `totpVerification` | `'any' \| 'rfc6238'` | `'any'` | Local only: how authenticator-app codes are checked ([Local development](#local-development)). Default store only. |
+
 ## Sign-out and password reset
 
 - `signOut()` clears the session cookie first, then deletes the session row. Deleting the row is what stops a copied cookie from authenticating.
@@ -751,6 +723,8 @@ Details: [DESIGN.md](./DESIGN.md#immutability-guard).
 ## Sign-up and email delivery
 
 Every self-service sign-up confirms the email address with an emailed code. With `emailPassword.autoSignIn` (on by default), the user is then signed in without typing their password again — the code itself is still required.
+
+The sign-in UI hides whether an account exists unless you set `emailPassword.revealExistingUsers` to `true`. A direct call to `auth.signUp()` always throws `UsernameExistsException` for an existing user, regardless of that setting.
 
 Cognito's default email sender is limited to 50 emails per day (confirmation, password-reset and email-MFA codes all count). That is enough for development, not for production. Before launch, send through your own Amazon SES identity with `email`:
 
@@ -791,10 +765,10 @@ The recipe [Tell the user what a password needs](#tell-the-user-what-a-password-
   - the `setAuthState` actions that call them (`signUp`, `confirmSignIn`, `confirmResetPassword`).
 - **A generated temporary password, locally:** `auth.admin.createUser` without `temporaryPassword` gets a generated 16-character password, and the local user pool checks it against the policy too. With `minLength` above 16, that call throws `InvalidPasswordException` locally, while Cognito generates a password that fits. Pass a `temporaryPassword` that fits the policy.
 - **What the client receives:** a password that breaks the policy is rejected with `InvalidPasswordException` (`AuthErrors.InvalidPassword`) and status 400. The message describes the whole policy rather than the rule the password broke, and it is the same locally and on AWS. For the recipe's policy it is `Password must be at least 12 characters and include an uppercase letter, a lowercase letter and a number.`
-- **How to branch on it:** a thrown error, from a direct call or from your own API method that makes one, matches `isAuthError(e, AuthErrors.InvalidPassword)`. Through `setAuthState` the error is retriable. The returned state carries `retriable: true`, `errorName: 'InvalidPasswordException'` and the message as `error`, so the form stays on the current step. Branch on that state with `hasAuthError`, as the recipe does.
+- **How to branch on it:** on the server, match a thrown error with `isAuthError(e, AuthErrors.InvalidPassword)`; in browser app code, use `isBlocksError(e, 'InvalidPasswordException')`. Through `setAuthState` the error is retriable. The returned state carries `retriable: true`, `errorName: 'InvalidPasswordException'` and the message as `error`, so the form stays on the current step. Branch on that state with `hasAuthError`, as the recipe does.
 - **An imported pool:** with `userPool: Auth.fromExisting(…)`, the block doesn't create the pool, so the pool's own policy applies on AWS. The local user pool still checks `emailPassword.passwordPolicy` (or the defaults), so a password can pass under `npm run dev` and fail on AWS, or the reverse. Set `passwordPolicy` to the policy of the imported pool to make them agree. The message is the fixed `Password does not meet the password policy`, locally and on AWS.
 
-## `validateUser`
+## Reject sign-ups and sign-ins with `validateUser`
 
 `validateUser` is called before any user is created and before any session is issued, whatever the mechanism. Throw to reject; a thrown `ApiError` reaches the client by its `name` and message.
 
@@ -818,6 +792,34 @@ const auth = new Auth(scope, 'auth', {
 - A bearer token (`allowBearerAuth`) is verified per request and does not run `validateUser`; gate per request (e.g. check `user.attributes.email`) when you rely on it.
 - Keep it fast: Cognito waits at most 5 seconds for the trigger, and a cold start of your Lambda counts. If it does not answer in time the sign-up fails (no user is created). Avoid slow network calls in `validateUser` (cache any allowlist you fetch); if cold starts alone come close to the limit, configure provisioned concurrency on the backend Lambda.
 - A pool you wrap with `userPool: Auth.fromExisting(...)` gets no trigger (its triggers are yours to manage); synth warns, and the in-process checks still run. Wrapping a pool another `Auth` in the same app creates (e.g. a second block for `admin`) is fine: the trigger stays with the block that created the pool and keeps running its `validateUser`. Details: [DESIGN.md](./DESIGN.md#validateuser-and-the-presignup-trigger).
+
+## Errors
+
+`Auth` throws `ApiError`s. Each `name` is a value of `AuthErrors`, and `setAuthState` returns the same name as `errorName` on a failed `AuthState`. The names are listed in the [`auth-common` README](../auth-common/README.md#auth-error-names-autherrors).
+
+- In browser app code, match a thrown error with `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client`. The auth-specific guard `isAuthError(e, AuthErrors.NotAuthenticated)` matches the same name. Both `isAuthError` and `AuthErrors` are available from `aws-cdk-blocks` on the server or directly from `@aws-cdk-blocks/auth-common` in either environment.
+- Match a returned state with `hasAuthError(state, 'InvalidPasswordException')` from `aws-cdk-blocks/client`.
+- An error `Auth` does not recognise becomes `InternalErrorException`. An `ApiError` your own `validateUser` or `onSignIn` hook throws keeps its name and status.
+
+The default HTTP status of each name:
+
+| HTTP status | `error.name` |
+|---|---|
+| 401 | `NotAuthenticatedException`, `NotAuthorizedException`, `ReauthenticationRequiredException`, `TokenExpiredException` |
+| 404 | `UserNotFoundException`, `ResourceNotFoundException` (`AuthErrors.GroupNotFound`) |
+| 409 | `UsernameExistsException`, `EmailPasswordNotEnabledException`, `NoFederatedProviderException`, `PasskeysNotEnabledException`, `MfaNotEnabledException` |
+| 429 | `LimitExceededException`, `TooManyRequestsException`, `TooManyFailedAttemptsException` |
+| 500 | `InternalErrorException`, `InsecureTransportException` |
+| 503 | `SignOutIncompleteException` |
+| 400 | Every other name |
+
+Three errors use a status other than the default in the table:
+
+- 403 `NotAuthorizedException`: `requireRole`, or `protect` with `role`, for a signed-in user outside the group.
+- 501 `ProviderUnavailableException`: a provider that is not available in this runtime, such as a social provider under `npm run dev`.
+- 501 `InvalidParameterException`: `rememberDevice` on AWS.
+
+`CodeMismatchException`, `EnableSoftwareTokenMFAException`, `InvalidParameterException`, `InvalidPasswordException` and `InternalErrorException` are retriable: `setAuthState` returns them with `retriable: true`, and the form stays on the current step.
 
 ## Mode gates
 
@@ -1057,7 +1059,7 @@ new Auth(scope, 'auth', {
 - **Local development.** A frontend at `http://127.0.0.1:<port>` is always allowed, and the dev server's CORS already admits it. Open both the frontend and the dev server at `127.0.0.1` (not `localhost`), so they are the same site and the session cookie needs no `crossDomain`.
 - **Which providers.** Every `providers` entry, on either store, since each signs in by redirect: `type: 'oidc'`, `github()` / `customOauth2()` and `stubIdp()` (locally) on a `store: 'builtin'` block; social, SAML and `type: 'oidc'` on the default store. Email and password sign-in keeps using `authApi` (`getAuthState` / `setAuthState`), which works across origins with the same CORS and cookie settings.
 - **Sign-out.** `signOut()` ends the block's session. When the provider keeps its own session (Cognito managed login, or an OIDC provider with an `end_session_endpoint`), it also returns `logoutUrl`; `endProviderSession: true` navigates there. The provider then returns the browser to `redirects.postSignOutPath` on the API's origin.
-- **Names.** The methods follow Amplify JS v6 (`signInWithRedirect`, `fetchAuthSession`, `getCurrentUser`, `signOut`); the user and the errors are the block's own (`isAuthError(e, AuthErrors.InvalidRelay)`, …). `user.userId` is the block's id; the Cognito `sub` that Amplify's `getCurrentUser().userId` returns is `user.userSub`.
+- **Names.** The methods follow Amplify JS v6 (`signInWithRedirect`, `fetchAuthSession`, `getCurrentUser`, `signOut`); the user and the errors are the block's own (for example, `isBlocksError(e, 'InvalidRelayException')`). `user.userId` is the block's id; the Cognito `sub` that Amplify's `getCurrentUser().userId` returns is `user.userSub`.
 
 ## Native apps (Swift, Kotlin, Dart)
 
