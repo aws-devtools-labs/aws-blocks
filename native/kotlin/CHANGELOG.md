@@ -1,8 +1,8 @@
-# aws-blocks-kotlin
+# cdk-blocks-kotlin
 
 ## 1.0.0
 
-First stable release of AWS Blocks for Kotlin.
+First stable release of CDK Blocks for Kotlin.
 
 ### Breaking
 
