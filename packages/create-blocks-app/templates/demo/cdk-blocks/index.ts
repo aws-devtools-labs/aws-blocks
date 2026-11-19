@@ -58,7 +58,7 @@ const files = new FileBucket(scope, 'app-files');
 const featureFlag = new AppSetting<string>(scope, 'feature-flag', { value: 'off' });
 
 // Secret: a single credential (API key, token). Like AppSetting but with
-// version history for rotation. The mock stores it in .bb-data (no AWS).
+// version history for rotation. The mock stores it in .cdk-blocks/local/data (no AWS).
 // `allowRuntimeWrite: true` because this app rotates the value at runtime via
 // rotateApiKey() → put(); without it a Secret is read-only (no put()).
 const apiKey = new Secret<string>(scope, 'api-key', { allowRuntimeWrite: true });

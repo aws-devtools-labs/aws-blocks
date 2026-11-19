@@ -30,7 +30,7 @@ afterEach(() => {
 /** A project with both stack names resolvable: `blocks-app-prod` and `blocks-app-alice-abc123`. */
 function deployedProject(extra: Record<string, string> = {}): string {
 	return makeProject({
-		'.blocks/config.json': JSON.stringify({ stackId: 'blocks-app' }),
+		'.cdk-blocks/config.json': JSON.stringify({ stackId: 'blocks-app' }),
 		'.cdk-blocks-sandbox/sandbox-id.txt': 'alice-abc123\n',
 		...extra,
 	});
@@ -254,7 +254,7 @@ describe('resolveRpcEndpoint — NO_ENDPOINT', () => {
 			await resolveRpcEndpoint({ projectRoot: root, stage: 'production', mode: 'cloud', ...forbiddenSeams }),
 		);
 		assert.match(message, /stage "production"/);
-		assert.match(message, /\.blocks\/config\.json/);
+		assert.match(message, /\.cdk-blocks\/config\.json/);
 	});
 
 	it('rejects a stage that has no stack', async () => {

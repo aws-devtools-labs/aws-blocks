@@ -224,7 +224,7 @@ function materialize(
 	const copy = (src: string, dest: string): void => writeFileSync(dest, retarget(readFileSync(src, 'utf8')));
 	rmSync(dir, { recursive: true, force: true });
 	fixtureApps.push(dir);
-	for (const sub of ['cdk-blocks/migrations', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	for (const sub of ['cdk-blocks/migrations', 'scripts', '.cdk-blocks']) mkdirSync(join(dir, sub), { recursive: true });
 	const cdkEntry = readFileSync(join(APP, 'index.cdk.ts'), 'utf8').replace(
 		'BlocksPresets.sandbox',
 		`BlocksPresets.${preset}`,
@@ -247,7 +247,7 @@ function materialize(
 		`${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk aws-blocks/index.cdk.ts` }, null, 2)}\n`,
 	);
 	writeFileSync(
-		join(dir, '.blocks', 'config.json'),
+		join(dir, '.cdk-blocks', 'config.json'),
 		`${JSON.stringify({ stackId: 'bb-test-upgrade', telemetry: { enabled: false } }, null, 2)}\n`,
 	);
 	return dir;

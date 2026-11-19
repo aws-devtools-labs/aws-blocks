@@ -261,7 +261,7 @@ In local dev mode (`npm run dev`), emails are:
     Body:      ...
     HTML:      ...   (only when html is set)
   ```
-- Persisted to `.bb-data/{fullId}/emails.json` for inspection
+- Persisted to `.cdk-blocks/local/data/{fullId}/emails.json` for inspection
 - Validated with the same checks as the deployed client, so an address or message rejected locally is rejected the same way when deployed
 
 ## Package Export Conditions

@@ -68,7 +68,7 @@ provider in `cdk-blocks/index.ts`. The deployed model is `model.deployed`
 | `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
 | `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
 | `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
-| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
 
 Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
 The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
@@ -77,7 +77,7 @@ The dev server settings are in `package.json` under `"blocks": { "dev": … }`; 
 ## Stack naming
 
 Your CloudFormation stack names are derived from the `stackId` in
-`.blocks/config.json`, generated at scaffold time from your project name plus a
+`.cdk-blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
 `cdk-blocks/index.cdk.ts` for dynamic naming logic.

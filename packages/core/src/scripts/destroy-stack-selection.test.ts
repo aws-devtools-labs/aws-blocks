@@ -77,7 +77,7 @@ function recordDestroyArgv(modulePath: string, call: string): string[] {
 
 /**
  * `destroySandbox`'s body with the real cdk destroy (the fake npm binary) and retry, but no AWS:
- * no Region or credentials check, and no SSM delete (this app has no `.blocks/config.json`).
+ * no Region or credentials check, and no SSM delete (this app has no `.cdk-blocks/config.json`).
  */
 const SANDBOX_DESTROY =
   "mod.runSandboxDestroy('cdk-blocks/index.ts', { checkCredentials: async () => {}, " +
@@ -200,7 +200,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
     assert.strictEqual(other.cdkRan, false);
     assert.match(
       other.output,
-      /The CDK app \(cdk-blocks\/index\.cdk\.ts\) defines my-blocks-stack-prod, not live-prod, the production stack that \.blocks\/config\.json names; nothing was deleted\./,
+      /The CDK app \(cdk-blocks\/index\.cdk\.ts\) defines my-blocks-stack-prod, not live-prod, the production stack that \.cdk-blocks\/config\.json names; nothing was deleted\./,
     );
     // A construct id that differs from the stack name is listed as `id (name)`.
     const named = await runDestroy('live-prod', 'Edge\nApp (live-prod)');

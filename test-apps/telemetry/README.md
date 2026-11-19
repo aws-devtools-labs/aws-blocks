@@ -9,7 +9,7 @@ test apps:
 
 - Its own test application (`test-apps/telemetry`, distinct from
   `test-apps/comprehensive`).
-- A suite-level `before()` seeds the pinned installation-id in `$HOME/.blocks/`
+- A suite-level `before()` seeds the pinned installation-id in `$HOME/.cdk-blocks/`
   so telemetry state is deterministic without affecting other suites.
 - Each captured event is written to a unique `--telemetry-file` path, so no test
   depends on another's file. The reader takes the first element of the array, so a
@@ -19,13 +19,22 @@ test apps:
 
 ## Concurrent groups
 
-The suite runs three groups at the same time; inside each group the cases run
+The suite runs four groups at the same time; inside each group the cases run
 in order:
 
 - **local commands**: every case that needs no AWS account, from this
   directory with the real HOME (unless a case sets its own). They run in order
-  because several write the project config (`.blocks/config.json`) or the real
+  because several write the project config (`.cdk-blocks/config.json`) or the real
   HOME's global config.
+- **CLI commands**: `help`, `docs`, `dev stop` and its `cleanup` alias,
+  `generate client|spec|types`, `migrate`, `whoami`, `secret`, `config`, `db`,
+  `sandbox deploy` and `sandbox preview`, plus the `blocks-generate-client` and
+  `blocks-generate-spec` bins run directly (as an app on vendored scripts runs
+  them), in their own app copy under `.e2e-groups/cli-commands` and
+  their own HOME, with no `~/.aws` link and every AWS credential source blocked,
+  so no case reaches an account. Each case runs twice: once to check its event
+  is delivered, and once against an unreachable endpoint to check that the exit
+  code and the recorded outcome do not change.
 - **AWS sandbox lifecycle**: `sandbox`, `sandbox:destroy` and `console`.
 - **AWS production lifecycle**: `deploy` and `destroy`.
 
@@ -60,7 +69,7 @@ never share a stack, and the destroy scripts run from this directory (the CI
 Matching the CI setup (the "Seed fixed e2e telemetry installation ID" step in
 `.github/workflows/pr-checks.yml`), the suite pins a fixed installation ID
 (`00000000-0000-0000-0000-000000000e2e`) by writing
-`$HOME/.blocks/telemetry/installation-id` **before** any CLI invocation. This
+`$HOME/.cdk-blocks/telemetry/installation-id` **before** any CLI invocation. This
 keeps emitted `installationId` values deterministic and suppresses the
 first-run consent notice.
 
@@ -74,6 +83,10 @@ random ID, and asserts it was created correctly.
   (official BB names + version, custom BB count, total blocks count).
 - **Identifier creation**: `installationId` and `projectId` are written when
   they do not already exist, and emitted events carry them.
+- **Every CLI command**: one event per invocation, named after the command
+  path (`dev:stop`, `generate:client`, `sandbox:deploy`, ...), with SUCCESS
+  where the command needs no AWS and FAIL (usage error or no credentials)
+  otherwise.
 - **Per-command success + failure**: SUCCESS + FAIL events for `deploy`,
   `destroy`, `sandbox`, `sandbox:destroy`, and `dev`; `console` SUCCESS only;
   `create-blocks-app` and `vendorize` document the no-telemetry limitation for

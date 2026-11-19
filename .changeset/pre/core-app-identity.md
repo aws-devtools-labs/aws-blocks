@@ -30,7 +30,7 @@ from the platform; to AWS Blocks it is just a string.
   would cover names other apps, CDK or AWS share (`cdk`, `blocks`, `secrets`,
   `config`, `amplify`, `cf`, `sagemaker`, the region prefixes such as `us` and
   `eu`, and any id starting with `aws` or `ssm`); synth rejects them, saying
-  why. Keep `.blocks/config.json`'s `stackId` equal to the id, so
+  why. Keep `.cdk-blocks/config.json`'s `stackId` equal to the id, so
   Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`) are the app's
   own.
 - **IAM report:** with `defaults.appIdentity` set, `cdk.out/<stack>.blocks-iam.json`

@@ -11,7 +11,7 @@ const scope = new Scope('idx');
 
 // Clean only our scope's mock data between tests
 beforeEach(() => {
-	const dir = '.bb-data';
+	const dir = '.cdk-blocks/local/data';
 	try {
 		if (existsSync(dir)) {
 			for (const entry of readdirSync(dir)) {

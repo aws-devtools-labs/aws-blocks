@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compile-time proof — NOT executed. `next build` type-checks this file, so if the
-// generated `.blocks/hosting-values.d.ts` stops narrowing getSecret/getConfig to the
+// generated `.cdk-blocks/hosting-values.d.ts` stops narrowing getSecret/getConfig to the
 // app's declared keys, the two `@ts-expect-error` directives below become "unused"
 // (TS2578) and the build FAILS. This is the CI guard for the zero-code type-safety
 // feature: the keys come from `secret('DEMO_SECRET')` / `config('DEMO_CONFIG')` in

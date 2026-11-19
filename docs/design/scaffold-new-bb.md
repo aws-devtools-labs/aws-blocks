@@ -30,7 +30,7 @@ by `package.json` conditional exports:
 |---|---|---|
 | `cdk` | `index.cdk.ts` | `cdk synth` (`--conditions=cdk`) — provisions infra, grants IAM |
 | `aws-runtime` | `index.aws.ts` | inside the deployed Lambda — real AWS SDK calls |
-| `default` + `types` | `index.mock.ts` | `npm run dev` + tests — local mock, persists to `.bb-data/` |
+| `default` + `types` | `index.mock.ts` | `npm run dev` + tests — local mock, persists to `.cdk-blocks/local/data/` |
 | `browser` | `index.browser.ts` | client bundle — server-side methods stubbed to throw |
 
 Load-bearing conventions every layer shares: extend `Scope` (never wrap it);
@@ -65,7 +65,7 @@ packages/bb-{name}/
     index.aws.ts        # aws-runtime; SDK client w/ buildUserAgentChain()
     index.cdk.ts        # cdk; provisions infra, grants on this.executionRole, synthGuard stubs
     index.browser.ts    # stub class (no-op ctor) + re-export errors
-    index.test.ts       # node:test; resets .bb-data in beforeEach
+    index.test.ts       # node:test; resets .cdk-blocks/local/data in beforeEach
     parity.test.ts      # mock↔aws↔browser behavioral parity
     index.cdk.test.ts   # Template.fromStack assertions; synthGuard throws
 ```

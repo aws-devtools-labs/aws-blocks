@@ -15,8 +15,8 @@ import { Auth as MockAuth } from './index.mock.js';
 import type { SessionStore } from './sessions.js';
 import { Browser, captureLogger, type LogEntry, makeAuth, makeContext } from './test-helpers.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const OKTA = { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } } as const;
 

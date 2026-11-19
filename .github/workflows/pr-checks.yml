@@ -278,6 +278,29 @@ jobs:
       - name: Check runtime mock-guard coverage
         run: npm run check:runtime-guard
 
+      # The hidden `.cdk-blocks` folder is reached by separate join() calls across
+      # five packages, shell steps that seed the installation id, and the
+      # templates' tsconfig includes. One left on the old name still builds, lints
+      # and passes its unit tests, so the guard is unit-tested first and then run.
+      - name: Test the hidden-folder guard
+        run: node --test scripts/dot-folder-guard.test.mjs
+
+      - name: Check no reference to the old hidden folder remains
+        run: npm run check:dot-folder
+
+      # `.gitignore` negates test-apps/**/.cdk-blocks/** so each test app's
+      # committed config.json stays tracked. Asserted in a throwaway fixture, not
+      # also un-ignores the Building Block data now nested under it, which the
+      # flat `.bb-data/` rule used to keep out.
+      - name: Check the consolidated data directory stays git-ignored
+        run: npm run check:data-ignored
+
+      # The four mistakes this rename made more than once: a multi-segment path
+      # compared against a single path segment, a LEGACY constant holding the new
+      # name, and a reflow merging one documented command into the next.
+      - name: Check the rename traps
+        run: npm run check:rename-traps
+
       # The guard decides whether unattributed traffic can ship, so it is unit-tested
       # first. A regression shows up here instead of as a wrong verdict below.
       - name: Test the client user-agent guard
@@ -1440,8 +1463,8 @@ jobs:
       - name: Seed fixed e2e telemetry installation ID
         shell: bash
         run: |
-          mkdir -p "$HOME/.blocks/telemetry"
-          printf '%s' '00000000-0000-0000-0000-000000000e2e' > "$HOME/.blocks/telemetry/installation-id"
+          mkdir -p "$HOME/.cdk-blocks/telemetry"
+          printf '%s' '00000000-0000-0000-0000-000000000e2e' > "$HOME/.cdk-blocks/telemetry/installation-id"
 
       - name: Telemetry E2E Tests
         run: npm run test:telemetry

@@ -22,7 +22,7 @@ let server: Server;
 let port: number;
 
 beforeEach(async () => {
-	const dir = '.bb-data';
+	const dir = '.cdk-blocks/local/data';
 	try {
 		if (existsSync(dir)) {
 			for (const entry of readdirSync(dir)) {

@@ -58,7 +58,7 @@ You're an engineer working **on AWS CDK Blocks itself** — the framework and it
 | `registerSdkIdentifiers`, `getSdkIdentifiers` | `@aws-cdk-blocks/core` | register (in mock/runtime ctor) / resolve (at call time) a BB's resource names |
 | `registerConfig`, `synthGuard` | `@aws-cdk-blocks/core/cdk` | inject Lambda config at synth · `(): never` stub for runtime-only methods |
 | `scope.registerClientMiddleware(pkg)` | `Scope` method (codegen) | registers the client-plugin **package specifier** that hydrates a Transferable into a live client object — the plugin does the hydration, this just registers it |
-| `getMockDataDir` | `@aws-cdk-blocks/core/bb-utils` | mock persistence dir → `.bb-data/{fullId}/` |
+| `getMockDataDir` | `@aws-cdk-blocks/core/bb-utils` | mock persistence dir → `.cdk-blocks/local/data/{fullId}/` |
 | `auth.requireAuth(context)` | `Auth` (`@aws-cdk-blocks/bb-auth`) | gate a method; returns the user or throws 401 |
 | `RawRoute` | `@aws-cdk-blocks/core` | escape hatch for a raw HTTP route when JSON-RPC isn't enough |
 | `fullId` | — | a BB instance's unique scoped id (drives resource + mock-data naming) |
@@ -133,7 +133,7 @@ packages/bb-{name}/
 // index.mock.ts — local dev + tests; persists to disk; self-registers a mock name
 super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}` });
-this.file = join(getMockDataDir(this), 'store.json');                    // .bb-data/{fullId}/
+this.file = join(getMockDataDir(this), 'store.json');                    // .cdk-blocks/local/data/{fullId}/
 
 // index.aws.ts — real SDK client; registers in ctor, resolves at call time
 readonly bbName = BB_NAME;
@@ -212,7 +212,7 @@ When working in an AWS CDK Blocks application (not this monorepo), Building Bloc
 | Modules | **ESM everywhere**; relative imports carry the `.js` extension. `strict: true`, ES2022, `moduleResolution: bundler`. |
 | Naming | BB class `PascalCase`, no "BB" prefix (`KVStore`). pkg `@aws-cdk-blocks/bb-{kebab}`. errors `{Class}Errors`. The **`BLOCKS_` env prefix is framework-reserved** — not for example app code. Auth identifiers lead with `Auth` (`Auth`, `AuthOptions`, `AuthErrors`; packages `bb-auth`, `auth-common` — D-004), and there is one auth BB: add a sign-in method as an `Auth` option rather than a new block (D-023). |
 | Schema validation | When a BB accepts a user-provided validation schema, type it as **`StandardSchemaV1`** (Zod/Valibot/ArkType) — don't pull a schema lib into the BB's runtime deps (it's the consumer's choice); if your own tests use `zod`, keep it a `devDependency`. (A BB may take a schema lib as a real `dependency` only for its *own* internal needs, e.g. `bb-agent`.) Validate via `schema['~standard'].validate(value)`, before conditional checks. |
-| Tests | **`node:test` + `node:assert`** (not Jest/Vitest), run on compiled `dist/`. Reset `.bb-data` between tests. Mock tests can't catch AWS-path serialization bugs — serialization/behavior changes also need a sandbox e2e. |
+| Tests | **`node:test` + `node:assert`** (not Jest/Vitest), run on compiled `dist/`. Reset `.cdk-blocks/local/data` between tests. Mock tests can't catch AWS-path serialization bugs — serialization/behavior changes also need a sandbox e2e. |
 | Async | `async/await` only; prefer **`Array.fromAsync()`** over `for await` push-loops. |
 
 ---
@@ -289,7 +289,7 @@ Leaving sandboxes running wastes AWS resources.
 | `npm run update:api` | Regenerate API reports (after intentional API changes) |
 | `npx changeset add` | required for any published-package change |
 
-- Node **22** (`.nvmrc`). Mock data → `.bb-data/{fullId}/`.
+- Node **22** (`.nvmrc`). Mock data → `.cdk-blocks/local/data/{fullId}/`.
 - Stages: a transient **sandbox** vs **production**. Spin a sandbox via the scripts in `aws-cdk-blocks/scripts` (`startSandbox`/`startDevServer`); run `test:e2e:sandbox` to validate the real AWS path; tear it down (`npm run destroy`) when done.
 
 ---

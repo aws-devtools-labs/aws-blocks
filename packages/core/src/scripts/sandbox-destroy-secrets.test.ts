@@ -26,8 +26,8 @@ describe('sandbox destroy deletes the sandbox SSM secrets', () => {
 	beforeEach(async () => {
 		savedCwd = process.cwd();
 		root = await mkdtemp(join(tmpdir(), 'blocks-destroy-secrets-'));
-		mkdirSync(join(root, '.blocks'));
-		writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'zz-app' }));
+		mkdirSync(join(root, '.cdk-blocks'));
+		writeFileSync(join(root, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'zz-app' }));
 		mkdirSync(join(root, '.cdk-blocks-sandbox'));
 		writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'dev-abc123\n');
 		// Keep the destroy's progress off stdout: in a `node --test` child, stdout carries the runner's
@@ -51,8 +51,8 @@ describe('sandbox destroy deletes the sandbox SSM secrets', () => {
 		assert.deepStrictEqual(deleted, ['/zz-app-dev-abc123-db-url']);
 	});
 
-	it('skips an app whose .blocks/config.json gives no stack name, without calling SSM', async () => {
-		await rm(join(root, '.blocks'), { recursive: true, force: true });
+	it('skips an app whose .cdk-blocks/config.json gives no stack name, without calling SSM', async () => {
+		await rm(join(root, '.cdk-blocks'), { recursive: true, force: true });
 		const names: string[] = [];
 		const deleted = await deleteSandboxSecrets(root, async (name) => {
 			names.push(name);

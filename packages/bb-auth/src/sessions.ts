@@ -17,7 +17,7 @@
  *
  * - The store is a `KVStore` at child id `session-store` of the block (table
  *   `<fullId>-session-store`, mock file
- *   `.bb-data/<fullId>-session-store/store.json`).
+ *   `.cdk-blocks/local/data/<fullId>-session-store/store.json`).
  * - Keys are `AuthCognito`'s: 24 random bytes, base64url.
  * - A **pool session** (email + password, or any provider federated through
  *   Cognito) is stored exactly as `AuthCognito` stores it:
@@ -647,7 +647,7 @@ export class SessionStore {
 /**
  * The session-signing secret in the **mock** runtime.
  *
- * `AuthCognito`'s mock keeps its secret in `.bb-data/<fullId>/state.json`
+ * `AuthCognito`'s mock keeps its secret in `.cdk-blocks/local/data/<fullId>/state.json`
  * (`sessionSecret`), so reading it from there keeps local sessions signed in
  * across the `AuthCognito` → `Auth` switch too. When that file has no secret,
  * one is generated and merged into it (other fields untouched), so the native

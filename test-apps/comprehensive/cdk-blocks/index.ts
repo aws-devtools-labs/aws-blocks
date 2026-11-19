@@ -120,7 +120,7 @@ const validatedStore = new KVStore(scope, 'validated-store', {
 //
 // One small record per test user, overwritten when that user gets a new code
 // (resend, password reset). They do pile up: the mock store persists to
-// .bb-data/ between local runs, and a suite run leaves ~30 behind. CI throws the
+// .cdk-blocks/local/data/ between local runs, and a suite run leaves ~30 behind. CI throws the
 // whole table away at teardown, so sweep with `testSupport.authPurgeDeliveredCodes()`
 // when that is not true — local dev, or a sandbox kept via BLOCKS_SANDBOX_KEEP.
 
@@ -3488,7 +3488,7 @@ export const testSupport = testSupportSecret
          * how many records were removed.
          *
          * Codes are one small record per test user and CI destroys the table at
-         * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
+         * teardown, so this is for the cases where it does not: sweeping .cdk-blocks/local/data/ in
          * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
          *
          * Pass `username` to delete only that user's records (every channel). The

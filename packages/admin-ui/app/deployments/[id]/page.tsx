@@ -91,7 +91,7 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
 					<CardHeader>
 						<CardTitle>No such deployment</CardTitle>
 						<CardDescription>
-							Nothing with id <code>{id}</code> is in <code>.blocks/deploy-history.jsonl</code> or in the
+							Nothing with id <code>{id}</code> is in <code>.cdk-blocks/deploy-history.jsonl</code> or in the
 							CloudFormation events this dashboard can reconstruct deployments from. The record may have been
 							pruned, or written on another machine.
 						</CardDescription>

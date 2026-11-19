@@ -37,8 +37,8 @@ import { cognitoWithTrigger, invokeLambda, preSignUpEvent } from './test-support
 import { decodeTriggerRejection } from './trigger-rejection.js';
 import type { AuthOptions, UserCandidate } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** `validateUser` allowing `@corp.example` only, recording every call. */
 function corpOnly() {

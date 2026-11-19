@@ -234,7 +234,7 @@ export function makeInvalidationProbe(
 export async function deploy(options: DeployOptions) {
   // A closed terminal (SIGHUP, then EIO) or output pipe must not end the deploy (see ignoreClosedOutput).
   ignoreClosedOutput();
-  // Structured deploy history (.blocks/deploy-history.jsonl) is the primary
+  // Structured deploy history (.cdk-blocks/deploy-history.jsonl) is the primary
   // source for the dashboard's deployments view: IN_PROGRESS at start, one
   // terminal record (same id) at the end. Best-effort, never fails a deploy.
   const recorder = createDeployRecorder(options.projectRoot, 'production');

@@ -59,11 +59,11 @@ const ALLOWLIST = [
 	{ at: 'scripts/ci/_proc.mjs:53', reason: CI_WINDOWS },
 	{ at: 'scripts/ci/windows-template-e2e.mjs:54', reason: CI_WINDOWS },
 	{
-		at: 'scripts/agent-bench/steps/4-judge.ts:128',
+		at: 'scripts/agent-bench/steps/4-judge.ts:136',
 		reason: 'The only value is the judge copy directory, passed through shellQuote() (single-quoted, embedded quotes escaped).',
 	},
 	{
-		at: 'scripts/agent-bench/steps/4-judge.ts:259',
+		at: 'scripts/agent-bench/steps/4-judge.ts:270',
 		reason: 'The only interpolation is --exclude-dir flags built from the constant STAGE_EXCLUDE_DIRS set in this script.',
 	},
 	{

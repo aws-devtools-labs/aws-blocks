@@ -15,13 +15,12 @@ const log = new Logger(scope, 'orders-log');
 const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
 
 // Tracer: wrap work in segments. Deployed it records X-Ray segments; locally it
-// keeps the last 100 traces in .bb-data/ and prints each one to stdout.
+// keeps the last 100 traces in .cdk-blocks/local/data/ and prints each one to stdout.
 const tracer = new Tracer(scope, 'tracer');
 
-// Dashboard: a CloudWatch Dashboard with health, logs, traces and the metrics
-// below. Cloud-only: under `npm run dev`, GET /cdk-blocks/dashboard answers 503
-// with pointers to the local logs, metrics and traces; deployed, it redirects
-// to the dashboard.
+// Under `npm run dev`, GET /cdk-blocks/dashboard shows the configured metrics
+// and where to inspect local logs and traces. After deployment, the same path
+// redirects to the CloudWatch Dashboard.
 new Dashboard(scope, 'dashboard', {
   title: 'My App',
   metrics: { metrics, metricConfigs: [{ name: 'OrdersPlaced' }] },

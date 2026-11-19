@@ -8,4 +8,4 @@ feat: add `escapeRegExp()` and `escapeHtml()` to `@aws-cdk-blocks/core/bb-utils`
 
 The `GET /cdk-blocks/settings` page that the local dev server serves now escapes the file path it shows, so a project directory whose name contains markup can't inject it into the page.
 
-On Windows, the local settings page now opens `.bb-data/settings.json` with `explorer.exe` instead of `cmd /c start`, so a project directory name containing `&` or `|` can no longer be read by `cmd.exe` as a second command.
+On Windows, the local settings page now opens `.cdk-blocks/local/data/settings.json` with `explorer.exe` instead of `cmd /c start`, so a project directory name containing `&` or `|` can no longer be read by `cmd.exe` as a second command.

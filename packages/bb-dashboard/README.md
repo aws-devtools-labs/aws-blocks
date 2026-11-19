@@ -173,12 +173,11 @@ Grouped per compute, then an app-wide metrics section:
 
 ## Dashboard Redirect Route
 
-The Dashboard BB registers a `GET` route (default: `/cdk-blocks/dashboard`) that 302-redirects
-to the CloudWatch Dashboard console URL. This provides a convenient, discoverable
-entry point for developers. Set `routePath: false` to disable.
+The Dashboard BB registers a `GET` route (default: `/cdk-blocks/dashboard`).
+Set `routePath: false` to disable it.
 
 - **In AWS:** Redirects to the full CloudWatch console URL (requires AWS login).
-- **In local dev:** Returns 503 with a message to deploy first.
+- **In local dev:** Serves a local observability page without AWS credentials or a deployment.
 
 ```typescript
 // Custom route path
@@ -196,18 +195,12 @@ log widgets appear for every compute unless you set `logs: false`.
 
 ## Local Development
 
-In local dev mode, the mock registers the redirect route but returns 503
-(since no CloudWatch Dashboard exists locally):
+Run `npm run dev` and open `/cdk-blocks/dashboard` on the dev server. The page lists configured
+metric names by namespace and points to the terminal for log and metric values and `.bb-data/`
+for saved traces. It does not query AWS or expose raw telemetry. Live CloudWatch charts are
+available only on the deployed dashboard.
 
-```
-[Dashboard] Dashboard BB: no-op in local mode (CloudWatch Dashboard is a cloud-only resource).
-Will create CloudWatch Dashboard 'My App' on deploy. Run 'npx cdk deploy' to view.
-
-📍 Local observability data:
-   • Logs: Check your terminal output - Logger BB writes structured JSON to stdout
-   • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)
-   • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout
-```
+To browse local block data, the page also shows how to launch the separate, session-protected Admin UI.
 
 ## Scaling & Cost
 

@@ -7,7 +7,7 @@
  * The supported way to make the first admin.
  *
  * - Locally (no `--stage` / `--stack`) it edits the local pool,
- *   `.bb-data/<fullId>/state.json`, and refuses while the dev server runs (it
+ *   `.cdk-blocks/local/data/<fullId>/state.json`, and refuses while the dev server runs (it
  *   would write its in-memory copy back over the change).
  * - With `--stage sandbox|prod` (or `--stack <name>`) it calls Cognito on the
  *   pool the block owns in that stack, with the caller's AWS credentials
@@ -48,7 +48,7 @@ Options:
   --username <name>  The user with exactly this username (instead of <user>).
   --email <addr>     The user whose verified email this is (instead of <user>).
   --block <id>       The Auth block (its id or full id), when the app has more than one.
-  --stage <name>     A deployed stage: sandbox or prod. Default: the local pool in .bb-data/.
+  --stage <name>     A deployed stage: sandbox or prod. Default: the local pool in .cdk-blocks/local/data/.
   --stack <name>     A deployed CloudFormation stack, by name (instead of --stage).
   --profile <name>   AWS profile for a deployed stage (default: the SDK's, e.g. AWS_PROFILE).
   --region <name>    AWS Region for a deployed stage (default: the SDK's, e.g. AWS_REGION).
@@ -58,7 +58,7 @@ Options:
 The group must be one the block declares (users.groups). On a deployed stage
 that is read from the stack. Locally it is a group the local pool holds: the
 pool adds each declared group when the backend loads and never removes one, so
-a group since dropped from users.groups is still accepted until .bb-data/ is
+a group since dropped from users.groups is still accepted until .cdk-blocks/local/data/ is
 reset. The pool line shows the AWS account and Region of a deployed pool.
 
 Examples:

@@ -19,5 +19,5 @@ runs:
       env:
         BLOCKS_E2E_TELEMETRY_ID: ${{ inputs.installation-id }}
       run: |
-        mkdir -p "$HOME/.blocks/telemetry"
-        printf '%s' "$BLOCKS_E2E_TELEMETRY_ID" > "$HOME/.blocks/telemetry/installation-id"
+        mkdir -p "$HOME/.cdk-blocks/telemetry"
+        printf '%s' "$BLOCKS_E2E_TELEMETRY_ID" > "$HOME/.cdk-blocks/telemetry/installation-id"

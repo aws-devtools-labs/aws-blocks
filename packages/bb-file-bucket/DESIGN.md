@@ -13,7 +13,7 @@ Design document for FileBucket. For usage, see [README.md](./README.md).
 **Rationale:** ReadableStream adds complexity for the common case (small-to-medium files). Buffer is simpler to work with in Lambda (where the entire response must be buffered anyway). For large files, presigned URLs (`getUrl`/`putUrl`) are the recommended pattern. This favors client-safe return types.
 
 **D-FB-2: Segregated internal storage in mock**
-**Decision:** The mock stores user content, sidecar metadata, and version history under separate sibling roots inside `.bb-data/{fullId}/`:
+**Decision:** The mock stores user content, sidecar metadata, and version history under separate sibling roots inside `.cdk-blocks/local/data/{fullId}/`:
 ```
 content/{key}                     file body (byte-identical to what was written)
 meta/{key}.json                   sidecar metadata
@@ -131,13 +131,13 @@ Creates a single S3 bucket (plus a dedicated log bucket when `accessLogging` is 
 
 ## Mock Implementation
 
-- Files stored on the local filesystem at `.bb-data/{scope.fullId}/` via `getMockDataDir()` from core.
+- Files stored on the local filesystem at `.cdk-blocks/local/data/{scope.fullId}/` via `getMockDataDir()` from core.
 - Internal data is segregated into sibling roots so it can never collide with user keys (see D-FB-2):
   - `content/{key}` — file body, byte-identical to what was written.
   - `meta/{key}.json` — sidecar metadata.
   - `versions/{key}/{versionId}` (+ `.json` sidecars, `__deleted__` marker) — version history.
 - Path mapping for both the mock and the dev file-server is centralized in `paths.ts` so they stay in lockstep.
-- Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
+- Data persists across dev server restarts. Customers can wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 - Presigned URLs are served by the dev file-server at `/.bb-file-bucket/{scope.fullId}/{path}?token=...`. The path segments are URL-encoded; the server decodes them and validates an HMAC token scoped to method, path, and expiry. The HMAC secret (`LOCAL_FILE_SECRET` in `tokens.ts`) is a **per-process random value** — the token-minting mock and the validating dev file-server share the same in-process module instance, so tokens are unforgeable without being a hardcoded, source-visible literal.
 - Downloads are served with `X-Content-Type-Options: nosniff` and a `Content-Disposition`: the one signed into the token by `getUrl({ attachment })` (D-FB-20), or plain `attachment` otherwise. The stored body is caller-controlled, so serving it inline would let an uploaded `text/html`/SVG payload run in the local app origin. Forcing a download + disabling MIME sniffing is dev-server hardening only; deployed content is served via S3 presigned URLs, where the stored `Content-Type` is the one signed into the upload URL (D-FB-19) or passed to `put()`, no `nosniff` is applied, and a `Content-Disposition` is only sent when the URL was created with `attachment` — do not assume this dev-server behavior reflects the deployed path.
 - A download with an explicit `versionId` resolves its body and metadata only from that version. A missing version returns HTTP 404, without falling back to the current object. Downloads without `versionId` resolve the current object.

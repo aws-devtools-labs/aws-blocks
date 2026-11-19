@@ -17,6 +17,6 @@
     "cdk-blocks/**/*",
     "src/**/*",
     "test/**/*",
-    ".blocks/**/*.d.ts"
+    ".cdk-blocks/**/*.d.ts"
   ]
 }

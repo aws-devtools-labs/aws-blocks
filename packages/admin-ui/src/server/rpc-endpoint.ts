@@ -153,7 +153,7 @@ function stackNameForStage(projectRoot: string, stage: DeployStage): string | un
 /** Says what was tried and what would fix it — "no endpoint" alone helps nobody. */
 function explainMissingStack(stage: string): string {
 	if (stage === 'production') {
-		return 'no stack id is recorded in .blocks/config.json and package.json names none either. Deploy production once, or switch to local mode.';
+		return 'no stack id is recorded in .cdk-blocks/config.json and package.json names none either. Deploy production once, or switch to local mode.';
 	}
 	if (stage === 'sandbox') {
 		return 'no .cdk-blocks-sandbox/sandbox-id.txt (or no stack id at all) — that file is written the first time a sandbox is deployed. Run a sandbox deploy, or switch to local mode.';

@@ -21,7 +21,7 @@ import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 const scope = new Scope('pc');
 
 function cleanScopeData() {
-	const dir = '.bb-data';
+	const dir = '.cdk-blocks/local/data';
 	try {
 		if (existsSync(dir)) {
 			for (const entry of readdirSync(dir)) {

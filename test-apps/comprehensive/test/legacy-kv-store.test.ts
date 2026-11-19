@@ -28,7 +28,7 @@ const GONE = { name: 'Gone', age: 1, tags: [] };
  * Call it before the dev server starts. It replaces the file of an earlier run.
  */
 export function seedLegacyStore(): void {
-  const dir = join(process.cwd(), '.bb-data', 'test-app-legacy-store');
+  const dir = join(process.cwd(), '.cdk-blocks/local/data', 'test-app-legacy-store');
   mkdirSync(dir, { recursive: true });
   const file = {
     ada: JSON.stringify(ADA),

@@ -4,4 +4,4 @@ node_modules/
 dist/
 .env
 cdk-blocks/client.js
-.bb-data/
+.cdk-blocks/local/data/

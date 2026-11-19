@@ -432,14 +432,14 @@ describe('create-blocks-app template metadata', () => {
   });
 
   it('every template README says to commit the generated types before gating CI on typegen --check', () => {
-    // A fresh app has no .blocks/hosting-values.d.ts, so `npm run typegen -- --check` exits 1 until it is committed.
+    // A fresh app has no .cdk-blocks/hosting-values.d.ts, so `npm run typegen -- --check` exits 1 until it is committed.
     const templatesDir = join(__dirname, '..', 'templates');
     const problems: string[] = [];
     for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
       const readmePath = join(templatesDir, entry.name, 'README.md');
       if (!entry.isDirectory() || !existsSync(readmePath)) continue;
       for (const line of readFileSync(readmePath, 'utf-8').split('\n')) {
-        if (line.includes('--check') && !line.includes('commit `.blocks/hosting-values.d.ts`') && !line.includes('commit .blocks/hosting-values.d.ts')) {
+        if (line.includes('--check') && !line.includes('commit `.cdk-blocks/hosting-values.d.ts`') && !line.includes('commit .cdk-blocks/hosting-values.d.ts')) {
           problems.push(`${entry.name}: ${line.trim()}`);
         }
       }
@@ -498,7 +498,9 @@ describe('create-blocks-app auto-detection', () => {
       // The printed import must name the workspace package the scaffold declares.
       assert.match(result.stdout, /import \{ api \} from 'cdk-blocks'/);
       assert.doesNotMatch(result.stdout, /from 'aws-blocks'/);
-      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.bb-data\/$/m);
+      // The whole of `local/`, so the mock data is covered before any block has run
+      // and written the self-ignoring marker inside it.
+      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.cdk-blocks\/local\/$/m);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -557,7 +559,9 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected Amplify Gen 2 project/);
-      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.bb-data\/$/m);
+      // The whole of `local/`, so the mock data is covered before any block has run
+      // and written the self-ignoring marker inside it.
+      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.cdk-blocks\/local\/$/m);
       const packageJson = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
       const generateClientPath = join(tmpDir, 'cdk-blocks', 'scripts', 'generate-client.ts');
       const cognitoVerifierPath = join(tmpDir, 'cdk-blocks', 'cognito-verifier.ts');
@@ -745,7 +749,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('generates .blocks/config.json with stackId and uses getStackName in index.cdk.ts', () => {
+  it('generates .cdk-blocks/config.json with stackId and uses getStackName in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -761,8 +765,8 @@ describe('create-blocks-app auto-detection', () => {
         cdkContent.includes('getStackName'),
         'generated index.cdk.ts should import getStackName from aws-cdk-blocks/scripts'
       );
-      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.cdk-blocks/config.json should have a stackId');
       assert.ok(config.stackId.startsWith('my-cool-app-'), 'stackId should start with truncated app name');
       assert.strictEqual(config.stackId.length, 'my-cool-app-'.length + 6, 'stackId should have 6-char random suffix');
     } finally {
@@ -777,8 +781,8 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.cdk-blocks/config.json should have a stackId');
       // Name part (before the random suffix) should be at most 16 chars
       const parts = config.stackId.split('-');
       const suffix = parts.pop();
@@ -814,7 +818,7 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run([appDir, '--template', 'bare', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(appDir, '.blocks', 'config.json'), 'utf-8'));
+      const config = JSON.parse(readFileSync(join(appDir, '.cdk-blocks', 'config.json'), 'utf-8'));
       assert.match(config.stackId, /^app-aws-blocks-w-[0-9a-f]{6}$/);
     } finally {
       rmSync(parent, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -875,13 +879,13 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('generates .blocks/config.json with stackId and ships zod for fresh bare project scaffolding', () => {
+  it('generates .cdk-blocks/config.json with stackId and ships zod for fresh bare project scaffolding', () => {
     const tmpDir = join(__dirname, '../.test-fresh-project-stackid');
     try {
       const result = run([tmpDir, '--template', 'bare', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.cdk-blocks/config.json should have a stackId');
       assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
       assert.strictEqual(config.stackId.split('-').pop()!.length, 6, 'suffix should be 6 chars');
       // The bare template's commented examples import zod, so a fresh app must depend on it
@@ -1189,7 +1193,7 @@ describe('create-blocks-app auto-detection', () => {
         NPM_CONFIG_REGISTRY: 'http://127.0.0.1:9',
       });
       assert.strictEqual(result.exitCode, 0);
-      assert.match(result.stdout, /Blocks app created/);
+      assert.match(result.stdout, /AWS CDK Blocks app created/);
       assert.doesNotMatch(result.stdout, /Installing dependencies/);
       assert.match(result.stdout, /\n  npm install\n/);
       assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
@@ -1247,7 +1251,7 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([join(tmpDir, 'app'), '-y'], undefined, { PATH: `${bin}:${process.env.PATH}` });
       assert.strictEqual(result.exitCode, 1, result.stdout);
       assert.match(result.stderr, /Error: Command failed: npm install/);
-      assert.doesNotMatch(result.stdout, /Blocks app created/);
+      assert.doesNotMatch(result.stdout, /AWS CDK Blocks app created/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

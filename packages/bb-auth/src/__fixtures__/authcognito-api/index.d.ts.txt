@@ -360,7 +360,7 @@ export declare class AuthCognito<const O extends AuthCognitoMockOptions = AuthCo
     /**
      * Write the most-recently-issued verification code to disk so e2e tests
      * can retrieve it without mailbox delivery. **Test scaffolding only** —
-     * not secure storage, and the file lives inside `.bb-data/<fullId>/`
+     * not secure storage, and the file lives inside `.cdk-blocks/local/data/<fullId>/`
      * which is gitignored at the repo root. Overwritten on every code
      * issuance, so only the last code of any purpose is visible.
      */

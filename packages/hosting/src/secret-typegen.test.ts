@@ -216,12 +216,12 @@ export const banner = config('BANNER', { schema: z.object({ text: z.string().nul
 		});
 	});
 
-	void it('does not descend into node_modules / dist / .blocks', async () => {
+	void it('does not descend into node_modules / dist / .cdk-blocks', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('KEEP');`,
 			'node_modules/pkg/index.ts': `secret('FROM_NODE_MODULES');`,
 			'dist/index.js': `secret('FROM_DIST');`,
-			'.blocks/hosting-values.d.ts': `secret('FROM_BLOCKS');`,
+			'.cdk-blocks/hosting-values.d.ts': `secret('FROM_BLOCKS');`,
 		});
 		const scan = await scanValueKeys({ cwd });
 		assert.deepEqual(scan.secretKeys, ['KEEP']);
@@ -275,7 +275,7 @@ void describe('generateHostingValuesDts()', () => {
 		});
 		assert.equal(code, 1);
 		assert.ok(messages.some((m) => /out of date/.test(m)));
-		await assert.rejects(readFile(join(cwd, '.blocks', 'hosting-values.d.ts'), 'utf-8'));
+		await assert.rejects(readFile(join(cwd, '.cdk-blocks', 'hosting-values.d.ts'), 'utf-8'));
 
 		// Generate, then --check passes.
 		await runTypegenCli(['--cwd', cwd], { log: () => {}, error: () => {} });
@@ -293,7 +293,7 @@ void describe('watchHostingValues()', () => {
 		// polling fallback (Linux, where recursive fs.watch is unavailable).
 		const stop = await watchHostingValues({ cwd, debounceMs: 20, pollMs: 50, log: () => {}, error: () => {} });
 		try {
-			const outFile = join(cwd, '.blocks', 'hosting-values.d.ts');
+			const outFile = join(cwd, '.cdk-blocks', 'hosting-values.d.ts');
 			assert.ok((await readFile(outFile, 'utf-8')).includes('"K1": string;'));
 
 			// Add a new key → the watcher should regenerate with it.
@@ -310,5 +310,58 @@ void describe('watchHostingValues()', () => {
 		} finally {
 			stop();
 		}
+	});
+
+	void it('does not start watching when the signal is aborted during the first scan', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const controller = new AbortController();
+		const logs: string[] = [];
+		await watchHostingValues({
+			cwd,
+			signal: controller.signal,
+			// The first scan writes the file and logs it; abort there, as Ctrl-C would mid-scan.
+			log: (m) => {
+				logs.push(m);
+				if (m.includes('regenerated')) controller.abort();
+			},
+			error: () => {},
+		});
+		assert.ok(controller.signal.aborted, 'the first scan should have aborted the signal');
+		assert.ok(!logs.some((m) => m.includes('watching')), `watcher started after abort: ${logs.join('\n')}`);
+	});
+});
+
+void describe('runTypegenCli() --watch', () => {
+	/** Resolve to `'timeout'` if `p` has not settled within `ms`. */
+	const within = <T>(p: Promise<T>, ms: number): Promise<T | 'timeout'> =>
+		Promise.race([p, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), ms).unref())]);
+
+	void it('resolves 0 when the signal is aborted during the first scan', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const controller = new AbortController();
+		const run = runTypegenCli(['--watch', '--cwd', cwd], {
+			signal: controller.signal,
+			log: (m) => {
+				if (m.includes('regenerated')) controller.abort();
+			},
+			error: () => {},
+		});
+		assert.strictEqual(await within(run, 3000), 0);
+	});
+
+	void it('resolves 0 when the signal is already aborted', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const run = runTypegenCli(['--watch', '--cwd', cwd], {
+			signal: AbortSignal.abort(),
+			log: () => {},
+			error: () => {},
+		});
+		assert.strictEqual(await within(run, 3000), 0);
 	});
 });

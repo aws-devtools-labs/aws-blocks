@@ -9,7 +9,7 @@
  * {@link getSdkIdentifiers} to interact with BB-managed resources using the raw AWS SDK.
  *
  * This module serves a complementary role to `mock-data.ts`:
- * - `mock-data.ts` → provides local file paths for mock persistence (`.bb-data/`)
+ * - `mock-data.ts` → provides local file paths for mock persistence (`.cdk-blocks/local/data/`)
  * - `sdk-registry.ts` → provides AWS resource identifiers for SDK access
  *
  * Together, these two modules form the runtime discovery layer — `mock-data.ts` for

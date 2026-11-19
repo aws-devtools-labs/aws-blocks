@@ -5,7 +5,7 @@
  * The local (mock) user-pool engine — a port of `AuthCognito`'s mock behind
  * the {@link NativeEngine} contract. Runs fully offline: users, groups, codes,
  * challenges, MFA / TOTP, devices, passkeys and the admin surface live in
- * `.bb-data/<fullId>/state.json` (`native-mock-store.ts`, `AuthCognito`'s file
+ * `.cdk-blocks/local/data/<fullId>/state.json` (`native-mock-store.ts`, `AuthCognito`'s file
  * format, read as-is).
  *
  * Throws Cognito-shaped service errors (`serviceError`), never `ApiError`s for

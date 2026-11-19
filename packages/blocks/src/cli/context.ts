@@ -15,6 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
 import type * as CoreScriptsModule from '@aws-cdk-blocks/core/scripts';
 import { loadCoreScripts } from './core-load.js';
+import { type LoadTelemetry, loadCoreTelemetry } from './telemetry.js';
 import { CliError, UsageError } from './errors.js';
 import { Output, type OutputFormat, type OutputStream } from './output.js';
 import type { Globals, ParsedInvocation } from './parse.js';
@@ -99,6 +100,11 @@ export interface CliDeps {
 	 * `npm run --help` and usage errors do not load core, and tests can replace it.
 	 */
 	core(): Promise<CoreScripts>;
+	/**
+	 * Load `@aws-cdk-blocks/core/track-command`, for the commands the CLI tracks itself
+	 * (see `telemetry.ts`). A seam, so tests never send events.
+	 */
+	telemetry: LoadTelemetry;
 }
 
 export type LogLevel = 'quiet' | 'normal' | 'verbose' | 'debug';
@@ -298,20 +304,20 @@ export class Context {
 		}
 	}
 
-	/** The project root, if the command runs inside an AWS Blocks app. */
+	/** The project root, if the command runs inside an AWS CDK Blocks app. */
 	findRoot(): string | undefined {
 		if (this.root === null) this.root = findProjectRoot(this.startDir);
 		return this.root;
 	}
 
-	/** The project root, or a CLI error when the command runs outside an AWS Blocks app. */
+	/** The project root, or a CLI error when the command runs outside an AWS CDK Blocks app. */
 	requireRoot(opts?: { allowLegacyBackendDir?: boolean }): string {
 		const root = opts?.allowLegacyBackendDir
 			? (this.findRoot() ?? findLegacyProjectRoot(this.startDir))
 			: this.findRoot();
 		if (!root) {
 			throw new CliError(
-				`not inside an AWS Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
+				`not inside an AWS CDK Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
 				{
 					hint: 'run the command from your app directory, or pass -C <app-dir>',
 				},
@@ -538,5 +544,6 @@ export function processDeps(): CliDeps {
 		chdir: (dir) => process.chdir(dir),
 		argv: process.argv,
 		core: loadCoreScripts,
+		telemetry: loadCoreTelemetry,
 	};
 }

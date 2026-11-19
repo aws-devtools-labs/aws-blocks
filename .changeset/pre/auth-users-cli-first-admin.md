@@ -5,7 +5,7 @@
 Add `npx @aws-cdk-blocks/bb-auth users`, a supported way to make the first admin. `users add-to-group <user> <group>` puts a user into one of the groups the `Auth` block declares in `users.groups`; `remove-from-group` and `list-groups` are also available.
 
 ```sh
-npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin                    # the local pool in .bb-data/
+npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin                    # the local pool in .cdk-blocks/local/data/
 npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes # the deployed pool
 ```
 

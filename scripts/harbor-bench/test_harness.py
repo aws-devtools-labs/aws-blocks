@@ -167,11 +167,11 @@ class ProvenanceTests(unittest.TestCase):
     def test_records_must_be_in_blocks_mock_data_not_elsewhere(self):
         with tempfile.TemporaryDirectory() as temp:
             app = Path(temp)
-            (app / '.bb-data/app-todos').mkdir(parents=True)
-            (app / '.bb-data/app-todos/store.json').write_text('{"1":{"title":"survival-a"}}')
+            (app / '.cdk-blocks/local/data/app-todos').mkdir(parents=True)
+            (app / '.cdk-blocks/local/data/app-todos/store.json').write_text('{"1":{"title":"survival-a"}}')
             (app / 'data.json').write_text('["survival-b"]')  # Stored outside the Blocks mock directory.
-            (app / 'node_modules/x/.bb-data').mkdir(parents=True)
-            (app / 'node_modules/x/.bb-data/f').write_text('survival-b')
+            (app / 'node_modules/x/.cdk-blocks/local/data').mkdir(parents=True)
+            (app / 'node_modules/x/.cdk-blocks/local/data/f').write_text('survival-b')
             self.assertEqual(stored_in_blocks(app, ['survival-a']), [])
             self.assertEqual(stored_in_blocks(app, ['survival-a', 'survival-b']), ['survival-b'])
 
@@ -237,7 +237,7 @@ class ReportTests(unittest.TestCase):
             failed = dict(result, status='failed', harbor_exit_code=1, same_session=False)
             (root / 'harbor-result-candidate-1/result.json').write_text(json.dumps(failed))
             self.assertIn('| **total** | passed | failed | no |', render(root))
-            # Without the .bb-data check the phase is not a pass, whatever else succeeded.
+            # Without the .cdk-blocks/local/data check the phase is not a pass, whatever else succeeded.
             verification = trial / 'steps/labels/verifier/verification.json'
             data = json.loads(verification.read_text())
             del data['checks']['blocks_persistence']

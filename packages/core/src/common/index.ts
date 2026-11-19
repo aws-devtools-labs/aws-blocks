@@ -195,7 +195,7 @@ const bbRegistry: {
 
 /**
  * Which scope path claimed each `fullId`, for every scope constructed in this
- * process. Process-wide, like the SDK identifier registry and the `.bb-data`
+ * process. Process-wide, like the SDK identifier registry and the `.cdk-blocks/local/data`
  * directory it protects. See `./scope-fullid-claims.ts`.
  */
 const fullIdClaims: ScopeFullIdClaims = { owners: new Map(), collided: new Set() };

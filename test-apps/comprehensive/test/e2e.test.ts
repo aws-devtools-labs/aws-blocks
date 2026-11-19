@@ -280,7 +280,7 @@ if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
 // before the background suites below start, because once they overlap a full
 // purge could delete a code one of them is waiting to read (basic-auth.test.ts
 // covers the per-user purge). Locally it also sweeps the records earlier runs
-// left in .bb-data/.
+// left in .cdk-blocks/local/data/.
 test('Auth - full purge clears every code record and leaves other keys alone', { skip: ENV !== 'local' && 'codeDelivery is mock-only; deployed Auth emails the code' }, async () => {
   const stamp = Date.now().toString(36);
   const username = `purge-probe-${stamp}`;

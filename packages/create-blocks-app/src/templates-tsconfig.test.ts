@@ -91,8 +91,8 @@ describe('template TypeScript projects', () => {
 				for (const listed of parsed.fileNames) {
 					owners.set(resolve(listed), [...(owners.get(resolve(listed)) ?? []), project]);
 				}
-				// The getConfig()/getSecret() key types that the dev task generates into .blocks/.
-				const blocksTypes = project === 'backend' ? '../.blocks/**/*.d.ts' : '.blocks/**/*.d.ts';
+				// The getConfig()/getSecret() key types that the dev task generates into .cdk-blocks/.
+				const blocksTypes = project === 'backend' ? '../.cdk-blocks/**/*.d.ts' : '.cdk-blocks/**/*.d.ts';
 				assert.ok(config.include?.includes(blocksTypes), `${name}/${file} does not include ${blocksTypes}`);
 			}
 			const files = sourceFiles(dir);
@@ -115,8 +115,8 @@ describe('template TypeScript projects', () => {
 		assert.strictEqual(backend.compilerOptions?.composite, true);
 		assert.deepStrictEqual(backend.compilerOptions?.types, ['node']);
 		// Every backend file, not only index.ts, so `tsc -b` rebuilds when an imported module changes;
-		// plus the getConfig()/getSecret() key types that the dev task generates into .blocks/.
-		assert.deepStrictEqual(backend.include, ['**/*', '../.blocks/**/*.d.ts']);
+		// plus the getConfig()/getSecret() key types that the dev task generates into .cdk-blocks/.
+		assert.deepStrictEqual(backend.include, ['**/*', '../.cdk-blocks/**/*.d.ts']);
 		// Adding Blocks to an existing project, or to an Amplify app, copies the default template's
 		// file when a template has none, and the upgrade guide links to it.
 		const expected = readFileSync(defaultPath, 'utf-8');

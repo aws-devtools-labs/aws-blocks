@@ -33,7 +33,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join, dirname } from 'node:path';
+import { basename, join, dirname } from 'node:path';
 import { tmpdir, homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -64,7 +64,7 @@ function createTmpDir(prefix = 'blocks-telemetry-e2e'): string {
 }
 
 function installationIdPath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), '.blocks', 'telemetry', 'installation-id');
+  return join(homeDir ?? homedir(), '.cdk-blocks', 'telemetry', 'installation-id');
 }
 
 function seedPinnedInstallationId(homeDir?: string): void {
@@ -320,7 +320,7 @@ interface CloudGroup {
 const CLOUD_GROUPS_DIR = join(APP_ROOT, '.e2e-groups');
 
 /** App entries a group copy needs. The generated client is left out. */
-const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'cdk-blocks'];
+const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.cdk-blocks', 'cdk-blocks'];
 
 /**
  * App entries a group copy leaves out: the tests and docs, state the CLI, the
@@ -332,7 +332,7 @@ const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'cd
  */
 const APP_EXCLUDED = [
   'test', 'README.md', '.gitignore', 'node_modules', 'dist',
-  'cdk.out', 'cdk.context.json', '.cdk-blocks-sandbox', '.bb-data', '.e2e-groups',
+  'cdk.out', 'cdk.context.json', '.cdk-blocks-sandbox', '.cdk-blocks/local/data', '.e2e-groups',
   '.DS_Store', '.idea', '.vscode',
 ];
 
@@ -432,6 +432,87 @@ function cloudGroup(name: string): CloudGroup {
 const sandboxGroup = cloudGroup('sandbox');
 const productionGroup = cloudGroup('production');
 
+/**
+ * The commands added to telemetry with the CLI dispatcher (tracked in the CLI,
+ * in core's entry points, or in the `blocks-generate-client` bin) plus
+ * `sandbox deploy` and `sandbox preview`, run where no AWS account is
+ * reachable: their own app copy (so generated files never land in the app), their
+ * own HOME without the `~/.aws` link, and every credential source blocked.
+ */
+const cliGroup = cloudGroup('cli-commands');
+
+/** Every AWS credential source the SDK's default chain reads, blocked. */
+const NO_AWS_ENV: Record<string, string | undefined> = {
+  AWS_ACCESS_KEY_ID: '',
+  AWS_SECRET_ACCESS_KEY: '',
+  AWS_SESSION_TOKEN: '',
+  AWS_PROFILE: undefined,
+  AWS_DEFAULT_PROFILE: undefined,
+  AWS_SHARED_CREDENTIALS_FILE: '/nonexistent',
+  AWS_CONFIG_FILE: '/nonexistent',
+  AWS_WEB_IDENTITY_TOKEN_FILE: undefined,
+  AWS_ROLE_ARN: undefined,
+  AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: undefined,
+  AWS_CONTAINER_CREDENTIALS_FULL_URI: undefined,
+  AWS_EC2_METADATA_DISABLED: 'true',
+  AWS_REGION: 'us-east-1',
+};
+
+interface CliCase {
+  args: string[];
+  command: string;
+  state: 'SUCCESS' | 'FAIL';
+  exitCode: number;
+  /**
+   * False when the run sends no event: the CLI rejects a usage error of `secret`
+   * and `config` before it calls core, which is where those two are tracked.
+   */
+  emits?: false;
+  /** Run this script with node instead of the CLI task, as an app on vendored scripts runs a bin. */
+  script?: string;
+}
+
+const GENERATE_CLIENT_BIN = join(REPO_ROOT, 'packages', 'blocks', 'dist', 'generate-client-cli.js');
+const GENERATE_SPEC_BIN = join(REPO_ROOT, 'packages', 'core', 'dist', 'scripts', 'generate-spec-cli.js');
+
+/**
+ * One case per invocation. SUCCESS cases need no AWS; FAIL cases stop at a
+ * usage error or at the credential check, before any AWS call.
+ */
+const CLI_CASES: CliCase[] = [
+  { args: ['help'], command: 'help', state: 'SUCCESS', exitCode: 0 },
+  { args: ['help', 'deploy'], command: 'help', state: 'SUCCESS', exitCode: 0 },
+  { args: ['docs'], command: 'docs', state: 'SUCCESS', exitCode: 0 },
+  { args: ['docs', 'bb-kv-store'], command: 'docs', state: 'SUCCESS', exitCode: 0 },
+  { args: ['dev', 'stop'], command: 'dev:stop', state: 'SUCCESS', exitCode: 0 },
+  { args: ['cleanup'], command: 'dev:stop', state: 'SUCCESS', exitCode: 0 },
+  { args: ['generate', 'types'], command: 'generate:types', state: 'SUCCESS', exitCode: 0 },
+  { args: ['generate', 'spec'], command: 'generate:spec', state: 'SUCCESS', exitCode: 0 },
+  { args: ['generate', 'client'], command: 'generate:client', state: 'SUCCESS', exitCode: 0 },
+  { args: ['migrate', '--dry-run'], command: 'migrate', state: 'SUCCESS', exitCode: 0 },
+  {
+    args: ['cdk-blocks/index.ts', 'cdk-blocks/client.js'], script: GENERATE_CLIENT_BIN,
+    command: 'generate:client', state: 'SUCCESS', exitCode: 0,
+  },
+  {
+    args: ['cdk-blocks/missing.ts', 'cdk-blocks/client.js'], script: GENERATE_CLIENT_BIN,
+    command: 'generate:client', state: 'FAIL', exitCode: 2,
+  },
+  {
+    args: ['cdk-blocks/index.ts', 'cdk-blocks/blocks.spec.json'], script: GENERATE_SPEC_BIN,
+    command: 'generate:spec', state: 'SUCCESS', exitCode: 0,
+  },
+  { args: ['whoami'], command: 'whoami', state: 'FAIL', exitCode: 1 },
+  { args: ['secret'], command: 'secret', state: 'FAIL', exitCode: 2, emits: false },
+  { args: ['secret', 'list'], command: 'secret', state: 'FAIL', exitCode: 1 },
+  { args: ['config'], command: 'config', state: 'FAIL', exitCode: 2, emits: false },
+  { args: ['config', 'list'], command: 'config', state: 'FAIL', exitCode: 1 },
+  { args: ['db'], command: 'db', state: 'FAIL', exitCode: 2 },
+  { args: ['db', 'status'], command: 'db', state: 'FAIL', exitCode: 2 },
+  { args: ['sandbox', 'deploy', '--yes'], command: 'sandbox:deploy', state: 'FAIL', exitCode: 1 },
+  { args: ['sandbox', 'preview', '--yes'], command: 'sandbox:preview', state: 'FAIL', exitCode: 1 },
+];
+
 function writeSandboxId(projectRoot: string, sandboxId: string): void {
   const dir = join(projectRoot, '.cdk-blocks-sandbox');
   mkdirSync(dir, { recursive: true });
@@ -482,17 +563,19 @@ describe('Telemetry E2E', { timeout: SUITE_TIMEOUT_MS, concurrency: true }, () =
     writeSandboxId(APP_ROOT, sandboxId);
     prepareCloudGroup(sandboxGroup, sandboxId);
     prepareCloudGroup(productionGroup, sandboxId);
+    prepareCliGroup();
   });
 
-  // Clean up: remove the seeded .blocks directory and the group copies
+  // Clean up: remove the seeded .cdk-blocks directory and the group copies
   // (rmSync removes the links in them, not what they point to).
   after(() => {
-    rmSync(join(homedir(), '.blocks', 'telemetry'), { recursive: true, force: true });
+    rmSync(join(homedir(), '.cdk-blocks', 'telemetry'), { recursive: true, force: true });
     rmSync(CLOUD_GROUPS_DIR, { recursive: true, force: true });
   });
 
   // The three groups run concurrently; the cases inside a group run in order.
   describe('local commands', { concurrency: false }, localCommandSuites);
+  describe('CLI commands', { concurrency: false }, cliCommandSuites);
   describe('AWS sandbox lifecycle', { concurrency: false }, sandboxLifecycleSuites);
   describe('AWS production lifecycle', { concurrency: false }, productionLifecycleSuites);
 });
@@ -1148,10 +1231,85 @@ function localCommandSuites(): void {
         telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
       });
 
-      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'consent notice should NOT show when id exists');
+      assert.ok(!result.stderr.includes('AWS CDK Blocks collects usage data'), 'consent notice should NOT show when id exists');
     });
   });
 
+}
+
+// ── 3b. CLI commands (no AWS) ───────────────────────────────────────────────
+
+function prepareCliGroup(): void {
+  const generatedClient = join(APP_ROOT, 'cdk-blocks', 'client.js');
+  for (const entry of APP_ENTRIES) {
+    cpSync(join(APP_ROOT, entry), join(cliGroup.root, entry), {
+      recursive: true,
+      filter: (src) => src !== generatedClient,
+    });
+  }
+  symlinkSync(join(REPO_ROOT, 'node_modules'), join(cliGroup.root, 'node_modules'), 'dir');
+  seedPinnedInstallationId(cliGroup.home);
+}
+
+/** The CLI commands group: one event per case, and the same result when the send fails. */
+function cliCommandSuites(): void {
+  const inGroup = { cwd: cliGroup.root, home: cliGroup.home };
+
+  describe('command events', () => {
+    let tmpDir: string;
+    afterEach(() => { if (tmpDir) rmSync(tmpDir, { recursive: true, force: true }); });
+
+    for (const c of CLI_CASES) {
+      const label = c.script ? `${basename(c.script)} ${c.args.join(' ')}` : c.args.join(' ');
+      const title = c.emits === false
+        ? `${label} exits ${c.exitCode} and emits nothing`
+        : `${c.state}: ${label} emits ${c.command}/${c.state}`;
+      test(title, async () => {
+        tmpDir = createTmpDir('cli-command');
+        const telemetryFile = uniqueTelemetryFile(tmpDir);
+
+        const result = await runCommand(process.execPath, [...(c.script ? [c.script] : BLOCKS_TASK), ...c.args], {
+          ...inGroup, telemetryFile, timeoutMs: 120_000, env: NO_AWS_ENV,
+        });
+
+        assert.strictEqual(result.exitCode, c.exitCode, `exit code\nstderr: ${result.stderr.slice(-1000)}`);
+        if (c.emits === false) {
+          assert.ok(!(await waitForFile(telemetryFile, 3_000)), `${c.args.join(' ')} should emit no telemetry`);
+          return;
+        }
+        assert.ok(await waitForFile(telemetryFile, 5_000), `${c.args.join(' ')} should emit telemetry`);
+        const body = readTelemetryFile(telemetryFile);
+        assert.strictEqual(body.event.command, c.command);
+        assert.strictEqual(body.event.state, c.state, `error=${JSON.stringify(body.event.error)}`);
+        if (c.state === 'FAIL') assert.ok(body.event.error, 'FAIL should carry error info');
+        assertDelivered(result.stderr, `${c.command} ${c.state}`);
+      });
+    }
+  });
+
+  describe('a telemetry failure never changes the command', () => {
+    let tmpDir: string;
+    afterEach(() => { if (tmpDir) rmSync(tmpDir, { recursive: true, force: true }); });
+
+    for (const c of CLI_CASES) {
+      const label = c.script ? `${basename(c.script)} ${c.args.join(' ')}` : c.args.join(' ');
+      test(`${label}: same exit code with an unreachable endpoint`, async () => {
+        tmpDir = createTmpDir('cli-unreachable');
+        const telemetryFile = uniqueTelemetryFile(tmpDir);
+
+        const result = await runCommand(process.execPath, [...(c.script ? [c.script] : BLOCKS_TASK), ...c.args], {
+          ...inGroup, telemetryFile, timeoutMs: 120_000,
+          env: { ...NO_AWS_ENV, BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable', NODE_DEBUG: '' },
+        });
+
+        assert.strictEqual(result.exitCode, c.exitCode, `exit code\nstderr: ${result.stderr.slice(-1000)}`);
+        assert.ok(!result.stderr.includes('BLOCKS-TELEMETRY'), 'a send failure must be invisible without NODE_DEBUG');
+        if (c.emits === false) return;
+        const body = readTelemetryFile(telemetryFile);
+        assert.strictEqual(body.event.state, c.state, "the recorded outcome is the command's own");
+      });
+    }
+  });
 }
 
 // ── 4. AWS commands (require valid credentials) ─────────────────────────────

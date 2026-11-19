@@ -2452,6 +2452,37 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0');
   });
 
+  it('reads the token header in any letter case (REST proxy events keep the client casing)', async () => {
+    const headers = { 'Content-Type': 'application/json', 'X-BLOCKS-USER-AGENT': 'aws-blocks-kotlin/9.9.9' };
+    const event = makeEvent({ headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'api.probe', params: [], id: 1 }) });
+    const result = await invoke(uaProbeBackend(), event);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/kotlin/9.9.9');
+  });
+
+  it('drops the token when the header arrives under two letter cases', async () => {
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-blocks-user-agent': 'aws-blocks-swift/1.0.0',
+      'X-Blocks-User-Agent': 'aws-blocks-kotlin/2.0.0',
+    };
+    const event = makeEvent({ headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'api.probe', params: [], id: 1 }) });
+    const result = await invoke(uaProbeBackend(), event);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
+  it('drops the token when the header is repeated on the wire, as the container does', async () => {
+    // A REST event keeps the last copy in `headers` and every copy in `multiValueHeaders`.
+    const event = {
+      ...probeEvent('aws-blocks-kotlin/2.0.0'),
+      multiValueHeaders: { 'x-blocks-user-agent': ['aws-blocks-swift/1.0.0', 'aws-blocks-kotlin/2.0.0'] },
+    };
+    const result = await invoke(uaProbeBackend(), event);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
 });
 
 // ── RPC dispatch surface (only the methods the API defines) ──────────────────

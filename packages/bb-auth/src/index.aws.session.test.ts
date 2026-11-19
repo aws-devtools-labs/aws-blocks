@@ -37,8 +37,8 @@ import {
 
 const DEFAULT_TTL = 30 * 86400;
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** Signed in, but the stored access token has already expired. */
 async function signedInWithExpiredAccess(opts: { refreshToken?: string | null } = {}) {

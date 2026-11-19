@@ -6,7 +6,7 @@
  *
  * Local dev ignores `defaults.secretsStore`: the key is the same mock
  * `AppSetting` the blocks used before the option existed, persisted under
- * `.bb-data/`.
+ * `.cdk-blocks/local/data/`.
  *
  * @internal
  */

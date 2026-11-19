@@ -300,6 +300,7 @@ export async function confirm(username: string, context: BlocksContext) {
 			assert.deepStrictEqual(confirmed.nextStep, { signUpStep: 'DONE' });
 			assert.ok(![...b.jar.keys()].some((k) => k.startsWith('autosignin_')), 'no auto-sign-in bridge cookie');
 		} finally {
+			rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 			rmSync('.bb-data', { recursive: true, force: true });
 		}
 	});

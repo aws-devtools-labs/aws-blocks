@@ -10,13 +10,13 @@
  * never inherits Blocks branding.
  *
  * This module is the ONE place Blocks pins its own namespaces. The prefixes are
- * **scoped to the app's stable `stackId`** (from the committed `.blocks/config.json`)
+ * **scoped to the app's stable `stackId`** (from the committed `.cdk-blocks/config.json`)
  * — `/blocks/<stackId>/secrets` (Secrets Manager) and `/blocks/<stackId>/config`
  * (SSM Parameter Store) — so two Blocks apps in one account/region never collide.
  *
  * Both sides derive the scope from the SAME source: the out-of-band CLI
  * (`npm run secret`/`config`) and the CDK synth both call {@link blocksStoreConfig},
- * which reads `stackId` via {@link getStackId}. When `.blocks/config.json` is absent
+ * which reads `stackId` via {@link getStackId}. When `.cdk-blocks/config.json` is absent
  * (e.g. a bare unit test) both sides fall back to the unscoped `/blocks/secrets` /
  * `/blocks/config` identically — so the CLI write and the deploy read can never
  * diverge, whether the id is present or not. `stackId` is stage-independent
@@ -36,7 +36,7 @@ export const BLOCKS_SECRET_PARAMETER_PREFIX = '/blocks/secrets';
 export const BLOCKS_CONFIG_PARAMETER_PREFIX = '/blocks/config';
 
 /**
- * Resolve the app's `stackId` (stable, stage-independent, from `.blocks/config.json`),
+ * Resolve the app's `stackId` (stable, stage-independent, from `.cdk-blocks/config.json`),
  * or `undefined` when it can't be read. Never throws — a missing id means both the
  * CLI and synth fall back to the unscoped base prefix, so they still agree.
  */
@@ -67,7 +67,7 @@ export function blocksConfigPrefix(stackId?: string): string {
  * writes, the IAM grant scopes to, and the runtime resolver reads. Secrets Manager
  * names are slash-free at the root, so this is `blocks/<stackId>/secrets/<KEY>`
  * (no leading slash), NOT an SSM-style path. Pass `stackId` to compute it without
- * reading `.blocks/config.json`.
+ * reading `.cdk-blocks/config.json`.
  *
  * @example 'blocks/myapp/secrets/STRIPE_KEY'
  */
@@ -88,7 +88,7 @@ export function blocksConfigParameterName(key: string, stackId?: string): string
 
 /**
  * The Blocks store config passed to the shared hosting engine — `stackId`-scoped
- * prefixes (falling back to the unscoped base when `.blocks/config.json` is absent).
+ * prefixes (falling back to the unscoped base when `.cdk-blocks/config.json` is absent).
  * Both the CLI and the CDK synth call this, so they resolve identical names.
  */
 export function blocksStoreConfig(stackId?: string): StoreConfig {

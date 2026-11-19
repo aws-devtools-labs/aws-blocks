@@ -101,7 +101,7 @@ async function main() {
 
   run('npm', ['install', '@aws-cdk-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
-  // The app name becomes the stack-name prefix (.blocks/config.json stackId).
+  // The app name becomes the stack-name prefix (.cdk-blocks/config.json stackId).
   // Keep it under `bb-test-`: the CI role can only delete stacks with the test
   // prefixes, so cleanup-stacks.yml can reclaim a stack a failed run leaves.
   const app = join(work, 'bb-test-win');

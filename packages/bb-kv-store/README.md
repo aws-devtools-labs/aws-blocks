@@ -482,7 +482,7 @@ Release 0.4.0 or earlier keeps each item as `{ pk, value: <JSON text>, ttl? }`. 
 - **The table name changes with the id.** An alarm, a dashboard, or a policy of yours that names the table must follow.
 - **A value that this release does not store fails the `put`** with `ValidationFailedException`. Such a value is an object with a top-level field that starts with `_bkv_`, or with a field named `__proto__`. Change the value in the copy.
 - **Cost.** A copy reads every item of the old table once, and uses one write unit for each item of 1 KB or less.
-- **Locally there is no table.** `LegacyKVStore` reads the data file of the old store in `.bb-data/`, so the same steps run on the dev server. It does not change that file until a `put` or a `delete`.
+- **Locally there is no table.** `LegacyKVStore` reads the data file of the old store in `.cdk-blocks/local/data/`, so the same steps run on the dev server. It does not change that file until a `put` or a `delete`.
 
 ### Step 1. Declare both stores, and deploy
 
@@ -583,7 +583,7 @@ const audit = new KVStore(scope, 'audit', {
 
 ## Local development
 
-The mock keeps data on disk in `.bb-data/{fullId}/`, so data stays across restarts of the dev server. To delete it, run `rm -rf .bb-data`. The data file is `store.json`, with a version field.
+The mock keeps data on disk in `.cdk-blocks/local/data/{fullId}/`, so data stays across restarts of the dev server. To delete it, run `rm -rf .cdk-blocks/local/data .bb-data`. The data file is `store.json`, with a version field.
 
 The mock applies the schema, the conditions, expiry, the 400 KB limit (measured the way DynamoDB measures it), DynamoDB's key and nesting limits, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.
 
@@ -593,4 +593,4 @@ The mock handles a data file of an earlier release as follows:
 - It keeps a copy of the `store.json` from before the conversion as `store.json.bak`.
 - It renames a file that it cannot read to a `.bak` file and logs a warning. It does not write over that file.
 
-The mock keeps the store in the memory of the dev server, and reads `store.json` only when it constructs the store. Two processes on the same `.bb-data` folder (two dev servers, or a script beside the dev server) do not see the writes of the other process, and can write over them.
+The mock keeps the store in the memory of the dev server, and reads `store.json` only when it constructs the store. Two processes on the same `.cdk-blocks/local/data` folder (two dev servers, or a script beside the dev server) do not see the writes of the other process, and can write over them.

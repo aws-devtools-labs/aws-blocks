@@ -77,14 +77,14 @@ EOF
 # Seed a CANARY telemetry installation-id BEFORE the first Blocks CLI runs so
 # the Blocks Telemetry service can recognize and EXCLUDE this bench's traffic
 # from real usage metrics. Both create-blocks-app and @aws-cdk-blocks/core read
-# ~/.blocks/telemetry/installation-id and reuse it when present, so seeding it
+# ~/.cdk-blocks/telemetry/installation-id and reuse it when present, so seeding it
 # once here tags every event from the scaffold, build, and runtime as a canary.
 # The canary id is sourced ONLY from $BLOCKS_TELEMETRY_CANARY_ID (kept out of the
 # repo); if it's unset we skip seeding and warn rather than tagging with a
 # hardcoded literal — bench traffic then simply isn't flagged as a canary.
 if [ -n "${BLOCKS_TELEMETRY_CANARY_ID:-}" ]; then
-  mkdir -p "$HOME/.blocks/telemetry"
-  echo "$BLOCKS_TELEMETRY_CANARY_ID" > "$HOME/.blocks/telemetry/installation-id"
+  mkdir -p "$HOME/.cdk-blocks/telemetry"
+  echo "$BLOCKS_TELEMETRY_CANARY_ID" > "$HOME/.cdk-blocks/telemetry/installation-id"
 else
   echo "::warning::BLOCKS_TELEMETRY_CANARY_ID unset; bench traffic not tagged as canary"
 fi

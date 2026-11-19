@@ -49,8 +49,8 @@ jobs:
       - name: Seed fixed e2e telemetry installation ID
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.blocks\telemetry" | Out-Null
-          Set-Content -NoNewline -Path "$env:USERPROFILE\.blocks\telemetry\installation-id" -Value "$env:BLOCKS_E2E_TELEMETRY_ID"
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.cdk-blocks\telemetry" | Out-Null
+          Set-Content -NoNewline -Path "$env:USERPROFILE\.cdk-blocks\telemetry\installation-id" -Value "$env:BLOCKS_E2E_TELEMETRY_ID"
 
       - run: npm ci
       - run: npm run build

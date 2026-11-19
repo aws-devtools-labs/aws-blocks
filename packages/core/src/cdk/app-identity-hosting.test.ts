@@ -50,10 +50,10 @@ describe('defaults.appIdentity — Hosting (stackId = app id)', () => {
 	dirs.push(root);
 	const cwd = process.cwd();
 	before(() => {
-		// The convention under defaults.appIdentity: `.blocks/config.json` names the stackId after the app id,
+		// The convention under defaults.appIdentity: `.cdk-blocks/config.json` names the stackId after the app id,
 		// so Hosting's secret()/config() values live under blocks/<id>/.
-		mkdirSync(join(root, '.blocks'), { recursive: true });
-		writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'appa' }));
+		mkdirSync(join(root, '.cdk-blocks'), { recursive: true });
+		writeFileSync(join(root, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'appa' }));
 		writeFileSync(
 			join(root, 'package.json'),
 			JSON.stringify({ name: 't', dependencies: { next: '15.0.0', react: '^18' } }),
@@ -81,7 +81,7 @@ describe('defaults.appIdentity — Hosting (stackId = app id)', () => {
 			defaultComputeFactory: stubComputeFactory,
 		});
 		const compute = (fn: string) => join(root, '.hosting', 'compute', fn);
-		// Hosting reads `stackId` from `.blocks/config.json` in the working directory.
+		// Hosting reads `stackId` from `.cdk-blocks/config.json` in the working directory.
 		process.chdir(root);
 		try {
 			new Hosting(stack, 'Web', {

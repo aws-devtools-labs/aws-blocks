@@ -44,9 +44,10 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** A request context for `origin` carrying `Authorization: Bearer <token>` (and optionally a cookie). */
 function bearerCtx(origin: string, token: string, cookie?: string): BlocksContext {

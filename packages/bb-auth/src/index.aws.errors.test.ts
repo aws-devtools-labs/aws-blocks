@@ -63,8 +63,8 @@ function expectedMessage(name: string): string {
 	return name === AuthErrors.InvalidPassword ? passwordPolicyMessage(undefined) : clientMessageFor(name);
 }
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** `createApi()` returns a context-bound callable; narrow it to the public surface. */
 function apiFor<O extends AuthOptions>(auth: Auth<O>, ctx: BlocksContext): AuthStateApi {

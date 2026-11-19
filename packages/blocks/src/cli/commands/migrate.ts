@@ -236,7 +236,7 @@ export const VERSION_DEPENDENCIES: Readonly<Record<string, readonly WrapperFile[
 };
 
 /**
- * Wrappers whose alias needs `.blocks/config.json#stackId`: `cdk-blocks deploy` and
+ * Wrappers whose alias needs `.cdk-blocks/config.json#stackId`: `cdk-blocks deploy` and
  * `cdk-blocks destroy` name the production stack `<stackId>-prod`, while the
  * wrappers call core's deploy and destroy, which do not. Apps scaffolded before
  * create-blocks-app wrote that file keep these wrappers until it exists.
@@ -244,33 +244,49 @@ export const VERSION_DEPENDENCIES: Readonly<Record<string, readonly WrapperFile[
 const STACK_ID_WRAPPERS: readonly WrapperFile[] = ['deploy.ts', 'destroy.ts'];
 
 const STACK_ID_HINT =
-	'create .blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" must equal the name of the production stack that your aws-blocks/index.cdk.ts defines (an app whose index.cdk.ts hard-codes "my-blocks-stack-prod" uses {"stackId": "my-blocks-stack"}), commit it, and rerun migration';
+	'create .cdk-blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" must equal the name of the production stack that your aws-blocks/index.cdk.ts defines (an app whose index.cdk.ts hard-codes "my-blocks-stack-prod" uses {"stackId": "my-blocks-stack"}), commit it, and rerun migration';
 
 /**
- * Why `.blocks/config.json` lacks the stackId that `cdk-blocks deploy` and
+ * Why `.cdk-blocks/config.json` lacks the stackId that `cdk-blocks deploy` and
  * `cdk-blocks destroy` need, and how to fix it; `null` when it has one. A file
  * that exists but does not parse is not a missing file: say so, as core's
  * `getStackId` and `cdk-blocks whoami` do.
  */
 function stackIdProblem(root: string): string | null {
-	const path = join(root, '.blocks', 'config.json');
+	const path = join(root, '.cdk-blocks', 'config.json');
 	let text: string | undefined;
 	try {
 		text = unlessGone(() => readFileSync(path, 'utf-8'));
 	} catch (error) {
-		return `.blocks/config.json cannot be read (${(error as Error).message}): fix ${path}, then rerun migration`;
+		return `.cdk-blocks/config.json cannot be read (${(error as Error).message}): fix ${path}, then rerun migration`;
 	}
-	if (text === undefined) return `this app has no .blocks/config.json: ${STACK_ID_HINT}`;
+	if (text === undefined) {
+		// Core's `getStackId` resolves the id from the pre-rename file, so telling the
+		// user to invent a fresh one here is what creates a second production stack.
+		const legacy = join(root, '.blocks', 'config.json');
+		try {
+			const legacyText = unlessGone(() => readFileSync(legacy, 'utf-8'));
+			if (legacyText !== undefined) {
+				const legacyId = (JSON.parse(legacyText) as { stackId?: unknown } | null)?.stackId;
+				if (typeof legacyId === 'string' && legacyId) {
+					return `this app still keeps its stackId in .blocks/config.json: move it with \`mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json\`, then rerun migration`;
+				}
+			}
+		} catch {
+			// Unreadable or invalid: fall through to the usual hint.
+		}
+		return `this app has no .cdk-blocks/config.json: ${STACK_ID_HINT}`;
+	}
 	let config: unknown;
 	try {
 		config = JSON.parse(text);
 	} catch (error) {
-		return `.blocks/config.json is not valid JSON (${(error as Error).message}): fix ${path}, then rerun migration`;
+		return `.cdk-blocks/config.json is not valid JSON (${(error as Error).message}): fix ${path}, then rerun migration`;
 	}
 	const stackId = (config as { stackId?: unknown } | null)?.stackId;
 	return typeof stackId === 'string' && stackId !== ''
 		? null
-		: `.blocks/config.json has no string "stackId": ${STACK_ID_HINT}`;
+		: `.cdk-blocks/config.json has no string "stackId": ${STACK_ID_HINT}`;
 }
 
 /** The pre-rename layout migrate reads; never `cdk-blocks` (`LEGACY_BLOCKS_BACKEND_DIR`). */
@@ -821,7 +837,7 @@ export function planMigration(
 			if (stackless.includes(rewrite.wrapper)) {
 				result.kept.push({
 					file: `package.json#scripts.${name}`,
-					reason: `"${to}" needs "stackId" in .blocks/config.json, but ${stackIdIssue}`,
+					reason: `"${to}" needs "stackId" in .cdk-blocks/config.json, but ${stackIdIssue}`,
 				});
 				continue;
 			}
@@ -902,7 +918,7 @@ export function planMigration(
 		if (wrapper.generated && stackless.includes(wrapper.file)) {
 			result.kept.push({
 				file: wrapper.path,
-				reason: `generated, but kept: the npm run deploy and npm run destroy tasks need "stackId" in .blocks/config.json, but ${stackIdIssue}`,
+				reason: `generated, but kept: the npm run deploy and npm run destroy tasks need "stackId" in .cdk-blocks/config.json, but ${stackIdIssue}`,
 			});
 		}
 	}

@@ -23,8 +23,8 @@ import { Browser } from './test-helpers.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
 import type { CognitoAuthOptions, StubUser } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 

@@ -161,7 +161,7 @@ function HistoryRow({
 }
 
 export default function PlaygroundPage() {
-	const { cloudStage, target, status } = useEnvironment();
+	const { cloudStage, target, status, ready } = useEnvironment();
 
 	const [selected, setSelected] = useState<MethodRef | undefined>();
 	const [history, setHistory] = useState<PlaygroundCall[]>([]);
@@ -181,6 +181,7 @@ export default function PlaygroundPage() {
 	const { data: envData } = useQuery({
 		queryKey: ['environments'],
 		queryFn: () => apiGet<EnvironmentsResponse>('/api/v1/environments'),
+		enabled: ready && cloudStage !== undefined,
 	});
 	// The deployed-stack facts for the selected cloud stage; undefined in the
 	// local environment, where the endpoint notice reads none of them.
