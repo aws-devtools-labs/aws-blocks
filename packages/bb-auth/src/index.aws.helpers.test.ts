@@ -95,6 +95,14 @@ describe('extractUserAttributes (JWT allow-shape)', () => {
 			email: 'alice@example.com',
 		});
 	});
+
+	test('keeps a string claim named __proto__ as an own attribute', () => {
+		// After JSON.parse, `__proto__` is an ordinary own key of the payload.
+		const out = extractUserAttributes(JSON.parse('{"__proto__":"x","email":"alice@example.com"}'));
+		assert.deepStrictEqual(Object.keys(out), ['__proto__', 'email']);
+		assert.strictEqual(Object.getOwnPropertyDescriptor(out, '__proto__')?.value, 'x');
+		assert.strictEqual(Object.getPrototypeOf(out), Object.prototype);
+	});
 });
 
 describe('memoizePerContext (requireRole per-request dedupe)', () => {

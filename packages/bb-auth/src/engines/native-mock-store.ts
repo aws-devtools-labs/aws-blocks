@@ -231,7 +231,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 function stringRecord(v: unknown): Record<string, string> {
 	const out: Record<string, string> = {};
 	if (!isRecord(v)) return out;
-	for (const [k, x] of Object.entries(v)) if (typeof x === 'string') out[k] = x;
+	for (const [k, x] of Object.entries(v)) if (typeof x === 'string') setOwn(out, k, x);
 	return out;
 }
 
@@ -291,7 +291,7 @@ export function parseUser(v: unknown): MockUserRecord | null {
 	if (isRecord(v.devices)) {
 		for (const [key, raw] of Object.entries(v.devices)) {
 			const device = parseDevice(raw);
-			if (device) devices[key] = device;
+			if (device) setOwn(devices, key, device);
 		}
 	}
 	const user: MockUserRecord = {

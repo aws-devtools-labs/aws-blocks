@@ -762,7 +762,16 @@ export class DirectFederationEngine implements FederationEngine {
 			// Userinfo only fills gaps, and only about the same subject (OIDC Core §5.3.2).
 			if (info && typeof info === 'object' && Reflect.get(info, 'sub') === verified.sub) {
 				for (const [k, v] of Object.entries(info)) {
-					if (!(k in claims)) claims[k] = v;
+					// Own keys only: a claim named like an Object.prototype member
+					// (`__proto__`, `constructor`) is a gap to fill like any other.
+					if (!Object.hasOwn(claims, k)) {
+						Object.defineProperty(claims, k, {
+							value: v,
+							enumerable: true,
+							writable: true,
+							configurable: true,
+						});
+					}
 				}
 			}
 		}
