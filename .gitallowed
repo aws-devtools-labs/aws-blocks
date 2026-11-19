@@ -5,6 +5,9 @@
 222222222222
 333333333333
 123456789012
+# Also in scripts/ci/sweep-cognito-pools.test.mjs (already on main, NOT
+# introduced by the change that added this entry).
+999999999999
 
 # Another dummy account number, already on main in
 # packages/blocks/src/cli/commands.test.ts (NOT introduced by this change). The
