@@ -20,8 +20,8 @@
     "test": "npm run typecheck"
   },
   "dependencies": {
-    "@aws-cdk-blocks/bb-auth": "*",
-    "aws-cdk-blocks": "*",
+    "@aws-cdk-blocks/bb-auth": "1.0.0-rc.0",
+    "aws-cdk-blocks": "1.0.0-rc.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
