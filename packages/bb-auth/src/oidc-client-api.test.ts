@@ -51,6 +51,44 @@ function wire(handle: OidcClientHandle): OidcClientDescriptor {
 	return JSON.parse(JSON.stringify(handle));
 }
 
+/** A relay sign-in driven only by the descriptor, as the SDKs run it; returns the exchange's response. */
+async function relayExchange(d: OidcClientDescriptor, provider: string, b: TestBrowser): Promise<Response> {
+	const relayTo = 'http://127.0.0.1:53682/callback';
+	const paramsRes = await fetch(`${server.origin}${d.authorizeParamsBasePath}/${provider}`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ csrf: 'c'.repeat(40), relayTo }),
+	});
+	assert.strictEqual(paramsRes.status, 200);
+	const params = await paramsRes.json();
+	const verifier = 'native-verifier-0123456789-abcdefghijklmnopqrstuvwxyz';
+	const callbackUrl = `${server.origin}${d.callbackPath}`;
+	const authorize = new URL(params.authorizeUrl);
+	for (const [k, v] of Object.entries({
+		response_type: 'code',
+		client_id: params.clientId,
+		redirect_uri: callbackUrl,
+		scope: params.scopes.join(' '),
+		state: params.state,
+		code_challenge: pkceChallenge(verifier),
+		code_challenge_method: 'S256',
+		nonce: params.nonce,
+	})) {
+		authorize.searchParams.set(k, v);
+	}
+	const toCallback = await fetch(authorize, { redirect: 'manual' });
+	const relayed = await fetch(location(toCallback, server.origin), { redirect: 'manual' });
+	const code = new URL(location(relayed, server.origin)).searchParams.get('code') ?? '';
+	return b.fetch(`${server.origin}${d.exchangePath}`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ code, verifier, state: params.state, nonce: params.nonce, provider, callbackUrl }),
+	});
+}
+
+/** The names of the cookies a response sets. */
+const setCookieNames = (res: Response) => res.headers.getSetCookie().map((line) => line.slice(0, line.indexOf('=')));
+
 describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 	test('serializes to the oidc/client descriptor with the default routes and the served provider', async () => {
 		const auth = new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp({ users: [ALICE] }) } });
@@ -65,6 +103,7 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			'providerConfigs',
 			'providers',
 			'refreshPath',
+			'sessionCookieName',
 			'sessionPath',
 			'signInBasePath',
 			'signOutPath',
@@ -168,7 +207,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			store: 'builtin',
 			providers: { staff: stubIdp() },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/second/callback',
+				// A callback that doesn't end in `/callback`: the descriptor names it as configured.
+				callbackPath: '/aws-blocks/auth/second/return',
 				signOutPath: '/aws-blocks/auth/second/signout',
 			},
 		});
@@ -177,7 +217,7 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		const b = wire(await getClient(second.createOidcApi(), ctx));
 
 		assert.deepStrictEqual(b.providers, ['staff']);
-		assert.strictEqual(b.callbackPath, '/aws-blocks/auth/second/callback');
+		assert.strictEqual(b.callbackPath, '/aws-blocks/auth/second/return');
 		assert.strictEqual(b.exchangePath, '/aws-blocks/auth/second/exchange');
 		assert.strictEqual(b.signOutPath, '/aws-blocks/auth/second/signout');
 		assert.strictEqual(b.authorizeParamsBasePath, '/aws-blocks/auth/second/authorize-params');
@@ -255,6 +295,7 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			for (const key of PATHS) {
 				assert.ok(typeof d[key] === 'string' && d[key].startsWith('/aws-blocks/auth/'), `${name}: ${key}`);
 			}
+			assert.ok(d.sessionCookieName?.startsWith('auth_'), `${name}: sessionCookieName`);
 			for (const id of d.providers) {
 				const c = d.providerConfigs[id];
 				assert.ok(c, `${name}: providerConfigs.${id}`);
@@ -264,6 +305,35 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 				assert.ok(Array.isArray(c.scopes), `${name}: ${id}.scopes`);
 			}
 		}
+	});
+
+	test("sessionCookieName is the cookie each block's exchange sets, so two blocks' sessions are told apart", async () => {
+		const scope = unique();
+		const first = new Auth(scope, 'first', {
+			store: 'builtin',
+			providers: { corp: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
+		});
+		const second = new Auth(scope, 'second', {
+			store: 'builtin',
+			providers: { staff: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
+			redirects: {
+				callbackPath: '/aws-blocks/auth/second/callback',
+				signOutPath: '/aws-blocks/auth/second/signout',
+			},
+		});
+		const b = new TestBrowser();
+		const a = wire(await getClient(first.createOidcApi(), b.context(server.origin)));
+		const c = wire(await getClient(second.createOidcApi(), b.context(server.origin)));
+		assert.notStrictEqual(a.sessionCookieName, c.sessionCookieName);
+
+		const signedInA = await relayExchange(a, 'corp', b);
+		assert.strictEqual(signedInA.status, 200);
+		assert.deepStrictEqual(setCookieNames(signedInA), [a.sessionCookieName]);
+		const signedInC = await relayExchange(c, 'staff', b);
+		assert.strictEqual(signedInC.status, 200);
+		assert.deepStrictEqual(setCookieNames(signedInC), [c.sessionCookieName]);
+		// Both sessions live side by side under the names the descriptors gave.
+		assert.deepStrictEqual([...b.jar.keys()].sort(), [a.sessionCookieName, c.sessionCookieName].sort());
 	});
 
 	test('a block with no providers returns an empty client rather than failing', async () => {

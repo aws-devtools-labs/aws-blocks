@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Exit codes and the error format of the `cdk-blocks` CLI.
+ * Exit codes and the error format of CDK Blocks tasks.
  *
  * Every failure prints on stderr in one shape:
  *
@@ -16,16 +16,26 @@
  * stack trace to show.
  */
 
-/**
- * How a printed `cdk-blocks` command runs in an app's shell, where the app's CLI is
- * not on PATH, as the app's AGENTS.md says: `--no` never downloads a package,
- * and `--` keeps npm from reading the command's options as its own.
- */
-export const BLOCKS_COMMAND = 'npx --no -- cdk-blocks';
+/** Task names that differ from the command path passed to the runner. */
+const TASK_NAMES: Readonly<Record<string, string>> = {
+	'dev stop': 'dev:stop',
+	'sandbox deploy': 'sandbox:deploy',
+	'sandbox preview': 'sandbox:preview',
+	'sandbox destroy': 'sandbox:destroy',
+	'sandbox console': 'sandbox:console',
+	'generate client': 'generate-client',
+	'generate spec': 'spec',
+	'generate types': 'typegen',
+};
 
-/** `cdk-blocks <words>` as a command to copy into the app's shell; see {@link BLOCKS_COMMAND}. */
-export function blocksCommand(...words: string[]): string {
-	return [BLOCKS_COMMAND, ...words].join(' ');
+/** Render a command path and its (already shell-quoted) arguments as a copyable app task. */
+export function blocksCommand(command = 'help', ...args: string[]): string {
+	if (command === '--help') return 'npm run help';
+	if (command === '--version') return 'npm run help -- --version';
+	const task = TASK_NAMES[`${command} ${args[0]}`];
+	if (task) args.shift();
+	else if (command === 'generate') return 'npm run help generate';
+	return ['npm run', task ?? command, ...(args.some((arg) => arg.startsWith('-')) ? ['--'] : []), ...args].join(' ');
 }
 
 /** Process exit codes. */
@@ -38,7 +48,7 @@ export const ExitCode = {
 	Usage: 2,
 	/** Interrupted with SIGINT. */
 	Interrupted: 130,
-	/** Stopped by a SIGTERM to the CLI, which the operation it ran ended on (`cdk-blocks sandbox deploy`, `cdk-blocks deploy`). */
+	/** Stopped by a SIGTERM to the task, which the operation it ran ended on (`npm run sandbox:deploy`, `npm run deploy`). */
 	Terminated: 143,
 } as const;
 
@@ -47,7 +57,7 @@ export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 export interface CliErrorDetails {
 	/** Where it failed: the command, the stack, the account and Region. */
 	where?: string[];
-	/** The next step, for example `npx --no -- cdk-blocks destroy --yes` (see {@link blocksCommand}). */
+	/** The next step, for example `npm run destroy -- --yes` (see {@link blocksCommand}). */
 	hint?: string;
 	/** The exit code. Default: 1. */
 	exitCode?: ExitCodeValue;

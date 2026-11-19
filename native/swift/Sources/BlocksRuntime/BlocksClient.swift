@@ -252,33 +252,70 @@ public final class BlocksClient: Sendable {
     /// Derived by stripping the RPC path segments from the end of the URL.
     /// e.g. `https://host/prod/aws-blocks/api` → `https://host/prod`
     ///      `http://localhost:3001/aws-blocks/api` → `http://localhost:3001`
+    /// The cut is at the first `aws-blocks` segment, so a doubled `/aws-blocks/api/aws-blocks/api`
+    /// gives the origin. A URL with no such segment is used as it is, without a trailing `/`.
     var rawRouteBase: String {
-        guard let parsed = URL(string: url) else { return url }
-        let pathComponents = parsed.pathComponents.filter { $0 != "/" }
-        // Find where "aws-blocks" starts in the path and drop from there
-        if let idx = pathComponents.firstIndex(of: "aws-blocks") {
-            let keepComponents = pathComponents[..<idx]
-            let scheme = parsed.scheme ?? "https"
-            let host = parsed.host ?? "localhost"
-            let port = parsed.port.map { ":\($0)" } ?? ""
-            let basePath = keepComponents.isEmpty ? "" : "/" + keepComponents.joined(separator: "/")
-            return "\(scheme)://\(host)\(port)\(basePath)"
+        // `URLComponents` keeps an IPv6 host's brackets and the path's percent-encoding as they were.
+        guard var components = URLComponents(string: url), components.host != nil else { return url }
+        let segments = components.percentEncodedPath.split(separator: "/")
+        if let idx = segments.firstIndex(of: "aws-blocks") {
+            let kept = segments[..<idx]
+            components.percentEncodedPath = kept.isEmpty ? "" : "/" + kept.joined(separator: "/")
+            components.query = nil
+            components.fragment = nil
+            return components.string ?? url
         }
-        return url
+        var trimmed = Substring(url)
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
+        return String(trimmed)
     }
 
     /// POST to a raw route (not JSON-RPC). Handles cookies automatically.
-    func postRawRoute(path: String, body: [String: Any]) async throws -> [String: Any] {
+    /// With `emptyBodyIsEmptyObject`, an empty 2xx body reads as `{}` instead of failing to parse.
+    func postRawRoute(path: String, body: [String: Any], emptyBodyIsEmptyObject: Bool = false) async throws -> [String: Any] {
+        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:], emptyBodyIsEmptyObject: emptyBodyIsEmptyObject).json
+    }
+
+    /// POST to a raw route, and also return the names of the cookies its response set.
+    func postRawRouteRecordingCookies(path: String, body: [String: Any]) async throws -> (json: [String: Any], cookieNames: [String]) {
+        try await sendRawRoute(method: "POST", path: path, body: body, headers: [:])
+    }
+
+    /// Removes the stored cookies named `names` that a request to the raw route `path` would send.
+    func removeCookies(named names: [String], sentTo path: String) {
+        guard !names.isEmpty, let url = URL(string: rawRouteBase + path) else { return }
+        BlocksClient.cookieJar.remove(named: Set(names), sentTo: url)
+    }
+
+    /// GET a raw route (not JSON-RPC). Handles cookies automatically.
+    func getRawRoute(path: String, headers: [String: String] = [:]) async throws -> [String: Any] {
+        try await sendRawRoute(method: "GET", path: path, body: nil, headers: headers).json
+    }
+
+    private func sendRawRoute(
+        method: String,
+        path: String,
+        body: [String: Any]?,
+        headers: [String: String],
+        emptyBodyIsEmptyObject: Bool = false
+    ) async throws -> (json: [String: Any], cookieNames: [String]) {
         guard let requestURL = URL(string: rawRouteBase + path) else {
             throw TransportError(message: "Invalid URL: \(rawRouteBase + path)")
         }
 
         var urlRequest = URLRequest(url: requestURL)
-        urlRequest.httpMethod = "POST"
+        urlRequest.httpMethod = method
         urlRequest.httpShouldHandleCookies = false
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        if let body {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
+            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        }
+        for (name, value) in headers {
+            urlRequest.setValue(value, forHTTPHeaderField: name)
+        }
 
         // Attach stored cookies
         if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
@@ -302,8 +339,9 @@ public final class BlocksClient: Sendable {
         }
 
         // Store Set-Cookie headers
+        var cookieNames: [String] = []
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse, requestURL: requestURL)
+            cookieNames = processCookies(from: httpResponse, requestURL: requestURL)
             // An error response is the server refusing the request, not a malformed success:
             // surface its status and error name instead of handing the error body to the caller.
             if !(200 ..< 300).contains(httpResponse.statusCode) {
@@ -337,18 +375,24 @@ public final class BlocksClient: Sendable {
             }
         }
 
+        if emptyBodyIsEmptyObject, data.isEmpty {
+            return ([:], cookieNames)
+        }
         guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw TransportError(
                 message: "Response from \(path) was not a JSON object",
                 statusCode: (response as? HTTPURLResponse)?.statusCode
             )
         }
-        return json
+        return (json, cookieNames)
     }
 
     // MARK: - Cookie Handling
 
-    private func processCookies(from response: HTTPURLResponse, requestURL: URL) {
+    /// Stores the response's cookies and returns the names of those it set to a value.
+    @discardableResult
+    private func processCookies(from response: HTTPURLResponse, requestURL: URL) -> [String] {
+        var names: [String] = []
         for (key, value) in response.allHeaderFields {
             guard "\(key)".caseInsensitiveCompare("Set-Cookie") == .orderedSame else { continue }
 
@@ -358,8 +402,12 @@ public final class BlocksClient: Sendable {
             let responseURL = response.url ?? requestURL
             for rawCookie in rawCookies {
                 BlocksClient.cookieJar.save(setCookie: rawCookie, requestURL: responseURL)
+                if let cookie = StoredCookie(setCookie: rawCookie, requestURL: responseURL), !cookie.value.isEmpty {
+                    names.append(cookie.name)
+                }
             }
         }
+        return names
     }
 
     private func splitSetCookieHeader(_ header: String) -> [String] {

@@ -547,7 +547,7 @@ describe('Node.js client and a config.json an older deploy wrote', () => {
   it('refuses a production config.json, without calling it', async () => {
     const { stdout, calls } = await callWith((stub) => ({ apiUrl: stub, environment: 'production' }));
     assert.match(stdout, /ERROR \.blocks-sandbox\/config\.json points at the deployed production stack .*written by an older deploy/);
-    assert.match(stdout, /npx --no -- cdk-blocks dev.*BLOCKS_API_URL/);
+    assert.match(stdout, /npm run dev.*BLOCKS_API_URL/);
     assert.strictEqual(calls, 0);
   });
 
@@ -565,7 +565,7 @@ describe('Node.js client and a config.json an older deploy wrote', () => {
     assert.strictEqual(calls, 1);
   });
 
-  it("uses a dev server's config.json, local or cdk-blocks sandbox's", async () => {
+  it("uses a dev server's config.json, local or npm run sandbox's", async () => {
     for (const environment of ['local', 'sandbox']) {
       const { stdout, calls } = await callWith((stub) => ({ apiUrl: stub, environment }));
       assert.match(stdout, /RESULT stub/, environment);

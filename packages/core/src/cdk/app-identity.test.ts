@@ -9,6 +9,7 @@ import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { stubComputeFactory } from './__fixtures__/stub-lambda-compute.js';
@@ -114,6 +115,25 @@ describe('defaults.appIdentity — tags', () => {
 		assert.ok(layers.length > 0, 'the fixture has a layer');
 		for (const [logicalId, layer] of layers) {
 			assert.strictEqual(layer.Properties?.LayerName, `appa-${logicalId}`);
+		}
+	});
+
+	test('set: long layer logical ids that share a prefix past the 140-character limit still get distinct names', async () => {
+		const app = new cdk.App({ context: QUALIFIER });
+		const stack = await makeStack(app, 'appa', appDefaults());
+		const shared = 'L'.repeat(160);
+		for (const suffix of ['One', 'Two']) {
+			new lambda.CfnLayerVersion(stack, `${shared}${suffix}`, { content: { s3Bucket: 'cdk-appa-assets', s3Key: `${suffix}.zip` } });
+		}
+		const names = Object.entries(Template.fromStack(stack).findResources('AWS::Lambda::LayerVersion'))
+			.filter(([logicalId]) => logicalId.startsWith('LLLL'))
+			.map(([, layer]) => layer.Properties?.LayerName as string);
+		assert.strictEqual(names.length, 2, JSON.stringify(names));
+		assert.notStrictEqual(names[0], names[1], 'truncated layer names collide');
+		for (const name of names) {
+			assert.ok(name.startsWith('appa-'), name);
+			assert.ok(name.length <= 140, `${name.length} characters`);
+			assert.match(name, /^[a-zA-Z0-9_-]+$/, name);
 		}
 	});
 

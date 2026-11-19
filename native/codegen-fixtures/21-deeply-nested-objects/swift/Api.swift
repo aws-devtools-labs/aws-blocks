@@ -39,7 +39,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetOrganization {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let address: Address
             public let id: String
             public let name: String
@@ -52,7 +52,7 @@ public final nonisolated class Api: Sendable {
                 self.owner = owner
             }
 
-            public struct Address: Codable {
+            public struct Address: Codable, Sendable {
                 public let city: String
                 public let contact: Contact
                 public let street: String
@@ -63,7 +63,7 @@ public final nonisolated class Api: Sendable {
                     self.street = street
                 }
 
-                public struct Contact: Codable {
+                public struct Contact: Codable, Sendable {
                     public let email: String
 
                     public init(email: String) {
@@ -72,7 +72,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct Owner: Codable {
+            public struct Owner: Codable, Sendable {
                 public let contact: Contact
                 public let name: String
 
@@ -81,7 +81,7 @@ public final nonisolated class Api: Sendable {
                     self.name = name
                 }
 
-                public struct Contact: Codable {
+                public struct Contact: Codable, Sendable {
                     public let email: String
                     public let phone: String
 
@@ -96,7 +96,7 @@ public final nonisolated class Api: Sendable {
 
     public enum CreateOrganization {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let address: Address
             public let name: String
             public let owner: Owner
@@ -107,7 +107,7 @@ public final nonisolated class Api: Sendable {
                 self.owner = owner
             }
 
-            public struct Address: Codable {
+            public struct Address: Codable, Sendable {
                 public let city: String
                 public let countryCode: String
                 public let street: String
@@ -119,7 +119,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct Owner: Codable {
+            public struct Owner: Codable, Sendable {
                 public let email: String
                 public let name: String
 
@@ -130,7 +130,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let id: String
 
             public init(id: String) {
@@ -141,7 +141,7 @@ public final nonisolated class Api: Sendable {
 
     public enum UpdateOrganization {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let address: Address?
             public let id: String
             public let name: String?
@@ -169,7 +169,7 @@ public final nonisolated class Api: Sendable {
                 self.owner = owner
             }
 
-            public struct Address: Codable {
+            public struct Address: Codable, Sendable {
                 public let city: String
                 public let street: String
                 public let zip: String
@@ -181,7 +181,7 @@ public final nonisolated class Api: Sendable {
                 }
             }
 
-            public struct Owner: Codable {
+            public struct Owner: Codable, Sendable {
                 public let contact: Contact
                 public let name: String
 
@@ -190,7 +190,7 @@ public final nonisolated class Api: Sendable {
                     self.name = name
                 }
 
-                public struct Contact: Codable {
+                public struct Contact: Codable, Sendable {
                     public let email: String
                     public let phone: String
 
@@ -202,7 +202,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {

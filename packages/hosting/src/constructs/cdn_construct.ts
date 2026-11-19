@@ -148,6 +148,14 @@ export type CdnConstructProps = {
    */
   computeAliases?: Map<string, IFunction>;
   /**
+   * Whether the SSR Lambda streams its response
+   * (`DoorInput.origins.server.streaming`). A streaming server is integrated
+   * with `ResponseTransferMode.STREAM`; a buffered Lambda handler (it returns
+   * `{ statusCode, headers, body }`) with a plain proxy integration.
+   * @default true
+   */
+  serverStreaming?: boolean;
+  /**
    * Map of compute name → Lambda Web Function (`compute.type:
    * 'web-function'`). A Web Function SSR compute is reached directly through
    * its endpoint with CloudFront OAC — no API Gateway.
@@ -477,16 +485,19 @@ export class CdnConstruct extends Construct {
       originId: ORIGIN_ID.s3,
     });
 
-    // SSR Lambda goes through API Gateway REST API + STREAM mode instead of
-    // OAC + Function URL. OAC SigV4 includes the body hash; Function URL
-    // recomputes it from received bytes and the two diverge, returning 403
-    // on every non-empty POST/PUT/PATCH. REST API uses lambda:InvokeFunction
-    // (no body re-hash) and is currently the only API GW flavor that
-    // supports ResponseTransferMode.STREAM for Lambda proxy integrations.
+    // SSR Lambda goes through API Gateway REST API instead of OAC + Function
+    // URL. OAC SigV4 includes the body hash; Function URL recomputes it from
+    // received bytes and the two diverge, returning 403 on every non-empty
+    // POST/PUT/PATCH. REST API uses lambda:InvokeFunction (no body re-hash)
+    // and is currently the only API GW flavor that supports
+    // ResponseTransferMode.STREAM for Lambda proxy integrations.
     //
-    // The Lambda must be built with a payload-v1 converter + streaming
-    // wrapper (REST API sends v1; most adapters default to v2). Image-opt
-    // and other GET-only compute stay on OAC + FURL.
+    // The Lambda must read the payload-v1 event (REST API sends v1; most
+    // adapters default to v2). A streaming server (a streaming wrapper, the
+    // Lambda Web Adapter in `response_stream` mode) is integrated in STREAM
+    // mode; a buffered handler with a plain proxy integration (see
+    // `serverStreaming`). Image-opt and other GET-only compute stay on OAC +
+    // FURL.
     const computeOrigins = new Map<string, IOrigin>();
     const hasSsr = (name: 'default' | 'server'): boolean =>
       Boolean(props.computeFunctions?.has(name) || props.computeWebFunctions?.has(name));
@@ -635,9 +646,15 @@ export class CdnConstruct extends Construct {
         acceptLegacy ? [legacyOriginVerifyValue(this)] : [],
       );
       ssrRestApi = restApi;
+      // The integration must match how the server answers. STREAM reads the
+      // response-stream framing (a JSON prelude, a delimiter, the body); a
+      // plain proxy integration reads the `{ statusCode, headers, body }`
+      // object a buffered handler returns. Given the other's answer, neither
+      // serves a request: a buffered handler behind STREAM answers 502 on
+      // every path.
       const integration = new LambdaIntegration(ssrFn, {
         proxy: true,
-        responseTransferMode: ResponseTransferMode.STREAM,
+        ...(props.serverStreaming !== false ? { responseTransferMode: ResponseTransferMode.STREAM } : {}),
       });
       // Wire root + {proxy+} manually. CDK's addProxy({ anyMethod: true })
       // attaches a MOCK integration to the root (not our LambdaIntegration),

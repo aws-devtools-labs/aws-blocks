@@ -57,7 +57,7 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
             }
         }
 
-        project.tasks.register("blocksDumpModel", CdkBlocksDumpModelTask::class.java) {
+        project.tasks.register("cdkBlocksDumpModel", CdkBlocksDumpModelTask::class.java) {
             it.apiSpecFile.set(extension.apiSpec)
         }
 
@@ -115,7 +115,7 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
     private fun configureKmp(project: Project, extension: CdkBlocksExtension) {
         val outputDir = project.layout.buildDirectory.dir("generated/source/cdk/blocks/commonMain")
 
-        val task = project.tasks.register("blocksCodegen", CdkBlocksCodegenTask::class.java)
+        val task = project.tasks.register("cdkBlocksCodegen", CdkBlocksCodegenTask::class.java)
         task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         val kmpExtension = project.extensions.getByType(KotlinMultiplatformExtension::class.java)
@@ -161,7 +161,7 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             val variantName = variant.name
-            val taskName = "blocksCodegen${variantName.replaceFirstChar { it.uppercaseChar() }}"
+            val taskName = "cdkBlocksCodegen${variantName.replaceFirstChar { it.uppercaseChar() }}"
 
             val outputDir = project.layout.buildDirectory.dir(
                 "generated/source/cdk/blocks/$variantName",
@@ -177,7 +177,7 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
     private fun configureJvm(project: Project, extension: CdkBlocksExtension) {
         val outputDir = project.layout.buildDirectory.dir("generated/source/cdk/blocks/main")
 
-        val task = project.tasks.register("blocksCodegen", CdkBlocksCodegenTask::class.java)
+        val task = project.tasks.register("cdkBlocksCodegen", CdkBlocksCodegenTask::class.java)
         task.configure { configureCodegenTask(it, extension, outputDir, RelayToRequirement.NotNeeded) }
 
         project.extensions.getByType(JavaPluginExtension::class.java)

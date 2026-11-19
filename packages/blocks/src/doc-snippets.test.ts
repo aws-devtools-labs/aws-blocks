@@ -21,12 +21,12 @@ const DOCS_DIR = join(PACKAGE_DIR, 'docs');
 /** Inside `dist/`, so `@aws-blocks/*` resolve through the workspace `node_modules` as an app's would. */
 const SCRATCH = join(PACKAGE_DIR, 'dist', '.doc-snippets-scratch');
 
-/** The umbrella's entries an app imports from, root first (`./docs/*` holds no code). */
+/** The umbrella's entries an app imports from, root first (exclude docs and the side-effect task runner). */
 function umbrellaEntries(): string[] {
 	const pkg: unknown = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'));
 	assert.ok(pkg && typeof pkg === 'object' && 'exports' in pkg && pkg.exports && typeof pkg.exports === 'object');
 	return Object.keys(pkg.exports)
-		.filter((key) => key !== './docs/*')
+		.filter((key) => key !== './docs/*' && key !== './run')
 		.map((key) => `@aws-blocks/blocks${key.slice(1)}`);
 }
 

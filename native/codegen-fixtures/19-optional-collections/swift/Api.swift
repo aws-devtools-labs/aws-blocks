@@ -31,7 +31,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetUser {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let metadata: [String: String]?
             public let name: String
             public let nicknames: [String?]?
@@ -67,7 +67,7 @@ public final nonisolated class Api: Sendable {
 
     public enum UpdateUser {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let id: String
             public let metadata: [String: String]?
             public let tags: [String]?
@@ -92,7 +92,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
