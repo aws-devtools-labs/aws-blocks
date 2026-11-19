@@ -1199,6 +1199,9 @@ function usesNext(pkg: PackageDeps): boolean {
   return Boolean(pkg.dependencies?.next || pkg.devDependencies?.next);
 }
 
+/** The frameworks `Hosting` detects from a project's package.json (`detectFramework` in `@aws-blocks/hosting/adapters`). */
+export type ProjectFramework = 'nextjs' | 'nitro' | 'astro' | 'sveltekit' | 'spa';
+
 /** The packages that make a project a Nitro app (Nuxt and the other Nitro frameworks), in the order Hosting checks them. */
 const NITRO_PACKAGES = ['nuxt', 'nitropack', '@solidjs/start', '@analogjs/platform-server', '@tanstack/start'];
 
@@ -1207,7 +1210,7 @@ const NITRO_PACKAGES = ['nuxt', 'nitropack', '@solidjs/start', '@analogjs/platfo
  * `detectFramework` in `@aws-blocks/hosting/adapters` (which this CLI doesn't load: the
  * project may not have installed it yet). A test checks that the two agree.
  */
-export function detectProjectFramework(pkg: PackageDeps & { peerDependencies?: Record<string, unknown> }): string {
+export function detectProjectFramework(pkg: PackageDeps & { peerDependencies?: Record<string, unknown> }): ProjectFramework {
   const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
   if ('next' in deps) return 'nextjs';
   if (NITRO_PACKAGES.some(name => name in deps)) return 'nitro';
@@ -1216,8 +1219,25 @@ export function detectProjectFramework(pkg: PackageDeps & { peerDependencies?: R
   return 'spa';
 }
 
-/** The template's build settings in its `Hosting` props: Vite's (`npm run build` into `dist/`), or the Next.js template's. */
-const TEMPLATE_BUILD_SETTINGS = /\n {4}buildCommand: 'npm run build',\n {4}(?:buildOutputDir: 'dist'|framework: 'nextjs'),\n/;
+/**
+ * The template's build settings in its `Hosting` props: Vite's (`npm run build` into
+ * `dist/`), or the Next.js template's. Matches LF or CRLF line endings (a Windows
+ * checkout of the templates) and captures the ending so the edit keeps it.
+ */
+const TEMPLATE_BUILD_SETTINGS = /(\r?\n) {4}buildCommand: 'npm run build',\r?\n {4}(?:buildOutputDir: 'dist'|framework: 'nextjs'),\r?\n/;
+
+/**
+ * The template's `index.cdk.ts` source with its `Hosting` build settings replaced by
+ * `framework: '<framework>'`, or `null` when the source has no build settings to
+ * replace (see TEMPLATE_BUILD_SETTINGS). Exported for the test that checks every
+ * template's `Hosting` matches.
+ */
+export function fitHostingSource(source: string, framework: Exclude<ProjectFramework, 'spa'>): string | null {
+  const match = TEMPLATE_BUILD_SETTINGS.exec(source);
+  if (!match) return null;
+  const eol = match[1];
+  return source.replace(TEMPLATE_BUILD_SETTINGS, `${eol}    framework: '${framework}',${eol}`);
+}
 
 /**
  * Fits the `Hosting` props in the copied backend's `index.cdk.ts` to the project's
@@ -1227,13 +1247,21 @@ const TEMPLATE_BUILD_SETTINGS = /\n {4}buildCommand: 'npm run build',\n {4}(?:bu
  * which an app may not have installed), and read their own output dir. For such a
  * project the props name the framework and leave the build to the adapter:
  * running `npm run build` first fails an Astro app without a server adapter, and
- * `dist` is not where Nuxt, SvelteKit or Next.js write their build.
+ * `dist` is not where Nuxt, SvelteKit or Next.js write their build. When the
+ * template's `Hosting` doesn't have the expected build settings, it prints the edit
+ * to make by hand rather than leaving the Vite settings in silently.
  */
-async function fitHostingToFramework(indexCdk: string, framework: string): Promise<void> {
+async function fitHostingToFramework(indexCdk: string, framework: ProjectFramework): Promise<void> {
   if (framework === 'spa' || !(await exists(indexCdk))) return;
   const source = await readFile(indexCdk, 'utf-8');
-  const updated = source.replace(TEMPLATE_BUILD_SETTINGS, `\n    framework: '${framework}',\n`);
-  if (updated !== source) await writeFile(indexCdk, updated);
+  const updated = fitHostingSource(source, framework);
+  if (updated !== null) {
+    await writeFile(indexCdk, updated);
+  } else if (source.includes('new Hosting(')) {
+    console.warn(`  ⚠ Could not set the ${framework} build settings in ${indexCdk}.`);
+    console.warn(`    In its \`new Hosting(...)\` props, set \`framework: '${framework}'\` and remove \`buildCommand\` and \`buildOutputDir\`:`);
+    console.warn(`    the ${framework} adapter builds the app and reads its own output dir.`);
+  }
 }
 
 /**
