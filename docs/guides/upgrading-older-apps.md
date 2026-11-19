@@ -12,7 +12,7 @@ Find your app's shape below and apply the edits. Every other file is unchanged.
 
 A deploy can fail with `CloudFormation cannot update a stack when a custom-named resource requires replacing` on the table of a `KVStore`. The cause is then the `KVStore` release, not the template. See [A `KVStore` from release 0.4.0 or earlier](#a-kvstore-from-release-040-or-earlier-custom-named-resource-requires-replacing).
 
-An app with a `DistributedDatabase` keeps its Aurora DSQL cluster when the block becomes a `Database`. See [A `DistributedDatabase`: keep its cluster with `Database`](#a-distributeddatabase-keep-its-cluster-with-database).
+An app with a `DistributedDatabase` keeps its Aurora DSQL cluster when the block becomes a `Database`. See [A `DistributedDatabase`: keep its cluster with `Database`](#a-distributeddatabase-keep-its-cluster-with-database). An app with a `Database` of `@aws-blocks/bb-data` keeps its Aurora cluster with `LegacyDatabaseCluster`. See [A `Database` of `@aws-blocks/bb-data`](#a-database-of-aws-blocksbb-data-keep-its-cluster-with-legacydatabasecluster).
 
 ## 0.1.0 to 0.1.19: add `defaults`, drop the sandbox overrides
 
@@ -129,7 +129,23 @@ A `Database` with no `cluster` option owns an Aurora DSQL cluster, as `Distribut
 
 4. Deploy. The migration functions of `DistributedDatabase` leave the stack, and those of `Database` take their place.
 
-This path is only for `DistributedDatabase`. A `Database` of `@aws-blocks/bb-data` ran on a different kind of cluster, and a `Database` of this release does not take it over.
+This path is only for `DistributedDatabase`. For a `Database` of `@aws-blocks/bb-data`, see the next section.
+
+## A `Database` of `@aws-blocks/bb-data`: keep its cluster with `LegacyDatabaseCluster`
+
+This section is for an app that deployed `Database` with `@aws-blocks/bb-data` and now deploys on a release where `Database` comes from `@aws-blocks/bb-database`.
+
+The old `Database` owned an Aurora PostgreSQL cluster in a VPC. The new `Database` owns a different kind of cluster, so the same line of code would give you a new, empty database, and the deploy would delete the credentials secret of the old cluster. Keep the old cluster with `LegacyDatabaseCluster`, and run a `Database` with a new id on it:
+
+```ts
+import { Database, LegacyDatabaseCluster } from '@aws-blocks/blocks';
+
+// Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './aws-blocks/migrations' });
+const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1 });
+const db = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+```
+
+Run `cdk diff` before you deploy. The [`Database` README](../../packages/bb-database/README.md#upgrade-from-aws-blocksbb-data) has the steps, the options to keep, and what to know before you remove the `LegacyDatabaseCluster`.
 
 ## Keep Node types out of the frontend
 

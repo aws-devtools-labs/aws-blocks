@@ -31,7 +31,7 @@ import {
 import { configError } from '../errors.js';
 import type { ResolvedAuroraClusterOptions, ResolvedClusterOptions } from '../runtime/construction.js';
 
-const REMOVAL_POLICY_MAP = {
+export const REMOVAL_POLICY_MAP = {
 	destroy: cdk.RemovalPolicy.DESTROY,
 	retain: cdk.RemovalPolicy.RETAIN,
 	snapshot: cdk.RemovalPolicy.SNAPSHOT,

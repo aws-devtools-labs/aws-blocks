@@ -9,25 +9,35 @@ import {
 	CONNECTION_SETTING_ID,
 	clusterConfigKey,
 	connectionParameterName,
+	legacyClusterConfigKey,
 	sanitizeDbRoleName,
 	searchPathFor,
 } from './constants.js';
+import { dataApiEngine, type RowCountingEngine } from './engines/handle.js';
 import { iamAuthToken, PgEngine } from './engines/pg-engine.js';
 import { configError } from './errors.js';
 import { sourceConnectionLabel, ssmConnectionLabel } from './external/connection.js';
 import { externalEngineFrom } from './external/engine.js';
-import { existingCluster, registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
+import {
+	checkLegacyClusterOptions,
+	existingCluster,
+	registerDatabase,
+	registerUniqueId,
+	resolveClusterOptions,
+} from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
-import { roleDatabase, scopedDatabase } from './runtime/scoped.js';
+import { ownerBypassesPolicies, roleDatabase, scopedDatabase } from './runtime/scoped.js';
 import type {
 	ClusterRef,
 	ClusterType,
 	ConnectionStringSource,
+	DataApiOptions,
 	DatabaseClusterOptions,
 	DatabaseOptions,
 	ExistingClusterOptions,
 	ExistingClusterRef,
+	LegacyDatabaseClusterOptions,
 	QueryOptions,
 	ScopedDatabase,
 	Transaction,
@@ -62,12 +72,54 @@ export class DatabaseCluster extends Scope {
 }
 
 /**
+ * The Aurora cluster of `Database` in `@aws-blocks/bb-data` 0.5.0; see the local entry for the full
+ * description. At runtime it names the deployed cluster, which each block reaches through the RDS Data API.
+ *
+ * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`.
+ */
+export class LegacyDatabaseCluster extends Scope {
+	/** The engine of the cluster: Aurora PostgreSQL. */
+	readonly type = 'aurora' as const;
+	/** The block reaches this cluster through the RDS Data API. */
+	readonly dataApi = true as const;
+
+	constructor(scope: ScopeParent, id: string, options?: LegacyDatabaseClusterOptions) {
+		super(id, { parent: scope });
+		checkLegacyClusterOptions(options, this.fullId);
+		registerUniqueId('DatabaseCluster', this, id, this.fullId);
+	}
+
+	/**
+	 * @internal Where the Data API finds the deployed cluster: the three values that the CDK layer wrote to the
+	 * config, under the keys of the earlier block. Read with the first statement of `blockFullId`.
+	 */
+	dataApiCoordinates(blockFullId: string): DataApiOptions {
+		const read = (suffix: 'CLUSTER_ARN' | 'SECRET_ARN' | 'DATABASE'): string =>
+			process.env[legacyClusterConfigKey(this.fullId, suffix)] ?? '';
+		const coordinates = {
+			clusterArn: read('CLUSTER_ARN'),
+			secretArn: read('SECRET_ARN'),
+			database: read('DATABASE'),
+		};
+		if (!coordinates.clusterArn || !coordinates.secretArn || !coordinates.database) {
+			throw configError(
+				`Database '${blockFullId}' is not configured: the cluster ARN, the secret ARN or the database name of ` +
+					`LegacyDatabaseCluster '${this.fullId}' is missing. Ensure the cluster is provisioned.`,
+			);
+		}
+		return coordinates;
+	}
+}
+
+/**
  * SQL database on PostgreSQL, Lambda runtime build. See the package README for the
  * full API; the surface is identical to local mode.
  */
 export class Database extends Scope {
 	readonly cluster: ClusterRef;
 	readonly schemaName: string;
+	/** On a `LegacyDatabaseCluster` the statements run as the user that owns the tables. */
+	private readonly ownerRunsStatements: boolean;
 
 	private readonly core: DatabaseCore;
 	/** @internal Logger for internal operations. Defaults to error level. */
@@ -86,14 +138,21 @@ export class Database extends Scope {
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
 
+		const legacy = resolved.shared instanceof LegacyDatabaseCluster ? resolved.shared : undefined;
+		this.ownerRunsStatements = legacy !== undefined;
+		const dataApi = resolved.external?.dataApi;
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: clusterFullId,
 			schemaName: this.schemaName,
-			...(resolved.external ? {} : readClusterConfig(clusterFullId)),
+			...(resolved.external || legacy ? {} : readClusterConfig(clusterFullId)),
 		});
 
-		let buildEngine: () => Promise<PgEngine>;
-		if (resolved.external) {
+		let buildEngine: () => Promise<RowCountingEngine>;
+		if (dataApi) {
+			buildEngine = () => dataApiEngine(dataApi);
+		} else if (legacy) {
+			buildEngine = async () => dataApiEngine(legacy.dataApiCoordinates(this.fullId));
+		} else if (resolved.external) {
 			// The connection string of an existing database: the app's own store, or the SSM SecureString that
 			// `npm run db -- connect --stage` wrote and the CDK layer lets the app role read. The child setting
 			// is built here, in the constructor; the value is read with the first statement.
@@ -148,6 +207,7 @@ export class Database extends Scope {
 	}
 
 	asUser(user: { userId: string }, claims?: Record<string, unknown>): ScopedDatabase {
+		if (this.ownerRunsStatements) throw ownerBypassesPolicies(this.fullId);
 		return scopedDatabase(this, user, claims);
 	}
 

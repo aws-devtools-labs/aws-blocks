@@ -13,7 +13,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { MIGRATION_SERVICE_TIMEOUT_SECONDS, MIGRATION_TOTAL_TIMEOUT_MINUTES } from './constants.js';
 import { MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
-import { Database, DatabaseCluster } from './index.cdk.js';
+import { Database, DatabaseCluster, LegacyDatabaseCluster } from './index.cdk.js';
 import { migrations } from './test-support/fixtures.js';
 import { freshScope, installLocalTestHooks } from './test-support/lifecycle.js';
 
@@ -577,5 +577,126 @@ describe('Database on an existing database (CDK)', () => {
 				}),
 			/need a connection string that the\s+deploy can read/,
 		);
+	});
+});
+
+describe('Database on a database that is reached through the RDS Data API (CDK)', () => {
+	const files = { '001_items.sql': 'CREATE TABLE items (id int);' };
+	const dataApi = {
+		clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:app',
+		secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:app-AbCdEf',
+		database: 'app',
+	};
+	const DATA_API_ACTIONS = [
+		'rds-data:ExecuteStatement',
+		'rds-data:BeginTransaction',
+		'rds-data:CommitTransaction',
+		'rds-data:RollbackTransaction',
+	];
+	const statementsOf = (template: Template): { Action: unknown; Resource: unknown }[] =>
+		Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+			(policy) => policy.Properties.PolicyDocument.Statement,
+		);
+
+	test('fromExisting({ dataApi }): no cluster, the grants on that cluster and secret, and the three values on the migration resource', () => {
+		const { stack, parent } = setup();
+		new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ dataApi }),
+			migrationsPath: migrations(files),
+		});
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::RDS::DBCluster', 0);
+		template.resourceCountIs('AWS::DSQL::Cluster', 0);
+		const statements = statementsOf(template);
+		// The app role and the two migration functions.
+		assert.strictEqual(
+			statements.filter((s) => isDeepStrictEqual(s.Action, DATA_API_ACTIONS) && s.Resource === dataApi.clusterArn)
+				.length,
+			3,
+		);
+		assert.strictEqual(
+			statements.filter((s) => s.Action === 'secretsmanager:GetSecretValue' && s.Resource === dataApi.secretArn)
+				.length,
+			3,
+		);
+		const [resource] = Object.values(migrationResources(template));
+		assert.deepStrictEqual(resource.Properties.dataApi, dataApi);
+		assert.strictEqual(resource.Properties.connectionParameter, undefined);
+	});
+
+	test('LegacyDatabaseCluster declares the cluster of the earlier block under its logical ids', () => {
+		const { stack } = setup();
+		const scope = new Scope('ledger');
+		const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1, removalPolicy: 'retain' });
+		new Database(scope, 'main-db', { cluster, migrationsPath: migrations(files) });
+		const template = Template.fromStack(stack);
+
+		// The construct ids of the earlier block: `<fullId>Cluster`, `<fullId>Vpc`, `<fullId>Sg`, under `ledger/main`.
+		const alnum = cluster.fullId.replace(/[^A-Za-z0-9]/g, '');
+		const clusters = template.findResources('AWS::RDS::DBCluster');
+		const [[clusterId, declared]] = Object.entries(clusters);
+		assert.match(clusterId, new RegExp(`^ledgermain${alnum}Cluster[0-9A-F]{8}$`));
+		assert.strictEqual(declared.DeletionPolicy, 'Retain');
+		assert.strictEqual(declared.Properties.EnableHttpEndpoint, true);
+		assert.strictEqual(declared.Properties.DatabaseName, cluster.fullId.replace(/[^a-zA-Z0-9]/g, '_'));
+		assert.deepStrictEqual(declared.Properties.ServerlessV2ScalingConfiguration, {
+			MinCapacity: 1,
+			MaxCapacity: 2,
+		});
+		assert.strictEqual(declared.Properties.EngineVersion, '16.13');
+		assert.strictEqual(declared.Properties.StorageEncrypted, undefined);
+		template.resourceCountIs('AWS::RDS::DBInstance', 1);
+		template.resourceCountIs('AWS::EC2::VPC', 1);
+		template.resourceCountIs('AWS::SecretsManager::Secret', 1);
+		template.resourceCountIs('AWS::DSQL::Cluster', 0);
+
+		// The block's files run through the Data API of that cluster, after the cluster exists.
+		const [resource] = Object.values(migrationResources(template));
+		assert.deepStrictEqual(resource.Properties.dataApi.clusterArn, {
+			'Fn::Join': [
+				'',
+				['arn:', { Ref: 'AWS::Partition' }, ':rds:us-east-1:123456789012:cluster:', { Ref: clusterId }],
+			],
+		});
+		assert.ok(resource.DependsOn.includes(clusterId));
+		assert.strictEqual(resource.Properties.schemaName, 'public');
+		// The migration functions are outside the VPC of the cluster.
+		for (const fn of Object.values(functionsByHandler(template, 'index.handler'))) {
+			assert.strictEqual(fn.Properties.VpcConfig, undefined);
+		}
+	});
+
+	test('a file of a block on a LegacyDatabaseCluster gets no check at synth', () => {
+		setup();
+		const scope = new Scope('ledger');
+		const older = { '001_index.sql': 'CREATE INDEX CONCURRENTLY t_n ON t (n);' };
+		assert.doesNotThrow(
+			() =>
+				new Database(scope, 'main-db', {
+					cluster: new LegacyDatabaseCluster(scope, 'main'),
+					migrationsPath: migrations(older),
+				}),
+		);
+		// The same file on a cluster that the block provisions is refused.
+		assert.throws(
+			() =>
+				new Database(scope, 'new-db', {
+					cluster: new DatabaseCluster(scope, 'new', { type: 'aurora' }),
+					migrationsPath: migrations(older),
+				}),
+			(e: unknown) => e instanceof Error && e.name === MIGRATION_VALIDATION_ERROR_NAME,
+		);
+	});
+
+	test('the context key of the earlier package keeps an encrypted cluster encrypted', () => {
+		const app = new cdk.App({
+			context: { 'aws:cdk:bundling-stacks': [], '@aws-blocks/bb-data:encryptStorageByDefault': true },
+		});
+		const stack = new StubBlocksStack(app, 'EncryptedLegacy');
+		new LegacyDatabaseCluster(
+			freshScope('app', (id) => new Scope(id)),
+			'main',
+		);
+		Template.fromStack(stack).hasResourceProperties('AWS::RDS::DBCluster', { StorageEncrypted: true });
 	});
 });

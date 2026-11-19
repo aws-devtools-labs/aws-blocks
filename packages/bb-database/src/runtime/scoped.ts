@@ -156,6 +156,18 @@ class UserDatabase implements ScopedDatabase {
 	}
 }
 
+/**
+ * Why `asUser()` is refused on a `LegacyDatabaseCluster`. On AWS the statements run as the user of the cluster's
+ * secret, which owns the tables, and PostgreSQL applies no policy to an owner: the claims would filter nothing.
+ * Local mode refuses it too, so that code which would read every row after a deploy does not pass locally.
+ */
+export function ownerBypassesPolicies(fullId: string): Error {
+	return configError(
+		`Database '${fullId}': asUser() does not filter rows on a LegacyDatabaseCluster, because the statements run ` +
+			'as the user that owns the tables. Use asRole(role, claims) with a role that your policies apply to.',
+	);
+}
+
 /** `Database.asUser()` for the local and the Lambda entry. */
 export function scopedDatabase(
 	parent: ScopedParent,
