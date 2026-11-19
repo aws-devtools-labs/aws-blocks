@@ -915,6 +915,13 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
+Of Nuxt's caching `routeRules`, `swr` and `cache` work: the server sends
+`s-maxage` with `stale-while-revalidate`, and the edge caches the page.
+`isr` does nothing on AWS: Nitro implements it only in its Vercel, Netlify and
+Zeabur presets, not in the `aws-lambda` and `node-server` presets that
+`Hosting` builds. A route with only `isr` is rendered on every request, and the
+build prints a warning naming it. Use `swr: <seconds>` instead.
+
 Synth checks only `ssrDefaultTtl`. It does not see routes the origin makes
 cacheable (`s-maxage`, Next.js `revalidate`, Nuxt `routeRules`, Astro SSR).
 For those, the construct installs a runtime cache guard in front of the SSR
