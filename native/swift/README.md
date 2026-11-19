@@ -6,20 +6,20 @@ A Swift Package and code generator that produces type-safe Swift client code fro
 
 ### 1. Add the package dependency
 
-In your `Package.swift`, pinned to the minor version, since until 1.0 a minor release can break the API:
+In your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aws-devtools-labs/aws-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
+    .package(url: "https://github.com/aws/cdk-blocks-swift.git", from: "1.0.0"),
 ],
 targets: [
     .target(
         name: "MyApp",
         dependencies: [
-            .product(name: "BlocksRuntime", package: "aws-blocks-swift"),
+            .product(name: "BlocksRuntime", package: "cdk-blocks-swift"),
         ],
         plugins: [
-            .plugin(name: "BlocksCodegenBuildPlugin", package: "aws-blocks-swift"),
+            .plugin(name: "BlocksCodegenBuildPlugin", package: "cdk-blocks-swift"),
         ],
     ),
 ]

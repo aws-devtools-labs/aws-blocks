@@ -6,7 +6,7 @@ import PackageDescription
 let generatedCodeSettings: [SwiftSetting] = [.swiftLanguageMode(.v6), .treatAllWarnings(as: .error)]
 
 let package = Package(
-    name: "aws-blocks-swift",
+    name: "cdk-blocks-swift",
     platforms: [.iOS(.v16), .macOS(.v13)],
     products: [
         .library(

@@ -101,14 +101,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build for iOS
-        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+        run: xcodebuild build -scheme cdk-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
       # App extensions link the runtime too, so it builds against the extension-safe API only.
       - name: Build the runtime for an iOS app extension
         run: xcodebuild build -scheme BlocksRuntime -destination 'generic/platform=iOS Simulator' APPLICATION_EXTENSION_API_ONLY=YES
 
       - name: Run unit tests on iOS
-        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+        run: xcodebuild test -scheme cdk-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
 
   swiftlint:
     name: SwiftLint
