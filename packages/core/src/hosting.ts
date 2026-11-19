@@ -719,6 +719,83 @@ export interface HostingProps {
   buildId?: 'per-deploy' | 'fixed';
 }
 
+/**
+ * Every key of {@link HostingProps}. `satisfies` keeps it complete: a prop added
+ * to the interface and not here (or a key here that the interface lacks) fails
+ * the build. Read by {@link warnUnknownHostingProps}.
+ */
+const HOSTING_PROP_KEYS = {
+  root: true,
+  buildCommand: true,
+  framework: true,
+  buildOutputDir: true,
+  customAdapter: true,
+  basePath: true,
+  api: true,
+  backendConfig: true,
+  compute: true,
+  environment: true,
+  domain: true,
+  secretStore: true,
+  configStore: true,
+  waf: true,
+  retainOnDelete: true,
+  buildRetentionDays: true,
+  contentSecurityPolicy: true,
+  priceClass: true,
+  geoRestriction: true,
+  quotas: true,
+  ssrDefaultTtl: true,
+  cacheKeyCookies: true,
+  cacheKeyHeaders: true,
+  buildCache: true,
+  errorPages: true,
+  logging: true,
+  monitoring: true,
+  skewProtection: true,
+  frontDoor: true,
+  imageOptimization: true,
+  incrementalRegeneration: true,
+  edgeRoutes: true,
+  buildId: true,
+} as const satisfies Record<keyof HostingProps, true>;
+
+/**
+ * Props of `@aws-cdk-blocks/hosting`'s `HostingConstruct` that `Hosting` does not
+ * take: it builds the construct itself and passes the door's settings through
+ * `frontDoor.features` (and the top-level aliases of those settings).
+ */
+const HOSTING_CONSTRUCT_ONLY_PROPS: ReadonlySet<string> = new Set([
+  'backendApi',
+  'cdn',
+  'edgeStackId',
+  'inPlaceBuild',
+  'manifest',
+  'skipImageOptimization',
+  'skipRegionValidation',
+  'storage',
+]);
+
+/**
+ * Warn, once per key, for each top-level prop that `Hosting` does not read.
+ * TypeScript rejects such a key in an object literal; config built in
+ * JavaScript, read from JSON or spread from another object reaches here with
+ * it, and the setting would be dropped without a word. A warning, not an
+ * error, so an app that already passes a stray key keeps synthesizing.
+ */
+function warnUnknownHostingProps(scope: Construct, props: HostingProps): void {
+  for (const key of Object.keys(props)) {
+    if (Object.hasOwn(HOSTING_PROP_KEYS, key)) continue;
+    const hint = HOSTING_CONSTRUCT_ONLY_PROPS.has(key)
+      ? ` \`${key}\` is a prop of @aws-cdk-blocks/hosting's HostingConstruct, which Hosting builds for you: set the door's settings in \`frontDoor.features\` (or the top-level Hosting settings) instead.`
+      : ' Check its spelling against the Hosting props.';
+    cdk.Annotations.of(scope).addWarningV2(
+      '@aws-cdk-blocks/core:UnknownHostingProp',
+      `Hosting does not read the prop \`${key}\`, so it has no effect.${hint}`,
+    );
+  }
+}
+
 /** The settings a {@link HostingPresets} entry may set. */
 export type HostingPreset = Pick<
   HostingProps,
@@ -1162,6 +1239,8 @@ export class Hosting extends Construct {
     // adds (step 12).
     const childrenBefore = snapshotForHosting(this);
 
+    // A prop Hosting doesn't read (a typo, a HostingConstruct-only prop) would be dropped silently.
+    warnUnknownHostingProps(this, props);
     // A setting the chosen door can't serve fails before anything is built.
     assertDoorSupportsSettings(props);
     const fixedBuildId = props.buildId === 'fixed';

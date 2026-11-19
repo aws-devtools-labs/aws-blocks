@@ -4553,3 +4553,41 @@ describe('Hosting — the skip log names the variable, not a value', () => {
     assert.ok(!line.includes('=1'), line);
   });
 });
+
+describe('Hosting — unknown top-level props', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-unknown-'));
+    createSpaBuildOutput(tmpDir);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  /** Synth with `extra` spread into the props, as untyped (JSON- or JS-driven) config would pass it. */
+  const warningsFor = (id: string, extra: Record<string, unknown>) => {
+    const stack = new Stack(new App(), id);
+    const props = { root: tmpDir, api: MOCK_API, ...extra } as HostingProps;
+    new Hosting(stack, 'Hosting', props);
+    return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('UnknownHostingProp'));
+  };
+
+  it('warns once per unknown key, naming it, and still synthesizes', () => {
+    const warnings = warningsFor('UnknownProps', { priceClas: 'PriceClass_100', cachePolicy: {} });
+    assert.strictEqual(warnings.length, 2, JSON.stringify(warnings));
+    const text = warnings.map((w) => JSON.stringify(w.entry.data)).join('\n');
+    assert.match(text, /`priceClas`/);
+    assert.match(text, /`cachePolicy`/);
+  });
+
+  it("points a HostingConstruct prop such as `cdn` at frontDoor.features", () => {
+    const warnings = warningsFor('UnknownCdnProp', { cdn: { geoRestriction: { type: 'denylist', locations: ['KP'] } } });
+    assert.strictEqual(warnings.length, 1);
+    const text = JSON.stringify(warnings[0].entry.data);
+    assert.match(text, /`cdn`/);
+    assert.match(text, /HostingConstruct/);
+    assert.match(text, /frontDoor\.features/);
+  });
+
+  it('does not warn for documented props', () => {
+    assert.strictEqual(warningsFor('KnownProps', { buildRetentionDays: 7, priceClass: 'PriceClass_100' }).length, 0);
+  });
+});

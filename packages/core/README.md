@@ -692,6 +692,8 @@ if (!sandboxMode || previewMode) {
 
 Tear a preview sandbox down with `npm run sandbox:destroy`.
 
+A top-level prop that `Hosting` doesn't read, such as a misspelled setting or a prop of `@aws-cdk-blocks/hosting`'s `HostingConstruct` like `cdn`, gets a synth warning, `@aws-cdk-blocks/core:UnknownHostingProp`, naming the key. It has no effect. TypeScript already rejects such a key in an object literal; the warning covers config written in JavaScript, read from JSON or spread from another object. Set the door's settings in `frontDoor.features` (or the top-level `Hosting` settings) instead.
+
 ## Building Blocks
 
 `npm run docs` lists every Building Block, and `npm run docs <Block>` prints one block's README. The `Pipeline` CI/CD construct is documented in the [`@aws-cdk-blocks/pipeline` README](../pipeline/README.md).
