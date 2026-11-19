@@ -20,7 +20,7 @@ final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/ap
 |-----------|------|---------|-------------|
 | `baseUrl` | `String` | required | The JSON-RPC endpoint. A call to `namespace.method` is POSTed to `{baseUrl}/{namespace}`. |
 | `client` | `http.Client?` | `http.Client()` | The HTTP client that sends the calls. |
-| `sessionStore` | `SessionStore?` | `InMemorySessionStore()` | Where session cookies are kept. The default loses them when the process exits. |
+| `sessionStore` | `SessionStore?` | Platform default | Where session cookies are kept. See [Sessions](#sessions) for Flutter secure storage, browser cookies and the pure Dart default. |
 | `tokenStore` | `TokenStore?` | `InMemoryTokenStore()` | Where an `OidcClient` keeps its tokens. The default loses them when the process exits. |
 | `authProvider` | `AuthProvider?` | none | Supplies a bearer token. When it has one, calls send it as an `Authorization: Bearer` header, alongside the session cookie when there is one. On an HTTP 401 the client calls its `onAuthFailure()` and runs the call once more. |
 
@@ -30,13 +30,14 @@ The generated `Blocks` class takes only `baseUrl` and `sessionStore` and builds 
 final client = BlocksClient(
   baseUrl: 'https://your-api.example.com/aws-blocks/api',
   tokenStore: tokenStore,
+  authProvider: oidc, // An OidcClient for a backend with bearer auth enabled.
 );
 final authApi = AuthApi(client);
 ```
 
-`PersistentSessionStore(store: tokenStore)` is a `SessionStore` that persists cookies through a `TokenStore`. Call its `load()` once before the first request.
+`PersistentSessionStore(store: tokenStore)` is a `SessionStore` that persists cookies through a `TokenStore`. It loads saved cookies before the first request automatically.
 
-A failed call throws a `BlocksException`:
+With valid parameters (`List` or `Map`), RPC response and transport failures use these exceptions:
 
 - An `ApiException`, with the server's `message`, `status`, `name` and `retriable`, when the response carries a JSON-RPC error, at any HTTP status. Match its `name` with `isBlocksError(e, 'ConditionalCheckFailedException')`.
 - A `TransportException` when no usable JSON-RPC result came back: no response, a non-2xx response with no JSON-RPC error, or a body that is not a JSON-RPC envelope. Its `statusCode` is null when no response arrived, and its `cause` is then the HTTP client's error.
@@ -215,10 +216,10 @@ Register the backend's callback with the identity provider, not an address in th
 | macOS, Linux, Windows | A loopback listener on `127.0.0.1` | Nothing: `oidc.signIn(OidcApiGetClientProvider.google)` |
 | Web | Not supported: a browser app signs in on its own origin | |
 
-A sign-in that ends without a redirect throws `OidcCancelledException`, on every platform:
+While waiting for the browser redirect, cancellation throws `OidcCancelledException`:
 
 - Pass `cancel:` to `signIn` or `signInDirect` to stop waiting early, for example when the user closes the sign-in dialog: `signIn(OidcApiGetClientProvider.google, cancel: dialogClosed.future)`. When it completes before the redirect arrives, the client stops waiting, the loopback listener closes, and a launcher gets the same `cancel` future so it can stop too.
-- `FlutterBrowserLauncher` throws it when the app comes back to the foreground without a redirect, which is how it notices that the user closed the browser, and once its optional `timeout` passes: `FlutterBrowserLauncher(timeout: const Duration(minutes: 5))`.
+- `FlutterBrowserLauncher` throws it when the app resumes after being hidden or paused and no redirect arrives within `resumeGracePeriod` (2 seconds by default), or when its optional `timeout` passes: `FlutterBrowserLauncher(timeout: const Duration(minutes: 5))`.
 - The loopback sign-in throws it once `oidc.signInTimeout` passes.
 - A custom `BrowserLauncher` should throw it when its browser is dismissed.
 

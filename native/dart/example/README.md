@@ -19,6 +19,7 @@ file, KV, and a todo list backed by a KVStore with a `schema` and a `key`).
   - `oidc_test.dart` — OIDC server-relay against the stub IdP (see below)
   - `rpc_wire_test.dart` — the JSON-RPC wire contract against `api.echoArgs`: params are positional, so a left-out optional keeps its slot as `null` and trailing unset ones are left off
   - `rest_tuple_params_test.dart` — a rest parameter typed as a tuple, against `api.echoRestArgs`: one positional param per element
+  - `session_restart_test.dart` — restores sessions across processes and signs out of one Auth block without affecting the other (local only)
 - `bin/e2e_test.dart` — Test runner (executes all suites sequentially)
 - `lib/blocks_client.dart` — Generated client (produced fresh by `run-e2e.sh`,
   not checked in as source of truth)
@@ -45,10 +46,10 @@ Locally the backend reads each sign-up code back (`basicGetLastCode` /
 `cognitoGetLastCode`), so the suites run the full sign-up flow. Against a
 deployed backend Cognito emails the code, so those legs print `⊘ SKIP` and the
 suites sign in a pre-provisioned, confirmed user instead. Seed it into the
-stack's user pools first:
+stack's user pools first, with `STACK_NAME` and `REGION` set to the deployed stack and region:
 
 ```bash
-(cd test-apps/native-bindings && BLOCKS_STACK_NAME=<stack> AWS_REGION=<region> npm run seed:cognito)
+(cd test-apps/native-bindings && BLOCKS_STACK_NAME="$STACK_NAME" AWS_REGION="$REGION" npm run seed:cognito)
 ```
 
 ## OIDC suite

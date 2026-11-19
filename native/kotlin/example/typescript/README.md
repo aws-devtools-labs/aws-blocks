@@ -4,9 +4,9 @@ The AWS CDK Blocks backend that both Kotlin example apps ([`../android`](../andr
 
 ## Running
 
-```bash
-npm install
+From `native/kotlin/example/typescript`, follow the [checkout setup](#inside-the-aws-blocks-repository) before running these commands. Skip `npm install` in this directory: the example needs `Auth` and `createOidcApi()` from the checkout.
 
+```bash
 # Local: API on :3001, web client on :3000
 npm run dev
 
