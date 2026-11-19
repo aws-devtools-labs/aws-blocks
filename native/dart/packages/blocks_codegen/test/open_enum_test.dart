@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // A string enum a response carries is generated open: a value the client was
 // generated without decodes to `XUnknown` holding the string, instead of

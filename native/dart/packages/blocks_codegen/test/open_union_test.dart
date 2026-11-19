@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:blocks_codegen/src/parser.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide contains;
+
+import 'dart_source_matchers.dart';
 
 // A union with a string discriminator that a response carries is generated
 // open: an object whose discriminator names no arm decodes to `XUnknown`,
