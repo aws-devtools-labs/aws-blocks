@@ -268,7 +268,7 @@ A knowledge base is one index, not one per user or tenant, and `retrieve()` retu
 
 ## Local development
 
-In local development, `KnowledgeBase` reads documents from the source folder, splits them into chunks according to the `chunking` strategy, and scores them with TF-IDF. The index is cached in `.bb-data/{fullId}/chunks.json` and rebuilt when the documents or the chunking settings change.
+In local dev mode, KnowledgeBase reads documents from the source folder, splits them into chunks according to the configured `chunking` strategy, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts; the cache is keyed on the source folder's contents and the chunking configuration, and is rebuilt automatically when documents are added, edited, or removed, or the chunking settings change.
 
 **Parity notes:**
 - Scoring uses TF-IDF (keyword-based) rather than real embeddings. Scores are relative within the mock and won't match production Bedrock scores exactly.
@@ -276,6 +276,9 @@ In local development, `KnowledgeBase` reads documents from the source folder, sp
 - Chunking is approximated locally: `'fixed'` uses word-count windows of `chunkSize` words that overlap by `chunkSize × chunkOverlap / 100` words, `'none'` keeps each document whole, and `'semantic'` (and `'hierarchical'`) split on paragraph boundaries.
 - `maxResults` and metadata filtering (`equals`, AND) behave as on AWS, except for an unknown filter key: Bedrock can reject it with `InvalidFilterException`; the mock matches nothing and returns `[]`.
 - `source` must be a relative path inside the project directory — absolute paths and paths that escape the project (via `..`) are rejected with `InvalidSourceConfigException`.
+
+Wipe cached data with `rm -rf .bb-data`.
+
 
 ## See also
 
