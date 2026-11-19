@@ -380,7 +380,7 @@ A failed RPC call (a method that throws, or a call to an unknown API namespace o
 
 | | |
 |---|---|
-| Namespace | `AWSBlocks` |
+| Namespace | `CDKBlocks` |
 | Metric | `RpcErrors` (Count) |
 | Dimensions | `FunctionName`, `StatusClass` (`4xx` for a client error such as an `ApiError` with status 403, `5xx` for anything else, including an unexpected error and the handler's 504 timeout) |
 | Also in the log line | `Status`, `ApiNamespace` and `Method`, searchable with CloudWatch Logs Insights |
