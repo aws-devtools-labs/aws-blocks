@@ -19,13 +19,21 @@ test apps:
 
 ## Concurrent groups
 
-The suite runs three groups at the same time; inside each group the cases run
+The suite runs four groups at the same time; inside each group the cases run
 in order:
 
 - **local commands**: every case that needs no AWS account, from this
   directory with the real HOME (unless a case sets its own). They run in order
   because several write the project config (`.blocks/config.json`) or the real
   HOME's global config.
+- **CLI commands**: every command the CLI dispatcher tracks itself (`help`,
+  `docs`, `dev stop` and its `cleanup` alias, `generate client|spec|types`,
+  `migrate`, `whoami`, `secret`, `config`, `db`) plus `sandbox deploy` and
+  `sandbox preview`, in their own app copy under `.e2e-groups/cli-commands` and
+  their own HOME, with no `~/.aws` link and every AWS credential source blocked,
+  so no case reaches an account. Each case runs twice: once to check its event
+  is delivered, and once against an unreachable endpoint to check that the exit
+  code and the recorded outcome do not change.
 - **AWS sandbox lifecycle**: `sandbox`, `sandbox:destroy` and `console`.
 - **AWS production lifecycle**: `deploy` and `destroy`.
 
@@ -74,6 +82,10 @@ random ID, and asserts it was created correctly.
   (official BB names + version, custom BB count, total blocks count).
 - **Identifier creation**: `installationId` and `projectId` are written when
   they do not already exist, and emitted events carry them.
+- **Every CLI command**: one event per invocation, named after the command
+  path (`dev:stop`, `generate:client`, `sandbox:deploy`, ...), with SUCCESS
+  where the command needs no AWS and FAIL (usage error or no credentials)
+  otherwise.
 - **Per-command success + failure**: SUCCESS + FAIL events for `deploy`,
   `destroy`, `sandbox`, `sandbox:destroy`, and `dev`; `console` SUCCESS only;
   `create-blocks-app` and `vendorize` document the no-telemetry limitation for
