@@ -429,8 +429,8 @@ class FakeBlock extends Construct {
 }
 
 describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
-	// ~78,000 estimated characters: 10,000 stay inline, the rest needs 11+ managed policies.
-	const MANY = 400;
+	// ~146,000 estimated characters: 10,000 stay inline, the rest needs 21+ managed policies.
+	const MANY = 750;
 
 	test('fails synth with an actionable error when the role needs more managed policies than allowed', () => {
 		const { stack, role } = makeRole({ packing: true });
@@ -438,7 +438,7 @@ describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 		assert.throws(
 			() => Template.fromStack(stack),
 			(err: Error) => {
-				assert.match(err.message, /PackingStack\/Role needs \d+ managed policies, more than the 10 allowed/);
+				assert.match(err.message, /PackingStack\/Role needs \d+ managed policies, more than the 20 allowed/);
 				assert.match(err.message, /separate Blocks backend \(another BlocksStack or BlocksBackend\)/);
 				assert.ok(err.message.includes(MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY), err.message);
 				assert.doesNotMatch(err.message, /blocks-iam\.json/);
@@ -494,8 +494,8 @@ describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 			return () => Template.fromStack(stack);
 		};
 		const overflow = policiesOf(build(0)()).managed.length;
-		assert.doesNotThrow(build(10 - overflow));
-		assert.throws(build(11 - overflow), /needs 11 managed policies, more than the 10 allowed/);
+		assert.doesNotThrow(build(20 - overflow));
+		assert.throws(build(21 - overflow), /needs 21 managed policies, more than the 20 allowed/);
 	});
 
 	test('warns, without failing, when replacing every overflow policy would briefly exceed the quota', () => {
@@ -516,12 +516,12 @@ describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 		const overflow = policiesOf(Template.fromStack(stack)).managed.length;
 		assert.ok(overflow >= 1);
 		// Steady state exactly at the quota: the replacement would need `overflow` more.
-		assert.strictEqual(build(10 - overflow).length, 1);
+		assert.strictEqual(build(20 - overflow).length, 1);
 		// Room for a full replacement: no warning.
-		assert.deepStrictEqual(build(10 - 2 * overflow), []);
+		assert.deepStrictEqual(build(20 - 2 * overflow), []);
 	});
 
-	for (const raised of [20, '20']) {
+	for (const raised of [25, '25']) {
 		test(`passes once the quota context is raised to ${JSON.stringify(raised)}`, () => {
 			const { stack, role } = makeRole({
 				packing: true,
@@ -529,30 +529,30 @@ describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 			});
 			addDistinct(role, MANY);
 			const managed = policiesOf(Template.fromStack(stack)).managed.length;
-			assert.ok(managed > 10 && managed <= 20, `expected 11-20 managed policies, got ${managed}`);
+			assert.ok(managed > 20 && managed <= 25, `expected 21-25 managed policies, got ${managed}`);
 		});
 	}
 
-	test('rejects a quota above IAM’s maximum of 20', () => {
+	test('rejects a quota above IAM’s maximum of 25', () => {
 		const { stack, role } = makeRole({
 			packing: true,
-			context: { [MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY]: 25 },
+			context: { [MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY]: 26 },
 		});
 		addDistinct(role, 1);
-		assert.throws(() => Template.fromStack(stack), /must be a whole number from 1 to 20/);
+		assert.throws(() => Template.fromStack(stack), /must be a whole number from 1 to 25/);
 	});
 
 	test('counts managed policies attached through ManagedPolicyArns alongside the overflow policies', () => {
 		const { stack, role } = makeRole({ packing: true });
-		for (let i = 0; i < 10; i++) role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName(`Policy${i}`));
+		for (let i = 0; i < 20; i++) role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName(`Policy${i}`));
 		// Overflows into at least one OverflowPolicy, which alone would be within the quota.
 		addDistinct(role, 120);
-		assert.throws(() => Template.fromStack(stack), /needs \d+ managed policies, more than the 10 allowed/);
+		assert.throws(() => Template.fromStack(stack), /needs \d+ managed policies, more than the 20 allowed/);
 	});
 
-	test('does not check a role without overflow policies, even with 11 attached AWS-managed policies', () => {
+	test('does not check a role without overflow policies, even with 21 attached AWS-managed policies', () => {
 		const { stack, role } = makeRole({ packing: true });
-		for (let i = 0; i < 11; i++) role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName(`Policy${i}`));
+		for (let i = 0; i < 21; i++) role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName(`Policy${i}`));
 		addDistinct(role, 5);
 		const template = Template.fromStack(stack);
 		assert.strictEqual(
@@ -666,7 +666,7 @@ describe('shared execution role (BlocksRole)', () => {
 	test('the quota error names the shared role', async () => {
 		const app = new cdk.App();
 		const stack = await makeStack(app, 'OverQuotaStack');
-		addDistinct(stack.executionRole, 400);
+		addDistinct(stack.executionRole, 750);
 		assert.throws(
 			() => app.synth(),
 			(err: Error) => {

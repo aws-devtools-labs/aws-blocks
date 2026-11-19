@@ -83,9 +83,9 @@ import { attributeRoleStatements } from './iam-report.js';
 export const MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY = '@aws-blocks/core:managedPoliciesPerRoleQuota';
 
 /** IAM's default "Managed policies per role" quota. */
-const DEFAULT_MANAGED_POLICIES_PER_ROLE = 10;
+const DEFAULT_MANAGED_POLICIES_PER_ROLE = 20;
 /** The most IAM lets that quota be raised to. */
-const MAX_MANAGED_POLICIES_PER_ROLE = 20;
+const MAX_MANAGED_POLICIES_PER_ROLE = 25;
 /** How many Building Blocks the quota error lists. */
 const TOP_GRANTING_BLOCKS = 5;
 
@@ -413,7 +413,7 @@ class StableOverflowPolicyIds implements cdk.IAspect {
 			// new overflow policy is attached there before it is removed here; a statement
 			// moving the other way is removed only when the old overflow policy is deleted,
 			// in CloudFormation's cleanup phase, after the DefaultPolicy update.
-			defaultCfn.addResourceDependency(cfn);
+			defaultCfn.node.addDependency(cfn);
 		}
 		warnReplacementHeadroom(this.role, overflow.length);
 	}
