@@ -6,12 +6,20 @@ import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core
 import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { connectionParameterName } from './constants.js';
-import { ClusterInfra } from './deploy/cluster-infra.js';
-import { type ConnectionStore, connectionReadStatements, externalMigrations } from './deploy/external-infra.js';
+import { ClusterInfra, ownedDsqlClusterLogicalId } from './deploy/cluster-infra.js';
+import {
+	type ConnectionStore,
+	dataApiStore,
+	externalMigrations,
+	secretStore,
+	ssmStore,
+} from './deploy/external-infra.js';
 import { configError } from './errors.js';
+import { LEGACY_VPC_REQUIREMENTS, type LegacyClusterInfra, legacyClusterInfra } from './legacy/aurora-cluster.js';
 import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
 import {
+	checkLegacyClusterOptions,
 	existingCluster,
 	type ResolvedClusterOptions,
 	registerDatabase,
@@ -25,6 +33,7 @@ import type {
 	DatabaseOptions,
 	ExistingClusterOptions,
 	ExistingClusterRef,
+	LegacyDatabaseClusterOptions,
 } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -36,8 +45,12 @@ function projectRootOf(scope: BuildingBlockScope): string {
 	return typeof ctx === 'string' && ctx ? ctx : process.cwd();
 }
 
-function clusterInfra(owner: BuildingBlockScope, options: ResolvedClusterOptions): ClusterInfra {
-	const infra = new ClusterInfra({ owner, fullId: owner.fullId, options });
+function clusterInfra(
+	owner: BuildingBlockScope,
+	options: ResolvedClusterOptions,
+	clusterLogicalId?: string,
+): ClusterInfra {
+	const infra = new ClusterInfra({ owner, fullId: owner.fullId, options, clusterLogicalId });
 	for (const [key, value] of Object.entries(infra.configEntries)) registerConfig(owner, key, value);
 	return infra;
 }
@@ -75,12 +88,52 @@ export class DatabaseCluster extends BuildingBlockScope {
 	}
 }
 
+/**
+ * The Aurora cluster of `Database` in `@aws-blocks/bb-data` 0.5.0; see the local entry for the full
+ * description. Declares the VPC, the security group, the cluster with its writer and its credentials secret
+ * as that block did, under the same logical ids, so a deploy changes none of them.
+ *
+ * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`.
+ */
+export class LegacyDatabaseCluster extends BuildingBlockScope {
+	/** The engine of the cluster: Aurora PostgreSQL. */
+	readonly type = 'aurora' as const;
+	/** The block reaches this cluster through the RDS Data API. */
+	readonly dataApi = true as const;
+	/** @internal */
+	readonly legacy: LegacyClusterInfra;
+
+	constructor(scope: ScopeParent, id: string, options?: LegacyDatabaseClusterOptions) {
+		super(id, { parent: scope, vpc: LEGACY_VPC_REQUIREMENTS });
+		markBlocksOwned(this);
+		checkLegacyClusterOptions(options, this.fullId);
+		registerUniqueId('DatabaseCluster', this, id, this.fullId);
+		this.legacy = legacyClusterInfra(this, options);
+	}
+
+	/**
+	 * @internal The migrations of a block on this cluster. The cluster has made the app's grants; the block's
+	 * files run in the migration function of an existing database, through the Data API, after the cluster exists.
+	 */
+	attach(block: BuildingBlockScope, schemaName: string, migrations: Record<string, string> | undefined): void {
+		if (!migrations || Object.keys(migrations).length === 0) return;
+		externalMigrations({
+			owner: block,
+			fullId: block.fullId,
+			schemaName,
+			migrations,
+			store: this.legacy.store,
+			dependsOn: this.legacy.cluster,
+		});
+	}
+}
+
 // An `AppSetting` exposes its parameter name at synth, a `Secret` its ARN; that is how the migration function
 // can be granted the read. Any other object with `get()` works at run time but tells synth nothing.
-function connectionStoreOf(source: object): ConnectionStore | undefined {
+function connectionStoreOf(stack: cdk.Stack, source: object): ConnectionStore | undefined {
 	const { parameterName, secretArn } = source as { parameterName?: unknown; secretArn?: unknown };
-	if (typeof parameterName === 'string') return { ssmParameterName: parameterName };
-	if (typeof secretArn === 'string') return { secretArn };
+	if (typeof parameterName === 'string') return ssmStore(stack, parameterName);
+	if (typeof secretArn === 'string') return secretStore(secretArn);
 	return undefined;
 }
 
@@ -113,7 +166,7 @@ export class Database extends BuildingBlockScope {
 		// Checked here, before any deploy: the migration Lambda runs the files without the linter, which is not
 		// deployed with it.
 		const migrations = this.migrationsPath ? loadMigrationFiles(this.migrationsPath) : undefined;
-		if (migrations) lintMigrationFiles(migrations, resolved.ref.kind);
+		if (migrations) lintMigrationFiles(migrations, resolved.fileKind);
 
 		if (resolved.external) {
 			this.existingDatabase(resolved.external, migrations);
@@ -125,7 +178,11 @@ export class Database extends BuildingBlockScope {
 			infra = clusterInfra(
 				this,
 				resolveClusterOptions({ type: 'dsql', removalPolicy: options.removalPolicy }, this.fullId),
+				ownedDsqlClusterLogicalId(cdk.Stack.of(this), this.fullId),
 			);
+		} else if (resolved.shared instanceof LegacyDatabaseCluster) {
+			resolved.shared.attach(this, this.schemaName, migrations);
+			return;
 		} else if (resolved.shared instanceof DatabaseCluster) {
 			infra = resolved.shared.infra;
 		} else {
@@ -153,19 +210,19 @@ export class Database extends BuildingBlockScope {
 		return synthGuard('Database', 'asRole');
 	}
 
-	// No cluster to provision. With `name`, the app's role is granted the read of the one SSM SecureString that
-	// `cdk-blocks db connect --stage` writes, under the name the Lambda entry derives the same way. With the app's
-	// own store, that block has made the grant already.
+	// No cluster to provision. The app's role is granted the read of what the block itself names: the one SSM
+	// SecureString that `npm run db -- connect --stage` writes, under the name the Lambda entry derives the same
+	// way, or the cluster and the secret of the Data API. With the app's own store, that block has made the grant.
 	private existingDatabase(external: ExistingClusterRef, migrations: Record<string, string> | undefined): void {
-		let store: ConnectionStore | undefined;
-		if (external.name !== undefined) {
-			store = { ssmParameterName: connectionParameterName(this.backendStackName, external.name) };
-			for (const statement of connectionReadStatements(cdk.Stack.of(this), store)) {
-				this.executionRole.addToPrincipalPolicy(statement);
-			}
-		} else if (external.connectionString) {
-			store = connectionStoreOf(external.connectionString);
-		}
+		const stack = cdk.Stack.of(this);
+		const named = external.dataApi
+			? dataApiStore(external.dataApi)
+			: external.name !== undefined
+				? ssmStore(stack, connectionParameterName(this.backendStackName, external.name))
+				: undefined;
+		named?.grantRead(this.executionRole);
+		const store =
+			named ?? (external.connectionString ? connectionStoreOf(stack, external.connectionString) : undefined);
 		if (!migrations || Object.keys(migrations).length === 0) return;
 		if (!store) {
 			throw configError(

@@ -67,10 +67,10 @@ async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
 }
 
 /** Origin (scheme://host:port) the dev server bound, read from the config file
- * it writes (`.blocks-sandbox/config.json` -> apiUrl). null until present. */
+ * it writes (`.cdk-blocks-sandbox/config.json` -> apiUrl). null until present. */
 function devOrigin(appDir) {
   try {
-    const cfg = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'config.json'), 'utf-8'));
+    const cfg = JSON.parse(readFileSync(join(appDir, '.cdk-blocks-sandbox', 'config.json'), 'utf-8'));
     return cfg.apiUrl ? new URL(cfg.apiUrl).origin : null;
   } catch { return null; }
 }
@@ -127,7 +127,7 @@ async function main() {
   }
 
   // Phase 2: sandbox — ready when CDK writes the outputs file (before watch).
-  const sandboxOutputs = join(app, '.blocks-sandbox', 'outputs.json');
+  const sandboxOutputs = join(app, '.cdk-blocks-sandbox', 'outputs.json');
   rmSync(sandboxOutputs, { force: true });
   try {
     const sb = await startUntilReady('npm', ['run', 'sandbox'], inApp, () => existsSync(sandboxOutputs), 30 * 60_000);
@@ -142,7 +142,7 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    // `cdk-blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
+    // `npm run destroy` asks for confirmation; this run has no terminal, so it needs --yes.
     teardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
   }
 

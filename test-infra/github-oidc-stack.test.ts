@@ -11,6 +11,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import {
   BENCH_GITHUB_ENVIRONMENT,
+  GITHUB_REPO_SUBJECT,
   buildGithubE2eOidcStack,
   E2E_REGION,
   GITHUB_ENVIRONMENT,
@@ -40,7 +41,7 @@ function assertTrustIsExactly(role: ReturnType<typeof synth>['role'], environmen
   assert.deepEqual(statement.Condition, {
     StringEquals: {
       'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-      'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${environment}`,
+      'token.actions.githubusercontent.com:sub': `${GITHUB_REPO_SUBJECT}:environment:${environment}`,
     },
   });
 }
@@ -52,6 +53,13 @@ describe('BlocksGithubE2eOidc', () => {
 
   test('bench role trust policy is exactly the agent-bench environment of this repo', () => {
     assertTrustIsExactly(synth({ agentBench: true }).benchRole, BENCH_GITHUB_ENVIRONMENT);
+  });
+
+  // Every other assertion interpolates GITHUB_REPO, so it would pass against
+  // any repo. Pin the literal: a repo rename leaves this value stale, and a
+  // stale `sub` fails every job at "Configure AWS credentials".
+  test('trust policies are pinned to this repo', () => {
+    assert.equal(GITHUB_REPO, 'aws/cdk-blocks');
   });
 
   // A token from one environment must not assume the other environment's role.

@@ -130,18 +130,14 @@ void main() {
           await expectLater(
             client.call('api.authRequired', []),
             throwsA(
-              isA<BlocksRpcException>()
-                  .having((e) => e.code, 'code', 401)
+              isA<ApiException>()
+                  .having((e) => e.status, 'status', 401)
                   .having(
                     (e) => e.message,
                     'message',
                     'Authentication required',
                   )
-                  .having(
-                    (e) => (e.data as Map)['name'],
-                    'data.name',
-                    'NotAuthenticatedException',
-                  ),
+                  .having((e) => e.name, 'name', 'NotAuthenticatedException'),
             ),
             reason: 'HTTP $status',
           );
@@ -171,7 +167,7 @@ void main() {
         );
         await expectLater(
           client.call('api.authRequired', []),
-          throwsA(isA<BlocksRpcException>().having((e) => e.code, 'code', 401)),
+          throwsA(isA<ApiException>().having((e) => e.status, 'status', 401)),
         );
         expect(calls, 2);
       },
@@ -232,7 +228,7 @@ void main() {
       expect(sentHeaders!['x-blocks-user-agent'], blocksUserAgentToken);
     });
 
-    test('throws BlocksRpcException on error response', () async {
+    test('throws ApiException on error response', () async {
       final mockClient = MockClient(
         (_) async => http.Response(
           jsonEncode({
@@ -247,8 +243,9 @@ void main() {
       expect(
         () => client.call('bad', {}),
         throwsA(
-          isA<BlocksRpcException>()
-              .having((e) => e.code, 'code', -32600)
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 500)
+              .having((e) => e.name, 'name', 'InvalidRequest')
               .having((e) => e.message, 'message', 'Invalid'),
         ),
       );
@@ -291,6 +288,35 @@ void main() {
       await client.call('test', {});
       expect(sentHeaders!['cookie'], 'token=xyz');
     });
+
+    for (final token in ['token', null]) {
+      test(
+        'with an auth provider, sends the cookie and '
+        '${token == null ? 'no bearer token when it has none' : 'its bearer token'}',
+        () async {
+          final store = InMemorySessionStore()..setCookies('session=s1');
+          Map<String, String>? sentHeaders;
+          final client = BlocksClient(
+            baseUrl: 'http://test',
+            client: MockClient((req) async {
+              sentHeaders = req.headers;
+              return http.Response(
+                jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+                200,
+              );
+            }),
+            sessionStore: store,
+            authProvider: _TokenAuthProvider(token),
+          );
+          await client.call('test', {});
+          expect(sentHeaders!['cookie'], 'session=s1');
+          expect(
+            sentHeaders!['authorization'],
+            token == null ? isNull : 'Bearer $token',
+          );
+        },
+      );
+    }
 
     Future<String?> cookieSentTo(
       String baseUrl,
@@ -409,6 +435,18 @@ void main() {
       expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
     });
   });
+}
+
+class _TokenAuthProvider implements AuthProvider {
+  _TokenAuthProvider(this.token);
+
+  final String? token;
+
+  @override
+  Future<String?> getAccessToken() async => token;
+
+  @override
+  Future<void> onAuthFailure() async {}
 }
 
 class _RefreshingAuthProvider implements AuthProvider {

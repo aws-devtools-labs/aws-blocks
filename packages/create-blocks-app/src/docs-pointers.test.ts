@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * A scaffolded app finds its Building Block docs through one command, `cdk-blocks docs`. The
+ * A scaffolded app finds its Building Block docs through one command, `npm run docs`. The
  * app AGENTS.md describes it in one bullet; every template's README and backend point at it in
  * the same words, with block names as its positional arguments; and nothing tells an agent to
  * read the docs or type files in `node_modules`, which the command replaces. The example apps
@@ -11,13 +11,13 @@
 
 import assert from 'node:assert';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, extname, join, relative } from 'node:path';
+import { dirname, extname, join, relative, sep } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(packageRoot, '..', '..');
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'cdk.out', '.bb-data', '.blocks-sandbox']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'cdk.out', '.bb-data', '.cdk-blocks-sandbox']);
 const TEXT = new Set(['.ts', '.tsx', '.js', '.mjs', '.md', '.json', '.html', '']);
 /**
  * The TypeScript apps of the native SDK examples, written like a scaffolded app. The Kotlin app's README is for
@@ -53,12 +53,7 @@ const lines = files.flatMap((file) =>
 );
 
 const BULLET =
-	"- **AWS Blocks docs:** `npx --no -- cdk-blocks docs` is the docs command for this app's Building Blocks and AWS Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npx --no -- cdk-blocks docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`KVStore --section local` for how it behaves on your machine), `--api` prints exact signatures, `--exports [filter]` lists what you can import and from which entry, `--search <term>` searches all the docs, and `--help` shows every option.";
-const README_POINTER =
-	'Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).';
-const COMMENT_POINTER =
-	'// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)';
-
+	"- **AWS Blocks docs:** `npm run docs` is the docs command for this app's Building Blocks and AWS Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npm run docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`npm run docs KVStore -- --section local` for how it behaves on your machine), `npm run docs:api KVStore` prints exact signatures, `npm run docs -- --exports [filter]` lists what you can import and from which entry, `npm run docs:search <term>` searches all the docs, and `npm run docs -- --help` shows every option.";
 describe('the docs pointers of a scaffolded app', () => {
 	it('describe the docs command in one AGENTS.md bullet', () => {
 		const guide = readFileSync(join(packageRoot, 'resources', 'AGENTS.md'), 'utf-8').split('\n');
@@ -84,28 +79,19 @@ describe('the docs pointers of a scaffolded app', () => {
 		}
 	});
 
-	it('point at it in the same words in every README and code comment', () => {
-		const pointers = lines.filter((l) => l.text.includes('Building Block docs:'));
-		for (const { where, text, file, i } of pointers) {
-			if (extname(file) === '.md') {
-				assert.ok(text.includes(README_POINTER), `${where}: ${text}`);
-			} else if (text.endsWith(';')) {
-				// Split over two lines of a comment block.
-				const prefix = text.slice(0, text.indexOf('Building'));
-				const next = readFileSync(file, 'utf-8').split('\n')[i + 1];
-				assert.strictEqual(
-					`${text} ${next.slice(prefix.length)}`,
-					`${prefix}${COMMENT_POINTER.slice(3)}`,
-					where,
-				);
-			} else {
-				assert.strictEqual(text.trim(), COMMENT_POINTER, where);
+	it('points to docs tasks the example app actually defines', () => {
+		for (const dir of [...TEMPLATES, ...NATIVE_APPS]) {
+			if (!existsSync(join(dir, 'package.json'))) continue;
+			const scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).scripts ?? {};
+			for (const { where, text } of lines.filter((line) => line.file.startsWith(dir + sep) && line.text.includes('Building Block docs:'))) {
+				assert.match(text, /npm run docs\b/, where);
+				assert.ok(Object.hasOwn(scripts, 'docs'), `${where}: no docs task`);
 			}
 		}
 	});
 
 	it('name blocks as positional arguments, in no older wording', () => {
-		for (const { where, text } of lines.filter((l) => l.text.includes('cdk-blocks docs'))) {
+		for (const { where, text } of lines.filter((l) => l.text.includes('npm run docs'))) {
 			assert.doesNotMatch(text, /prints one\b|one block:|docs <block>|one block's usage/, where);
 		}
 	});

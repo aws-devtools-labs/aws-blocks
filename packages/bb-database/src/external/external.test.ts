@@ -71,9 +71,9 @@ describe('parseConnectionString', () => {
 		// What a secret that was never set looks like: a random placeholder.
 		configError(
 			() => parseConnectionString('q8Zb3_placeholder', "The SSM parameter '/stack-db-url'"),
-			/\/stack-db-url/,
+			/\/stack-db-url.*Store one with `npm run db connect`/,
 		);
-		configError(() => parseConnectionString(null, 'The value'), /The value has no value/);
+		configError(() => parseConnectionString(null, 'The value'), /The value has no value\..*`npm run db connect`/);
 		configError(() => parseConnectionString('  ', 'The value'), /The value has no value/);
 		configError(() => parseConnectionString(`mysql://u:${PASSWORD}@h/db`, 'The value'), /postgres:\/\//);
 	});
@@ -492,7 +492,7 @@ describe('a connection string that the application stored itself', () => {
 		assert.strictEqual(parseConnectionString(stored.value, stored.label).host, 'db.example.com');
 	});
 
-	test('a value that `cdk-blocks db connect --stage` stored as it is stays as it is', async () => {
+	test('a value that `npm run db -- connect --stage` stored as it is stays as it is', async () => {
 		const url = `postgresql://app:${PASSWORD}@db.example.com:6543/postgres`;
 		assert.strictEqual((await readSsmConnectionString('/stack-db-url', fake(url))).value, url);
 	});
@@ -601,5 +601,74 @@ describe('asRole()', () => {
 			fullId: 'app-db',
 		};
 		configError(() => roleDatabase(external, ''), /name of a database role/);
+	});
+});
+
+describe('DatabaseCluster.fromExisting({ dataApi })', () => {
+	const dataApi = {
+		clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:app',
+		secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:app-AbCdEf',
+		database: 'app',
+	};
+
+	test('returns a plain reference with the three values', () => {
+		assert.deepStrictEqual(DatabaseCluster.fromExisting({ dataApi }), {
+			__brand: 'ExistingClusterRef',
+			type: 'external',
+			dataApi,
+		});
+	});
+
+	test('is one of three sources, takes no ca, and needs all three values', () => {
+		configError(() => DatabaseCluster.fromExisting({ name: 'db-url', dataApi }), /exactly one/);
+		configError(() => DatabaseCluster.fromExisting({ dataApi, ca: CA }), /'ca' is for a connection string/);
+		configError(() => DatabaseCluster.fromExisting({ dataApi: { ...dataApi, database: '' } }), /dataApi\.database/);
+		// @ts-expect-error: the secret is required
+		configError(() => DatabaseCluster.fromExisting({ dataApi: { clusterArn: 'a', database: 'd' } }), /secretArn/);
+	});
+
+	test('a block on it is external, in public, and cannot name another schema', () => {
+		const scope = freshScope('ext-data-api');
+		const db = new Database(scope, 'db', { cluster: DatabaseCluster.fromExisting({ dataApi }) });
+		assert.deepStrictEqual(db.cluster, { kind: 'external', id: 'external' });
+		assert.strictEqual(db.schemaName, 'public');
+		configError(
+			() =>
+				new Database(scope, 'other', { cluster: DatabaseCluster.fromExisting({ dataApi }), schemaName: 'app' }),
+			/reached through the RDS Data API has the schema\s+'public'/,
+		);
+	});
+
+	test('two blocks on one cluster and database claim the same schema', () => {
+		const scope = freshScope('ext-data-api');
+		new Database(scope, 'a', { cluster: DatabaseCluster.fromExisting({ dataApi }) });
+		configError(
+			() => new Database(scope, 'b', { cluster: DatabaseCluster.fromExisting({ dataApi }) }),
+			/both use schema 'public'/,
+		);
+		// Another database of the same cluster is another place.
+		new Database(scope, 'c', {
+			cluster: DatabaseCluster.fromExisting({ dataApi: { ...dataApi, database: 'two' } }),
+		});
+	});
+
+	test('the migration runner sends its settings one by one to an engine that takes one statement in a call', async () => {
+		class OneStatementEngine extends ExternalEngine {
+			readonly oneStatementPerCall = true;
+		}
+		const engine = new OneStatementEngine(160004);
+		await runMigrationPlan(
+			engine,
+			buildMigrationPlan({ '001_items.sql': 'CREATE TABLE items (id int);' }, 'external'),
+			{
+				schemaName: 'public',
+				boundToInvocation: true,
+				log: () => {},
+			},
+		);
+		assert.deepStrictEqual(
+			inFileTransaction(engine).filter((s) => s.startsWith('SET LOCAL')),
+			['SET LOCAL idle_in_transaction_session_timeout = 60000', 'SET LOCAL statement_timeout = 540000'],
+		);
 	});
 });

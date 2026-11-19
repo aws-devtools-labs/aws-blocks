@@ -277,6 +277,10 @@ R4 is not met yet. Nothing stops a deploy that renames a `Database` or `Database
 
 The planned mechanism has three parts: a binding record in stack metadata, a marker in `.bb-data` for the dev server, and a guard that inspects a change set before `cdk deploy`.
 
+**The logical id of an owned cluster.** The cluster of a `Database` that owns it has the CloudFormation logical id `<fullId>DsqlCluster`, without the characters that a logical id cannot have. The id does not come from the construct path. `DistributedDatabase` of `@aws-blocks/bb-distributed-data` declared its cluster under that id. A `Database` with the id of a deployed `DistributedDatabase`, in the same scope and stack, is therefore the same resource to CloudFormation, and the deploy keeps the cluster. The runner reads the `_migrations` table of that block as it is: the table has an extra `id` column with a default. The database role has the same name in both blocks.
+
+Two blocks whose ids give the same logical id fail at synth with an error that names both. A shared `DatabaseCluster` has the logical id of its construct path.
+
 ## 7. Existing databases
 
 `DatabaseCluster.fromExisting()` returns `{ type: 'external' }` with either a `name` or the application's own connection string source, and an optional `ca`. A block on it has `cluster.kind === 'external'` and provisions no cluster.
@@ -291,15 +295,15 @@ Three properties of an existing database shape this section:
 
 - The CDK entry point grants the execution role read access to the parameter.
 - The Lambda entry point reads the parameter through an `AppSetting` with the first statement.
-- `cdk-blocks db connect --stage` writes the parameter. It takes the stack name from core's `getStackName()`.
+- `npm run db -- connect --stage <stage>` writes the parameter. It takes the stack name from core's `getStackName()`.
 
 Locally the value is an `AppSetting` under one fixed scope, keyed by the name. The block and the command line reach the same entry without the application's scopes. The value appears in no template, no custom resource property and no log. The migration function receives the name of the parameter.
 
-`AppSetting.put()` and `Secret.put()` store a value as JSON, so a string is held in quotes. `cdk-blocks db connect` stores the string as it is. `decodeStoredValue` (`src/external/ssm-store.ts`) reads both forms for the migration function and the command line.
+`AppSetting.put()` and `Secret.put()` store a value as JSON, so a string is held in quotes. `npm run db connect` stores the string as it is. `decodeStoredValue` (`src/external/ssm-store.ts`) reads both forms for the migration function and the command line.
 
 **The driver never sees the connection string.** `pg` merges a connection string over the programmatic config, and a TLS parameter in the string replaces the `ssl` object. For example, `sslmode=no-verify` turns verification off. `src/external/connection.ts` therefore splits the value with `new URL()` into host, port, user, password and database, and refuses the TLS parameters. It also replaces the parser's own error, because that error carries the value in its `input` field. The pool always gets an `ssl` value, `{ ca }` or `true`. With no value, `pg` reads `PGSSLMODE`.
 
-**The certificate authority.** `ca` is an option in code, per connection. `cdk-blocks db connect --ca` writes it to one module per connection name: `aws-blocks/database.ca.ts` for the default name, and `aws-blocks/database.<name>.ca.ts` for another. Every command for that connection verifies the server with that module. A `connect` without `--ca` does the same, so the command checks what the application checks.
+**The certificate authority.** `ca` is an option in code, per connection. `npm run db -- connect --ca <file>` writes it to one module per connection name: `aws-blocks/database.ca.ts` for the default name, and `aws-blocks/database.<name>.ca.ts` for another. Every command for that connection verifies the server with that module. A `connect` without `--ca` does the same, so the command checks what the application checks.
 
 **Session state does not cross a transaction pooler.** Through such a pooler, a session `SET` can reach another client or be lost, and a session advisory lock can stay held. Nothing that the block does on an existing database depends on session state:
 
@@ -323,7 +327,7 @@ The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table i
 
 **No baseline command.** A schema dump is the work of the user's own tool, such as `pg_dump` or a provider's command line. The block supplies the step that such a tool lacks. `migrate --mark-applied <file>` records a file in the ledger of a database that already has the schema, with one `INSERT … ON CONFLICT DO NOTHING`.
 
-**Local mode is the real database.** PGlite cannot rebuild the schema, roles and data of an existing database from files, so the local entry point opens the same engine as the Lambda entry point. It runs no migration file. Nothing that starts from `npm run dev` changes a schema. `cdk-blocks db migrate` is the explicit step, with the runner that the deploy uses.
+**Local mode is the real database.** PGlite cannot rebuild the schema, roles and data of an existing database from files, so the local entry point opens the same engine as the Lambda entry point. It runs no migration file. Nothing that starts from `npm run dev` changes a schema. `npm run db migrate` is the explicit step, with the runner that the deploy uses.
 
 **Identity.** The connection role usually owns the tables, and PostgreSQL does not apply policies to an owner. The claims of `asUser()` alone filter nothing there. `asRole(role, claims?)` switches the role and sets the claims in one statement at the start of each transaction (`src/runtime/scoped.ts`). The role name is a bound parameter. The block takes no position on which roles exist or what the claims hold.
 
@@ -331,9 +335,27 @@ The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table i
 
 **Connections and errors.** The pool connects with a ten-second timeout and closes a connection ten seconds after its last statement. A connection that was never made is `ConnectionFailed`, not `QueryFailed`: the address, the certificate, the login, a missing database, or too many clients. A request does not try again. The driver's text names the host or the role and never the password, and it goes to the function's log. A client that is checked out for a transaction has its own `error` listener, so a connection that ends between two statements does not end the Node process.
 
+**A database behind the RDS Data API.** `fromExisting({ dataApi })` names an Aurora PostgreSQL cluster, a Secrets Manager secret and a database. The engine is `DataApiEngine` (`src/engines/data-api-engine.ts`). It implements the engine interface over the four calls of the Data API: a statement is `ExecuteStatement`, and a transaction handle holds the id that `BeginTransaction` returns. The block opens no connection, so the cluster can stay in a VPC with no path to it.
+
+- The Data API has no session. The block's schema is `public`, and nothing that the block does needs a session (the list above holds).
+- The Data API takes one statement in a call. The engine says so (`oneStatementPerCall`), and the migration runner then sends its settings one by one.
+- An error of the service gets the SQLSTATE that the block's translation reads. The server's own code is at the end of the message. A cluster that resumes, or a service that cannot answer, is `57P03`, which a migration run tries again. A credential that the server refused is `28P01`.
+- A statement outside a transaction is sent again after an answer that says it did not run and that passes: a paused cluster that resumes (up to 24 seconds of waits, inside the deadline of a request), and a credential that the server refused, which a rotation of the secret causes. A statement in a transaction is not sent again.
+- A placeholder `$n` in a string, a quoted identifier, a comment or a dollar-quoted body is not a parameter, as on a PostgreSQL connection. The Data API itself does not bind a name inside a string.
+- The service reports no changed rows for a statement with `RETURNING`. The engine counts the rows that such a statement returned.
+- A commit that fails is followed by a rollback. A commit that did not reach the server would otherwise leave the transaction open, with its locks, until the service ends it.
+- The service ends a statement after 45 seconds. The migration runner has no way around that limit, so a statement that needs longer is not for a migration file here.
+- Parameters and results have the forms that `Database` of `@aws-blocks/bb-data` gave them, so an app that moves from that block reads the same values.
+
+**The cluster of the earlier block.** `LegacyDatabaseCluster` declares the Aurora cluster of `Database` in `@aws-blocks/bb-data` 0.5.0. `src/legacy/aurora-infra.ts` is that release's infrastructure function, without its migration function, and `src/legacy/aurora-cluster.ts` is how that release turned its options into the function's arguments. Both files are frozen. The construct has the id and the scope of the earlier `Database`, so every logical id is the one in the deployed stack, and CloudFormation changes none of the resources.
+
+The cluster is a provisioned cluster to the block, of type `aurora`, with two differences. On AWS the engine is `DataApiEngine`, with the cluster ARN, the secret ARN and the database name from the config keys of the earlier block. The migration resources are those of an existing database, so the runner uses the ledger of the earlier block and applies no DSQL check. Locally the cluster is PGlite, as a `DatabaseCluster` of type `aurora` is.
+
+The statements run as the user of the cluster's secret, which owns the tables. The block creates no application role there, so Row Level Security policies apply only through `asRole()`. `asUser()` is an error on this cluster, in local mode too: locally the statements run as a role that owns nothing, so `asUser()` would filter rows there and not on AWS. The block's migration files get no check, at synth and locally, because they are older than the block.
+
 ## 8. Command line
 
-The package has one binary, `bb-database`. `cdk-blocks db` runs it from the project root. The wrapper passes the arguments as typed and adds two environment variables: `BB_DATABASE_COMMAND`, the name for the usage text, and `BB_DATABASE_START_DIR`, the directory that the user is in. The binary resolves the paths in its own options from that directory, so the wrapper keeps no list of those options.
+The package has one binary, `bb-database`. `npm run db` runs it from the project root. The wrapper passes the arguments as typed and adds two environment variables: `BB_DATABASE_COMMAND`, the name for the usage text, and `BB_DATABASE_START_DIR`, the directory where the runner started (the app directory for npm scripts). The binary resolves the paths in its own options from that directory, so the wrapper keeps no list of those options.
 
 **An existing database.** `connect`, `migrate`, `types` and `status` work on the database of a stored connection string. `connect` reads the string from a hidden prompt or from stdin. The string is never an argument, and the binary removes it and its password from everything it prints.
 
@@ -409,7 +431,7 @@ An existing database:
 | Area | Local | AWS |
 |---|---|---|
 | Engine | The real database, through the `pg` pool engine | The same |
-| Migrations | Not run by `npm run dev`. `cdk-blocks db migrate` runs them | The migration function runs them during the deploy |
+| Migrations | Not run by `npm run dev`. `npm run db migrate` runs them | The migration function runs them during the deploy |
 | `request.jwt.claims` on a connection after a scoped transaction | An empty string | The same |
 
 ## 12. Limitations and future work
@@ -423,7 +445,8 @@ An existing database:
 
 **Future work.** Each item states when to revisit it.
 
-1. **More providers for an existing database.** Supabase is the tested provider. Amazon RDS needs a function inside a VPC, and its certificate authority is in the Lambda runtime but not in Node's trust store. Revisit on the first request.
+1. **More providers for an existing database.** Supabase is the tested provider for a connection string. An Aurora cluster with the Data API needs no network path (section 7). Amazon RDS without the Data API needs a function inside a VPC, and its certificate authority is in the Lambda runtime but not in Node's trust store. Revisit on the first request.
+1. **The command line for a Data API source.** `connect`, `migrate`, `types` and `status` work with a stored connection string only. Revisit on the first request.
 2. **A second, less privileged connection string for the application,** while migrations keep the owner's. Revisit on the first request.
 3. **Safe replacement,** a `replaces` option that names a previous binding. `KVStore` and `FileBucket` have the same need, so it needs one design across the data blocks.
 4. **Compile-time binding verification** from a lock file that deploys write. The ids are unique per application (section 2.2), so the literal in a constructor identifies a block. Revisit when deploys can write files back to the repository.
@@ -442,6 +465,8 @@ An existing database:
 | Error names and the mapping from SQLSTATE | `src/errors.ts` |
 | Connection pool, IAM token passwords, result type parsers | `src/engines/pg-engine.ts` |
 | Engine interfaces and transaction handles | `src/engines/handle.ts` |
+| The engine of a database behind the RDS Data API | `src/engines/data-api-engine.ts` |
+| The cluster of `@aws-blocks/bb-data` 0.5.0 (frozen) | `src/legacy/aurora-infra.ts`, `src/legacy/aurora-cluster.ts` |
 | Local engine, schema and role switching, the `sys` stub | `src/engines/pglite-cluster.ts` |
 | Local rules by cluster type | `src/dialect/rules-engine.ts` |
 | DSQL rules: the linter wrapper, the block's own rule, statement classification, the transaction limits | `src/dialect/lint.ts`, `src/dialect/validation.ts` |

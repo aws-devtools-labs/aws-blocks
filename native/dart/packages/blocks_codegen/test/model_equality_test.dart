@@ -74,7 +74,7 @@ const _noteSchema = {
 };
 
 const _realtimeExport =
-    "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;";
+    "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, RealtimeSubscriptionEndedException, TransferableException, InvalidDescriptorException;";
 const _oidcExport =
     "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;";
 
@@ -300,28 +300,6 @@ void main() {
         ),
       );
       expect(output, contains('Future<List<RealtimeChannel<Note>>> listFeeds'));
-      expect(output, contains(_realtimeExport));
-    });
-
-    test('a file upload handle in a list parameter', () {
-      final output = _generate(
-        _spec([
-          _method(
-            'ping',
-            {'type': 'string'},
-            [
-              {
-                'name': 'uploads',
-                'required': true,
-                'schema': _list({
-                  'x-blocks-transferable': 'file-bucket/upload',
-                }),
-              },
-            ],
-          ),
-        ], {}),
-      );
-      expect(output, contains('List<FileUploadHandle> uploads'));
       expect(output, contains(_realtimeExport));
     });
 

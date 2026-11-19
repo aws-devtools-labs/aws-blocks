@@ -49,7 +49,7 @@ added alongside the spec's servers. Each becomes a constant on the generated `Se
 `prod("https://api.example.com/aws-blocks/api")` is reachable as `Servers.prod`.
 
 A server URL is the RPC URL itself: the `apiUrl` that `npm run dev` writes to
-`.blocks-sandbox/config.json`, or a deploy to `.blocks-sandbox/config.<stage>.json`, whose path ends
+`.cdk-blocks-sandbox/config.json`, or a deploy to `.cdk-blocks-sandbox/config.<stage>.json`, whose path ends
 in `/aws-blocks/api`. It is not the origin that serves it. The generated client posts to the URL as
 given, so an override such as `local("http://10.0.2.2:3001")` replaces the
 `http://localhost:3001/aws-blocks/api` the client would otherwise use with the bare origin, and
@@ -86,12 +86,12 @@ including the iOS `Info.plist` entry, is in [OIDC](oidc.md#registering-the-relay
 
 | Task | Description |
 |------|-------------|
-| `blocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `blocksCodegenDebug`) |
-| `blocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
-| `blocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
+| `cdkBlocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `cdkBlocksCodegenDebug`) |
+| `cdkBlocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
+| `cdkBlocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
 
 Codegen runs automatically as a dependency of compilation, so a normal build does not need to
-invoke these directly. `blocksDumpModel` is the one to reach for when the generated API does not
+invoke these directly. `cdkBlocksDumpModel` is the one to reach for when the generated API does not
 match what you expected from the spec.
 
 ## One spec per compilation scope

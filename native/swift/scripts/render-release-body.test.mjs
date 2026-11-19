@@ -42,8 +42,8 @@ describe("render-release-body", () => {
 		assert.match(output, /- Fixed a bug\./);
 		assert.match(output, /tagged `swift@1\.2\.3`/);
 		assert.match(output, /Approve the workflow runs/);
-		assert.match(output, /"Sync release from aws-blocks" workflow in aws-blocks-swift with version `1\.2\.3`/);
-		assert.match(output, /aws-blocks-swift\/actions\/workflows\/sync-from-monorepo\.yml/);
+		assert.match(output, /"Sync release from aws-blocks" workflow in cdk-blocks-swift with version `1\.2\.3`/);
+		assert.match(output, /github\.com\/aws\/cdk-blocks-swift\/actions\/workflows\/sync-from-monorepo\.yml/);
 		assert.doesNotMatch(output, /__VERSION__|__CHANGELOG_ENTRY__/);
 	});
 
@@ -51,7 +51,7 @@ describe("render-release-body", () => {
 		const { status, output } = render("target", "1.2.3", "- Some change.");
 		assert.equal(status, 0, output);
 		assert.match(output, /## Release 1\.2\.3/);
-		assert.match(output, /aws-blocks tag `swift@1\.2\.3`/);
+		assert.match(output, /cdk-blocks tag `swift@1\.2\.3`/);
 		assert.match(output, /- Some change\./);
 		assert.doesNotMatch(output, /## Swift SDK Release/);
 		assert.doesNotMatch(output, /__VERSION__|__CHANGELOG_ENTRY__/);
@@ -83,8 +83,8 @@ describe("render-release-body", () => {
 	});
 
 	for (const [template, url] of [
-		["monorepo", "aws-blocks/blob/release/swift-1.2.3/native/swift/CHANGELOG.md"],
-		["target", "aws-blocks/blob/swift@1.2.3/native/swift/CHANGELOG.md"],
+		["monorepo", "github.com/aws/cdk-blocks/blob/release/swift-1.2.3/native/swift/CHANGELOG.md"],
+		["target", "github.com/aws/cdk-blocks/blob/swift@1.2.3/native/swift/CHANGELOG.md"],
 	]) {
 		it(`${template} template links to the CHANGELOG when the entry is too long`, () => {
 			const entry = `- ${"x".repeat(70000)}`;

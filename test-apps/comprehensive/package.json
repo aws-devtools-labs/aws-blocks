@@ -23,7 +23,9 @@
     "test:upgrade-in-place": "tsx test/upgrade-in-place.ts",
     "test:upgrade-in-place:dry-run": "tsx test/upgrade-in-place.ts --dry-run",
     "test:upgrade-legacy-kv-store": "tsx test/upgrade-legacy-kv-store.ts",
-    "vendorize": "node ../../packages/blocks/dist/vendorize.js"
+    "test:upgrade-sql-blocks": "tsx test/upgrade-sql-blocks.ts",
+    "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
+    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
   },
   "dependencies": {
     "@aws-blocks/auth-common": "*",
@@ -49,9 +51,11 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
     "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@smithy/signature-v4": "^5.7.5",
     "@types/node": "^20.19.43",
     "aws-cdk-lib": "^2.274.0",
     "concurrently": "^8.2.2",

@@ -587,7 +587,7 @@ jobs:
           name: dist-registry
           path: dist-registry/
 
-      - name: Template E2E Tests
+      - name: Template E2E and docs task upgrade
         run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   # Same local template suite as e2e-templates, on Windows — the OS where
@@ -631,7 +631,7 @@ jobs:
           name: dist-registry
           path: dist-registry/
 
-      - name: Template E2E Tests (Windows)
+      - name: Template E2E and docs task upgrade (Windows)
         run: node scripts/ci/templates-e2e.mjs --skip-publish
 
   e2e-sandbox:
@@ -731,7 +731,7 @@ jobs:
       # cancelled job 5 minutes after the cancel, so the two steps get 3 minutes
       # together.
       - name: Configure AWS credentials for teardown
-        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        if: always() && hashFiles('test-apps/comprehensive/.cdk-blocks-sandbox/sandbox-id.txt') != ''
         timeout-minutes: 1
         uses: ./.github/actions/e2e-aws-credentials
         with:
@@ -740,7 +740,7 @@ jobs:
 
       - name: Tear down leftover stacks
         id: teardown
-        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        if: always() && hashFiles('test-apps/comprehensive/.cdk-blocks-sandbox/sandbox-id.txt') != ''
         timeout-minutes: 2
         env:
           JOB_STATUS: ${{ job.status }}
@@ -989,7 +989,7 @@ jobs:
       # minutes together. Fresh credentials, since the first session can expire
       # before a long or timed-out job gets here.
       - name: Configure AWS credentials for teardown
-        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        if: always() && hashFiles('test-apps/compute-smoke/.cdk-blocks-sandbox/sandbox-id.txt') != ''
         timeout-minutes: 1
         uses: ./.github/actions/e2e-aws-credentials
         with:
@@ -998,7 +998,7 @@ jobs:
 
       - name: Tear down leftover stacks
         id: teardown
-        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        if: always() && hashFiles('test-apps/compute-smoke/.cdk-blocks-sandbox/sandbox-id.txt') != ''
         timeout-minutes: 2
         env:
           JOB_STATUS: ${{ job.status }}
@@ -1098,7 +1098,7 @@ jobs:
       # GitHub force-stops a cancelled job 5 minutes after the cancel, so the two
       # steps get 3 minutes together.
       - name: Configure AWS credentials for teardown
-        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        if: always() && hashFiles('test-apps/comprehensive/.cdk-blocks-sandbox/sandbox-id.txt') != ''
         timeout-minutes: 1
         uses: ./.github/actions/e2e-aws-credentials
         with:
@@ -1107,7 +1107,7 @@ jobs:
 
       - name: Tear down leftover stacks
         id: teardown
-        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        if: always() && hashFiles('test-apps/comprehensive/.cdk-blocks-sandbox/sandbox-id.txt') != ''
         timeout-minutes: 2
         env:
           JOB_STATUS: ${{ job.status }}

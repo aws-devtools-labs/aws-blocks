@@ -229,6 +229,17 @@ public struct CodegenModelBuilder {
         var sharedTypes: [NestedTypeNode] = []
         var sharedSchemas: [String: TypeRef] = [:]
         var namingWarnings: [String] = []
+        // Of parameters of different shapes the spec gives one name, the shape of the one with the smallest
+        // `<method>#param:<name>` key may take it, as in the Dart generator, so spec order doesn't matter.
+        var typeNameOwners: [String: (key: String, schema: TypeRef)] = [:]
+        for method in rpcModel.methods {
+            for param in method.params {
+                guard let typeName = param.typeName else { continue }
+                let key = "\(method.name)#param:\(param.name)"
+                if let owner = typeNameOwners[typeName], owner.key <= key { continue }
+                typeNameOwners[typeName] = (key, param.schema)
+            }
+        }
 
         for method in rpcModel.methods {
             let parts = method.name.split(separator: ".", maxSplits: 1)
@@ -271,12 +282,13 @@ public struct CodegenModelBuilder {
                         siblingClaims: rootClaims
                     )
                 }
-                guard let typeName = param.typeName,
+                guard let typeName = param.typeName, typeNameOwners[typeName]?.schema == param.schema,
                       isSharedTypeName(typeName, schema: param.schema, taken: topLevelTypeNames, shared: sharedSchemas)
                 else {
-                    // Spec order decides which shape gets a contested name, so say which parameter lost it.
+                    // Say which parameter lost a contested name.
                     if let typeName = param.typeName {
-                        let reason = sharedSchemas[typeName] != nil ? "a parameter of another shape took that name first"
+                        let reason = typeNameOwners[typeName]?.schema != param.schema
+                            ? "a parameter of another shape has that name"
                             : isValidSwiftIdentifier(typeName) ? "another type has that name" : "it isn't a Swift identifier"
                         namingWarnings.append(
                             "swift: parameter '\(param.name)' of \(method.name) keeps its own nested type, not \(typeName): \(reason)."

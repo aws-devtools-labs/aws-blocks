@@ -5,7 +5,7 @@
 /// test-apps/native-bindings' `auth-oidc` block (`Auth` with the local stub
 /// IdP).
 ///
-/// It drives the real `OidcClient.signInRelay` flow headlessly — no device, no
+/// It drives the real `OidcClient.signIn` flow headlessly — no device, no
 /// real IdP — by replacing the browser with an HTTP-driven [BrowserLauncher]
 /// that follows the redirect chain the stub IdP produces (it auto-approves),
 /// capturing the final custom-scheme relay redirect.
@@ -16,9 +16,12 @@
 ///   - RPC (authed):  api.oidcRequireAuth   (bound to the `auth-oidc` block)
 ///   - auth routes:   `Auth`'s fixed routes under /aws-blocks/auth/* at the
 ///                    API **origin** — NOT under the JSON-RPC prefix
-///                    (/aws-blocks/api). The client is built with
-///                    [OidcClient]'s default authorize-params and callback
-///                    paths, which are exactly those routes.
+///                    (/aws-blocks/api). The client is the one the
+///                    backend's `oidcAuthApi.getClient()` returns
+///                    (`Auth.createOidcApi()`), on the RPC URL; it cuts
+///                    the origin itself.
+///   - state machine: oidcAuthStateApi.getAuthState for the signed-in state;
+///                    the sign-in button comes from the client's `providers`.
 ///
 /// Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend
 /// serves the stub only on a sandbox deployment (the native-bindings test app
@@ -35,10 +38,11 @@ import 'dart:io';
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:http/http.dart' as http;
+
 import 'harness.dart';
 
 // The generated enum of the providers `oidcAuthApi.getClient()` names.
-const _provider = OidcAuthApiApiGetClientProvider.google;
+const _provider = OidcAuthApiGetClientProvider.google;
 const _relayTo = 'nativebindings://auth';
 
 /// HTTP-driven [BrowserLauncher] standing in for a real browser.
@@ -62,7 +66,11 @@ class HttpRelayLauncher implements BrowserLauncher {
       uri.toString().split(RegExp('[?#]')).first;
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     var current = authorizeUrl;
     for (var hop = 0; hop < 10; hop++) {
       final req = http.Request('GET', current)..followRedirects = false;
@@ -150,13 +158,43 @@ void main() async {
   final session = PersistentSessionStore(store: tokenStore);
   await session.load();
 
-  // The client apps get: `oidcAuthApi.getClient()` (`Auth.createOidcApi()`),
-  // hydrated by the generated client, which shares its session store, so the
-  // session cookie the exchange sets lands in [session].
-  final discovery = Blocks(baseUrl: rpcUrl, sessionStore: session);
-  final oidc = await discovery.oidcAuthApi.getClient();
+  // The OIDC client comes from the backend's `oidcAuthApi.getClient()`
+  // (`Auth.createOidcApi()`). The generated client hydrates it with its own
+  // session store, so the cookie the exchange sets is the one the generated
+  // calls send.
+  Future<TypedOidcClient<OidcAuthApiGetClientProvider>> oidcFor(
+    SessionStore sessionStore,
+  ) => Blocks(
+    baseUrl: rpcUrl,
+    sessionStore: sessionStore,
+  ).oidcAuthApi.getClient();
+  final oidc = await oidcFor(session);
+  final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
 
   final launcher = HttpRelayLauncher(httpClient);
+
+  // S1: signed out, as the state machine says, and one sign-in button per
+  // provider in the client's `providers`, as an app renders them. The
+  // backend may serve other providers too, so only google's is checked.
+  group('OIDC: signed out, with a sign-in button per provider');
+  try {
+    final state = await blocks.oidcAuthStateApi.getAuthState();
+    check(
+      state.state == AuthStateState.signedOut,
+      'getAuthState is signedOut (${state.state.toJson()})',
+    );
+    final buttons = [
+      for (final name in oidc.providers)
+        ?OidcAuthApiGetClientProvider.fromProviderName(name),
+    ];
+    check(
+      buttons.contains(_provider),
+      'oidc.providers gives a ${_provider.providerName} button '
+      '(got ${buttons.map((b) => b.providerName).toList()})',
+    );
+  } catch (e) {
+    check(false, 'getAuthState and providers before sign-in, threw: $e');
+  }
 
   // A1 — authorize-params returns a server-signed state envelope that decodes
   // and round-trips the SDK-supplied csrf + relayTo.
@@ -188,12 +226,12 @@ void main() async {
     check(false, 'authorize-params signed state envelope decodes — threw: $e');
   }
 
-  // A2 — signInRelay completes; /exchange returns the user and its Set-Cookie
+  // A2 — signIn completes; /exchange returns the user and its Set-Cookie
   // is captured into the (persistent) SessionStore.
-  group('OIDC: signInRelay completes + session cookie captured');
+  group('OIDC: signIn completes + session cookie captured');
   OidcUser? user;
   try {
-    user = await oidc.signInRelay(
+    user = await oidc.signIn(
       _provider,
       launcher: launcher,
       relayTo: _relayTo,
@@ -202,11 +240,24 @@ void main() async {
         session.cookies.isNotEmpty && session.cookieHeader != null;
     check(
       user.userId.isNotEmpty && cookieCaptured,
-      'signInRelay returned user ${user.userId} and set the session cookie',
+      'signIn returned user ${user.userId} and set the session cookie',
     );
   } catch (e) {
-    check(false, 'signInRelay completes + cookie captured — threw: $e');
+    check(false, 'signIn completes + cookie captured — threw: $e');
     stderr.writeln('  launcher trace:\n    ${launcher.trace.join('\n    ')}');
+  }
+
+  // S2: the state machine reports the federated session.
+  group('OIDC: getAuthState after sign-in');
+  try {
+    final state = await blocks.oidcAuthStateApi.getAuthState();
+    check(
+      state.state == AuthStateState.signedIn &&
+          state.user?.userId == user?.userId,
+      'getAuthState is signedIn as ${state.user?.userId}',
+    );
+  } catch (e) {
+    check(false, 'getAuthState after sign-in, threw: $e');
   }
 
   // Let the fire-and-forget write-through to the TokenStore flush before we
@@ -218,7 +269,6 @@ void main() async {
   // (the Blocks client shares the SAME SessionStore instance).
   group('OIDC: authenticated RPC via the replayed cookie');
   try {
-    final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
     final me = await blocks.api.oidcRequireAuth();
     check(
       me.userId.isNotEmpty,
@@ -250,16 +300,112 @@ void main() async {
     );
   }
 
-  // A5 — sign out clears the session.
+  // S3: a fresh client on a cookie store reloaded from the same backing
+  // store restores the session, as an app does on launch.
+  group('OIDC: restore() from a reloaded cookie store');
+  try {
+    final reloaded = PersistentSessionStore(store: tokenStore);
+    await reloaded.load();
+    final restored = await (await oidcFor(reloaded)).restore();
+    check(
+      restored != null && restored.userId == user?.userId,
+      'restore() returns ${restored?.userId}',
+    );
+  } catch (e) {
+    check(false, 'restore() while signed in, threw: $e');
+  }
+
+  // A5: sign out returns the IdP logout URL and ends the session.
   group('OIDC: sign out');
   try {
-    final out = await Blocks(
-      baseUrl: rpcUrl,
-      sessionStore: session,
-    ).api.oidcSignOut();
-    check(out.success, 'oidcSignOut returns success');
+    final logoutUrl = await oidc.signOut();
+    check(
+      logoutUrl != null,
+      'signOut() returns a logout URL (${logoutUrl?.path})',
+    );
   } catch (e) {
-    check(false, 'oidcSignOut — threw: $e');
+    check(false, 'signOut() threw: $e');
+  }
+  try {
+    final restored = await (await oidcFor(session)).restore();
+    check(restored == null, 'restore() is null after signOut()');
+    final state = await blocks.oidcAuthStateApi.getAuthState();
+    check(
+      state.state == AuthStateState.signedOut,
+      'getAuthState is signedOut after signOut() (${state.state.toJson()})',
+    );
+  } catch (e) {
+    check(false, 'restore() / getAuthState after signOut(), threw: $e');
+  }
+
+  // Desktop sign-in through the runtime's own loopback listener. No
+  // launcher is passed, so signIn binds 127.0.0.1 and relays there. The
+  // "browser" is an HTTP client that follows the stub IdP's redirects; the
+  // last one lands on the real listener, which completes the sign-in.
+  group('OIDC: desktop loopback sign-in (real listener)');
+  try {
+    final loopbackSession = InMemorySessionStore();
+    final desktop = await oidcFor(loopbackSession);
+    Uri? landed;
+    desktop
+      ..signInTimeout = const Duration(seconds: 30)
+      ..openBrowser = (url) async {
+        var current = url;
+        for (var hop = 0; hop < 10; hop++) {
+          final req = http.Request('GET', current)..followRedirects = false;
+          final resp = await http.Response.fromStream(
+            await httpClient.send(req),
+          );
+          final location = resp.headers['location'];
+          if (resp.statusCode < 300 ||
+              resp.statusCode >= 400 ||
+              location == null) {
+            landed = current;
+            return;
+          }
+          current = current.resolve(location);
+        }
+      };
+    final signedIn = await desktop.signIn(_provider);
+    check(
+      landed?.host == '127.0.0.1' && landed?.path == '/oidc/callback',
+      'the relay redirect landed on the loopback listener '
+      '(${landed?.host}${landed?.path})',
+    );
+    final me = await Blocks(
+      baseUrl: rpcUrl,
+      sessionStore: loopbackSession,
+    ).api.oidcRequireAuth();
+    check(
+      me.userId == signedIn.userId,
+      'api.oidcRequireAuth succeeds after the loopback sign-in',
+    );
+    check(
+      await desktop.signOut() != null && await desktop.restore() == null,
+      'signOut() ends the loopback session',
+    );
+  } catch (e) {
+    check(false, 'desktop loopback sign-in threw: $e');
+  }
+
+  // The OidcClient a generated client returns stops when that client is
+  // closed, as its own calls do.
+  group('OIDC: Blocks.close() stops the OidcClient it returned');
+  final closing = Blocks(baseUrl: rpcUrl, sessionStore: InMemorySessionStore());
+  final hydrated = await closing.oidcAuthApi.getClient();
+  check(await hydrated.restore() == null, 'restore() works while open');
+  closing.close();
+  try {
+    await hydrated.restore();
+    check(false, 'restore() after close() throws');
+  } on ClientClosedException {
+    check(true, 'restore() after close() throws ClientClosedException');
+  }
+  try {
+    await closing.oidcAuthApi.getClient();
+    check(false, 'a call after close() throws');
+  } on ClientClosedException {
+    check(true, 'a call after Blocks.close() throws ClientClosedException');
   }
 
   httpClient.close();

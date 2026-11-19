@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `cdk-blocks docs`: the docs that @aws-blocks/blocks ships in its `docs/` folder
+ * `npm run docs`: the docs that @aws-blocks/blocks ships in its `docs/` folder
  * (generated at prebuild and prepack by scripts/gen-block-docs.mjs), looked up by
  * name instead of by path. A block is named by its class, its folder or its folder
  * without `bb-`; an export or an option by its name in the blocks' API reports.
@@ -10,7 +10,7 @@
  * Every doc or excerpt printed starts with the line `# <folder>/<file>` (`# bb-kv-store/README.md`,
  * `# README.md` for a root doc), so the reader can cite the file and print it again by that name. No
  * output names a path on disk: in an app, that path is inside node_modules, which agents are told not
- * to read. With `--output json` the same answer is one JSON document ({@link Answer}), each doc in it
+ * to read. When piped (or with `--output json`) the same answer is one JSON document ({@link Answer}), each doc in it
  * named by `doc: '<folder>/<file>'`. Everything below {@link docs} reads a docs folder passed in, so
  * tests run it on a fixture folder.
  */
@@ -20,15 +20,15 @@ import { createRequire } from 'node:module';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { blocksVersion, type Context } from './context.js';
-import { BLOCKS_COMMAND, CliError, ExitCode, UsageError } from './errors.js';
+import { blocksCommand, CliError, ExitCode, UsageError } from './errors.js';
 import { suggest } from './parse.js';
 import type { CommandInput } from './registry.js';
 
-/** The docs command as it runs in an app's shell (`npx --no -- cdk-blocks docs`; see BLOCKS_COMMAND). */
-const CLI = `${BLOCKS_COMMAND} docs`;
+/** The docs command as it runs in an app's shell (`npm run docs`). */
+const CLI = blocksCommand('docs');
 
 /**
- * The forms of `<command>` and what each prints, aligned: `cdk-blocks docs` in `--help`, the runnable {@link CLI} in
+ * The forms of `<command>` and what each prints, aligned: `npm run docs` in `--help`, the runnable {@link CLI} in
  * the listing. A function declaration, not a constant: registry.ts calls it while this module is still loading
  * (docs.js → parse.js → registry.js), before its constants exist.
  */
@@ -63,7 +63,7 @@ const DOCS_OPTIONS = [
 	'  --section <topic>      the part of the docs about a topic; repeatable; with no topic, the headings',
 	'  --exports [filter...]  the names @aws-blocks/blocks and its entries export, and which entry to use',
 	'  --search <term>        matching lines in every doc, or in the named blocks, with their section',
-	'  --output json          the same answer as one JSON document, each doc in it named by "doc"',
+	'  --output text|json     text on a terminal; JSON when piped, each doc in it named by "doc"',
 ];
 
 /** Lines of a README section a card prints before pointing at `--section`. */
@@ -97,7 +97,7 @@ export interface DocsBlock {
 	main: string;
 	/** Markdown files of the block's folder (README.md, API.md, DESIGN.md, ...), `main` first. */
 	files: string[];
-	/** Class names that name the block (the vendorize map's): `cdk-blocks docs KVStore` prints its README. */
+	/** Class names that name the block (the vendorize map's): `npm run docs KVStore` prints its README. */
 	named: string[];
 	/** Classes shown in the listing: the named ones, else the classes (and class-like constants) it declares. */
 	classes: string[];
@@ -183,7 +183,7 @@ export interface DocsRequest {
 	exports?: boolean;
 }
 
-/** What `cdk-blocks docs` prints for a request: the text, and the same answer as data for `--output json`. */
+/** What `npm run docs` prints for a request: text on a terminal, and the same answer as JSON when piped. */
 export interface Answer {
 	text: string;
 	json: Record<string, unknown>;
@@ -237,7 +237,7 @@ interface Section {
 	end: number;
 }
 
-/** The root doc that owns @aws-blocks/blocks' own API report (`cdk-blocks docs guide --api`). */
+/** The root doc that owns @aws-blocks/blocks' own API report (`npm run docs guide -- --api`). */
 const UMBRELLA = 'guide';
 
 /** The package a declaration is in: the umbrella's own are @aws-blocks/blocks'. */
@@ -260,7 +260,7 @@ const ROOT_DOCS = [
 	},
 ];
 
-/** `cdk-blocks docs [name...]`. */
+/** `npm run docs [name...]`. */
 export async function docs(ctx: Context, input: CommandInput): Promise<number> {
 	const request: DocsRequest = {
 		names: input.positionals,
@@ -272,7 +272,7 @@ export async function docs(ctx: Context, input: CommandInput): Promise<number> {
 		exports: input.flags.exports === true,
 	};
 	const answer = answerDocs(loadDocs(shippedDocsDir()), request, blocksVersion());
-	// Text unless --output json asks for the data: the registry keeps JSON from being a default (jsonOnRequest).
+	// The output layer selects text on a terminal and JSON when piped, unless explicitly overridden.
 	ctx.out.result(answer.json, answer.text);
 	return ExitCode.Ok;
 }
@@ -300,7 +300,7 @@ export function loadDocs(
 	const blocks: DocsBlock[] = [];
 	for (const root of ROOT_DOCS) {
 		if (!rootFiles.includes(root.file)) continue;
-		// `guide` also owns the other root files: `cdk-blocks docs guide --api` is the umbrella API report.
+		// `guide` also owns the other root files: `npm run docs guide -- --api` is the umbrella API report.
 		const files =
 			root.name === 'guide'
 				? [root.file, ...rootFiles.filter((f) => f !== root.file && f !== 'TROUBLESHOOTING.md')]
@@ -773,7 +773,7 @@ function typesExports(file: string, seen = new Set<string>()): Map<string, boole
 	return out;
 }
 
-/** The text `cdk-blocks docs` prints for a request. */
+/** The text `npm run docs` prints for a request. */
 export function renderDocs(index: DocsIndex, request: DocsRequest, version: string): string {
 	return answerDocs(index, request, version).text;
 }
@@ -805,7 +805,7 @@ export function answerDocs(index: DocsIndex, request: DocsRequest, version: stri
 	if (names.length === 0) {
 		// A bare `--section` alone asks for an overview: the list of blocks is the docs' table of contents.
 		if (request.api || request.sections.length) {
-			throw new UsageError(`name a block, for example: ${CLI} KVStore --api`, { hint: CLI });
+			throw new UsageError(`name a block, for example: npm run docs:api KVStore`, { hint: CLI });
 		}
 		return listing(index, version);
 	}
@@ -842,7 +842,7 @@ function renderName(index: DocsIndex, name: string, request: DocsRequest): Answe
 		if (!block.files.includes(file)) {
 			// The same mistake as a name that does not exist, so the same exit code: 2.
 			throw new UsageError(`${block.name} has no ${file}. Its files: ${block.files.join(', ')}.`, {
-				hint: `${CLI} ${block.name}${block.files.includes('API.md') ? ' --api' : ''}`,
+				hint: `${block.files.includes('API.md') ? 'npm run docs:api' : CLI} ${block.name}`,
 			});
 		}
 		const main = read(file);
@@ -932,7 +932,7 @@ function withOtherBlocks<T>(index: DocsIndex, block: DocsBlock, wanted: string, 
 			.filter((b) => b.prefix && b !== block && b.files.includes('README.md'))
 			.flatMap((b) => {
 				const s = namedSection(readFileSync(join(b.dir, 'README.md'), 'utf-8'), wanted);
-				return s ? [`${CLI} ${b.name} --section ${s.slug}`] : [];
+				return s ? [`${CLI} ${b.name} -- --section ${s.slug}`] : [];
 			});
 		if (!others.length) throw error;
 		throw new UsageError(`${error.message}\nOther blocks have it: ${others.slice(0, CARD_OWNERS).join('; ')}`, {
@@ -1293,7 +1293,7 @@ function unknownName(index: DocsIndex, name: string): UsageError {
 			...(containing.length ? [`Exports with every word of it: ${containing.join(', ')}`] : []),
 			...(hits.length ? ['The docs mention it here:', ...hits.map(formatHit)] : []),
 		].join('\n'),
-		{ hint: `${CLI} --search ${JSON.stringify(name)}, or ${CLI} for the list of blocks` },
+		{ hint: `npm run docs:search ${JSON.stringify(name)}, or ${CLI} for the list of blocks` },
 	);
 }
 
@@ -1511,7 +1511,7 @@ function exportsList(index: DocsIndex, filters: string[]): ExportsAnswer {
 			.slice(0, NAMES_LISTED);
 		if (!members.length && !external.length && !unexported.length) {
 			throw new CliError(`@aws-blocks/blocks exports no name containing ${quoted}.`, {
-				hint: `${CLI} --exports, or ${CLI} --search ${JSON.stringify(filters[0])}`,
+				hint: `${CLI} -- --exports, or npm run docs:search ${JSON.stringify(filters[0])}`,
 			});
 		}
 		const lines = [
@@ -1607,11 +1607,16 @@ function listing(index: DocsIndex, version: string): Answer {
 	const text = [
 		`AWS Blocks docs for @aws-blocks/blocks ${version}`,
 		'',
-		`Usage: ${CLI} [name...] [options]`,
+		`Usage: ${CLI} [name...] [-- options]`,
 		'',
 		...docsForms(CLI),
 		'',
 		...DOCS_OPTIONS,
+		'',
+		'Examples:',
+		'  npm run docs:api KVStore            print the KVStore API report',
+		'  npm run docs:search withAuth        search the installed docs',
+		'  npm run -s docs KVStore | jq .docs  read the JSON answer without npm script banners',
 		'',
 		'ApiNamespace, ApiError and the typed client are in core.',
 		`A block's other files: --api prints its API.md, a doc path the others (${CLI} bb-cron-job/DESIGN.md).`,
@@ -1693,7 +1698,7 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 	let also: string[] = [];
 	if (rest.length) {
 		const lookups = rest.flatMap((o) =>
-			decls.filter((d) => d.block === o).map((d) => (member ? `${CLI} ${d.name}.${name}` : `${CLI} ${o} --api`)),
+			decls.filter((d) => d.block === o).map((d) => (member ? `${CLI} ${d.name}.${name}` : `npm run docs:api ${o}`)),
 		);
 		also = [...new Set(lookups)];
 		out.push(`Also in ${rest.join(', ')}: ${also.join('; ')}`);
@@ -1748,7 +1753,7 @@ function card(index: DocsIndex, name: string, decls: Declaration[], member: bool
 				out.push('', docHeader(doc), ...lines);
 				docs.push({ doc, ...part });
 			} else {
-				const missing = `${doc} does not mention ${name}; try ${CLI} --search ${name}`;
+				const missing = `${doc} does not mention ${name}; try npm run docs:search ${name}`;
 				out.push('', missing);
 				notes.push(missing);
 			}
@@ -1890,7 +1895,7 @@ function excerpt(block: DocsBlock, text: string, section: Section): { lines: str
 	const out = [`(lines ${section.start}-${section.end})`, ...shown];
 	const more =
 		lines.length > shown.length
-			? `... ${lines.length - shown.length} more lines: ${CLI} ${block.name} --section ${section.slug}`
+			? `... ${lines.length - shown.length} more lines: ${CLI} ${block.name} -- --section ${section.slug}`
 			: undefined;
 	if (more) out.push(more);
 	return {
@@ -1907,7 +1912,7 @@ function excerpt(block: DocsBlock, text: string, section: Section): { lines: str
 function toc(block: DocsBlock, doc: { file: string; doc: string; text: string }): { text: string; part: DocPart } {
 	const sections = parseSections(doc.text);
 	const count = doc.text.split('\n').length;
-	const lines = [`${doc.doc}: ${count} lines; ${CLI} ${docArgs(block, doc.file)} --section <topic>`];
+	const lines = [`${doc.doc}: ${count} lines; ${sectionCommand(block, doc.file)} <topic>`];
 	for (const s of sections)
 		lines.push(`${'  '.repeat(Math.max(0, s.level - 1))}${s.title}  [${s.slug}]  lines ${s.start}-${s.end}`);
 	return {
@@ -1921,9 +1926,10 @@ function toc(block: DocsBlock, doc: { file: string; doc: string; text: string })
 }
 
 /** The arguments that print a block's file: `core`, `core --api`, or the doc path `bb-cron-job/DESIGN.md`. */
-function docArgs(block: DocsBlock, file: string): string {
-	if (file === 'API.md') return `${block.name} --api`;
-	return file === block.main || !block.prefix ? block.name : `${block.prefix}${file}`;
+function sectionCommand(block: DocsBlock, file: string): string {
+	if (file === 'API.md') return `npm run docs:api ${block.name} -- --section`;
+	const name = file === block.main || !block.prefix ? block.name : `${block.prefix}${file}`;
+	return `${CLI} ${name} -- --section`;
 }
 
 /**
@@ -2020,7 +2026,7 @@ function sectionText(block: DocsBlock, file: string, text: string, wanted: strin
 			`Its sections: ${shown.join(', ')}${listed.length > shown.length ? `, … (${listed.length - shown.length} more)` : ''}`,
 		].join('\n'),
 		{
-			hint: `${CLI} --search ${JSON.stringify(wanted)} ${block.name}, or ${CLI} ${docArgs(block, file)} --section`,
+			hint: `npm run docs:search ${JSON.stringify(wanted)} ${block.name}, or ${sectionCommand(block, file)}`,
 		},
 	);
 }
@@ -2060,7 +2066,7 @@ function stem(word: string): string {
  */
 function search(index: DocsIndex, term: string, only: DocsBlock[]): Answer {
 	const needle = decodeEntities(term).trim().toLowerCase();
-	if (!needle) throw new UsageError(`--search needs a term, for example: ${CLI} --search ConditionalCheckFailed`);
+	if (!needle) throw new UsageError(`--search needs a term, for example: npm run docs:search ConditionalCheckFailed`);
 	const words = [...new Set(meaningfulWords(needle))];
 	const alternatives = [...new Set(needle.split(/\\?\|/).map((a) => a.trim()))].filter(Boolean);
 	const named = [...new Set(only.map((b) => b.name))].join(', ');
@@ -2093,11 +2099,11 @@ function search(index: DocsIndex, term: string, only: DocsBlock[]): Answer {
 		];
 		const notes = note ? [note] : [];
 		if (hits.length < total) {
-			const more = `${total} matching lines in ${filesHit} files; showing ${hits.length} (at most ${SEARCH_HITS_PER_FILE} per file). Name a block to narrow: ${CLI} --search ${JSON.stringify(term)} <block>`;
+			const more = `${total} matching lines in ${filesHit} files; showing ${hits.length} (at most ${SEARCH_HITS_PER_FILE} per file). Name a block to narrow: npm run docs:search ${JSON.stringify(term)} <block>`;
 			out.push(more);
 			notes.push(more);
 		}
-		out.push(`Read one: ${CLI} <block> --section <section>`);
+		out.push(`Read one: ${CLI} <block> -- --section <section>`);
 		return {
 			text: `${out.join('\n')}\n`,
 			json: { term, hits, total, files: filesHit, ...(notes.length ? { notes } : {}) },

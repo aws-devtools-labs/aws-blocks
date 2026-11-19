@@ -216,7 +216,7 @@ machine: `calibrate.py` never uploads.
   and are discarded.
 
 ```sh
-gh workflow run harbor-agent-check.yml --repo aws-devtools-labs/aws-blocks --ref main -f pr_number=123 -f trials=5
+gh workflow run harbor-agent-check.yml --repo aws/cdk-blocks --ref main -f pr_number=123 -f trials=5
 ```
 
 PR code is built without credentials, but every file packed into the arm's registry, package

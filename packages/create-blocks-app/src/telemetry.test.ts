@@ -690,23 +690,24 @@ describe('create-blocks-app telemetry/first-run notice', () => {
       assert.match(notice, /names and versions of the official Building Blocks the app uses, how many Building Blocks it uses/);
       assert.match(notice, /custom Building Block names are never sent/);
       assert.match(notice, /never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code/);
-      // Opt-outs that work from any directory, and the scope of the commands without --global.
+      // The environment opt-out works before an app exists; the task needs an installed app.
       assert.ok(notice.includes('export AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
-      assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable --global'), notice);
-      assert.ok(notice.includes('npx --no -- blocks-telemetry --disable --global'), notice);
-      assert.doesNotMatch(notice, /npx blocks-telemetry/, 'an unscoped npx name could resolve to a package from the registry');
-      assert.match(notice, /Without --global, these commands opt out the current app only\./);
+      assert.match(notice, /npm run telemetry -- disable --global/);
+      assert.match(notice, /after installing its dependencies/);
+      assert.match(notice, /renamed the task.*use the name it printed/);
+      assert.doesNotMatch(notice, /\bnpx\b/);
+      assert.match(notice, /Without --global, this command opts out the current app only\./);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it('is identical to the core CLI notice', () => {
-    // The two packages print the same notice from separate literals, so compare the sources.
+  it('describes collection and retention the same way as the core notice', () => {
+    // Opt-out instructions differ: the generator can run before an app exists.
     const extract = (url: URL): string => {
       const match = /const FIRST_RUN_NOTICE = `([^`]*)`;/.exec(readFileSync(url, 'utf-8'));
       assert.ok(match, `FIRST_RUN_NOTICE not found in ${url.pathname}`);
-      return match[1];
+      return match[1].split('\nTo opt out everywhere,')[0];
     };
     assert.strictEqual(
       extract(new URL('../src/telemetry.ts', import.meta.url)),

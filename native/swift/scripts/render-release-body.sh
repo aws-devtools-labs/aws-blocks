@@ -9,7 +9,7 @@
 #
 # <template-name> is `monorepo` or `target`. The Publish Swift SDK workflow in
 # this repo renders `monorepo`. `target` is rendered by the "Sync release from
-# aws-blocks" workflow in aws-blocks-swift, which runs this script from the
+# aws-blocks" workflow in cdk-blocks-swift, which runs this script from the
 # swift@<version> tag. The template names, the `<template> <version>` arguments
 # and the entry on STDIN are therefore that repo's interface. Keep them
 # compatible: a break only shows up after a release is tagged, and a fix on
@@ -47,10 +47,10 @@ __CHANGELOG_ENTRY__
 
 This PR was opened by github-actions[bot], so its checks wait for approval. Approve the workflow runs at the bottom of this PR, and merge once they pass.
 
-On merge, this will be tagged `swift@__VERSION__`. Then run the "Sync release from aws-blocks" workflow in aws-blocks-swift with version `__VERSION__` to open the release PR there: https://github.com/aws-devtools-labs/aws-blocks-swift/actions/workflows/sync-from-monorepo.yml
+On merge, this will be tagged `swift@__VERSION__`. Then run the "Sync release from aws-blocks" workflow in cdk-blocks-swift with version `__VERSION__` to open the release PR there: https://github.com/aws/cdk-blocks-swift/actions/workflows/sync-from-monorepo.yml
 EOF
 )
-    CHANGELOG_URL="https://github.com/aws-devtools-labs/aws-blocks/blob/release/swift-${VERSION}/native/swift/CHANGELOG.md"
+    CHANGELOG_URL="https://github.com/aws/cdk-blocks/blob/release/swift-${VERSION}/native/swift/CHANGELOG.md"
     ;;
   target)
     BODY=$(cat <<'EOF'
@@ -58,12 +58,12 @@ EOF
 
 __CHANGELOG_ENTRY__
 
-Synced from aws-blocks tag `swift@__VERSION__`.
+Synced from cdk-blocks tag `swift@__VERSION__`.
 
 On merge, a git tag `__VERSION__` will be created automatically and a GitHub Release published. Swift Package Manager will pick up the new version via the tag.
 EOF
 )
-    CHANGELOG_URL="https://github.com/aws-devtools-labs/aws-blocks/blob/swift@${VERSION}/native/swift/CHANGELOG.md"
+    CHANGELOG_URL="https://github.com/aws/cdk-blocks/blob/swift@${VERSION}/native/swift/CHANGELOG.md"
     ;;
   *)
     echo "Error: unknown template \"${TEMPLATE}\" (expected 'monorepo' or 'target')." >&2

@@ -394,7 +394,7 @@ async function rpc(apiUrl: string, method: string, args: readonly unknown[] = []
 
 function readApiUrl(appDir: string): string {
 	for (const doc of ['outputs.production.json', 'outputs.json']) {
-		const path = join(appDir, '.blocks-sandbox', doc);
+		const path = join(appDir, '.cdk-blocks-sandbox', doc);
 		if (!existsSync(path)) continue;
 		const url = (JSON.parse(readFileSync(path, 'utf8')) as Record<string, Record<string, string>>)[stackName]?.ApiUrl;
 		if (url) return url;

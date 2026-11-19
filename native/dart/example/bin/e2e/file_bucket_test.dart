@@ -35,6 +35,19 @@ void main() async {
     'binary content matches byte-for-byte',
   );
 
+  group('FileBucket: a failed transfer carries its HTTP status');
+  final missing = await blocks.api.fileGetHandle(path: '$prefix/missing.txt');
+  try {
+    await missing.download();
+    check(false, 'downloading a missing file throws');
+  } on FileTransferException catch (e) {
+    check(
+      e.statusCode == 404,
+      'a missing file is a FileTransferException with statusCode 404 '
+      '(got: ${e.statusCode}: ${e.message})',
+    );
+  }
+
   group('FileBucket: server-side put/get');
   await blocks.api.filePut(path: '$prefix/server.txt', content: 'server-side');
   final file = await blocks.api.fileGet(path: '$prefix/server.txt');

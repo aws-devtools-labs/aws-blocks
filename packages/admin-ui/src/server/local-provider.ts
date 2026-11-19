@@ -1704,14 +1704,14 @@ export class LocalDataProvider implements DataProvider {
 	/**
 	 * Stack naming scheme (mirrors core's getStackName, D-012):
 	 * production → `<stackId>-prod`; sandbox → `<stackId>-<sandboxId>` with
-	 * the sandbox id read (never created) from .blocks-sandbox/sandbox-id.txt.
+	 * the sandbox id read (never created) from .cdk-blocks-sandbox/sandbox-id.txt.
 	 */
 	private resolveStackName(stage: string): string | undefined {
 		const stackId = this.readStackId();
 		if (!stackId) return undefined;
 		if (stage === 'production') return `${stackId}-prod`;
 		if (stage === 'sandbox') {
-			const idFile = join(this.projectRoot, '.blocks-sandbox', 'sandbox-id.txt');
+			const idFile = join(this.projectRoot, '.cdk-blocks-sandbox', 'sandbox-id.txt');
 			if (!existsSync(idFile)) return undefined;
 			const sandboxId = readFileSync(idFile, 'utf-8').trim();
 			return sandboxId ? `${stackId}-${sandboxId}` : undefined;

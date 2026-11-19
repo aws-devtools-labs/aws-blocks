@@ -257,9 +257,8 @@ Future<void> _provisionLocalUser(
       password: password,
       email: '$username@example.com',
     );
-  } on BlocksRpcException catch (e) {
-    final data = e.data;
-    if (data is Map && data['name'] == AuthErrorNames.userAlreadyExists) {
+  } on ApiException catch (e) {
+    if (isBlocksError(e, AuthErrorNames.userAlreadyExists)) {
       return; // provisioned by an earlier run
     }
     rethrow;

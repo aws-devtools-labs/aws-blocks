@@ -7,17 +7,23 @@ import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/cor
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { SqlQuery } from './common/sql.js';
 import { RulesEngine } from './dialect/rules-engine.js';
-import type { RowCountingEngine } from './engines/handle.js';
+import { dataApiEngine, type RowCountingEngine } from './engines/handle.js';
 import { PGLITE_SUBDIR, type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
 import { configError } from './errors.js';
 import { localConnectionLabel, sourceConnectionLabel } from './external/connection.js';
 import { prepareLocalSchema } from './migrations/local.js';
 import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
-import { existingCluster, registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
+import {
+	checkLegacyClusterOptions,
+	existingCluster,
+	registerDatabase,
+	registerUniqueId,
+	resolveClusterOptions,
+} from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
-import { roleDatabase, scopedDatabase } from './runtime/scoped.js';
+import { ownerBypassesPolicies, roleDatabase, scopedDatabase } from './runtime/scoped.js';
 import type {
 	ClusterRef,
 	ClusterType,
@@ -25,6 +31,7 @@ import type {
 	DatabaseOptions,
 	ExistingClusterOptions,
 	ExistingClusterRef,
+	LegacyDatabaseClusterOptions,
 	QueryOptions,
 	ScopedDatabase,
 	Transaction,
@@ -69,17 +76,23 @@ export class DatabaseCluster extends Scope {
 	 * privileges are the block's: a role that owns the tables is not filtered by Row Level Security policies.
 	 *
 	 * The connection string is never written in code. With `name`, the block reads the SSM SecureString
-	 * `/<stackName>-<name>` on AWS and the value under `.bb-data/` locally; `cdk-blocks db connect --name <name>`
+	 * `/<stackName>-<name>` on AWS and the value under `.bb-data/` locally; `npm run db -- connect --name <name>`
 	 * checks the database and stores both. With `connectionString`, the block reads your own `AppSetting`
 	 * or `Secret`.
 	 *
 	 * The server certificate is always verified: against `ca` when given, against Node's trust store
 	 * otherwise. Local mode connects to the same kind of database; it does not run migration files.
 	 *
-	 * @param options - `name` or `connectionString` (exactly one), and optionally `ca` (PEM text)
+	 * With `dataApi`, the database is an Aurora PostgreSQL cluster that the block reaches through the RDS
+	 * Data API: no connection string and no network path to the cluster, and the credentials stay in the
+	 * Secrets Manager secret that `secretArn` names. Local mode calls the Data API with your AWS credentials.
+	 *
+	 * @param options - `name`, `connectionString` or `dataApi` (exactly one), and optionally `ca` (PEM text)
 	 * @returns A reference object for the `cluster` option of `Database`
 	 * @throws {DatabaseConfigurationError} If both or neither of `name` and `connectionString` are given,
 	 *   or `ca` is not PEM text
+	 * @throws {DatabaseConfigurationError} If `dataApi` is given with another source or with `ca`, or one
+	 *   of its three values is missing
 	 * @example
 	 * import { DATABASE_CA } from './database.ca.js';
 	 * const db = new Database(scope, 'db', {
@@ -88,6 +101,42 @@ export class DatabaseCluster extends Scope {
 	 */
 	static fromExisting(options: ExistingClusterOptions): ExistingClusterRef {
 		return existingCluster(options);
+	}
+
+	/** @internal */
+	engineFor(schemaName: string): SchemaEngine {
+		return pgliteEngine(getMockDataDir(this), this.type, schemaName);
+	}
+}
+
+/**
+ * The Aurora cluster that `Database` of `@aws-blocks/bb-data` 0.5.0 provisioned, kept in the stack so that an
+ * app can move from that block to this one without a change to the cluster. Give it the id of that `Database`
+ * and the options that the `Database` had, and pass it as the `cluster` of a `Database` with a new id. The
+ * new `Database` uses the tables that are in the cluster, in the `public` schema, and the `_migrations` table
+ * of the earlier block.
+ *
+ * On AWS the block reaches the cluster through the RDS Data API, as the earlier block did. Locally the cluster
+ * is one PGlite under `.bb-data/{fullId}/pglite/`.
+ *
+ * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`. It gets no new features. A
+ * new app uses `DatabaseCluster`.
+ *
+ * @example
+ * // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './aws-blocks/migrations' });
+ * const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1 });
+ * const db = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+ */
+export class LegacyDatabaseCluster extends Scope {
+	/** The engine of the cluster: Aurora PostgreSQL. */
+	readonly type = 'aurora' as const;
+	/** On AWS the block reaches this cluster through the RDS Data API. */
+	readonly dataApi = true as const;
+
+	constructor(scope: ScopeParent, id: string, options?: LegacyDatabaseClusterOptions) {
+		super(id, { parent: scope });
+		checkLegacyClusterOptions(options, this.fullId);
+		registerUniqueId('DatabaseCluster', this, id, this.fullId);
 	}
 
 	/** @internal */
@@ -116,6 +165,8 @@ export class Database extends Scope {
 	readonly cluster: ClusterRef;
 	/** The schema this block's tables live in. */
 	readonly schemaName: string;
+	/** On a `LegacyDatabaseCluster` the statements run as the user that owns the tables. */
+	private readonly ownerRunsStatements: boolean;
 	private readonly migrationsPath: string | undefined;
 
 	private readonly core: DatabaseCore;
@@ -135,6 +186,7 @@ export class Database extends Scope {
 		const resolved = registerDatabase(this, id, this.fullId, options);
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
+		this.ownerRunsStatements = resolved.shared?.dataApi === true;
 
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
 
@@ -143,9 +195,10 @@ export class Database extends Scope {
 		if (resolved.external) {
 			const external = resolved.external;
 			// An existing database is the real one locally too: its schema, roles and data cannot be rebuilt
-			// from files. Migration files are not run from here; a deploy or `cdk-blocks db migrate` runs them.
+			// from files. Migration files are not run from here; a deploy or `npm run db migrate` runs them.
 			// The driver and the settings store are loaded here, so an app without one never loads them.
 			engine = async () => {
+				if (external.dataApi) return dataApiEngine(external.dataApi);
 				const [{ externalEngineFrom }, { localConnectionSetting }] = await Promise.all([
 					import('./external/engine.js'),
 					import('./external/local-store.js'),
@@ -167,13 +220,13 @@ export class Database extends Scope {
 			const dataDir = getMockDataDir(this);
 			// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
 			// (a cache hit) in case a file changed after startup.
-			if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), kind);
+			if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), resolved.fileKind);
 
 			engine = async () => {
 				let inner: SchemaEngine;
 				if (!shared) {
 					inner = pgliteEngine(dataDir, kind, this.schemaName);
-				} else if (shared instanceof DatabaseCluster) {
+				} else if (shared instanceof DatabaseCluster || shared instanceof LegacyDatabaseCluster) {
 					inner = shared.engineFor(this.schemaName);
 				} else {
 					throw configError(
@@ -190,6 +243,7 @@ export class Database extends Scope {
 				const mock = new RulesEngine(inner, kind);
 				const applied = await prepareLocalSchema(mock, inner, {
 					kind,
+					fileKind: resolved.fileKind,
 					schemaName: this.schemaName,
 					migrationsPath: this.migrationsPath,
 					log: (m) => this.log.info(m),
@@ -323,6 +377,7 @@ export class Database extends Scope {
 	 * const notes = await db.asUser(user).query<Note>(sql`SELECT id, body FROM notes`);
 	 */
 	asUser(user: { userId: string }, claims?: Record<string, unknown>): ScopedDatabase {
+		if (this.ownerRunsStatements) throw ownerBypassesPolicies(this.fullId);
 		return scopedDatabase(this, user, claims);
 	}
 

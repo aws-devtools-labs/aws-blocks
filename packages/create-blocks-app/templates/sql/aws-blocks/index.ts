@@ -15,8 +15,8 @@
  * The schema lives in aws-blocks/migrations/main/*.sql — numbered files that run
  * once, automatically, on first query locally and on deploy in AWS.
  *
- * Building Block docs: npx --no -- cdk-blocks docs lists the blocks;
- * npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
+ * Building Block docs: npm run docs lists the blocks;
+ * npm run docs <Block>... prints their docs (--help for more)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import {
@@ -33,7 +33,7 @@ import {
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-// Email + password sign-in (npx --no -- cdk-blocks docs Auth).
+// Email + password sign-in (npm run docs Auth).
 // Sign-up confirms the email address with a 6-digit code; once the caller
 // submits it they are signed in automatically. On AWS, Cognito emails the code.
 const auth = new Auth(scope, 'auth', {
@@ -57,7 +57,7 @@ export const authApi = auth.createApi();
 // Schema lives in aws-blocks/migrations/main/*.sql: the directory is named after
 // the block id ('main') and is resolved from the project root (the dir you run
 // `npm run dev` / `npm run deploy` in). The files are written for Aurora DSQL;
-// see "Migrations" in `npx --no -- cdk-blocks docs Database`.
+// see "Migrations" in `npm run docs Database`.
 const db = new Database(scope, 'main');
 
 // Row shapes returned by the queries below. These mirror the migration DDL;

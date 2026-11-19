@@ -137,8 +137,8 @@ class InlineObjectPropertyTest : FunSpec({
         val source = types(holder(""" "payload": ${obj(inner, "kind")} """, "payload"))
         source shouldContain "public val kind: Kind,"
         source shouldContain """
-            |    @Serializable
-            |    public enum class Kind {
+            |    @Serializable(with = Kind.Serializer::class)
+            |    public sealed class Kind {
         """.trimMargin()
     }
 

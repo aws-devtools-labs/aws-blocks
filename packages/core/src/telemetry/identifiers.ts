@@ -19,10 +19,10 @@ The collection endpoint also receives your IP address, as with any HTTPS request
 It is not stored, except in logs of requests that the endpoint's firewall blocks.
 Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years.
 To opt out everywhere, export AWS_BLOCKS_DISABLE_TELEMETRY=1 (accepts 1, true, or yes, case-insensitive),
-or run one of these inside an AWS Blocks app:
-  npx --no -- cdk-blocks telemetry disable --global
-  npx --no -- blocks-telemetry --disable --global
-Without --global, these commands opt out the current app only.
+or run the telemetry task inside a CDK Blocks app after installing its dependencies:
+  npm run telemetry -- disable --global
+If the scaffold renamed the task to preserve an existing script, use the name it printed.
+Without --global, this command opts out the current app only.
 `;
 
 interface BlocksConfig {

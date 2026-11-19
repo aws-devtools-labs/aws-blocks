@@ -12,8 +12,8 @@ const getBaseUrl = testBaseUrl;
 // production run must not read the sandbox's.
 const outputsFile =
   process.env.BLOCKS_TEST_ENV === 'production'
-    ? '.blocks-sandbox/outputs.production.json'
-    : '.blocks-sandbox/outputs.json';
+    ? '.cdk-blocks-sandbox/outputs.production.json'
+    : '.cdk-blocks-sandbox/outputs.json';
 
 function getStackName(): string {
   const outputs = JSON.parse(readFileSync(outputsFile, 'utf-8'));

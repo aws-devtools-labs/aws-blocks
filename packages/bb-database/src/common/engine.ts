@@ -38,4 +38,10 @@ export interface DatabaseEngine {
 
   /** Clean up resources (close connections, etc.). */
   destroy(): Promise<void>;
+
+  /**
+   * Set by an engine that takes one statement in a call (the RDS Data API). A caller that would send several
+   * statements in one text sends them one by one.
+   */
+  readonly oneStatementPerCall?: boolean;
 }

@@ -5,7 +5,7 @@
  * The dev server's per-port pidfile protocol: the record of the session that
  * owns a front-door port, its exclusive claim, and its release.
  *
- * It has no dependency beyond Node.js, so the `cdk-blocks dev` CLI loads it
+ * It has no dependency beyond Node.js, so the `npm run dev` launcher loads it
  * (`@aws-blocks/core/scripts/dev-pidfile`) to claim the session the moment it
  * starts, well before the dev server it starts has loaded (see
  * {@link claimDevSession}).
@@ -44,9 +44,9 @@ export interface DevServerPidRecord {
    */
   frontend?: { port: number; pgid?: number; listeners?: FrontendListener[] };
   /**
-   * The record of a `cdk-blocks dev` CLI (`pid`, with its own parent as `ppid`)
+   * The record of a `npm run dev` launcher (`pid`, with its own parent as `ppid`)
    * whose dev server has not taken the session over yet. The CLI writes it
-   * before it starts `tsx watch`, so that a `dev stop` during startup finds the
+   * before it starts `tsx watch`, so that a `npm run dev:stop` during startup finds the
    * session, and stops it by signalling the CLI. The dev server that the CLI
    * starts replaces it with its own record (see {@link claimDevPidfile}).
    */
@@ -54,16 +54,16 @@ export interface DevServerPidRecord {
   /** Random, new for every record written: names the record's reap file (see {@link claimDevPidfile}). */
   token?: string;
   /**
-   * The `cdk-blocks sandbox` session (its process) that started this dev server,
+   * The `npm run sandbox` session (its process) that started this dev server,
    * set from {@link SANDBOX_SESSION_ENV}: that session ends with its dev
-   * server, so `dev stop` waits for it and says it stopped the sandbox.
+   * server, so `npm run dev:stop` waits for it and says it stopped the sandbox.
    */
   sandbox?: { pid: number };
   /**
-   * The `cdk-blocks dev` CLI that started this dev server's `tsx watch` (its
+   * The `npm run dev` launcher that started this dev server's `tsx watch` (its
    * process), set from {@link DEV_SESSION_ENV}: the top of the session. On
    * Windows, where a signal runs no cleanup and a process that a shell started
-   * outlives its parent, `dev stop` ends the session by ending this process's
+   * outlives its parent, `npm run dev:stop` ends the session by ending this process's
    * whole tree, once the recorded `tsx watch` is proven to descend from it.
    */
   session?: { pid: number };
@@ -76,7 +76,7 @@ export interface FrontendListener {
 }
 
 /**
- * The environment variable carrying the pid of the `cdk-blocks sandbox` process to
+ * The environment variable carrying the pid of the `npm run sandbox` process to
  * the dev server it starts, which records it (see {@link DevServerPidRecord.sandbox}).
  */
 export const SANDBOX_SESSION_ENV = 'BLOCKS_SANDBOX_SESSION';
@@ -255,7 +255,7 @@ export type PidfileClaim =
   | {
       acquired: false;
       reason: string;
-      /** The port of the session that holds the app: the one `dev stop --port` stops. */
+      /** The port of the session that holds the app: the one `npm run dev:stop -- --port <port>` stops. */
       port: number;
     };
 
@@ -485,12 +485,12 @@ function livePeer(d: ClaimPidfileDeps, path: string): DevServerPidRecord | null 
  *
  * The record of our own `tsx watch` predecessor (same live watcher, exited
  * child) is replaced in place, so the pidfile exists throughout a reload and a
- * `dev stop` run at any moment of it finds the session. Only this start can
+ * `npm run dev:stop` run at any moment of it finds the session. Only this start can
  * take that record over: any other start sees the live watcher and bows out,
  * and `tsx watch` runs one child at a time.
  *
- * Likewise the {@link DevServerPidRecord.starting} record of the `cdk-blocks dev`
- * CLI that started this dev server (`adopt`, its pid) is replaced in place: the
+ * Likewise the {@link DevServerPidRecord.starting} record of the `npm run dev`
+ * launcher that started this dev server (`adopt`, its pid) is replaced in place: the
  * session it claimed is this one. Any other start sees the live CLI and bows out.
  * Neither looks at the other ports again: the session that claimed the app did.
  *
@@ -556,17 +556,17 @@ export function devPidfilePath(port: number): string {
   return join(BLOCKS_SANDBOX_DIR, `dev-server.${port}.pid`);
 }
 
-/** A running `cdk-blocks sandbox` session of an app: its process, and the port of its dev server. */
+/** A running `npm run sandbox` session of an app: its process, and the port of its dev server. */
 export interface SandboxSession {
   pid: number;
   port: number;
 }
 
 /**
- * The `cdk-blocks sandbox` session running in the app at `root`, if any: a live
+ * The `npm run sandbox` session running in the app at `root`, if any: a live
  * dev-server record (see {@link recordLiveness}) whose `sandbox` process is
  * alive too. Its `cdk watch` deploys every change and writes the app's
- * `.blocks-sandbox/cdk.out`, so another sandbox deploy or destroy of the app
+ * `.cdk-blocks-sandbox/cdk.out`, so another sandbox deploy or destroy of the app
  * must not run beside it.
  */
 export function liveSandboxSession(root: string, deps: Partial<ClaimPidfileDeps> = {}): SandboxSession | null {
@@ -591,7 +591,7 @@ export interface DevSession {
 
 /**
  * The live dev session of the app at `root` on any port, if any: a
- * `cdk-blocks dev`, also one still starting, or a `cdk-blocks sandbox`'s dev
+ * `npm run dev`, also one still starting, or a `npm run sandbox`'s dev
  * server (see {@link recordLiveness}). The app runs one dev server at a time,
  * so a command that would start one checks this before it does anything else.
  */
@@ -618,7 +618,7 @@ export function releaseDevPidfile(path: string, owner: number, deps: Partial<Cla
 
 /**
  * Remove the record `inspected` from `path`, which its reader saw dead (or
- * unreadable): never any other record (see the protocol above). For `dev stop`
+ * unreadable): never any other record (see the protocol above). For `npm run dev:stop`
  * and the dev server's hand-off watcher.
  */
 export function reapDevPidfile(path: string, inspected: string, deps: Partial<ClaimPidfileDeps> = {}): void {
@@ -630,7 +630,7 @@ export function reapDevPidfile(path: string, inspected: string, deps: Partial<Cl
 }
 
 /**
- * The environment variable carrying the pid of the `cdk-blocks dev` CLI to the dev
+ * The environment variable carrying the pid of the `npm run dev` launcher to the dev
  * server it starts, which takes over the CLI's starting record (see
  * {@link claimDevSession}).
  */
@@ -651,10 +651,10 @@ export type DevSessionClaim =
     };
 
 /**
- * Claim the dev session on `port` for this process, the `cdk-blocks dev` CLI of
+ * Claim the dev session on `port` for this process, the `npm run dev` launcher of
  * the app at `root`, before it starts its dev server: write a
  * {@link DevServerPidRecord.starting} record with the same exclusive claim as
- * the dev server's. A `dev stop` from then on finds the session and SIGTERMs
+ * the dev server's. A `npm run dev:stop` from then on finds the session and SIGTERMs
  * the CLI, which stops what it started; until now, the pidfile appeared only
  * once the dev server had loaded, and a stop in between found nothing to stop.
  * The dev server, started with {@link DEV_SESSION_ENV} set to this pid, takes

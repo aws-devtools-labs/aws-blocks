@@ -50,7 +50,7 @@ interface SandboxRun {
 		counters?: { blocksCount: number };
 	}>;
 	npmCalls: Array<{ argv: string[]; nodeOptions: string | undefined; appEntry: string | undefined; clientExisted: boolean }>;
-	/** `.blocks-sandbox/config.json`, `config.sandbox.json` and `aws-blocks/client.js` after the run, if written. */
+	/** `.cdk-blocks-sandbox/config.json`, `config.sandbox.json` and `aws-blocks/client.js` after the run, if written. */
 	configJson?: string;
 	sandboxConfigJson?: string;
 	clientJs?: string;
@@ -63,7 +63,7 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 	let failure: SandboxRun;
 
 	const runSandbox = (name: string, failDeploy: boolean, script = 'run-sandbox.mjs', extraEnv: NodeJS.ProcessEnv = {}): SandboxRun => {
-		rmSync(join(appDir, '.blocks-sandbox'), { recursive: true, force: true });
+		rmSync(join(appDir, '.cdk-blocks-sandbox'), { recursive: true, force: true });
 		rmSync(join(appDir, 'aws-blocks', 'client.js'), { force: true });
 		const telemetryFile = join(tmp, `${name}-telemetry.json`);
 		const npmLog = join(tmp, `${name}-npm.jsonl`);
@@ -99,8 +99,8 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 		);
 		const readIfExists = (path: string) => (existsSync(path) ? readFileSync(path, 'utf-8') : undefined);
 		return {
-			configJson: readIfExists(join(appDir, '.blocks-sandbox', 'config.json')),
-			sandboxConfigJson: readIfExists(join(appDir, '.blocks-sandbox', 'config.sandbox.json')),
+			configJson: readIfExists(join(appDir, '.cdk-blocks-sandbox', 'config.json')),
+			sandboxConfigJson: readIfExists(join(appDir, '.cdk-blocks-sandbox', 'config.sandbox.json')),
 			clientJs: readIfExists(join(appDir, 'aws-blocks', 'client.js')),
 			status: result.status,
 			signal: result.signal,
@@ -211,7 +211,7 @@ try {
 	});
 
 	it('a watch-mode sandbox ends, and stops its cdk watch, when its dev server ends (U2)', () => {
-		// `cdk-blocks dev stop` stops the sandbox's dev server; the sandbox used to stay up, headless, its
+		// `npm run dev:stop` stops the sandbox's dev server; the sandbox used to stay up, headless, its
 		// `cdk watch` hotswapping every save into AWS, with no command left that could find or stop it.
 		const watchPid = join(tmp, 'watch.pid');
 		writeFileSync(
@@ -274,13 +274,13 @@ await startSandbox({ backendPath: ${JSON.stringify(BACKEND_PATH)}, devCommand: $
 	it('deploys as `sandbox` does: `cdk synth`, then `cdk deploy` of that assembly, both under `--conditions=cdk`', () => {
 		// Since #778 the sandbox synthesizes first (to check the assembly for
 		// resources Express Mode can't update), then deploys the assembly.
-		const options = { outDir: '.blocks-sandbox', projectRoot: appDir };
+		const options = { outDir: '.cdk-blocks-sandbox', projectRoot: appDir };
 		assert.strictEqual(success.npmCalls.length, 2);
 		const [synth, deploy] = success.npmCalls;
 		assert.deepStrictEqual(synth.argv, buildSandboxSynthArgs(options));
 		assert.deepStrictEqual(
 			deploy.argv,
-			buildSandboxDeployArgs({ ...options, assemblyDir: '.blocks-sandbox/cdk.out' }),
+			buildSandboxDeployArgs({ ...options, assemblyDir: '.cdk-blocks-sandbox/cdk.out' }),
 		);
 		assert.strictEqual(synth.nodeOptions, '--conditions=cdk');
 		assert.strictEqual(deploy.nodeOptions, '--conditions=cdk');

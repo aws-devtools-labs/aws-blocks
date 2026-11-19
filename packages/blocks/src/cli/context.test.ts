@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
 import { resolveDevConfig } from './config.js';
 import {
 	childPids,
@@ -21,9 +20,12 @@ import {
 	logLevelFor,
 	PromptInterrupted,
 	promptLine,
+	resultFormat,
 } from './context.js';
 import { CliError } from './errors.js';
+import { Output, type OutputStream } from './output.js';
 import { parseArgv } from './parse.js';
+import { COMMANDS } from './registry.js';
 import { DEV_FAILURE_FILE_ENV, DEV_OPTIONS_ENV, DEV_STATE, runnerArgs, runnerPath, shellQuote } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
@@ -208,6 +210,69 @@ async function isListening(port: number): Promise<boolean> {
 	}
 }
 
+describe('the result format', () => {
+	const terminal: OutputStream = { write: () => true, isTTY: true };
+	const pipe: OutputStream = { write: () => true };
+	const format = (argv: string[], stdout: OutputStream) => resultFormat(parseArgv(argv), stdout);
+	const JSON_COMMANDS = COMMANDS.filter((command) => command.json);
+
+	it('is JSON for a command with a JSON result when stdout is not a terminal, text on one', () => {
+		assert.deepStrictEqual(JSON_COMMANDS.map((command) => command.path.join(' ')).sort(), [
+			'deploy',
+			'dev stop',
+			'docs',
+			'migrate',
+			'sandbox deploy',
+			'sandbox preview',
+			'whoami',
+		]);
+		// The canonical names, and the aliases that run them.
+		for (const argv of [
+			...JSON_COMMANDS.map((command) => [...command.path]),
+			['dev:stop'],
+			['cleanup'],
+			['sandbox:deploy'],
+			['sandbox', '--deploy-only'],
+			['sandbox:preview'],
+			['sandbox', '--preview'],
+		]) {
+			assert.strictEqual(format(argv, pipe), 'json', argv.join(' '));
+			assert.strictEqual(format(argv, { ...pipe, isTTY: false }), 'json', argv.join(' '));
+			assert.strictEqual(format(argv, terminal), 'text', argv.join(' '));
+		}
+	});
+
+	it('an explicit --output wins, on a terminal or not', () => {
+		for (const stdout of [terminal, pipe]) {
+			assert.strictEqual(format(['whoami', '--output', 'text'], stdout), 'text');
+			assert.strictEqual(format(['--output=json', 'deploy'], stdout), 'json');
+			assert.strictEqual(format(['dev', '--output', 'text', 'stop'], stdout), 'text');
+		}
+	});
+
+	it('is text for every command without a JSON result, and for help and --version, whatever stdout is', () => {
+		const { globals } = parseArgv([]);
+		const others = COMMANDS.filter((command) => !command.json);
+		assert.ok(others.length > 10);
+		for (const command of others) {
+			const parsed = { command, globals, flags: {}, positionals: [], passthrough: [] };
+			assert.strictEqual(resultFormat(parsed, pipe), 'text', command.path.join(' '));
+		}
+		for (const argv of [[], ['--version'], ['deploy', '--version'], ['whoami', '--help'], ['help', 'deploy']]) {
+			assert.strictEqual(format(argv, pipe), 'text', argv.join(' '));
+		}
+	});
+
+	it('prints JSON under --query, even when the format is text', () => {
+		for (const argv of [['whoami', '--query', 'account'], ['whoami', '--output', 'text', '--query', 'account']]) {
+			for (const stdout of [terminal, pipe]) {
+				const out = new Output(stdout, pipe, format(argv, stdout), false, {}, 'account');
+				assert.strictEqual(out.format, 'json', argv.join(' '));
+			}
+		}
+	});
+});
+
 /** Whether any process of the group `pgid` is running, or exited and not yet reaped. */
 function isGroupRunning(pgid: number): boolean {
 	try {
@@ -368,7 +433,7 @@ setInterval(() => {}, 1000);
 	});
 
 	/**
-	 * Start `cdk-blocks dev` in a process group of its own, with a frontend like `npx next dev`, send it
+	 * Start `npm run dev` in a process group of its own, with a frontend like `npx next dev`, send it
 	 * `signal` (to the group, or to the CLI's pid alone), and check that it and its frontend stop
 	 * within `withinMs`, leaving nothing running. Returns the CLI's exit code.
 	 */
@@ -404,8 +469,8 @@ setInterval(() => {}, 1000);
 		);
 		mkdirSync(join(root, 'aws-blocks'));
 		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
-		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
-		const cli = spawn(process.execPath, [bin, 'dev'], {
+		const entry = ['--input-type=module', '-e', `import ${JSON.stringify(new URL('./run.js', import.meta.url).href)}`, '--'];
+		const cli = spawn(process.execPath, [...entry, 'dev'], {
 			cwd: root,
 			detached: true,
 			stdio: ['ignore', 'pipe', 'pipe'],
@@ -438,8 +503,8 @@ setInterval(() => {}, 1000);
 			// reaping a member that the dev server's fallback SIGKILL ended; it is shorter than the server's stop.
 			for (const deadline = Date.now() + 250; isGroupRunning(frontendGroup) && Date.now() < deadline; )
 				await sleep(25);
-			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived cdk-blocks dev\n${output}`);
-			assert.strictEqual(isGroupRunning(cli.pid ?? 0), false, `a process of cdk-blocks dev outlived it\n${output}`);
+			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived npm run dev\n${output}`);
+			assert.strictEqual(isGroupRunning(cli.pid ?? 0), false, `a process of npm run dev outlived it\n${output}`);
 			assert.doesNotMatch(output, /Force killing|Killing process/);
 			assert.ok(took <= withinMs, `stopped after ${took} ms, not within ${withinMs} ms\n${output}`);
 			return code as number | null;
@@ -450,14 +515,14 @@ setInterval(() => {}, 1000);
 		}
 	}
 
-	it('stops `cdk-blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', {
+	it('stops `npm run dev` and its frontend on a SIGTERM to its process group, leaving nothing running', {
 		timeout: 60_000,
 	}, async () => {
 		// As `timeout`, a supervisor or CI sends it: the CLI, `tsx watch` and the dev server all get it.
 		assert.strictEqual(await stopDev('group', 'SIGTERM', 3000), 0);
 	});
 
-	it('stops `cdk-blocks dev` and its frontend within 1.5 s on a SIGTERM or SIGHUP to its pid alone', {
+	it('stops `npm run dev` and its frontend within 1.5 s on a SIGTERM or SIGHUP to its pid alone', {
 		timeout: 60_000,
 	}, async () => {
 		// As `kill <pid>`, an IDE's stop button or a harness that kills a background job sends it.
@@ -467,7 +532,7 @@ setInterval(() => {}, 1000);
 	});
 
 	/**
-	 * Start `cdk-blocks dev` in a process group of its own, run `cdk-blocks dev stop` `delayMs` after it, and
+	 * Start `npm run dev` in a process group of its own, run `npm run dev:stop` `delayMs` after it, and
 	 * check that the stop stopped it, whatever stage of its startup it was in, leaving nothing running.
 	 */
 	async function stopDuringStartup(delayMs: number): Promise<void> {
@@ -490,9 +555,9 @@ setInterval(() => {}, 1000);
 		);
 		mkdirSync(join(root, 'aws-blocks'));
 		writeFileSync(join(root, 'aws-blocks', 'index.ts'), "export const testApi = { ping: async () => 'pong' };\n");
-		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
+		const entry = ['--input-type=module', '-e', `import ${JSON.stringify(new URL('./run.js', import.meta.url).href)}`, '--'];
 		const run = (args: string[], detached: boolean) => {
-			const child = spawn(process.execPath, [bin, ...args], { cwd: root, detached, stdio: ['ignore', 'pipe', 'pipe'] });
+			const child = spawn(process.execPath, [...entry, ...args], { cwd: root, detached, stdio: ['ignore', 'pipe', 'pipe'] });
 			let output = '';
 			child.stdout.on('data', (chunk) => (output += chunk));
 			child.stderr.on('data', (chunk) => (output += chunk));
@@ -505,12 +570,13 @@ setInterval(() => {}, 1000);
 			await sleep(delayMs);
 			const stop = run(['dev', 'stop', '--port', String(port)], false);
 			const stopCode = await stop.closed;
-			const context = `\n--- after ${delayMs} ms, dev stop:\n${stop.output()}\n--- cdk-blocks dev:\n${dev.output()}`;
+			const context = `\n--- after ${delayMs} ms, dev stop:\n${stop.output()}\n--- npm run dev:\n${dev.output()}`;
 			assert.strictEqual(stopCode, 0, context);
-			assert.match(stop.output(), /Stopped the dev server/, context);
+			// Its stdout is a pipe, so the result is JSON.
+			assert.match(stop.output(), /"stopped": true,/, context);
 			const devCode = await Promise.race([dev.closed, sleep(15_000).then(() => 'still running')]);
 			assert.strictEqual(devCode, 0, context);
-			assert.strictEqual(isGroupRunning(pgid), false, `a process of cdk-blocks dev outlived it${context}`);
+			assert.strictEqual(isGroupRunning(pgid), false, `a process of npm run dev outlived it${context}`);
 			// The frontend starts only once the dev server listens, which the later stops may come after.
 			const frontendPid = join(root, 'frontend.pid');
 			if (existsSync(frontendPid)) {
@@ -525,7 +591,7 @@ setInterval(() => {}, 1000);
 			assert.strictEqual(await isListening(port), false, context);
 			assert.strictEqual(await isListening(frontendPort), false, context);
 			// The dev server's pidfile hand-off watcher removes its record just after `tsx watch` exits.
-			const pidfile = join(root, '.blocks-sandbox', `dev-server.${port}.pid`);
+			const pidfile = join(root, '.cdk-blocks-sandbox', `dev-server.${port}.pid`);
 			for (const deadline = Date.now() + 2000; existsSync(pidfile) && Date.now() < deadline; ) await sleep(25);
 			assert.strictEqual(existsSync(pidfile), false, `the pidfile outlived the session${context}`);
 		} finally {
@@ -534,7 +600,7 @@ setInterval(() => {}, 1000);
 		}
 	}
 
-	it('stops `cdk-blocks dev` on a `cdk-blocks dev stop` at any moment of its startup, leaving nothing running', {
+	it('stops `npm run dev` on a `npm run dev:stop` at any moment of its startup, leaving nothing running', {
 		timeout: 300_000,
 	}, async () => {
 		// Before the dev server has loaded, the pidfile names the CLI, which `dev stop` signals.
@@ -619,7 +685,7 @@ setInterval(() => {}, 1000);
 		}
 	});
 
-	/** A backend-only app on a free port, for a real `cdk-blocks dev`; returns its root and port. */
+	/** A backend-only app on a free port, for a real `npm run dev`; returns its root and port. */
 	async function devApp(): Promise<{ root: string; port: number }> {
 		const [port] = await freePorts(1);
 		const root = fixtureApp({ name: 'dev-app', blocks: { dev: { port, frontend: false } } });
@@ -651,10 +717,10 @@ setInterval(() => {}, 1000);
 			.map(([child]) => child);
 	}
 
-	/** Start `cdk-blocks dev` in `root` in a process group of its own. */
+	/** Start `npm run dev` in `root` in a process group of its own. */
 	function startCli(root: string) {
-		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
-		const cli = spawn(process.execPath, [bin, 'dev'], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+		const entry = ['--input-type=module', '-e', `import ${JSON.stringify(new URL('./run.js', import.meta.url).href)}`, '--'];
+		const cli = spawn(process.execPath, [...entry, 'dev'], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
 		let output = '';
 		cli.stdout.on('data', (chunk) => (output += chunk));
 		cli.stderr.on('data', (chunk) => (output += chunk));
@@ -752,7 +818,7 @@ setInterval(() => {}, 1000);
 			const [nextWatcher] = childrenOf(dev.cli.pid ?? 0);
 			const [nextRunner] = childrenOf(nextWatcher ?? 0);
 			assert.ok(nextRunner && nextRunner !== runner, dev.output());
-			// `cdk-blocks dev stop`, or a supervisor: a SIGTERM to the CLI still stops the restarted session.
+			// `npm run dev:stop`, or a supervisor: a SIGTERM to the CLI still stops the restarted session.
 			process.kill(dev.cli.pid ?? 0, 'SIGTERM');
 			const [code] = await within(dev.exited, 20_000, dev.output);
 			assert.strictEqual(code, 0, dev.output());
@@ -778,7 +844,7 @@ setInterval(() => {}, 1000);
 			assert.strictEqual(await isListening(port), false, dev.output());
 			assert.strictEqual(isGroupRunning(dev.cli.pid ?? 0), false, dev.output());
 			assert.strictEqual(
-				existsSync(join(root, '.blocks-sandbox', `dev-server.${port}.pid`)),
+				existsSync(join(root, '.cdk-blocks-sandbox', `dev-server.${port}.pid`)),
 				false,
 				dev.output(),
 			);
@@ -787,7 +853,7 @@ setInterval(() => {}, 1000);
 		}
 	});
 
-	it('records how its dev server runner ended, for cdk-blocks dev', { timeout: 60_000 }, async () => {
+	it('records how its dev server runner ended, for npm run dev', { timeout: 60_000 }, async () => {
 		const { root, port } = await devApp();
 		const file = join(mkdtempSync(join(tmpdir(), 'blocks-dev-state-')), 'failure');
 		const run = () => {
@@ -807,7 +873,7 @@ setInterval(() => {}, 1000);
 		try {
 			await listening(port, () => '');
 			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.running);
-			// `cdk-blocks dev stop`: a SIGTERM to tsx watch, which relays it.
+			// `npm run dev:stop`: a SIGTERM to tsx watch, which relays it.
 			process.kill(first.watcher.pid ?? 0, 'SIGTERM');
 			await within(first.exited, 10_000, () => 'tsx watch');
 			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.stopped);
@@ -820,7 +886,7 @@ setInterval(() => {}, 1000);
 			const [runner] = childrenOf(second.watcher.pid ?? 0);
 			process.kill(runner, 'SIGKILL');
 			while (childrenOf(second.watcher.pid ?? 0).includes(runner)) await sleep(25);
-			// Nothing ran in the runner: `cdk-blocks dev` reads `running` as a runner that a signal killed.
+			// Nothing ran in the runner: `npm run dev` reads `running` as a runner that a signal killed.
 			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.running);
 		} finally {
 			if (isGroupRunning(second.watcher.pid ?? 0)) process.kill(-(second.watcher.pid ?? 0), 'SIGKILL');

@@ -102,21 +102,31 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable, Sendable {
             case email(Email)
             case sms(Sms)
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case `type`
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .email(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("email", forKey: .`type`)
                     try params.encode(to: encoder)
                 case .sms(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("sms", forKey: .`type`)
                     try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
+            }
+
+            public var unknownDiscriminator: String? {
+                guard case .unknown(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["type"] else { return nil }
+                return tag
             }
 
             public init(from decoder: Decoder) throws {
@@ -126,7 +136,7 @@ public final nonisolated class Api: Sendable {
                 case "email": self = .email(try Email(from: decoder))
                 case "sms": self = .sms(try Sms(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .`type`, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }

@@ -74,8 +74,8 @@ void main() {
         "import 'package:blocks_runtime/blocks_runtime.dart';",
         "import 'package:example_iot_native/example_iot_native.dart' "
             'show DeviceLink;',
-        "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;",
-        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;",
+        "export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;",
+        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, RealtimeSubscriptionEndedException, TransferableException, InvalidDescriptorException;",
       ]);
     });
 
@@ -707,10 +707,7 @@ void main() {
     });
 
     test('the root client and namespace class names are errors', () {
-      for (final entry in const {
-        'blocks': 'Blocks',
-        'apiApi': 'ApiApi',
-      }.entries) {
+      for (final entry in const {'blocks': 'Blocks', 'api': 'Api'}.entries) {
         expect(
           () => _generateFrom(_specWith(_binding(export: entry.key))),
           _throwsFormat('also declares ${entry.value}'),

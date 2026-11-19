@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { type BuildingBlockScope, blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaEntry, scopeProviderWaiterTrust } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
+import { CfnCluster } from 'aws-cdk-lib/aws-dsql';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -27,9 +28,10 @@ import {
 	MIGRATION_TOTAL_TIMEOUT_MINUTES,
 	sanitizeDbRoleName,
 } from '../constants.js';
+import { configError } from '../errors.js';
 import type { ResolvedAuroraClusterOptions, ResolvedClusterOptions } from '../runtime/construction.js';
 
-const REMOVAL_POLICY_MAP = {
+export const REMOVAL_POLICY_MAP = {
 	destroy: cdk.RemovalPolicy.DESTROY,
 	retain: cdk.RemovalPolicy.RETAIN,
 	snapshot: cdk.RemovalPolicy.SNAPSHOT,
@@ -48,6 +50,8 @@ interface ClusterInfraProps {
 	owner: BuildingBlockScope;
 	fullId: string;
 	options: ResolvedClusterOptions;
+	/** The logical id of the cluster resource. Without it, the cluster has the id of its construct path. */
+	clusterLogicalId?: string;
 }
 
 interface AttachedBlock {
@@ -95,13 +99,43 @@ interface ClusterResource {
 	adminConnect: iam.PolicyStatement;
 }
 
+const LOGICAL_ID_MAX = 255;
+// Per stack: the block that has each logical id of an owned cluster.
+const ownedClusterIds = new WeakMap<cdk.Stack, Map<string, string>>();
+
+/**
+ * The logical id of the Aurora DSQL cluster that a `Database` owns: `<fullId>DsqlCluster`, without the characters
+ * that a logical id cannot have. `DistributedDatabase` of `@aws-blocks/bb-distributed-data` declared its cluster
+ * as a child of the stack with that name. A `Database` with the id of a deployed `DistributedDatabase` is
+ * therefore the same resource to CloudFormation, and a deploy keeps the cluster and its data.
+ *
+ * Undefined when the id is too long for a logical id; the cluster then has the id of its construct path.
+ */
+export function ownedDsqlClusterLogicalId(stack: cdk.Stack, fullId: string): string | undefined {
+	const logicalId = `${fullId.replace(/[^A-Za-z0-9]/g, '')}DsqlCluster`;
+	if (logicalId.length > LOGICAL_ID_MAX) return undefined;
+	const taken = ownedClusterIds.get(stack) ?? new Map<string, string>();
+	ownedClusterIds.set(stack, taken);
+	const other = taken.get(logicalId);
+	if (other !== undefined && other !== fullId) {
+		throw configError(
+			`Database '${fullId}': its cluster has the CloudFormation logical id '${logicalId}', which the cluster of ` +
+				`Database '${other}' already has. The two ids differ only in characters that a logical id cannot ` +
+				'have. Change one of the ids.',
+		);
+	}
+	taken.set(logicalId, fullId);
+	return logicalId;
+}
+
 // DSQL maps the app's database role to the execution role itself, with `AWS IAM GRANT` (migration-lambda.ts),
 // so one `dsql:DbConnect` grant on the cluster covers it.
-function dsqlCluster(owner: BuildingBlockScope, stack: cdk.Stack): ClusterResource {
-	const resource = new cdk.CfnResource(owner, 'DsqlCluster', {
-		type: 'AWS::DSQL::Cluster',
-		properties: { DeletionProtectionEnabled: owner.defaults.deletionProtection },
+function dsqlCluster(owner: BuildingBlockScope, stack: cdk.Stack, logicalId: string | undefined): ClusterResource {
+	// The typed L1 is taggable, so `Tags.of()` tags (the `app` tag among them) reach the cluster in the template.
+	const resource = new CfnCluster(owner, 'DsqlCluster', {
+		deletionProtectionEnabled: owner.defaults.deletionProtection,
 	});
+	if (logicalId !== undefined) resource.overrideLogicalId(logicalId);
 	const clusterArn = stack.formatArn({ service: 'dsql', resource: 'cluster', resourceName: resource.ref });
 	return {
 		resource,
@@ -198,7 +232,7 @@ export class ClusterInfra {
 			: defaults.removalPolicy;
 		const cluster =
 			options.type === 'dsql'
-				? dsqlCluster(props.owner, stack)
+				? dsqlCluster(props.owner, stack, props.clusterLogicalId)
 				: auroraCluster(props.owner, stack, props.fullId, this.dbRole, options);
 		cluster.resource.applyRemovalPolicy(
 			removalPolicy === cdk.RemovalPolicy.SNAPSHOT && !cluster.supportsSnapshot

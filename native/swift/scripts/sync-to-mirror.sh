@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Copies the Swift SDK (this native/swift directory) into a checkout of the
-# aws-blocks-swift repo, which SwiftPM consumes because it needs Package.swift
+# cdk-blocks-swift repo, which SwiftPM consumes because it needs Package.swift
 # at the repo root.
 #
 # Usage: sync-to-mirror.sh <mirror-checkout-dir>
 #
 # Everything at the mirror root is replaced except the files that only live in
 # the mirror: .git, .github, LICENSE, NOTICE, CODE_OF_CONDUCT.md and
-# CONTRIBUTING.md. The aws-blocks-swift "Sync release from aws-blocks" workflow
+# CONTRIBUTING.md. The cdk-blocks-swift "Sync release from aws-blocks" workflow
 # runs this script from a checkout of aws-blocks at the swift@<version> tag, so
 # the copy rules ship with the release they apply to.
 
@@ -24,7 +24,7 @@ TARGET="$(CDPATH='' cd -P -- "$ARG" && pwd -P)"
 # checkout of the mirror: it has the mirror's own release workflow, which
 # aws-blocks doesn't. (`-e` because .git is a file in a worktree.)
 if [ ! -e "$TARGET/.git" ] || [ ! -f "$TARGET/.github/workflows/publish-tag-release.yml" ]; then
-  echo "Error: '$ARG' is not an aws-blocks-swift checkout." >&2
+  echo "Error: '$ARG' is not a cdk-blocks-swift checkout." >&2
   exit 1
 fi
 # Refuse a TARGET that is SRC or contains it, such as the aws-blocks root.

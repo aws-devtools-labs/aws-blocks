@@ -200,7 +200,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 3. Root `README.md` — how conditional exports work
 
 ### Discovering Building Block Documentation
-When working in an AWS Blocks application (not this monorepo), Building Block documentation ships in `@aws-blocks/blocks`, and `cdk-blocks docs` prints it for the installed version: `npx --no -- cdk-blocks docs` lists all Building Blocks with their package names, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).
+When working in an AWS Blocks application (not this monorepo), Building Block documentation ships in `@aws-blocks/blocks`, and `npm run docs` prints it for the installed version: `npm run docs` lists all Building Blocks with their package names, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). Use `npm run docs:search <term>` to search or `npm run docs:api <Block>` for signatures. Structured tasks print text on a terminal and JSON when piped; use `npm run -s docs KVStore` in pipelines to suppress npm’s banner.
 
 ---
 

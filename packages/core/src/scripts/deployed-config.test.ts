@@ -14,7 +14,7 @@ describe('deployed config — where a deploy records its API URL', () => {
   it('writes config.<stage>.json, never the dev server config.json', () => {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-deployed-config-'));
     try {
-      const out = join(dir, '.blocks-sandbox');
+      const out = join(dir, '.cdk-blocks-sandbox');
       writeDeployedConfig(out, 'production', 'https://p.example/aws-blocks/api');
       writeDeployedConfig(out, 'sandbox', 'https://s.example/aws-blocks/api');
       assert.deepStrictEqual(readdirSync(out).sort(), ['config.production.json', 'config.sandbox.json']);
@@ -38,7 +38,7 @@ describe('deployed config — where a deploy records its API URL', () => {
   it("tells an older deploy's config.json from a dev server's", () => {
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://p.example/aws-blocks/api', environment: 'production' }), 'production');
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://s.example/prod/aws-blocks/api', environment: 'sandbox' }), 'sandbox');
-    // The dev servers of `cdk-blocks dev` and `cdk-blocks sandbox` (which proxies to the sandbox) write http URLs.
+    // The dev servers of `npm run dev` and `npm run sandbox` (which proxies to the sandbox) write http URLs.
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }), null);
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://10.0.0.5:3000/aws-blocks/api', environment: 'sandbox' }), null);
     assert.strictEqual(legacyDeployedStage(null), null);
@@ -46,7 +46,7 @@ describe('deployed config — where a deploy records its API URL', () => {
 
   it("moves an older deploy's config.json to its stage file, keeps a newer record, and leaves a dev server's alone", () => {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-legacy-config-'));
-    const out = join(dir, '.blocks-sandbox');
+    const out = join(dir, '.cdk-blocks-sandbox');
     const write = (name: string, body: unknown) => writeFileSync(join(out, name), JSON.stringify(body));
     const read = (name: string) => JSON.parse(readFileSync(join(out, name), 'utf-8'));
     try {

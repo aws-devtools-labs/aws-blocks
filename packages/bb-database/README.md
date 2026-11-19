@@ -140,7 +140,7 @@ Block options:
 | `removalPolicy` | `'retain' \| 'destroy'` | Only when `cluster` is omitted. With a shared cluster, set it on the `DatabaseCluster`. |
 | `logger` | `ChildLogger` | Logger for internal operations. Defaults to a `Logger` at error level. |
 
-`Database` and `DatabaseCluster` ids are unique per app. A second block with the same id is an error at construction.
+`Database` and `DatabaseCluster` ids are unique per app. A second block with the same id is an error at construction. The ids of two blocks that each own a cluster must also differ in a letter or a digit. Ids that differ only in punctuation, such as `db-a` and `dba` in one scope, are an error at synth.
 
 ## Sharing a cluster
 
@@ -170,7 +170,7 @@ Each `Database` on it gets a schema named after its id, with its own migrations 
 ```ts
 import { Scope } from '@aws-blocks/core';
 import { Database, DatabaseCluster, sql } from '@aws-blocks/bb-database';
-import { DATABASE_CA } from './database.ca.js'; // written by `cdk-blocks db connect --ca`
+import { DATABASE_CA } from './database.ca.js'; // written by `npm run db -- connect --ca <file>`
 
 const scope = new Scope('app');
 const db = new Database(scope, 'db', {
@@ -185,8 +185,9 @@ const open = await db.query<{ id: string; title: string }>(sql`SELECT id, title 
 
 | Option | Type | Description |
 |---|---|---|
-| `name` | `string` | A short name for the connection string. On AWS the block reads the SSM SecureString `/<stackName>-<name>`, so each stage has its own value. Locally it reads the value stored under `.bb-data/`. `cdk-blocks db connect` writes both. |
-| `connectionString` | `AppSetting` or `Secret` | Your own store, in place of `name`, for an app that manages the value itself. The block calls `get()` with its first statement. Give exactly one of `name` and `connectionString`. |
+| `name` | `string` | A short name for the connection string. On AWS the block reads the SSM SecureString `/<stackName>-<name>`, so each stage has its own value. Locally it reads the value stored under `.bb-data/`. `npm run db connect` writes both. |
+| `connectionString` | `AppSetting` or `Secret` | Your own store, in place of `name`, for an app that manages the value itself. The block calls `get()` with its first statement. Give exactly one of `name`, `connectionString` and `dataApi`. |
+| `dataApi` | `{ clusterArn, secretArn, database }` | An Aurora PostgreSQL cluster that the block reaches through the RDS Data API. See [An Aurora cluster through the Data API](#an-aurora-cluster-through-the-data-api). |
 | `ca` | `string` | The certificate authority that signed the server certificate, as PEM text. Supabase uses its own authority, so it needs one. Without `ca`, Node's trust store applies. |
 
 **The connection string is never written in code.** It is a secret: store it with the command below, or in your own `AppSetting` or `Secret`.
@@ -196,12 +197,12 @@ const open = await db.query<{ id: string; title: string }>(sql`SELECT id, title 
 ### The command line
 
 ```sh
-npx cdk-blocks db connect --ca ./prod-ca-2021.crt                      # local: asks for the string, checks, stores
-npx cdk-blocks db connect --stage production --ca ./prod-ca-2021.crt   # the same for a deployed stage
-npx cdk-blocks db migrate                                              # apply ./migrations to the local database
-npx cdk-blocks db types                                                # write aws-blocks/database.types.ts
-npx cdk-blocks db status --stage production                            # applied and pending files
-npx cdk-blocks db migrate --mark-applied 000_baseline.sql              # record a file as applied, without running it
+npm run db -- connect --ca ./prod-ca-2021.crt                      # local: asks for the string, checks, stores
+npm run db -- connect --stage production --ca ./prod-ca-2021.crt   # the same for a deployed stage
+npm run db migrate                                              # apply ./migrations to the local database
+npm run db types                                                # write aws-blocks/database.types.ts
+npm run db -- status --stage production                            # applied and pending files
+npm run db -- migrate --mark-applied 000_baseline.sql              # record a file as applied, without running it
 ```
 
 | Command | What it does |
@@ -212,15 +213,15 @@ npx cdk-blocks db migrate --mark-applied 000_baseline.sql              # record 
 | `types [--out <file>]` | Writes one `Tables` interface for Kysely from the live schema (default `aws-blocks/database.types.ts`). The file needs no import: its `Generated` type is structurally Kysely's. |
 | `status [dir] [--stage sandbox\|production]` | Lists the applied and the pending files. |
 
-`cdk-blocks db` runs the block's own command line (the `bb-database` binary of this package) from the project root, so `@aws-blocks/bb-database` must be installed in the app. Every command takes `--name` and `--schema`, and the `--yes` and `--no-input` of `cdk-blocks`. For one JSON object on stdout, give the option to the tool after `--`: `npx cdk-blocks db status -- --output json`. The exit code is 0 for success, 1 for a failure and 2 for a usage error. The connection string is never an argument and never printed.
+`npm run db` runs the block's own command line (the `bb-database` binary of this package) from the project root, so `@aws-blocks/bb-database` must be installed in the app. Every command takes `--name` and `--schema`, and the `--yes` and `--no-input` of the task runner. To request JSON explicitly, pass `--output json` through both npm and the runner: `npm run -s db -- status -- --output json`. Use `-s` to omit npm’s banner. The exit code is 0 for success, 1 for a failure and 2 for a usage error. The connection string is never an argument and never printed.
 
 ### What to know
 
 - **Use the transaction pooler string for a deployed stage.** A Lambda function outside a VPC has no IPv6 route and no fixed address, so it cannot reach an IPv6-only host or pass an IP allow-list. On Supabase that means the shared pooler, port 6543. Every function instance holds its own connections, and only a transaction pooler shares them.
 - **The block connects as the role in the connection string.** What that role may do is decided by your database, not by the block. A role that owns the tables, a superuser and a role with `BYPASSRLS` are not filtered by Row Level Security policies: a statement on the block itself reads every row. Use [`asRole()`](#row-level-security) to run as a role that policies apply to, or connect as a role with only the grants the app needs.
-- **Local mode is the real database.** `npm run dev` connects to the database of the local value, with the same certificate check. It never runs migration files; `cdk-blocks db migrate` and a deploy do. Use a development project locally, not production.
+- **Local mode is the real database.** `npm run dev` connects to the database of the local value, with the same certificate check. It never runs migration files; `npm run db migrate` and a deploy do. Use a development project locally, not production.
 - **A schema other than `public` needs a session setting** (`search_path`), which a transaction pooler does not keep. Through one, write schema-qualified names.
-- **Changing the password.** Run `cdk-blocks db connect --stage <stage>` again. A function instance that is already running keeps its value until it is replaced.
+- **Changing the password.** Run `npm run db -- connect --stage <stage>` again. A function instance that is already running keeps its value until it is replaced.
 
 ### Starting from the schema you have
 
@@ -246,18 +247,83 @@ Migration files describe changes from now on. A database that was built before t
 3. Prove the file on an empty database of the same provider (a new project, or a new database on your server). A file is one transaction: when a statement fails, the error names it and nothing from the file is applied, so remove that statement and run it again until the file applies.
 
    ```sh
-   npx cdk-blocks db connect --name scratch              # the connection string of the empty database
-   npx cdk-blocks db migrate --name scratch --no-types
+   npm run db -- connect --name scratch              # the connection string of the empty database
+   npm run db -- migrate --name scratch --no-types
    ```
 
 4. Record the file on each database that already has the schema, so that it does not run there:
 
    ```sh
-   npx cdk-blocks db migrate --mark-applied 000_baseline.sql                      # the development database
-   npx cdk-blocks db migrate --mark-applied 000_baseline.sql --stage production   # a deployed stage
+   npm run db -- migrate --mark-applied 000_baseline.sql                      # the development database
+   npm run db -- migrate --mark-applied 000_baseline.sql --stage production   # a deployed stage
    ```
 
 A database without the record gets the file like every other file: a new stage builds its schema from it on the first deploy.
+
+### An Aurora cluster through the Data API
+
+An Aurora PostgreSQL cluster in a VPC has no address that a Lambda function outside the VPC can reach. With `dataApi`, the block does not connect to it. It sends each statement to the [RDS Data API](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api.html) as an HTTPS call, and the Data API reads the user name and password from a Secrets Manager secret. The cluster must have the Data API enabled.
+
+```ts
+import { Scope } from '@aws-blocks/core';
+import { Database, DatabaseCluster } from '@aws-blocks/bb-database';
+
+const scope = new Scope('app');
+const db = new Database(scope, 'db', {
+  cluster: DatabaseCluster.fromExisting({
+    dataApi: {
+      clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:orders',
+      secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:orders-credentials-AbCdEf',
+      database: 'orders',
+    },
+  }),
+  migrationsPath: './migrations',
+});
+```
+
+The three values name the database and are not secrets. The app's execution role and the migration Lambdas get the Data API actions on that cluster and `secretsmanager:GetSecretValue` on that secret. A secret under a customer managed KMS key also needs `kms:Decrypt` for those roles, which you grant.
+
+What is different from a connection string:
+
+- **Every stage uses the cluster that the code names.** The three values are in code, so `npm run dev`, a sandbox and production all use that database, unless your code chooses the values by stage. Local mode calls the Data API of that cluster with your AWS credentials, and a sandbox deploy applies new migration files to it. Name a development cluster while you develop.
+- **One statement in each call.** A transaction is a Data API transaction, and each of its statements is one HTTPS call, so a transaction with many statements is slow.
+- **The Data API ends a statement after 45 seconds.** A migration statement that needs longer, such as an index on a large table, fails. Run that statement on the cluster yourself. The text of a statement is at most 65,536 characters, and a result at most 1 MB.
+- **The schema is `public`.** The Data API keeps no session, so `schemaName` is an error.
+- **Parameters have a type.** A string, a number, a boolean, `null` and a `Buffer` go as they are. A `Date` goes as its ISO text, and an object or an array as its JSON text; the Data API has no array parameters. PostgreSQL does not convert a text parameter by itself, so a statement casts a parameter that it compares with or writes to a `uuid`, `timestamptz` or `jsonb` column: `WHERE id = ${id}::uuid`.
+- **Results.** A `json` or `jsonb` value is parsed and an array is an array. A `numeric`, `timestamp` or `date` value is a string.
+- **A paused cluster.** A statement outside a transaction waits up to 24 seconds for a cluster at a minimum capacity of 0 to resume. After that, and inside a transaction, it fails with `ConnectionFailed`.
+- **The command line.** `npm run db` works with a stored connection string. It has no command for a Data API source. A deploy applies the migration files.
+
+## Upgrade from `@aws-blocks/bb-data`
+
+An app that deployed `Database` of `@aws-blocks/bb-data` has an Aurora PostgreSQL cluster in a VPC, with a credentials secret, and reaches it through the Data API. `LegacyDatabaseCluster` keeps that cluster in the stack as it is. A `Database` of this package then runs on it, with the tables and the `_migrations` table that are in it.
+
+1. In `aws-blocks/index.ts`, change the class on the line of the old `Database` to `LegacyDatabaseCluster`. Keep its id, its scope and the options that shaped the cluster. Add a `Database` with a new id, and give it the cluster and the `migrationsPath`:
+
+   ```ts
+   import { Database, LegacyDatabaseCluster } from '@aws-blocks/bb-database';
+
+   // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './aws-blocks/migrations' });
+   const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1 });
+   const db = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+   ```
+
+   The options of `LegacyDatabaseCluster` are those of release 0.5.0: `minCapacity`, `maxCapacity`, `databaseName`, `removalPolicy`, `postgresVersion`, `subnets`, `storageEncryptionKeyArn` and `pointInTimeRecovery`. Give each one the value that the old `Database` had. It also reads the context key `@aws-blocks/bb-data:encryptStorageByDefault` of your `cdk.json`; keep that key.
+
+2. Keep the migration files and their names. A file that is in the `_migrations` table does not run again, and the block does not check these files. Local mode runs every file again in a new PGlite database, each file in one transaction; a file with a statement that PostgreSQL refuses in a transaction, such as `CREATE INDEX CONCURRENTLY`, fails there.
+
+3. Before you deploy, run `cdk diff`. No resource of the types `AWS::RDS::*`, `AWS::SecretsManager::Secret` and `AWS::EC2::*` may show as changed, removed or added. A change there means that an id, the scope, the stack name or an option is not the one of the old `Database`.
+
+4. Deploy. The migration function of the old block leaves the stack, and the block's own take its place.
+
+`query`, `queryOne`, `execute`, `transaction` and `sql` take the same arguments. `db.cluster.kind` is `'aurora'`, and the statements run as the user of the cluster's secret, through the Data API, with [the differences above](#an-aurora-cluster-through-the-data-api).
+
+- **`withRLS()` is now [`asRole()`](#policies-written-for-a-role).** `db.withRLS({ userId })` becomes `db.asRole('authenticated', { sub: userId, role: 'authenticated' })`. `asUser()` is an error on a `LegacyDatabaseCluster`: the user of the secret owns the tables, and PostgreSQL applies no policy to an owner.
+- **Test on a deployed stage.** Locally the cluster is a PGlite database, as it was. PGlite accepts a parameter without a cast where the Data API does not, so a statement can pass locally and fail on AWS.
+
+`LegacyDatabaseCluster` is deprecated and frozen. It exists for this upgrade and gets no new features. To leave it, add a `Database` on a new cluster, copy the rows, and switch your handlers.
+
+**Do not remove a `LegacyDatabaseCluster` that still holds data you need.** When it leaves the app with the removal policy `retain` (the production default), CloudFormation keeps the cluster but deletes its credentials secret, without a recovery window, and then tries to delete the VPC that the cluster is still in. In a test that deploy took 1 hour 49 minutes and left the VPC behind. Take a snapshot and delete the cluster yourself first.
 
 ## Migrations
 
@@ -321,16 +387,16 @@ On a `dsql` cluster the file resumes where it stopped. A failed index build or c
 
 On an existing database ([Existing database](#existing-database)) the files run as written: the block does not check them, because they may be older than the block, and PostgreSQL reports what it refuses. Each pending file is one transaction, and the file is recorded in that same transaction, so two runs at the same time cannot both apply it: one commits, and the other is rolled back and says so. The server ends a transaction that sits idle for a minute, so a run that stops in the middle of a file does not keep its locks. A deploy runs the files in a function outside any VPC, with the stored connection string; a failure stops the deploy and names the file, the statement, the SQLSTATE and the server's message. A file made by `pg_dump` runs too: its session settings are reset before the commit, and its `SET transaction_timeout` line is skipped on a server older than PostgreSQL 17. A file's own `SET` of a limit that the run applies is also skipped, so that the limit holds for the whole file: `idle_in_transaction_session_timeout` in every run, and `statement_timeout` and `transaction_timeout` in a deploy.
 
-An app that used `@aws-blocks/bb-data` with `fromExisting()` keeps its files and its `_migrations` table: point `migrationsPath` at the same directory (`./migrations`), and no file runs a second time. Its connection string is already in SSM as `/<stackName>-db-url`, which is what `name: 'db-url'` reads. A new stage needs `cdk-blocks db connect --stage` once: `sandbox` and `deploy` do not copy a `*_DB_URL` variable from the env file any more.
+An app that used `@aws-blocks/bb-data` with `fromExisting()` keeps its files and its `_migrations` table: point `migrationsPath` at the same directory (`./migrations`), and no file runs a second time. Its connection string is already in SSM as `/<stackName>-db-url`, which is what `name: 'db-url'` reads. A new stage needs `npm run db -- connect --stage <stage>` once: `sandbox` and `deploy` do not copy a `*_DB_URL` variable from the env file any more.
 ### Types and status from the command line
 
 For a block that provisions its cluster, name the block. These two commands need no AWS account and no connection string.
 
 ```sh
-npx cdk-blocks db types --block shop                                  # aws-blocks/migrations/shop -> aws-blocks/database.types.ts
-npx cdk-blocks db types --block orders --type aurora --out aws-blocks/orders.types.ts
-npx cdk-blocks db status --block shop                                 # applied and pending files in the local database
-npx cdk-blocks db status --block orders --cluster main                # a block on the DatabaseCluster 'main'
+npm run db -- types --block shop                                  # aws-blocks/migrations/shop -> aws-blocks/database.types.ts
+npm run db -- types --block orders --type aurora --out aws-blocks/orders.types.ts
+npm run db -- status --block shop                                 # applied and pending files in the local database
+npm run db -- status --block orders --cluster main                # a block on the DatabaseCluster 'main'
 ```
 
 | Command | What it does |
@@ -381,7 +447,7 @@ const recent = await kysely.selectFrom('orders').select(['id', 'total']).where('
 
 Statements run through the same engine as `query()`: they use the block's schema, the same DML-only access and the errors under [Errors](#errors). Create the Kysely instance at module scope; it is safe during CDK synth. Plugins and logging are options of Kysely.
 
-- **Types.** Declare the tables yourself, or generate them from the block's migration files: `npx cdk-blocks db types --block <id>` writes one `Tables` interface (see [Types and status from the command line](#types-and-status-from-the-command-line)). A `bigint` column is a `number`, a `numeric` column is a `string` and a `timestamp` column is a `Date`, locally and on AWS.
+- **Types.** Declare the tables yourself, or generate them from the block's migration files: `npm run db -- types --block <id>` writes one `Tables` interface (see [Types and status from the command line](#types-and-status-from-the-command-line)). A `bigint` column is a `number`, a `numeric` column is a `string` and a `timestamp` column is a `Date`, locally and on AWS.
 - **Transactions.** Inside a Kysely transaction, run every statement on `trx`. A statement on the block or on the root Kysely instance is not part of that transaction: on AWS it runs on another connection, and in local mode it fails after five seconds. A Kysely statement inside the block's `transaction()` callback runs in that transaction.
 - **Errors.** An error that the callback of a Kysely transaction throws reaches the caller as thrown; the block does not change it to `TransactionFailed`. A Kysely transaction is not re-run on a conflict, so on a `dsql` cluster use `transaction(fn, { retryOnConflict: true })` for work that can conflict.
 - **`dsql` clusters.** Isolation levels and savepoints are not available.
@@ -447,7 +513,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 Each transaction on the returned object starts with one statement, `SELECT set_config('role', $1, true), set_config('request.jwt.claims', $2, true)`: `SET LOCAL ROLE` and the claims, both for that transaction only. The role and the claims end with the transaction, so it is safe through a transaction pooler. The same notes as for `asUser()` apply (errors, transactions, cost), and these:
 
 - **The claims are yours, unchanged.** Pass what your policies read. Supabase's `auth.uid()` reads `sub` and expects the Supabase user id, so pass that id when the rows are keyed by it. Only server code sets claims; take them from a verified session, never from request input.
-- **The connection role must be a member of the role.** Otherwise the first statement fails with `DatabaseConfigurationError`, and the function's log names the `GRANT` to run. `cdk-blocks db connect` lists the roles the connection role may switch to.
+- **The connection role must be a member of the role.** Otherwise the first statement fails with `DatabaseConfigurationError`, and the function's log names the `GRANT` to run. `npm run db connect` lists the roles the connection role may switch to.
 - **Write a policy so that it accepts an empty claims setting.** After a transaction that set the claims, PostgreSQL leaves `request.jwt.claims` on that connection as an empty string, and `''::jsonb` is an error. A later statement on the block itself then fails with `QueryFailed` instead of reading no rows, when the connection role is one that policies apply to. Write `nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'`. A cluster that the block provisions gives every connection the default `{}`; a transaction pooler does not keep such a default.
 - **A statement can undo the switch** with `RESET ROLE` inside its own transaction. The app writes the SQL, so this is a rule for the app's own statements, not a boundary.
 
@@ -456,7 +522,7 @@ With Kysely, keep one instance for the database and set the identity inside a tr
 ```ts
 import { Kysely, sql as raw } from 'kysely';
 import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
-import type { Tables } from './database.types.js'; // written by `cdk-blocks db types`
+import type { Tables } from './database.types.js'; // written by `npm run db types`
 
 const kysely = new Kysely<Tables>({ dialect: new DatabaseDialect(db) });
 
@@ -530,6 +596,8 @@ Per cluster, whether a block owns it or a `DatabaseCluster` declares it:
 - **Two migration Lambdas** (`onEvent` and `isComplete`), one log group, and a custom-resource provider that waits for DSQL index and validation jobs for up to 55 minutes.
 - **IAM:** on `dsql`, the app's execution role gets `dsql:DbConnect` on the cluster and the migration Lambdas get `dsql:DbConnectAdmin`. On `aurora`, the execution role gets `rds-db:connect` for the app's database role and the migration Lambdas get it for `postgres`.
 - **Config:** `BLOCKS_{CLUSTER_ID}_ENDPOINT` and `BLOCKS_{CLUSTER_ID}_REGION` (the cluster's full id upper-cased, with `_` for other characters), injected through the config bucket.
+
+A `LegacyDatabaseCluster` declares what `Database` of `@aws-blocks/bb-data` 0.5.0 declared: an Aurora PostgreSQL Serverless v2 cluster with one writer instance and the Data API enabled, its credentials secret, a security group, and a VPC with two isolated subnets when the app provides none. The execution role gets the Data API actions on the cluster and the read of the secret, and the config has `BLOCKS_{CLUSTER_ID}_CLUSTER_ARN`, `_SECRET_ARN` and `_DATABASE`. A block on it has two migration Lambdas of its own, outside the VPC.
 
 Per block: one CloudFormation custom resource that applies its migrations, and one S3 asset with the migration files when it has any. The migration Lambda also creates a per-cluster database role for the app, maps it to IAM (`AWS IAM GRANT` to the execution role on `dsql`; `GRANT rds_iam` on `aurora`, where the `rds-db:connect` grant decides who gets a token for it), and grants it `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE, SELECT` on its sequences. DDL needs the admin token, which only the migration Lambdas hold.
 

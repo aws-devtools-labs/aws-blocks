@@ -18,19 +18,19 @@ npm run test:e2e   # waits for heartbeat's first run (about a minute)
 `api.lastRun('heartbeat')` returns the latest run, or `null` before the first
 one. Schedules take `rate(<n> minutes|hours|days)` (one minute minimum) or a
 6-field `cron(...)` expression; see
-`npx --no -- cdk-blocks docs CronJob`.
+`npm run docs CronJob`.
 
 ## For Coding Agents
 
-**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more). `AGENTS.md` explains the rest.**
+**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.**
 
 **After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
 
 ## Documentation Location
 
-**All Blocks documentation comes from `npx --no -- cdk-blocks docs`:**
+**All Blocks documentation comes from `npm run docs`:**
 
-The Blocks package handles infrastructure, backend logic, APIs, storage, authentication, and more through Building Blocks. Run `npx --no -- cdk-blocks docs` to list the Building Blocks, and `npx --no -- cdk-blocks docs <Block>...` to print their docs (`--help` for more).
+The Blocks package handles infrastructure, backend logic, APIs, storage, authentication, and more through Building Blocks. Run `npm run docs` to list the Building Blocks, and `npm run docs <Block>...` to print their docs (`npm run docs -- --help` for more).
 
 ## For Humans
 
@@ -48,13 +48,12 @@ npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against dev server
 npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
 npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
-npm run secret -- set KEY # Set a secret (also list, remove KEY)
-npm run config -- set KEY value # Set a config value (also list, remove KEY)
+npm run secret set KEY # Set a secret (also list, remove KEY)
+npm run config set KEY value # Set a config value (also list, remove KEY)
 npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
 ```
 
-Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
-`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
 The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
@@ -83,11 +82,11 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 - **Backend:** `aws-blocks/index.ts` — Define APIs and Building Blocks
 - **Infrastructure:** Inferred from code, works locally and on AWS
 
-**Building Block docs: `npx --no -- cdk-blocks docs` lists the blocks, and `npx --no -- cdk-blocks docs <Block>...` prints their docs (`--help` for more).**
+**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more).**
 
 ## Stack naming
 
-Your CloudFormation stack names are derived from the `stackId` in `.blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
+Your CloudFormation stack names are derived from the `stackId` in `.blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
 
 To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
 
@@ -101,7 +100,7 @@ This template is backend-only. To add a frontend:
    ```
    Then add a build script and the frontend dev server to `package.json`. Replace
    `"blocks": { "dev": { "port": 3001, "frontend": false } }` with the frontend settings, so `npm run dev`
-   (`cdk-blocks dev`) starts Vite behind the dev server and serves both on http://localhost:3000:
+   (`npm run dev`) starts Vite behind the dev server and serves both on http://localhost:3000:
    ```json
    {
      "scripts": {

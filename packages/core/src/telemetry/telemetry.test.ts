@@ -1101,12 +1101,11 @@ describe('telemetry/identifiers first-run notice', () => {
     assert.match(notice, /names and versions of the official Building Blocks the app uses, how many Building Blocks it uses/);
     assert.match(notice, /custom Building Block names are never sent/);
     assert.match(notice, /never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code/);
-    // Opt-outs that work from any directory, and the scope of the commands without --global.
+    // Opt-outs that work from any directory, and the scope of the task without --global.
     assert.ok(notice.includes('export AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
-    assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable --global'), notice);
-    assert.ok(notice.includes('npx --no -- blocks-telemetry --disable --global'), notice);
+    assert.ok(notice.includes('npm run telemetry -- disable --global'), notice);
     assert.doesNotMatch(notice, /npx blocks-telemetry/, 'an unscoped npx name could resolve to a package from the registry');
-    assert.match(notice, /Without --global, these commands opt out the current app only\./);
+    assert.match(notice, /Without --global, this command opts out the current app only\./);
 
     rmSync(tmp, { recursive: true, force: true });
   });

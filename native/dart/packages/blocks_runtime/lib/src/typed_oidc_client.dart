@@ -18,13 +18,13 @@ abstract interface class OidcProvider {
   String get providerName;
 }
 
-/// An [OidcClient] whose [signIn], [signInRelay] and [exchange] take only the
+/// An [OidcClient] whose [signInDirect], [signIn] and [exchange] take only the
 /// providers of type [P], the enum a generated client generates for a method
 /// whose spec names its providers:
 ///
 /// ```dart
 /// final oidc = await blocks.auth.getClient(); // TypedOidcClient<AuthApiGetClientProvider>
-/// final user = await oidc.signInRelay(
+/// final user = await oidc.signIn(
 ///   AuthApiGetClientProvider.google,
 ///   launcher: launcher,
 ///   relayTo: 'com.example.app://auth',
@@ -52,30 +52,34 @@ abstract interface class OidcProvider {
 /// - A `dynamic` call reaches the [OidcClient] methods, so passing a
 ///   generated value through `dynamic` throws a `TypeError`.
 ///
-/// Whichever way a provider reaches [signIn], [signInRelay] or [exchange],
+/// Whichever way a provider reaches [signInDirect], [signIn] or [exchange],
 /// one the backend doesn't list throws [OidcUnknownProviderException].
 extension type TypedOidcClient<P extends OidcProvider>(OidcClient untyped)
     implements OidcClient {
-  /// [OidcClient.signIn] with [provider]'s name.
-  Future<OidcUser> signIn(
+  /// [OidcClient.signInDirect] with [provider]'s name.
+  Future<OidcUser> signInDirect(
     P provider, {
     required BrowserLauncher launcher,
     required String redirectUri,
-  }) => untyped.signIn(
+    Future<void>? cancel,
+  }) => untyped.signInDirect(
     provider.providerName,
     launcher: launcher,
     redirectUri: redirectUri,
+    cancel: cancel,
   );
 
-  /// [OidcClient.signInRelay] with [provider]'s name.
-  Future<OidcUser> signInRelay(
+  /// [OidcClient.signIn] with [provider]'s name.
+  Future<OidcUser> signIn(
     P provider, {
-    required BrowserLauncher launcher,
-    required String relayTo,
-  }) => untyped.signInRelay(
+    BrowserLauncher? launcher,
+    String? relayTo,
+    Future<void>? cancel,
+  }) => untyped.signIn(
     provider.providerName,
     launcher: launcher,
     relayTo: relayTo,
+    cancel: cancel,
   );
 
   /// [OidcClient.exchange] with [provider]'s name.

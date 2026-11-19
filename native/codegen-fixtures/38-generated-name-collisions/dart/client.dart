@@ -5,7 +5,7 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
 
 // --- Models ---
 
@@ -108,21 +108,49 @@ class ProfileMeta {
 }
 
 
-enum ProfileState {
+sealed class ProfileState {
+  static const inProgress = ProfileStateKnown.inProgress;
+  static const in_progress = ProfileStateKnown.in_progress;
+  static const values = ProfileStateKnown.values;
+
+  String toJson();
+  static ProfileState fromJson(String json) => ProfileStateKnown._jsonMap[json] ?? ProfileStateUnknown(json);
+}
+
+enum ProfileStateKnown implements ProfileState {
   inProgress,
   in_progress
 ;
 
-  static const _jsonMap = <String, ProfileState>{
+  static const _jsonMap = <String, ProfileStateKnown>{
     'in-progress': inProgress,
     'in_progress': in_progress,
   };
-  static const _toJsonMap = <ProfileState, String>{
+  static const _toJsonMap = <ProfileStateKnown, String>{
     inProgress: 'in-progress',
     in_progress: 'in_progress',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static ProfileState fromJson(String json) => _jsonMap[json]!;
+}
+
+final class ProfileStateUnknown implements ProfileState {
+  final String value;
+
+  const ProfileStateUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ProfileStateUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'ProfileStateUnknown' '($value)';
 }
 
 
@@ -351,9 +379,9 @@ class Same2 {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<ApiSendResult> send({required String request, required String class$, String? args, String? json}) async {
     final params = <dynamic>[
@@ -424,13 +452,20 @@ class ABApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
   late final ABApi aB;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    api = ApiApi(client);
+    _client = client;
+    api = Api(client);
     aB = ABApi(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 

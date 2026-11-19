@@ -344,7 +344,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     };
   }
   const self: DevServerPidRecord = { pid: 2000, ppid: 900, port: 3000, command: 'b', parentCommand: 'p' };
-  const path = '/app/.blocks-sandbox/dev-server.3000.pid';
+  const path = '/app/.cdk-blocks-sandbox/dev-server.3000.pid';
 
   it('creates the pidfile when there is none', () => {
     const fs = memoryFs();
@@ -364,9 +364,9 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
 
   it("refuses while the app's dev server on another port is alive, names that port, and removes its own record", () => {
     // Two dev servers of one app share its .bb-data: the second one, on another port, must not start either.
-    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const owner = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a', parentCommand: 'q' });
-    const foreign = '/elsewhere/.blocks-sandbox/dev-server.4200.pid';
+    const foreign = '/elsewhere/.cdk-blocks-sandbox/dev-server.4200.pid';
     const fs = memoryFs({ [other]: owner, [foreign]: JSON.stringify({ pid: 1001, ppid: 501, port: 4200, command: 'c' }) });
     const commandOf = (pid: number) => ({ 1000: 'a', 500: 'q', 1001: 'c' })[pid] ?? '';
     const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: () => true, commandOf });
@@ -380,7 +380,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
   });
 
   it("starts when the app's record on another port is stale, and leaves that record to its own port", () => {
-    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const stale = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a' });
     const fs = memoryFs({ [other]: stale });
     const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: (pid) => pid === 2000, commandOf: () => 'b' });
@@ -391,7 +391,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
   it('takes its own reload over in place without looking at the other ports again', () => {
     // A dev server whose tsx watch reloads it keeps the session, even while a refused start's record lingers.
     const predecessor = { pid: 1999, ppid: 900, port: 3000, command: 'old', parentCommand: 'tsx watch server.ts' };
-    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const fs = memoryFs({ [path]: JSON.stringify(predecessor), [other]: JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a' }) });
     const commandOf = (pid: number) => ({ 900: 'tsx watch server.ts', 1000: 'a', 2000: 'b' })[pid] ?? '';
     const claim = claimDevPidfile(path, { ...self, parentCommand: 'tsx watch server.ts' }, {
@@ -593,10 +593,10 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     assert.strictEqual(fs.files.get(path), other);
   });
 
-  describe('the starting record of a cdk-blocks dev CLI', () => {
+  describe('the starting record of a dev task launcher', () => {
     // The CLI (pid 700, run from a shell, pid 600) claimed the port before it started tsx watch.
-    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node cdk-blocks dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
-    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node cdk-blocks dev' : 'bash') };
+    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
+    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev' : 'bash') };
 
     it('is replaced in place by the dev server that CLI started, which keeps its leftover frontend group', () => {
       const fs = memoryFs({ [path]: JSON.stringify(cli) });
@@ -832,7 +832,7 @@ describe('Windows processes — CIM query, creation-time identity and ancestry',
 
 // ── runsUnderTsxWatch — a failed first start ends its tsx watch too ──────────
 describe('runsUnderTsxWatch — whether a failed first start must end its tsx watch', () => {
-  it('believes cdk-blocks dev, which says so, where the parent command line cannot be read (Windows)', () => {
+  it('believes npm run dev, which says so, where the parent command line cannot be read (Windows)', () => {
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '1' }, ''), true);
     assert.strictEqual(runsUnderTsxWatch({}, ''), false);
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '0' }, 'bash'), false);
@@ -986,7 +986,7 @@ describe('claimDevSession — release', () => {
     // A backend that throws while it loads ends its dev server before it removes the record it took over.
     const root = mkdtempSync(join(tmpdir(), 'dev-session-release-'));
     try {
-      const pidfile = join(root, '.blocks-sandbox', 'dev-server.41951.pid');
+      const pidfile = join(root, '.cdk-blocks-sandbox', 'dev-server.41951.pid');
       const first = claimDevSession(root, 41951);
       assert.ok(first.acquired);
       writeFileSync(pidfile, JSON.stringify({ pid: 4194302, ppid: 4194303, port: 41951, command: 'node gone.js', token: 'dead-run' }));

@@ -1,15 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Windows regression check of the `cdk-blocks dev` session, run by templates-e2e.mjs
+// Windows regression check of the `dev task` session, run by templates-e2e.mjs
 // on the Windows lane against the scaffolded `default` app (a backend and a Vite
 // frontend). Each template's `test:e2e` tears its dev server down with
 // `taskkill /T /F` from the top, which hides what a user runs:
-//   1. `cdk-blocks dev` → HTTP 200 → a backend edit (a `tsx watch` restart) → still 200;
-//   2. `cdk-blocks dev stop` → no node/tsx/vite/esbuild process of the app is left,
+//   1. `dev task` → HTTP 200 → a backend edit (a `tsx watch` restart) → still 200;
+//   2. `dev:stop task` → no node/tsx/vite/esbuild process of the app is left,
 //      both ports are free, and the pidfile is gone;
-//   3. a hard kill of the `cdk-blocks dev` CLI (as Task Manager does), then a new
-//      `cdk-blocks dev` that starts, and stops cleanly;
+//   3. a hard kill of the `dev task` CLI (as Task Manager does), then a new
+//      `dev task` that starts, and stops cleanly;
 //   4. a first start whose port another process holds exits non-zero.
 // Every wait is bounded. Ports 4510/4610, so a developer's 3000/3100 are never touched.
 
@@ -69,10 +69,11 @@ function listening(port) {
 	});
 }
 
-/** Check the Windows `cdk-blocks dev` lifecycle in `app`; throws on the first failure. */
+/** Check the Windows `dev task` lifecycle in `app`; throws on the first failure. */
 export async function checkDevLifecycle(app, env, logDir) {
-	const bin = join(app, 'node_modules', '@aws-blocks', 'blocks', 'dist', 'cli', 'bin.js');
-	const pidfile = join(app, '.blocks-sandbox', `dev-server.${PORT}.pid`);
+	// Use the package bootstrap directly so the hard-kill target is the session owner, not npm or cmd.exe.
+	const task = ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--'];
+	const pidfile = join(app, '.cdk-blocks-sandbox', `dev-server.${PORT}.pid`);
 	const record = () => {
 		try {
 			return JSON.parse(readFileSync(pidfile, 'utf-8'));
@@ -80,10 +81,10 @@ export async function checkDevLifecycle(app, env, logDir) {
 			return null;
 		}
 	};
-	const devArgs = [bin, 'dev', '--port', String(PORT), '--frontend-port', String(FRONTEND_PORT)];
+	const devArgs = [...task, 'dev', '--port', String(PORT), '--frontend-port', String(FRONTEND_PORT)];
 	let run = 0;
 	const sessions = [];
-	/** Start `cdk-blocks dev` as a user does, its output in a log file; resolves `exit` with its exit code. */
+	/** Start `dev task` through the package bootstrap, its output in a log file; resolves `exit` with its exit code. */
 	const startDev = () => {
 		const log = join(logDir, `dev-lifecycle-${++run}.log`);
 		writeFileSync(log, '');
@@ -99,8 +100,8 @@ export async function checkDevLifecycle(app, env, logDir) {
 		throw new Error(`dev lifecycle: ${message}${output}`);
 	};
 	const ready = async (session) => {
-		if (!(await waitFor(async () => (await status(`http://localhost:${PORT}/.blocks-sandbox/config.json`)) === 200, 120_000)))
-			fail('cdk-blocks dev did not answer HTTP 200 within 120 s', session);
+		if (!(await waitFor(async () => (await status(`http://localhost:${PORT}/.cdk-blocks-sandbox/config.json`)) === 200, 120_000)))
+			fail('dev task did not answer HTTP 200 within 120 s', session);
 		if (!(await waitFor(async () => (await status(`http://localhost:${PORT}/`)) === 200, 60_000)))
 			fail('the frontend did not answer through the dev server within 60 s', session);
 		// On Windows the dev server records its frontend's listeners once they listen (one CIM query).
@@ -108,14 +109,14 @@ export async function checkDevLifecycle(app, env, logDir) {
 			fail(`the pidfile names no frontend listener: ${JSON.stringify(record())}`, session);
 	};
 	const stopped = async (session) => {
-		const stop = spawnSync(process.execPath, [bin, 'dev', 'stop', '--port', String(PORT)], {
+		const stop = spawnSync(process.execPath, [...task, 'dev', 'stop', '--port', String(PORT)], {
 			cwd: app,
 			env,
 			encoding: 'utf-8',
 			timeout: 60_000,
 		});
-		console.log(`  cdk-blocks dev stop: exit ${stop.status}\n${stop.stdout}${stop.stderr}`);
-		if (stop.status !== 0) fail(`cdk-blocks dev stop exited ${stop.status}`, session);
+		console.log(`  dev:stop task: exit ${stop.status}\n${stop.stdout}${stop.stderr}`);
+		if (stop.status !== 0) fail(`dev:stop task exited ${stop.status}`, session);
 		const clean = await waitFor(
 			() => appProcesses(app).length === 0 && !listening(PORT) && !listening(FRONTEND_PORT) && !existsSync(pidfile),
 			30_000,
@@ -123,7 +124,7 @@ export async function checkDevLifecycle(app, env, logDir) {
 		if (!clean) {
 			const left = appProcesses(app).map((p) => `  pid=${p.ProcessId} ${p.Name}: ${p.CommandLine}`);
 			fail(
-				`30 s after cdk-blocks dev stop: ${left.length} process(es) left, :${PORT} ${listening(PORT) ? 'bound' : 'free'}, ` +
+				`30 s after dev:stop task: ${left.length} process(es) left, :${PORT} ${listening(PORT) ? 'bound' : 'free'}, ` +
 					`:${FRONTEND_PORT} ${listening(FRONTEND_PORT) ? 'bound' : 'free'}, pidfile ${existsSync(pidfile) ? 'present' : 'gone'}\n${left.join('\n')}`,
 				session,
 			);
@@ -131,12 +132,12 @@ export async function checkDevLifecycle(app, env, logDir) {
 		// A save after the stop must not start the dev server again.
 		appendFileSync(join(app, 'aws-blocks', 'index.ts'), '\n// edited after dev stop\n');
 		await sleep(5000);
-		if ((await status(`http://localhost:${PORT}/.blocks-sandbox/config.json`)) !== 0)
-			fail('a backend save after cdk-blocks dev stop started the dev server again', session);
+		if ((await status(`http://localhost:${PORT}/.cdk-blocks-sandbox/config.json`)) !== 0)
+			fail('a backend save after dev:stop task started the dev server again', session);
 	};
 
 	try {
-		console.log('\n--- dev lifecycle 1: cdk-blocks dev, a backend edit, cdk-blocks dev stop ---');
+		console.log('\n--- dev lifecycle 1: dev task, a backend edit, dev:stop task ---');
 		const first = startDev();
 		await ready(first);
 		const before = record()?.pid;
@@ -146,12 +147,14 @@ export async function checkDevLifecycle(app, env, logDir) {
 		await ready(first);
 		await stopped(first);
 
-		console.log('\n--- dev lifecycle 2: a hard kill of the cdk-blocks dev CLI, then cdk-blocks dev again ---');
+		console.log('\n--- dev lifecycle 2: a hard kill of the dev task CLI, then dev task again ---');
 		const killed = startDev();
 		await ready(killed);
-		// Task Manager's End task: TerminateProcess of the CLI alone, not its tree.
+		// Kill the task owner alone, not its tree, to exercise orphan recovery.
+		if (record()?.session?.pid !== killed.child.pid) fail('bootstrap is not the recorded session owner', killed);
 		spawnSync('taskkill', ['/PID', String(killed.child.pid), '/F'], { stdio: 'ignore' });
-		await killed.exit;
+		if ((await Promise.race([killed.exit.then(() => true), sleep(10_000, false, { ref: false })])) !== true)
+			fail('the hard-killed task did not exit', killed);
 		const restarted = startDev();
 		await ready(restarted);
 		await stopped(restarted);
@@ -162,9 +165,9 @@ export async function checkDevLifecycle(app, env, logDir) {
 		try {
 			const failing = startDev();
 			const code = await Promise.race([failing.exit, sleep(90_000, 'timeout')]);
-			if (code === 'timeout') fail('cdk-blocks dev with its port held did not exit within 90 s', failing);
-			if (code === 0) fail('cdk-blocks dev with its port held exited 0', failing);
-			console.log(`  cdk-blocks dev with :${PORT} held exited ${code}`);
+			if (code === 'timeout') fail('dev task with its port held did not exit within 90 s', failing);
+			if (code === 0) fail('dev task with its port held exited 0', failing);
+			console.log(`  dev task with :${PORT} held exited ${code}`);
 		} finally {
 			holder.close();
 		}

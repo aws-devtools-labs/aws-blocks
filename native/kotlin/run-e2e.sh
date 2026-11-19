@@ -67,7 +67,7 @@ echo "   Copied to: $E2E_DIR/blocks.spec.json"
 echo ""
 echo "Step 3: Run Kotlin codegen"
 cd "$E2E_DIR"
-./gradlew blocksCodegen --quiet
+./gradlew cdkBlocksCodegen --quiet
 echo "   Codegen complete"
 
 if [ -z "$BLOCKS_URL" ]; then

@@ -17,6 +17,12 @@ import ts from 'typescript';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const guidePath = join(__dirname, '..', 'resources', 'AGENTS.md');
 
+it('documents clean stdout for piped tasks and raw queries', () => {
+	const guide = readFileSync(guidePath, 'utf-8');
+	assert.ok(guide.includes('npm run -s docs KVStore | jq .'));
+	assert.ok(guide.includes('npm run -s whoami -- --query stacks.production'));
+});
+
 function pollSnippet(): string {
 	const guide = readFileSync(guidePath, 'utf-8');
 	const blocks = [...guide.matchAll(/```ts\n([\s\S]*?)```/g)].map((m) => m[1]);

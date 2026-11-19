@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function getSandboxId(projectRoot: string): string {
-  const dir = join(projectRoot, '.blocks-sandbox');
+  const dir = join(projectRoot, '.cdk-blocks-sandbox');
   const file = join(dir, 'sandbox-id.txt');
   if (existsSync(file)) return readFileSync(file, 'utf-8').trim();
   mkdirSync(dir, { recursive: true });

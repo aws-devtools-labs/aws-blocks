@@ -1,7 +1,7 @@
 node_modules/
 .next/
-.blocks-sandbox/
-!src/app/.blocks-sandbox/
+.cdk-blocks-sandbox/
+!src/app/.cdk-blocks-sandbox/
 
 .open-next/
 .amplify-hosting/

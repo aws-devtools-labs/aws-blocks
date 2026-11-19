@@ -18,7 +18,7 @@ From the `example/typescript/aws-blocks` directory, run the following to start t
 ```bash
 npm install
 npm run dev
-npx blocks-generate-spec
+npm run spec
 ```
 
 This produces the `blocks.spec.json` file that the Gradle plugin reads at build time.

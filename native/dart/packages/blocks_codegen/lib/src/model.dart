@@ -148,11 +148,16 @@ class DiscriminatedUnionRef extends TypeRef {
   /// (vs String) discriminant handling in the generator.
   final bool discriminantIsBoolean;
 
+  /// The name the spec gives the union (`x-blocks-type-name`, the type alias
+  /// it is declared as), or null.
+  final String? typeName;
+
   /// [variants] must be non-empty and share [discriminant].
   const DiscriminatedUnionRef({
     required this.discriminant,
     required this.variants,
     this.discriminantIsBoolean = false,
+    this.typeName,
   });
 }
 

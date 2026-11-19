@@ -2,12 +2,12 @@ import { ApiNamespace, Scope, KVStore, Auth, Agent, BedrockModels } from '@aws-b
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
-// Building Block docs: npx --no -- cdk-blocks docs lists the blocks; npx --no -- cdk-blocks docs <Block>... prints their docs (--help for more)
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
 const store = new KVStore(scope, 'app-store', {});
-// Auth: email + password sign-in (npx --no -- cdk-blocks docs Auth).
+// Auth: email + password sign-in (npm run docs Auth).
 // Sign-up confirms the email address with a 6-digit code; once the caller
 // submits it they are signed in automatically. On AWS, Cognito emails the code.
 const auth = new Auth(scope, 'auth', {

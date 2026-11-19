@@ -4,10 +4,14 @@
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:test/test.dart';
 
-/// Asserts a [FormatException] whose message contains [needle], so a test
+/// Asserts a [TransferableException] whose message contains [needle], so a test
 /// distinguishes the four rejection branches rather than accepting any throw.
-Matcher _throwsFormat(String needle) => throwsA(
-  isA<FormatException>().having((e) => e.message, 'message', contains(needle)),
+Matcher _throwsDescriptor(String needle) => throwsA(
+  isA<TransferableException>().having(
+    (e) => e.message,
+    'message',
+    contains(needle),
+  ),
 );
 
 void main() {
@@ -32,7 +36,7 @@ void main() {
         () => UnknownTransferable.fromJson(<String, dynamic>{
           '__blocks': 'other/tag',
         }, expectedTag: 'example-iot/device-link'),
-        _throwsFormat(
+        _throwsDescriptor(
           "expected tag 'example-iot/device-link', got 'other/tag'",
         ),
       );
@@ -43,7 +47,7 @@ void main() {
         () => UnknownTransferable.fromJson(<String, dynamic>{
           'endpoint': 'wss://iot.example.com',
         }, expectedTag: 'example-iot/device-link'),
-        _throwsFormat("expected a string '__blocks' tag"),
+        _throwsDescriptor("expected a string '__blocks' tag"),
       );
     });
 
@@ -52,7 +56,7 @@ void main() {
         () => UnknownTransferable.fromJson(<String, dynamic>{
           '__blocks': '',
         }, expectedTag: 'example-iot/device-link'),
-        _throwsFormat("expected a non-empty '__blocks' tag"),
+        _throwsDescriptor("expected a non-empty '__blocks' tag"),
       );
     });
 
@@ -61,7 +65,7 @@ void main() {
         () => UnknownTransferable.fromJson(<String, dynamic>{
           '__blocks': 42,
         }, expectedTag: 'example-iot/device-link'),
-        _throwsFormat("expected a string '__blocks' tag"),
+        _throwsDescriptor("expected a string '__blocks' tag"),
       );
     });
 
@@ -71,7 +75,7 @@ void main() {
           'not-an-object',
           expectedTag: 'example-iot/device-link',
         ),
-        _throwsFormat('expected a JSON object'),
+        _throwsDescriptor('expected a JSON object'),
       );
     });
 
@@ -81,7 +85,7 @@ void main() {
           'not-an-object',
           expectedTag: 'example-iot/device-link',
         ),
-        _throwsFormat("'example-iot/device-link'"),
+        _throwsDescriptor("'example-iot/device-link'"),
       );
     });
   });
