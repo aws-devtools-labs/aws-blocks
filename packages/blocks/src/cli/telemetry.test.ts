@@ -76,11 +76,15 @@ const CORE_PROBES: Record<string, { event: string; run: (dir: string) => Promise
 		event: 'generate:client',
 		run: async (dir) => {
 			const bin = fileURLToPath(new URL('../generate-client-cli.js', import.meta.url));
-			spawnSync(process.execPath, [bin, join(dir, 'missing.ts'), `--telemetry-file=${join(dir, 'events.json')}`], {
-				cwd: dir,
-				env: process.env,
-				stdio: 'ignore',
-			});
+			spawnSync(
+				process.execPath,
+				[bin, join(dir, 'missing.ts'), `--telemetry-file=${join(dir, 'events.json')}`],
+				{
+					cwd: dir,
+					env: process.env,
+					stdio: 'ignore',
+				},
+			);
 		},
 	},
 };
@@ -93,7 +97,17 @@ const CORE_PROBES: Record<string, { event: string; run: (dir: string) => Promise
  * need AWS before they finish, and the `vendorize` bin exits on a bad argument before
  * its tracked function runs.
  */
-const UNPROBED = ['dev', 'sandbox', 'sandbox deploy', 'sandbox preview', 'sandbox destroy', 'sandbox console', 'deploy', 'destroy', 'vendorize'];
+const UNPROBED = [
+	'dev',
+	'sandbox',
+	'sandbox deploy',
+	'sandbox preview',
+	'sandbox destroy',
+	'sandbox console',
+	'deploy',
+	'destroy',
+	'vendorize',
+];
 
 const CI_VARS = [
 	'CI',
@@ -219,7 +233,14 @@ describe('withCommandTelemetry', () => {
 		it(`rethrows the command's own error when the tracker is ${behave}`, async () => {
 			const error = new Error('command failed');
 			await assert.rejects(
-				withCommandTelemetry(['whoami'], () => undefined, async () => { throw error; }, tracker(behave)),
+				withCommandTelemetry(
+					['whoami'],
+					() => undefined,
+					async () => {
+						throw error;
+					},
+					tracker(behave),
+				),
 				(e) => e === error,
 			);
 		});
@@ -233,15 +254,33 @@ describe('withCommandTelemetry', () => {
 				return fn();
 			},
 		});
-		const code = await withCommandTelemetry(['docs'], () => { throw new Error('no cwd'); }, async () => 0, load);
+		const code = await withCommandTelemetry(
+			['docs'],
+			() => {
+				throw new Error('no cwd');
+			},
+			async () => 0,
+			load,
+		);
 		assert.equal(code, 0);
 		assert.equal(tracked, false);
 	});
 
 	it('never loads telemetry for an untracked command', async () => {
 		let loaded = false;
-		const load: LoadTelemetry = async () => { loaded = true; throw new Error('unused'); };
-		assert.equal(await withCommandTelemetry(['deploy'], () => undefined, async () => 0, load), 0);
+		const load: LoadTelemetry = async () => {
+			loaded = true;
+			throw new Error('unused');
+		};
+		assert.equal(
+			await withCommandTelemetry(
+				['deploy'],
+				() => undefined,
+				async () => 0,
+				load,
+			),
+			0,
+		);
 		assert.equal(loaded, false);
 	});
 });
