@@ -114,7 +114,7 @@ Future<void> main() async {
   // baseUrl: 'https://<your API>/aws-blocks/api' to call another one.
   final blocks = Blocks();
   final health = await blocks.api.health();
-  print(health.status.name); // ok
+  print(health.status.toJson()); // ok
 }
 ```
 
