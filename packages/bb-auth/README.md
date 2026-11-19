@@ -498,9 +498,12 @@ export const authApi = auth.createApi();
 
 For local development without an identity provider account, use the stub IdP. The dev server serves a real OIDC provider with an account picker:
 
-```typescript
+```ts
+// cdk-blocks/index.ts
+import { Scope } from 'aws-cdk-blocks';
 import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';
 
+const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
   store: 'builtin',
   providers: {
@@ -513,6 +516,7 @@ const auth = new Auth(scope, 'auth', {
   },
   users: { groups: ['admin'] },
 });
+export const authApi = auth.createApi();
 ```
 
 `stubIdp()`, `github()` and `customOauth2()` require `store: 'builtin'`. On the default store, TypeScript reports that the provider is not assignable to `CognitoProvider`. Set `store: 'builtin'` or put the provider in a separate block with that store.
