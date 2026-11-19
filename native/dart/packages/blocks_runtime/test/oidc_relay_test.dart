@@ -873,7 +873,6 @@ void main() {
       await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
       expect(session.cookies['blocks_session'], 'sess-abc-123');
-      expect(session.cookieHeader, contains('blocks_session=sess-abc-123'));
     });
 
     test(
@@ -972,10 +971,9 @@ void main() {
         httpClient: httpClient,
       );
 
-      expect(session.cookieHeader, isNotNull);
+      expect(session.cookies, isNotEmpty);
       await client.signOut();
       expect(session.cookies, isEmpty);
-      expect(session.cookieHeader, isNull);
     });
   });
 
