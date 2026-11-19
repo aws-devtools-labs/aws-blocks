@@ -30,8 +30,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 `new Auth` provisions the backend, and `authApi` exposes the sign-in API. Neither renders a login screen. Mount the UI in the SPA entrypoint and gate the app shell behind a session:
 
+The example mounts into `<div id="menu-bar"></div>` and `<div id="app"></div>`. The default template includes both; add either missing element to your page before running the snippet.
+
 ```typescript
-// src/index.ts: the SPA entrypoint
+// src/index.ts
 import { api, authApi } from 'cdk-blocks';
 import { AccountMenuBar, AuthenticatedContent } from 'aws-cdk-blocks/ui';
 
@@ -345,7 +347,7 @@ export const authApi = auth.createApi();
 
 The two limits work together: the session ends at the earlier of `ttlSeconds` without use and `refreshTokenValiditySeconds` since sign-in. Both app clients (`client` and the hosted-UI client) get the same settings. Changing them updates the clients in place; it does not replace a client or sign anyone out. Tokens already issued keep the lifetime they were issued with.
 
-**Rotation and other clients.** Cognito does not allow the `REFRESH_TOKEN_AUTH` flow on a client with rotation on, so the block removes `ALLOW_REFRESH_TOKEN_AUTH` from its clients and refreshes with `GetTokensFromRefreshToken`. If another app refreshes against the same client with `REFRESH_TOKEN_AUTH`, move it to `GetTokensFromRefreshToken` or set `refreshTokenRotation: false`. With `userPool` the block does not create the app client, so set these on your own client; the options other than `ttlSeconds` are refused there.
+**Rotation and other clients.** Cognito does not allow the `REFRESH_TOKEN_AUTH` flow on a client with rotation on, so the block removes `ALLOW_REFRESH_TOKEN_AUTH` from its clients and refreshes with `GetTokensFromRefreshToken`. If another app refreshes against the same client with `REFRESH_TOKEN_AUTH`, move it to `GetTokensFromRefreshToken` or set `refreshTokenRotation: false`. With `userPool`, configure token lifetimes and rotation on your existing app client; the block refuses those four options. `ttlSeconds`, `freshAgeSeconds` and `crossDomain` still apply to the block's own sessions.
 
 ### Roles and an admin-only user list
 
@@ -450,7 +452,7 @@ The hook works the same locally and deployed. Once the first admin exists, empty
 
 ### Social sign-in: the client secret and the callback URL
 
-A provider secret is a reference, never a string: a string-valued `Secret` (AWS Secrets Manager), or an `AppSetting` created with `secret: true` (an SSM SecureString). The value stays in Secrets Manager or SSM and never enters the template. Either works for any provider; this app uses one of each:
+A provider secret is a reference, never a string: a string-valued `Secret` (AWS Secrets Manager), or an `AppSetting` created with `secret: true` (an SSM SecureString). The CloudFormation template contains only the reference. When registering these providers, the deployment Lambda reads the value and passes it to Cognito. This app uses one of each:
 
 ```ts
 // cdk-blocks/index.ts
@@ -487,7 +489,7 @@ export const authApi = auth.createApi();
      - Without an explicit `name`, the secret is named after the block's `fullId`; set it with `aws secretsmanager put-secret-value` instead.
      - For a secret that already exists, wrap it: `new Secret(scope, 'google-client-secret', { secret: Secret.fromExisting('<secret ARN>') })`.
      - The deploy-time provider registration can read exactly this secret (`secretsmanager:GetSecretValue` on its ARN, plus `kms:Decrypt` via Secrets Manager). The app's execution role can read it too, like every `Secret` the app declares.
-   - **`AppSetting`:** before the first deploy, `aws ssm put-parameter --name /my-app/facebook-client-secret --type SecureString --value '<client secret>'`; to rotate, run it again with `--overwrite`. With `new AppSetting(scope, 'facebook-secret', { secret: true })` instead, the deploy creates the parameter, at `/<fullId>`, with a random value you then overwrite the same way.
+   - **`AppSetting`:** before the first deploy, use the Systems Manager Parameter Store console to create `/my-app/facebook-client-secret` as a `SecureString` with the provider's client secret. To rotate it, edit the parameter value and deploy again. With `new AppSetting(scope, 'facebook-secret', { secret: true })` instead, the deploy creates `/<fullId>` with a random value; replace it the same way.
 2. **Register the callback URL** with the provider. Google calls it an *authorized redirect URI*: `https://my-app-auth.auth.<region>.amazoncognito.com/oauth2/idpresponse` (`/saml2/idpresponse` for SAML). Without `hostedUi.domainPrefix` the prefix is derived from the block's `fullId`; read it from the `UserPoolDomain` resource in the synthesized template. `hostedUi.domainPrefix` is create-only: choose it before the first deploy.
 3. **Test on a sandbox** (`npm run sandbox`). Cognito managed login needs a deployed user pool, so under `npm run dev` these providers are unavailable:
    - `getAuthState()` marks the action `unavailable`, and the `Authenticator` shows the button disabled, with a hint.
@@ -638,7 +640,7 @@ For what the policy covers and what the message says, see [Password policy](#pas
 - `new Auth(scope, 'auth')`: email + password, the zero-config default.
 - `new Auth(scope, 'auth', { providers: { google: { type: 'google', clientId, clientSecret } } })`: email + password plus Google, federated through Cognito.
 - `new Auth(scope, 'auth', { providers: { okta: { type: 'oidc', issuer, clientId, clientSecret } } })`: email + password plus Okta, federated through Cognito (a client secret is required).
-- `new Auth(scope, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } })`: Okta only, federated directly by your backend. No Cognito user pool is created. For password users as well, add a second block ([below](#where-do-your-users-live)).
+- `new Auth(scope, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } })`: Okta only, federated directly by your backend. No Cognito user pool is created. For password users as well, [add a second block](#where-do-your-users-live). For offline sign-in, see [the stub IdP recipe](#the-stub-idp-stubidp), including how to select the real provider for production.
 
 The guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, `signOut`) and `createApi()` work the same for every sign-in method. Each method is documented on the exported `AuthShape` type: `npm run docs:api Auth`.
 
@@ -653,7 +655,7 @@ The guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAut
 | `emailPassword.selfSignUp` | `boolean` | `true` | Users may register themselves. `false`: users are created only through `auth.admin`. |
 | `emailPassword.passwordPolicy` | `PasswordPolicy` | 8 characters, all four character kinds | [Password policy](#password-policy). |
 | `emailPassword.autoSignIn` | `boolean` | `true` | Sign the user in once they enter the emailed confirmation code ([Sign-up and email delivery](#sign-up-and-email-delivery)). |
-| `emailPassword.revealExistingUsers` | `boolean` | `false` | Whether the sign-in UI reveals that an account exists during sign-up, confirmation or password reset ([Sign-up and email delivery](#sign-up-and-email-delivery)). |
+| `emailPassword.revealExistingUsers` | `boolean` | `false` | Whether sign-up, confirmation and password reset reveal account state ([Sign-up and email delivery](#sign-up-and-email-delivery)). |
 | `providers` | `Record<string, CognitoProvider>`; with `store: 'builtin'`, `Record<string, BuiltinProvider>` | none | Sign-in providers, keyed by provider id and tagged with their `type`. Required with `store: 'builtin'`. |
 | `users` | `UserPoolOptions` | none | The shape of the user pool. `store: 'builtin'` accepts `users.groups` only. |
 | `users.signInWith` | `('username' \| 'email' \| 'phone')[]` | `['username', 'email']` | What a user types as their username. Fixed once the pool exists. |
@@ -728,7 +730,7 @@ Details: [DESIGN.md](./DESIGN.md#immutability-guard).
 
 Every self-service sign-up confirms the email address with an emailed code. With `emailPassword.autoSignIn` (on by default), the user is then signed in without typing their password again — the code itself is still required.
 
-The sign-in UI hides whether an account exists unless you set `emailPassword.revealExistingUsers` to `true`. A direct call to `auth.signUp()` always throws `UsernameExistsException` for an existing user, regardless of that setting.
+By default, the sign-up form hides whether the account exists. A direct call to `auth.signUp()` always throws `UsernameExistsException` for an existing user. Confirmation, resend and password reset mask account state in both the UI and direct method calls. Set `emailPassword.revealExistingUsers: true` to receive the more specific errors on those paths and in the sign-up form.
 
 Cognito's default email sender is limited to 50 emails per day (confirmation, password-reset and email-MFA codes all count). That is enough for development, not for production. Before launch, send through your own Amazon SES identity with `email`:
 
@@ -817,13 +819,14 @@ The default HTTP status of each name:
 | 503 | `SignOutIncompleteException` |
 | 400 | Every other name |
 
-Three errors use a status other than the default in the table:
+Some operations return a different status for the same name. For example:
 
 - 403 `NotAuthorizedException`: `requireRole`, or `protect` with `role`, for a signed-in user outside the group.
 - 501 `ProviderUnavailableException`: a provider that is not available in this runtime, such as a social provider under `npm run dev`.
+- 502 `ProviderUnavailableException`: a direct OIDC provider's discovery document does not match its configured issuer.
 - 501 `InvalidParameterException`: `rememberDevice` on AWS.
 
-`CodeMismatchException`, `EnableSoftwareTokenMFAException`, `InvalidParameterException`, `InvalidPasswordException` and `InternalErrorException` are retriable: `setAuthState` returns them with `retriable: true`, and the form stays on the current step.
+Use `state.retriable`, not `errorName` alone, to decide whether to keep the form on the current step. `Auth` marks mapped service errors named `CodeMismatchException`, `EnableSoftwareTokenMFAException`, `InvalidParameterException`, `InvalidPasswordException` or `InternalErrorException` as retriable. An explicitly thrown `ApiError` carries its own retry flag.
 
 ## Mode gates
 

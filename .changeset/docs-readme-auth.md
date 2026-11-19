@@ -4,4 +4,4 @@
 "aws-cdk-blocks": patch
 ---
 
-Document `Auth` setup, options, error handling, and local versus AWS behavior. Clarify that sessions default to 30 days and that users must sign in again after migrating from `AuthCognito`. The `auth-common` README now lists the auth error names and shows how browser clients can match them.
+Document `Auth` setup, options and error handling. Sessions default to 30 days, users sign in again after migrating from `AuthCognito`, and `rememberDevice` on AWS reports `InvalidParameterException` (501). The `auth-common` README lists the auth error names and shows how browser clients can match them.
