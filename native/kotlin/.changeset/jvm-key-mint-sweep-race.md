@@ -8,4 +8,4 @@ The desktop store generates its encryption key on first use, and the instance th
 removes the entries an earlier key left behind. It published the key before removing them, so a
 second instance starting at the same moment adopted that key, wrote a session under it, and had it
 deleted by the sweep still to come. Entries are now removed only when they carry a different key's
-fingerprint, so one written under the key in hand survives however the two interleave.
+fingerprint, which keeps the session the second instance wrote.

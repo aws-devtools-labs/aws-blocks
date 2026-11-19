@@ -152,13 +152,19 @@ internal class EncryptedFileKeyValueStore(
      * run. What the sweep adds is that a directory does not accumulate entries no key on the
      * machine can read, waiting for a write to the same name to displace them.
      *
-     * Minting is not on its own a licence to delete, which is why every deletion is justified by
-     * the fingerprint the file itself carries rather than by having minted. The key is published
+     * Minting is not on its own a licence to delete, which is why a deletion is justified by the
+     * fingerprint the file itself carries rather than by having minted. The key is published
      * before this runs, so a second instance created at the same moment adopts it and can write an
      * entry while the sweep is in progress — an entry belonging to the key in hand, which deleting
      * would discard a session the caller believes was saved. Anything that cannot be read as
      * another key's is left alone: a staging file a concurrent writer has not finished, a file
      * whose contents do not decode, one too short to carry a fingerprint.
+     *
+     * One window stays open: the check and the delete both go by path, so an entry renamed into
+     * place between them is deleted along with the stale one it replaced. The jar writes a single
+     * name, so after a lost key that is the same name twice, which is where this is reachable.
+     * Closing it means holding [withDirectoryLock] across every key resolution, a plain load
+     * included, and that lock does not time out.
      *
      * Best-effort: a failure here leaves unreadable entries in place, which the fingerprint check
      * already copes with, so it does not deserve to fail the call that provoked it.

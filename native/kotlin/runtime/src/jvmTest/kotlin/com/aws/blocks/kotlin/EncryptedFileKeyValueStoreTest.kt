@@ -201,13 +201,18 @@ class EncryptedFileKeyValueStoreTest {
     }
 
     @Test
-    fun keepsAnEntryAdoptedConcurrentlyWhileItSweptAfterMinting() = runTest {
+    fun discardsOnlyTheOrphanWhenAnotherInstanceAdoptsTheKeyItMinted() = runTest {
         // The instance that mints publishes the key before it sweeps the directory, so a second
         // instance created at the same moment adopts that key and writes under it while the sweep
         // is still to come. That entry belongs to the key in hand and has to survive, or a session
-        // the caller was told was saved is gone. This is the race
-        // `separateInstancesAgreeOnTheKeyWhenCreatedConcurrently` hits intermittently; here the two
-        // are ordered so it happens every run.
+        // the caller was told was saved is gone — the race
+        // `separateInstancesAgreeOnTheKeyWhenCreatedConcurrently` hits intermittently, ordered here
+        // so it happens every run. The orphan pins the other half of the same condition: nothing
+        // else fails when the sweep deletes nothing at all, because the fingerprint check in `get`
+        // reports an orphan as absent whether or not it was swept.
+        store().put("orphan", "under-the-lost-key")
+        File(storageDir, ".key").delete() shouldBe true
+
         val published = CountDownLatch(1)
         val adopted = CountDownLatch(1)
         val minting = EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") {
@@ -231,6 +236,9 @@ class EncryptedFileKeyValueStoreTest {
         val reader = store()
         reader.get("adopted") shouldBe "by-the-adopter"
         reader.get("minted") shouldBe "by-the-minter"
+        // By file rather than through `get`, which cannot tell a swept orphan from one still there.
+        File(storageDir, Base64.getUrlEncoder().encodeToString("orphan".toByteArray()))
+            .exists() shouldBe false
     }
 
     /** Runs [afterStoring] once a freshly minted key is installed, before the store is handed it. */
