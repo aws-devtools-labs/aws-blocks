@@ -606,7 +606,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
         'installation-id must not be written',
       );
       assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
-      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
+      assert.ok(!result.stderr.includes('AWS CDK Blocks collects usage data'), 'no first-run notice');
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -630,7 +630,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
         assert.ok(!existsSync(idFile), 'installation-id must not be written');
         assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
         assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
-        assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
+        assert.ok(!result.stderr.includes('AWS CDK Blocks collects usage data'), 'no first-run notice');
       } finally {
         rmSync(home, { recursive: true, force: true });
       }
@@ -648,7 +648,7 @@ describe('create-blocks-app telemetry/first-run notice', () => {
     try {
       assert.strictEqual(result.status, 0, result.stderr);
       const notice = result.stderr;
-      assert.ok(notice.includes('AWS Blocks collects usage data to improve the product.'), notice);
+      assert.ok(notice.includes('AWS CDK Blocks collects usage data to improve the product.'), notice);
       // The endpoint sees the source IP of every request, so the notice must not
       // promise that no personal data reaches it, and must say so in full.
       assert.doesNotMatch(notice, /\bPII\b/);

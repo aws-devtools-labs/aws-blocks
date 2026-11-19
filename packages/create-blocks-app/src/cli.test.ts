@@ -1189,7 +1189,7 @@ describe('create-blocks-app auto-detection', () => {
         NPM_CONFIG_REGISTRY: 'http://127.0.0.1:9',
       });
       assert.strictEqual(result.exitCode, 0);
-      assert.match(result.stdout, /Blocks app created/);
+      assert.match(result.stdout, /AWS CDK Blocks app created/);
       assert.doesNotMatch(result.stdout, /Installing dependencies/);
       assert.match(result.stdout, /\n  npm install\n/);
       assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
@@ -1247,7 +1247,7 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([join(tmpDir, 'app'), '-y'], undefined, { PATH: `${bin}:${process.env.PATH}` });
       assert.strictEqual(result.exitCode, 1, result.stdout);
       assert.match(result.stderr, /Error: Command failed: npm install/);
-      assert.doesNotMatch(result.stdout, /Blocks app created/);
+      assert.doesNotMatch(result.stdout, /AWS CDK Blocks app created/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

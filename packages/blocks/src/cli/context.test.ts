@@ -79,7 +79,7 @@ describe('project root detection', () => {
 
 		const outside = await runCli(['dev'], { cwd: elsewhere });
 		assert.strictEqual(outside.code, 1);
-		assert.match(outside.stderr, /^Error: not inside an AWS Blocks app/);
+		assert.match(outside.stderr, /^Error: not inside an AWS CDK Blocks app/);
 		assert.match(outside.stderr, /Try: run the command from your app directory, or pass -C <app-dir>/);
 
 		const missing = await runCli(['-C', join(elsewhere, 'nope'), 'dev'], { cwd: elsewhere });

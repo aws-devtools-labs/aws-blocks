@@ -298,20 +298,20 @@ export class Context {
 		}
 	}
 
-	/** The project root, if the command runs inside an AWS Blocks app. */
+	/** The project root, if the command runs inside an AWS CDK Blocks app. */
 	findRoot(): string | undefined {
 		if (this.root === null) this.root = findProjectRoot(this.startDir);
 		return this.root;
 	}
 
-	/** The project root, or a CLI error when the command runs outside an AWS Blocks app. */
+	/** The project root, or a CLI error when the command runs outside an AWS CDK Blocks app. */
 	requireRoot(opts?: { allowLegacyBackendDir?: boolean }): string {
 		const root = opts?.allowLegacyBackendDir
 			? (this.findRoot() ?? findLegacyProjectRoot(this.startDir))
 			: this.findRoot();
 		if (!root) {
 			throw new CliError(
-				`not inside an AWS Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
+				`not inside an AWS CDK Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
 				{
 					hint: 'run the command from your app directory, or pass -C <app-dir>',
 				},

@@ -273,7 +273,7 @@ describe('passthrough commands', () => {
 		]) {
 			const run = await runCli(argv, { cwd: outside });
 			assert.strictEqual(run.code, 1, argv.join(' '));
-			assert.match(run.stderr, /^Error: not inside an AWS Blocks app/);
+			assert.match(run.stderr, /^Error: not inside an AWS CDK Blocks app/);
 		}
 	});
 
@@ -1285,7 +1285,7 @@ describe('help for passthrough subcommands', () => {
 		// Running a verb still needs the app.
 		const run = await runCli(['secret', 'list'], { cwd: outside, core });
 		assert.strictEqual(run.code, 1);
-		assert.match(run.stderr, /^Error: not inside an AWS Blocks app/);
+		assert.match(run.stderr, /^Error: not inside an AWS CDK Blocks app/);
 	});
 });
 
@@ -1541,7 +1541,7 @@ describe('error format', () => {
 		assert.strictEqual(plain.code, 1);
 		assert.doesNotMatch(plain.stderr, /Run with/);
 		const debug = await runCli(['generate', 'spec', '--debug'], { cwd: outside });
-		assert.match(debug.stderr, /^Error: not inside an AWS Blocks app[\s\S]*\n {4}at /);
+		assert.match(debug.stderr, /^Error: not inside an AWS CDK Blocks app[\s\S]*\n {4}at /);
 		// An underlying error has a stack to show.
 		const cause = await runCli(['secret', 'list'], {
 			cwd: root,

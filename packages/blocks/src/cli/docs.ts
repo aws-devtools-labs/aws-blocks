@@ -157,7 +157,7 @@ export interface DocsIndex {
 		browserMain: Map<string, boolean>;
 		files: Map<string, string>;
 	};
-	/** Names the API reports import from packages outside AWS Blocks (`StandardSchemaV1`): the package, the blocks. */
+	/** Names the API reports import from packages outside AWS CDK Blocks (`StandardSchemaV1`): the package, the blocks. */
 	externals: Map<string, { from: string; type: boolean; blocks: string[] }>;
 	/**
 	 * A report declaration's lowercase name → the unexported declarations it stands for, with the members it omits
@@ -1404,7 +1404,7 @@ function importCard(index: DocsIndex, input: string): Answer | undefined {
 		if (external !== undefined && x) {
 			const reports = x.blocks.map((b) => (b === UMBRELLA ? BLOCKS : b)).join(', ');
 			const line = plainImport(external, x.from, x.type);
-			first = `${external}: from ${x.from}, not an AWS Blocks package. The API reports of ${reports} import it: ${line}`;
+			first = `${external}: from ${x.from}, not an AWS CDK Blocks package. The API reports of ${reports} import it: ${line}`;
 			about = { name: external, kind: x.type ? 'type' : 'export', package: x.from, import: line };
 		} else {
 			// A package the reports import from (zod): what they import from it.
@@ -1413,7 +1413,7 @@ function importCard(index: DocsIndex, input: string): Answer | undefined {
 			const names = from.map(
 				([n, e]) => `${n} (${e.blocks.map((b) => (b === UMBRELLA ? BLOCKS : b)).join(', ')})`,
 			);
-			first = `${from[0][1].from}: a package outside AWS Blocks. The API reports import from it: ${names.join('; ')}`;
+			first = `${from[0][1].from}: a package outside AWS CDK Blocks. The API reports import from it: ${names.join('; ')}`;
 			about = { name: from[0][1].from, kind: 'package', package: from[0][1].from };
 		}
 	}
@@ -1609,7 +1609,7 @@ function listing(index: DocsIndex, version: string): Answer {
 	// A root doc is a name for a file, not a folder: `guide` is the package README.
 	const files = roots.map((b) => `  ${b.name.padEnd(width)}  ${b.main} of aws-cdk-blocks: ${b.purpose}`);
 	const text = [
-		`AWS Blocks docs for aws-cdk-blocks ${version}`,
+		`AWS CDK Blocks docs for aws-cdk-blocks ${version}`,
 		'',
 		`Usage: ${CLI} [name...] [-- options]`,
 		'',
