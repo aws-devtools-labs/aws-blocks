@@ -11,18 +11,18 @@ A single application configuration value backed by SSM Parameter Store.
 ## Quick start
 
 ```typescript
+const auth = new Auth(scope, 'auth', { users: { groups: ['admin'] } });
 const apiUrl = new AppSetting(scope, 'apiUrl', {
   value: 'https://api.example.com',
 });
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async getApiUrl() {
-    return { url: await apiUrl.get() };
-  },
-  async setApiUrl(url: string) {
-    await apiUrl.put(url);
-  },
-}));
+export const api = auth.protect(scope, 'api', {
+  methods: () => ({
+    async getApiUrl() {
+      return { url: await apiUrl.get() };
+    },
+  }),
+});
 ```
 
 ## API
@@ -64,8 +64,8 @@ An invalid combination throws `ValidationFailed` at CDK synth, and at constructi
 With `kmsKeyArn`:
 
 - The app's Lambda execution role is granted `kms:Decrypt`, plus `kms:Encrypt` for a secret the stack creates, on that key ARN.
-- **The key's own key policy must also allow the app's Lambda execution role** to use it (or delegate to IAM via the account-root statement CDK adds to same-account keys).
-- Adding or changing `kmsKeyArn` on a deployed secret re-encrypts its current value under the new key on the next deploy.
+- The key policy must authorize the app's execution role. For a stack-created secret, it must also authorize the secret initializer's role (or delegate to IAM).
+- For a stack-created secret, changing `kmsKeyArn` re-encrypts its current value on deploy. For an imported secret, its owner must change the encryption key; this option only changes the app's grant.
 
 ## Errors
 
@@ -110,7 +110,7 @@ const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: '/my-app/db-url',
 ```
 
 - The stack does not create, seed, tag or delete the parameter.
-- The app's role gets read access only: `ssm:GetParameter`, plus `kms:Decrypt` with `secret: true`. Do not call `put()` on it: the role has no `ssm:PutParameter`, so the write is denied on AWS, although it succeeds locally.
+- The construct grants `ssm:GetParameter` and, with `secret: true`, `kms:Decrypt`. It does not grant or deny `ssm:PutParameter`. Do not call `put()` on an imported setting: the mock permits it, and on AWS it can overwrite the parameter if another policy grants write access.
 - The parameter must exist before the app runs. If it does not, the deploy succeeds and `get()` throws `ParameterNotFound`.
 - Locally the value is the entry under the setting's `fullId` in `.bb-data/settings.json`: a random string with `secret: true`, an empty string otherwise. Edit the file to set it.
 
@@ -126,14 +126,17 @@ const config = new AppSetting(scope, 'config', {
   schema: z.object({ maxRetries: z.number(), timeout: z.number() }),
 });
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async getConfig() {
-    return await config.get(); // { maxRetries: number; timeout: number }
-  },
-  async updateConfig(cfg: { maxRetries: number; timeout: number }) {
-    await config.put(cfg); // validated against schema
-  },
-}));
+// Only members of the admin group can read or change this configuration.
+export const settingsAdmin = auth.protect(scope, 'settingsAdmin', {
+  methods: () => ({
+    async getConfig() {
+      return config.get();
+    },
+    async updateConfig(cfg: { maxRetries: number; timeout: number }) {
+      await config.put(cfg); // validated against the schema after authorization
+    },
+  }),
+}, { role: 'admin' });
 ```
 
 ### Explicit Name (Cross-Service Reads)
