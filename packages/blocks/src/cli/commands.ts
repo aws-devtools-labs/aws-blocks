@@ -1161,6 +1161,8 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 	// and records its `generate:types` event, and the CLI exits normally. Without a listener
 	// the signal would kill the process before that. A one-shot run keeps the default
 	// handling, so Ctrl-C still stops it at once.
+	// Stopping the watcher with Ctrl-C or SIGTERM deliberately exits 0 and records SUCCESS,
+	// matching the `hosting-typegen` bin: stopping a watcher is how it normally ends.
 	const controller = flags.watch === true ? new AbortController() : undefined;
 	const abort = (): void => controller?.abort();
 	if (controller) {
