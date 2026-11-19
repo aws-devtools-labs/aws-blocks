@@ -256,6 +256,8 @@ On desktop, a call without a `launcher` binds `127.0.0.1` on a port the operatin
 
 **Realtime subscriptions** — if your backend has realtime channels (e.g., cursor tracking, live updates), the generated client gives you typed `Stream<T>` subscriptions over WebSocket.
 
+A subscription's stream closes normally only when you cancel it or call `close()`. Any other end, such as the channel token expiring after about an hour or the socket closing, emits a `RealtimeException` and then closes the stream. The SDK doesn't reconnect or renew by itself: call the API method that returned the channel again and subscribe to the new handle.
+
 **Auth flows**: each auth action's input is its own class in a sealed union, so a misspelled field or action doesn't compile. `AuthState.state` is an enum, and its actions arrive at runtime, so render them by name and skip the ones you don't know.
 
 **File transfers** — presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
@@ -286,7 +288,7 @@ The enum is named `<Api class><Method>Provider`. Each value carries the name the
 | `ClientClosedException` | A call after `Blocks.close()` (or `BlocksClient.close()`), including a call of an `OidcClient` one of its calls returned | `message` |
 | `TransferableException` | A `__blocks` descriptor could not be hydrated; `InvalidDescriptorException` names the `blocksType` and `missingField` | `message` |
 | `FileTransferException` | A file upload or download failed | `message`, `statusCode`, `cause` |
-| `RealtimeException` (sealed) | `RealtimeChannelClosedException` on a subscribe after close, `RealtimeConnectionException` when the WebSocket fails | `message`, `cause` |
+| `RealtimeException` (sealed) | `RealtimeChannelClosedException` on a subscribe after close, `RealtimeConnectionException` when the WebSocket fails or closes, `RealtimeSubscriptionEndedException` when the server ends or refuses one channel's subscription (`code` is `token_expired`, `access_revoked`, `principal_mismatch` or null) | `message`, `cause`; `channel` and `code` on `RealtimeSubscriptionEndedException` |
 | `OidcException` (sealed) | The OIDC sign-in flow itself failed (callback, cancelled, unknown provider, exchange) | `message`, `cause` |
 
 Match a server error by name with `isBlocksError(e, 'ConditionalCheckFailedException')`, as on the server and in the TypeScript client. Don't branch on `status == 500`: a named error thrown without a status arrives as a 500 with its name intact. JSON-RPC's reserved codes are reported as 500, and when the server sends no name for one, the client fills in its name (`ParseError`, `InvalidRequest`, `MethodNotFound`, `InvalidParams` or `InternalError`). A method with no return value gets an envelope with no `result` and returns null.

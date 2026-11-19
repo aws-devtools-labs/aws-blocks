@@ -85,6 +85,7 @@ const blocksRuntimeTypeNames = {
   'RealtimeChannelClosedException',
   'RealtimeConnectionException',
   'RealtimeException',
+  'RealtimeSubscriptionEndedException',
   'SessionStore',
   'StatePayload',
   'TokenStore',
@@ -92,7 +93,6 @@ const blocksRuntimeTypeNames = {
   'TransportException',
   'TypedOidcClient',
   'UnknownTransferable',
-  'WebSocketPool',
 };
 
 class TransferableBinding {

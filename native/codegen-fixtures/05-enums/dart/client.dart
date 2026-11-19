@@ -9,14 +9,44 @@ export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksCli
 
 // --- Models ---
 
-enum SetStatusResultStatus {
+sealed class SetStatusResultStatus {
+  static const active = SetStatusResultStatusKnown.active;
+  static const inactive = SetStatusResultStatusKnown.inactive;
+  static const pending = SetStatusResultStatusKnown.pending;
+  static const values = SetStatusResultStatusKnown.values;
+  static final Map<String, SetStatusResultStatusKnown> _byJson = SetStatusResultStatusKnown.values.asNameMap();
+
+  String toJson();
+  static SetStatusResultStatus fromJson(String json) => _byJson[json] ?? SetStatusResultStatusUnknown(json);
+}
+
+enum SetStatusResultStatusKnown implements SetStatusResultStatus {
   active,
   inactive,
   pending
 ;
 
+  @override
   String toJson() => name;
-  static SetStatusResultStatus fromJson(String json) => values.byName(json);
+}
+
+final class SetStatusResultStatusUnknown implements SetStatusResultStatus {
+  final String value;
+
+  const SetStatusResultStatusUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SetStatusResultStatusUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'SetStatusResultStatusUnknown' '($value)';
 }
 
 

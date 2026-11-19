@@ -9,15 +9,46 @@ import kotlin.String
 import kotlin.collections.List
 import kotlin.collections.Map
 import kotlinx.serialization.Contextual
-import kotlinx.serialization.SerialName
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
-@Serializable
-public enum class Level {
-  @SerialName("low")
-  Low,
-  @SerialName("high")
-  High,
+@Serializable(with = Level.Serializer::class)
+public sealed class Level {
+  public abstract val `value`: String
+
+  public data object Low : Level() {
+    override val `value`: String = "low"
+  }
+
+  public data object High : Level() {
+    override val `value`: String = "high"
+  }
+
+  public data class Unknown(
+    override val `value`: String,
+  ) : Level()
+
+  public companion object {
+    public val entries: List<Level> by lazy { listOf(Low, High) }
+
+    public fun fromValue(`value`: String): Level = entries.firstOrNull { it.value == value } ?: Unknown(value)
+  }
+
+  public object Serializer : KSerializer<Level> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("com.example.app.Level", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, `value`: Level) {
+      encoder.encodeString(value.value)
+    }
+
+    override fun deserialize(decoder: Decoder): Level = fromValue(decoder.decodeString())
+  }
 }
 
 @Serializable

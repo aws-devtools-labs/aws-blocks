@@ -6,7 +6,7 @@
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
-export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, TransferableException, InvalidDescriptorException;
+export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, RealtimeSubscriptionEndedException, TransferableException, InvalidDescriptorException;
 export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;
 
 // --- Models ---
@@ -51,13 +51,42 @@ class SignInOption {
 
 // --- API Namespaces ---
 
-enum Level {
+sealed class Level {
+  static const low = LevelKnown.low;
+  static const high = LevelKnown.high;
+  static const values = LevelKnown.values;
+  static final Map<String, LevelKnown> _byJson = LevelKnown.values.asNameMap();
+
+  String toJson();
+  static Level fromJson(String json) => _byJson[json] ?? LevelUnknown(json);
+}
+
+enum LevelKnown implements Level {
   low,
   high
 ;
 
+  @override
   String toJson() => name;
-  static Level fromJson(String json) => values.byName(json);
+}
+
+final class LevelUnknown implements Level {
+  final String value;
+
+  const LevelUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LevelUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'LevelUnknown' '($value)';
 }
 
 

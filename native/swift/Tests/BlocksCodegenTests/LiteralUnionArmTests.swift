@@ -225,6 +225,7 @@ final class LiteralUnionArmTests: XCTestCase {
         assertContains(operation.api, "case level_Variant0(Level_Variant0)")
         assertContains(operation.api, "public enum Level_Variant0: String, Codable, Sendable {\n            case low\n            case high")
         assertContains(schema.models, "case settingLevel_Variant0(SettingLevel_Variant0)")
+        // An arm of a union without a discriminator stays closed, though a result reaches the schema.
         assertContains(schema.models, "public nonisolated enum SettingLevel_Variant0: String, Codable, Sendable {\n    case low\n    case high")
     }
 

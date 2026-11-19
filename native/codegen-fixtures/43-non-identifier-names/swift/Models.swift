@@ -2,16 +2,80 @@ import Foundation
 import BlocksRuntime
 
 
-public nonisolated enum Sample_Type__X___Kind: String, Codable, Sendable {
-    case a_b = "a\"b"
-    case c_d = "c;d"
-    case x_y = "x`y"
-    case new_line = "new\nline"
-    case __x_ = "${x}"
-    case __z_ = "\\(z)"
-    case __unnamed = "*/"
-    case _1st = "1st"
-    case _sp_ace = " sp ace"
+public nonisolated enum Sample_Type__X___Kind: RawRepresentable, Codable, Hashable, Sendable {
+    case a_b
+    case c_d
+    case x_y
+    case new_line
+    case __x_
+    case __z_
+    case __unnamed
+    case _1st
+    case _sp_ace
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "a\"b": self = .a_b
+        case "c;d": self = .c_d
+        case "x`y": self = .x_y
+        case "new\nline": self = .new_line
+        case "${x}": self = .__x_
+        case "\\(z)": self = .__z_
+        case "*/": self = .__unnamed
+        case "1st": self = ._1st
+        case " sp ace": self = ._sp_ace
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .a_b: return "a\"b"
+        case .c_d: return "c;d"
+        case .x_y: return "x`y"
+        case .new_line: return "new\nline"
+        case .__x_: return "${x}"
+        case .__z_: return "\\(z)"
+        case .__unnamed: return "*/"
+        case ._1st: return "1st"
+        case ._sp_ace: return " sp ace"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.a_b, .a_b): return true
+        case (.c_d, .c_d): return true
+        case (.x_y, .x_y): return true
+        case (.new_line, .new_line): return true
+        case (.__x_, .__x_): return true
+        case (.__z_, .__z_): return true
+        case (.__unnamed, .__unnamed): return true
+        case (._1st, ._1st): return true
+        case (._sp_ace, ._sp_ace): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .a_b: hasher.combine(0)
+        case .c_d: hasher.combine(1)
+        case .x_y: hasher.combine(2)
+        case .new_line: hasher.combine(3)
+        case .__x_: hasher.combine(4)
+        case .__z_: hasher.combine(5)
+        case .__unnamed: hasher.combine(6)
+        case ._1st: hasher.combine(7)
+        case ._sp_ace: hasher.combine(8)
+        case .unknown(let value):
+            hasher.combine(9)
+            hasher.combine(value)
+        }
+    }
 }
 
 public nonisolated struct Sample_Type__X___: Codable, Sendable {
