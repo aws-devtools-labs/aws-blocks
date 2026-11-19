@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
+import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
@@ -255,7 +255,7 @@ for (const days of [0, 36, 7.5]) {
 		});
 		Annotations.fromStack(stack).hasWarning(
 			'*',
-			Match.stringLikeRegexp('retentionDays must be an integer.*ack: @aws-blocks/bb-kv-store:InvalidPitrDays'),
+			Match.stringLikeRegexp('retentionDays must be an integer.*ack: @aws-cdk-blocks/bb-kv-store:InvalidPitrDays'),
 		);
 	});
 }

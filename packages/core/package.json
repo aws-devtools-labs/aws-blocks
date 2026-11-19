@@ -1,5 +1,5 @@
 {
-  "name": "@aws-blocks/core",
+  "name": "@aws-cdk-blocks/core",
   "version": "0.8.0",
   "keywords": [
     "aws-blocks",
@@ -91,8 +91,8 @@
     "unctx": "^2.5.0"
   },
   "dependencies": {
-    "@aws-blocks/hosting": "^0.5.0",
-    "@aws-blocks/pipeline": "*",
+    "@aws-cdk-blocks/hosting": "^0.5.0",
+    "@aws-cdk-blocks/pipeline": "*",
     "@aws-sdk/client-account": "^3.1156.0",
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-cloudfront": "^3.1156.0",

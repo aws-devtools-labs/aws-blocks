@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, beforeEach } from 'node:test';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { _closeAllPgliteClusters } from '../engines/pglite-cluster.js';
 import { _resetDatabaseRegistry } from '../runtime/construction.js';
 import { removeFixtures } from './fixtures.js';

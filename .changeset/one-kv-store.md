@@ -1,11 +1,11 @@
 ---
-"@aws-blocks/bb-kv-store": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-kv-store": minor
+"aws-cdk-blocks": minor
 ---
 
 feat(bb-kv-store): one KVStore block (folds DistributedTable in)
 
-AWS Blocks now ships one NoSQL block. `KVStore` takes over the data model of `DistributedTable`, and the `@aws-blocks/bb-distributed-table` package is removed from the umbrella and from the workspace. There is no shim.
+AWS Blocks now ships one NoSQL block. `KVStore` takes over the data model of `DistributedTable`, and the `@aws-cdk-blocks/bb-distributed-table` package is removed from the umbrella and from the workspace. There is no shim.
 
 A store has three forms, and the first two share one table:
 
@@ -39,4 +39,4 @@ Migration for a `KVStore` app: drop `ttl: true`, replace `removalPolicy`/`deleti
 
 Local development data: the mock data file `.bb-data/{fullId}/store.json` now has a version (`{ "version": 2, "items": [...] }`). The mock converts the `store.json` of the earlier `KVStore` and the `data.json` of `DistributedTable` the first time it loads them, so local data stays after the upgrade. A file that the mock cannot read is renamed to a `.bak` file and reported with a warning; the mock does not write over it.
 
-The umbrella `@aws-blocks/blocks` no longer exports `DistributedTable`, `DistributedTableErrors`, or the `DT*` option types. It exports the KVStore types `KeyConfig`, `IndexConfig`, `KeyOf`, `ValueOf`, `Entry`, `Results`, `QueryOptions`, `GetOptions`, `KVScanOptions`, `PutBatchEntry`, `SortCondition`, `Where` and `ReadValidationMode` alongside the existing ones. A type keeps its own name in the umbrella; it has the `KV` prefix only when another block exports a type with the same name (`KVPutOptions`, `KVScanOptions`).
+The umbrella `aws-cdk-blocks` no longer exports `DistributedTable`, `DistributedTableErrors`, or the `DT*` option types. It exports the KVStore types `KeyConfig`, `IndexConfig`, `KeyOf`, `ValueOf`, `Entry`, `Results`, `QueryOptions`, `GetOptions`, `KVScanOptions`, `PutBatchEntry`, `SortCondition`, `Where` and `ReadValidationMode` alongside the existing ones. A type keeps its own name in the umbrella; it has the `KV` prefix only when another block exports a type with the same name (`KVPutOptions`, `KVScanOptions`).

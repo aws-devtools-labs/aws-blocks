@@ -6,8 +6,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { isDeepStrictEqual } from 'node:util';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
@@ -690,7 +690,7 @@ describe('Database on a database that is reached through the RDS Data API (CDK)'
 
 	test('the context key of the earlier package keeps an encrypted cluster encrypted', () => {
 		const app = new cdk.App({
-			context: { 'aws:cdk:bundling-stacks': [], '@aws-blocks/bb-data:encryptStorageByDefault': true },
+			context: { 'aws:cdk:bundling-stacks': [], '@aws-cdk-blocks/bb-data:encryptStorageByDefault': true },
 		});
 		const stack = new StubBlocksStack(app, 'EncryptedLegacy');
 		new LegacyDatabaseCluster(

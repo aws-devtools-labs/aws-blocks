@@ -23,7 +23,7 @@
  * by the asset proxy instead, with the CloudFront door's semantics (each
  * redirect source gets a route to it). Responses routed straight to the
  * server, the image function or the backend bypass it; synth names what is not
- * applied (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * applied (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  */
 import { Fn } from 'aws-cdk-lib';
 import { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';

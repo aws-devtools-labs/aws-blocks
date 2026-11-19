@@ -1,6 +1,6 @@
 # AppSetting — Design
 
-**Package:** `@aws-blocks/bb-app-setting`
+**Package:** `@aws-cdk-blocks/bb-app-setting`
 **Type:** Primitive (new infrastructure)
 **AWS Service:** SSM Parameter Store (String + SecureString)
 

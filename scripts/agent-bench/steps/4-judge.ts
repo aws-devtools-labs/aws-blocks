@@ -157,12 +157,12 @@ function makeJudgeAgent(): Agent {
 // lib/bedrock-retry.ts). A StructuredOutputError is a real grading outcome and is never retried.
 
 // Evidence is omitted from the prompt (the orchestrator applies objective caps after). blocks_fidelity
-// input: a mechanical grep of the agent's source is ground truth for which @aws-blocks blocks were
-// actually imported — an anti-gaming signal. Injected before the rubric/task sections.
+// input: a mechanical grep of the agent's source is ground truth for which blocks were actually
+// imported — an anti-gaming signal. Injected before the rubric/task sections.
 const blocksImports = collectBlocksImports(JUDGE_SRC);
 const judgeSections: string[] = [];
 judgeSections.push(
-	`<imports>\nMechanical grep of the agent's workspace source for @aws-blocks imports (node_modules/.git/dist/bench-tests excluded) — ground truth for which blocks were actually imported:\n\n${blocksImports}\n</imports>`,
+	`<imports>\nMechanical grep of the agent's workspace source for aws-cdk-blocks imports, scoped siblings and the unscoped umbrella alike (node_modules/.git/dist/bench-tests excluded) — ground truth for which blocks were actually imported:\n\n${blocksImports}\n</imports>`,
 );
 judgeSections.push(`<rubric>\n${judgeRubric()}\n</rubric>`);
 judgeSections.push(`<task>\n${taskPrompt}\n</task>`);
@@ -249,22 +249,25 @@ process.stderr.write(
 // a command the judge ran could keep Node's loop ref'd and idle the step until its timeout.
 process.exit(0);
 
-// Mechanically grep the workspace for @aws-blocks imports. Inner grep finds the scope; outer keeps
+// Mechanically grep the workspace for @aws-cdk-blocks imports. Inner grep finds the scope; outer keeps
 // only import/from/require lines. grep exits 1 (clean "none found") when nothing matches.
 function collectBlocksImports(workspace: string): string {
 	try {
 		// --exclude-dir flags derive from STAGE_EXCLUDE_DIRS (one source of truth). Globs quoted so
 		// the shell can't expand them before grep sees them.
 		const excludeArgs = [...STAGE_EXCLUDE_DIRS].map((d) => `--exclude-dir=${d}`).join(' ');
+		// Both forms: the siblings are scoped, the umbrella is not, and every template imports
+		// the umbrella. Matching only the scope would report "none found" for almost every
+		// scaffolded app, which the judge then takes as ground truth for blocks_fidelity.
 		const out = execSync(
-			`grep -rn "@aws-blocks/" . --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.mjs" --include="*.cjs" ${excludeArgs} | grep -Ew "import|from|require"`,
+			`grep -rnE "['\\"](@aws-cdk-blocks/|aws-cdk-blocks(/|['\\"]))" . --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.mjs" --include="*.cjs" ${excludeArgs} | grep -Ew "import|from|require"`,
 			{ cwd: workspace, encoding: 'utf-8', maxBuffer: 4 * 1024 * 1024 },
 		).trim();
-		if (!out) return '(no @aws-blocks imports found in the workspace source)';
+		if (!out) return '(no aws-cdk-blocks imports found in the workspace source)';
 		return out.length > 6000 ? `${out.slice(0, 6000)}\n… (truncated)` : out;
 	} catch (err) {
 		if ((err as { status?: number }).status === 1) {
-			return '(no @aws-blocks imports found in the workspace source)';
+			return '(no aws-cdk-blocks imports found in the workspace source)';
 		}
 		return `(import scan failed: ${describeError(err)})`;
 	}

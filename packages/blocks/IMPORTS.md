@@ -2,62 +2,62 @@
 
 <!-- Generated from the built packages by `npm run update:imports`; do not edit. -->
 
-Every app-facing entry of `@aws-blocks/blocks`, where it runs, and every name it exports. A **value** can be imported normally; a **type** only with `import type` (or `import { type … }`).
+Every app-facing entry of `aws-cdk-blocks`, where it runs, and every name it exports. A **value** can be imported normally; a **type** only with `import type` (or `import { type … }`).
 
-The rule that matters most: **code that runs under the `browser` condition imports no values from the root `@aws-blocks/blocks`**. That covers browser bundles and the templates' e2e tests (`npm run test:e2e` runs `tsx -C browser`). The root is the backend entry and the only one with a `browser` condition, under which it resolves to an empty module; every subpath resolves to the same file everywhere. Such code imports from `/client`, `/ui` and `/theme`, the e2e tests also from `/utils`, and a block's error constants come from that block's own package (`KVStoreErrors` from `@aws-blocks/bb-kv-store`; see [Root values in browser code](#root-values-in-browser-code)). The typed client of your own API is `import { api } from 'cdk-blocks'` (your backend module), not an `@aws-blocks/blocks` entry.
+The rule that matters most: **code that runs under the `browser` condition imports no values from the root `aws-cdk-blocks`**. That covers browser bundles and the templates' e2e tests (`npm run test:e2e` runs `tsx -C browser`). The root is the backend entry and the only one with a `browser` condition, under which it resolves to an empty module; every subpath resolves to the same file everywhere. Such code imports from `/client`, `/ui` and `/theme`, the e2e tests also from `/utils`, and a block's error constants come from that block's own package (`KVStoreErrors` from `@aws-cdk-blocks/bb-kv-store`; see [Root values in browser code](#root-values-in-browser-code)). The typed client of your own API is `import { api } from 'cdk-blocks'` (your backend module), not an `aws-cdk-blocks` entry.
 
 | Entry | Runs in | For |
 |---|---|---|
-| `@aws-blocks/blocks` | Backend (`cdk-blocks/`): local dev, Lambda, CDK synth. | Every Building Block and the core backend API. It is the only entry with a `browser` condition: there (browser bundles, and the templates’ `npm run test:e2e`, which runs `tsx -C browser`) it resolves to an empty module, so no values, though `import type` still works. Under `--conditions=cdk` it resolves to the `/cdk` build. |
-| `@aws-blocks/blocks/client` | Browser, Node, and the `tsx -C browser` e2e tests. | Core’s browser-safe values: errors and their matchers, and the API client runtime the generated `cdk-blocks` client uses. |
-| `@aws-blocks/blocks/ui` | Browser (returns DOM nodes). | The auth UI components and the auth state store. |
-| `@aws-blocks/blocks/theme` | Browser. | The stylesheet the UI components use. |
-| `@aws-blocks/blocks/server` | Server-side rendering (Node). | Forwarding the browser’s cookies to API calls made during SSR. |
-| `@aws-blocks/blocks/utils` | Node tests and scripts, including the templates’ `tsx -C browser` e2e tests (no `browser` condition, so it resolves the same everywhere). | Test helpers: a cookie jar for `fetch`, per-user test clients, local auth codes, TOTP codes. |
-| `@aws-blocks/blocks/cdk` | CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `cdk-blocks/index.cdk.ts`. | The synth-time build: what the generated `cdk-blocks/index.cdk.ts` imports (`BlocksStack`, `BlocksPresets`, `Hosting`, `HostingPresets`), plus every block’s CDK construct. |
-| `@aws-blocks/blocks/lambda-handler` | The deployed Lambda. | `createLambdaHandler`, which the generated `cdk-blocks/index.handler.ts` imports. |
-| `@aws-blocks/blocks/scripts` | Node: the package task runner, and your CDK entry file. | Task plumbing (dev server, deploy, sandbox). The generated `cdk-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `cdk-blocks/scripts/generate-client.ts` imports `generateClientCode`. |
+| `aws-cdk-blocks` | Backend (`cdk-blocks/`): local dev, Lambda, CDK synth. | Every Building Block and the core backend API. It is the only entry with a `browser` condition: there (browser bundles, and the templates’ `npm run test:e2e`, which runs `tsx -C browser`) it resolves to an empty module, so no values, though `import type` still works. Under `--conditions=cdk` it resolves to the `/cdk` build. |
+| `aws-cdk-blocks/client` | Browser, Node, and the `tsx -C browser` e2e tests. | Core’s browser-safe values: errors and their matchers, and the API client runtime the generated `cdk-blocks` client uses. |
+| `aws-cdk-blocks/ui` | Browser (returns DOM nodes). | The auth UI components and the auth state store. |
+| `aws-cdk-blocks/theme` | Browser. | The stylesheet the UI components use. |
+| `aws-cdk-blocks/server` | Server-side rendering (Node). | Forwarding the browser’s cookies to API calls made during SSR. |
+| `aws-cdk-blocks/utils` | Node tests and scripts, including the templates’ `tsx -C browser` e2e tests (no `browser` condition, so it resolves the same everywhere). | Test helpers: a cookie jar for `fetch`, per-user test clients, local auth codes, TOTP codes. |
+| `aws-cdk-blocks/cdk` | CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `cdk-blocks/index.cdk.ts`. | The synth-time build: what the generated `cdk-blocks/index.cdk.ts` imports (`BlocksStack`, `BlocksPresets`, `Hosting`, `HostingPresets`), plus every block’s CDK construct. |
+| `aws-cdk-blocks/lambda-handler` | The deployed Lambda. | `createLambdaHandler`, which the generated `cdk-blocks/index.handler.ts` imports. |
+| `aws-cdk-blocks/scripts` | Node: the package task runner, and your CDK entry file. | Task plumbing (dev server, deploy, sandbox). The generated `cdk-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `cdk-blocks/scripts/generate-client.ts` imports `generateClientCode`. |
 
 ## Root values in browser code
 
-Code run under the `browser` condition can’t import values from the root. These root values have a browser export: in a browser-safe entry of `@aws-blocks/blocks`, or in the browser build of the package that defines them, which carries its error constants and pure helpers (the Building Block classes there are stubs, so they are not listed). Those packages are dependencies of `@aws-blocks/blocks`; to import one directly, add it to your app’s `dependencies`. An error can also be matched by its name string, with nothing extra installed: `isBlocksError(e, 'ConditionalCheckFailedException')` from `@aws-blocks/blocks/client`.
+Code run under the `browser` condition can’t import values from the root. These root values have a browser export: in a browser-safe entry of `aws-cdk-blocks`, or in the browser build of the package that defines them, which carries its error constants and pure helpers (the Building Block classes there are stubs, so they are not listed). Those packages are dependencies of `aws-cdk-blocks`; to import one directly, add it to your app’s `dependencies`. An error can also be matched by its name string, with nothing extra installed: `isBlocksError(e, 'ConditionalCheckFailedException')` from `aws-cdk-blocks/client`.
 
 | Name | In browser code, import from |
 |---|---|
-| `AgentErrors` | `@aws-blocks/bb-agent` |
-| `ApiError` | `@aws-blocks/blocks/client` |
-| `AppSettingErrors` | `@aws-blocks/bb-app-setting` |
-| `AsyncJobErrors` | `@aws-blocks/bb-async-job` |
-| `AuthErrors` | `@aws-blocks/bb-auth` |
-| `BedrockModels` | `@aws-blocks/bb-agent` |
-| `blocksError` | `@aws-blocks/blocks/client` |
-| `brandBlocksError` | `@aws-blocks/blocks/client` |
-| `CronJobErrors` | `@aws-blocks/bb-cron-job` |
-| `customOauth2` | `@aws-blocks/bb-auth` |
-| `DashboardErrors` | `@aws-blocks/bb-dashboard` |
-| `DatabaseErrors` | `@aws-blocks/bb-database` |
-| `DEFAULT_API_ERROR_NAME` | `@aws-blocks/blocks/client` |
-| `EmailErrors` | `@aws-blocks/bb-email-client` |
-| `FileBucketErrors` | `@aws-blocks/bb-file-bucket` |
-| `github` | `@aws-blocks/bb-auth` |
-| `hasAuthError` | `@aws-blocks/blocks/client` |
-| `isAuthError` | `@aws-blocks/bb-auth` |
-| `isBlocksError` | `@aws-blocks/blocks/client` |
-| `isWireSafeError` | `@aws-blocks/blocks/client` |
-| `KnowledgeBaseErrors` | `@aws-blocks/bb-knowledge-base` |
-| `KVStoreErrors` | `@aws-blocks/bb-kv-store` |
-| `LoggingErrors` | `@aws-blocks/bb-logger` |
-| `MetricsErrors` | `@aws-blocks/bb-metrics` |
-| `OllamaModels` | `@aws-blocks/bb-agent` |
-| `relayOrigin` | `@aws-blocks/bb-auth` |
-| `Scope` | `@aws-blocks/blocks/client` |
-| `SecretErrors` | `@aws-blocks/bb-secret` |
-| `sql` | `@aws-blocks/bb-database` |
-| `stubIdp` | `@aws-blocks/bb-auth` |
+| `AgentErrors` | `@aws-cdk-blocks/bb-agent` |
+| `ApiError` | `aws-cdk-blocks/client` |
+| `AppSettingErrors` | `@aws-cdk-blocks/bb-app-setting` |
+| `AsyncJobErrors` | `@aws-cdk-blocks/bb-async-job` |
+| `AuthErrors` | `@aws-cdk-blocks/bb-auth` |
+| `BedrockModels` | `@aws-cdk-blocks/bb-agent` |
+| `blocksError` | `aws-cdk-blocks/client` |
+| `brandBlocksError` | `aws-cdk-blocks/client` |
+| `CronJobErrors` | `@aws-cdk-blocks/bb-cron-job` |
+| `customOauth2` | `@aws-cdk-blocks/bb-auth` |
+| `DashboardErrors` | `@aws-cdk-blocks/bb-dashboard` |
+| `DatabaseErrors` | `@aws-cdk-blocks/bb-database` |
+| `DEFAULT_API_ERROR_NAME` | `aws-cdk-blocks/client` |
+| `EmailErrors` | `@aws-cdk-blocks/bb-email-client` |
+| `FileBucketErrors` | `@aws-cdk-blocks/bb-file-bucket` |
+| `github` | `@aws-cdk-blocks/bb-auth` |
+| `hasAuthError` | `aws-cdk-blocks/client` |
+| `isAuthError` | `@aws-cdk-blocks/bb-auth` |
+| `isBlocksError` | `aws-cdk-blocks/client` |
+| `isWireSafeError` | `aws-cdk-blocks/client` |
+| `KnowledgeBaseErrors` | `@aws-cdk-blocks/bb-knowledge-base` |
+| `KVStoreErrors` | `@aws-cdk-blocks/bb-kv-store` |
+| `LoggingErrors` | `@aws-cdk-blocks/bb-logger` |
+| `MetricsErrors` | `@aws-cdk-blocks/bb-metrics` |
+| `OllamaModels` | `@aws-cdk-blocks/bb-agent` |
+| `relayOrigin` | `@aws-cdk-blocks/bb-auth` |
+| `Scope` | `aws-cdk-blocks/client` |
+| `SecretErrors` | `@aws-cdk-blocks/bb-secret` |
+| `sql` | `@aws-cdk-blocks/bb-database` |
+| `stubIdp` | `@aws-cdk-blocks/bb-auth` |
 
 The other root values (the Building Block classes, CDK and server helpers) have no browser export; browser code uses `import type` for their types.
 
-## `@aws-blocks/blocks`
+## `aws-cdk-blocks`
 
 Backend (`cdk-blocks/`): local dev, Lambda, CDK synth.
 
@@ -65,7 +65,7 @@ Backend (`cdk-blocks/`): local dev, Lambda, CDK synth.
 
 **Types (306):** `AdminAction`, `AdminActionGate`, `AdminCreateInit`, `AdminDisabled`, `AdminDisabledOnBuiltin`, `AdminGetterOf`, `AdminGrants`, `AdminOff`, `AdminOffOnBuiltin`, `AdminOptions`, `AdminSurface`, `AdminUser`, `AdminUserFilter`, `AgentConfig`, `AgentResult`, `AgentStreamChunk`, `AgentTool`, `AmazonProvider`, `AnnotationValue`, `AnySignInNextStep`, `ApiHandler`, `ApiMethods`, `ApiNamespaceConstructor`, `ApiNamespaceOptions`, `AppleCredentials`, `AppleProvider`, `AppSettingOptions`, `AppSettingRef`, `AsyncAPI`, `AsyncJobBaseOptions`, `AsyncJobContext`, `AsyncJobOptions`, `AsyncJobState`, `AsyncJobStatus`, `AsyncJobTransition`, `AttrOf`, `AuthAction`, `AuthActionInput`, `AuthActionInputOf`, `AuthAuditRecord`, `AuthBase`, `AuthClient`, `AuthClientEnvironment`, `AuthClientOptions`, `AuthCommonOptions`, `AuthenticatedUser`, `AuthErrorName`, `AuthField`, `AuthFlowOf`, `AuthMockOptions`, `AuthOptions`, `AuthSession`, `AuthShape`, `AuthState`, `AuthStateApiOf`, `AuthStateUser`, `AuthStore`, `AuthUser`, `AuthUserOf`, `BatchSubmitResult`, `BearerAuthOptions`, `BlocksAuth`, `BlocksContext`, `BrowserAuthSession`, `BrowserUser`, `BuildingBlockMeta`, `BuiltinAuthMockOptions`, `BuiltinAuthOptions`, `BuiltinProvider`, `BuiltinUserOptions`, `ChildLogger`, `ChunkingConfig`, `ChunkingStrategy`, `ClusterKind`, `ClusterType`, `CodeDeliveryDetails`, `CodeDeliveryFn`, `CodeDeliveryPurpose`, `CognitoAuthMockOptions`, `CognitoAuthOptions`, `CognitoOidcProvider`, `CognitoProvider`, `CompletePasskeyRegistrationResult`, `ComputeOptions`, `ComputeProps`, `ComputeType`, `ConditionalDeleteOptions`, `ConditionalWriteOptions`, `ConfigValue`, `ConfirmSignInChallengeOf`, `ConfirmSignInInputOf`, `ConfirmSignInOptions`, `ConfirmSignUpResult`, `ConnectionStringSource`, `ContainerComputeOptions`, `ContainerPollerHandle`, `ContainerPollerStarter`, `ContainerScaling`, `ContainerSize`, `CorsRule`, `CronJobEvent`, `CronJobOptions`, `CustomAttrNames`, `CustomOauth2Options`, `DashboardOptions`, `DataApiOptions`, `DatabaseClusterOptions`, `DatabaseOptions`, `DefaultToolContext`, `DeploymentType`, `DeviceRecord`, `DirectOidcProvider`, `DisconnectReason`, `EmailMessage`, `EmailOptions`, `EmailPasswordEnabled`, `EmailPasswordOptions`, `EmailSenderOptions`, `EmitOptions`, `Entry`, `ERROR_EMAIL_is_not_in_mfa_types`, `ERROR_federateVia_replaced_by_store`, `ERROR_needs_store_cognito`, `ERROR_replaced_by_providers`, `ERROR_SMS_is_not_in_mfa_types`, `ERROR_TOTP_is_not_in_mfa_types`, `ExistingClusterOptions`, `ExistingClusterRef`, `ExternalKmsKeyRef`, `ExternalMetricsRef`, `ExternalTableRef`, `ExternalUserPoolRef`, `FacebookProvider`, `FBExternalBucketRef`, `FBExternalKmsKeyRef`, `FBPutOptions`, `FBScanOptions`, `FederatedActionNameOf`, `FederatedIdentity`, `FederationGate`, `FileBucketOptions`, `FileContent`, `FileInfo`, `GetAuthSessionOptions`, `GetChannelOptions`, `GetOptions`, `GetUrlOptions`, `GitHubOptions`, `GoogleProvider`, `GroupAdmin`, `GroupOf`, `HasFederatedProvider`, `HostedUiOptions`, `HttpMethod`, `IndexConfig`, `JobDispatchResult`, `JobWorkerReply`, `JobWorkerRequest`, `JWT`, `KeyConfig`, `KeyOf`, `KnowledgeBaseAgentTool`, `KnowledgeBaseAgentToolOptions`, `KnowledgeBaseAgentToolResult`, `KnowledgeBaseOptions`, `KVPutOptions`, `KVScanOptions`, `KVStoreOptions`, `LegacyDatabaseClusterOptions`, `LegacyKVStoreDeleteOptions`, `LegacyKVStoreOptions`, `LegacyKVStorePutOptions`, `LifecycleAdmin`, `LifecycleRule`, `LogEntry`, `LoggingOptions`, `LogLevel`, `ManagedValue`, `MappedClaims`, `MetadataFilter`, `MetricConfig`, `MetricDatum`, `MetricResolution`, `MetricsBBRef`, `MetricsEmitter`, `MetricsOptions`, `MetricsSource`, `MetricUnit`, `MfaEnabled`, `MfaFactor`, `MfaGate`, `MfaMode`, `MfaModeEnabled`, `MfaModeOf`, `MfaModeOfOption`, `MfaOptions`, `MfaPreference`, `MfaPreferenceInput`, `MfaSetting`, `MfaStepNameOf`, `MfaTypeOf`, `ModelConfig`, `NoSharedMethodNames`, `OAuth2Provider`, `OAuthCredentials`, `ObjectLockOptions`, `OidcClientApiOf`, `OidcClientDescriptor`, `OidcClientHandle`, `OidcProviderBase`, `OidcProviderConfig`, `OnStubAuthorize`, `PasskeyDescription`, `PasskeyGate`, `PasskeyOptions`, `PasskeysEnabled`, `PasskeysOptionOf`, `PasswordGate`, `PasswordPolicy`, `PreferredChallenge`, `ProfileAttributeMapping`, `ProtectedApi`, `ProtectHandlers`, `ProtectOptions`, `ProviderCommon`, `ProviderIdOf`, `ProviderSecretRef`, `PutBatchEntry`, `PutUrlOptions`, `QueryOptions`, `RawRouteOptions`, `ReadAttrOf`, `ReadValidationMode`, `RealtimeChannel`, `RealtimeSubscription`, `RedirectOptions`, `RegisteredRoute`, `RelayOrigin`, `RequireAuthOptions`, `ResetPasswordResult`, `Results`, `RetrieveOptions`, `RetrieveResult`, `RunContainerOptions`, `SamlProvider`, `ScalingSignal`, `ScopedDatabase`, `ScopeOptions`, `ScopeParent`, `SecretOptions`, `SecretReadOptions`, `SecretRef`, `SecretValue`, `SecretVersion`, `SecretVersionInfo`, `Segment`, `SendBatchResult`, `SendResult`, `ServerlessComputeOptions`, `SessionOptions`, `SetPasswordOptions`, `SignInNextStep`, `SignInOptions`, `SignInRedirectResult`, `SignInResult`, `SignInStepNameOf`, `SignInUrlOptions`, `SignInWithRedirectInput`, `SignOutOptions`, `SignOutResult`, `SignUpOptions`, `SignUpResult`, `SocialProvider`, `SocialProviderId`, `SortCondition`, `SourceConfig`, `SqlQuery`, `StandardUserAttributeKey`, `StartPasskeyRegistrationResult`, `StreamOptions`, `StubAuthorizeRequest`, `StubIdpOptions`, `StubIdpSettings`, `StubProvider`, `StubUser`, `SubmitOptions`, `SubscribeOptions`, `TokenUsage`, `ToolCallRecord`, `ToolDefinition`, `ToolFactory`, `ToolHandlerArgs`, `ToolsConfig`, `TotpEnabled`, `TracerOptions`, `Transaction`, `TransactionOptions`, `UpdateAttributeOutcome`, `UserAttribute`, `UserCandidate`, `UserPoolOptions`, `ValueKind`, `ValueOf`, `WaitUntilCompleteOptions`, `WaitUntilSyncedOptions`, `Where`
 
-## `@aws-blocks/blocks/client`
+## `aws-cdk-blocks/client`
 
 Browser, Node, and the `tsx -C browser` e2e tests.
 
@@ -73,7 +73,7 @@ Browser, Node, and the `tsx -C browser` e2e tests.
 
 **Types (6):** `ApiHandler`, `ApiNamespaceClientOptions`, `BlocksContext`, `BlocksMiddleware`, `BlocksRequest`, `ScopeOptions`
 
-## `@aws-blocks/blocks/ui`
+## `aws-cdk-blocks/ui`
 
 Browser (returns DOM nodes).
 
@@ -81,7 +81,7 @@ Browser (returns DOM nodes).
 
 **Types (26):** `AuthActionFields`, `AuthActionInput`, `AuthActionName`, `AuthActionOverride`, `AuthActionPayloadMap`, `AuthClient`, `AuthClientEnvironment`, `AuthClientOptions`, `AuthenticatorOptions`, `AuthFederatedActionName`, `AuthFieldOverride`, `AuthMfaSetting`, `AuthNextStepName`, `AuthStateApi`, `AuthTypedActionOverride`, `AuthTypedAuthenticatorOptions`, `AuthUserOf`, `BrowserAuthSession`, `BrowserUser`, `MfaSettingsOptions`, `SignInRedirectResult`, `SignInWithRedirectInput`, `SignOutResult`, `StatusKind`, `StatusMessageHandle`, `StatusMessageOptions`
 
-## `@aws-blocks/blocks/theme`
+## `aws-cdk-blocks/theme`
 
 Browser.
 
@@ -89,7 +89,7 @@ Browser.
 
 **Types (0):** —
 
-## `@aws-blocks/blocks/server`
+## `aws-cdk-blocks/server`
 
 Server-side rendering (Node).
 
@@ -97,7 +97,7 @@ Server-side rendering (Node).
 
 **Types (2):** `CookieProvider`, `WithAuthOptions`
 
-## `@aws-blocks/blocks/utils`
+## `aws-cdk-blocks/utils`
 
 Node tests and scripts, including the templates’ `tsx -C browser` e2e tests (no `browser` condition, so it resolves the same everywhere).
 
@@ -105,7 +105,7 @@ Node tests and scripts, including the templates’ `tsx -C browser` e2e tests (n
 
 **Types (1):** `GetLastAuthCodeOptions`
 
-## `@aws-blocks/blocks/cdk`
+## `aws-cdk-blocks/cdk`
 
 CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `cdk-blocks/index.cdk.ts`.
 
@@ -113,7 +113,7 @@ CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file
 
 **Types (332):** `AdminAction`, `AdminActionGate`, `AdminCreateInit`, `AdminDisabled`, `AdminDisabledOnBuiltin`, `AdminGetterOf`, `AdminGrants`, `AdminOff`, `AdminOffOnBuiltin`, `AdminOptions`, `AdminSurface`, `AdminUser`, `AdminUserFilter`, `AgentConfig`, `AgentResult`, `AgentStreamChunk`, `AgentTool`, `AmazonProvider`, `AnnotationValue`, `AnySignInNextStep`, `ApiHandler`, `ApiMethods`, `ApiNamespaceConstructor`, `ApiNamespaceOptions`, `ApiWafOptions`, `AppleCredentials`, `AppleProvider`, `AppSettingOptions`, `AppSettingRef`, `AsyncAPI`, `AsyncJobBaseOptions`, `AsyncJobContext`, `AsyncJobOptions`, `AsyncJobState`, `AsyncJobStatus`, `AsyncJobTransition`, `AttrOf`, `AuthAction`, `AuthActionInput`, `AuthActionInputOf`, `AuthAuditRecord`, `AuthBase`, `AuthClient`, `AuthClientEnvironment`, `AuthClientOptions`, `AuthCommonOptions`, `AuthenticatedUser`, `AuthErrorName`, `AuthField`, `AuthFlowOf`, `AuthMockOptions`, `AuthOptions`, `AuthSession`, `AuthShape`, `AuthState`, `AuthStateApiOf`, `AuthStateUser`, `AuthStore`, `AuthUser`, `AuthUserOf`, `BatchSubmitResult`, `BearerAuthOptions`, `BlocksAuth`, `BlocksBackendProps`, `BlocksContext`, `BlocksDefaults`, `BlocksSecretsStore`, `BlocksStackApi`, `BlocksStackProps`, `BlocksThrottling`, `BlocksVpcOptions`, `BranchConfig`, `BrowserAuthSession`, `BrowserUser`, `BuildingBlockMeta`, `BuiltinAuthMockOptions`, `BuiltinAuthOptions`, `BuiltinProvider`, `BuiltinUserOptions`, `ChildLogger`, `ChunkingConfig`, `ChunkingStrategy`, `CloudFrontOverRouterFrontDoor`, `ClusterKind`, `ClusterType`, `CodeDeliveryDetails`, `CodeDeliveryFn`, `CodeDeliveryPurpose`, `CognitoAuthMockOptions`, `CognitoAuthOptions`, `CognitoOidcProvider`, `CognitoProvider`, `CompletePasskeyRegistrationResult`, `ComputeConfig`, `ComputeOptions`, `ComputeProps`, `ComputeType`, `ConditionalDeleteOptions`, `ConditionalWriteOptions`, `ConfigValue`, `ConfirmSignInChallengeOf`, `ConfirmSignInInputOf`, `ConfirmSignInOptions`, `ConfirmSignUpResult`, `ConnectionStringSource`, `ContainerComputeOptions`, `ContainerPollerHandle`, `ContainerPollerStarter`, `ContainerScaling`, `ContainerSize`, `CoreBlocksBackendProps`, `CoreBlocksStackProps`, `CorsRule`, `CronJobEvent`, `CronJobOptions`, `CustomAttrNames`, `CustomOauth2Options`, `DashboardOptions`, `DataApiOptions`, `DatabaseClusterOptions`, `DatabaseOptions`, `DefaultToolContext`, `DeploymentType`, `DeployStageProps`, `DeviceRecord`, `DirectOidcProvider`, `DisconnectReason`, `EmailMessage`, `EmailOptions`, `EmailPasswordEnabled`, `EmailPasswordOptions`, `EmailSenderOptions`, `EmitOptions`, `Entry`, `ERROR_EMAIL_is_not_in_mfa_types`, `ERROR_federateVia_replaced_by_store`, `ERROR_needs_store_cognito`, `ERROR_replaced_by_providers`, `ERROR_SMS_is_not_in_mfa_types`, `ERROR_TOTP_is_not_in_mfa_types`, `ExistingClusterOptions`, `ExistingClusterRef`, `ExternalKmsKeyRef`, `ExternalMetricsRef`, `ExternalTableRef`, `ExternalUserPoolRef`, `FacebookProvider`, `FBExternalBucketRef`, `FBExternalKmsKeyRef`, `FBPutOptions`, `FBScanOptions`, `FederatedActionNameOf`, `FederatedIdentity`, `FederationGate`, `FileBucketOptions`, `FileContent`, `FileInfo`, `FrameworkType`, `GetAuthSessionOptions`, `GetChannelOptions`, `GetOptions`, `GetUrlOptions`, `GitHubOptions`, `GoogleProvider`, `GroupAdmin`, `GroupOf`, `HasFederatedProvider`, `HostedUiOptions`, `HostingDomainConfig`, `HostingPreset`, `HostingProps`, `HostingWafConfig`, `HttpMethod`, `IndexConfig`, `JobDispatchResult`, `JobWorkerReply`, `JobWorkerRequest`, `JWT`, `KeyConfig`, `KeyOf`, `KnowledgeBaseAgentTool`, `KnowledgeBaseAgentToolOptions`, `KnowledgeBaseAgentToolResult`, `KnowledgeBaseOptions`, `KVPutOptions`, `KVScanOptions`, `KVStoreOptions`, `LegacyDatabaseClusterOptions`, `LegacyKVStoreDeleteOptions`, `LegacyKVStoreOptions`, `LegacyKVStorePutOptions`, `LifecycleAdmin`, `LifecycleRule`, `LogEntry`, `LoggingOptions`, `LogLevel`, `ManagedValue`, `MappedClaims`, `MetadataFilter`, `MetricConfig`, `MetricDatum`, `MetricResolution`, `MetricsBBRef`, `MetricsEmitter`, `MetricsOptions`, `MetricsSource`, `MetricUnit`, `MfaEnabled`, `MfaFactor`, `MfaGate`, `MfaMode`, `MfaModeEnabled`, `MfaModeOf`, `MfaModeOfOption`, `MfaOptions`, `MfaPreference`, `MfaPreferenceInput`, `MfaSetting`, `MfaStepNameOf`, `MfaTypeOf`, `ModelConfig`, `NoSharedMethodNames`, `OAuth2Provider`, `OAuthCredentials`, `ObjectLockOptions`, `OidcClientApiOf`, `OidcClientDescriptor`, `OidcClientHandle`, `OidcProviderBase`, `OidcProviderConfig`, `OnStubAuthorize`, `PasskeyDescription`, `PasskeyGate`, `PasskeyOptions`, `PasskeysEnabled`, `PasskeysOptionOf`, `PasswordGate`, `PasswordPolicy`, `PipelineProps`, `PipelineSourceConfig`, `PipelineStageConfig`, `PipelineSynthConfig`, `PreferredChallenge`, `ProfileAttributeMapping`, `ProtectedApi`, `ProtectHandlers`, `ProtectOptions`, `ProviderCommon`, `ProviderIdOf`, `ProviderSecretRef`, `PutBatchEntry`, `PutUrlOptions`, `QueryOptions`, `RawRouteOptions`, `ReadAttrOf`, `ReadValidationMode`, `RealtimeChannel`, `RealtimeSubscription`, `RedirectOptions`, `RegisteredRoute`, `RelayOrigin`, `RequireAuthOptions`, `ResetPasswordResult`, `Results`, `RetrieveOptions`, `RetrieveResult`, `RunContainerOptions`, `SamlProvider`, `ScalingSignal`, `ScopedDatabase`, `ScopeOptions`, `ScopeParent`, `SecretOptions`, `SecretReadOptions`, `SecretRef`, `SecretValue`, `SecretVersion`, `SecretVersionInfo`, `Segment`, `SendBatchResult`, `SendResult`, `ServerlessComputeOptions`, `SessionOptions`, `SetPasswordOptions`, `SignInNextStep`, `SignInOptions`, `SignInRedirectResult`, `SignInResult`, `SignInStepNameOf`, `SignInUrlOptions`, `SignInWithRedirectInput`, `SignOutOptions`, `SignOutResult`, `SignUpOptions`, `SignUpResult`, `SocialProvider`, `SocialProviderId`, `SortCondition`, `SourceConfig`, `SqlQuery`, `StandardUserAttributeKey`, `StartPasskeyRegistrationResult`, `StreamOptions`, `StubAuthorizeRequest`, `StubIdpOptions`, `StubIdpSettings`, `StubProvider`, `StubUser`, `SubmitOptions`, `SubnetRole`, `SubscribeOptions`, `TokenUsage`, `ToolCallRecord`, `ToolDefinition`, `ToolFactory`, `ToolHandlerArgs`, `ToolsConfig`, `TotpEnabled`, `TracerOptions`, `Transaction`, `TransactionOptions`, `UpdateAttributeOutcome`, `UserAttribute`, `UserCandidate`, `UserPoolOptions`, `ValueKind`, `ValueOf`, `VpcContext`, `VpcRequirements`, `WaitUntilCompleteOptions`, `WaitUntilSyncedOptions`, `Where`
 
-## `@aws-blocks/blocks/lambda-handler`
+## `aws-cdk-blocks/lambda-handler`
 
 The deployed Lambda.
 
@@ -121,7 +121,7 @@ The deployed Lambda.
 
 **Types (2):** `EventClass`, `LambdaContext`
 
-## `@aws-blocks/blocks/scripts`
+## `aws-cdk-blocks/scripts`
 
 Node: the package task runner, and your CDK entry file.
 
@@ -133,6 +133,6 @@ Node: the package task runner, and your CDK entry file.
 
 | Entry | What it is |
 |---|---|
-| `@aws-blocks/blocks/run` | the side-effect entry point invoked by app package scripts |
-| `@aws-blocks/blocks/vendorize` | the `npm run vendorize` implementation |
-| `@aws-blocks/blocks/docs/*` | these docs |
+| `aws-cdk-blocks/run` | the side-effect entry point invoked by app package scripts |
+| `aws-cdk-blocks/vendorize` | the `npm run vendorize` implementation |
+| `aws-cdk-blocks/docs/*` | these docs |

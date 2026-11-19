@@ -11,7 +11,7 @@
  * @internal
  */
 
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 import { type AuthErrorName, AuthErrors, isAuthError, isAuthErrorName } from './errors.js';
 import type { AuthUser, BlocksAuth } from './index.js';
 

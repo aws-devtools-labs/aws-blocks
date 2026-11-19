@@ -14,7 +14,7 @@
  * @internal
  */
 
-import type { Auth } from '@aws-blocks/bb-auth';
+import type { Auth } from '@aws-cdk-blocks/bb-auth';
 import { getSdkIdentifiers } from './sdk-identifiers.js';
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;

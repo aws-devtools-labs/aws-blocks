@@ -13,7 +13,7 @@
  * them with `isBlocksError(e, 'NotAuthenticatedException')`.
  */
 
-import { ApiError, AuthErrors, type BlocksAuth, type BlocksContext } from '@aws-blocks/blocks';
+import { ApiError, AuthErrors, type BlocksAuth, type BlocksContext } from 'aws-cdk-blocks';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 
 type CognitoVerifierInstance = ReturnType<typeof CognitoJwtVerifier.create>;

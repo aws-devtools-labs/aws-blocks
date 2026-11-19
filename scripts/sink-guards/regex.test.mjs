@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Repo invariant: a value reaches `new RegExp(…)` only as a constant or through
-// an escape (`escapeRegExp` from `@aws-blocks/core/bb-utils`, or a same-named
+// an escape (`escapeRegExp` from `@aws-cdk-blocks/core/bb-utils`, or a same-named
 // helper that escapes every metacharacter). Unescaped, a configured
 // `example.com` also matches `exampleXcom`, and `a|.*` matches everything.
 //

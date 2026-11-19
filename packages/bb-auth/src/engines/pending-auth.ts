@@ -24,8 +24,8 @@
  */
 
 import { createHmac } from 'node:crypto';
-import type { BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { clearPendingAuthCookie, readPendingAuthCookie, setPendingAuthCookie } from '../cookies.js';
 
 /** Pending sign-in lifetime: 10 minutes (`AuthOIDC`'s). */

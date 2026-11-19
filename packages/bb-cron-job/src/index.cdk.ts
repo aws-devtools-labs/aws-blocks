@@ -1,12 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { AsyncJob } from '@aws-blocks/bb-async-job';
-import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
-import { blocksError, getOrCreateOnRoot, registerConfig, Scope } from '@aws-blocks/core/cdk';
-import { foreignComputeProblem, sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
+import { ContainerCompute } from '@aws-cdk-blocks/bb-container-compute/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { blocksError, getOrCreateOnRoot, registerConfig, Scope } from '@aws-cdk-blocks/core/cdk';
+import { foreignComputeProblem, sourceScopedConditions } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';

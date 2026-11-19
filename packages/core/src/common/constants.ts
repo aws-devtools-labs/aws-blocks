@@ -25,7 +25,7 @@ export const BLOCKS_SANDBOX_DIR = '.cdk-blocks-sandbox';
  * the config is uploaded to, the invalidation paths, the no-cache path, the liveness
  * probe, and the placeholder write whose on-disk path becomes that S3 key. Anything
  * touching the developer's own disk reads {@link BLOCKS_SANDBOX_DIR} instead.
- * `@aws-blocks/hosting` does not depend on this package, so its matching S3 exclude
+ * `@aws-cdk-blocks/hosting` does not depend on this package, so its matching S3 exclude
  * repeats the value as a literal and is pinned by test instead.
  */
 export const BLOCKS_SANDBOX_SERVED_DIR = '.blocks-sandbox';

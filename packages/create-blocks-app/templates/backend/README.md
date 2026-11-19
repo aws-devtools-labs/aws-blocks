@@ -2,7 +2,7 @@
 
 Backend-only TypeScript API with AWS Blocks — no frontend included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template backend`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template backend`
 
 ## For Coding Agents
 
@@ -112,7 +112,7 @@ This template is backend-only. To add a frontend:
 
 3. **Add Hosting to `cdk-blocks/index.cdk.ts`:**
    ```ts
-   import { Hosting } from '@aws-blocks/blocks/cdk';
+   import { Hosting } from 'aws-cdk-blocks/cdk';
 
    if (!sandboxMode) {
      new Hosting(blocksStack, 'Hosting', {

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { SqlQuery } from './common/sql.js';
 
@@ -143,7 +143,7 @@ export interface LegacySubnetSelection {
 
 /**
  * Options of a `LegacyDatabaseCluster`: the options of `Database` in
- * `@aws-blocks/bb-data` 0.5.0 that shaped its Aurora cluster. Give each one
+ * `@aws-cdk-blocks/bb-data` 0.5.0 that shaped its Aurora cluster. Give each one
  * the value that the `Database` had. A different value changes the deployed
  * cluster, and some changes replace it.
  */

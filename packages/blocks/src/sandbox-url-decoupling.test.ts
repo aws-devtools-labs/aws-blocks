@@ -164,7 +164,7 @@ const PUBLISHED_SITES: ReadonlyArray<{
 		site: 'static-asset exclusion for the placeholder',
 		file: 'packages/hosting/src/constructs/s3_website_construct.ts',
 		needle: `'${SERVED_DIR}/*'`,
-		why: "the S3 exclude that stops the build-time placeholder overwriting the real config. A literal, because `@aws-blocks/hosting` cannot import the constant, so it is checked against the constant's value — matched without the surrounding `exclude: [` so a reformat of that array cannot fail this spuriously",
+		why: "the S3 exclude that stops the build-time placeholder overwriting the real config. A literal, because `@aws-cdk-blocks/hosting` cannot import the constant, so it is checked against the constant's value — matched without the surrounding `exclude: [` so a reformat of that array cannot fail this spuriously",
 	},
 	{
 		site: 'dev server mirror of the published path',

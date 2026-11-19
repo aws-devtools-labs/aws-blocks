@@ -1,8 +1,8 @@
-# @aws-blocks/auth-common
+# @aws-cdk-blocks/auth-common
 
 Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAuth` contract that `Auth` implements, the `AuthErrors` vocabulary, and the provider-agnostic sign-in UI. Use this package to build provider-agnostic auth UI, or import the types when authoring a custom auth Building Block.
 
-> For authentication itself, use `Auth` (`@aws-blocks/bb-auth`, also exported from `@aws-blocks/blocks`): one block for email + password, social sign-in, OIDC and SAML. Its README explains which sign-in option to choose and why.
+> For authentication itself, use `Auth` (`@aws-cdk-blocks/bb-auth`, also exported from `aws-cdk-blocks`): one block for email + password, social sign-in, OIDC and SAML. Its README explains which sign-in option to choose and why.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -10,10 +10,10 @@ Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAu
 
 | Export Path | What it provides |
 |---|---|
-| `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField`, `AuthErrorName`. Values: `AuthErrors`, `isAuthError`, `isAuthErrorName` |
-| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `MfaSettings`, `StatusMessage`. Custom UI: `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`, `onAuthChange`, `broadcastAuthChange`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
-| `@aws-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
-| `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLocalDevRequest`, `isLoopbackRequest`, `isInsecurePublicOrigin` |
+| `@aws-cdk-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField`, `AuthErrorName`. Values: `AuthErrors`, `isAuthError`, `isAuthErrorName` |
+| `@aws-cdk-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `MfaSettings`, `StatusMessage`. Custom UI: `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`, `onAuthChange`, `broadcastAuthChange`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
+| `@aws-cdk-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
+| `@aws-cdk-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLocalDevRequest`, `isLoopbackRequest`, `isInsecurePublicOrigin` |
 
 ## Session-cookie security policy (`/cookies`)
 
@@ -26,9 +26,9 @@ Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAu
 | `true` | `false` | `SameSite=None; Secure; Partitioned` |
 | `true` | `true` | `SameSite=None; Secure` |
 
-`buildCookieSecurityAttrs(input)` returns the string form for BBs that assemble `Set-Cookie` by hand; `resolveCookieSecurity(input)` returns the attribute object for BBs that pass a structured cookie config. `isLocalDevRequest(ctx)` is the per-request `isLocalhost` input: it is `true` only when the process is local (`getDeploymentType()` from `@aws-blocks/core` is `'local'`) and the request comes from a loopback origin. On deployed compute it is always `false`, so a request header such as `Origin: http://localhost` cannot drop `Secure` or `Partitioned`. `isLoopbackRequest(ctx)` is the header check on its own (`localhost`, `127.0.0.1`, `[::1]`).
+`buildCookieSecurityAttrs(input)` returns the string form for BBs that assemble `Set-Cookie` by hand; `resolveCookieSecurity(input)` returns the attribute object for BBs that pass a structured cookie config. `isLocalDevRequest(ctx)` is the per-request `isLocalhost` input: it is `true` only when the process is local (`getDeploymentType()` from `@aws-cdk-blocks/core` is `'local'`) and the request comes from a loopback origin. On deployed compute it is always `false`, so a request header such as `Origin: http://localhost` cannot drop `Secure` or `Partitioned`. `isLoopbackRequest(ctx)` is the header check on its own (`localhost`, `127.0.0.1`, `[::1]`).
 
-The optional `plainHttpOrigin` input marks a deployed front door served over plain HTTP (an ALB with no certificate). In a sandbox deploy it drops `Secure` from the same-origin `Lax` cookie, which a browser would otherwise discard over HTTP. Outside a sandbox (`getDeploymentType()` is `'production'`, which includes deployed compute whose config doesn't say otherwise) the same-origin cookie is refused instead: `resolveCookieSecurity` and `buildCookieSecurityAttrs` throw `AuthErrors.InsecureTransport` (`InsecureTransportException`), so no session is issued without `Secure`. A clearing cookie (`clearing: true`, `Max-Age=0`) carries no value and is never refused, so sign-out still clears the cookie. The one opt-out outside a sandbox is the front door's `allowPlainHttp: true` (for a trusted network path only): `Hosting` registers the config entry `BLOCKS_ALLOW_PLAIN_HTTP` (`'true'`), and with exactly that value the cookie drops `Secure` as in a sandbox. A missing or any other value refuses; on deployed compute only the loaded config entry counts, never an environment variable of the same name. A production synth already fails for such a door (`PlainHttpFrontDoorError` in `@aws-blocks/hosting`); this is the runtime backstop. It doesn't change the cross-domain cookie, which the API's own HTTPS response sets. `isInsecurePublicOrigin()` derives it from the door's own scheme (`BLOCKS_PUBLIC_ORIGIN` starting with `http://`), never from a request header. `Auth` (`bb-auth`) passes it for every cookie it sets.
+The optional `plainHttpOrigin` input marks a deployed front door served over plain HTTP (an ALB with no certificate). In a sandbox deploy it drops `Secure` from the same-origin `Lax` cookie, which a browser would otherwise discard over HTTP. Outside a sandbox (`getDeploymentType()` is `'production'`, which includes deployed compute whose config doesn't say otherwise) the same-origin cookie is refused instead: `resolveCookieSecurity` and `buildCookieSecurityAttrs` throw `AuthErrors.InsecureTransport` (`InsecureTransportException`), so no session is issued without `Secure`. A clearing cookie (`clearing: true`, `Max-Age=0`) carries no value and is never refused, so sign-out still clears the cookie. The one opt-out outside a sandbox is the front door's `allowPlainHttp: true` (for a trusted network path only): `Hosting` registers the config entry `BLOCKS_ALLOW_PLAIN_HTTP` (`'true'`), and with exactly that value the cookie drops `Secure` as in a sandbox. A missing or any other value refuses; on deployed compute only the loaded config entry counts, never an environment variable of the same name. A production synth already fails for such a door (`PlainHttpFrontDoorError` in `@aws-cdk-blocks/hosting`); this is the runtime backstop. It doesn't change the cross-domain cookie, which the API's own HTTPS response sets. `isInsecurePublicOrigin()` derives it from the door's own scheme (`BLOCKS_PUBLIC_ORIGIN` starting with `http://`), never from a request header. `Auth` (`bb-auth`) passes it for every cookie it sets.
 
 
 ## Server-Side Interface (`BlocksAuth`)
@@ -36,7 +36,7 @@ The optional `plainHttpOrigin` input marks a deployed front door served over pla
 `Auth` implements `BlocksAuth`, and so can a custom auth Building Block. Server-side code is identical regardless of provider:
 
 ```typescript
-import { Auth } from '@aws-blocks/bb-auth';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const auth = new Auth(scope, 'auth');
 
@@ -77,9 +77,9 @@ export const authApi = auth.createApi();
 `AuthErrors` is the shared vocabulary of auth error names. Each value is the `name` of the `ApiError` an auth BB throws, and the `errorName` it sets on a failed `AuthState`. Errors cross the wire by `name`, so the same check works on the server and in the browser:
 
 ```typescript
-import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { AuthErrors, isAuthError } from '@aws-blocks/auth-common';
-import { Auth } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Scope } from '@aws-cdk-blocks/core';
+import { AuthErrors, isAuthError } from '@aws-cdk-blocks/auth-common';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('app');
 const auth = new Auth(scope, 'auth');
@@ -98,9 +98,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-- `isAuthError(e, AuthErrors.X)` narrows `e` to `Error & { name: 'X…' }`. It is `isBlocksError` from `@aws-blocks/core`, restricted to auth names, so a typo or an unknown name fails to compile.
+- `isAuthError(e, AuthErrors.X)` narrows `e` to `Error & { name: 'X…' }`. It is `isBlocksError` from `@aws-cdk-blocks/core`, restricted to auth names, so a typo or an unknown name fails to compile.
 - `isAuthError(e)` (no name) matches any name in `AuthErrors`. Some names, such as `InvalidParameterException` or `ResourceNotFoundException`, are not unique to auth — prefer passing the specific name you handle.
-- `isAuthErrorName(value)` narrows a string (e.g. `state.errorName` from `setAuthState`) to `AuthErrorName`. To branch on one specific name on that path, use `hasAuthError(state, AuthErrors.X)` from `@aws-blocks/core`.
+- `isAuthErrorName(value)` narrows a string (e.g. `state.errorName` from `setAuthState`) to `AuthErrorName`. To branch on one specific name on that path, use `hasAuthError(state, AuthErrors.X)` from `@aws-cdk-blocks/core`.
 
 The names follow Amazon Cognito's exception names wherever Cognito has one (for example `UsernameExistsException`, `CodeMismatchException`). `Auth` reports every failure with one of these names (an error it does not recognise becomes `InternalErrorException`); only an `ApiError` your own `validateUser` / `onSignIn` hook throws keeps the name you gave it. See [DESIGN.md](./DESIGN.md#auth-error-vocabulary) for how the names the removed `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks used map onto `AuthErrors`.
 
@@ -109,7 +109,7 @@ The names follow Amazon Cognito's exception names wherever Cognito has one (for 
 The `Authenticator` renders auth UI driven by the state machine. It works with `Auth`, whatever sign-in methods it is configured with, and with any custom auth BB that serves the same state machine, because it renders based on `AuthState`, not provider-specific logic.
 
 ```typescript
-import { Authenticator } from '@aws-blocks/auth-common/ui';
+import { Authenticator } from '@aws-cdk-blocks/auth-common/ui';
 import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(Authenticator(authApi));
@@ -130,7 +130,7 @@ The component:
 Compact bar for the top of the page. Shows "👤 username | Sign Out" when signed in, or a "Sign In" button when signed out. Clicking "Sign In" opens the `Authenticator` in a modal overlay.
 
 ```typescript
-import { AccountMenuBar } from '@aws-blocks/auth-common/ui';
+import { AccountMenuBar } from '@aws-cdk-blocks/auth-common/ui';
 import { authApi } from 'cdk-blocks';
 
 document.body.prepend(AccountMenuBar(authApi));
@@ -143,7 +143,7 @@ Use `AccountMenuBar` for the page header and `Authenticator` when you want a sta
 Renders content only when the user is signed in. Automatically updates when auth state changes (same window and cross-tab).
 
 ```typescript
-import { AuthenticatedContent } from '@aws-blocks/auth-common/ui';
+import { AuthenticatedContent } from '@aws-cdk-blocks/auth-common/ui';
 import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(
@@ -179,7 +179,7 @@ When no fallback is provided the container renders nothing while signed out.
 Authenticator-app (TOTP) enrolment and MFA preferences for the signed-in user, on an account page. It drives the auth block's `setUpTotp`, `verifyTotpSetup`, `getMfaPreference` and `updateMfaPreference` actions (`Auth` with `mfa` on) and renders nothing while signed out:
 
 ```typescript
-import { MfaSettings } from '@aws-blocks/auth-common/ui';
+import { MfaSettings } from '@aws-cdk-blocks/auth-common/ui';
 import { authApi } from 'cdk-blocks';
 
 document.querySelector('#security')!.appendChild(MfaSettings(authApi));
@@ -192,7 +192,7 @@ Pass `renderQrCode: (otpauthUri) => Node` to draw the setup QR code with a libra
 A themed, accessible status line for the "loading / success / error" affordance apps otherwise hand-roll with inline styles. It returns a handle: mount `handle.element`, then drive it with `handle.set(kind, text)` as an async operation progresses.
 
 ```typescript
-import { StatusMessage } from '@aws-blocks/auth-common/ui';
+import { StatusMessage } from '@aws-cdk-blocks/auth-common/ui';
 
 const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
 document.querySelector('#app-status')!.replaceWith(status.element);
@@ -221,7 +221,7 @@ Pass `testId` to scope the root (and its `-text` child) when a page renders more
 Subscribe to auth state changes from any source (same window + other tabs):
 
 ```typescript
-import { onAuthChange } from '@aws-blocks/auth-common/ui';
+import { onAuthChange } from '@aws-cdk-blocks/auth-common/ui';
 import { authApi } from 'cdk-blocks';
 
 const unsubscribe = onAuthChange(authApi, (user) => {
@@ -242,7 +242,7 @@ const unsubscribe = onAuthChange(authApi, (user) => {
 If you build your own sign-in form instead of using the `Authenticator`, submit every action with `submitAuthAction`. A bare `authApi.setAuthState(...)` changes the session on the server but **notifies nothing** on the client, so `onAuthChange`, `AuthenticatedContent`, `AccountMenuBar` and other tabs keep showing the old state until a reload.
 
 ```typescript
-import { submitAuthAction } from '@aws-blocks/blocks/ui';
+import { submitAuthAction } from 'aws-cdk-blocks/ui';
 import { authApi } from 'cdk-blocks';
 
 export async function signIn(username: string, password: string): Promise<string | undefined> {
@@ -266,7 +266,7 @@ It calls `setAuthState(input)` once and resolves to exactly what that returned, 
 
 - `retriable: true` — changes nothing. Keep the current form (and its hidden fields, such as `session`) and show `error` inline.
 - any other result — updates the shared auth-state store (below), so every mounted `Authenticator` re-renders, mid-flow steps included.
-- a `signedIn` or `signedOut` result — also broadcasts `user ?? null` to `onAuthChange` subscribers in this window and in other tabs. Mid-flow steps are not broadcast. The broadcast is tagged with `authApi`'s RPC namespace, so with two auth blocks on a page, another block's `onAuthChange` (and store) ignores it. An untagged message — `broadcastAuthChange(user)` called without an `api`, or one from a tab still running an older `@aws-blocks/auth-common` — reaches every block's listeners.
+- a `signedIn` or `signedOut` result — also broadcasts `user ?? null` to `onAuthChange` subscribers in this window and in other tabs. Mid-flow steps are not broadcast. The broadcast is tagged with `authApi`'s RPC namespace, so with two auth blocks on a page, another block's `onAuthChange` (and store) ignores it. An untagged message — `broadcastAuthChange(user)` called without an `api`, or one from a tab still running an older `@aws-cdk-blocks/auth-common` — reaches every block's listeners.
 - a rejected call (network, 5xx) — rejects with the same error and changes nothing.
 
 `input` is the same discriminated `AuthActionInput` as `setAuthState`, so a wrong payload is a compile error. With `Auth`, `input` is checked against the actions that block's options allow: on an `emailPassword: false` block, `submitAuthAction(authApi, { action: 'signIn', … })` does not compile. Outside a browser (SSR, Node scripts) it is just the RPC: nothing is cached or broadcast, and nothing throws. Pass the same `authApi` object every time; the store is keyed by its identity.
@@ -279,7 +279,7 @@ The `Authenticator` and `AccountMenuBar` submit through it too, so each sign-in 
 
 ```tsx
 import { useSyncExternalStore } from 'react';
-import { getAuthStateSnapshot, subscribeAuthState } from '@aws-blocks/blocks/ui';
+import { getAuthStateSnapshot, subscribeAuthState } from 'aws-cdk-blocks/ui';
 import { authApi } from 'cdk-blocks';
 
 const subscribe = (cb: () => void) => subscribeAuthState(authApi, cb);
@@ -306,7 +306,7 @@ Use the store when you render the auth *flow* (challenge steps, errors). Use `on
 `broadcastAuthChange` is the lower-level primitive `submitAuthAction` uses. You rarely need it directly: call it only when the session changed by some route other than `submitAuthAction`, such as a sign-in your own server endpoint completed.
 
 ```typescript
-import { broadcastAuthChange } from '@aws-blocks/blocks/ui';
+import { broadcastAuthChange } from 'aws-cdk-blocks/ui';
 import { authApi } from 'cdk-blocks';
 
 // After a successful sign-in
@@ -325,13 +325,13 @@ function broadcastAuthChange(user: AuthUser | null, api?: AuthStateApi<never>): 
 
 Pass the signed-in `AuthUser`, or `null` for a sign-out. It fires a `BroadcastChannel` message for other tabs plus a window event for the current tab, which is what every `onAuthChange` subscriber listens to. Pass `api` to tag the message with its RPC namespace, so only that API's `onAuthChange` gets it; without it, every API's does. It does not update the auth-state store, so `subscribeAuthState` listeners don't see it. It is browser-only: it touches `window`, so don't call it during SSR.
 
-Application code normally installs the umbrella package rather than `auth-common`, and there the import is **`@aws-blocks/blocks/ui`**:
+Application code normally installs the umbrella package rather than `auth-common`, and there the import is **`aws-cdk-blocks/ui`**:
 
 ```typescript
-import { Authenticator, onAuthChange, submitAuthAction } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange, submitAuthAction } from 'aws-cdk-blocks/ui';
 ```
 
-The root `@aws-blocks/blocks` entry point does not export them, because the UI exports live behind the `/ui` subpath so backend bundles don't pull in DOM code. `@aws-blocks/auth-common/ui` and `@aws-blocks/blocks/ui` are the same functions; use the umbrella path unless you depend on `auth-common` directly.
+The root `aws-cdk-blocks` entry point does not export them, because the UI exports live behind the `/ui` subpath so backend bundles don't pull in DOM code. `@aws-cdk-blocks/auth-common/ui` and `aws-cdk-blocks/ui` are the same functions; use the umbrella path unless you depend on `auth-common` directly.
 
 ## Theming (`injectTheme` + `--bb-*` tokens)
 
@@ -372,7 +372,7 @@ is idempotent and SSR-safe — a second call is a no-op, and it returns
 silently when there is no `document`:
 
 ```typescript
-import { injectTheme } from '@aws-blocks/blocks/ui';
+import { injectTheme } from 'aws-cdk-blocks/ui';
 
 injectTheme();
 ```

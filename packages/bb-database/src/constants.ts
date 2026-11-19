@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import { escapeRegExp, sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
-import { DEFAULT_DB_CONNECTION_NAME, dbConnectionParameterName } from '@aws-blocks/core/db-naming';
+import { escapeRegExp, sanitizeConfigKey } from '@aws-cdk-blocks/core/bb-utils';
+import { DEFAULT_DB_CONNECTION_NAME, dbConnectionParameterName } from '@aws-cdk-blocks/core/db-naming';
 import type { ClusterType } from './types.js';
 
 export const MIGRATION_LAMBDA_TIMEOUT_MINUTES = 10;
@@ -172,7 +172,7 @@ export const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')
 // `public` is a DSQL system entity: it needs no search_path, no CREATE SCHEMA and no schema-level grant.
 export const searchPathFor = (schema: string): string | undefined => (schema === DEFAULT_SCHEMA ? undefined : schema);
 
-/** The name `Database` of `@aws-blocks/bb-data` derived from a full id, for its database and its config keys. */
+/** The name `Database` of `@aws-cdk-blocks/bb-data` derived from a full id, for its database and its config keys. */
 export const legacyName = (fullId: string): string => fullId.replace(/[^a-zA-Z0-9]/g, '_');
 
 // The config keys of a `LegacyDatabaseCluster`, in the form the earlier block used. The CDK layer writes them

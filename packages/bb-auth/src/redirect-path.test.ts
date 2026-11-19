@@ -10,7 +10,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { isSafeRedirectPath, safeRedirectPath, signInRedirectPath } from './redirect-path.js';
 

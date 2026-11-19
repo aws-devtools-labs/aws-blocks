@@ -3,8 +3,8 @@
 
 import { Duration } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerConfig } from '@aws-cdk-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 
 export interface QueueOptions {
   visibilityTimeoutSeconds?: number;

@@ -1,8 +1,8 @@
 ---
-'@aws-blocks/core': patch
+'@aws-cdk-blocks/core': patch
 ---
 
-fix(client): `@aws-blocks/core/client` now bundles for React Native (Hermes)
+fix(client): `@aws-cdk-blocks/core/client` now bundles for React Native (Hermes)
 
 The client's Node-only `.cdk-blocks-sandbox/config.json` fallback loaded `fs` with
 `await import(/* webpackIgnore: true */ 'node:fs')`. Expo's Metro honors the

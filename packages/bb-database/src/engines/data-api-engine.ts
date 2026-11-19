@@ -3,7 +3,7 @@
 
 // The engine of an Aurora PostgreSQL cluster that is reached through the RDS Data API: no socket and no VPC,
 // one HTTPS call for each statement, and a Secrets Manager secret as the credential. It gives parameters and
-// results the forms that `Database` of `@aws-blocks/bb-data` gave them, so an app that moves from that block
+// results the forms that `Database` of `@aws-cdk-blocks/bb-data` gave them, so an app that moves from that block
 // reads the same values.
 
 import { setTimeout as sleep } from 'node:timers/promises';

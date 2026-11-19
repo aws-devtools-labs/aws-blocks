@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import { blocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-cdk-blocks/core';
 import { splitStatements } from '../common/split-statements.js';
 import { type AsyncDdlTarget, asyncDdlTarget } from '../dialect/async-ddl.js';
 import { ASYNC_DDL, findStatementIssues, inspectStatement, stripLiteralsAndComments } from '../dialect/validation.js';

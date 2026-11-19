@@ -1,5 +1,5 @@
 {
-  "name": "@aws-blocks/blocks",
+  "name": "aws-cdk-blocks",
   "version": "0.9.0",
   "keywords": [
     "aws-blocks",
@@ -82,81 +82,81 @@
     "test": "node --test dist/conditional-exports.test.js dist/mock-aws-parity.test.js dist/vendorize-map.test.js dist/ui.test.js dist/brand-coverage.test.js dist/sandbox-dir-coverage.test.js dist/sandbox-url-decoupling.test.js dist/branded-message-coverage.test.js dist/default-compute-telemetry.test.js dist/file-bucket-exports.test.js dist/readme-links.test.js dist/test-client.test.js dist/totp.test.js dist/utils-exports.test.js dist/docs-pointers.test.js dist/doc-snippets.test.js dist/imports-reference.test.js dist/cli/*.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.8.0",
-    "@aws-blocks/hosting": "^0.5.0",
-    "@aws-blocks/auth-common": "^0.3.0",
-    "@aws-blocks/bb-auth": "^0.1.0",
-    "@aws-blocks/bb-kv-store": "^0.4.0",
-    "@aws-blocks/bb-realtime": "^0.5.0",
-    "@aws-blocks/bb-database": "^0.1.0",
-    "@aws-blocks/bb-async-job": "^0.3.0",
-    "@aws-blocks/bb-cron-job": "^0.4.0",
-    "@aws-blocks/bb-file-bucket": "^0.4.0",
-    "@aws-blocks/bb-app-setting": "^0.4.0",
-    "@aws-blocks/bb-secret": "^0.3.0",
-    "@aws-blocks/bb-knowledge-base": "^0.3.0",
-    "@aws-blocks/bb-agent": "^0.7.0",
-    "@aws-blocks/bb-tracer": "^0.3.0",
-    "@aws-blocks/bb-logger": "^0.3.0",
-    "@aws-blocks/bb-email-client": "^0.2.0",
-    "@aws-blocks/bb-metrics": "^0.2.0",
-    "@aws-blocks/bb-dashboard": "^0.3.0",
-    "@aws-blocks/bb-lambda-compute": "^0.7.0",
-    "@aws-blocks/bb-container-compute": "^0.2.0",
-    "@aws-blocks/bb-compute": "^0.2.0",
+    "@aws-cdk-blocks/core": "^0.8.0",
+    "@aws-cdk-blocks/hosting": "^0.5.0",
+    "@aws-cdk-blocks/auth-common": "^0.3.0",
+    "@aws-cdk-blocks/bb-auth": "^0.1.0",
+    "@aws-cdk-blocks/bb-kv-store": "^0.4.0",
+    "@aws-cdk-blocks/bb-realtime": "^0.5.0",
+    "@aws-cdk-blocks/bb-database": "^0.1.0",
+    "@aws-cdk-blocks/bb-async-job": "^0.3.0",
+    "@aws-cdk-blocks/bb-cron-job": "^0.4.0",
+    "@aws-cdk-blocks/bb-file-bucket": "^0.4.0",
+    "@aws-cdk-blocks/bb-app-setting": "^0.4.0",
+    "@aws-cdk-blocks/bb-secret": "^0.3.0",
+    "@aws-cdk-blocks/bb-knowledge-base": "^0.3.0",
+    "@aws-cdk-blocks/bb-agent": "^0.7.0",
+    "@aws-cdk-blocks/bb-tracer": "^0.3.0",
+    "@aws-cdk-blocks/bb-logger": "^0.3.0",
+    "@aws-cdk-blocks/bb-email-client": "^0.2.0",
+    "@aws-cdk-blocks/bb-metrics": "^0.2.0",
+    "@aws-cdk-blocks/bb-dashboard": "^0.3.0",
+    "@aws-cdk-blocks/bb-lambda-compute": "^0.7.0",
+    "@aws-cdk-blocks/bb-container-compute": "^0.2.0",
+    "@aws-cdk-blocks/bb-compute": "^0.2.0",
     "tsx": "^4.23.15"
   },
   "aws-blocks": {
     "vendorize": {
-      "@aws-blocks/bb-kv-store": [
+      "@aws-cdk-blocks/bb-kv-store": [
         "KVStore"
       ],
-      "@aws-blocks/bb-realtime": [
+      "@aws-cdk-blocks/bb-realtime": [
         "Realtime"
       ],
-      "@aws-blocks/bb-database": [
+      "@aws-cdk-blocks/bb-database": [
         "Database"
       ],
-      "@aws-blocks/bb-async-job": [
+      "@aws-cdk-blocks/bb-async-job": [
         "AsyncJob"
       ],
-      "@aws-blocks/bb-compute": [
+      "@aws-cdk-blocks/bb-compute": [
         "Compute"
       ],
-      "@aws-blocks/bb-cron-job": [
+      "@aws-cdk-blocks/bb-cron-job": [
         "CronJob"
       ],
-      "@aws-blocks/bb-file-bucket": [
+      "@aws-cdk-blocks/bb-file-bucket": [
         "FileBucket"
       ],
-      "@aws-blocks/bb-app-setting": [
+      "@aws-cdk-blocks/bb-app-setting": [
         "AppSetting"
       ],
-      "@aws-blocks/bb-secret": [
+      "@aws-cdk-blocks/bb-secret": [
         "Secret"
       ],
-      "@aws-blocks/bb-knowledge-base": [
+      "@aws-cdk-blocks/bb-knowledge-base": [
         "KnowledgeBase"
       ],
-      "@aws-blocks/bb-auth": [
+      "@aws-cdk-blocks/bb-auth": [
         "Auth"
       ],
-      "@aws-blocks/bb-agent": [
+      "@aws-cdk-blocks/bb-agent": [
         "Agent"
       ],
-      "@aws-blocks/bb-tracer": [
+      "@aws-cdk-blocks/bb-tracer": [
         "Tracer"
       ],
-      "@aws-blocks/bb-logger": [
+      "@aws-cdk-blocks/bb-logger": [
         "Logger"
       ],
-      "@aws-blocks/bb-email-client": [
+      "@aws-cdk-blocks/bb-email-client": [
         "EmailClient"
       ],
-      "@aws-blocks/bb-metrics": [
+      "@aws-cdk-blocks/bb-metrics": [
         "Metrics"
       ],
-      "@aws-blocks/bb-dashboard": [
+      "@aws-cdk-blocks/bb-dashboard": [
         "Dashboard"
       ]
     }

@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-auth": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(bb-auth): the local user pool keeps an email / phone unique, as Cognito does

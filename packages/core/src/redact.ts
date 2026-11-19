@@ -19,7 +19,7 @@
  *
  *  2. **Form-field descriptors** — the auth state machine ships secrets as
  *     `{ name: 'session', defaultValue: '<token>' }` (see
- *     `@aws-blocks/auth-common` AuthField). Here the secret sits under the
+ *     `@aws-cdk-blocks/auth-common` AuthField). Here the secret sits under the
  *     innocuous key `defaultValue`; the sensitive word is the *value* of a
  *     sibling `name`. Rule 1 alone would walk straight past it. So when an
  *     object carries a sensitive `name`, its `defaultValue` is redacted too.
@@ -35,7 +35,7 @@ export const REDACTED = '[REDACTED]' as const;
  * case-insensitively as a SUBSTRING, so prefixed/suffixed variants
  * (`accessToken`, `refreshToken`, `idToken`, `apiKey`, `clientSecret`) all
  * match without enumerating every spelling. Keep aligned with the auth action
- * payloads in `@aws-blocks/auth-common` plus the generic credential vocabulary.
+ * payloads in `@aws-cdk-blocks/auth-common` plus the generic credential vocabulary.
  */
 const SENSITIVE_KEY_PARTS: readonly string[] = [
   'password',
@@ -53,7 +53,7 @@ const SENSITIVE_KEY_PARTS: readonly string[] = [
 /**
  * Field names that are sensitive only as an EXACT match. The OTP / verification
  * code the auth state machine sends is literally named `code` (see
- * `@aws-blocks/auth-common` confirmSignIn payloads). Matching it as a substring
+ * `@aws-cdk-blocks/auth-common` confirmSignIn payloads). Matching it as a substring
  * would mask innocuous fields like `statusCode`, `errorCode`, `countryCode`,
  * `zipCode`, `qrCode` — log noise that defeats the debugging purpose of these
  * logs without protecting anything. So `code` is exact-match only.

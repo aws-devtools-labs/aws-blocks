@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-agent": patch
+"@aws-cdk-blocks/bb-agent": patch
 ---
 
 docs: the Agent docs describe the installed version

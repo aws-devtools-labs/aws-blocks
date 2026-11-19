@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-async-job": patch
-"@aws-blocks/bb-cron-job": patch
+"@aws-cdk-blocks/bb-async-job": patch
+"@aws-cdk-blocks/bb-cron-job": patch
 ---
 
 docs: the AsyncJob and CronJob design docs describe the installed version

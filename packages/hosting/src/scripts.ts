@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/hosting/scripts` — **build-time tooling**: the CLI core
+ * `@aws-cdk-blocks/hosting/scripts` — **build-time tooling**: the CLI core
  * (`secret`/`config` set/list/remove) and the typegen engine (scan/watch,
  * `hosting-typegen`). Kept off the package's `.` entry so the value API there
  * imports no `fast-glob` / `node:fs` and stays safe to bundle for any runtime
  * (including the Next.js edge runtime). Consumed only from build contexts —
- * `@aws-blocks/core`'s scripts and the Blocks dev server — never an SSR route.
+ * `@aws-cdk-blocks/core`'s scripts and the Blocks dev server — never an SSR route.
  *
  * @module
  */

@@ -23,7 +23,7 @@
  * @internal
  */
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 
 /** Marks a `validateUser` rejection in a trigger error message. */
 const REJECTION_TAG = 'bb-auth-rejection:';

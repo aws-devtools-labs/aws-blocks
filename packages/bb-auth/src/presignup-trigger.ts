@@ -40,9 +40,9 @@
  */
 
 import crypto from 'node:crypto';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { ApiError } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { ApiError } from '@aws-cdk-blocks/core';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { cognitoFederatedProviders } from './cdk/contract.js';
 import { deriveKey } from './cookies.js';
 import { INTERNAL_ERROR_MESSAGE, toAuthApiError } from './error-mapping.js';

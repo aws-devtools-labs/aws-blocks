@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-file-bucket": patch
+"@aws-cdk-blocks/bb-file-bucket": patch
 ---
 
 docs: the FileBucket design doc describes the installed version

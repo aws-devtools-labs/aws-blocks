@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { destroy } from '@aws-blocks/blocks/scripts';
+import { destroy } from 'aws-cdk-blocks/scripts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 

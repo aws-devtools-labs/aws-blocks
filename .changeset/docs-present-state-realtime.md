@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-realtime": patch
+"@aws-cdk-blocks/bb-realtime": patch
 ---
 
 docs: the Realtime docs state the channel-name limits directly

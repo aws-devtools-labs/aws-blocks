@@ -15,8 +15,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, mock, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 import { clientMessageFor } from './error-mapping.js';
 import { Auth, AuthErrors } from './index.mock.js';
 import { Browser, wireView } from './test-support/aws-harness.js';

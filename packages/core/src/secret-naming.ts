@@ -5,7 +5,7 @@
  * Blocks-owned namespaces for hosting values.
  *
  * The mechanism (markers, resolvers, path/env naming) lives in the
- * framework-neutral `@aws-blocks/hosting` package, which defaults to neutral
+ * framework-neutral `@aws-cdk-blocks/hosting` package, which defaults to neutral
  * `/hosting/secrets` and `/hosting/config` prefixes so a non-Blocks consumer
  * never inherits Blocks branding.
  *
@@ -25,8 +25,8 @@
  * @module
  */
 
-import type { StoreConfig } from '@aws-blocks/hosting/constructs';
-import { secretStoreLocator } from '@aws-blocks/hosting';
+import type { StoreConfig } from '@aws-cdk-blocks/hosting/constructs';
+import { secretStoreLocator } from '@aws-cdk-blocks/hosting';
 import { getStackId } from './scripts/stack-id.js';
 
 /** Base Blocks prefix for `secret()` values (Secrets Manager); scoped by `stackId`. */

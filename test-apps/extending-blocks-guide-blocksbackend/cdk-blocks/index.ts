@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
 const scope = new Scope('blocksbackend-guide');

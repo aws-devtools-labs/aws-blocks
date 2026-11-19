@@ -51,7 +51,7 @@ void describe('scanValueKeys()', () => {
 	void it('collects string-literal secret()/config() keys, sorted + de-duped', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `
-				import { secret, config } from '@aws-blocks/hosting';
+				import { secret, config } from '@aws-cdk-blocks/hosting';
 				const e = {
 					STRIPE_KEY: secret('STRIPE_KEY'),
 					FEATURE_FLAGS: config('FEATURE_FLAGS'),
@@ -69,7 +69,7 @@ void describe('scanValueKeys()', () => {
 	void it('ignores commented-out and string-literal occurrences (AST, not regex)', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `
-				import { secret } from '@aws-blocks/hosting';
+				import { secret } from '@aws-cdk-blocks/hosting';
 				// secret('COMMENTED') should NOT be captured
 				const s = "secret('IN_A_STRING')"; // not a call
 				const real = secret('REAL_KEY');
@@ -82,7 +82,7 @@ void describe('scanValueKeys()', () => {
 	void it('reports non-literal keys as dynamic call sites (skipped)', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `
-				import { secret } from '@aws-blocks/hosting';
+				import { secret } from '@aws-cdk-blocks/hosting';
 				const NAME = 'X';
 				const dyn = secret(NAME);
 				const lit = secret('LITERAL');
@@ -98,7 +98,7 @@ void describe('scanValueKeys()', () => {
 	void it('resolves the import binding, not the identifier text', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `
-				import { secret as sec, config } from '@aws-blocks/hosting';
+				import { secret as sec, config } from '@aws-cdk-blocks/hosting';
 				// A local function of the same name must NOT be treated as a marker.
 				function secretHelper() { return 'x'; }
 				const localSecret = (k: string) => k;
@@ -119,10 +119,10 @@ void describe('scanValueKeys()', () => {
 		assert.equal(scan.dynamicCallSites.length, 0, 'dotenv config({path}) must not be flagged');
 	});
 
-	void it('detects markers imported via @aws-blocks/blocks/cdk (the primary app path)', async () => {
+	void it('detects markers imported via aws-cdk-blocks/cdk (the primary app path)', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `
-				import { secret, config } from '@aws-blocks/blocks/cdk';
+				import { secret, config } from 'aws-cdk-blocks/cdk';
 				const s = secret('VIA_BLOCKS_CDK');
 				const c = config('CFG_VIA_BLOCKS_CDK');
 			`,
@@ -135,7 +135,7 @@ void describe('scanValueKeys()', () => {
 	void it('detects namespace-imported markers (import * as blocks)', async () => {
 		const cwd = await fixture({
 			'cdk-blocks/index.cdk.ts': `
-				import * as blocks from '@aws-blocks/core/cdk';
+				import * as blocks from '@aws-cdk-blocks/core/cdk';
 				const s = blocks.secret('NS_SECRET');
 				const c = blocks.config('NS_CONFIG');
 			`,
@@ -184,8 +184,8 @@ export const keys = secret('KEYS', { schema: z.record(z.string(), z.string().opt
 				},
 				include: ['**/*'],
 			}),
-			'cdk-blocks/index.ts': `import { config, secret } from '@aws-blocks/blocks';${schemas}`,
-			'src/app.ts': `import { config } from '@aws-blocks/hosting';
+			'cdk-blocks/index.ts': `import { config, secret } from 'aws-cdk-blocks';${schemas}`,
+			'src/app.ts': `import { config } from '@aws-cdk-blocks/hosting';
 import { z } from 'zod';
 export const banner = config('BANNER', { schema: z.object({ text: z.string().nullable() }) });
 `,
@@ -205,7 +205,7 @@ export const banner = config('BANNER', { schema: z.object({ text: z.string().nul
 		assert.deepStrictEqual((await scanValueKeys({ cwd })).valueTypes, expected);
 		// With no tsconfig at all, the defaults are strict too.
 		const bare = await fixture({
-			'cdk-blocks/index.ts': `import { config, secret } from '@aws-blocks/blocks';${schemas}`,
+			'cdk-blocks/index.ts': `import { config, secret } from 'aws-cdk-blocks';${schemas}`,
 		});
 		await mkdir(join(bare, 'node_modules'));
 		await symlink(zod, join(bare, 'node_modules', 'zod'), 'junction');
@@ -218,7 +218,7 @@ export const banner = config('BANNER', { schema: z.object({ text: z.string().nul
 
 	void it('does not descend into node_modules / dist / .blocks', async () => {
 		const cwd = await fixture({
-			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('KEEP');`,
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('KEEP');`,
 			'node_modules/pkg/index.ts': `secret('FROM_NODE_MODULES');`,
 			'dist/index.js': `secret('FROM_DIST');`,
 			'.blocks/hosting-values.d.ts': `secret('FROM_BLOCKS');`,
@@ -251,7 +251,7 @@ void describe('renderHostingValuesDts()', () => {
 void describe('generateHostingValuesDts()', () => {
 	void it('writes the file, then reports upToDate on a re-run (deterministic)', async () => {
 		const cwd = await fixture({
-			'cdk-blocks/index.cdk.ts': `import { secret, config } from '@aws-blocks/hosting'; secret('K1'); config('C1');`,
+			'cdk-blocks/index.cdk.ts': `import { secret, config } from '@aws-cdk-blocks/hosting'; secret('K1'); config('C1');`,
 		});
 		const first = await generateHostingValuesDts({ cwd });
 		assert.equal(first.upToDate, false); // did not exist
@@ -265,7 +265,7 @@ void describe('generateHostingValuesDts()', () => {
 
 	void it('check mode does not write and flags staleness via exit code', async () => {
 		const cwd = await fixture({
-			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('NEW_KEY');`,
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('NEW_KEY');`,
 		});
 		const messages: string[] = [];
 		// No file yet → stale → exit 1, nothing written.
@@ -287,7 +287,7 @@ void describe('generateHostingValuesDts()', () => {
 void describe('watchHostingValues()', () => {
 	void it('regenerates when a scanned file changes; stop() tears down', async () => {
 		const cwd = await fixture({
-			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('K1');`,
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
 		});
 		// Low debounce + poll so it is fast on both fs.watch (macOS/Windows) and the
 		// polling fallback (Linux, where recursive fs.watch is unavailable).
@@ -299,7 +299,7 @@ void describe('watchHostingValues()', () => {
 			// Add a new key → the watcher should regenerate with it.
 			await writeFile(
 				join(cwd, 'cdk-blocks', 'index.cdk.ts'),
-				`import { secret, config } from '@aws-blocks/hosting'; secret('K1'); config('C2');`,
+				`import { secret, config } from '@aws-cdk-blocks/hosting'; secret('K1'); config('C2');`,
 				'utf-8',
 			);
 			const updated = await waitFor(async () => {

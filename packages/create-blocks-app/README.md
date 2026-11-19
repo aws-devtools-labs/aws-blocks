@@ -11,7 +11,7 @@ CLI tool for scaffolding AWS Blocks projects.
 ### Create a New Project
 
 ```bash
-npx @aws-blocks/create-blocks-app my-app
+npx @aws-cdk-blocks/create-blocks-app my-app
 ```
 
 A target directory that contains only benign metadata (VCS/editor/OS files) or an `INSTRUCTIONS.md` is still treated as a fresh project; any other pre-existing file blocks scaffolding so nothing is overwritten.
@@ -19,13 +19,13 @@ A target directory that contains only benign metadata (VCS/editor/OS files) or a
 ### Start from Template
 
 ```bash
-npx @aws-blocks/create-blocks-app my-app --template react
+npx @aws-cdk-blocks/create-blocks-app my-app --template react
 ```
 
 For the full list of templates and one-line descriptions, run:
 
 ```bash
-npx @aws-blocks/create-blocks-app --help
+npx @aws-cdk-blocks/create-blocks-app --help
 ```
 
 Template descriptions are sourced from each template's `package.json` (`blocksTemplateDescription`) so the CLI is always the source of truth.
@@ -33,7 +33,7 @@ Template descriptions are sourced from each template's `package.json` (`blocksTe
 ### Add to Existing Project
 
 ```bash
-npx @aws-blocks/create-blocks-app .
+npx @aws-cdk-blocks/create-blocks-app .
 ```
 
 This writes `cdk-blocks/tsconfig.json`, a TypeScript project that checks the backend with Node types, and never edits your own `tsconfig`. To keep Node types out of your frontend, reference that project from the `tsconfig` that compiles the code importing `cdk-blocks`, and typecheck with `tsc -b --force`: the CLI prints the steps, and [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has them in full. In a Next.js project, it writes no `cdk-blocks/tsconfig.json`: `next build` ignores project references, so the app's `tsconfig.json` keeps checking `cdk-blocks/`.
@@ -47,7 +47,7 @@ It also adds to your `.gitignore` (or creates one): the AWS Blocks build and loc
 Already have an Amplify Gen 2 app? Run from your project root:
 
 ```bash
-npx @aws-blocks/create-blocks-app .
+npx @aws-cdk-blocks/create-blocks-app .
 ```
 
 The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Blocks alongside it — adding a `cdk-blocks/` workspace, wiring auth via bearer tokens, and scaffolding npm scripts for deployment. Your existing Amplify auth, data, and hosting stay untouched.
@@ -73,7 +73,7 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 
 **cdk-blocks/index.ts**
 ```typescript
-import { ApiNamespace, Scope, Auth, KVStore, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, Auth, KVStore, Realtime } from 'aws-cdk-blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -113,7 +113,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 **cdk-blocks/index.cdk.ts**
 ```typescript
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -130,34 +130,34 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ### Package.json Scripts
 
-The app runs its installed `@aws-blocks/blocks/run` entry through npm scripts. Run `npm run help` for the command list or `npm run help sandbox destroy` for one task. The dev server settings live in `package.json#blocks.dev`.
+The app runs its installed `aws-cdk-blocks/run` entry through npm scripts. Run `npm run help` for the command list or `npm run help sandbox destroy` for one task. The dev server settings live in `package.json#blocks.dev`.
 
 ```json
 {
   "scripts": {
-    "docs": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs",
-    "docs:search": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --search",
-    "docs:api": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --api",
-    "help": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- help",
-    "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
-    "whoami": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- whoami",
-    "migrate": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- migrate",
-    "generate-client": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client",
-    "dev": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- dev",
-    "dev:stop": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- dev stop",
-    "sandbox": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox",
-    "sandbox:deploy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox deploy",
-    "sandbox:preview": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox preview",
-    "sandbox:destroy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox destroy",
-    "sandbox:console": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- sandbox console",
-    "cleanup": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- dev stop --all",
-    "deploy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- deploy",
-    "destroy": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- destroy",
-    "secret": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- secret",
-    "typegen": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate types",
-    "spec": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate spec",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize",
-    "prebuild": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client",
+    "docs": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs",
+    "docs:search": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --search",
+    "docs:api": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --api",
+    "help": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- help",
+    "db": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- db",
+    "whoami": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- whoami",
+    "migrate": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- migrate",
+    "generate-client": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client",
+    "dev": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev",
+    "dev:stop": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev stop",
+    "sandbox": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox",
+    "sandbox:deploy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox deploy",
+    "sandbox:preview": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox preview",
+    "sandbox:destroy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox destroy",
+    "sandbox:console": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox console",
+    "cleanup": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev stop --all",
+    "deploy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- deploy",
+    "destroy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- destroy",
+    "secret": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- secret",
+    "typegen": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate types",
+    "spec": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate spec",
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize",
+    "prebuild": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client",
     "typecheck": "tsc -b --force",
     "build": "tsc -b --force && vite build"
   },
@@ -167,28 +167,28 @@ The app runs its installed `@aws-blocks/blocks/run` entry through npm scripts. R
 }
 ```
 
-No template sets `frontendCommand`: `npm run dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --host 127.0.0.1 --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`; `npm run dev` warns when the command does not contain that port. Backend-only templates (`api-only`, `backend`, `cron`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `npm run dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only`, `cron` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`npm run dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `cdk-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`. If an overlay keeps an existing script name, find the Blocks task in `package.json` under `scripts` by its `@aws-blocks/blocks/run` entry and trailing command, then use that script name in the examples.
+No template sets `frontendCommand`: `npm run dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --host 127.0.0.1 --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`; `npm run dev` warns when the command does not contain that port. Backend-only templates (`api-only`, `backend`, `cron`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `npm run dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only`, `cron` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`npm run dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `cdk-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`. If an overlay keeps an existing script name, find the Blocks task in `package.json` under `scripts` by its `aws-cdk-blocks/run` entry and trailing command, then use that script name in the examples.
 
 `npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question. For structured tasks such as docs, terminal output defaults to text and redirected or piped stdout defaults to JSON. Use `npm run -s docs KVStore | jq .` to keep npm banners out of the pipe; pass `-- --output text` to request text instead.
 
-Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `cdk-blocks/scripts/*.ts` wrappers. Run `node --input-type=module -e "import '@aws-blocks/blocks/run'" -- migrate` from the app root after updating `@aws-blocks/blocks` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `cdk-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
+Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `cdk-blocks/scripts/*.ts` wrappers. Run `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate` from the app root after updating `aws-cdk-blocks` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `cdk-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
 
-### `@aws-blocks/*` Dependency Versions
+### `@aws-cdk-blocks/*` Dependency Versions
 
-Every `@aws-blocks/*` package the CLI writes into your `package.json` (and into `cdk-blocks/package.json` for an Amplify Gen 2 project) gets a caret range on the release line this CLI version was tested with, for example:
+Every `@aws-cdk-blocks/*` package the CLI writes into your `package.json` (and into `cdk-blocks/package.json` for an Amplify Gen 2 project) gets a caret range on the release line this CLI version was tested with, for example:
 
 ```json
 {
   "dependencies": {
-    "@aws-blocks/blocks": "^0.9.0",
-    "@aws-blocks/hosting": "^0.5.0"
+    "aws-cdk-blocks": "^0.9.0",
+    "@aws-cdk-blocks/hosting": "^0.5.0"
   }
 }
 ```
 
-A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.9.x` to `0.10.0`) is a new, breaking release line, and your app moves to it only when you edit the range. The CLI is released with every `@aws-blocks/blocks` release and has the same version number, so the latest CLI starts a new app on the latest `@aws-blocks/blocks` release. If you add AWS Blocks to an existing project that already lists one of these packages in `dependencies`, your range is kept. For an Amplify Gen 2 project, `cdk-blocks/package.json` follows the root's range too (from `dependencies` or `devDependencies`) when it is a semver range; a `*`, path or protocol spec gets the stamp instead.
+A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.9.x` to `0.10.0`) is a new, breaking release line, and your app moves to it only when you edit the range. The CLI is released with every `aws-cdk-blocks` release and has the same version number, so the latest CLI starts a new app on the latest `aws-cdk-blocks` release. If you add AWS Blocks to an existing project that already lists one of these packages in `dependencies`, your range is kept. For an Amplify Gen 2 project, `cdk-blocks/package.json` follows the root's range too (from `dependencies` or `devDependencies`) when it is a semver range; a `*`, path or protocol spec gets the stamp instead.
 
-Apps scaffolded by an older CLI declare `"*"` instead, so their next clean install can pull a breaking release. Replace each `"*"` for an `@aws-blocks/*` package with a caret range for the version you have installed (`npm ls @aws-blocks/blocks` shows it), then run `npm install`.
+Apps scaffolded by an older CLI declare `"*"` instead, so their next clean install can pull a breaking release. Replace each `"*"` for an `@aws-cdk-blocks/*` package with a caret range for the version you have installed (`npm ls aws-cdk-blocks` shows it), then run `npm install`.
 
 ## Templates
 
@@ -201,10 +201,10 @@ The Vite templates (`default`, `bare`, `react`, `auth`, `auth-oidc`, `agent`, `d
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 
 ```bash
-npx @aws-blocks/create-blocks-app --help
+npx @aws-cdk-blocks/create-blocks-app --help
 ```
 
-A template declares each `@aws-blocks/*` dependency as `"*"`, a placeholder. Inside this monorepo the CLI rewrites the placeholders in the app's root `package.json` to `file:` paths to the sibling packages. From the published CLI it stamps the range listed for that package in create-blocks-app's own `devDependencies`, which `changeset version` keeps on the package's current release line. So when a template starts using another `@aws-blocks/*` package, add it to create-blocks-app's `devDependencies` too; the unit tests fail until you do. A devDependency bump never releases the CLI on its own, so `.changeset/config.json` puts create-blocks-app and `@aws-blocks/blocks` in one `fixed` group: every blocks release also releases the CLI, at the same version number, with the updated ranges. A new release line of a package blocks depends on (such as `@aws-blocks/hosting`) falls outside blocks' caret range for it, so changesets releases blocks, and with it the CLI. So a template should import Building Blocks from `@aws-blocks/blocks`, and only write an `@aws-blocks/*` package that blocks itself lists in `dependencies`.
+A template declares each `@aws-cdk-blocks/*` dependency as `"*"`, a placeholder. Inside this monorepo the CLI rewrites the placeholders in the app's root `package.json` to `file:` paths to the sibling packages. From the published CLI it stamps the range listed for that package in create-blocks-app's own `devDependencies`, which `changeset version` keeps on the package's current release line. So when a template starts using another `@aws-cdk-blocks/*` package, add it to create-blocks-app's `devDependencies` too; the unit tests fail until you do. A devDependency bump never releases the CLI on its own, so `.changeset/config.json` puts create-blocks-app and `aws-cdk-blocks` in one `fixed` group: every blocks release also releases the CLI, at the same version number, with the updated ranges. A new release line of a package blocks depends on (such as `@aws-cdk-blocks/hosting`) falls outside blocks' caret range for it, so changesets releases blocks, and with it the CLI. So a template should import Building Blocks from `aws-cdk-blocks`, and only write an `@aws-cdk-blocks/*` package that blocks itself lists in `dependencies`.
 
 ## Related Packages
 

@@ -1,8 +1,8 @@
 ---
-'@aws-blocks/core': minor
-'@aws-blocks/create-blocks-app': minor
-'@aws-blocks/blocks': minor
-'@aws-blocks/admin-ui': patch
+'@aws-cdk-blocks/core': minor
+'@aws-cdk-blocks/create-blocks-app': minor
+'aws-cdk-blocks': minor
+'@aws-cdk-blocks/admin-ui': patch
 ---
 
 **Breaking: telemetry now follows your CDK CLI telemetry setting, and the AWS Blocks opt-out is removed.** `AWS_BLOCKS_DISABLE_TELEMETRY`, the `cdk-blocks telemetry` command, the `blocks-telemetry` binary and the `telemetry.enabled` key in `.blocks/config.json` are gone, with no fallback and no migration, so if you opted out that way you are opted back in until you opt out through CDK.

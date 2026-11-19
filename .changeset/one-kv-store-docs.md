@@ -1,11 +1,11 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/bb-app-setting": patch
-"@aws-blocks/bb-database": patch
-"@aws-blocks/bb-file-bucket": patch
-"@aws-blocks/bb-knowledge-base": patch
-"@aws-blocks/bb-metrics": patch
-"@aws-blocks/bb-secret": patch
+"@aws-cdk-blocks/core": patch
+"@aws-cdk-blocks/bb-app-setting": patch
+"@aws-cdk-blocks/bb-database": patch
+"@aws-cdk-blocks/bb-file-bucket": patch
+"@aws-cdk-blocks/bb-knowledge-base": patch
+"@aws-cdk-blocks/bb-metrics": patch
+"@aws-cdk-blocks/bb-secret": patch
 ---
 
 docs: refer to `KVStore` as the one NoSQL block

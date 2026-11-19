@@ -1,5 +1,5 @@
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
-import { Auth } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 // Manual test app for `Auth` passkeys (originally written for `AuthCognito`,
 // PR #708 / passkeys-investigation.md).

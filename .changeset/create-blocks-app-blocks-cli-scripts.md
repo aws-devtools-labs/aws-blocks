@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/create-blocks-app": minor
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/create-blocks-app": minor
+"@aws-cdk-blocks/core": patch
 ---
 
 Generated apps keep their existing npm lifecycle script names without generating `cdk-blocks/scripts/*.ts` wrappers. Backend-only templates default to port 3001 with `blocks.dev.frontend` disabled; frontend templates default to frontend port 3100 and detect their frontend from dependencies. Override the ports with `npm run dev -- --port 4000 --frontend-port 4100`. Existing `blocks.dev` settings are preserved when adding AWS Blocks to an existing project. Amplify keeps its own sandbox and client generation. Generated guidance documents npm scripts, structured results, and non-interactive confirmations. Scaffold next steps quote paths with spaces and give backend-only apps their correct API URL. `--template=<name>` and `--template <name>` are both accepted. `npm run cleanup` stops only dev sessions recorded for this app. Production destroy requires confirmation in a terminal or `npm run destroy -- --yes` in automation. End-to-end tests reuse the configured dev port. Generate hosting types with `npm run typegen` before enabling `npm run typegen -- --check` in CI. The local realtime WebSocket uses `BLOCKS_DEV_HOST` to opt into a different host.

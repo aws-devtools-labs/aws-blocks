@@ -1,6 +1,6 @@
 import { Auth } from 'some-other-auth-library';
-import { Auth as AuthCognito } from '@aws-blocks/bb-auth';
-import { Scope } from '@aws-blocks/core';
+import { Auth as AuthCognito } from '@aws-cdk-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 export const blocksAuth = new AuthCognito(scope, 'auth', { emailPassword: { autoSignIn: false } });

@@ -6,7 +6,7 @@ every minute and records each run in a `KVStore`; a second job shows
 `npm run dev` the local server fires them on the same schedule. No frontend
 included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template cron`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template cron`
 
 ## Getting Started
 
@@ -128,7 +128,7 @@ This template is backend-only. To add a frontend:
 
 3. **Add Hosting to `cdk-blocks/index.cdk.ts`:**
    ```ts
-   import { Hosting } from '@aws-blocks/blocks/cdk';
+   import { Hosting } from 'aws-cdk-blocks/cdk';
 
    if (!sandboxMode) {
      new Hosting(blocksStack, 'Hosting', {

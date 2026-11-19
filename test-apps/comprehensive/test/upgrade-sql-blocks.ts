@@ -8,10 +8,10 @@
  * one migration file, then the same app on this checkout, with that file and a
  * second one. `--scenario` chooses the block:
  *
- * - `dsql` (default): a `DistributedDatabase` of `@aws-blocks/bb-distributed-data`
+ * - `dsql` (default): a `DistributedDatabase` of `@aws-cdk-blocks/bb-distributed-data`
  *   0.3.0 becomes a `Database` with the same id, which keeps its Aurora DSQL
  *   cluster (`app/backend.dsql-*.ts.txt`).
- * - `aurora`: a `Database` of `@aws-blocks/bb-data` 0.5.0 becomes a
+ * - `aurora`: a `Database` of `@aws-cdk-blocks/bb-data` 0.5.0 becomes a
  *   `LegacyDatabaseCluster` with the same id and a `Database` on it, which
  *   keeps the Aurora cluster, its secret and its VPC
  *   (`app/backend.aurora-*.ts.txt`).
@@ -20,7 +20,7 @@
  *
  * From `test-apps/comprehensive`, after `npm run build` at the repo root and
  * in a built checkout of the release (both blocks were released from one
- * commit: `git worktree add <dir> @aws-blocks/bb-data@0.5.0`):
+ * commit: `git worktree add <dir> @aws-cdk-blocks/bb-data@0.5.0`):
  *
  *     npm run test:upgrade-sql-blocks -- --scenario dsql --mode diff --base-dir <release checkout> --evidence <dir>
  *     BLOCKS_UPGRADE_E2E=1 AWS_PROFILE=<sandbox> AWS_REGION=<region> \
@@ -216,7 +216,7 @@ function materialize(
 	}
 	writeFileSync(
 		join(dir, 'cdk-blocks', 'index.handler.ts'),
-		"import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';\n\nexport const handler = createLambdaHandler(() => import('./index.js'));\n",
+		"import { createLambdaHandler } from 'aws-cdk-blocks/lambda-handler';\n\nexport const handler = createLambdaHandler(() => import('./index.js'));\n",
 	);
 	copyFileSync(join(APP, 'deploy.ts'), join(dir, 'scripts', 'deploy.ts'));
 	copyFileSync(join(APP, 'destroy.ts'), join(dir, 'scripts', 'destroy.ts'));

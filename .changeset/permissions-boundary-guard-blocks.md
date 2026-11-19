@@ -1,10 +1,10 @@
 ---
-'@aws-blocks/bb-auth': patch
-'@aws-blocks/bb-compute': patch
-'@aws-blocks/bb-container-compute': patch
-'@aws-blocks/bb-cron-job': patch
-'@aws-blocks/bb-dashboard': patch
-'@aws-blocks/blocks': patch
+'@aws-cdk-blocks/bb-auth': patch
+'@aws-cdk-blocks/bb-compute': patch
+'@aws-cdk-blocks/bb-container-compute': patch
+'@aws-cdk-blocks/bb-cron-job': patch
+'@aws-cdk-blocks/bb-dashboard': patch
+'aws-cdk-blocks': patch
 ---
 
 test: check `defaults.permissionsBoundary` coverage for Auth, Compute, ContainerCompute, CronJob and Dashboard

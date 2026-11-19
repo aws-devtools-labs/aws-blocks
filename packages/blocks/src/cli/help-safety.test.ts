@@ -17,7 +17,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import * as realCore from '@aws-blocks/core/scripts';
+import * as realCore from '@aws-cdk-blocks/core/scripts';
 import type { SpawnSpec } from './context.js';
 import { type FakeRun, fixtureApp, runCli } from './test-helpers.js';
 
@@ -162,8 +162,8 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 
 	it('vendorize help prints usage without starting the vendorize process', async () => {
 		for (const argv of [
-			['help', 'vendorize', '@aws-blocks/bb-kv-store'],
-			['vendorize', '@aws-blocks/bb-kv-store', '--help'],
+			['help', 'vendorize', '@aws-cdk-blocks/bb-kv-store'],
+			['vendorize', '@aws-cdk-blocks/bb-kv-store', '--help'],
 		]) {
 			const root = fixtureApp({ workspaces: ['cdk-blocks'] });
 			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn([]) });
@@ -177,7 +177,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 	it('the real vendorize bin prints usage for --help anywhere, before it copies or installs', () => {
 		const root = fixtureApp({ workspaces: ['cdk-blocks'] });
 		const bin = fileURLToPath(new URL('../vendorize.js', import.meta.url));
-		const child = spawnSync(process.execPath, [bin, '@aws-blocks/bb-kv-store', '--force', '--help'], {
+		const child = spawnSync(process.execPath, [bin, '@aws-cdk-blocks/bb-kv-store', '--force', '--help'], {
 			cwd: root,
 			encoding: 'utf-8',
 			env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' },

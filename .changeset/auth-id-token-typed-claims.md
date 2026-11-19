@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-auth': patch
-'@aws-blocks/blocks': patch
+'@aws-cdk-blocks/bb-auth': patch
+'aws-cdk-blocks': patch
 ---
 
 `requireAuth().attributes` and `getCurrentUser().attributes` hold the ID token's string claims, the same locally and on AWS, so they don't include `updated_at` or `address`. Amazon Cognito's ID token carries `updated_at` as a number and `address` as an object (`{ formatted }`). `AuthCognito`'s mock reported both as strings there, which a deployed app never saw. The local ID token (`getAuthSession`) and the `claims` passed to `validateUser` carry them in Cognito's shapes. To read either as a string, call `auth.getUserAttributes(context)`, which returns them the same way on both.

@@ -41,12 +41,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = join(__dirname, '..');
 const REPO_ROOT = join(APP_ROOT, '..', '..');
-// The create-blocks-app CLI is a monorepo workspace package (@aws-blocks/create-blocks-app)
+// The create-blocks-app CLI is a monorepo workspace package (@aws-cdk-blocks/create-blocks-app)
 // that is not published to the public npm registry, so `npm exec create-blocks-app` 404s.
 // Invoke the locally built binary directly (built by `npm run build` before the suite).
 const CREATE_BLOCKS_APP_BIN = join(REPO_ROOT, 'packages', 'create-blocks-app', 'dist', 'index.js');
 // Invoke the package bootstrap directly; this fixture does not declare task scripts.
-const BLOCKS_TASK = ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--'];
+const BLOCKS_TASK = ['--input-type=module', '-e', "import 'aws-cdk-blocks/run'", '--'];
 
 const PINNED_INSTALLATION_ID = '00000000-0000-0000-0000-000000000e2e';
 const PINNED_PROJECT_ID = '00000000-0000-0000-0000-0000000e2e57';

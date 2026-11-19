@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(core): clearer `dev stop` results when another process holds the port, and no stuck garbage pidfiles

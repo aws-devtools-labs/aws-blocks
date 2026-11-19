@@ -25,7 +25,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { S3Client } from '@aws-sdk/client-s3';
-import { ApiError, Scope, getSdkIdentifiers, isBlocksError, isWireSafeError } from '@aws-blocks/core';
+import { ApiError, Scope, getSdkIdentifiers, isBlocksError, isWireSafeError } from '@aws-cdk-blocks/core';
 import { deriveBucketName } from './bucket-name.js';
 import { FileBucket as MockFileBucket, FileBucketErrors } from './index.mock.js';
 import { FileBucket as AwsFileBucket } from './index.aws.js';

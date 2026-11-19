@@ -1,10 +1,10 @@
 # Upgrading an older app
 
-An app keeps the `cdk-blocks/index.cdk.ts` that `create-blocks-app` copied into it when it was scaffolded. Upgrading `@aws-blocks/blocks` doesn't change that file. Templates declare `"@aws-blocks/blocks": "*"`, so a fresh install of an old app pulls the current release, and an `index.cdk.ts` written for an older release can stop synthesizing.
+An app keeps the `cdk-blocks/index.cdk.ts` that `create-blocks-app` copied into it when it was scaffolded. Upgrading `aws-cdk-blocks` doesn't change that file. Templates declare `"aws-cdk-blocks": "*"`, so a fresh install of an old app pulls the current release, and an `index.cdk.ts` written for an older release can stop synthesizing.
 
 Find your app's shape below and apply the edits. Every other file is unchanged.
 
-| Template version | What you see on current `@aws-blocks/blocks` |
+| Template version | What you see on current `aws-cdk-blocks` |
 |---|---|
 | 0.1.0 to 0.1.19 | `BlocksStack.create() requires a \`defaults\` field` (older releases: `TypeError: Cannot read properties of undefined (reading 'vpc')`) |
 | 0.1.20 to 0.2.0 | `error TS2339: Property 'handler' does not exist on type 'BlocksStack'` |
@@ -13,7 +13,7 @@ Find your app's shape below and apply the edits. Every other file is unchanged.
 
 A deploy can fail with `CloudFormation cannot update a stack when a custom-named resource requires replacing` on the table of a `KVStore`. The cause is then the `KVStore` release, not the template. See [A `KVStore` from release 0.4.0 or earlier](#a-kvstore-from-release-040-or-earlier-custom-named-resource-requires-replacing).
 
-An app with a `DistributedDatabase` keeps its Aurora DSQL cluster when the block becomes a `Database`. See [A `DistributedDatabase`: keep its cluster with `Database`](#a-distributeddatabase-keep-its-cluster-with-database). An app with a `Database` of `@aws-blocks/bb-data` keeps its Aurora cluster with `LegacyDatabaseCluster`. See [A `Database` of `@aws-blocks/bb-data`](#a-database-of-aws-blocksbb-data-keep-its-cluster-with-legacydatabasecluster).
+An app with a `DistributedDatabase` keeps its Aurora DSQL cluster when the block becomes a `Database`. See [A `DistributedDatabase`: keep its cluster with `Database`](#a-distributeddatabase-keep-its-cluster-with-database). An app with a `Database` of `@aws-cdk-blocks/bb-data` keeps its Aurora cluster with `LegacyDatabaseCluster`. See [A `Database` of `@aws-cdk-blocks/bb-data`](#a-database-of-aws-blocksbb-data-keep-its-cluster-with-legacydatabasecluster).
 
 ## Rename `aws-blocks/` to `cdk-blocks/`
 
@@ -37,7 +37,7 @@ Before:
 
 ```ts
 import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { Hosting, BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, SandboxDisableDeletionProtection } from 'aws-cdk-blocks/cdk';
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -54,7 +54,7 @@ if (sandboxMode) {
 After:
 
 ```ts
-import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -87,11 +87,11 @@ If your own code uses `blocksStack.handler`, use the stack-wide equivalents, whi
 | `resource.grantRead(blocksStack.handler)` | `resource.grantRead(blocksStack.executionRole)` |
 | `blocksStack.handler.addToRolePolicy(statement)` | `blocksStack.executionRole.addToPrincipalPolicy(statement)` |
 
-`registerConfig` is exported from `@aws-blocks/blocks/cdk`. Values it registers are loaded into `process.env` on every compute at cold start, but a real environment variable of the same name wins.
+`registerConfig` is exported from `aws-cdk-blocks/cdk`. Values it registers are loaded into `process.env` on every compute at cold start, but a real environment variable of the same name wins.
 
 ## A `KVStore` from release 0.4.0 or earlier: `custom-named resource requires replacing`
 
-This section is for an app that deployed a `KVStore` with `@aws-blocks/bb-kv-store` 0.4.0 or earlier and now deploys on a later release. The cause is the Building Block, not the template. The deploy fails on the table of that store:
+This section is for an app that deployed a `KVStore` with `@aws-cdk-blocks/bb-kv-store` 0.4.0 or earlier and now deploys on a later release. The cause is the Building Block, not the template. The deploy fails on the table of that store:
 
 ```text
 CloudFormation cannot update a stack when a custom-named resource requires replacing. Rename <table name> and update the stack again.
@@ -106,7 +106,7 @@ Keep the old table with `LegacyKVStore`, and migrate its items to a `KVStore` wi
 1. In `cdk-blocks/index.ts`, change the class on the line of the old store to `LegacyKVStore`. Keep its id and every option it had. Add a `KVStore` with a new id next to it:
 
    ```ts
-   import { KVStore, LegacyKVStore } from '@aws-blocks/blocks';
+   import { KVStore, LegacyKVStore } from 'aws-cdk-blocks';
 
    // Before: const prefs = new KVStore<Prefs>(scope, 'prefs', { ttl: true });
    const oldPrefs = new LegacyKVStore<Prefs>(scope, 'prefs', { ttl: true });
@@ -123,14 +123,14 @@ Keep the old table with `LegacyKVStore`, and migrate its items to a `KVStore` wi
 
 ## A `DistributedDatabase`: keep its cluster with `Database`
 
-This section is for an app that deployed a `DistributedDatabase` with `@aws-blocks/bb-distributed-data` and now deploys on a release where `@aws-blocks/blocks` exports `Database` and no `DistributedDatabase`.
+This section is for an app that deployed a `DistributedDatabase` with `@aws-cdk-blocks/bb-distributed-data` and now deploys on a release where `aws-cdk-blocks` exports `Database` and no `DistributedDatabase`.
 
 A `Database` with no `cluster` option owns an Aurora DSQL cluster, as `DistributedDatabase` did. When the `Database` has the id of the `DistributedDatabase`, in the same scope and the same stack, it is the same cluster to CloudFormation. The deploy keeps the cluster and its rows.
 
 1. In `cdk-blocks/index.ts`, change the class to `Database`. Keep the id, the scope, and `migrationsPath`:
 
    ```ts
-   import { Database, sql } from '@aws-blocks/blocks';
+   import { Database, sql } from 'aws-cdk-blocks';
 
    // Before: const ledger = new DistributedDatabase(scope, 'ledger', { migrationsPath: './aws-blocks/dsql-migrations' });
    const ledger = new Database(scope, 'ledger', { migrationsPath: './aws-blocks/dsql-migrations' });
@@ -144,16 +144,16 @@ A `Database` with no `cluster` option owns an Aurora DSQL cluster, as `Distribut
 
 4. Deploy. The migration functions of `DistributedDatabase` leave the stack, and those of `Database` take their place.
 
-This path is only for `DistributedDatabase`. For a `Database` of `@aws-blocks/bb-data`, see the next section.
+This path is only for `DistributedDatabase`. For a `Database` of `@aws-cdk-blocks/bb-data`, see the next section.
 
-## A `Database` of `@aws-blocks/bb-data`: keep its cluster with `LegacyDatabaseCluster`
+## A `Database` of `@aws-cdk-blocks/bb-data`: keep its cluster with `LegacyDatabaseCluster`
 
-This section is for an app that deployed `Database` with `@aws-blocks/bb-data` and now deploys on a release where `Database` comes from `@aws-blocks/bb-database`.
+This section is for an app that deployed `Database` with `@aws-cdk-blocks/bb-data` and now deploys on a release where `Database` comes from `@aws-cdk-blocks/bb-database`.
 
 The old `Database` owned an Aurora PostgreSQL cluster in a VPC. The new `Database` owns a different kind of cluster, so the same line of code would give you a new, empty database, and the deploy would delete the credentials secret of the old cluster. Keep the old cluster with `LegacyDatabaseCluster`, and run a `Database` with a new id on it:
 
 ```ts
-import { Database, LegacyDatabaseCluster } from '@aws-blocks/blocks';
+import { Database, LegacyDatabaseCluster } from 'aws-cdk-blocks';
 
 // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './cdk-blocks/migrations' });
 const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1 });
@@ -178,7 +178,7 @@ Skip this for a Next.js app: `next build` ignores project references when it typ
 1. Copy the TypeScript files of a fresh scaffold of the same template (pass its name to `--template`), made in a folder outside your app (on Windows, pick another folder than `/tmp`):
 
    ```bash
-   npx @aws-blocks/create-blocks-app@latest /tmp/fresh-app --template default --skip-install
+   npx @aws-cdk-blocks/create-blocks-app@latest /tmp/fresh-app --template default --skip-install
    cp /tmp/fresh-app/tsconfig.json /tmp/fresh-app/tsconfig.app.json /tmp/fresh-app/tsconfig.node.json .
    cp /tmp/fresh-app/cdk-blocks/tsconfig.json cdk-blocks/
    ```
@@ -239,4 +239,4 @@ Skip this for a Next.js app: `next build` ignores project references when it typ
 
 ## Keep the next upgrade from surprising you
 
-Pin `@aws-blocks/blocks` (for example `"^0.9.0"` instead of `"*"`) in `package.json`, so a fresh install doesn't pull a release with breaking changes. Check the package's `CHANGELOG.md` when you move the range.
+Pin `aws-cdk-blocks` (for example `"^0.9.0"` instead of `"*"`) in `package.json`, so a fresh install doesn't pull a release with breaking changes. Check the package's `CHANGELOG.md` when you move the range.

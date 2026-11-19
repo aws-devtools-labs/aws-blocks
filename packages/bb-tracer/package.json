@@ -1,5 +1,5 @@
 {
-  "name": "@aws-blocks/bb-tracer",
+  "name": "@aws-cdk-blocks/bb-tracer",
   "version": "0.3.0",
   "keywords": [
     "aws-blocks",
@@ -45,8 +45,8 @@
     "test": "node --test --test-concurrency=1 dist/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.3.0",
-    "@aws-blocks/core": "^0.8.0",
+    "@aws-cdk-blocks/bb-logger": "^0.3.0",
+    "@aws-cdk-blocks/core": "^0.8.0",
     "aws-xray-sdk-core": "^3.12.0"
   },
   "devDependencies": {

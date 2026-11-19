@@ -5,7 +5,7 @@ one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
 loose key/value data, and a second `KVStore` with a `schema` and a `key` for a
 sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template demo`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template demo`
 
 ## Getting Started
 
@@ -46,7 +46,7 @@ Open http://localhost:3000 after `npm run dev`.
   Its placeholder works locally (the mock sends nothing), but replace it with a
   verified SES identity before deploying to production: the placeholder is on the
   reserved `.invalid` domain, which SES can never verify, so every send from it
-  fails on AWS. Synth warns (`@aws-blocks/bb-email-client:UnverifiableSender`)
+  fails on AWS. Synth warns (`@aws-cdk-blocks/bb-email-client:UnverifiableSender`)
   until you do.
 - **KVStore with a `schema` and a `key`** — per-user todos, stored as records
   you list or query as a collection (a store fixes its key when you create

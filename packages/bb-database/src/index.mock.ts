@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { join } from 'node:path';
-import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
-import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
-import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { type ChildLogger, Logger } from '@aws-cdk-blocks/bb-logger';
+import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-cdk-blocks/core';
+import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import type { SqlQuery } from './common/sql.js';
 import { RulesEngine } from './dialect/rules-engine.js';
 import { dataApiEngine, type RowCountingEngine } from './engines/handle.js';
@@ -110,7 +110,7 @@ export class DatabaseCluster extends Scope {
 }
 
 /**
- * The Aurora cluster that `Database` of `@aws-blocks/bb-data` 0.5.0 provisioned, kept in the stack so that an
+ * The Aurora cluster that `Database` of `@aws-cdk-blocks/bb-data` 0.5.0 provisioned, kept in the stack so that an
  * app can move from that block to this one without a change to the cluster. Give it the id of that `Database`
  * and the options that the `Database` had, and pass it as the `cluster` of a `Database` with a new id. The
  * new `Database` uses the tables that are in the cluster, in the `public` schema, and the `_migrations` table
@@ -119,7 +119,7 @@ export class DatabaseCluster extends Scope {
  * On AWS the block reaches the cluster through the RDS Data API, as the earlier block did. Locally the cluster
  * is one PGlite under `.bb-data/{fullId}/pglite/`.
  *
- * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`. It gets no new features. A
+ * @deprecated Only for an app that deployed `Database` of `@aws-cdk-blocks/bb-data`. It gets no new features. A
  * new app uses `DatabaseCluster`.
  *
  * @example
@@ -152,11 +152,11 @@ export class LegacyDatabaseCluster extends Scope {
  * Locally this is PGlite under `.bb-data/`, with dsql-lint and the DSQL
  * transaction limits applied when the cluster is `dsql`. Migrations in
  * `./cdk-blocks/migrations/{id}` run on first use. `simulateConflict(db)` from
- * `@aws-blocks/bb-database/testing` makes the next commit fail with
+ * `@aws-cdk-blocks/bb-database/testing` makes the next commit fail with
  * `SerializationFailure` so retry logic can be tested without a deployed cluster.
  *
  * @example
- * import { Database, sql } from '@aws-blocks/bb-database';
+ * import { Database, sql } from '@aws-cdk-blocks/bb-database';
  * const db = new Database(scope, 'db');
  * const user = await db.queryOne<User>(sql`SELECT id, email FROM users WHERE id = ${id}`);
  */

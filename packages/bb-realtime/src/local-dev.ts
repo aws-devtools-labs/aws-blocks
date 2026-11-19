@@ -19,7 +19,7 @@ export function getBroadcastBus(): EventEmitter | null {
 	return broadcastBus;
 }
 
-const SECRET_KEY = Symbol.for('@aws-blocks/bb-realtime.localTokenSecret');
+const SECRET_KEY = Symbol.for('@aws-cdk-blocks/bb-realtime.localTokenSecret');
 const secretHolder = globalThis as unknown as Record<symbol, string | undefined>;
 
 /**
@@ -34,7 +34,7 @@ const secretHolder = globalThis as unknown as Record<symbol, string | undefined>
 secretHolder[SECRET_KEY] ??= randomBytes(32).toString('base64url');
 export const LOCAL_TOKEN_SECRET: string = secretHolder[SECRET_KEY];
 
-const REVOKED_KEY = Symbol.for('@aws-blocks/bb-realtime.localRevokedPrincipals');
+const REVOKED_KEY = Symbol.for('@aws-cdk-blocks/bb-realtime.localRevokedPrincipals');
 const revokedHolder = globalThis as unknown as Record<symbol, Map<string, number> | undefined>;
 /** When access was revoked per principal (unix seconds), shared with the WebSocket server like the secret above. */
 revokedHolder[REVOKED_KEY] ??= new Map<string, number>();

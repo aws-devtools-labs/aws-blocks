@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 docs: tell agents to read a block's README first in the generated `AGENTS.md`

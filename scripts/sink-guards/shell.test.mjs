@@ -53,7 +53,7 @@ const ALLOWLIST = [
 		at: 'packages/core/src/scripts/process-tree.ts:242',
 		reason: 'CIM query of Windows processes: the only interpolated values are pids through Math.trunc into a fixed Get-CimInstance -Filter template, run with -NoProfile -NonInteractive and an argv array.',
 	},
-	{ at: 'packages/create-block/src/index.ts:287', reason: `npm view of an @aws-blocks/* name: ${WINDOWS_NPM}` },
+	{ at: 'packages/create-block/src/index.ts:287', reason: `npm view of an @aws-cdk-blocks/* name: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:632', reason: `npm run build -w <validated name>: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:637', reason: `npm test -w <validated name>: ${WINDOWS_NPM}` },
 	{ at: 'scripts/ci/_proc.mjs:53', reason: CI_WINDOWS },

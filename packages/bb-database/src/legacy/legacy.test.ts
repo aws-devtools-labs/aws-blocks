@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { DataApiEngine } from '../engines/data-api-engine.js';
 import { Database as LambdaDatabase, LegacyDatabaseCluster as LambdaLegacyCluster } from '../index.aws.js';
 import { Database, LegacyDatabaseCluster, sql } from '../index.mock.js';
@@ -20,7 +20,7 @@ const isConfigError = (pattern: RegExp) => (e: unknown) => {
 	return true;
 };
 
-// The ledger table as `Database` of `@aws-blocks/bb-data` created it.
+// The ledger table as `Database` of `@aws-cdk-blocks/bb-data` created it.
 const EARLIER_LEDGER = `CREATE TABLE IF NOT EXISTS _migrations (
 	id SERIAL PRIMARY KEY,
 	name TEXT NOT NULL UNIQUE,

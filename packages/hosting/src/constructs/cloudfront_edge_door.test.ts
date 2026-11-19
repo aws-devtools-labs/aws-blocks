@@ -437,7 +437,7 @@ describe('cloudFrontEdgeDoor — the origin-verify secret never crosses a plain-
   });
 
   it('`allowPlainHttp: true` outside a sandbox sends the secret over plain HTTP, with an acknowledgeable production warning', () => {
-    const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+    const ID = '@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction';
     const allowed = (acknowledge: boolean) => {
       const stack = build(acknowledge ? 'AllowedAck' : 'Allowed', { protocol: 'http' }, false, true);
       if (acknowledge) Annotations_.of(stack).acknowledgeWarning(ID);
@@ -452,7 +452,7 @@ describe('cloudFrontEdgeDoor — the origin-verify secret never crosses a plain-
     assert.match(text, /origin secret crosses the edge → router hop in cleartext/);
     assert.match(text, /`allowPlainHttp: true`/);
     assert.match(text, /trusted/);
-    assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-blocks\/hosting:PlainHttpAllowedInProduction'\)/);
+    assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-cdk-blocks\/hosting:PlainHttpAllowedInProduction'\)/);
     assert.equal(allowed(true).found.length, 0, 'acknowledged on the stack');
   });
 

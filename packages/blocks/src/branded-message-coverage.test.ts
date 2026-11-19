@@ -7,7 +7,7 @@
  * caught error's `.message`.
  *
  * Core forwards a branded error's `name` AND `message` to the RPC caller (see
- * `blocksError` / `brandBlocksError` / `sanitizeCaughtError` in `@aws-blocks/core`).
+ * `blocksError` / `brandBlocksError` / `sanitizeCaughtError` in `@aws-cdk-blocks/core`).
  * A raw driver/SDK/service message can embed account ids, ARNs, bucket names,
  * object keys or SQL, so interpolating it into the message of a branded error
  * re-opens the leak the brand was meant to close. The safe pattern is a stable,

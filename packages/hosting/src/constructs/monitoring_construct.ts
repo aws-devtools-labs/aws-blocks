@@ -151,7 +151,7 @@ export const createAlarmTopicKey = (scope: Construct): Key => {
 
 /** Stable id of the no-subscriber warning; also the `acknowledgeWarning` id. */
 export const MONITORING_NO_SUBSCRIBER_WARNING_ID =
-  '@aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers';
+  '@aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers';
 
 /**
  * Register a synth-time validation that warns when `topic` carries alarm

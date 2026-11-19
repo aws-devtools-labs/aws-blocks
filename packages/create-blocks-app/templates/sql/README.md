@@ -4,7 +4,7 @@ Backend-only TypeScript API on a PostgreSQL database — the AWS Blocks
 `Database` Building Block on Aurora DSQL. Relational modeling with foreign keys,
 transactions, and version-controlled SQL migrations. No frontend included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template sql`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template sql`
 
 ## For Coding Agents
 

@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/bb-auth": minor
-"@aws-blocks/bb-secret": patch
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-auth": minor
+"@aws-cdk-blocks/bb-secret": patch
+"aws-cdk-blocks": minor
 ---
 
 feat(bb-auth): accept a `Secret` as a provider client secret

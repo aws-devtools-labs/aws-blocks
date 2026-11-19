@@ -1,5 +1,5 @@
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import { isBlocksError } from '@aws-blocks/core';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 
 export function isWrongCode(e: unknown): boolean {
 	// TODO(aws-blocks-auth-migrate): review this auth error check: Auth renamed some error names and changed which flows return which (see MIGRATION.md, "Error names").

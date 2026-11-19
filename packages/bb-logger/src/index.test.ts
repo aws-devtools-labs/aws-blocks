@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { Logger, LoggingErrors } from './index.mock.js';
 import { Logger as AwsLogger } from './index.aws.js';
 import type { LogEntry, ChildLogger } from './types.js';

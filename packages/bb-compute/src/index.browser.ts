@@ -4,8 +4,8 @@
 // Browser stub — compute is server-side infrastructure and never runs in the
 // browser. The backend module that constructs it is type-imported by frontends,
 // so this stub keeps CDK out of the browser bundle while the reference resolves.
-import type { ComputeType } from '@aws-blocks/core';
-import type { ComputeBase, ComputeProvider } from '@aws-blocks/core/cdk/internal';
+import type { ComputeType } from '@aws-cdk-blocks/core';
+import type { ComputeBase, ComputeProvider } from '@aws-cdk-blocks/core/cdk/internal';
 
 export class Compute<K extends ComputeType = ComputeType> implements ComputeProvider<K> {
 	setEnv(_key: string, _value: string): void {}

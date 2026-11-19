@@ -71,7 +71,7 @@ describe('scaffold templates and resources', () => {
 		assert.deepStrictEqual(
 			found,
 			[],
-			`Removed block names (use \`Auth\` from @aws-blocks/bb-auth):\n${found.join('\n')}`,
+			`Removed block names (use \`Auth\` from @aws-cdk-blocks/bb-auth):\n${found.join('\n')}`,
 		);
 	});
 

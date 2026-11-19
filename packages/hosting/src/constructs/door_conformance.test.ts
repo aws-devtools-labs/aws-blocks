@@ -9,7 +9,7 @@
  *
  * Each door is fed the plan the way production feeds it: `HostingConstruct` is
  * synthesized for the plan behind that door (the stacked door's edge is built
- * from the construct's `doorInput`, as `@aws-blocks/core` `Hosting` does), and
+ * from the construct's `doorInput`, as `@aws-cdk-blocks/core` `Hosting` does), and
  * the handlers are pulled out of the template and executed:
  *
  * - CloudFront: the KVS router's viewer-request / viewer-response functions,

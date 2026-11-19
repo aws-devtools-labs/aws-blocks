@@ -21,7 +21,7 @@ Pick the form by how you read the data.
 | as a list, in order, inside a group | `schema` and a `key` with a sort field | the todos of one user, the messages of one conversation |
 
 ```typescript
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
 import { z } from 'zod';
 
 // 1. No options. A string key and a string value.
@@ -229,7 +229,7 @@ The error has a `retriable` flag. It is true when a value check took part in a f
 
 A conditional write is atomic for its item. No other write to that item lands between the call's check and its write. On AWS, each call is one DynamoDB `PutItem` or `DeleteItem` with a condition expression. The local mock runs the check and the write with no `await` in between, so no other request runs between them.
 
-There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on `Database` (`@aws-blocks/bb-data`) or `DistributedDatabase` (`@aws-blocks/bb-distributed-data`).
+There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on `Database` (`@aws-cdk-blocks/bb-data`) or `DistributedDatabase` (`@aws-cdk-blocks/bb-distributed-data`).
 
 ## Read consistency
 
@@ -290,8 +290,8 @@ const lastHour = readings.query({
 `query` and `scan` return a `cursor`. Pass it to the same call to read the next page, in this request or in a later one. The cursor is `undefined` when the read reached the end. A `cursor` of `undefined` starts at the first entry, so a client can pass back the `cursor` of the page before as it is. A `cursor` of `null` also starts at the first entry, because an option with the value `null` counts as an option that you did not pass.
 
 ```typescript
-import { ApiNamespace } from '@aws-blocks/core';
-import { Auth } from '@aws-blocks/bb-auth';
+import { ApiNamespace } from '@aws-cdk-blocks/core';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const auth = new Auth(scope, 'auth');
 
@@ -372,8 +372,8 @@ Match an error by name with `isBlocksError`.
 | `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
 
 try {
 	await cache.put('lock:report', 'worker-3', { ifNotExists: true });
@@ -489,7 +489,7 @@ Release 0.4.0 or earlier keeps each item as `{ pk, value: <JSON text>, ttl? }`. 
 Change the class on the line of the old store. Keep its id and its options. Add the new store with a new id.
 
 ```typescript
-import { LegacyKVStore } from '@aws-blocks/bb-kv-store';
+import { LegacyKVStore } from '@aws-cdk-blocks/bb-kv-store';
 
 interface Prefs {
 	theme: string;

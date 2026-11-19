@@ -1,5 +1,5 @@
 {
-  "name": "@aws-blocks/auth-common",
+  "name": "@aws-cdk-blocks/auth-common",
   "version": "0.3.0",
   "sideEffects": false,
   "keywords": [
@@ -49,7 +49,7 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.8.0"
+    "@aws-cdk-blocks/core": "^0.8.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

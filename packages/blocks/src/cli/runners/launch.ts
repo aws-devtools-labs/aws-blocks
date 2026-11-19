@@ -16,7 +16,7 @@
  * `BLOCKS_DEV_OPTIONS`, because the sandbox starts it from a shell command string.
  *
  * `tsx` resolves from the app first, so the app's own version runs as it did
- * from the npm scripts, then from `@aws-blocks/blocks`, which depends on it.
+ * from the npm scripts, then from `aws-cdk-blocks`, which depends on it.
  * The runners pass the same `tsx` loader to core's client-generation worker
  * through `BLOCKS_TSX_IMPORT`, so an app without its own `tsx` works there too.
  *
@@ -109,7 +109,7 @@ export function runnerPath(name: RunnerName): string {
 	return fileURLToPath(new URL(`./${name}.js`, import.meta.url));
 }
 
-/** The absolute path of a `tsx` entry: the app's own, else the one `@aws-blocks/blocks` depends on. */
+/** The absolute path of a `tsx` entry: the app's own, else the one `aws-cdk-blocks` depends on. */
 function resolveTsx(root: string, entry: 'tsx' | 'tsx/cli'): string {
 	for (const from of [join(root, 'package.json'), fileURLToPath(import.meta.url)]) {
 		try {
@@ -121,7 +121,7 @@ function resolveTsx(root: string, entry: 'tsx' | 'tsx/cli'): string {
 	throw new CliError('cannot find tsx, which runs the app TypeScript.', { hint: 'npm install -D tsx' });
 }
 
-/** The `tsx` CLI entry: the app's own, else the one `@aws-blocks/blocks` depends on. */
+/** The `tsx` CLI entry: the app's own, else the one `aws-cdk-blocks` depends on. */
 export function resolveTsxCli(root: string): string {
 	return resolveTsx(root, 'tsx/cli');
 }

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { blocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-cdk-blocks/core';
 import { MetricsErrors } from './errors.js';
 
 /**

@@ -21,7 +21,7 @@
  * @module
  */
 
-import { type BlocksContext, blocksError, getCachedConfigValue, getDeploymentType } from '@aws-blocks/core';
+import { type BlocksContext, blocksError, getCachedConfigValue, getDeploymentType } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 
 /**

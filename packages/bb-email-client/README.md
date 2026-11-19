@@ -1,4 +1,4 @@
-# @aws-blocks/bb-email-client
+# @aws-cdk-blocks/bb-email-client
 
 Transactional email sending via Amazon SES.
 
@@ -7,7 +7,7 @@ Transactional email sending via Amazon SES.
 ## Usage
 
 ```typescript
-import { EmailClient } from '@aws-blocks/bb-email-client';
+import { EmailClient } from '@aws-cdk-blocks/bb-email-client';
 
 const emailClient = new EmailClient(scope, 'notifications', {
   fromAddress: 'noreply@your-verified-domain.com', // an address on a domain verified in SES
@@ -44,7 +44,7 @@ damages your domain's reputation.
 Don't do this:
 
 ```typescript
-import type { EmailMessage } from '@aws-blocks/bb-email-client';
+import type { EmailMessage } from '@aws-cdk-blocks/bb-email-client';
 
 // ❌ Open relay: anyone on the internet chooses the recipient and the content
 export const api = new ApiNamespace(scope, 'api', () => ({
@@ -58,10 +58,10 @@ Instead, gate the method with `auth.requireAuth(context)` from an auth block, an
 message on the server so the caller can't choose the recipients or the content:
 
 ```typescript
-import { Scope, ApiNamespace, ApiError } from '@aws-blocks/core';
-import { Auth } from '@aws-blocks/bb-auth';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { EmailClient } from '@aws-blocks/bb-email-client';
+import { Scope, ApiNamespace, ApiError } from '@aws-cdk-blocks/core';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { EmailClient } from '@aws-cdk-blocks/bb-email-client';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth');
@@ -142,16 +142,16 @@ before `emailClient.send()`.
 (`example.com`, `example.net`, `example.org` and their subdomains, or anything under
 `.test`, `.example`, `.invalid` or `.localhost`, per RFC 2606 and RFC 6761) can never be
 verified, so every send from it fails with `DomainNotVerifiedException` once deployed.
-Synth flags it with the warning `@aws-blocks/bb-email-client:UnverifiableSender`, in
+Synth flags it with the warning `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, in
 sandbox and production alike; a `replyTo` address on such a domain gets
-`@aws-blocks/bb-email-client:UndeliverableReplyTo`. They are warnings, not errors: the
+`@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`. They are warnings, not errors: the
 app still synthesizes and deploys, and the local mock still accepts the address. If the
 sender is deliberate (for example a stack that never sends), acknowledge it:
 
 ```typescript
 import { Annotations } from 'aws-cdk-lib';
 
-Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-email-client:UnverifiableSender');
+Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-email-client:UnverifiableSender');
 ```
 
 ### `emailClient.send(message): Promise<SendResult>`
@@ -224,8 +224,8 @@ throws `EmailSendFailedException`. In `sendBatch()` the message is marked `faile
 ## Error Handling
 
 ```typescript
-import { EmailErrors } from '@aws-blocks/bb-email-client';
-import { isBlocksError } from '@aws-blocks/core';
+import { EmailErrors } from '@aws-cdk-blocks/bb-email-client';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 
 try {
   await emailClient.send({ to: 'user@example.com', subject: 'Hi', body: 'Hello' });

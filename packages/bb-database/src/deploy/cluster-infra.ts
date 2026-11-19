@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type BuildingBlockScope, blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { deployTimeLambdaEntry, scopeProviderWaiterTrust } from '@aws-blocks/core/cdk/internal';
+import { type BuildingBlockScope, blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-cdk-blocks/core/cdk';
+import { deployTimeLambdaEntry, scopeProviderWaiterTrust } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { CfnCluster } from 'aws-cdk-lib/aws-dsql';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -105,7 +105,7 @@ const ownedClusterIds = new WeakMap<cdk.Stack, Map<string, string>>();
 
 /**
  * The logical id of the Aurora DSQL cluster that a `Database` owns: `<fullId>DsqlCluster`, without the characters
- * that a logical id cannot have. `DistributedDatabase` of `@aws-blocks/bb-distributed-data` declared its cluster
+ * that a logical id cannot have. `DistributedDatabase` of `@aws-cdk-blocks/bb-distributed-data` declared its cluster
  * as a child of the stack with that name. A `Database` with the id of a deployed `DistributedDatabase` is
  * therefore the same resource to CloudFormation, and a deploy keeps the cluster and its data.
  *

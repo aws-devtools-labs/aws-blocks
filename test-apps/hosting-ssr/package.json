@@ -21,12 +21,12 @@
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "@aws-blocks/bb-auth": "*",
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/hosting": "*",
+    "@aws-cdk-blocks/bb-auth": "*",
+    "aws-cdk-blocks": "*",
+    "@aws-cdk-blocks/hosting": "*",
     "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import { readFileSync, rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
-import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
+import { ApiError, isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { KVStore, KVStoreErrors } from './index.mock.js';

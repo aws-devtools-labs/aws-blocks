@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): a stop while the dev server starts, or a backend that fails to load, leaves no stale pidfile

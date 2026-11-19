@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
-import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
+import { ApiError, blocksError, isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { LOCAL_APP_ROLE } from './constants.js';

@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-database": minor
+"@aws-cdk-blocks/bb-database": minor
 ---
 
 `DatabaseCluster` gains `type: 'aurora'`: Aurora PostgreSQL Serverless v2 created with the express configuration. The cluster is created in seconds together with its writer instance, runs outside any VPC behind an internet access gateway, scales to zero (`minCapacity: 0`, the default) and is reached with IAM authentication only; the master user has no password and the app connects as its own database role with a short-lived token. `minCapacity` and `maxCapacity` set the ACU range, `pointInTimeRecovery` the backup window, and `removalPolicy` accepts `'snapshot'`.

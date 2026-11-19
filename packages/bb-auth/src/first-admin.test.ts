@@ -13,7 +13,7 @@ import assert from 'node:assert';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';

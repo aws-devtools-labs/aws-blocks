@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiNamespace, Scope, KVStore } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore } from 'aws-cdk-blocks';
 
 const scope = new Scope('hosting-ssr-astro-test');
 

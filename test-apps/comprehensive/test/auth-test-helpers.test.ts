@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The auth test helpers from `@aws-blocks/blocks/utils`, used the way an app's
+ * The auth test helpers from `aws-cdk-blocks/utils`, used the way an app's
  * e2e suite uses them: two users from `createTestClient()` hold two sessions at
  * once, and `getLastAuthCode()` reads each sign-up code from the local pool
  * without knowing where the block keeps its data. Customer code: no casts.
@@ -13,8 +13,8 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/blocks/client';
-import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
+import { isBlocksError } from 'aws-cdk-blocks/client';
+import { createTestClient, getLastAuthCode } from 'aws-cdk-blocks/utils';
 
 type App = typeof import('cdk-blocks');
 

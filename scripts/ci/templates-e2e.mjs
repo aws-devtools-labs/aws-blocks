@@ -104,7 +104,7 @@ function discoverTemplates() {
  * test:templates` exports npm's own resolved configuration that way
  * (`npm_config_userconfig=~/.npmrc`, `npm_config_cache`, …). Child npm processes
  * read them, and `npm_config_userconfig` overrides `NPM_CONFIG_USERCONFIG`, so a
- * registry in the caller's ~/.npmrc would serve the scaffolded apps' @aws-blocks
+ * registry in the caller's ~/.npmrc would serve the scaffolded apps' @aws-cdk-blocks
  * packages instead of the local registry. Dropping them makes `npm run
  * test:templates` behave exactly like `node scripts/ci/templates-e2e.mjs` (what CI
  * runs). Uppercase `NPM_CONFIG_*` variables a caller sets on purpose are kept.
@@ -114,23 +114,23 @@ function callerEnvWithoutNpmConfig() {
 }
 
 /**
- * True when the install in `dir` took `@aws-blocks/<name>` from the local
- * registry, so a registry leaking in from the caller's npm config fails loudly
- * instead of testing published packages.
+ * True when the install in `dir` took `name` from the local registry, so a registry
+ * leaking in from the caller's npm config fails loudly instead of testing published
+ * packages. `name` is the full package name, because the umbrella is unscoped.
  */
 function assertLocalRegistry(dir, name) {
 	let resolved = '';
 	try {
 		const lock = JSON.parse(readFileSync(join(dir, 'package-lock.json'), 'utf-8'));
-		resolved = lock.packages?.[`node_modules/@aws-blocks/${name}`]?.resolved ?? '';
+		resolved = lock.packages?.[`node_modules/${name}`]?.resolved ?? '';
 	} catch {
 		/* no lockfile: reported below */
 	}
 	if (!resolved.startsWith(REGISTRY_URL)) {
-		console.error(`  FAIL: @aws-blocks/${name} in ${dir} was not installed from the local registry (resolved: ${resolved || '<none>'})`);
+		console.error(`  FAIL: ${name} in ${dir} was not installed from the local registry (resolved: ${resolved || '<none>'})`);
 		return false;
 	}
-	console.log(`  ✓ @aws-blocks/${name} installed from the local registry`);
+	console.log(`  ✓ ${name} installed from the local registry`);
 	return true;
 }
 
@@ -158,7 +158,12 @@ async function main() {
 	const baseTmp = process.env.RUNNER_TEMP || tmpdir();
 	work = mkdtempSync(join(baseTmp, 'bb-templates-e2e-'));
 	const userNpmrc = join(work, '.npmrc');
-	writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY_URL}\n`);
+	// The default registry rather than a `@aws-cdk-blocks:registry=` line: npm
+	// resolves a registry per scope, so a scope line cannot route the unscoped
+	// `aws-cdk-blocks` umbrella every template depends on. The local registry
+	// forwards third-party packages upstream and never forwards our own, so
+	// assertLocalRegistry still catches a published copy standing in.
+	writeFileSync(userNpmrc, `registry=${REGISTRY_URL}\n`);
 	const env = {
 		...callerEnvWithoutNpmConfig(),
 		NPM_CONFIG_USERCONFIG: userNpmrc,
@@ -171,11 +176,11 @@ async function main() {
 	};
 
 	console.log('\n=== Step 3: Install create-blocks-app from registry ===');
-	if (!run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env })) {
-		throw new Error('installing @aws-blocks/create-blocks-app from the local registry failed');
+	if (!run('npm', ['install', '@aws-cdk-blocks/create-blocks-app@latest'], { cwd: work, env })) {
+		throw new Error('installing @aws-cdk-blocks/create-blocks-app from the local registry failed');
 	}
-	if (!assertLocalRegistry(work, 'create-blocks-app')) {
-		throw new Error('@aws-blocks/create-blocks-app was not installed from the local registry');
+	if (!assertLocalRegistry(work, '@aws-cdk-blocks/create-blocks-app')) {
+		throw new Error('@aws-cdk-blocks/create-blocks-app was not installed from the local registry');
 	}
 	const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
 
@@ -204,7 +209,7 @@ async function main() {
 			continue;
 		}
 
-		if (!assertLocalRegistry(app, 'blocks')) {
+		if (!assertLocalRegistry(app, 'aws-cdk-blocks')) {
 			failed.push(template);
 			continue;
 		}
@@ -215,7 +220,7 @@ async function main() {
 			const pkg = JSON.parse(readFileSync(manifest, 'utf-8'));
 			for (const task of ['docs', 'docs:search', 'docs:api', 'migrate']) delete pkg.scripts[task];
 			writeFileSync(manifest, JSON.stringify(pkg, null, 2) + '\n');
-			const bootstrap = ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--'];
+			const bootstrap = ['--input-type=module', '-e', "import 'aws-cdk-blocks/run'", '--'];
 			if (
 				!run(process.execPath, [...bootstrap, 'migrate', '--force'], { ...inApp, shell: false }) ||
 				!run('npm', ['run', '-s', 'migrate', '--', '--dry-run'], inApp) ||
@@ -236,7 +241,7 @@ async function main() {
 		}
 
 		console.log('\n--- Testing vendorize task ---');
-		if (!run('npm', ['run', 'vendorize', '--', '@aws-blocks/bb-kv-store'], inApp)) {
+		if (!run('npm', ['run', 'vendorize', '--', '@aws-cdk-blocks/bb-kv-store'], inApp)) {
 			console.error(`  FAIL: vendorize failed for template ${template}`);
 			failed.push(template);
 			continue;

@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-auth': minor
-'@aws-blocks/blocks': minor
+'@aws-cdk-blocks/bb-auth': minor
+'aws-cdk-blocks': minor
 ---
 
 `Auth` can send its user pool's email through your own Amazon SES identity, with the `email` option: `email: { fromAddress: 'no-reply@example.com', fromName?, replyTo?, sesRegion?, sesVerifiedDomain?, configurationSetName? }`. Cognito's default sender is capped at 50 emails a day, so set this before real users sign up.

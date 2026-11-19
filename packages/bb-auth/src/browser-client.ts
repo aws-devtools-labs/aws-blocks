@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth/browser-client` — redirect sign-in for a web frontend
+ * `@aws-cdk-blocks/bb-auth/browser-client` — redirect sign-in for a web frontend
  * served from a **different origin** than the `Auth` block's API. It replaces `AuthOIDC`'s `getClient()` browser PKCE client.
  *
  * It speaks the block's existing routes, so there is no new server protocol
@@ -39,7 +39,7 @@
  *
  * @example
  * ```typescript
- * import { createAuthClient } from '@aws-blocks/bb-auth/browser-client';
+ * import { createAuthClient } from '@aws-cdk-blocks/bb-auth/browser-client';
  *
  * const auth = createAuthClient({ baseUrl: 'https://api.example.com' });
  *
@@ -53,8 +53,8 @@
  * ```
  */
 
-// From `@aws-blocks/core`'s browser entry in a browser bundle: only its client-safe exports.
-import { ApiError } from '@aws-blocks/core';
+// From `@aws-cdk-blocks/core`'s browser entry in a browser bundle: only its client-safe exports.
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import type {
 	AuthClient,
@@ -167,7 +167,7 @@ function browserEnvironment(): AuthClientEnvironment {
 	const win: unknown = Reflect.get(globalThis, 'window');
 	const unavailable = (what: string) => (): never => {
 		throw new Error(
-			`@aws-blocks/bb-auth/browser-client: ${what} is not available here. Call it in a browser, ` +
+			`@aws-cdk-blocks/bb-auth/browser-client: ${what} is not available here. Call it in a browser, ` +
 				'or pass `environment` to createAuthClient().',
 		);
 	};

@@ -18,8 +18,8 @@
  * @internal
  */
 
-import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, RawRouteErrors, type Scope } from '@aws-blocks/core';
-import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, RawRouteErrors, type Scope } from '@aws-cdk-blocks/core';
+import { getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 
 /** Root under which every stub issuer is mounted (inside the reserved auth subtree). */
 export const STUB_ROOT = `${BLOCKS_AUTH_PREFIX}/idp`;

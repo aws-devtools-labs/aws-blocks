@@ -11,9 +11,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, type TestContext, test } from 'node:test';
-import type { AuthAction, AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { Scope } from '@aws-blocks/core';
+import type { AuthAction, AuthActionInput, AuthState, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { generateTotpSecret, totpCode, verifyTotpCode } from './engines/totp.js';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';

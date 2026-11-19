@@ -135,7 +135,7 @@ export async function startRegistry({ root, registryUrl, children, maxTries = 31
 	});
 	children.push(registry);
 	for (let i = 0; ; i++) {
-		if (await httpUp(`${registryUrl}@aws-blocks/blocks`)) break;
+		if (await httpUp(`${registryUrl}aws-cdk-blocks`)) break;
 		if (registry.exitCode !== null) {
 			throw new Error(`Local registry process exited (${registry.exitCode}) before becoming ready on :${port}`);
 		}

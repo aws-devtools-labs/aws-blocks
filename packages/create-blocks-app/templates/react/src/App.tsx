@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api, authApi } from 'cdk-blocks';
-import { AccountMenuBar, onAuthChange, StatusMessage, type AuthUserOf } from '@aws-blocks/blocks/ui';
+import { AccountMenuBar, onAuthChange, StatusMessage, type AuthUserOf } from 'aws-cdk-blocks/ui';
 
 // Backend APIs are fully typed — hover over api.* for signatures.
 // Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)

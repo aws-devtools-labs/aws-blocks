@@ -1,11 +1,11 @@
-# @aws-blocks/bb-compute
+# @aws-cdk-blocks/bb-compute
 
 The `Compute` Building Block is the single surface for choosing where a workload runs.
 State the compute `type` and its options; Blocks maps the type to the AWS
 service that backs it. The service name never appears in your code.
 
 ```ts
-import { Compute } from '@aws-blocks/blocks';
+import { Compute } from 'aws-cdk-blocks';
 
 // Serverless (Lambda today): pay-as-you-go, per-request.
 const api = new Compute(scope, 'api', { type: 'serverless', memory: 512 });

@@ -5,11 +5,11 @@ import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-blocks/core';
+import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-cdk-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
-import type { DisconnectReason } from '@aws-blocks/bb-realtime';
+import type { DisconnectReason } from '@aws-cdk-blocks/bb-realtime';
 import type { AgentStreamChunk, ModelConfig } from './types.js';
 import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
@@ -2413,7 +2413,7 @@ describe('tool context', () => {
 
 
 import { FileBucketSnapshotStorage } from './file-bucket-snapshot-storage.js';
-import { FileBucket } from '@aws-blocks/bb-file-bucket';
+import { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
 
 describe('FileBucketSnapshotStorage', () => {
 	const scope = new Scope('test-snap');
@@ -4080,7 +4080,7 @@ import { handleInvocation } from './agentcore-invocation.js';
 import { errorCauseShape } from './agent.js';
 import { SessionManager } from '@strands-agents/sdk';
 import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type { S3StorageConfig } from '@strands-agents/sdk/session/s3-storage';
 
 describe('deployed Agent S3Storage region (multi-region)', () => {
@@ -5645,7 +5645,7 @@ describe('createChat loadConversation + metadata narrowing', () => {
 // ARNs): only a branded Building Block error keeps its message there; anything
 // else becomes a generic message, with the original logged server-side.
 
-import { blocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-cdk-blocks/core';
 
 describe('invokeTurn error redaction', () => {
 	const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: s3:GetObject';

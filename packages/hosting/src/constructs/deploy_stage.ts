@@ -6,7 +6,7 @@ import type { Construct } from 'constructs';
 /**
  * Whether `scope` is synthesized for a sandbox deploy: the CDK context key
  * `sandboxMode` the sandbox scripts pass (`-c sandboxMode=true`), the same
- * rule as `isSandboxContext` in `@aws-blocks/core/cdk`. Anything else is a
+ * rule as `isSandboxContext` in `@aws-cdk-blocks/core/cdk`. Anything else is a
  * production deploy.
  *
  * The plain-HTTP checks use it: a plain-HTTP front door
@@ -28,4 +28,4 @@ export const isSandboxDeploy = (scope: Construct): boolean => {
  *
  * @internal
  */
-export const PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+export const PLAIN_HTTP_ALLOWED_IN_PRODUCTION_WARNING_ID = '@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction';

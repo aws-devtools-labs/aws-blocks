@@ -1,4 +1,4 @@
-# @aws-blocks/bb-knowledge-base
+# @aws-cdk-blocks/bb-knowledge-base
 
 Semantic document retrieval backed by Amazon Bedrock Knowledge Bases.
 
@@ -11,8 +11,8 @@ Semantic document retrieval backed by Amazon Bedrock Knowledge Bases.
 ## Quick Start
 
 ```typescript
-import { Scope, ApiNamespace } from '@aws-blocks/core';
-import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { Scope, ApiNamespace } from '@aws-cdk-blocks/core';
+import { KnowledgeBase } from '@aws-cdk-blocks/bb-knowledge-base';
 
 const scope = new Scope('my-app');
 
@@ -153,16 +153,16 @@ Subfolder paths automatically populate the `folder` metadata key. For example, a
 
 ## Use as an Agent tool
 
-`asAgentTool()` returns a tool definition you pass to the `tool()` factory of an `Agent` (`@aws-blocks/bb-agent`). It encodes the two rules in [Trust Boundary](#trust-boundary) so you don't have to remember them:
+`asAgentTool()` returns a tool definition you pass to the `tool()` factory of an `Agent` (`@aws-cdk-blocks/bb-agent`). It encodes the two rules in [Trust Boundary](#trust-boundary) so you don't have to remember them:
 
 - **The filter comes from your server code.** The tool's only input is `query`. The required `filter` callback derives the metadata filter from the per-call tool context, which you set from the authenticated session when you call `agent.stream()`. The model can't see or change it.
 - **Results are untrusted.** The tool is marked `untrustedOutput: true`, so the agent wraps the retrieved text in an untrusted-data block and tells the model to treat it as data.
 
 ```typescript
-import { Scope, ApiNamespace } from '@aws-blocks/core';
-import { Auth } from '@aws-blocks/bb-auth';
-import { Agent } from '@aws-blocks/bb-agent';
-import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { Scope, ApiNamespace } from '@aws-cdk-blocks/core';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { Agent } from '@aws-cdk-blocks/bb-agent';
+import { KnowledgeBase } from '@aws-cdk-blocks/bb-knowledge-base';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -211,8 +211,8 @@ A knowledge base is one index, not one per user or tenant, and `retrieve()` retu
 ## Error Handling
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { KnowledgeBaseErrors } from '@aws-cdk-blocks/bb-knowledge-base';
 
 try {
   const results = await kb.retrieve('query');

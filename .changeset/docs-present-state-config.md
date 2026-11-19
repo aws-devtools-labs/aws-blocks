@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-app-setting": patch
-"@aws-blocks/bb-secret": patch
+"@aws-cdk-blocks/bb-app-setting": patch
+"@aws-cdk-blocks/bb-secret": patch
 ---
 
 docs: the AppSetting and Secret docs describe the installed version

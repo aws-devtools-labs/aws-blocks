@@ -1,12 +1,12 @@
 ---
-'@aws-blocks/bb-auth': minor
-'@aws-blocks/blocks': minor
+'@aws-cdk-blocks/bb-auth': minor
+'aws-cdk-blocks': minor
 ---
 
-A web frontend served from another origin than its API can sign in with a federated provider. `createAuthClient()` from the new `@aws-blocks/bb-auth/browser-client` entry (also exported from `@aws-blocks/blocks/ui`) replaces `AuthOIDC`'s `getClient()` browser client:
+A web frontend served from another origin than its API can sign in with a federated provider. `createAuthClient()` from the new `@aws-cdk-blocks/bb-auth/browser-client` entry (also exported from `aws-cdk-blocks/ui`) replaces `AuthOIDC`'s `getClient()` browser client:
 
 ```typescript
-import { createAuthClient } from '@aws-blocks/bb-auth/browser-client';
+import { createAuthClient } from '@aws-cdk-blocks/bb-auth/browser-client';
 
 const auth = createAuthClient({ baseUrl: 'https://api.example.com', redirectUri: 'https://app.example.com/return' });
 await auth.signInWithRedirect({ provider: 'okta' });   // on the sign-in button

@@ -38,7 +38,7 @@ export function need(value: string | undefined, name: string): string {
 export const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 /** The block's bin, as built. */
 export const CLI = join(PACKAGE_ROOT, 'dist', 'cli.js');
-/** The package's default entry, as built: what `@aws-blocks/bb-database` resolves to in local mode. */
+/** The package's default entry, as built: what `@aws-cdk-blocks/bb-database` resolves to in local mode. */
 export const PACKAGE_ENTRY = join(PACKAGE_ROOT, 'dist', 'index.mock.js');
 
 const FIXTURE_CA = join(PACKAGE_ROOT, 'test', 'fixtures', 'supabase-ca.crt');

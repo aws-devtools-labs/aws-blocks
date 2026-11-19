@@ -7,8 +7,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { config, secret } from '@aws-blocks/hosting';
-import { HostingError } from '@aws-blocks/hosting/constructs';
+import { config, secret } from '@aws-cdk-blocks/hosting';
+import { HostingError } from '@aws-cdk-blocks/hosting/constructs';
 import {
   _setSynthExistsChecker,
   _setSynthSecretFetcher,
@@ -16,7 +16,7 @@ import {
   type DoorInput,
   defineFrontDoor,
   type RouteBehavior,
-} from '@aws-blocks/hosting/constructs';
+} from '@aws-cdk-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token, aws_apigateway } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
@@ -1263,7 +1263,7 @@ describe('Hosting', () => {
       createSpaBuildOutput(tmpDir);
 
       // Synth has the same split as dispatch: a bundle can hold more than one
-      // copy of @aws-blocks/core, and this loop reads whichever route table
+      // copy of @aws-cdk-blocks/core, and this loop reads whichever route table
       // its own copy owns. Register the way a second copy would — straight
       // into the shared state, not through this copy's registerRoute() — and
       // the behavior must still be emitted. With a module-local registry it
@@ -3339,7 +3339,7 @@ describe('Hosting', () => {
     });
 
     it('outside a sandbox, `allowPlainHttp: true` synthesizes the plain-HTTP ALB door with an acknowledgeable production warning', () => {
-      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const ID = '@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction';
       const synthProd = (acknowledge: boolean) => {
         createSpaBuildOutput(tmpDir);
         const stack = new Stack(new App(), `AlbAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
@@ -3972,7 +3972,7 @@ describe('Hosting', () => {
     });
 
     it('`allowPlainHttp: true` lets an internet-facing router without a certificate synthesize outside a sandbox, with one acknowledgeable warning', () => {
-      const ID = '@aws-blocks/hosting:PlainHttpAllowedInProduction';
+      const ID = '@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction';
       const synthProd = (acknowledge: boolean) => {
         createSpaBuildOutput(tmpDir);
         const stack = new Stack(new App(), `StackedAllowPlainHttp${acknowledge}`, { env: { account: '111111111111', region: 'us-east-1' } });
@@ -4473,7 +4473,7 @@ describe('Hosting — skipping the frontend build', () => {
 });
 
 // A deploy synthesizes with `NODE_OPTIONS=--conditions=cdk`. `buildCommand`
-// must run without that condition, so a build that loads `@aws-blocks/*`
+// must run without that condition, so a build that loads `@aws-cdk-blocks/*`
 // doesn't get their CDK constructs, but with the user's other NODE_OPTIONS.
 describe('Hosting — buildCommand environment', () => {
   let tmpDir: string;

@@ -1,4 +1,4 @@
-# @aws-blocks/pipeline
+# @aws-cdk-blocks/pipeline
 
 CDK Pipelines-based CI/CD construct for AWS Blocks applications.
 
@@ -13,7 +13,7 @@ Creates one self-mutating CodePipeline V2 per branch. Each pipeline:
 
 <!-- doc-snippet: skip — MyAppStack stands for your app's own stack class -->
 ```ts
-import { Pipeline } from '@aws-blocks/pipeline';
+import { Pipeline } from '@aws-cdk-blocks/pipeline';
 
 new Pipeline(stack, 'Pipeline', {
   source: {

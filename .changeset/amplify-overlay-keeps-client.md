@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/create-blocks-app": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/create-blocks-app": patch
+"aws-cdk-blocks": patch
 ---
 
 fix: the Amplify overlay keeps its own `cdk-blocks/client.js` under `npm run dev`

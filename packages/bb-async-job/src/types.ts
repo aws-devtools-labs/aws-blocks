@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ComputeProvider } from '@aws-cdk-blocks/core/cdk/internal';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 /**
  * Context passed to the AsyncJob handler with metadata about the current job.

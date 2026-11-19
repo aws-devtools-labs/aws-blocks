@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 fix(create-blocks-app): load the generated client only after the dev server is ready in template e2e tests

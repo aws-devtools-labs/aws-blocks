@@ -1,4 +1,4 @@
-# @aws-blocks/bb-logger
+# @aws-cdk-blocks/bb-logger
 
 Structured logging with consistent JSON format, log levels, and contextual metadata.
 
@@ -19,8 +19,8 @@ Structured logging with consistent JSON format, log levels, and contextual metad
 ## Quick Start
 
 ```typescript
-import { Scope } from '@aws-blocks/core';
-import { Logger } from '@aws-blocks/bb-logger';
+import { Scope } from '@aws-cdk-blocks/core';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
 
 const scope = new Scope('my-app');
 const log = new Logger(scope, 'app');
@@ -130,7 +130,7 @@ To change retention, set `logRetention` on the stack-wide `defaults` (it applies
 to every compute's handler log group):
 
 ```typescript
-import { BlocksPresets } from '@aws-blocks/core/cdk';
+import { BlocksPresets } from '@aws-cdk-blocks/core/cdk';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
 // In your cdk-blocks backend, override the preset's logRetention:
@@ -154,7 +154,7 @@ In local dev (`npm run dev`), the Logger BB:
 ## Errors
 
 ```typescript
-import { LoggingErrors } from '@aws-blocks/bb-logger';
+import { LoggingErrors } from '@aws-cdk-blocks/bb-logger';
 
 LoggingErrors.SerializationFailed // 'SerializationFailedException'
 ```

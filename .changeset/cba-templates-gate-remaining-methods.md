@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 fix(create-blocks-app): gate the remaining public template methods and git-ignore secrets when adding Blocks to an existing project

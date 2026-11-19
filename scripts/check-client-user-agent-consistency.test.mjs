@@ -51,7 +51,7 @@ function runGuard(dir) {
 	}
 }
 
-const INSTALLED = `import { installClientUserAgent } from '@aws-blocks/core';
+const INSTALLED = `import { installClientUserAgent } from '@aws-cdk-blocks/core';
 const client = new DynamoDBClient({ customUserAgent: this.buildUserAgentChain() });
 installClientUserAgent(client);
 `;

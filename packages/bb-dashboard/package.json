@@ -1,5 +1,5 @@
 {
-  "name": "@aws-blocks/bb-dashboard",
+  "name": "@aws-cdk-blocks/bb-dashboard",
   "version": "0.3.0",
   "keywords": [
     "aws-blocks",
@@ -42,10 +42,10 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.8.0"
+    "@aws-cdk-blocks/core": "^0.8.0"
   },
   "devDependencies": {
-    "@aws-blocks/bb-lambda-compute": "^0.7.0",
+    "@aws-cdk-blocks/bb-lambda-compute": "^0.7.0",
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3"
   },

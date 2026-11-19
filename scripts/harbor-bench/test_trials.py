@@ -222,7 +222,7 @@ def result(arm, statuses, tokens=100, seconds=60, storage='kv_store'):
         phases.append(phase)
     return {'arm': arm, 'harbor_exit_code': 0, 'same_session': True, 'phases': phases, 'storage': storage,
             'status': 'passed' if all(s == 'passed' for s in statuses) else 'failed',
-            'packages': [{'name': '@aws-blocks/core', 'integrity': 'sha512-x'}]}
+            'packages': [{'name': '@aws-cdk-blocks/core', 'integrity': 'sha512-x'}]}
 
 
 def write(root, arm, trial, value):
@@ -480,7 +480,7 @@ class PublicResultTests(unittest.TestCase):
             'file_bucket': {backend: 'const files = new FileBucket(scope, "files");'},
             'multiple': {backend: 'new KVStore(scope, "a")', 'todo-app/cdk-blocks/files.ts': 'new FileBucket(s, "f")'},
             # Imports and types are not use; generated JS, dependencies and frontend code are not the backend.
-            'none': {backend: 'import { KVStore } from "@aws-blocks/blocks";\ntype Store = KVStore<string>;',
+            'none': {backend: 'import { KVStore } from "aws-cdk-blocks";\ntype Store = KVStore<string>;',
                      'todo-app/cdk-blocks/index.js': 'new Database(scope, "db")',
                      'todo-app/cdk-blocks/node_modules/x/index.ts': 'new KVStore(scope, "x")',
                      'todo-app/src/main.ts': 'new FileBucket(scope, "f")'},

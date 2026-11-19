@@ -6,7 +6,7 @@ methods, profile attributes, password change and sign-out everywhere. Backed by
 Amazon Cognito once deployed; fully local with `npm run dev`. Vite + vanilla DOM
 frontend.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template auth`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template auth`
 > (`--template auth-cognito` is an alias for `auth`).
 
 ## Getting Started

@@ -84,7 +84,7 @@ function fixtureWarnings(warnings: readonly string[], root: string): string[] {
 /** Every specifier the fixtures install, so a name collision with `ambient` is caught here. */
 const FIXTURE_SPECIFIERS = [
 	'.cache',
-	'@aws-blocks/blocks',
+	'aws-cdk-blocks',
 	'@example/alpha',
 	'@example/bb-iot',
 	'@example/broken',
@@ -171,8 +171,8 @@ describe('readNativeDeclarations', () => {
 
 	it('skips a package whose aws-blocks namespace has no native key', () => {
 		const root = makeApp();
-		installPackage(root, '@aws-blocks/blocks', {
-			'aws-blocks': { vendorize: { '@aws-blocks/bb-realtime': ['Realtime'] } },
+		installPackage(root, 'aws-cdk-blocks', {
+			'aws-blocks': { vendorize: { '@aws-cdk-blocks/bb-realtime': ['Realtime'] } },
 		});
 
 		assert.deepStrictEqual(sourcesFrom(foundationOf(root)), []);
@@ -609,9 +609,9 @@ describe('readNativeDeclarations', () => {
 		// A dependency string, the scaffolded keyword, and a scoped name all contain
 		// `aws-blocks` without declaring anything, so none of them may abort.
 		for (const [label, contents] of [
-			['dependency string', '{ "name": "u", "dependencies": { "@aws-blocks/core": "^1" }, '],
+			['dependency string', '{ "name": "u", "dependencies": { "@aws-cdk-blocks/core": "^1" }, '],
 			['scaffolded keyword', '{ "name": "k", "keywords": ["aws-blocks"], '],
-			['scoped package name', '{ "name": "@aws-blocks/bb-x", "version": "1.0.0", '],
+			['scoped package name', '{ "name": "@aws-cdk-blocks/bb-x", "version": "1.0.0", '],
 		] as const) {
 			const root = makeApp();
 			installRawManifest(root, '@example/mentions', contents);

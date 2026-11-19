@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, synthGuard } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { ExternalMetricsRef, MetricsOptions } from './types.js';
 import { externalMetricsRef } from './from-existing.js';
 
@@ -56,7 +56,7 @@ export class Metrics extends Scope {
 		return externalMetricsRef(namespace);
 	}
 
-	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-cdk-blocks/core/cdk`).
 	emit(..._args: unknown[]): never { return synthGuard('Metrics', 'emit'); }
 	emitBatch(..._args: unknown[]): never { return synthGuard('Metrics', 'emitBatch'); }
 	flush(..._args: unknown[]): never { return synthGuard('Metrics', 'flush'); }

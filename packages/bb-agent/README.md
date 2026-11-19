@@ -1,4 +1,4 @@
-# @aws-blocks/bb-agent
+# @aws-cdk-blocks/bb-agent
 
 AI agent with streaming, tool calling, and conversation persistence. Powered by [Strands Agents SDK](https://strandsagents.com/).
 
@@ -11,8 +11,8 @@ AI agent with streaming, tool calling, and conversation persistence. Powered by 
 ## Quick Start
 
 ```typescript
-import { Scope } from '@aws-blocks/core';
-import { Agent } from '@aws-blocks/bb-agent';
+import { Scope } from '@aws-cdk-blocks/core';
+import { Agent } from '@aws-cdk-blocks/bb-agent';
 
 const scope = new Scope('my-app');
 
@@ -102,7 +102,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 **`sessionScope: 'shared'` opts out.** The session is then keyed by the `conversationId` alone and the channel by the bare `channelId`: anyone who passes the same `conversationId` continues that session, and anyone who passes the same `channelId` receives its chunks. Use it only when your app never lets a caller choose the `conversationId` or `channelId` (for example, the server generates them and keeps them to itself). `stream()` doesn't need a `userId` in this mode, and `resume()` throws `AgentErrors.InvalidUsage`: a session with no owner can't tell who may approve its pending tool calls. For the same reason, the constructor throws `AgentErrors.InvalidModelConfig` when a tool sets `needsApproval` or `interrupt`, so an agent with approval steps needs `'user'` or persistence. Switching an existing agent between `'shared'` and `'user'` starts new sessions; sessions stored under the other key are not resumed.
 
-These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session user's `userSub` and don't spread a caller-supplied object into it (`{ userId: user.userSub, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userSub }` or pick only `limit`). Pass `user.userSub` rather than `user.userId`: `AuthenticatedUser` (from `@aws-blocks/bb-auth`) documents `userSub` as the id to key your data on, stable for the user's lifetime, while `userId` is the username for a user-pool user. `listConversations(userId)` returns only the conversations a user owns:
+These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session user's `userSub` and don't spread a caller-supplied object into it (`{ userId: user.userSub, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userSub }` or pick only `limit`). Pass `user.userSub` rather than `user.userId`: `AuthenticatedUser` (from `@aws-cdk-blocks/bb-auth`) documents `userSub` as the id to key your data on, stable for the user's lifetime, while `userId` is the username for a user-pool user. `listConversations(userId)` returns only the conversations a user owns:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -235,7 +235,7 @@ Model configuration is optional. When omitted, the agent defaults to `BedrockMod
 | `guardrail` | `{ identifier, version, trace? }` | Bedrock only. Attach an existing Amazon Bedrock guardrail to every model call. See [Bedrock Guardrails](#bedrock-guardrails). |
 
 ```typescript
-import { Agent } from '@aws-blocks/bb-agent';
+import { Agent } from '@aws-cdk-blocks/bb-agent';
 
 // Minimal — just deployed model, canned provider used locally automatically
 const agent = new Agent(scope, 'agent', {
@@ -281,7 +281,7 @@ Pre-configured model presets for quick setup. Names are capability-based so the 
 All the presets are **Anthropic** models. Before first use in an AWS account, submit Anthropic's one-time use case details form and activate the model's one-time AWS Marketplace subscription — see [AWS Credentials (Bedrock)](#aws-credentials-bedrock).
 
 ```typescript
-import { Agent, BedrockModels} from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels} from '@aws-cdk-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   model: {
@@ -309,7 +309,7 @@ model: { deployed: { ...BedrockModels.BALANCED, inferenceConfig: { temperature: 
 Convenience shortcuts for local development using [Ollama](https://ollama.com/). Requires Ollama installed and running (`ollama serve`), model pulled (`ollama pull <model-id>`). Uses the default endpoint `http://localhost:11434/v1`.
 
 ```typescript
-import { Agent, BedrockModels, OllamaModels} from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels, OllamaModels} from '@aws-cdk-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   model: {
@@ -362,7 +362,7 @@ Health checks verify the model *exists* but cannot guarantee invoke access (e.g.
 To see detailed health check logs, pass a logger with `info` level:
 
 ```typescript
-import { Logger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
 
 const agent = new Agent(scope, 'agent', {
   model: { deployed: BedrockModels.BALANCED },
@@ -442,8 +442,8 @@ Only models that support the Chat Completions API (`/v1/chat/completions`) work 
 ### Error Handling
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { AgentErrors } from '@aws-blocks/bb-agent';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { AgentErrors } from '@aws-cdk-blocks/bb-agent';
 
 try {
   await agent.getConversation(id, { userId });
@@ -619,9 +619,9 @@ await agent.stream(message, { conversationId, userId, context: { userId, tenantI
 The `KnowledgeBase` BB can be used as an agent tool, giving the agent the ability to search documents on demand. The shortest safe form is `kb.asAgentTool()`: the model supplies only the query, a required `filter` callback derives the search scope from the tool context, and the tool is marked `untrustedOutput: true` (see [Use as an Agent tool](../bb-knowledge-base/README.md#use-as-an-agent-tool)):
 
 ```typescript
-import { Scope } from '@aws-blocks/core';
-import { Agent } from '@aws-blocks/bb-agent';
-import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { Scope } from '@aws-cdk-blocks/core';
+import { Agent } from '@aws-cdk-blocks/bb-agent';
+import { KnowledgeBase } from '@aws-cdk-blocks/bb-knowledge-base';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -643,8 +643,8 @@ const agent = new Agent(scope, 'assistant', {
 Or write the tool yourself:
 
 ```typescript
-import { Agent } from '@aws-blocks/bb-agent';
-import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { Agent } from '@aws-cdk-blocks/bb-agent';
+import { KnowledgeBase } from '@aws-cdk-blocks/bb-knowledge-base';
 import { z } from 'zod';
 
 const kb = new KnowledgeBase(scope, 'docs', {
@@ -763,7 +763,7 @@ The Agent BB works without a frontend — for scripts, background jobs, or serve
 ### Without tool approval
 
 ```typescript
-import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels } from '@aws-cdk-blocks/bb-agent';
 
 const agent = new Agent(scope, 'summarizer', {
   model: { deployed: BedrockModels.BALANCED },
@@ -781,7 +781,7 @@ console.log(done.text);
 When tools have `needsApproval: true`, `complete()` throws an `InterruptError`. Handle it programmatically:
 
 ```typescript
-import { Agent, BedrockModels, InterruptError } from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels, InterruptError } from '@aws-cdk-blocks/bb-agent';
 import { z } from 'zod';
 
 const refundBot = new Agent(scope, 'refunds', {
@@ -932,12 +932,12 @@ tools: (tool) => ({
 
 ## Client API — `createChat` (recommended)
 
-Import from `@aws-blocks/bb-agent/client`. `createChat` is the **compute-agnostic** client API: the runtime (Lambda + Realtime today, others later) is hidden behind a single **transport**, so your call sites never name it. The common case is one call — `chat.sendMessage('Hello')` — with no channel dance and no subscribe-before-send race (subscribe and run are fused).
+Import from `@aws-cdk-blocks/bb-agent/client`. `createChat` is the **compute-agnostic** client API: the runtime (Lambda + Realtime today, others later) is hidden behind a single **transport**, so your call sites never name it. The common case is one call — `chat.sendMessage('Hello')` — with no channel dance and no subscribe-before-send race (subscribe and run are fused).
 
 You configure the transport **once**. For the current Lambda + Realtime runtime, use `realtimeTransport` — copy-paste this wiring and only change your API method names:
 
 ```typescript
-import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
+import { createChat, realtimeTransport } from '@aws-cdk-blocks/bb-agent/client';
 
 const transport = realtimeTransport({
   // Subscribe to a Realtime channel — the hydrated channel handle comes from your getChannel RPC.
@@ -994,7 +994,7 @@ You get all of this with **no app code** when you use `realtimeTransport` — it
 'use client'; // Next.js only — createChat opens a browser WebSocket, so it must run in a Client Component. Plain React (Vite/CRA) can omit this.
 
 import { useRef, useState, useEffect } from 'react';
-import { createChat, realtimeTransport, type ChatMessage } from '@aws-blocks/bb-agent/client';
+import { createChat, realtimeTransport, type ChatMessage } from '@aws-cdk-blocks/bb-agent/client';
 import { api } from 'cdk-blocks'; // your typed backend client
 
 export function Chat() {
@@ -1096,10 +1096,10 @@ Key points:
 
 > **Deprecated — prefer [`createChat`](#client-api--createchat-recommended).** `useChat` couples call sites to the Realtime channel mechanism (you hand-write a `subscribe` callback and an `api` adapter). `createChat` replaces the `subscribe` callback with a single `transport` and fuses subscribe + run. `useChat` is kept for backward compatibility. The reconnect-recovery contract below applies to both surfaces — with `createChat`, `realtimeTransport` forwards these reconnect callbacks automatically, so you don't hand-write the `subscribe` adapter.
 
-Import from `@aws-blocks/bb-agent/client`. Manages conversation state, streaming subscriptions, and interrupt handling. Handles the subscribe-before-send ordering automatically.
+Import from `@aws-cdk-blocks/bb-agent/client`. Manages conversation state, streaming subscriptions, and interrupt handling. Handles the subscribe-before-send ordering automatically.
 
 ```typescript
-import { useChat } from '@aws-blocks/bb-agent/client';
+import { useChat } from '@aws-cdk-blocks/bb-agent/client';
 
 const chat = useChat({
   api: {
@@ -1135,10 +1135,10 @@ Complete wiring showing the backend API and frontend `useChat` connected togethe
 **Backend** (`cdk-blocks/index.ts`):
 
 ```typescript
-import { Scope, ApiNamespace } from '@aws-blocks/core';
-import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
-import type { InterruptResponse } from '@aws-blocks/bb-agent';
-import { Auth } from '@aws-blocks/bb-auth';
+import { Scope, ApiNamespace } from '@aws-cdk-blocks/core';
+import { Agent, BedrockModels } from '@aws-cdk-blocks/bb-agent';
+import type { InterruptResponse } from '@aws-cdk-blocks/bb-agent';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('my-app');
 
@@ -1184,7 +1184,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 **Frontend** (`app.ts`):
 
 ```typescript
-import { useChat } from '@aws-blocks/bb-agent/client';
+import { useChat } from '@aws-cdk-blocks/bb-agent/client';
 
 const chat = useChat({
   api: {
@@ -1223,7 +1223,7 @@ The example above is framework-agnostic on purpose — `useChat` has no React im
 'use client'; // Next.js only — see the note below. Plain React (Vite/CRA) can omit this.
 
 import { useRef, useState, useEffect } from 'react';
-import { useChat, type ChatMessage } from '@aws-blocks/bb-agent/client';
+import { useChat, type ChatMessage } from '@aws-cdk-blocks/bb-agent/client';
 import { api } from './api'; // your generated cdk-blocks API client
 
 export function Chat() {
@@ -1301,9 +1301,9 @@ Key points:
 Agent with tools that can look up orders and search documentation. Uses tool context to scope queries to the authenticated user.
 
 ```typescript
-import { Scope, ApiNamespace } from '@aws-blocks/core';
-import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
-import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { Scope, ApiNamespace } from '@aws-cdk-blocks/core';
+import { Agent, BedrockModels } from '@aws-cdk-blocks/bb-agent';
+import { KnowledgeBase } from '@aws-cdk-blocks/bb-knowledge-base';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');

@@ -32,7 +32,7 @@ env:
 
 jobs:
   # Build + pack the whole monorepo to a local npm registry ONCE per run, handed to every cell
-  # as the dist-registry/ artifact (cells resolve @aws-blocks/* from the packed .tgz, not symlinks,
+  # as the dist-registry/ artifact (cells resolve @aws-cdk-blocks/* from the packed .tgz, not symlinks,
   # so every cell tests byte-identical packages). Replaces the per-cell monorepo rebuild. No AWS.
   build-blocks:
     name: build blocks (pack dist-registry once)

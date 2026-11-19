@@ -20,8 +20,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthActionInput, AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { AuthActionInput, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 import { clientMessageFor } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';

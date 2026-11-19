@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/hosting": patch
+"@aws-cdk-blocks/hosting": patch
 ---
 
 docs: the Hosting README describes the installed version

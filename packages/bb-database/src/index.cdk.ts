@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
-import { markBlocksOwned } from '@aws-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import { markBlocksOwned } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { connectionParameterName } from './constants.js';
 import { ClusterInfra, ownedDsqlClusterLogicalId } from './deploy/cluster-infra.js';
@@ -89,11 +89,11 @@ export class DatabaseCluster extends BuildingBlockScope {
 }
 
 /**
- * The Aurora cluster of `Database` in `@aws-blocks/bb-data` 0.5.0; see the local entry for the full
+ * The Aurora cluster of `Database` in `@aws-cdk-blocks/bb-data` 0.5.0; see the local entry for the full
  * description. Declares the VPC, the security group, the cluster with its writer and its credentials secret
  * as that block did, under the same logical ids, so a deploy changes none of them.
  *
- * @deprecated Only for an app that deployed `Database` of `@aws-blocks/bb-data`.
+ * @deprecated Only for an app that deployed `Database` of `@aws-cdk-blocks/bb-data`.
  */
 export class LegacyDatabaseCluster extends BuildingBlockScope {
 	/** The engine of the cluster: Aurora PostgreSQL. */

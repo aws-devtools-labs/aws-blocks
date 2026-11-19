@@ -5,7 +5,7 @@
  * Shared types for Email. Imported by mock, aws, cdk, and browser entry points.
  * This file has zero runtime dependencies — types only.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 /**
  * Configuration options for the Email building block instance.
@@ -21,14 +21,14 @@ export interface EmailOptions {
 	 * Must be on a domain SES can verify. An address on a reserved domain
 	 * (`example.com`, `example.net`, `example.org` and their subdomains, or under
 	 * `.test`, `.example`, `.invalid` or `.localhost`) can never be verified, so
-	 * synth adds the warning `@aws-blocks/bb-email-client:UnverifiableSender`.
+	 * synth adds the warning `@aws-cdk-blocks/bb-email-client:UnverifiableSender`.
 	 */
 	fromAddress: string;
 	/**
 	 * Optional reply-to address(es).
 	 *
 	 * An address on a reserved domain adds the synth warning
-	 * `@aws-blocks/bb-email-client:UndeliverableReplyTo`.
+	 * `@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`.
 	 */
 	replyTo?: string[];
 	/** Optional SES configuration set name for tracking/events. */

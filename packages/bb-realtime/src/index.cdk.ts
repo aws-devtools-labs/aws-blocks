@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @aws-blocks/bb-realtime — CDK construct.
+ * @aws-cdk-blocks/bb-realtime — CDK construct.
  *
  * Provisions a shared API Gateway WebSocket API with a DynamoDB connections
  * table (via KVStore) for channel-based pub/sub. All WebSocket
@@ -19,12 +19,12 @@ import { WebSocketApi, WebSocketStage, LogGroupLogDestination } from 'aws-cdk-li
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { frameworkKey } from '@aws-blocks/bb-secret/internal';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import type { ScopeParent } from '@aws-blocks/core';
+import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, getOrCreateOnRoot } from '@aws-cdk-blocks/core/cdk';
+import { registerConfig } from '@aws-cdk-blocks/core/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import { frameworkKey } from '@aws-cdk-blocks/bb-secret/internal';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
 import { RealtimeErrors } from './errors.js';

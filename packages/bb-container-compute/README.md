@@ -1,4 +1,4 @@
-# @aws-blocks/bb-container-compute
+# @aws-cdk-blocks/bb-container-compute
 
 The container-backed **compute** for AWS Blocks: an AWS Fargate service (ARM64)
 that runs the app's backend as a long-lived process. It self-starts the SQS
@@ -6,8 +6,8 @@ pollers for the `AsyncJob`s and `CronJob`s assigned to it, and serves any
 `ApiNamespace` routed to it through an internal Application Load Balancer.
 
 > **Internal package.** You don't construct `ContainerCompute` yourself. The
-> public `Compute` Building Block (`@aws-blocks/bb-compute`, re-exported from
-> `@aws-blocks/blocks`) builds one when you pass `type: 'container'`. Use
+> public `Compute` Building Block (`@aws-cdk-blocks/bb-compute`, re-exported from
+> `aws-cdk-blocks`) builds one when you pass `type: 'container'`. Use
 > `Compute`, and see the [bb-compute README](../bb-compute/README.md) for the
 > customer-facing options.
 
@@ -15,10 +15,10 @@ pollers for the `AsyncJob`s and `CronJob`s assigned to it, and serves any
 
 ## Installation
 
-You get this package through `@aws-blocks/blocks`, which depends on it:
+You get this package through `aws-cdk-blocks`, which depends on it:
 
 ```bash
-npm install @aws-blocks/blocks
+npm install aws-cdk-blocks
 ```
 
 ## Quick start
@@ -26,7 +26,7 @@ npm install @aws-blocks/blocks
 Ask for a container through `Compute`, then hand it to a workload:
 
 ```ts
-import { AsyncJob, Compute, Scope } from '@aws-blocks/blocks';
+import { AsyncJob, Compute, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 
@@ -66,7 +66,7 @@ new AsyncJob(scope, 'reports', {
 
 ## What it provides
 
-`ContainerCompute` extends the `Compute` base class from `@aws-blocks/core`. At
+`ContainerCompute` extends the `Compute` base class from `@aws-cdk-blocks/core`. At
 synth it provisions:
 
 - A Fargate task definition and service (ARM64), sized from `size`, using the
@@ -93,7 +93,7 @@ the `defaults.vpc.subnets` you choose).
 | `ContainerCompute.isContainerCompute(x)` | `boolean` | Type guard that works across duplicate package copies (CDK layer). |
 
 Every member except `setEnv` exists only on the CDK export
-(`@aws-blocks/bb-container-compute/cdk`).
+(`@aws-cdk-blocks/bb-container-compute/cdk`).
 
 `service` and `taskDefinition` are `undefined` when the backend module path
 can't be discovered (for example, in isolated unit tests).
@@ -191,7 +191,7 @@ the compute or the namespace path at fault:
   characters), or two namespace paths that map to the same load balancer rule
   priority. Rename the export.
 
-Synth warns (`@aws-blocks/bb-container-compute:api-rule-quota`) when more than
+Synth warns (`@aws-cdk-blocks/bb-container-compute:api-rule-quota`) when more than
 100 container API namespaces share one load balancer, its default listener-rule
 quota.
 

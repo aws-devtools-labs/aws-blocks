@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { CronJobErrors } from './errors.js';
 import { parseScheduleForMock, validateSchedule, validateTimezone } from './schedule.js';
 

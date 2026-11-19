@@ -8,15 +8,15 @@
  * values (no `const`, `function` or `class`), so every entry point — mock,
  * AWS, CDK and browser — can re-export it without pulling in runtime code.
  *
- * Status: published as `@aws-blocks/bb-auth` and exported from the
- * `@aws-blocks/blocks` umbrella. The option groups and the gated method surface
+ * Status: published as `@aws-cdk-blocks/bb-auth` and exported from the
+ * `aws-cdk-blocks` umbrella. The option groups and the gated method surface
  * below are the contract the runtime layers implement. `types-test.ts` is the compile-time proof
  * that the mode gates work and that `Auth<O>` stays covariant in `O`.
  */
 
-import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-cdk-blocks/auth-common';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
@@ -2061,7 +2061,7 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O
  * `getAuthState()`'s `actions`: `` `signIn:${id}` `` for each configured
  * provider id (`never` when there is none; `` `signIn:${string}` `` for the
  * wide `AuthOptions`). The action carries a `url`; the client navigates to it
- * rather than calling `setAuthState`. Narrows `@aws-blocks/bb-auth/ui`'s
+ * rather than calling `setAuthState`. Narrows `@aws-cdk-blocks/bb-auth/ui`'s
  * `AuthFederatedActionName` to this block's providers.
  *
  * @example
@@ -2085,7 +2085,7 @@ export type FederatedActionNameOf<O extends AuthOptions> = `signIn:${ProviderIdO
  *
  * @example
  * ```typescript
- * import { onAuthChange } from '@aws-blocks/bb-auth/ui';
+ * import { onAuthChange } from '@aws-cdk-blocks/bb-auth/ui';
  * import { authApi } from 'cdk-blocks';
  *
  * onAuthChange(authApi, (user) => {
@@ -2166,7 +2166,7 @@ export interface OidcClientDescriptor<P extends string = string> {
  * {@link OidcClientDescriptor}; a native SDK turns that into a live OIDC
  * client whose `signIn` takes only `P`. A browser receives the plain
  * descriptor: for a web frontend use `createAuthClient()` from
- * `@aws-blocks/bb-auth/browser-client` instead.
+ * `@aws-cdk-blocks/bb-auth/browser-client` instead.
  */
 export interface OidcClientHandle<P extends string = string> {
 	/** See {@link OidcClientDescriptor.providers}. */
@@ -2723,7 +2723,7 @@ export interface CognitoAuthMockOptions extends CognitoAuthOptions {
 	 * - `'rfc6238'` — the code must be the shared secret's RFC 6238 code
 	 *   (HMAC-SHA-1, 6 digits, 30 s steps, one step of clock skew either way),
 	 *   as Cognito and authenticator apps compute it. Compute one in a test
-	 *   with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils`.
+	 *   with `totpCodeFor(sharedSecret)` from `aws-cdk-blocks/utils`.
 	 *   Catches a wrong secret or `otpauth://` URI locally instead of only on a
 	 *   deployed pool.
 	 *
@@ -3777,7 +3777,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Browser redirect client (`@aws-blocks/bb-auth/browser-client`)
+// Browser redirect client (`@aws-cdk-blocks/bb-auth/browser-client`)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -3877,7 +3877,7 @@ export interface AuthClientOptions {
 /**
  * Redirect sign-in for a web frontend on another origin than the `Auth`
  * block's API. Created by `createAuthClient()` from
- * `@aws-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
+ * `@aws-cdk-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
  */
 export interface AuthClient<P extends string = string> {
 	/**

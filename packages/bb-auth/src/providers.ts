@@ -45,7 +45,7 @@ const STUB_CLIENT_ID = 'stub-client-id';
  * with `getDeploymentType()` so the stub is used only where it is allowed:
  *
  * ```ts
- * import { Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
+ * import { Auth, getDeploymentType, stubIdp } from 'aws-cdk-blocks';
  *
  * const corp = getDeploymentType() === 'production'
  *   ? { type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' } as const
@@ -63,7 +63,7 @@ const STUB_CLIENT_ID = 'stub-client-id';
  * A deployed stub's refresh tokens are self-contained and revocation is
  * remembered per Lambda instance only, so a revoked refresh token keeps
  * working on other instances until it expires (30 days). Synth emits a
- * `@aws-blocks/bb-auth:StubIdpDeployed` warning for every sandbox stub.
+ * `@aws-cdk-blocks/bb-auth:StubIdpDeployed` warning for every sandbox stub.
  *
  * @example
  * ```ts

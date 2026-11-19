@@ -3,7 +3,7 @@
 
 /**
  * The FileBucket option types a consumer needs to name are reachable from the
- * umbrella's default and `cdk` entries, not only from `@aws-blocks/bb-file-bucket`.
+ * umbrella's default and `cdk` entries, not only from `@aws-cdk-blocks/bb-file-bucket`.
  * Type-only: this file fails to compile if an export is missing.
  */
 import { test } from 'node:test';

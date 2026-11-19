@@ -6,8 +6,8 @@
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { MetricsErrors } from '@aws-blocks/bb-metrics';
+ * import { isBlocksError } from '@aws-cdk-blocks/core';
+ * import { MetricsErrors } from '@aws-cdk-blocks/bb-metrics';
  *
  * try {
  *   metrics.emit('', 1);

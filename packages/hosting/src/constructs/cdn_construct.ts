@@ -538,7 +538,7 @@ export class CdnConstruct extends Construct {
     const acceptLegacy = serverOriginOpts.acceptLegacyVerifyHeader === true;
     if (acceptLegacy) {
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:AcceptLegacyVerifyHeader',
+        '@aws-cdk-blocks/hosting:AcceptLegacyVerifyHeader',
         'Remove frontDoor.features.serverOrigin.acceptLegacyVerifyHeader after this deploy. While it is set, the ' +
           'server origin also accepts the origin-verify value derived from the stack name and construct path, and ' +
           'the SSR REST API stage gets no web ACL until the next deploy.',

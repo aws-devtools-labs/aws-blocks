@@ -23,9 +23,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
-import { ApiError } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { INCORRECT_CREDENTIALS_MESSAGE, WRONG_CODE_MESSAGE } from './enumeration.js';
 import {
 	ACCESS_DENIED_MESSAGE,
