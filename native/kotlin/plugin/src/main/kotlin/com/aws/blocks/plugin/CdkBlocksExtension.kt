@@ -12,7 +12,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
 
 /**
- * Configuration extension for the AWS CDK Blocks codegen plugin.
+ * Configuration extension for the AWS Blocks codegen plugin.
  *
  * Applied via the `cdkBlocks` block in a module's `build.gradle.kts`.
  */
