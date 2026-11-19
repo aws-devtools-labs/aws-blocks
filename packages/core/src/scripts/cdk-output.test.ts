@@ -118,6 +118,31 @@ describe('createCdkProgressReporter', () => {
     assert.strictEqual(out.text(), 'Stack | 2 | 10:00:06 AM | UPDATE_ROLLBACK_IN_PROGRESS | AWS::CloudFormation::Stack | Stack\n');
   });
 
+  it('prints synth warnings (location, message, construct path, acknowledgement) once each, on their stream', () => {
+    const out = collectingSink();
+    const err = collectingSink();
+    const reporter = createCdkProgressReporter(out, err);
+    const warning = [
+      'aws-blocks/index.cdk.ts:33:3',
+      "WARNING The 'alb' front door serves the app over plain HTTP (no certificate), so sign-in travels unencrypted.",
+      '   app-sandbox/Hosting/Hosting',
+      "   Acknowledge with 'Annotation::@aws-cdk-blocks/hosting:PlainHttpFrontDoor'",
+    ];
+    // `cdk deploy` synthesizes, and a sandbox synthesizes first: the same block arrives twice.
+    for (let i = 0; i < 2; i++) {
+      for (const line of ['[Blocks] IAM report: cdk.out/app.blocks-iam.json', ...warning, '']) reporter.line(line, 'stderr');
+      reporter.line("85 feature flags are not configured. Run 'cdk flags --unstable=flags' to learn more.", 'stderr');
+    }
+    reporter.line('[Warning at /App/Bucket] Bucket is public [ack: @aws-cdk-blocks/bb-file-bucket:Public]', 'stderr');
+    reporter.line('✨  Synthesis time: 0.5s', 'stdout');
+    reporter.finish(true);
+    assert.strictEqual(
+      err.text(),
+      [...warning, '[Warning at /App/Bucket] Bucket is public [ack: @aws-cdk-blocks/bb-file-bucket:Public]', ''].join('\n'),
+    );
+    assert.strictEqual(out.text(), '   Synthesizing app...\n');
+  });
+
   it('redraws one progress line in place on a TTY and clears it before the next full line', () => {
     const out = collectingSink();
     const reporter = createCdkProgressReporter(out, collectingSink(), { isTty: true, now: () => 0 });

@@ -659,13 +659,15 @@ At startup the dev server regenerates `cdk-blocks/client.js` from your backend. 
 
 ## Script output (`BLOCKS_LOG_LEVEL`)
 
-The lifecycle scripts in `@aws-cdk-blocks/core/scripts` (`deploy`, `destroy`, `startSandbox`, `destroySandbox`, `startDevServer`, which the generated `npm run deploy` / `sandbox` / `sandbox:destroy` / `destroy` / `dev` scripts call) read the `BLOCKS_LOG_LEVEL` environment variable to decide how much to print:
+The lifecycle scripts in `@aws-cdk-blocks/core/scripts` (`deploy`, `destroy`, `startSandbox`, `destroySandbox`, `startDevServer`, which the generated `npm run deploy` / `sandbox` / `sandbox:destroy` / `destroy` / `dev` scripts call) read the `BLOCKS_LOG_LEVEL` environment variable to decide how much to print.
+
+The generated scripts run these through the `aws-cdk-blocks` task runner, which sets `BLOCKS_LOG_LEVEL` for them: `normal` by default, `quiet` with `--quiet`, `verbose` with `--verbose`, `debug` with `--debug`, or the value you set yourself (`BLOCKS_LOG_LEVEL=verbose npm run deploy`). So `normal` is what `npm run deploy` prints unless you choose another level. The "unset" row applies when your own code calls the scripts directly.
 
 | `BLOCKS_LOG_LEVEL` | What prints |
 |---|---|
 | unset (or any other value) | Everything: every progress step and the raw CDK output, as at `verbose`, plus the dev server's RPC error stack traces. |
-| `quiet` | Errors and final results only. CDK output is hidden while it runs. |
-| `normal` | Short progress steps and results. CDK output is condensed into a few lines (`Synthesizing app...`, a resource count); failure and rollback lines still print as they happen. |
+| `quiet` | Errors and final results only. CDK output, synth warnings included, is hidden while it runs. |
+| `normal` | Short progress steps and results. CDK output is condensed into a few lines (`Synthesizing app...`, a resource count); failure and rollback lines still print as they happen, and so does every synth warning (a CDK warning annotation, such as `@aws-cdk-blocks/hosting:PlainHttpFrontDoor`), once, with its construct path and how to acknowledge it. |
 | `verbose` | The same lines as unset: every progress step plus the raw CDK output (the dev server leaves out RPC error stack traces, see below). |
 | `debug` | `verbose` plus stack traces for errors the scripts catch and report as warnings. |
 

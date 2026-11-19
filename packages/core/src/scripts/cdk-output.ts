@@ -11,7 +11,8 @@
  *   keeps its existing relay.
  * - `normal`: the raw stream becomes a few milestones and a progress count
  *   ({@link createCdkProgressReporter}). Failure, rollback and error-shaped
- *   lines pass through verbatim, on the stream they arrived on.
+ *   lines pass through verbatim, on the stream they arrived on, and so does
+ *   each synth warning (a CDK warning annotation), once.
  * - `quiet`: no child output is shown while the operation runs.
  *
  * At `quiet` and `normal` every raw child line is kept in a bounded ring
@@ -119,6 +120,19 @@ export function isCdkFailureLine(line: string): boolean {
   );
 }
 
+/**
+ * The first line of a synth warning, as the CDK CLI prints a warning annotation
+ * (`Annotations.of(c).addWarningV2(id, message)`): `WARNING <message>` in current
+ * versions, `[Warning at /Stack/Path] <message>` in older ones.
+ */
+const WARNING_START_LINE = /^(?:WARNING\s|\[Warning at \/)/;
+
+/** The source location the CDK CLI prints on the line before a warning (`aws-blocks/index.cdk.ts:33:3`). */
+const WARNING_LOCATION_LINE = /^\S+:\d+:\d+$/;
+
+/** A continuation of a warning: its construct path and `Acknowledge with '…'` line, indented. */
+const WARNING_CONTINUATION_LINE = /^\s+\S/;
+
 /** A pre-CloudFormation synth/bundling marker. */
 const SYNTH_LINE = /✨\s+Synthesis time:|\b(synthesi|bundling|building assets?)/i;
 
@@ -159,8 +173,10 @@ export interface CdkProgressReporter {
  * Every resource event is counted (a `*_COMPLETE` per logical id, or CDK's own
  * `N/M` counter when the stream has one), so it works for the production
  * `--progress events --ci` stream and the sandbox/destroy default stream.
- * Failure lines are written verbatim to the stream they came from; everything
- * else is dropped (the caller retains it for the failure dump).
+ * Failure lines are written verbatim to the stream they came from, and so is
+ * each synth warning (with the source location before it and its indented
+ * construct path and acknowledgement lines), once however many synths print it;
+ * everything else is dropped (the caller retains it for the failure dump).
  *
  * Adapted from the original CLI prototype's deploy-progress reporter.
  */
@@ -179,6 +195,12 @@ export function createCdkProgressReporter(
   let liveLine = false;
   let lastPiped = '';
   let lastPipedAt = Number.NEGATIVE_INFINITY;
+  // Synth warnings: the one being collected, the line before it (its source
+  // location), and the ones already printed. CDK prints each warning at every
+  // synth, and a sandbox or a deploy can synthesize more than once.
+  let warning: { lines: string[]; sink: OutputSink } | undefined;
+  let previousLine = '';
+  const printedWarnings = new Set<string>();
 
   const clearLive = (): void => {
     if (!liveLine) return;
@@ -210,9 +232,37 @@ export function createCdkProgressReporter(
     stdout.write(`   CloudFormation... ${tail}\n`);
   };
 
+  const flushWarning = (): void => {
+    if (!warning) return;
+    const text = warning.lines.join('\n');
+    if (!printedWarnings.has(text)) {
+      printedWarnings.add(text);
+      milestone(warning.sink, text);
+    }
+    warning = undefined;
+  };
+
   return {
     line(raw: string, from: 'stdout' | 'stderr'): void {
       const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      const before = previousLine;
+      previousLine = line.trim();
+      // Synth warnings print, unlike the rest of the synth output: a security
+      // warning (a plain-HTTP door, a stub identity provider) must not need
+      // `--verbose` to be seen. A warning ends at the first line that does not
+      // continue it.
+      if (warning && WARNING_CONTINUATION_LINE.test(line) && !parseCdkEventLine(line)) {
+        warning.lines.push(line.trimEnd());
+        return;
+      }
+      flushWarning();
+      if (WARNING_START_LINE.test(line)) {
+        warning = {
+          lines: [...(WARNING_LOCATION_LINE.test(before) ? [before] : []), line.trimEnd()],
+          sink: from === 'stderr' ? stderr : stdout,
+        };
+        return;
+      }
       if (line.trim() === '' || NOISE_LINE.test(line)) return;
       const event = parseCdkEventLine(line);
       if (isCdkFailureLine(line) || (event && isRollbackStatus(event.status))) {
@@ -247,6 +297,7 @@ export function createCdkProgressReporter(
       milestone(stdout, text);
     },
     finish(ok: boolean): void {
+      flushWarning();
       clearLive();
       if (!ok || !announcedEvents) return;
       const n = total ?? done();
