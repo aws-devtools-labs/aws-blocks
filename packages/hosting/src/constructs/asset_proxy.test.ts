@@ -82,7 +82,7 @@ const OBJECTS: Record<string, StoredObject> = {
     contentType: 'text/javascript',
     cacheControl: 'public, max-age=31536000, immutable',
   },
-  [`${PREFIX}/.cdk-blocks-sandbox/config.json`]: {
+  [`${PREFIX}/.blocks-sandbox/config.json`]: {
     body: '{}',
     contentType: 'application/json',
     cacheControl: 'max-age=60, must-revalidate',
@@ -140,7 +140,7 @@ for (const [label, generate, event] of variants) {
     });
 
     it("passes through the object's stored Cache-Control", async () => {
-      const config = await spa(event('/.cdk-blocks-sandbox/config.json'));
+      const config = await spa(event('/.blocks-sandbox/config.json'));
       assert.equal(config.statusCode, 200);
       assert.equal(config.headers['cache-control'], 'max-age=60, must-revalidate');
       const hashed = await spa(event('/assets/app-abc123.js'));

@@ -73,7 +73,7 @@ A separate `greet` test validates the sample API in a freshly scaffolded app.
 When you replace the sample API, update or delete that test to exercise your own methods.
 Add assertions for your own page content and behavior as you customize the app.
 To test an already-running app, set `TEST_URL` to its base URL; it must serve
-both the home page and `/.cdk-blocks-sandbox/config.json`. The sample API test uses
+both the home page and `/.blocks-sandbox/config.json`. The sample API test uses
 the API URL from that config, including when it points to a separate backend.
 
 ## Stack naming

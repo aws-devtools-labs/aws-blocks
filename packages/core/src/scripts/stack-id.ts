@@ -58,7 +58,7 @@ export function getStackId(projectRoot?: string): string {
 export function getSandboxId(projectRoot?: string): string {
   const root = projectRoot || process.cwd();
   // Before the get-or-create below can mint a NEW id: an app upgrading across the
-  // directory rename still has its id under the old name (D-030). Minting here
+  // directory rename still has its id under the old name (D-031). Minting here
   // would deploy to a different stack and orphan the customer's existing sandbox.
   migrateLegacySandboxDir(root);
   const filePath = join(root, BLOCKS_SANDBOX_DIR, 'sandbox-id.txt');
