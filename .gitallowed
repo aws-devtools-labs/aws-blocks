@@ -15,7 +15,7 @@
 
 # More synthetic account numbers already on main (NOT introduced by this
 # change): AWS's documented example account 111122223333 in
-# packages/bb-data/src/infra.test.ts, and 999999999999 in
+# packages/core/src/cdk/api-waf.test.ts, and 999999999999 in
 # scripts/ci/sweep-cognito-pools.test.mjs. Staging them in a merge from main
 # trips the account-id pattern and blocks the commit.
 111122223333
