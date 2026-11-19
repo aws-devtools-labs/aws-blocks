@@ -1,4 +1,4 @@
-# AWS Blocks Kotlin – Agent Guide
+# AWS CDK Blocks Kotlin – Agent Guide
 
 Context for AI coding agents working in this repository.
 

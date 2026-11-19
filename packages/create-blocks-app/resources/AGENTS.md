@@ -7,7 +7,7 @@
 - **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `aws-cdk-blocks`, along with the block's errors constant where it has one there (e.g. `KVStore`, `KVStoreErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `aws-cdk-blocks/client`.
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
 - **Script names:** In an existing project, look in `package.json` under `scripts` for the `aws-cdk-blocks/run` entry with the matching trailing command. Use its actual script name if an overlay preserved an existing name.
-- **AWS Blocks docs:** `npm run docs` is the docs command for this app's Building Blocks and AWS Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npm run docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`npm run docs KVStore -- --section local` for how it behaves on your machine), `npm run docs:api KVStore` prints exact signatures, `npm run docs -- --exports [filter]` lists what you can import and from which entry, `npm run docs:search <term>` searches all the docs, and `npm run docs -- --help` shows every option.
+- **AWS CDK Blocks docs:** `npm run docs` is the docs command for this app's Building Blocks and AWS CDK Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npm run docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`npm run docs KVStore -- --section local` for how it behaves on your machine), `npm run docs:api KVStore` prints exact signatures, `npm run docs -- --exports [filter]` lists what you can import and from which entry, `npm run docs:search <term>` searches all the docs, and `npm run docs -- --help` shows every option.
 
 ## Framework model
 
@@ -224,13 +224,13 @@ curl -X POST http://localhost:3000/cdk-blocks/api \
 - `params` is a positional array.
 - Errors return HTTP `200` with an `{"error":{...}}` body — check the body, not the status.
 - Auth is an `HttpOnly` session cookie: save it on sign-in with `curl -c cookies.txt` and resend it with `-b cookies.txt`.
-- More examples: `npm run docs troubleshooting` (see the **AWS Blocks docs** bullet above).
+- More examples: `npm run docs troubleshooting` (see the **AWS CDK Blocks docs** bullet above).
 
 ## Rules
 
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
 - **To store data, use `KVStore`** — for app records you list or query as a collection (todos, notes, orders), give the store a `schema` and a `key`; for values you read and write by one key (settings, flags, caches, sessions, per-user preferences), use it with no options. Decide before you create the store: a store cannot change its key. It is constructed with a `Scope` and used inside your API methods; read its docs (`npm run docs KVStore`, with `--api` for exact signatures) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is `npm run docs`.
-- **The framework model above covers the common path.** Read a block's own docs (`npm run docs <Block>...`, with `--api` for exact signatures) when you need a block's specific API surface (see the **AWS Blocks docs** bullet).
+- **The framework model above covers the common path.** Read a block's own docs (`npm run docs <Block>...`, with `--api` for exact signatures) when you need a block's specific API surface (see the **AWS CDK Blocks docs** bullet).
 
 ## Deploying (requires AWS credentials)
 
