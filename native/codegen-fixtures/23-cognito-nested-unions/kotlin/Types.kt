@@ -27,12 +27,12 @@ public data class AuthenticatedUser(
   public sealed class Groups {
     public abstract val `value`: String
 
-    public data object Admins : Groups() {
-      override val `value`: String = "admins"
-    }
-
     public data object Users : Groups() {
       override val `value`: String = "users"
+    }
+
+    public data object Admins : Groups() {
+      override val `value`: String = "admins"
     }
 
     public data class Unknown(
@@ -40,7 +40,7 @@ public data class AuthenticatedUser(
     ) : Groups()
 
     public companion object {
-      public val entries: List<Groups> by lazy { listOf(Admins, Users) }
+      public val entries: List<Groups> by lazy { listOf(Users, Admins) }
 
       public fun fromValue(`value`: String): Groups = entries.firstOrNull { it.value == value } ?: Unknown(value)
     }
