@@ -133,7 +133,7 @@ Future<void> _phase(
         state.state == AuthStateState.signedIn &&
             state.user?.username == username,
         'auth-basic still signed in as $username after the restart '
-        '(state=${state.state.name})',
+        '(state=${state.state.toJson()})',
       );
       expect(
         (await oidc()).state == AuthStateState.signedIn,
