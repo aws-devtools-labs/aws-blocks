@@ -59,6 +59,11 @@ const ALLOWLIST = [
 		reason: "Form action is this stub IdP's own authorize URL (stubIssuerUrl: the request's base URL or BLOCKS_API_URL plus a fixed path), so it always has an http(s) scheme.",
 	},
 	{
+		at: 'packages/bb-dashboard/src/local-dashboard.ts:25',
+		reason:
+			"`metrics` joins, per metrics source, `<h3>${escapeHtml(namespace)}</h3><ul>${names}</ul>` or '', and `names` joins `<li><code>${escapeHtml(name)}</code></li>`. This guard checks both templates (lines 12 and 13) on their own; it flags the join only because it follows `.map()` callbacks with an expression body, and this one has a block body.",
+	},
+	{
 		at: 'packages/core/src/scripts/dashboard.ts:152',
 		reason:
 			'Loopback dashboard URL this process built itself: `http://127.0.0.1:<port>` from the server it just started, plus a hex session token from randomBytes. No external input reaches it, and it is escaped for &, " and < before entering the attribute.',
