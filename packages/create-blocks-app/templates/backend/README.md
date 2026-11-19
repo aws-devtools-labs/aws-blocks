@@ -14,7 +14,7 @@ npm run sandbox     # Deploy to AWS sandbox
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: APIs and Building Blocks (the `api` namespace with `greet`) |
+| `cdk-blocks/index.ts` | Backend: APIs and Building Blocks (the `api` namespace with `greet`) |
 | `test/e2e.test.ts` | Tests: call the API through the typed client |
 
 ## Commands
@@ -36,7 +36,7 @@ After code changes, run `npm run typecheck`: `npm run test:e2e` does not type-ch
 
 ### RPC endpoint (local dev)
 
-Tests and TypeScript callers import the typed client (`import { api } from 'aws-blocks'`). Call the endpoint directly only to troubleshoot connectivity; `AGENTS.md` describes the request format and the error responses.
+Tests and TypeScript callers import the typed client (`import { api } from 'cdk-blocks'`). Call the endpoint directly only to troubleshoot connectivity; `AGENTS.md` describes the request format and the error responses.
 
 ```bash
 # The dev server's RPC endpoint is JSON-RPC 2.0 at POST /cdk-blocks/api:

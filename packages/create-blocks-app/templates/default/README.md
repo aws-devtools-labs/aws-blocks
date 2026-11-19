@@ -38,7 +38,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 ## Building on this template
 
-The test file (`test/e2e.test.ts`) has the sections App readiness, Auth, CRUD, Conditional writes (optimistic locking), Per-user isolation and Realtime. Add your own tests by copying a `test(...)` block and changing the assertion. The API methods in `aws-blocks/index.ts` follow a consistent pattern: authenticate → do work → broadcast.
+The test file (`test/e2e.test.ts`) has the sections App readiness, Auth, CRUD, Conditional writes (optimistic locking), Per-user isolation and Realtime. Add your own tests by copying a `test(...)` block and changing the assertion. The API methods in `cdk-blocks/index.ts` follow a consistent pattern: authenticate → do work → broadcast.
 
 ## Stack naming
 

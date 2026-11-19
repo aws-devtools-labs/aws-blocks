@@ -2,12 +2,12 @@
 
 ## Quick Reference
 
-- **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
-- **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
-- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `@aws-blocks/blocks`, along with the block's errors constant where it has one there (e.g. `KVStore`, `KVStoreErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `@aws-blocks/blocks/client`.
-- **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`. The file targets the starter API: when you change the API, update its tests to match (the build type-checks `test/`), and never delete `test/` or the `test:e2e` script.
-- **Script names:** In an existing project, look in `package.json` under `scripts` for the `@aws-blocks/blocks/run` entry with the matching trailing command. Use its actual script name if an overlay preserved an existing name.
-- **AWS Blocks docs:** `npm run docs` is the docs command for this app's Building Blocks and AWS Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npm run docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`npm run docs KVStore -- --section local` for how it behaves on your machine), `npm run docs:api KVStore` prints exact signatures, `npm run docs -- --exports [filter]` lists what you can import and from which entry, `npm run docs:search <term>` searches all the docs, and `npm run docs -- --help` shows every option.
+- **Backend:** `cdk-blocks/index.ts` — APIs, auth, data models
+- **Frontend:** `src/` — imports backend APIs via `import { api } from 'cdk-blocks'`
+- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `aws-cdk-blocks`, along with the block's errors constant where it has one there (e.g. `KVStore`, `KVStoreErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `aws-cdk-blocks/client`.
+- **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
+- **Script names:** In an existing project, look in `package.json` under `scripts` for the `aws-cdk-blocks/run` entry with the matching trailing command. Use its actual script name if an overlay preserved an existing name.
+- **AWS CDK Blocks docs:** `npm run docs` is the docs command for this app's Building Blocks and AWS CDK Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npm run docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`npm run docs KVStore -- --section local` for how it behaves on your machine), `npm run docs:api KVStore` prints exact signatures, `npm run docs -- --exports [filter]` lists what you can import and from which entry, `npm run docs:search <term>` searches all the docs, and `npm run docs -- --help` shows every option.
 
 ## Framework model
 
@@ -200,7 +200,7 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 
 ## Workflow
 
-1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
+1. Make changes to backend (`cdk-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on the dev port (`package.json` `"blocks.dev.port"`, see step 3), wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes. When a test run started its own server, it has stopped it by the time it exits, so there is nothing to stop or check afterwards. Get it passing before every `npm run deploy`; it exercises the API through the typed client, not the UI, so after a frontend change also check the page in a browser.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.

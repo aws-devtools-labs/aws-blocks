@@ -22,7 +22,7 @@ one. Schedules take `rate(<n> minutes|hours|days)` (one minute minimum) or a
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: the `heartbeat` and `paused` CronJobs, the `KVStore` of runs, the `api` namespace (`lastRun`) |
+| `cdk-blocks/index.ts` | Backend: the `heartbeat` and `paused` CronJobs, the `KVStore` of runs, the `api` namespace (`lastRun`) |
 | `test/e2e.test.ts` | Tests: call the API through the typed client |
 
 ## Commands
@@ -44,7 +44,7 @@ After code changes, run `npm run typecheck`: `npm run test:e2e` does not type-ch
 
 ### RPC endpoint (local dev)
 
-Tests and TypeScript callers import the typed client (`import { api } from 'aws-blocks'`). Call the endpoint directly only to troubleshoot connectivity; `AGENTS.md` describes the request format and the error responses.
+Tests and TypeScript callers import the typed client (`import { api } from 'cdk-blocks'`). Call the endpoint directly only to troubleshoot connectivity; `AGENTS.md` describes the request format and the error responses.
 
 ```bash
 # The dev server's RPC endpoint is JSON-RPC 2.0 at POST /cdk-blocks/api:

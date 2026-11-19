@@ -1,6 +1,6 @@
 # Blocks Demo App
 
-An example app on AWS Blocks that wires together `Auth`, `KVStore`,
+An example app on AWS CDK Blocks that wires together `Auth`, `KVStore`,
 `FileBucket`, `AppSetting`, `Secret`, `EmailClient`, `AsyncJob`,
 `KnowledgeBase`, `Database` and cookies. Vite + vanilla DOM frontend, no framework.
 
@@ -16,11 +16,11 @@ Open http://localhost:3000 after `npm run dev`.
 
 ## Before deploying to production
 
-Replace the `EMAIL_SENDER` constant in `aws-blocks/index.ts` with a verified
+Replace the `EMAIL_SENDER` constant in `cdk-blocks/index.ts` with a verified
 SES identity. Its placeholder works locally (the mock sends nothing), but it is
 on the reserved `.invalid` domain, which SES can never verify, so every send
 from it fails on AWS. Synth warns
-(`@aws-blocks/bb-email-client:UnverifiableSender`) until you do.
+(`@aws-cdk-blocks/bb-email-client:UnverifiableSender`) until you do.
 
 ## Project Structure
 

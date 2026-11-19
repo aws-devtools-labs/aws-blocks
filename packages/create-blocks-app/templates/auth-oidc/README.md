@@ -23,12 +23,12 @@ sandbox can sign in as the stub's users.
 
 ## Before deploying to production
 
-Synth refuses `stubIdp()` for production, so `aws-blocks/index.ts` picks the
+Synth refuses `stubIdp()` for production, so `cdk-blocks/index.ts` picks the
 provider with `getDeploymentType()`. Before `npm run deploy`:
 
 1. Replace the production entry's `issuer` and `clientId` with your IdP's
    (Okta, Entra ID, Auth0, any OIDC provider).
-2. Register `<your origin>/aws-blocks/auth/callback` as its redirect URI.
+2. Register `<your origin>/cdk-blocks/auth/callback` as its redirect URI.
 
 ## Project Structure
 

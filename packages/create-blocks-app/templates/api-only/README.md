@@ -81,7 +81,7 @@ curl -i http://localhost:3001/healthz
 
 ### RPC endpoint (local dev)
 
-Tests and TypeScript callers import the typed client (`import { api } from 'aws-blocks'`). Call the endpoint directly from a client in another language or to troubleshoot connectivity; `AGENTS.md` describes the request format, the error responses and the session cookie.
+Tests and TypeScript callers import the typed client (`import { api } from 'cdk-blocks'`). Call the endpoint directly from a client in another language or to troubleshoot connectivity; `AGENTS.md` describes the request format, the error responses and the session cookie.
 
 ```bash
 # The health check is public — no cookie needed:
@@ -94,14 +94,14 @@ curl -X POST http://localhost:3001/cdk-blocks/api \
 ## Adding a frontend later
 
 This template is backend-only. To add a frontend, add `Hosting` to
-`aws-blocks/index.cdk.ts` (`npm run docs Hosting`) and remove
+`cdk-blocks/index.cdk.ts` (`npm run docs Hosting`) and remove
 `"frontend": false` from the dev server settings in `package.json` (`AGENTS.md`
 describes them). For a wired example, scaffold the `react` template in another
 directory and compare its `package.json`, `vite.config.ts` and
-`aws-blocks/index.cdk.ts`:
+`cdk-blocks/index.cdk.ts`:
 
 ```bash
-npx @aws-blocks/create-blocks-app my-app --template react
+npx @aws-cdk-blocks/create-blocks-app my-app --template react
 ```
 
 ## For Agents

@@ -10,7 +10,7 @@ npm run test:e2e     # Run API tests
 npm run sandbox      # Deploy to AWS sandbox
 ```
 
-Open http://localhost:3000 after `npm run dev`. The dev server serves the React frontend and the backend (`/aws-blocks/*`) from a single origin.
+Open http://localhost:3000 after `npm run dev`. The dev server serves the React frontend and the backend (`/cdk-blocks/*`) from a single origin.
 
 **Signing up locally:** sign-up confirms the email address with a 6-digit code. Locally no email is sent, so the code is printed in the `npm run dev` terminal (`[auth] signUp code for …`). Enter it and you are signed in.
 

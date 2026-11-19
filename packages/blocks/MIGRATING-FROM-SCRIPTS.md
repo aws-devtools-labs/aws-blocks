@@ -1,6 +1,6 @@
-# Migrating an app from `cdk-blocks` and `aws-blocks/scripts`
+# Migrating an app from `cdk-blocks` and `cdk-blocks/scripts`
 
-What `npm run migrate` rewrites, keeps and deletes in an app whose scripts call the `cdk-blocks` executable or run generated `aws-blocks/scripts/*.ts` wrappers, when it refuses to run, and what it prints. How to run it, its exit codes and the two commands that behave differently afterwards are in the [`@aws-blocks/blocks` README](./README.md#migrating-an-existing-app).
+What `npm run migrate` rewrites, keeps and deletes in an app whose scripts call the `cdk-blocks` executable or run generated `cdk-blocks/scripts/*.ts` wrappers, when it refuses to run, and what it prints. How to run it, its exit codes and the two commands that behave differently afterwards are in the [`aws-cdk-blocks` README](./README.md#migrating-an-existing-app).
 
 ## Generated and customized wrappers
 
@@ -12,7 +12,7 @@ What `npm run migrate` rewrites, keeps and deletes in an app whose scripts call 
 
 ## Scripts
 
-- Migrate rewrites recognized generated task scripts to load `@aws-blocks/blocks/run` and adds missing task scripts.
+- Migrate rewrites recognized generated task scripts to load `aws-cdk-blocks/run` and adds missing task scripts.
 - For the older TypeScript wrappers, it rewrites a script only when both the command and the wrapper match a generated version.
 - It does not overwrite custom scripts to make room for new tasks.
 
@@ -25,7 +25,7 @@ Some generated scripts are kept and reported:
 
 To finish a kept `deploy` or `destroy`:
 
-1. Create `.blocks/config.json` with `{"stackId": "<id>"}`. `<id>-prod` must equal the name of the production stack that your `aws-blocks/index.cdk.ts` defines: an app whose `index.cdk.ts` hard-codes `'my-blocks-stack-prod'` uses `{"stackId": "my-blocks-stack"}`.
+1. Create `.blocks/config.json` with `{"stackId": "<id>"}`. `<id>-prod` must equal the name of the production stack that your `cdk-blocks/index.cdk.ts` defines: an app whose `index.cdk.ts` hard-codes `'my-blocks-stack-prod'` uses `{"stackId": "my-blocks-stack"}`.
 2. Commit it.
 3. Run `npm run migrate` again.
 
@@ -33,8 +33,8 @@ To finish a kept `deploy` or `destroy`:
 
 - The `port`, `frontendCommand`, `frontendPort` and `frontend` (`false` for a backend-only `server.ts`) of a generated `server.ts` move to `package.json#blocks.dev`, unless `blocks.dev` already exists.
 - `frontendCommand` is written only when `npm run dev` does not detect the same dev server from the app's dependencies (the detected command can add `--host 127.0.0.1`). A migrated default app gets `{"frontendPort": 3100}`, so `--frontend-port` works.
-- For the Amplify overlay's `server.ts`, migrate also sets `"generateClient": false`, so the dev server keeps the overlay's own `aws-blocks/client.js`.
-- An overlay from before it shipped a `server.ts` (0.1.0 to 0.1.15), which migrate tells by its generated `aws-blocks/scripts/generate-client.ts`, gets `{"port": 3001, "frontend": false, "generateClient": false}`.
+- For the Amplify overlay's `server.ts`, migrate also sets `"generateClient": false`, so the dev server keeps the overlay's own `cdk-blocks/client.js`.
+- An overlay from before it shipped a `server.ts` (0.1.0 to 0.1.15), which migrate tells by its generated `cdk-blocks/scripts/generate-client.ts`, gets `{"port": 3001, "frontend": false, "generateClient": false}`.
 
 ## Which wrappers are deleted
 
@@ -42,8 +42,8 @@ A generated wrapper is deleted once no script and no file that migrate reads use
 
 What counts as a use:
 
-- The wrapper's project path (`aws-blocks/scripts/deploy.ts`), or a relative path such as `import '../server.js'`.
-- In shell scripts, Dockerfiles, CI files and `package.json` scripts and fields, a bare `scripts/deploy.ts` or `deploy.ts` too, because they can run from another working directory (`working-directory: aws-blocks`, `cd aws-blocks/scripts && npx tsx typegen.ts`).
+- The wrapper's project path (`cdk-blocks/scripts/deploy.ts`), or a relative path such as `import '../server.js'`.
+- In shell scripts, Dockerfiles, CI files and `package.json` scripts and fields, a bare `scripts/deploy.ts` or `deploy.ts` too, because they can run from another working directory (`working-directory: cdk-blocks`, `cd cdk-blocks/scripts && npx tsx typegen.ts`).
 - The fields of the app's `package.json` other than `scripts`, such as a `lint-staged`, `simple-git-hooks` or `nodemonConfig` block that runs a wrapper. The wrapper is reported as used by `package.json#<field>`.
 
 Which files migrate reads in the app directory:
@@ -59,9 +59,9 @@ Which files migrate reads outside the app directory:
 - When the app is a subdirectory of its git repository (a monorepo): every `package.json` and every CI, shell, Make and Docker file that git tracks in the repository outside the app (`.github/workflows/*`, `scripts/deploy-web.sh`, `ci/Makefile`, a sibling workspace's `package.json`), except under `node_modules` and files over 1 MiB.
 - When the app is in a git submodule: those files of the superproject too.
 - In those files a path counts only when it names this app, so another app's workflow does not keep this app's wrappers:
-  - `apps/web/aws-blocks/scripts/deploy.ts`;
+  - `apps/web/cdk-blocks/scripts/deploy.ts`;
   - a path relative to the file;
-  - a bare `aws-blocks/scripts/deploy.ts` or `deploy.ts` in a file that changes into the app (`working-directory: apps/web`, `cd apps/web`, `cd "$(git rev-parse --show-toplevel)/apps/web"`, or `cd "$(dirname "$0")/../apps/web"` from the script's own directory).
+  - a bare `cdk-blocks/scripts/deploy.ts` or `deploy.ts` in a file that changes into the app (`working-directory: apps/web`, `cd apps/web`, `cd "$(git rev-parse --show-toplevel)/apps/web"`, or `cd "$(dirname "$0")/../apps/web"` from the script's own directory).
 - It reads nothing else outside the app directory.
 
 ## When migrate refuses
