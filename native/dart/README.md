@@ -289,7 +289,7 @@ The generated `Blocks` class takes two parameters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `baseUrl` | `String?` (`String` when the spec declares no server) | The spec's first server. Required when the spec declares no server. | The JSON-RPC endpoint, for example `http://localhost:3001/aws-blocks/api`. |
+| `baseUrl` | `String?` (`String` when the spec declares no server) | The spec's first server. Required when the spec declares no server. | The JSON-RPC endpoint, for example `http://localhost:3001/cdk-blocks/api`. |
 | `sessionStore` | `SessionStore?` | Platform default | Where session cookies are kept (see Sessions below). |
 
 To set the HTTP client, token store or bearer auth provider, pass a custom [`BlocksClient`](packages/blocks_runtime/README.md#blocksclient) to each generated API class instead.

@@ -32,7 +32,7 @@ This produces the `blocks.spec.json` file that the Gradle plugin reads at build 
 
 ## Configuring OIDC
 
-Sign-in goes through the shared backend's Google provider. The [backend README](../typescript/README.md#configuring-oidc) covers both ways to make it work: the stub IdP, which needs no credentials (a small change in the backend's `aws-blocks/index.ts`), and a Google OAuth client.
+Sign-in goes through the shared backend's Google provider. The [backend README](../typescript/README.md#configuring-oidc) covers both ways to make it work: the stub IdP, which needs no credentials (a small change in the backend's `cdk-blocks/index.ts`), and a Google OAuth client.
 
 Specific to this app:
 

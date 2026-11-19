@@ -8,7 +8,7 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 ```bash
 npm run dev         # Local dev: API on :3001 and the web frontend (long-running)
-npm run spec        # Write aws-blocks/blocks.spec.json for the Swift code generator (run after npm run dev has started)
+npm run spec        # Write cdk-blocks/blocks.spec.json for the Swift code generator (run after npm run dev has started)
 npm run typecheck   # Check TypeScript types (run after code changes)
 npm test            # typecheck, then the local e2e tests (starts its own dev server on :3001)
 npm run sandbox     # Deploy to AWS sandbox

@@ -27,14 +27,14 @@ npm run dev
 
 The server starts at `http://localhost:3001`. It serves the Blocks API (JSON-RPC) and the web frontend. Sign-up sends a verification code; locally no email is sent, and the dev-server console prints the code instead.
 
-`npm install` fetches `@aws-blocks/blocks` from npm. Until a release includes the `Auth` block, the published package can't build this backend. Inside the AWS Blocks repository, run it against the packages in your checkout instead:
+`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block, the published package can't build this backend. Inside the AWS CDK Blocks repository, run it against the packages in your checkout instead:
 
 1. Build the repository (`npm run build` at its root).
 2. Skip `npm install`. If you already ran it, remove `typescript-demo/node_modules`, which would shadow the checkout's packages.
-3. Link the app's own `aws-blocks` package (below), then `npm run dev`. Node resolves `@aws-blocks/*` and the tools from the repository's root `node_modules`.
+3. Link the app's own `cdk-blocks` package (below), then `npm run dev`. Node resolves `@aws-cdk-blocks/*` and the tools from the repository's root `node_modules`.
 
 ```bash
-mkdir -p node_modules && ln -sfn ../aws-blocks node_modules/aws-blocks
+mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
 ```
 
 ## 2. Generate the Spec File

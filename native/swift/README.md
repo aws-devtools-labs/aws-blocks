@@ -234,7 +234,7 @@ The sheet opens the provider's sign-in page; the backend's callback receives the
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `server` | The first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. | The server every API calls. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. |
+| `server` | The first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. | The server every API calls. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/cdk-blocks/api"))`. |
 | `session` | A `URLSession` the instance creates and releases. | Pass `session:` a `URLSession` you own; it stays yours. |
 | `tokenStore` | `InMemoryTokenStore()` | `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there. |
 

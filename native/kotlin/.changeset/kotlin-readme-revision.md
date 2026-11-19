@@ -7,7 +7,7 @@ docs(kotlin): add an "Errors" section to the README and correct the setup steps 
 Corrections:
 
 - The Android and KMP example READMEs said to run `npm install`, `npm run dev` and `npm run spec` from `example/typescript/aws-blocks`. The scripts are in `example/typescript`; both files now link to the backend README's "Running" section.
-- The same two files said sign-in has no fake-user fallback. They now name the two ways to sign in: the stub IdP, which needs no credentials but a small change in the backend's `aws-blocks/index.ts`, and a Google OAuth client.
+- The same two files said sign-in has no fake-user fallback. They now name the two ways to sign in: the stub IdP, which needs no credentials but a small change in the backend's `cdk-blocks/index.ts`, and a Google OAuth client.
 - The KMP example README said `App` constructs `Blocks()`. It constructs `Blocks` with `Blocks.defaultServer`.
 - The README's badge said Kotlin 2.2.10 while the build uses 2.2.21. The badge is removed; "Requirements" states the supported versions.
 

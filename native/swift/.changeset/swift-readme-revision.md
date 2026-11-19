@@ -12,7 +12,7 @@ Corrections:
 - The demo README told a reader with a physical device to deploy and "regenerate". It now names the command: `BLOCKS_SPEC_STAGE=production npm run spec` in place of step 2.
 - The demo README's folder tree omitted files the demo has. It is now two lines that name the two folders and what each holds.
 - The demo backend README's "Commands" omitted `npm run spec`, which the demo's step 2 runs.
-- The demo README's step 1 did not say that `npm install` fetches a published `@aws-blocks/blocks` without the `Auth` block the backend imports. It now says so, and how to run the backend against the packages of an AWS Blocks checkout until a release includes `Auth`.
+- The demo README's step 1 did not say that `npm install` fetches a published `aws-cdk-blocks` without the `Auth` block the backend imports. It now says so, and how to run the backend against the packages of an AWS CDK Blocks checkout until a release includes `Auth`.
 - The demo README listed `swift package generate-code-from-blocks-spec` as a way to generate the demo's code. From `native/swift/` that command generates into the package's own test targets; the README now says so and keeps the Xcode form, which reads `swift-demo/blocks.spec.json`.
 
 Added:
