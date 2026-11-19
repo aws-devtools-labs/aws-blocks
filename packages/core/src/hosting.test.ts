@@ -2375,7 +2375,7 @@ describe('Hosting', () => {
       const app = new App();
       const stack = new Stack(app, 'ShopProdStack', { env: { account: ACCOUNT, region: REGION } });
       const api: BlocksStackApi = {
-        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`,
       };
       new Hosting(stack, 'Hosting', { root: tmpDir, api });
 
@@ -2395,9 +2395,9 @@ describe('Hosting', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'ShopWebsiteStack', { env: { account: ACCOUNT, region: REGION } });
-      const publicApiUrl = 'https://d111111abcdef8.cloudfront.net/aws-blocks/api';
+      const publicApiUrl = 'https://d111111abcdef8.cloudfront.net/cdk-blocks/api';
       const api: BlocksStackApi = {
-        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`,
         publicApiUrl,
       };
       new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: 'none' });
@@ -2414,7 +2414,7 @@ describe('Hosting', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'ShopWebsiteDirectStack', { env: { account: ACCOUNT, region: REGION } });
-      const apiUrl = `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`;
+      const apiUrl = `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`;
       new Hosting(stack, 'Hosting', { root: tmpDir, api: { apiUrl }, frontDoor: 'none' });
 
       const { config, raw } = servedConfig(app, stack);
@@ -2430,7 +2430,7 @@ describe('Hosting', () => {
       const app = new App({ context: { sandboxMode: 'true' } });
       const stack = new Stack(app, 'ShopAlbStack', { env: { account: ACCOUNT, region: REGION } });
       const api: BlocksStackApi = {
-        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/aws-blocks/api`,
+        apiUrl: `https://abc123.execute-api.${REGION}.amazonaws.com/prod/cdk-blocks/api`,
       };
       new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: { kind: 'alb' } });
 

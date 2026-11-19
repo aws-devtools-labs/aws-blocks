@@ -198,7 +198,7 @@ void main() {
       store: FileTokenStore(applicationId: 'com.example.notes_cli'),
     ),
   );
-  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   print(client.sessionStore is PersistentSessionStore); // true
 }
 ```

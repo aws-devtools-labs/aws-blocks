@@ -98,7 +98,7 @@ void main() {
       expect(t.client.authState, isA<OidcSignedOut>());
       expect(
         await t.client.sessionStore.cookieHeaderFor(
-          Uri.parse('http://localhost:3000/aws-blocks/auth/session'),
+          Uri.parse('http://localhost:3000/cdk-blocks/auth/session'),
         ),
         isNull,
       );

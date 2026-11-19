@@ -14,7 +14,7 @@ final _device = <String, String>{};
 
 const _channel = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
 
-const _api = 'https://api.example.com/aws-blocks/api';
+const _api = 'https://api.example.com/cdk-blocks/api';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

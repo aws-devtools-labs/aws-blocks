@@ -33,7 +33,7 @@ class _FailingWrites extends InMemoryTokenStore {
 }
 
 void main() {
-  final api = Uri.parse('https://example.com/aws-blocks/api');
+  final api = Uri.parse('https://example.com/cdk-blocks/api');
 
   test('a warning that cannot be written does not stop later writes', () async {
     final stderr = _BrokenStderr();

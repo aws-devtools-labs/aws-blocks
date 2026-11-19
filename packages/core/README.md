@@ -242,12 +242,12 @@ cat .cdk-blocks-sandbox/config.production.json
 # → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api", "environment": "production" }
 #   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /cdk-blocks/api instead)
 curl https://<your-cloudfront-domain>/.cdk-blocks-sandbox/config.json
-# → {"apiUrl":"/aws-blocks/api","__blocksBuildId":"<build id>"}
+# → {"apiUrl":"/cdk-blocks/api","__blocksBuildId":"<build id>"}
 ```
 
 The deployed file is public on purpose, in every stage, production included: a browser has no other way to learn the API URL, and `cdk-blocks deploy --wait-live` polls it for `__blocksBuildId` to know the new build is live. Keep serving it; removing the `/.cdk-blocks-sandbox/*` route breaks every deployed page. The name says `sandbox` for historical reasons, not because only a sandbox serves it. Hosting writes only values the browser receives anyway:
 
-- `apiUrl`, only when Hosting has an `api`: the same-origin `/aws-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
+- `apiUrl`, only when Hosting has an `api`: the same-origin `/cdk-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
 - `__blocksBuildId`: an opaque id for the deploy (a timestamp plus random characters, or a hash of the build's content with `buildId: 'fixed'`).
 - Your `backendConfig`, if you set one. Everything in it is published as is (except `apiUrl` and `__blocksBuildId`, which Hosting sets over any key of the same name), so never put a secret or an internal identifier there. The same object is also set as the `BLOCKS_CONFIG` environment variable on SSR functions.
 

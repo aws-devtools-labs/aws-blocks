@@ -21,7 +21,7 @@ void main() {
   test('connection refused, through the real HTTP client', () async {
     final port = await _refusedPort();
     final client = BlocksClient(
-      baseUrl: 'http://127.0.0.1:$port/aws-blocks/api',
+      baseUrl: 'http://127.0.0.1:$port/cdk-blocks/api',
     );
     addTearDown(client.close);
     await expectLater(
@@ -46,7 +46,7 @@ void main() {
       await request.response.close();
     });
     final client = BlocksClient(
-      baseUrl: 'http://127.0.0.1:${server.port}/aws-blocks/api',
+      baseUrl: 'http://127.0.0.1:${server.port}/cdk-blocks/api',
     );
     addTearDown(client.close);
     await expectLater(
@@ -97,12 +97,12 @@ void main() {
       socket.destroy();
     });
     final client = OidcClient(
-      exchangePath: '/aws-blocks/auth/exchange',
-      refreshPath: '/aws-blocks/auth/refresh',
-      signOutPath: '/aws-blocks/auth/signout',
+      exchangePath: '/cdk-blocks/auth/exchange',
+      refreshPath: '/cdk-blocks/auth/refresh',
+      signOutPath: '/cdk-blocks/auth/signout',
       providers: ['google'],
       providerConfigs: {},
-      baseUrl: 'http://127.0.0.1:${server.port}/aws-blocks/api',
+      baseUrl: 'http://127.0.0.1:${server.port}/cdk-blocks/api',
       tokenStore: InMemoryTokenStore(),
     );
     await expectLater(

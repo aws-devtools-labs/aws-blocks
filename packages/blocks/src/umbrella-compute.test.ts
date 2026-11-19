@@ -209,7 +209,7 @@ describe('apiFrontDoor tier selection', () => {
 		assert.ok(apiUrl, 'expected an ApiUrl output');
 		const value = JSON.stringify(apiUrl.Value);
 		assert.ok(value.includes('execute-api'), `apigateway ApiUrl should be the gateway URL, got ${value}`);
-		assert.ok(value.includes('aws-blocks/api'), 'ApiUrl should carry the RPC prefix');
+		assert.ok(value.includes('cdk-blocks/api'), 'ApiUrl should carry the RPC prefix');
 	});
 
 	test('cloudfront provisions one CloudFront distribution whose origin is the shared gateway host', async () => {
@@ -510,22 +510,24 @@ describe('ApiNamespace compute option', () => {
 
 		// Routed by the export name, to the reports compute's function only.
 		const parts = Object.entries(resources).filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource');
-		const reportsResource = parts.find(([, r]) => r.Properties.PathPart === 'reports');
-		assert.ok(reportsResource, 'a /cdk-blocks/api/reports resource');
+		// One under /cdk-blocks/api and its legacy /aws-blocks/api twin.
+		const reportsIds = parts.filter(([, r]) => r.Properties.PathPart === 'reports').map(([id]) => id);
+		assert.strictEqual(reportsIds.length, 2, 'a /cdk-blocks/api/reports resource and its legacy twin');
 		assert.ok(!parts.some(([, r]) => r.Properties.PathPart === 'reportsApi'), 'not the constructor name');
-		const method = Object.values(resources).find(
-			(r) =>
-				r.Type === 'AWS::ApiGateway::Method' &&
-				(r.Properties.ResourceId as { Ref?: string }).Ref === reportsResource[0],
-		);
-		assert.ok(JSON.stringify(method?.Properties.Integration).includes(fnId), 'integrates the reports function');
+		for (const reportsId of reportsIds) {
+			const method = Object.values(resources).find(
+				(r) =>
+					r.Type === 'AWS::ApiGateway::Method' && (r.Properties.ResourceId as { Ref?: string }).Ref === reportsId,
+			);
+			assert.ok(JSON.stringify(method?.Properties.Integration).includes(fnId), 'integrates the reports function');
+		}
 
 		// Nothing else reaches the reports function: every other method (the default
 		// namespace's catch-alls included) integrates a different function.
 		const otherMethods = Object.values(resources).filter(
 			(r) =>
 				r.Type === 'AWS::ApiGateway::Method' &&
-				(r.Properties.ResourceId as { Ref?: string }).Ref !== reportsResource[0] &&
+				!reportsIds.includes((r.Properties.ResourceId as { Ref?: string }).Ref ?? '') &&
 				r.Properties.Integration !== undefined,
 		);
 		assert.ok(otherMethods.length > 0, 'the catch-all methods exist');
@@ -828,7 +830,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const methods = ofType(resources, 'AWS::ApiGateway::Method').filter(
 			([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK',
 		);
-		assert.strictEqual(methods.length, 2, 'render and preview');
+		assert.strictEqual(methods.length, 4, 'render and preview, under /cdk-blocks and the legacy /aws-blocks');
 	});
 
 	test('the apigateway tier adds no CloudFront pieces', async () => {
@@ -880,7 +882,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		assert.ok(patterns.includes('/cdk-blocks/api/*'), 'the RPC subtree reaches the gateway');
 		for (const type of ['AWS::CloudFront::VpcOrigin', 'Custom::AWS']) assert.strictEqual(ofType(hosted, type).length, 0, type);
 		const vpcLink = ofType(hosted, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
-		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
+		assert.strictEqual(vpcLink.length, 4, "the gateway's VPC link carries render and preview on both prefixes");
 	});
 
 	test("behind Hosting's stacked door, container namespaces stay on the gateway through the router", async () => {
@@ -904,7 +906,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		);
 		assert.deepStrictEqual(toBlocksLb, [], "no VPC origin to the containers' load balancer");
 		const vpcLink = ofType(hosted, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
-		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
+		assert.strictEqual(vpcLink.length, 4, "the gateway's VPC link carries render and preview on both prefixes");
 		// Created with the gateway, before Hosting picks its door (documented as unused here).
 		const lookups = ofType(hosted, 'Custom::AWS').filter(([, r]) => /DescribeManagedPrefixLists/.test(JSON.stringify(r.Properties)));
 		assert.strictEqual(lookups.length, 1, 'the prefix-list lookup');
@@ -949,7 +951,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		);
 		assert.deepStrictEqual(ofType(resources, 'AWS::CloudFront::Function').map(([id]) => id), gatewayStamps);
 		const vpcLink = ofType(resources, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
-		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
+		assert.strictEqual(vpcLink.length, 4, "the gateway's VPC link carries render and preview on both prefixes");
 		const warnings = isolatedWarning(stack);
 		assert.strictEqual(warnings.length, 1);
 		assert.match(String(warnings[0].entry.data), /'render', 'preview'|'preview', 'render'/);
