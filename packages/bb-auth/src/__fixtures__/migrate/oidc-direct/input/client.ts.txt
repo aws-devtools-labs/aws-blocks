@@ -1,5 +1,5 @@
 import '@aws-blocks/bb-auth-oidc/middleware';
-import { oidcAuthApi } from 'aws-blocks';
+import { oidcAuthApi } from 'cdk-blocks';
 
 export async function signIn(): Promise<void> {
 	const client = await oidcAuthApi.getClient();

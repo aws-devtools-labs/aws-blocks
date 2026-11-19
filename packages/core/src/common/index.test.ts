@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { buildingBlockParent, computeScopeFullId, OFFICIAL_BB_NAMES, Scope } from './index.js';
 import type { ScopeParent } from './index.js';
 import { CORE_VERSION } from '../version.js';
+import { BLOCKS_BACKEND_DIR, LEGACY_BLOCKS_BACKEND_DIR } from './constants.js';
 
 /**
  * Test subclass that exposes the protected buildUserAgentChain method.
@@ -566,5 +567,17 @@ describe('buildingBlockParent', () => {
 		assert.strictEqual(self.fullId, 'my-app-auth');
 		assert.strictEqual(new TestBB('sessions', { parent: self }).fullId, 'my-app-auth-sessions');
 		assert.strictEqual(computeScopeFullId({ id: 'sessions', parent: self }), 'my-app-auth-sessions');
+	});
+});
+
+// ── LEGACY_BLOCKS_BACKEND_DIR: pinned so a rename cannot sweep it up ────────
+describe('LEGACY_BLOCKS_BACKEND_DIR', () => {
+	test('is the historical directory name and never follows a rename', () => {
+		assert.strictEqual(LEGACY_BLOCKS_BACKEND_DIR, 'aws-blocks');
+		assert.notStrictEqual(LEGACY_BLOCKS_BACKEND_DIR, BLOCKS_BACKEND_DIR);
+	});
+
+	test('is the current directory name for every non-migrate command', () => {
+		assert.strictEqual(BLOCKS_BACKEND_DIR, 'cdk-blocks');
 	});
 });

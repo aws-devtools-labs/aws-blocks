@@ -22,7 +22,7 @@ function setting(id: string, declaration: Partial<BlockSettingDeclaration> = {})
 		id,
 		fullId: `shop-${id}`,
 		category: 'config',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 1,
 		setting: {
 			parameterName: `/shop-${id}`,
@@ -42,7 +42,7 @@ function store(id: string): DiscoveredBlock {
 		id,
 		fullId: `shop-${id}`,
 		category: 'data',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 2,
 	};
 }
@@ -417,7 +417,7 @@ describe('joinSettings', () => {
 		assert.deepStrictEqual(inventory.settings[0], {
 			fullId: 'shop-limits',
 			id: 'limits',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 1,
 			address: '/shop-limits',
 			presence: 'present',

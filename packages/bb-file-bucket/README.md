@@ -309,7 +309,7 @@ const bucket = new FileBucket(scope, 'uploads', {
 });
 ```
 
-`aws-blocks/index.ts` is shared by sandbox and production deploys, so this rule also allows `http://localhost:3000` on the production bucket. Only a sandbox needs it; leaving it in production is low-risk because presigned URLs authenticate through their query-string signature, not ambient browser credentials.
+`cdk-blocks/index.ts` is shared by sandbox and production deploys, so this rule also allows `http://localhost:3000` on the production bucket. Only a sandbox needs it; leaving it in production is low-risk because presigned URLs authenticate through their query-string signature, not ambient browser credentials.
 
 - `GET` covers `download()` and `fetch()` on a `getUrl()` URL; `PUT` covers `upload()` and a `putUrl()` URL.
 - `allowedHeaders` must list every header the browser sends. A cross-origin `PUT` always triggers a CORS preflight, and S3 rejects the preflight if a request header — such as the `Content-Type` that `upload()` sends — is not allowed.

@@ -4,9 +4,9 @@
 /**
  * Every snippet in the README's "Recipes" section compiles against the real,
  * built packages, as an app would write it. A recipe's snippets are files of
- * one app, named by their first-line comment (`// aws-blocks/index.ts`,
- * `// src/main.ts`); the frontend's `import … from 'aws-blocks'` resolves to
- * that recipe's backend file, as the scaffolded `aws-blocks` workspace does.
+ * one app, named by their first-line comment (`// cdk-blocks/index.ts`,
+ * `// src/main.ts`); the frontend's `import … from 'cdk-blocks'` resolves to
+ * that recipe's backend file, as the scaffolded `cdk-blocks` workspace does.
  */
 
 import assert from 'node:assert';
@@ -33,7 +33,7 @@ function readRecipes(): Recipe[] {
 			const files: Record<string, string> = {};
 			for (const [, code] of chunk.matchAll(/```ts\n([\s\S]*?)```/g)) {
 				const path = /^\/\/ (\S+\.ts)\n/.exec(code ?? '')?.[1];
-				assert.ok(path, `${title}: each snippet starts with its file path, e.g. "// aws-blocks/index.ts"`);
+				assert.ok(path, `${title}: each snippet starts with its file path, e.g. "// cdk-blocks/index.ts"`);
 				files[path] = code ?? '';
 			}
 			return { title, files };
@@ -60,7 +60,7 @@ describe('README recipes compile', () => {
 
 	for (const recipe of recipes) {
 		test(recipe.title, () => {
-			assert.ok('aws-blocks/index.ts' in recipe.files, 'has a backend file');
+			assert.ok('cdk-blocks/index.ts' in recipe.files, 'has a backend file');
 			const dir = scratchDir('readme-recipe');
 			dirs.push(dir);
 			// `export {}` keeps a snippet without imports/exports a module.
@@ -68,7 +68,7 @@ describe('README recipes compile', () => {
 				dir,
 				Object.fromEntries(Object.entries(recipe.files).map(([p, code]) => [p, `${code}\nexport {};\n`])),
 			);
-			assert.deepStrictEqual(typecheck(files, { 'aws-blocks': [join(dir, 'aws-blocks', 'index.ts')] }), []);
+			assert.deepStrictEqual(typecheck(files, { 'cdk-blocks': [join(dir, 'cdk-blocks', 'index.ts')] }), []);
 		});
 	}
 });

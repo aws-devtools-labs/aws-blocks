@@ -28,7 +28,7 @@ export interface BlocksAppSynthOptions {
 	 * `@aws-blocks/bb-auth`.
 	 */
 	build: string;
-	/** The app directory: `backendHandlerPath` is `<appDir>/aws-blocks/index.handler.ts`. */
+	/** The app directory: `backendHandlerPath` is `<appDir>/cdk-blocks/index.handler.ts`. */
 	appDir: string;
 	/** The `BlocksStack` id. @default 'TestStack' */
 	stack?: string;
@@ -57,7 +57,7 @@ export function synthBlocksApp(options: BlocksAppSynthOptions): BlocksAppSynthRe
 	const n = `${process.pid}.${counter++}`;
 	const probe = join(DIST_DIR, `.blocks-app-probe.${n}.mjs`);
 	const backend = join(DIST_DIR, `.blocks-app-backend.${n}.mjs`);
-	const handlerPath = join(options.appDir, 'aws-blocks', 'index.handler.ts');
+	const handlerPath = join(options.appDir, 'cdk-blocks', 'index.handler.ts');
 	writeFileSync(
 		backend,
 		// `@aws-blocks/bb-auth` is imported only when the build uses it, so an

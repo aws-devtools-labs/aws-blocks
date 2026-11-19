@@ -164,7 +164,7 @@ Add the generated file to your `tsconfig.json` `include` and let the tool own it
 (it is regenerated, never hand-edited):
 
 ```jsonc
-{ "include": ["src", "aws-blocks", ".blocks/**/*.d.ts"] }
+{ "include": ["src", "cdk-blocks", ".blocks/**/*.d.ts"] }
 ```
 
 The keys come straight from your `secret()`/`config()` calls — the single source of
@@ -1085,7 +1085,7 @@ it is not an in-place update.
 A door is one function. `defineFrontDoor` types it:
 
 ```ts
-// aws-blocks/my-door.ts
+// cdk-blocks/my-door.ts
 import {
   AllowedMethods,
   CachePolicy,
@@ -1138,7 +1138,7 @@ export const myDoor = defineFrontDoor({
 ```
 
 ```ts
-// aws-blocks/index.cdk.ts
+// cdk-blocks/index.cdk.ts
 new Hosting(stack, 'Hosting', { root: '..', api: stack, frontDoor: { kind: 'custom', door: myDoor } });
 ```
 

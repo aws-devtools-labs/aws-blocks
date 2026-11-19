@@ -85,7 +85,7 @@ are hand-edited and **none** are generated from the block's source:
    `aws-blocks.vendorize` map (`pkg → [ClassName]`).
 4. **root `package.json` `workspaces`** — append `"packages/bb-{name}"`.
 5. **`test-apps/comprehensive`** — dep as `"*"` + a `new {Class}(scope, ...)` instance in
-   `aws-blocks/index.ts` + a `test/{name}.test.ts` (zero casts).
+   `cdk-blocks/index.ts` + a `test/{name}.test.ts` (zero casts).
 6. **`npx changeset add`.**
 
 **Derived artifacts are already automated — the generator should *call* these, not

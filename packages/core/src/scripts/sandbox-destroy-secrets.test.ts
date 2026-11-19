@@ -103,7 +103,7 @@ describe('sandbox destroy deletes the sandbox SSM secrets', () => {
 	it('runs the delete after the stack is destroyed, in the project root', async () => {
 		process.chdir(root);
 		const calls: string[] = [];
-		await runSandboxDestroy('aws-blocks/index.cdk.ts', steps(calls, async () => {}));
+		await runSandboxDestroy('cdk-blocks/index.cdk.ts', steps(calls, async () => {}));
 		assert.deepStrictEqual(calls, ['check', 'clients', 'destroy', `secrets:${process.cwd()}`]);
 	});
 
@@ -112,7 +112,7 @@ describe('sandbox destroy deletes the sandbox SSM secrets', () => {
 		const calls: string[] = [];
 		await assert.rejects(
 			runSandboxDestroy(
-				'aws-blocks/index.cdk.ts',
+				'cdk-blocks/index.cdk.ts',
 				steps(calls, async () => {
 					throw new Error('destroy failed');
 				}),

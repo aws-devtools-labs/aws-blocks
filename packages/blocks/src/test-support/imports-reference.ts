@@ -25,14 +25,14 @@ export const IMPORTS_MD = join(PACKAGE_DIR, 'IMPORTS.md');
 /** Where each app-facing entry runs and what it is for. A new export-map entry must be added here or to {@link NOT_APP_FACING}. */
 const APP_FACING: Record<string, { readonly runs: string; readonly purpose: string }> = {
 	'.': {
-		runs: 'Backend (`aws-blocks/`): local dev, Lambda, CDK synth.',
+		runs: 'Backend (`cdk-blocks/`): local dev, Lambda, CDK synth.',
 		purpose:
 			'Every Building Block and the core backend API. It is the only entry with a `browser` condition: there (browser bundles, and the templates’ `npm run test:e2e`, which runs `tsx -C browser`) it resolves to an empty module, so no values, though `import type` still works. Under `--conditions=cdk` it resolves to the `/cdk` build.',
 	},
 	'./client': {
 		runs: 'Browser, Node, and the `tsx -C browser` e2e tests.',
 		purpose:
-			'Core’s browser-safe values: errors and their matchers, and the API client runtime the generated `aws-blocks` client uses.',
+			'Core’s browser-safe values: errors and their matchers, and the API client runtime the generated `cdk-blocks` client uses.',
 	},
 	'./ui': {
 		runs: 'Browser (returns DOM nodes).',
@@ -51,18 +51,18 @@ const APP_FACING: Record<string, { readonly runs: string; readonly purpose: stri
 		purpose: 'Test helpers: a cookie jar for `fetch`, per-user test clients, local auth codes, TOTP codes.',
 	},
 	'./cdk': {
-		runs: 'CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `aws-blocks/index.cdk.ts`.',
+		runs: 'CDK synth (`npm run deploy` / `npm run sandbox`), in your app’s CDK entry file `cdk-blocks/index.cdk.ts`.',
 		purpose:
-			'The synth-time build: what the generated `aws-blocks/index.cdk.ts` imports (`BlocksStack`, `BlocksPresets`, `Hosting`, `HostingPresets`), plus every block’s CDK construct.',
+			'The synth-time build: what the generated `cdk-blocks/index.cdk.ts` imports (`BlocksStack`, `BlocksPresets`, `Hosting`, `HostingPresets`), plus every block’s CDK construct.',
 	},
 	'./lambda-handler': {
 		runs: 'The deployed Lambda.',
-		purpose: '`createLambdaHandler`, which the generated `aws-blocks/index.handler.ts` imports.',
+		purpose: '`createLambdaHandler`, which the generated `cdk-blocks/index.handler.ts` imports.',
 	},
 	'./scripts': {
 		runs: 'Node: the package task runner, and your CDK entry file.',
 		purpose:
-			'Task plumbing (dev server, deploy, sandbox). The generated `aws-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `aws-blocks/scripts/generate-client.ts` imports `generateClientCode`.',
+			'Task plumbing (dev server, deploy, sandbox). The generated `cdk-blocks/index.cdk.ts` imports `getStackName` from it, and the amplify template’s `cdk-blocks/scripts/generate-client.ts` imports `generateClientCode`.',
 	},
 };
 
@@ -176,7 +176,7 @@ export function renderImportsReference(): string {
 		'',
 		'Every app-facing entry of `@aws-blocks/blocks`, where it runs, and every name it exports. A **value** can be imported normally; a **type** only with `import type` (or `import { type … }`).',
 		'',
-		"The rule that matters most: **code that runs under the `browser` condition imports no values from the root `@aws-blocks/blocks`**. That covers browser bundles and the templates' e2e tests (`npm run test:e2e` runs `tsx -C browser`). The root is the backend entry and the only one with a `browser` condition, under which it resolves to an empty module; every subpath resolves to the same file everywhere. Such code imports from `/client`, `/ui` and `/theme`, the e2e tests also from `/utils`, and a block's error constants come from that block's own package (`KVStoreErrors` from `@aws-blocks/bb-kv-store`; see [Root values in browser code](#root-values-in-browser-code)). The typed client of your own API is `import { api } from 'aws-blocks'` (your backend module), not an `@aws-blocks/blocks` entry.",
+		"The rule that matters most: **code that runs under the `browser` condition imports no values from the root `@aws-blocks/blocks`**. That covers browser bundles and the templates' e2e tests (`npm run test:e2e` runs `tsx -C browser`). The root is the backend entry and the only one with a `browser` condition, under which it resolves to an empty module; every subpath resolves to the same file everywhere. Such code imports from `/client`, `/ui` and `/theme`, the e2e tests also from `/utils`, and a block's error constants come from that block's own package (`KVStoreErrors` from `@aws-blocks/bb-kv-store`; see [Root values in browser code](#root-values-in-browser-code)). The typed client of your own API is `import { api } from 'cdk-blocks'` (your backend module), not an `@aws-blocks/blocks` entry.",
 		'',
 		'| Entry | Runs in | For |',
 		'|---|---|---|',

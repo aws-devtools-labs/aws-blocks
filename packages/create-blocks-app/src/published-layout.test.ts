@@ -134,7 +134,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['@aws-blocks/blocks'], '~0.1.0');
   });
 
-  it('stamps the root and the aws-blocks/ workspace when adding Blocks to an Amplify Gen 2 project', () => {
+  it('stamps the root and the cdk-blocks/ workspace when adding Blocks to an Amplify Gen 2 project', () => {
     const project = join(root, 'amplify-app');
     mkdirSync(join(project, 'amplify'), { recursive: true });
     writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'amplify-app', version: '1.0.0' }));
@@ -143,8 +143,8 @@ describe('create-blocks-app version stamping from the published package', () => 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
     assertStamped(readManifest(join(project, 'package.json')), 'Amplify project root');
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
-    assertStamped(workspace, 'Amplify aws-blocks/ workspace');
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
+    assertStamped(workspace, 'Amplify cdk-blocks/ workspace');
     assert.deepStrictEqual(
       blocksDeps(workspace).map(([name]) => name),
       ['@aws-blocks/blocks'],
@@ -152,7 +152,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     );
   });
 
-  it('gives the Amplify aws-blocks/ workspace the range the project root already lists', () => {
+  it('gives the Amplify cdk-blocks/ workspace the range the project root already lists', () => {
     const project = join(root, 'amplify-pinned');
     mkdirSync(join(project, 'amplify'), { recursive: true });
     writeFileSync(
@@ -164,7 +164,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
     assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['@aws-blocks/blocks'], '~0.1.0');
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
     assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.0', 'workspace should follow the root range');
   });
 
@@ -184,7 +184,7 @@ describe('create-blocks-app version stamping from the published package', () => 
 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
     assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.2', 'the root devDependency range wins');
   });
 
@@ -203,7 +203,7 @@ describe('create-blocks-app version stamping from the published package', () => 
 
     const result = run(['.', '--yes', '--skip-install'], project);
     assert.strictEqual(result.exitCode, 0, result.output);
-    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
+    const workspace = readManifest(join(project, 'cdk-blocks', 'package.json'));
     assert.strictEqual(
       workspace.dependencies?.['@aws-blocks/blocks'],
       cliManifest.devDependencies?.['@aws-blocks/blocks'],

@@ -148,17 +148,28 @@ const ACCESS_KEY_VARIABLES = [
 
 /**
  * The project root: the nearest directory at or above `start` that holds both a
- * `package.json` and an `aws-blocks/` directory.
+ * `package.json` and a `cdk-blocks/` directory.
  */
-export function findProjectRoot(start: string): string | undefined {
+export function findProjectRoot(start: string, backendDir: string = 'cdk-blocks'): string | undefined {
 	let dir = resolve(start);
 	for (;;) {
-		const appDir = join(dir, 'aws-blocks');
+		const appDir = join(dir, backendDir);
 		if (existsSync(join(dir, 'package.json')) && existsSync(appDir) && statSync(appDir).isDirectory()) return dir;
 		const parent = dirname(dir);
 		if (parent === dir) return undefined;
 		dir = parent;
 	}
+}
+
+/**
+ * The root of an app that has not been migrated yet, found by its legacy
+ * `aws-blocks/` directory. Only `migrate` uses this: every other command
+ * detects the current `cdk-blocks/`.
+ */
+export function findLegacyProjectRoot(start: string): string | undefined {
+	// Spelled out rather than imported: core is loaded lazily here (`core-load.ts`)
+	// so a version mismatch reports itself. Pinned as `LEGACY_BLOCKS_BACKEND_DIR`.
+	return findProjectRoot(start, 'aws-blocks');
 }
 
 /** The env file that core's deploy (`production`) and sandbox (`sandbox`) load from the project root. */
@@ -294,11 +305,13 @@ export class Context {
 	}
 
 	/** The project root, or a CLI error when the command runs outside an AWS Blocks app. */
-	requireRoot(): string {
-		const root = this.findRoot();
+	requireRoot(opts?: { allowLegacyBackendDir?: boolean }): string {
+		const root = opts?.allowLegacyBackendDir
+			? (this.findRoot() ?? findLegacyProjectRoot(this.startDir))
+			: this.findRoot();
 		if (!root) {
 			throw new CliError(
-				`not inside an AWS Blocks app: no package.json with an aws-blocks/ directory at or above ${this.startDir}.`,
+				`not inside an AWS Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
 				{
 					hint: 'run the command from your app directory, or pass -C <app-dir>',
 				},

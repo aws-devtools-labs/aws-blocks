@@ -106,9 +106,9 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 export function fixtureApp(pkg: Record<string, unknown> = { dependencies: { vite: '*' } }): string {
 	const root = mkdtempSync(join(tmpdir(), 'blocks-cli-'));
 	writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', type: 'module', ...pkg }));
-	mkdirSync(join(root, 'aws-blocks'));
-	writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
-	writeFileSync(join(root, 'aws-blocks', 'index.cdk.ts'), 'export {};\n');
+	mkdirSync(join(root, 'cdk-blocks'));
+	writeFileSync(join(root, 'cdk-blocks', 'index.ts'), 'export {};\n');
+	writeFileSync(join(root, 'cdk-blocks', 'index.cdk.ts'), 'export {};\n');
 	mkdirSync(join(root, '.blocks'));
 	writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'demo' }));
 	return root;

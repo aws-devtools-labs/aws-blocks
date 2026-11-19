@@ -25,8 +25,8 @@ function makeDir(...segments: string[]): string {
 
 /** Plants the marker file, making `dir` a Blocks project. */
 function makeProject(dir: string): string {
-	mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
-	writeFileSync(join(dir, 'aws-blocks', 'index.ts'), 'export const blocks = {};');
+	mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
+	writeFileSync(join(dir, 'cdk-blocks', 'index.ts'), 'export const blocks = {};');
 	return dir;
 }
 
@@ -40,8 +40,8 @@ afterEach(() => {
 });
 
 describe('PROJECT_MARKER', () => {
-	it('is the aws-blocks entry file', () => {
-		assert.strictEqual(PROJECT_MARKER, 'aws-blocks/index.ts');
+	it('is the cdk-blocks entry file', () => {
+		assert.strictEqual(PROJECT_MARKER, 'cdk-blocks/index.ts');
 	});
 });
 
@@ -58,9 +58,9 @@ describe('isBlocksProject', () => {
 		assert.strictEqual(isBlocksProject(join(root, 'nope')), false);
 	});
 
-	it('is false when aws-blocks/index.ts is a directory rather than a file', () => {
+	it('is false when cdk-blocks/index.ts is a directory rather than a file', () => {
 		const root = makeRoot('marker-is-dir');
-		makeDir(root, 'aws-blocks', 'index.ts');
+		makeDir(root, 'cdk-blocks', 'index.ts');
 		assert.strictEqual(isBlocksProject(root), false);
 	});
 });
@@ -90,7 +90,7 @@ describe('resolveProject — explicitPath', () => {
 		assert.strictEqual(result.reason, 'bad-explicit');
 		assert.deepStrictEqual(result.candidates, []);
 		assert.match(result.message, /is not an AWS Blocks project/);
-		assert.match(result.message, /aws-blocks\/index\.ts/);
+		assert.match(result.message, /cdk-blocks\/index\.ts/);
 		assert.ok(result.message.includes(notAProject));
 	});
 });
@@ -201,7 +201,7 @@ describe('resolveProject — descendant scan', () => {
 		assert.strictEqual(result.reason, 'not-found');
 		assert.deepStrictEqual(result.candidates, []);
 		assert.match(result.message, /No AWS Blocks project found/);
-		assert.match(result.message, /aws-blocks\/index\.ts/);
+		assert.match(result.message, /cdk-blocks\/index\.ts/);
 		assert.match(result.message, /--project <path>/);
 		assert.ok(result.message.includes(root));
 	});

@@ -130,7 +130,7 @@ export async function checkDevLifecycle(app, env, logDir) {
 			);
 		}
 		// A save after the stop must not start the dev server again.
-		appendFileSync(join(app, 'aws-blocks', 'index.ts'), '\n// edited after dev stop\n');
+		appendFileSync(join(app, 'cdk-blocks', 'index.ts'), '\n// edited after dev stop\n');
 		await sleep(5000);
 		if ((await status(`http://localhost:${PORT}/.cdk-blocks-sandbox/config.json`)) !== 0)
 			fail('a backend save after dev:stop task started the dev server again', session);
@@ -141,7 +141,7 @@ export async function checkDevLifecycle(app, env, logDir) {
 		const first = startDev();
 		await ready(first);
 		const before = record()?.pid;
-		appendFileSync(join(app, 'aws-blocks', 'index.ts'), '\n// edited by the dev lifecycle check\n');
+		appendFileSync(join(app, 'cdk-blocks', 'index.ts'), '\n// edited by the dev lifecycle check\n');
 		if (!(await waitFor(() => (record()?.pid ?? before) !== before, 60_000)))
 			fail('the backend edit did not restart the dev server within 60 s', first);
 		await ready(first);

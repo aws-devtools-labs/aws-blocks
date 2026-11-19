@@ -6,7 +6,7 @@
  * id, same block id, same API. The options are `backend.auth-cognito.ts.txt`'s
  * `{ groups: ['admins'] }` in `Auth`'s shape.
  *
- * Materialized as `aws-blocks/index.ts` in the PR checkout.
+ * Materialized as `cdk-blocks/index.ts` in the PR checkout.
  */
 
 import { Auth } from '@aws-blocks/bb-auth';

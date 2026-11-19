@@ -12,7 +12,7 @@ import type {
   authSocialApi as authSocialApiType,
   isolatedApi as isolatedApiType,
   strictStatusApi as strictStatusApiType,
-} from 'aws-blocks';
+} from 'cdk-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
@@ -61,7 +61,7 @@ import { testApiUrl } from './api-url.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
+const backendPath = join(__dirname, '..', 'cdk-blocks', 'index.cdk.ts');
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
@@ -69,7 +69,7 @@ let isolatedApi: typeof isolatedApiType;
 let strictStatusApi: typeof strictStatusApiType;
 let authSocialApi: typeof authSocialApiType;
 let authStateApis: AuthStateApis;
-let appModule: typeof import('aws-blocks');
+let appModule: typeof import('cdk-blocks');
 let protectApis: ProtectApis;
 let authTotpApis: AuthTotpApis;
 
@@ -164,7 +164,7 @@ test.before(async () => {
 
   // Import API after config is written, pinned to the target of BLOCKS_TEST_ENV (see testApiUrl).
   process.env.BLOCKS_API_URL = testApiUrl();
-  const module = await import('aws-blocks');
+  const module = await import('cdk-blocks');
   appModule = module;
   api = module.api;
   isolatedApi = module.isolatedApi;
@@ -217,7 +217,7 @@ test.after(async (t) => {
   // even when every test passed.
   //
   // Which module owns that pool is environment-dependent. Under `tsx -C browser`
-  // `import 'aws-blocks'` resolves (via the package's `browser` export) to the
+  // `import 'cdk-blocks'` resolves (via the package's `browser` export) to the
   // generated client.js, which side-effect-imports the realtime client
   // middleware — bb-realtime/mock-middleware locally, bb-realtime/aws-middleware
   // on sandbox/production. We reset BOTH, best-effort: a dynamic import of the

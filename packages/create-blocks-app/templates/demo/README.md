@@ -22,7 +22,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: auth, KVStore, todo table, API methods |
+| `cdk-blocks/index.ts` | Backend: auth, KVStore, todo table, API methods |
 | `src/index.ts` | Frontend: sign-in, key/value demo, sortable todo UI |
 | `test/e2e.test.ts` | Tests exercising the public and protected API |
 | `index.html` | HTML shell |
@@ -42,7 +42,7 @@ Open http://localhost:3000 after `npm run dev`.
   content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
   methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
   `requireAuth`; `getFlag` and `jobRan` stay public.
-  The EmailClient sender is the `EMAIL_SENDER` constant in `aws-blocks/index.ts`.
+  The EmailClient sender is the `EMAIL_SENDER` constant in `cdk-blocks/index.ts`.
   Its placeholder works locally (the mock sends nothing), but replace it with a
   verified SES identity before deploying to production: the placeholder is on the
   reserved `.invalid` domain, which SES can never verify, so every send from it
@@ -89,7 +89,7 @@ Your CloudFormation stack names are derived from the `stackId` in
 `.blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
@@ -97,5 +97,5 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
 (frontend). Test via `npm run test:e2e`.

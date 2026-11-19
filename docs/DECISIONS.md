@@ -1429,13 +1429,13 @@ is known, so the candidates are built exactly and compared for equality.
 **Authors:** belaboe, svidgen
 
 ### Context
-A scaffolded app keeps its backend in `aws-blocks/`, and the frontend imports it (`import { api } from 'aws-blocks'`, with `aws-blocks/package.json` exporting `types: ./index.ts`). The frontend's `tsconfig` therefore typechecked backend source, which runs on Node, with the frontend's settings. The templates passed because one root `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error. A frontend `tsconfig` that narrows `types` or `lib`, as create-vite's does, failed inside `aws-blocks/` (`TS2591: Cannot find name 'process'`, `TS2550`).
+A scaffolded app keeps its backend in `cdk-blocks/`, and the frontend imports it (`import { api } from 'cdk-blocks'`, with `cdk-blocks/package.json` exporting `types: ./index.ts`). The frontend's `tsconfig` therefore typechecked backend source, which runs on Node, with the frontend's settings. The templates passed because one root `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error. A frontend `tsconfig` that narrows `types` or `lib`, as create-vite's does, failed inside `cdk-blocks/` (`TS2591: Cannot find name 'process'`, `TS2550`).
 
 ### Decision
-- The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) use create-vite's `react-ts` layout. The root `tsconfig.json` lists `tsconfig.app.json` (`src/`, `vite/client` types) and `tsconfig.node.json` (`vite.config.ts`, `test/`, Node types), and both reference a composite `aws-blocks/tsconfig.json` (every backend file plus `.blocks/**/*.d.ts`, Node types, `rootDir: ".."`, declarations under `node_modules/.tmp`).
+- The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) use create-vite's `react-ts` layout. The root `tsconfig.json` lists `tsconfig.app.json` (`src/`, `vite/client` types) and `tsconfig.node.json` (`vite.config.ts`, `test/`, Node types), and both reference a composite `cdk-blocks/tsconfig.json` (every backend file plus `.blocks/**/*.d.ts`, Node types, `rootDir: ".."`, declarations under `node_modules/.tmp`).
 - `typecheck` is `tsc -b --force`, and `build` is `tsc -b --force && vite build`.
 - `nextjs` keeps one `tsconfig.json` with global Node types: `next build` ignores project references when it type-checks. The backend-only templates also keep one, because all their code runs on Node.
-- Adding AWS Blocks to an existing project writes `aws-blocks/tsconfig.json` (none in a Next.js project) and prints the steps. It never edits the project's own `tsconfig`. Apps scaffolded earlier keep working as they are, and `docs/guides/upgrading-older-apps.md` has the steps to move them.
+- Adding AWS Blocks to an existing project writes `cdk-blocks/tsconfig.json` (none in a Next.js project) and prints the steps. It never edits the project's own `tsconfig`. Apps scaffolded earlier keep working as they are, and `docs/guides/upgrading-older-apps.md` has the steps to move them.
 - AGENTS.md's "no client generation step" stays true: editors read the backend source through the reference, and the declarations are written by the typecheck itself, not by a separate AWS Blocks step.
 
 ### Rationale
@@ -1449,13 +1449,13 @@ A scaffolded app keeps its backend in `aws-blocks/`, and the frontend imports it
 - In a new Vite scaffold, a Node global in browser code (`src/`) is a type error.
 - A backend API signature that uses a Node type (for example, returning `Buffer`) reads as `any` in the frontend, hidden by `skipLibCheck`. Backend APIs should return JSON-serializable values.
 - `composite` turns on declaration emit, so an inferred type that names a non-hoisted package fails with `TS2742` (pnpm's default layout). `packages/blocks/TROUBLESHOOTING.md` lists the fixes.
-- Tools that read the root `tsconfig.json` find no compiler options there. The hosting `config()`/`secret()` typegen therefore uses the project that compiles each schema file, and `cdk-blocks` points `tsx` at `aws-blocks/tsconfig.json` through `TSX_TSCONFIG_PATH`.
+- Tools that read the root `tsconfig.json` find no compiler options there. The hosting `config()`/`secret()` typegen therefore uses the project that compiles each schema file, and `cdk-blocks` points `tsx` at `cdk-blocks/tsconfig.json` through `TSX_TSCONFIG_PATH`.
 - Code shared by browser and backend belongs in its own project without Node types, referenced by both. Adding it to the backend project would let Node globals into browser code.
 
 ### Alternatives Considered
-- **A. Global Node types everywhere (the previous templates).** No errors, but browser code can use Node globals unchecked, and a narrower frontend `tsconfig` still fails in `aws-blocks/`. Kept for Next.js only.
+- **A. Global Node types everywhere (the previous templates).** No errors, but browser code can use Node globals unchecked, and a narrower frontend `tsconfig` still fails in `cdk-blocks/`. Kept for Next.js only.
 - **B. `/// <reference types="node" />` in `@aws-blocks/blocks`'s published declarations.** Fixes the Node types but not `lib` or strictness differences: in a test, a Vite app with `auth-cognito` went from 11 to 8 errors and still failed.
-- **D. Generated declarations** (`aws-blocks/.types/`, written by `prepare`/`prebuild` hooks and the dev server; the first revision of #1111). Works without changing the frontend `tsconfig`, but adds a generation step with its own freshness logic. In review, its `tsc --build` over a narrow root missed edits to imported modules and dependency changes, and it made the old layout a hard error for existing apps.
+- **D. Generated declarations** (`cdk-blocks/.types/`, written by `prepare`/`prebuild` hooks and the dev server; the first revision of #1111). Works without changing the frontend `tsconfig`, but adds a generation step with its own freshness logic. In review, its `tsc --build` over a narrow root missed edits to imported modules and dependency changes, and it made the old layout a hard error for existing apps.
 - **E. Generate an explicit API type or schema** (for example, from `blocks.spec.json`). A much larger change, and TypeScript inference is the source of truth today.
 
 ### References

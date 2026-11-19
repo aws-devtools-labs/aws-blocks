@@ -82,7 +82,7 @@ export interface SandboxOptions {
  * `shell: true`, because the args are only concatenated, never escaped.
  */
 export function buildDevServerSpawn(devCommand: string | undefined): { command: string; args: string[] } {
-  return { command: devCommand || 'npx tsx watch aws-blocks/scripts/server.ts', args: [] };
+  return { command: devCommand || 'npx tsx watch cdk-blocks/scripts/server.ts', args: [] };
 }
 
 /**

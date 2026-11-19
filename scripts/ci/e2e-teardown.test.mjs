@@ -23,7 +23,7 @@ const ID = 'runner-k3x9q2';
 // The random half of the id: test-apps/comprehensive names its production
 // stack with only this (bb-test-prod-<suffix>-<salt>, since #1031).
 const SALT = 'k3x9q2';
-const CDK_ENTRY = fileURLToPath(new URL('../../test-apps/comprehensive/aws-blocks/index.cdk.ts', import.meta.url));
+const CDK_ENTRY = fileURLToPath(new URL('../../test-apps/comprehensive/cdk-blocks/index.cdk.ts', import.meta.url));
 
 // A stand-in for the AWS CLI: serves list-stacks / describe-stacks /
 // delete-stack from a JSON state file, logs each call, and applies scripted

@@ -43,7 +43,7 @@ function block(overrides: Partial<DiscoveredBlock> = {}): DiscoveredBlock {
 		id: 'todos',
 		fullId: 'my-app-todos',
 		category: 'data',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 42,
 		...overrides,
 	};
@@ -379,12 +379,12 @@ describe('navStatus', () => {
 				blocks: blocksResponse({
 					blocksSource: 'unavailable',
 					blocksErrorCode: 'NOT_A_BLOCKS_PROJECT',
-					blocksError: 'No aws-blocks/index.ts found.',
+					blocksError: 'No cdk-blocks/index.ts found.',
 				}),
 				pending: false,
 				failed: false,
 			}),
-			{ kind: 'unavailable', code: 'NOT_A_BLOCKS_PROJECT', message: 'No aws-blocks/index.ts found.' },
+			{ kind: 'unavailable', code: 'NOT_A_BLOCKS_PROJECT', message: 'No cdk-blocks/index.ts found.' },
 		);
 	});
 
@@ -401,7 +401,7 @@ describe('navStatus', () => {
 			blocks: blocksResponse({
 				blocks: [],
 				unknownConstructs: [
-					{ text: 'blocks.Mystery', file: 'aws-blocks/index.ts', line: 3, reason: 'unknown-type' },
+					{ text: 'blocks.Mystery', file: 'cdk-blocks/index.ts', line: 3, reason: 'unknown-type' },
 				],
 			}),
 			pending: false,
@@ -883,7 +883,7 @@ describe('buildInventoryTree — unrecognised things', () => {
 			blocks: blocksResponse({
 				blocks: [],
 				unknownConstructs: [
-					{ text: 'blocks.Mystery', file: 'aws-blocks/index.ts', line: 9, reason: 'unknown-type' },
+					{ text: 'blocks.Mystery', file: 'cdk-blocks/index.ts', line: 9, reason: 'unknown-type' },
 				],
 			}),
 			resources: { state: 'pending' },

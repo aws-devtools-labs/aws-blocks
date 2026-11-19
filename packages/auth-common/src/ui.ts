@@ -171,7 +171,7 @@ export interface AuthStateApi<I extends AuthActionInput = AuthActionInput, U ext
  * @example
  * ```typescript
  * import type { AuthUserOf } from '@aws-blocks/auth-common';
- * import type { authApi } from 'aws-blocks';
+ * import type { authApi } from 'cdk-blocks';
  *
  * type User = AuthUserOf<typeof authApi>; // groups, attributes, userSub, …
  * ```
@@ -616,7 +616,7 @@ function subscribe(api: AuthStateApi, listener: ((state: AuthState) => void) | S
  * @example
  * ```typescript
  * import { submitAuthAction } from '@aws-blocks/blocks/ui';
- * import { authApi } from 'aws-blocks';
+ * import { authApi } from 'cdk-blocks';
  *
  * const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
  * if (next.retriable) showError(next.error); // wrong password, bad MFA code, …
@@ -687,7 +687,7 @@ export async function submitAuthAction<A extends AuthStateApi<never>>(
  * ```tsx
  * import { useSyncExternalStore } from 'react';
  * import { subscribeAuthState, getAuthStateSnapshot } from '@aws-blocks/blocks/ui';
- * import { authApi } from 'aws-blocks';
+ * import { authApi } from 'cdk-blocks';
  *
  * const subscribe = (cb: () => void) => subscribeAuthState(authApi, cb);
  * const getSnapshot = () => getAuthStateSnapshot(authApi);
@@ -1108,7 +1108,7 @@ export interface AuthenticatorOptions {
  * @example
  * ```typescript
  * import { Authenticator } from '@aws-blocks/auth-common/ui';
- * import { authApi } from 'aws-blocks';
+ * import { authApi } from 'cdk-blocks';
  *
  * document.body.appendChild(Authenticator(authApi));
  *
@@ -1825,7 +1825,7 @@ function groupSetupKey(secret: string): string {
  * @example
  * ```typescript
  * import { MfaSettings } from '@aws-blocks/blocks/ui';
- * import { authApi } from 'aws-blocks';
+ * import { authApi } from 'cdk-blocks';
  *
  * declare function qrCodeDataUrl(text: string): string; // from your QR library (optional)
  *
@@ -2043,7 +2043,7 @@ export function MfaSettings(api: AuthStateApi, options?: MfaSettingsOptions): HT
  * @example
  * ```typescript
  * import { AccountMenuBar } from '@aws-blocks/auth-common/ui';
- * import { authApi } from 'aws-blocks';
+ * import { authApi } from 'cdk-blocks';
  *
  * document.body.prepend(AccountMenuBar(authApi));
  * ```

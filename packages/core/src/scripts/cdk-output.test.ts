@@ -273,12 +273,12 @@ describe('attachCdkWatchOutput', () => {
     const err = collectingSink();
     const child = fakeWatch();
     attachCdkWatchOutput(child, { level: 'normal', stderr: err });
-    child.out.write('Detected change to aws-blocks/index.ts\nbundling chatter\n');
+    child.out.write('Detected change to cdk-blocks/index.ts\nbundling chatter\n');
     child.out.write('[START RequestId: abc] Version: $LATEST\n');
     child.err.write('❌ Deployment failed: Error: Resource handler returned message: boom\n');
     await tick();
     assert.deepStrictEqual(calls, [
-      ['log', '[CDK Watch] Detected change to aws-blocks/index.ts'],
+      ['log', '[CDK Watch] Detected change to cdk-blocks/index.ts'],
       ['error', '[CDK Watch] ❌ Deployment failed: Error: Resource handler returned message: boom'],
     ]);
     assert.match(err.text(), /──── cdk watch output \(3 lines, retained because BLOCKS_LOG_LEVEL=normal\) ────/);
@@ -318,8 +318,8 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
   }
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   const SYNTH_CRASH = [
-    "Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'",
-    '/app/aws-blocks/index.ts:3',
+    "Detected change to 'cdk-blocks/index.ts' (type: change). Triggering 'cdk deploy'",
+    '/app/cdk-blocks/index.ts:3',
     'SyntaxError: Unexpected token }',
   ];
 
@@ -355,7 +355,7 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
     await sleep(5);
     assert.ok(calls.includes('[CDK Watch] SyntaxError: Unexpected token }'));
     assert.strictEqual(err.text(), '');
-    child.out.write("Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'\n");
+    child.out.write("Detected change to 'cdk-blocks/index.ts' (type: change). Triggering 'cdk deploy'\n");
     await sleep(5);
     assert.match(err.text(), /cdk watch output \(3 lines/);
     child.emit('exit', null, 'SIGTERM');
@@ -379,7 +379,7 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
       const err = collectingSink();
       const child = fakeWatch();
       attachCdkWatchOutput(child, { level: 'quiet', stderr: err, failureIdleMs: 20 });
-      child.out.write(`Detected change to 'aws-blocks/${file}' (type: change). Triggering 'cdk deploy'\n`);
+      child.out.write(`Detected change to 'cdk-blocks/${file}' (type: change). Triggering 'cdk deploy'\n`);
       // A real hotswap is silent for seconds before its ✅; well past the idle window.
       await sleep(60);
       child.out.write(' ✅  MyStack\n');
@@ -420,7 +420,7 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
     child.err.write(SYNTH_CRASH.join('\n') + '\n');
     await sleep(5);
     child.out.write(
-      "Detected change to 'aws-blocks/HttpError.ts' (type: change) while 'cdk deploy' is still running. Will queue for another deployment after this one finishes\n",
+      "Detected change to 'cdk-blocks/HttpError.ts' (type: change) while 'cdk deploy' is still running. Will queue for another deployment after this one finishes\n",
     );
     await sleep(5);
     assert.strictEqual(err.text(), '', 'a queued change does not dump early');

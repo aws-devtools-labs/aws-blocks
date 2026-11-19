@@ -188,7 +188,7 @@ export const UPGRADE_GUIDE_URL =
 
 /**
  * Fail fast with an actionable message if `defaults` is missing. TypeScript
- * callers get a compile error, but `cdk` runs `aws-blocks/index.cdk.ts` through a
+ * callers get a compile error, but `cdk` runs `cdk-blocks/index.cdk.ts` through a
  * loader that doesn't type-check, so an app scaffolded before `defaults` became
  * required (or a plain-JS caller, `as any`, or a dynamically built props object)
  * reaches the constructors without it, which then throw a cryptic
@@ -218,7 +218,7 @@ export function assertBlocksDefaults(
 			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
 			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
 			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
-			`aws-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
+			`cdk-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
 	);
 }
 

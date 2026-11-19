@@ -123,9 +123,9 @@ export class DatabaseCluster extends Scope {
  * new app uses `DatabaseCluster`.
  *
  * @example
- * // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './aws-blocks/migrations' });
+ * // Before: const db = new Database(scope, 'main', { minCapacity: 1, migrationsPath: './cdk-blocks/migrations' });
  * const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1 });
- * const db = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+ * const db = new Database(scope, 'main-db', { cluster, migrationsPath: './cdk-blocks/migrations' });
  */
 export class LegacyDatabaseCluster extends Scope {
 	/** The engine of the cluster: Aurora PostgreSQL. */
@@ -151,7 +151,7 @@ export class LegacyDatabaseCluster extends Scope {
  *
  * Locally this is PGlite under `.bb-data/`, with dsql-lint and the DSQL
  * transaction limits applied when the cluster is `dsql`. Migrations in
- * `./aws-blocks/migrations/{id}` run on first use. `simulateConflict(db)` from
+ * `./cdk-blocks/migrations/{id}` run on first use. `simulateConflict(db)` from
  * `@aws-blocks/bb-database/testing` makes the next commit fail with
  * `SerializationFailure` so retry logic can be tested without a deployed cluster.
  *

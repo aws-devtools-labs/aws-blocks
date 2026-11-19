@@ -400,7 +400,7 @@ describe('HTTP method validation', () => {
   });
 });
 
-// ── FIX 6: Reserve /aws-blocks namespace ────────────────────────────────────
+// ── FIX 6: Reserve /cdk-blocks namespace ────────────────────────────────────
 
 describe('/aws-blocks namespace reservation', () => {
   it('registering /aws-blocks/api throws', () => {
@@ -475,7 +475,7 @@ describe('/aws-blocks namespace reservation', () => {
     });
   });
 
-  it('rejects /aws-blocks (exact namespace path)', () => {
+  it('rejects /cdk-blocks (exact namespace path)', () => {
     assert.throws(
       () => registerRoute({ method: 'POST', path: '/aws-blocks', handler: noop }),
       (err: Error) => {
@@ -495,7 +495,7 @@ describe('/aws-blocks namespace reservation', () => {
     );
   });
 
-  it('allows /aws-blocksary (not the reserved prefix)', () => {
+  it('allows /cdk-blocksary (not the reserved prefix)', () => {
     assert.doesNotThrow(() => {
       registerRoute({ method: 'GET', path: '/aws-blocksary', handler: noop });
     });

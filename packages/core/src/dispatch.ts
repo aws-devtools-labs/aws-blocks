@@ -223,7 +223,7 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
 }
 
 /**
- * Create the dispatcher for a backend module (the app's `aws-blocks/index.ts`).
+ * Create the dispatcher for a backend module (the app's `cdk-blocks/index.ts`).
  *
  * Handles, in order: cross-origin rejection, `OPTIONS` preflight, RawRoute
  * dispatch for any path outside `/aws-blocks/api`, and JSON-RPC for the

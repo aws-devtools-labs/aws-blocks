@@ -72,7 +72,7 @@ The `Auth` block's `createApi()` namespace (here `authApi`) is a sign-in state m
 Federated sign-in goes through an `OIDCClient`. Export the block's `createOidcApi()` beside `createApi()`, and `getClient()` returns the client, typed by the block's provider ids and carrying the block's own routes:
 
 ```ts
-// aws-blocks/index.ts
+// cdk-blocks/index.ts
 export const authApi = auth.createApi();
 export const oidcAuthApi = auth.createOidcApi();
 ```

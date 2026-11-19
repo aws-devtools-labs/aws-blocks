@@ -4,7 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -54,9 +54,9 @@ test.before(async () => {
   process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
-  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
   // stale client that lacks namespaces exported since the last generation.
-  const mod = await import('aws-blocks');
+  const mod = await import('cdk-blocks');
   api = mod.api;
 });
 

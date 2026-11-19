@@ -33,15 +33,15 @@ function pollSnippet(): string {
 
 // The generated client types each method from the backend; this stands in for
 // an app whose backend defines `getDashboard(): Promise<{ open: number }>`.
-const CLIENT_DECLARATION = "declare module 'aws-blocks' {\n\texport const api: { getDashboard(): Promise<{ open: number }> };\n}\n";
+const CLIENT_DECLARATION = "declare module 'cdk-blocks' {\n\texport const api: { getDashboard(): Promise<{ open: number }> };\n}\n";
 
 describe('scaffolded AGENTS.md polling snippet', () => {
 	it('typechecks under strict settings against the typed client', () => {
 		const dir = mkdtempSync(join(tmpdir(), 'cba-poll-tsc-'));
 		try {
 			writeFileSync(join(dir, 'poll.ts'), pollSnippet());
-			writeFileSync(join(dir, 'aws-blocks.d.ts'), CLIENT_DECLARATION);
-			const program = ts.createProgram([join(dir, 'poll.ts'), join(dir, 'aws-blocks.d.ts')], {
+			writeFileSync(join(dir, 'cdk-blocks.d.ts'), CLIENT_DECLARATION);
+			const program = ts.createProgram([join(dir, 'poll.ts'), join(dir, 'cdk-blocks.d.ts')], {
 				strict: true,
 				noEmit: true,
 				target: ts.ScriptTarget.ES2022,
@@ -78,9 +78,9 @@ describe('scaffolded AGENTS.md polling snippet', () => {
 			dir = mkdtempSync(join(tmpdir(), 'cba-poll-run-'));
 			const js = ts.transpileModule(pollSnippet(), {
 				compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-			}).outputText.replace("from 'aws-blocks'", "from './aws-blocks.mjs'");
+			}).outputText.replace("from 'cdk-blocks'", "from './cdk-blocks.mjs'");
 			writeFileSync(join(dir, 'poll.mjs'), js);
-			writeFileSync(join(dir, 'aws-blocks.mjs'), 'export const api = { getDashboard: () => globalThis.__getDashboard() };\n');
+			writeFileSync(join(dir, 'cdk-blocks.mjs'), 'export const api = { getDashboard: () => globalThis.__getDashboard() };\n');
 			pollDashboard = (await import(pathToFileURL(join(dir, 'poll.mjs')).href)).pollDashboard;
 		});
 

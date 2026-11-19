@@ -122,7 +122,7 @@ export type ScopeParent = Scope | { id: string };
  * - **`Database`** - SQL database with full relational features
  *   - Use when you need: complex multi-table JOINs, SQL transactions across tables, foreign key constraints
  *   - Avoid when: DynamoDB limitations are acceptable (no ad-hoc queries, eventual consistency on indexes, 400KB item limit)
- *   - Schema lives in ordered .sql files under `aws-blocks/migrations/<id>/`
+ *   - Schema lives in ordered .sql files under `cdk-blocks/migrations/<id>/`
  *   - Local dev applies those files to an in-process PostgreSQL (PGlite)
  * 
  * **Rule of thumb:** Use KVStore unless you specifically need SQL JOINs or transactions.
@@ -426,7 +426,7 @@ export class Scope {
   /**
    * Render {@link buildUserAgentChain} as a single space-delimited string,
    * suitable for a string-typed field such as the Postgres `application_name`
-   * connection parameter (`aws-blocks/<core> bb/Auth/<version> bb/Database/<version>`).
+   * connection parameter (`cdk-blocks/<core> bb/Auth/<version> bb/Database/<version>`).
    *
    * Shortened here rather than left to the server: Postgres truncates an
    * over-long `application_name` by raw bytes, cutting mid-token, and preserves

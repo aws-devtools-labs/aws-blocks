@@ -39,7 +39,7 @@ describe('root help', () => {
 			'generate-client', 'spec', 'typegen', 'db', 'vendorize', 'migrate', 'help',
 		];
 		assert.deepStrictEqual(listed.sort(), [...runnable].sort());
-		assert.doesNotMatch(help, /cdk-blocks|sandbox up/);
+		assert.doesNotMatch(help, /\bcdk-blocks(?!\/)|sandbox up/);
 	});
 
 	it('shows the version, global options and the exit codes', () => {
@@ -56,7 +56,7 @@ describe('command help', () => {
 			const help = commandHelp(command);
 			assert.ok(help.includes(`Usage: ${blocksCommand(command.path[0], ...command.path.slice(1))}`), command.path.join(' '));
 			assert.match(help, /\nExamples\n {2}npm run /, command.path.join(' '));
-			assert.doesNotMatch(help, /cdk-blocks/);
+			assert.doesNotMatch(help, /\bcdk-blocks(?!\/)/);
 			const examples = command.examples?.map(({ command }) => command) ?? [];
 			assert.strictEqual(new Set(examples).size, examples.length, command.path.join(' '));
 		}

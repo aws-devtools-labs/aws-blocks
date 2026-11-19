@@ -28,8 +28,8 @@ function escapeRegExp(text: string): string {
 function appWithOldCore(): string {
 	const app = mkdtempSync(join(tmpdir(), 'blocks-cli-old-core-'));
 	writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'old-core-app', type: 'module' }));
-	mkdirSync(join(app, 'aws-blocks'));
-	writeFileSync(join(app, 'aws-blocks', 'index.ts'), 'export {};\n');
+	mkdirSync(join(app, 'cdk-blocks'));
+	writeFileSync(join(app, 'cdk-blocks', 'index.ts'), 'export {};\n');
 	const blocks = join(app, 'node_modules', '@aws-blocks', 'blocks');
 	cpSync(join(PACKAGE, 'package.json'), join(blocks, 'package.json'));
 	cpSync(join(PACKAGE, 'dist', 'cli'), join(blocks, 'dist', 'cli'), { recursive: true });

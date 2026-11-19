@@ -14,7 +14,7 @@ import { join } from 'node:path';
  * path (`GET /.cdk-blocks-sandbox/config.json`, published by the Hosting
  * construct as a CloudFront static behaviour and answered by the dev server).
  * The two populations are indistinguishable as text, which is exactly how the
- * `aws-blocks/` → `cdk-blocks/` rename broke 24 tests: a sweep that renames the
+ * `cdk-blocks/` → `cdk-blocks/` rename broke 24 tests: a sweep that renames the
  * disk paths and misses the published path leaves a browser asking for a URL
  * nothing serves, and the client cannot resolve its API URL at all.
  *

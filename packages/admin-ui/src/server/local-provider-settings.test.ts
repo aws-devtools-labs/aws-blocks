@@ -23,7 +23,7 @@ import type { StoredParameter } from './settings-store.js';
 const DISCOVERY: BlocksResult = {
 	blocksSource: 'source-scan',
 	projectName: 'shop',
-	scope: { id: 'shop', file: 'aws-blocks/index.ts', line: 1 },
+	scope: { id: 'shop', file: 'cdk-blocks/index.ts', line: 1 },
 	unknownConstructs: [],
 	scannedFiles: 1,
 	blocks: [
@@ -32,7 +32,7 @@ const DISCOVERY: BlocksResult = {
 			id: 'flag',
 			fullId: 'shop-flag',
 			category: 'config',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 3,
 			setting: {
 				parameterName: '/shop-flag',
@@ -47,7 +47,7 @@ const DISCOVERY: BlocksResult = {
 			id: 'token',
 			fullId: 'shop-token',
 			category: 'config',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 4,
 			setting: {
 				parameterName: '/shop-token',
@@ -62,7 +62,7 @@ const DISCOVERY: BlocksResult = {
 			id: 'cache',
 			fullId: 'shop-cache',
 			category: 'data',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 5,
 		},
 	],
@@ -339,7 +339,7 @@ describe('LocalDataProvider.writeSetting', () => {
 				id: 'limits',
 				fullId: 'shop-limits',
 				category: 'config',
-				file: 'aws-blocks/index.ts',
+				file: 'cdk-blocks/index.ts',
 				line: 6,
 				setting: {
 					parameterName: '/shop-limits',
@@ -354,7 +354,7 @@ describe('LocalDataProvider.writeSetting', () => {
 				id: 'db-url',
 				fullId: 'shop-db-url',
 				category: 'config',
-				file: 'aws-blocks/index.ts',
+				file: 'cdk-blocks/index.ts',
 				line: 7,
 				setting: { nameSource: 'unresolved', secret: true, hasSchema: false, external: true },
 			},

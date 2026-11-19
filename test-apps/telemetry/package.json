@@ -9,7 +9,7 @@
   "blocksTemplate": "telemetry-e2e",
   "blocksTemplateVersion": "1.2.3",
   "scripts": {
-    "dev:server": "tsx aws-blocks/scripts/server.ts",
+    "dev:server": "tsx cdk-blocks/scripts/server.ts",
     "test": "echo 'Telemetry E2E tests run via root test:telemetry'",
     "test:telemetry": "tsx test/telemetry-e2e.test.ts"
   },

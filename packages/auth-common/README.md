@@ -110,7 +110,7 @@ The `Authenticator` renders auth UI driven by the state machine. It works with `
 
 ```typescript
 import { Authenticator } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(Authenticator(authApi));
 ```
@@ -131,7 +131,7 @@ Compact bar for the top of the page. Shows "👤 username | Sign Out" when signe
 
 ```typescript
 import { AccountMenuBar } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 document.body.prepend(AccountMenuBar(authApi));
 ```
@@ -144,7 +144,7 @@ Renders content only when the user is signed in. Automatically updates when auth
 
 ```typescript
 import { AuthenticatedContent } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(
   AuthenticatedContent(authApi, (user) => {
@@ -180,7 +180,7 @@ Authenticator-app (TOTP) enrolment and MFA preferences for the signed-in user, o
 
 ```typescript
 import { MfaSettings } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 document.querySelector('#security')!.appendChild(MfaSettings(authApi));
 ```
@@ -222,7 +222,7 @@ Subscribe to auth state changes from any source (same window + other tabs):
 
 ```typescript
 import { onAuthChange } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 const unsubscribe = onAuthChange(authApi, (user) => {
   if (user) {
@@ -243,7 +243,7 @@ If you build your own sign-in form instead of using the `Authenticator`, submit 
 
 ```typescript
 import { submitAuthAction } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 export async function signIn(username: string, password: string): Promise<string | undefined> {
   const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
@@ -280,7 +280,7 @@ The `Authenticator` and `AccountMenuBar` submit through it too, so each sign-in 
 ```tsx
 import { useSyncExternalStore } from 'react';
 import { getAuthStateSnapshot, subscribeAuthState } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 const subscribe = (cb: () => void) => subscribeAuthState(authApi, cb);
 const getSnapshot = () => getAuthStateSnapshot(authApi);
@@ -307,7 +307,7 @@ Use the store when you render the auth *flow* (challenge steps, errors). Use `on
 
 ```typescript
 import { broadcastAuthChange } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 
 // After a successful sign-in
 broadcastAuthChange({ userId: 'alice', username: 'alice' });

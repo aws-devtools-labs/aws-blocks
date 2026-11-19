@@ -29,7 +29,7 @@ export function getStackId(projectRoot?: string): string {
       `.blocks/config.json not found or missing stackId — it is created by create-blocks-app and should be committed. ` +
       `To fix manually, create ${configPath} with: { "stackId": "<id>" }. ` +
       `For an app that is already deployed, <id>-prod must be the name of its existing production stack ` +
-      `(the stack that aws-blocks/index.cdk.ts names); any other id makes the next deploy create a second production stack.`
+      `(the stack that cdk-blocks/index.cdk.ts names); any other id makes the next deploy create a second production stack.`
     );
   let config: BlocksConfig | null;
   try {

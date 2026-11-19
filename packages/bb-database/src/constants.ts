@@ -109,7 +109,7 @@ export const CONNECTION_NAME_RULE =
 
 export const DEFAULT_SCHEMA = 'public';
 
-export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
+export const DEFAULT_MIGRATIONS_ROOT = './cdk-blocks/migrations';
 
 const DB_ROLE_PREFIX = 'blocks_app_';
 

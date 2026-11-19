@@ -204,18 +204,18 @@ function materialize(
 	const dir = join(treeRoot, 'test-apps', '.upgrade-in-place', `${suffix}-${variant}`);
 	rmSync(dir, { recursive: true, force: true });
 	fixtureApps.push(dir);
-	for (const sub of ['aws-blocks/migrations', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	for (const sub of ['cdk-blocks/migrations', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
 	const cdkEntry = readFileSync(join(APP, 'index.cdk.ts'), 'utf8').replace(
 		'BlocksPresets.sandbox',
 		`BlocksPresets.${preset}`,
 	);
-	writeFileSync(join(dir, 'aws-blocks', 'index.cdk.ts'), cdkEntry + IAM_ONLY);
-	copyFileSync(join(APP, scenario[revision]), join(dir, 'aws-blocks', 'index.ts'));
+	writeFileSync(join(dir, 'cdk-blocks', 'index.cdk.ts'), cdkEntry + IAM_ONLY);
+	copyFileSync(join(APP, scenario[revision]), join(dir, 'cdk-blocks', 'index.ts'));
 	for (const file of revision === 'release' ? RELEASE_FILES : UPGRADED_FILES) {
-		copyFileSync(join(APP, 'dsql-migrations', file), join(dir, 'aws-blocks', 'migrations', file));
+		copyFileSync(join(APP, 'dsql-migrations', file), join(dir, 'cdk-blocks', 'migrations', file));
 	}
 	writeFileSync(
-		join(dir, 'aws-blocks', 'index.handler.ts'),
+		join(dir, 'cdk-blocks', 'index.handler.ts'),
 		"import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';\n\nexport const handler = createLambdaHandler(() => import('./index.js'));\n",
 	);
 	copyFileSync(join(APP, 'deploy.ts'), join(dir, 'scripts', 'deploy.ts'));

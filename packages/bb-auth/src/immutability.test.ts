@@ -212,8 +212,8 @@ describe('checkBaseline (the file layer)', () => {
 
 	test('path: <appDir>/baselines/<stack>/<fullId>.auth-pool.json', () => {
 		assert.strictEqual(
-			baselinePath('/app/aws-blocks', 'S', 'S-auth'),
-			join('/app/aws-blocks', 'baselines', 'S', 'S-auth.auth-pool.json'),
+			baselinePath('/app/cdk-blocks', 'S', 'S-auth'),
+			join('/app/cdk-blocks', 'baselines', 'S', 'S-auth.auth-pool.json'),
 		);
 	});
 

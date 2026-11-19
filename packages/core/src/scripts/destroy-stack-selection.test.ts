@@ -80,7 +80,7 @@ function recordDestroyArgv(modulePath: string, call: string): string[] {
  * no Region or credentials check, and no SSM delete (this app has no `.blocks/config.json`).
  */
 const SANDBOX_DESTROY =
-  "mod.runSandboxDestroy('aws-blocks/index.ts', { checkCredentials: async () => {}, " +
+  "mod.runSandboxDestroy('cdk-blocks/index.ts', { checkCredentials: async () => {}, " +
   'retryClients: mod.destroyRetryClients, destroy: mod.runDestroyWithRetries, deleteSecrets: async () => [] })';
 
 describe('destroy selects the stacks its deploy creates', { skip }, () => {
@@ -102,7 +102,7 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     assert.strictEqual(argv[argv.indexOf('reuseFrontendBuild=true') - 1], '--context', `expected --context reuseFrontendBuild=true in: ${argv.join(' ')}`);
     // The --app command names no path: the backend entry reaches CDK in its environment.
     assert.strictEqual(argv[argv.indexOf('--app') + 1], cdkAppCommand());
-    assert.match(readFileSync(cdkLog, 'utf-8'), /^app=aws-blocks\/index\.ts$/m);
+    assert.match(readFileSync(cdkLog, 'utf-8'), /^app=cdk-blocks\/index\.ts$/m);
   });
 
   it('destroySandbox clears a stale assembly first and removes the one CDK wrote after a successful destroy', () => {
@@ -158,7 +158,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
   ): Promise<{ failed: boolean; output: string; cdkRan: boolean }> {
     rmSync(argvLog, { force: true });
     const moduleUrl = new URL('./destroy.js', import.meta.url).href;
-    const options = JSON.stringify({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: root, stackName });
+    const options = JSON.stringify({ cdkAppPath: 'cdk-blocks/index.cdk.ts', projectRoot: root, stackName });
     const script = `const mod = await import(${JSON.stringify(moduleUrl)}); await mod.destroy(${options});`;
     const run = promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
@@ -200,7 +200,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
     assert.strictEqual(other.cdkRan, false);
     assert.match(
       other.output,
-      /The CDK app \(aws-blocks\/index\.cdk\.ts\) defines my-blocks-stack-prod, not live-prod, the production stack that \.blocks\/config\.json names; nothing was deleted\./,
+      /The CDK app \(cdk-blocks\/index\.cdk\.ts\) defines my-blocks-stack-prod, not live-prod, the production stack that \.blocks\/config\.json names; nothing was deleted\./,
     );
     // A construct id that differs from the stack name is listed as `id (name)`.
     const named = await runDestroy('live-prod', 'Edge\nApp (live-prod)');
@@ -260,7 +260,7 @@ describe('cdkListedStacks', () => {
       'AI agent detected',
       '🏗️  Building frontend (spa): npm run build',
       '> mig1@0.1.0 prebuild',
-      'blocks-generate-client: wrote /app/aws-blocks/client.js',
+      'blocks-generate-client: wrote /app/cdk-blocks/client.js',
       'vite v6.4.5 building for production...',
       '✓ built in 406ms',
       'zz-app-prod',

@@ -154,18 +154,18 @@ function materialize(treeRoot: string, variant: string, backend: string, preset:
 	const dir = join(treeRoot, 'test-apps', '.upgrade-in-place', `${suffix}-${variant}`);
 	rmSync(dir, { recursive: true, force: true });
 	fixtureApps.push(dir);
-	for (const sub of ['aws-blocks', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	for (const sub of ['cdk-blocks', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
 	const cdkEntry = readFileSync(join(APP, 'index.cdk.ts'), 'utf8').replace('BlocksPresets.sandbox', `BlocksPresets.${preset}`);
-	writeFileSync(join(dir, 'aws-blocks', 'index.cdk.ts'), cdkEntry);
+	writeFileSync(join(dir, 'cdk-blocks', 'index.cdk.ts'), cdkEntry);
 	const source = readFileSync(join(APP, backend), 'utf8');
-	writeFileSync(join(dir, 'aws-blocks', 'index.ts'), withoutLegacy ? source.replace(/^.*\/\/ legacy\n/gm, '') : source);
+	writeFileSync(join(dir, 'cdk-blocks', 'index.ts'), withoutLegacy ? source.replace(/^.*\/\/ legacy\n/gm, '') : source);
 	writeFileSync(
-		join(dir, 'aws-blocks', 'index.handler.ts'),
+		join(dir, 'cdk-blocks', 'index.handler.ts'),
 		"import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';\n\nexport const handler = createLambdaHandler(() => import('./index.js'));\n",
 	);
 	copyFileSync(join(APP, 'deploy.ts'), join(dir, 'scripts', 'deploy.ts'));
 	copyFileSync(join(APP, 'destroy.ts'), join(dir, 'scripts', 'destroy.ts'));
-	writeFileSync(join(dir, 'cdk.json'), `${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk aws-blocks/index.cdk.ts` }, null, 2)}\n`);
+	writeFileSync(join(dir, 'cdk.json'), `${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk cdk-blocks/index.cdk.ts` }, null, 2)}\n`);
 	writeFileSync(join(dir, '.blocks', 'config.json'), `${JSON.stringify({ stackId: 'bb-test-upgrade', telemetry: { enabled: false } }, null, 2)}\n`);
 	return dir;
 }

@@ -604,7 +604,7 @@ const auth = new Auth(scope, 'auth');
 export const authApi = auth.createApi();
 
 // Frontend — imports and uses it like any other ApiNamespace
-import { authApi } from 'aws-blocks';
+import { authApi } from 'cdk-blocks';
 const state = await authApi.getAuthState();
 ```
 

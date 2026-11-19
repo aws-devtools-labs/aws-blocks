@@ -13,7 +13,7 @@ A native Android app demonstrating the AWS Blocks Kotlin plugin. It uses Jetpack
 
 ## Prerequisites
 
-From the `example/typescript/aws-blocks` directory, run the following to start the backend and generate the spec file:
+From the `example/typescript/cdk-blocks` directory, run the following to start the backend and generate the spec file:
 
 ```bash
 npm install
@@ -55,7 +55,7 @@ The app applies the `com.aws.blocks.kotlin` plugin and configures it in `app/bui
 
 ```kotlin
 cdkBlocks {
-    apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
+    apiSpec = rootProject.file("../typescript/cdk-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {
         relayTo = "blocks.testapp://oidcRedirect"

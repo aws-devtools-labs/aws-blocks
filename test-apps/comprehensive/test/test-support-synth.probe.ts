@@ -6,7 +6,7 @@
  *
  * Run as `tsx -C cdk test/test-support-synth.probe.ts <out.json>` with or
  * without `BLOCKS_TEST_ENV`. It synthesizes the comprehensive stack exactly as
- * `cdk synth` would (`aws-blocks/index.cdk.ts`), then writes a summary: the
+ * `cdk synth` would (`cdk-blocks/index.cdk.ts`), then writes a summary: the
  * synthesized template, the RPC namespaces recorded on the stack's compute, and
  * the methods of the backend module's `api` and `testSupport` exports (the very
  * module instance synth loaded, not a second copy).
@@ -16,12 +16,12 @@ import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Template } from 'aws-cdk-lib/assertions';
-import { blocksStack } from '../aws-blocks/index.cdk.js';
+import { blocksStack } from '../cdk-blocks/index.cdk.js';
 
 const out = process.argv[2];
 if (!out) throw new Error('usage: test-support-synth.probe.ts <out.json>');
 
-const backendPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'aws-blocks', 'index.ts');
+const backendPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'cdk-blocks', 'index.ts');
 
 // `BlocksStack.create` imports the backend as `<file URL>?stack=<stack id>`;
 // the same specifier returns that cached instance.

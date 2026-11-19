@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { signUp, confirmSignUp, signIn, signOut, getCurrentUser } from 'aws-amplify/auth';
-import { api } from 'aws-blocks';
+import { api } from 'cdk-blocks';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);

@@ -144,7 +144,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 				outputs.join(''),
 				/^Usage: npm run db -- <command> \[options\]\n[\s\S]*\n {2}types \[--name <name>\] \[--schema <schema>\] \[--out <file>\]\n/,
 			);
-			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'aws-blocks', 'package.json']);
+			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'cdk-blocks', 'package.json']);
 		}
 	});
 
@@ -165,7 +165,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 			['help', 'vendorize', '@aws-blocks/bb-kv-store'],
 			['vendorize', '@aws-blocks/bb-kv-store', '--help'],
 		]) {
-			const root = fixtureApp({ workspaces: ['aws-blocks'] });
+			const root = fixtureApp({ workspaces: ['cdk-blocks'] });
 			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn([]) });
 			assert.strictEqual(run.code, 0, run.stderr);
 			assert.match(run.stdout, /Usage: npm run vendorize/);
@@ -175,7 +175,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 	});
 
 	it('the real vendorize bin prints usage for --help anywhere, before it copies or installs', () => {
-		const root = fixtureApp({ workspaces: ['aws-blocks'] });
+		const root = fixtureApp({ workspaces: ['cdk-blocks'] });
 		const bin = fileURLToPath(new URL('../vendorize.js', import.meta.url));
 		const child = spawnSync(process.execPath, [bin, '@aws-blocks/bb-kv-store', '--force', '--help'], {
 			cwd: root,

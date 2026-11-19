@@ -113,7 +113,7 @@ export async function generateTypes(engine: DatabaseEngine, schemaName: string):
 }
 
 /** Where `types` and `migrate` write the `Tables` interface when no file is named. */
-export const TYPES_FILE = 'aws-blocks/database.types.ts';
+export const TYPES_FILE = 'cdk-blocks/database.types.ts';
 
 /** Writes the `Tables` interface of `schema`, as the database reports it, to `out`. */
 export async function writeTypes(

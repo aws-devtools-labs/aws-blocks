@@ -118,7 +118,7 @@ export default function SettingsPage() {
 						<CardTitle>This app declares no settings</CardTitle>
 						<CardDescription>
 							Add an <code className="font-mono">AppSetting</code> to your{' '}
-							<code className="font-mono">aws-blocks/</code> source and it appears here, in every stage.
+							<code className="font-mono">cdk-blocks/</code> source and it appears here, in every stage.
 						</CardDescription>
 					</CardHeader>
 				</Card>

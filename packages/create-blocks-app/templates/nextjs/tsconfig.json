@@ -38,7 +38,7 @@
   ],
   "exclude": [
     "node_modules",
-    "aws-blocks/index.cdk.ts",
-    "aws-blocks/deploy.ts"
+    "cdk-blocks/index.cdk.ts",
+    "cdk-blocks/deploy.ts"
   ]
 }

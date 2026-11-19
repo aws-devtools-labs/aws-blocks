@@ -17,10 +17,10 @@
  *    what catches a fragment that still constructs a removed block.
  *
  * A block that is one complete file — its first line names the file
- * (`// aws-blocks/index.ts`), no other line does, and it has an import — is
+ * (`// cdk-blocks/index.ts`), no other line does, and it has an import — is
  * typechecked in full instead. Complete files under the same heading form one
- * app, as in bb-auth's README recipes: `'aws-blocks'` resolves to that app's
- * `aws-blocks/index.ts`.
+ * app, as in bb-auth's README recipes: `'cdk-blocks'` resolves to that app's
+ * `cdk-blocks/index.ts`.
  *
  * Markers, each with its reason:
  *  - `<!-- doc-snippet: skip — "before" code of a migration -->`, directly above
@@ -146,7 +146,7 @@ interface Analysis {
 	readonly blocksNames: Set<string>;
 	/** Every name the block declares or imports (from any module). */
 	readonly declared: Set<string>;
-	/** Bare (non-relative, non-`aws-blocks`) module specifiers the block imports. */
+	/** Bare (non-relative, non-`cdk-blocks`) module specifiers the block imports. */
 	readonly modules: Set<string>;
 	/** `new X` / `X.member` uses on bare identifiers: name → members (`''` for `new`). */
 	readonly uses: Map<string, Set<string>>;
@@ -206,7 +206,7 @@ function analyze(block: Block): Analysis {
 			hasImport = true;
 			const spec = node.moduleSpecifier.text;
 			const clause = node.importClause;
-			if (!spec.startsWith('.') && spec !== 'aws-blocks') modules.add(spec);
+			if (!spec.startsWith('.') && spec !== 'cdk-blocks') modules.add(spec);
 			if (clause?.name) declared.add(clause.name.text);
 			const nb = clause?.namedBindings;
 			if (nb && ts.isNamespaceImport(nb)) declared.add(nb.name.text);
@@ -439,15 +439,15 @@ export function checkDocs(
 			}
 
 			for (const a of apps) {
-				const backend = a.files.has('aws-blocks/index.ts') ? join(a.dir, 'aws-blocks', 'index.js') : undefined;
+				const backend = a.files.has('cdk-blocks/index.ts') ? join(a.dir, 'cdk-blocks', 'index.js') : undefined;
 				for (const [path, code] of a.files) {
 					const abs = join(a.dir, path);
 					mkdirSync(dirname(abs), { recursive: true });
 					let text = code;
-					if (backend && path !== 'aws-blocks/index.ts') {
+					if (backend && path !== 'cdk-blocks/index.ts') {
 						let rel = relative(dirname(abs), backend);
 						if (!rel.startsWith('.')) rel = `./${rel}`;
-						text = text.replace(/(['"])aws-blocks\1/g, `'${rel}'`);
+						text = text.replace(/(['"])cdk-blocks\1/g, `'${rel}'`);
 					}
 					writeFileSync(abs, `${text}\nexport {};\n`);
 					roots.push(abs);

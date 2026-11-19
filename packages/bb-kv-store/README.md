@@ -73,7 +73,7 @@ For an app that has a `KVStore` from release 0.4.0 or earlier, see [Upgrade from
 
 `Results` is an `AsyncIterable` of `{ key, value, expiresAt }` entries with one more property, `cursor`. `expiresAt` is present when the item has an expiry. Collect it with `await Array.fromAsync(results)` or read it with `for await`.
 
-**Runtime only.** The data methods run at request time. Call them inside an `ApiNamespace` method, a `RawRoute` handler, a job handler, or a runtime script. Do not call them at the top level of `aws-blocks/index.ts`. Top-level code runs during CDK synth, where a data method throws an `Error` that reads `KVStore.<method>() cannot be called during CDK synth`. You can construct the block at module scope.
+**Runtime only.** The data methods run at request time. Call them inside an `ApiNamespace` method, a `RawRoute` handler, a job handler, or a runtime script. Do not call them at the top level of `cdk-blocks/index.ts`. Top-level code runs during CDK synth, where a data method throws an `Error` that reads `KVStore.<method>() cannot be called during CDK synth`. You can construct the block at module scope.
 
 **`null` options.** An option with the value `null` counts as an option that you did not pass, in every method. A value from a request can be `null` where the type says `undefined`. For example, an `expiresAt` of `null` sets no expiry. The two value checks are the exception. `ifValueEquals: null` compares with a stored `null`, and `ifFieldEquals: null` is an error.
 

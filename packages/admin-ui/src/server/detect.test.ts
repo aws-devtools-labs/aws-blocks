@@ -51,9 +51,9 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
 }
 
 describe('resolveLocalPort', () => {
-	it('reads the port out of aws-blocks/scripts/server.ts', () => {
+	it('reads the port out of cdk-blocks/scripts/server.ts', () => {
 		const root = makeProject({
-			'aws-blocks/scripts/server.ts': 'startDevServer({\n\tbackendPath: x,\n\tport: 4321,\n});\n',
+			'cdk-blocks/scripts/server.ts': 'startDevServer({\n\tbackendPath: x,\n\tport: 4321,\n});\n',
 		});
 		assert.deepStrictEqual(resolveLocalPort(root), { port: 4321, source: 'server-script' });
 	});
@@ -66,7 +66,7 @@ describe('resolveLocalPort', () => {
 	 * developer to stop a dev server that was not running. Raised in review on #843.
 	 */
 	it('reports source "default" when server.ts states no port at all', () => {
-		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ backendPath: x });\n' });
+		const root = makeProject({ 'cdk-blocks/scripts/server.ts': 'startDevServer({ backendPath: x });\n' });
 		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'default' });
 	});
 
@@ -77,13 +77,13 @@ describe('resolveLocalPort', () => {
 	 */
 	it('reports source "indeterminate" when port is set to a computed value', () => {
 		const root = makeProject({
-			'aws-blocks/scripts/server.ts': 'startDevServer({ port: Number(process.env.PORT) || 3001 });\n',
+			'cdk-blocks/scripts/server.ts': 'startDevServer({ port: Number(process.env.PORT) || 3001 });\n',
 		});
 		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' });
 	});
 
 	it('reports source "indeterminate" when the port value is out of range', () => {
-		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ port: 99999 });\n' });
+		const root = makeProject({ 'cdk-blocks/scripts/server.ts': 'startDevServer({ port: 99999 });\n' });
 		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' });
 	});
 
@@ -93,7 +93,7 @@ describe('resolveLocalPort', () => {
 	});
 
 	it('reports source "default" even when server.ts really says 3000 — the number alone is ambiguous', () => {
-		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ port: 3000 });\n' });
+		const root = makeProject({ 'cdk-blocks/scripts/server.ts': 'startDevServer({ port: 3000 });\n' });
 		const resolved = resolveLocalPort(root);
 		assert.strictEqual(resolved.port, DEFAULT_LOCAL_PORT);
 		assert.strictEqual(
@@ -106,7 +106,7 @@ describe('resolveLocalPort', () => {
 
 describe('localBlocksUrl', () => {
 	it('builds the loopback base URL from the resolved port', () => {
-		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ port: 4400 });\n' });
+		const root = makeProject({ 'cdk-blocks/scripts/server.ts': 'startDevServer({ port: 4400 });\n' });
 		assert.strictEqual(localBlocksUrl(root), 'http://localhost:4400');
 	});
 });
@@ -189,7 +189,7 @@ describe('stackNameCandidates', () => {
 
 describe('detectLocalDevServer', () => {
 	it('reports the server up and mines the namespace list', async () => {
-		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ port: 4400 });\n' });
+		const root = makeProject({ 'cdk-blocks/scripts/server.ts': 'startDevServer({ port: 4400 });\n' });
 		const seen: string[] = [];
 		const status = await detectLocalDevServer(
 			root,

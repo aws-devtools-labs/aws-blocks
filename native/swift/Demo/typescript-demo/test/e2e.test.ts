@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
-import type { api as apiType, hello as helloType } from 'aws-blocks';
+import type { api as apiType, hello as helloType } from 'cdk-blocks';
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
@@ -23,7 +23,7 @@ test.before(async () => {
   });
   server.unref();
 
-  // Wait for the server to answer. It also writes `aws-blocks/client.js`, the
+  // Wait for the server to answer. It also writes `cdk-blocks/client.js`, the
   // generated client the import below resolves to, so import only after this.
   let ready = false;
   for (let i = 0; i < 60 && !ready; i++) {
@@ -42,7 +42,7 @@ test.before(async () => {
   if (!ready) throw new Error('Server not ready');
 
   // Import API via browser conditional export (client proxy)
-  const mod = await import('aws-blocks');
+  const mod = await import('cdk-blocks');
   api = mod.api;
   hello = mod.hello;
 });

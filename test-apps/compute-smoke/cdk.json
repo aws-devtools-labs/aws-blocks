@@ -1,3 +1,3 @@
 {
-  "app": "npx tsx aws-blocks/index.cdk.ts"
+  "app": "npx tsx cdk-blocks/index.cdk.ts"
 }

@@ -241,7 +241,7 @@ export type DatabaseClusterOptions = DsqlClusterOptions | AuroraClusterOptions;
 export interface DatabaseBlockOptions {
 	/**
 	 * Directory of `.sql` migration files for this block, relative to the project
-	 * root. Defaults to `./aws-blocks/migrations/{id}`, which may be absent; an
+	 * root. Defaults to `./cdk-blocks/migrations/{id}`, which may be absent; an
 	 * explicit path must exist.
 	 */
 	migrationsPath?: string;
