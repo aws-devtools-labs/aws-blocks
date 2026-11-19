@@ -372,7 +372,7 @@ describe('agent-bench shell runner — credential isolation + command log', () =
 		NPM_CONFIG_FETCH_RETRIES: '5',
 		LANG: 'C.UTF-8',
 		AWS_REGION: 'us-east-1',
-		AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+		CDK_DISABLE_CLI_TELEMETRY: '1',
 	};
 	const MODES = {
 		// the agent user via sudo+runuser (CI vars kept: isolation is what CI requires)

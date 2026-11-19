@@ -29,8 +29,10 @@ const ownedSinks = new Map<string, () => void>();
  * the path unguessable: in a shared tmpdir a predictable name can be pre-created as a
  * symlink, redirecting the child's write. Best-effort; never throws.
  */
-export function createFrameworkSink(): string | undefined {
-  if (!isTelemetryEnabled()) return undefined;
+export function createFrameworkSink(projectRoot?: string): string | undefined {
+  // Defaults to the current directory, which the lifecycle runner sets to the project
+  // root; a caller holding an explicit root passes it, as the production deploy does.
+  if (!isTelemetryEnabled(projectRoot)) return undefined;
   try {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-framework-'));
     const sink = resolve(dir, 'framework');
@@ -60,7 +62,7 @@ export function createFrameworkSink(): string | undefined {
  */
 export function writeFrameworkSink(framework: string): void {
   const sink = process.env[FRAMEWORK_SINK_ENV];
-  // Re-checked here: a directly-set sink path must not bypass the opt-out.
+  // Recheck consent so a direct sink path cannot bypass opt-out; the child uses the project root as cwd.
   if (!sink || !isTelemetryEnabled()) return;
   try {
     // O_CREAT | O_EXCL: atomic create — rejects an existing path, so a pre-created symlink

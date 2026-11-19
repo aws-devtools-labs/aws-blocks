@@ -310,7 +310,7 @@ assert.deepEqual(JSON.parse(readFileSync('.cdk-blocks-sandbox/config.production.
     try {
       execFileSync(process.execPath, ['--experimental-test-module-mocks', '--input-type=module', '-e', fixture], {
         cwd: dir,
-        env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1', ...(legacy ? { LEGACY: '1' } : {}) },
+        env: { PATH: process.env.PATH, HOME: dir, CDK_DISABLE_CLI_TELEMETRY: '1', ...(legacy ? { LEGACY: '1' } : {}) },
         encoding: 'utf8',
         stdio: 'pipe',
         timeout: 15_000,

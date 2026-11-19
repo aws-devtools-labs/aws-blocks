@@ -37,10 +37,10 @@ permissions:
 
 env:
   NODE_OPTIONS: '--test-reporter=spec'
-  # Disable Blocks CLI telemetry for canary runs. Telemetry is on by default and
-  # CI detection alone does not suppress it, so set the official opt-out env var
-  # (packages/core/src/telemetry/consent.ts) to stop any events being sent.
-  AWS_BLOCKS_DISABLE_TELEMETRY: '1'
+  # Disable CLI telemetry for canary runs. Telemetry is on by default and CI
+  # detection alone does not suppress it, so set CDK's opt-out env var, which is
+  # the only one (read in packages/core/src/telemetry/cdk-consent.ts).
+  CDK_DISABLE_CLI_TELEMETRY: '1'
 
 jobs:
   # Discover the matrix from the source of truth rather than hard-coding it.

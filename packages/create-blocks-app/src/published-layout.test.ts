@@ -82,7 +82,7 @@ function run(args: string[], cwd: string): { output: string; exitCode: number } 
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        CDK_DISABLE_CLI_TELEMETRY: '1',
         BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
       },
     });

@@ -106,7 +106,7 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       cwd: dir,
       encoding: 'utf-8',
       timeout: 30_000,
-      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop' },
+      env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop' },
     });
     assert.strictEqual(result.status, 0, `create-blocks-app failed: ${result.stderr}`);
     const init = spawnSync('git', ['init', '-q', dir]);

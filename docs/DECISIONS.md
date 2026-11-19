@@ -336,6 +336,7 @@ it is absent — the operational paths read the CA from the environment only.
 **Authors:** sarayev
 **Status**: Amended by [D-017](#d-017---telemetry-file-appends-every-event-from-the-run-that-created-the-file) (2026-10-05, varshpam) — clause 4 ("One event per file") and Alternative 4 ("Append to existing files") are superseded; a run now appends every event to the file it created. Clause 3 is narrowed: a path this run did not create is still skipped. The decision below is preserved as originally written.
 **Status**: Amended by [D-018](#d-018---telemetry-file-is-gated-by-consent) (2026-10-08, varshpam) — point 1 ("Writes regardless of opt-out status"), Alternative 2 ("File gated by consent (same as HTTP)"), the capture-without-sending note and Rationale bullets 1-3 are superseded; the file sink is now gated by consent. Point 2, and point 3 as narrowed by D-017, still hold. The decision below is preserved as originally written.
+**Status**: Amended by the removal of the AWS Blocks telemetry opt-out (2026-11-18, varshpam) — the capture-without-sending note names `AWS_BLOCKS_DISABLE_TELEMETRY`, which no longer exists: consent is CDK's. Redirecting `BLOCKS_TELEMETRY_ENDPOINT` to an unreachable address captures to the file without reaching the collector.
 
 ### Context
 

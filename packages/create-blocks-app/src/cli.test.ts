@@ -18,7 +18,7 @@ const task = (args: string) => `node --input-type=module -e "import '@aws-blocks
 // Tasks available both in a standalone app and alongside an Amplify-owned backend.
 const discoveryTasks = {
   docs: 'docs', 'docs:api': 'docs --api', 'docs:search': 'docs --search',
-  help: '--help', whoami: 'whoami', telemetry: 'telemetry',
+  help: '--help', whoami: 'whoami',
 };
 
 const standaloneTasks = {
@@ -62,7 +62,7 @@ function run(args: string[], cwd?: string, env?: Record<string, string>): { stdo
       // endpoint at a dead port so a regression cannot reach the production collector.
       env: {
         ...process.env,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        CDK_DISABLE_CLI_TELEMETRY: '1',
         BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
         ...env,
       },
@@ -835,7 +835,13 @@ describe('create-blocks-app auto-detection', () => {
       symlinkSync(join(__dirname, '../../blocks'), join(scope, 'blocks'), 'junction');
       const docs = (command: string) => JSON.parse(execSync(command, {
         cwd: app, encoding: 'utf-8', timeout: 30_000,
-        env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+        // Same guard as run(): the scaffolded task calls trackCommand, so opt out and
+        // point the endpoint at a dead port so a regression cannot reach the collector.
+        env: {
+          ...process.env,
+          CDK_DISABLE_CLI_TELEMETRY: '1',
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+        },
       }));
       // Parse stdout as-is: npm banners or text formatting would break a consumer's pipe.
       const member = docs('npm run -s docs Auth.protect');
@@ -1406,7 +1412,7 @@ describe('create-blocks-app bin-symlink invocation', () => {
           // This spawn bypasses run(), so it needs the same telemetry guard.
           env: {
             ...process.env,
-            AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+            CDK_DISABLE_CLI_TELEMETRY: '1',
             BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
           },
         });

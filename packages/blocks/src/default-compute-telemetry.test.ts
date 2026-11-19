@@ -34,7 +34,7 @@ function registryAfterUmbrellaImport(
 	const out = execFileSync('node', ['--input-type=module', '-e', script], {
 		encoding: 'utf-8',
 		cwd: join(dirname(require.resolve('@aws-blocks/blocks')), '..'),
-		env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+		env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' },
 		timeout: 60_000,
 	});
 	// Parsing the whole stdout instead would turn any import-time write in the

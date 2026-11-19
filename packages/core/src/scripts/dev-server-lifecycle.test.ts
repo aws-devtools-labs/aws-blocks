@@ -116,7 +116,7 @@ function startDev(
   );
   const child = spawn(process.execPath, [tsxCli, ...(watch ? ['watch', '--clear-screen=false'] : []), entry], {
     cwd: dir,
-    env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1', BLOCKS_LOG_LEVEL: '', ...env },
+    env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1', BLOCKS_LOG_LEVEL: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: posix,
   });

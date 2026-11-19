@@ -148,9 +148,9 @@ describe('buildShellEnv (agent/judge shell env policy)', () => {
 	});
 
 	it('keeps the framework telemetry opt-out (a non-credential AWS_* flag)', () => {
-		const env = buildShellEnv({ ...JOB_ENV, AWS_BLOCKS_DISABLE_TELEMETRY: '1' });
-		assert.equal(env.AWS_BLOCKS_DISABLE_TELEMETRY, '1');
-		assert.equal(isCredentialName('AWS_BLOCKS_DISABLE_TELEMETRY'), false);
+		const env = buildShellEnv({ ...JOB_ENV, CDK_DISABLE_CLI_TELEMETRY: '1' });
+		assert.equal(env.CDK_DISABLE_CLI_TELEMETRY, '1');
+		assert.equal(isCredentialName('CDK_DISABLE_CLI_TELEMETRY'), false);
 	});
 
 	it('never forwards undefined values', () => {
