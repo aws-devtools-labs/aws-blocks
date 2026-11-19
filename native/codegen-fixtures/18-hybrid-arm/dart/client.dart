@@ -7,7 +7,15 @@
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart'
-    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -70,7 +78,25 @@ class Todo {
       'Todo(userId: $userId, todoId: $todoId, title: $title, completed: $completed, priority: $priority, createdAt: $createdAt)';
 }
 
-enum AuthStateState {
+sealed class AuthStateState {
+  static const signedOut = AuthStateStateKnown.signedOut;
+  static const signedIn = AuthStateStateKnown.signedIn;
+  static const confirmingSignUp = AuthStateStateKnown.confirmingSignUp;
+  static const confirmingSignIn = AuthStateStateKnown.confirmingSignIn;
+  static const confirmingMfa = AuthStateStateKnown.confirmingMfa;
+  static const confirmingPasswordReset =
+      AuthStateStateKnown.confirmingPasswordReset;
+  static const values = AuthStateStateKnown.values;
+  static final Map<String, AuthStateStateKnown> _byJson = AuthStateStateKnown
+      .values
+      .asNameMap();
+
+  String toJson();
+  static AuthStateState fromJson(String json) =>
+      _byJson[json] ?? AuthStateStateUnknown(json);
+}
+
+enum AuthStateStateKnown implements AuthStateState {
   signedOut,
   signedIn,
   confirmingSignUp,
@@ -78,8 +104,29 @@ enum AuthStateState {
   confirmingMfa,
   confirmingPasswordReset;
 
+  @override
   String toJson() => name;
-  static AuthStateState fromJson(String json) => values.byName(json);
+}
+
+final class AuthStateStateUnknown implements AuthStateState {
+  final String value;
+
+  const AuthStateStateUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthStateStateUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'AuthStateStateUnknown'
+      '($value)';
 }
 
 class AuthUser {
@@ -125,28 +172,93 @@ class AuthUser {
       'AuthUser(userId: $userId, username: $username, displayName: $displayName)';
 }
 
-enum AuthActionMethod {
+sealed class AuthActionMethod {
+  static const GET = AuthActionMethodKnown.GET;
+  static const POST = AuthActionMethodKnown.POST;
+  static const values = AuthActionMethodKnown.values;
+  static final Map<String, AuthActionMethodKnown> _byJson =
+      AuthActionMethodKnown.values.asNameMap();
+
+  String toJson();
+  static AuthActionMethod fromJson(String json) =>
+      _byJson[json] ?? AuthActionMethodUnknown(json);
+}
+
+enum AuthActionMethodKnown implements AuthActionMethod {
   GET,
   POST;
 
+  @override
   String toJson() => name;
-  static AuthActionMethod fromJson(String json) => values.byName(json);
 }
 
-enum AuthActionCapability {
+final class AuthActionMethodUnknown implements AuthActionMethod {
+  final String value;
+
+  const AuthActionMethodUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthActionMethodUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'AuthActionMethodUnknown'
+      '($value)';
+}
+
+sealed class AuthActionCapability {
+  static const webauthnGet = AuthActionCapabilityKnown.webauthnGet;
+  static const webauthnCreate = AuthActionCapabilityKnown.webauthnCreate;
+  static const values = AuthActionCapabilityKnown.values;
+
+  String toJson();
+  static AuthActionCapability fromJson(String json) =>
+      AuthActionCapabilityKnown._jsonMap[json] ??
+      AuthActionCapabilityUnknown(json);
+}
+
+enum AuthActionCapabilityKnown implements AuthActionCapability {
   webauthnGet,
   webauthnCreate;
 
-  static const _jsonMap = <String, AuthActionCapability>{
+  static const _jsonMap = <String, AuthActionCapabilityKnown>{
     'webauthn-get': webauthnGet,
     'webauthn-create': webauthnCreate,
   };
-  static const _toJsonMap = <AuthActionCapability, String>{
+  static const _toJsonMap = <AuthActionCapabilityKnown, String>{
     webauthnGet: 'webauthn-get',
     webauthnCreate: 'webauthn-create',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static AuthActionCapability fromJson(String json) => _jsonMap[json]!;
+}
+
+final class AuthActionCapabilityUnknown implements AuthActionCapability {
+  final String value;
+
+  const AuthActionCapabilityUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthActionCapabilityUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'AuthActionCapabilityUnknown'
+      '($value)';
 }
 
 class AuthAction {
@@ -226,7 +338,24 @@ class AuthAction {
       'AuthAction(name: $name, label: $label, fields: $fields, url: $url, method: $method, capability: $capability, unavailable: $unavailable)';
 }
 
-enum AuthFieldType {
+sealed class AuthFieldType {
+  static const number = AuthFieldTypeKnown.number;
+  static const password = AuthFieldTypeKnown.password;
+  static const email = AuthFieldTypeKnown.email;
+  static const text = AuthFieldTypeKnown.text;
+  static const tel = AuthFieldTypeKnown.tel;
+  static const hidden = AuthFieldTypeKnown.hidden;
+  static const values = AuthFieldTypeKnown.values;
+  static final Map<String, AuthFieldTypeKnown> _byJson = AuthFieldTypeKnown
+      .values
+      .asNameMap();
+
+  String toJson();
+  static AuthFieldType fromJson(String json) =>
+      _byJson[json] ?? AuthFieldTypeUnknown(json);
+}
+
+enum AuthFieldTypeKnown implements AuthFieldType {
   number,
   password,
   email,
@@ -234,8 +363,29 @@ enum AuthFieldType {
   tel,
   hidden;
 
+  @override
   String toJson() => name;
-  static AuthFieldType fromJson(String json) => values.byName(json);
+}
+
+final class AuthFieldTypeUnknown implements AuthFieldType {
+  final String value;
+
+  const AuthFieldTypeUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthFieldTypeUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'AuthFieldTypeUnknown'
+      '($value)';
 }
 
 class AuthField {
@@ -605,6 +755,9 @@ enum UpdateMfaPreferenceInputEmail {
       values.byName(json);
 }
 
+@Deprecated('Use AuthActionInput')
+typedef AuthApiSetAuthStateInput = AuthActionInput;
+
 // --- API Namespaces ---
 
 class AuthState {
@@ -676,10 +829,10 @@ class AuthState {
       'AuthState(state: $state, user: $user, actions: $actions, error: $error, errorName: $errorName, retriable: $retriable)';
 }
 
-sealed class AuthApiSetAuthStateInput {
-  const AuthApiSetAuthStateInput();
+sealed class AuthActionInput {
+  const AuthActionInput();
   Map<String, dynamic> toJson();
-  static AuthApiSetAuthStateInput fromJson(Map<String, dynamic> json) {
+  static AuthActionInput fromJson(Map<String, dynamic> json) {
     switch (json['action'] as String) {
       case 'signUp':
         return SignUpInput.fromJson(json);
@@ -723,7 +876,7 @@ sealed class AuthApiSetAuthStateInput {
   }
 }
 
-class SignUpInput extends AuthApiSetAuthStateInput {
+class SignUpInput extends AuthActionInput {
   final String username;
   final String password;
   final Map<String, String> additionalProperties;
@@ -776,7 +929,7 @@ class SignUpInput extends AuthApiSetAuthStateInput {
       'SignUpInput(username: $username, password: $password, additionalProperties: $additionalProperties)';
 }
 
-class ResetPasswordInput extends AuthApiSetAuthStateInput {
+class ResetPasswordInput extends AuthActionInput {
   final String username;
 
   const ResetPasswordInput({required this.username});
@@ -802,7 +955,7 @@ class ResetPasswordInput extends AuthApiSetAuthStateInput {
   String toString() => 'ResetPasswordInput(username: $username)';
 }
 
-class SignInInput extends AuthApiSetAuthStateInput {
+class SignInInput extends AuthActionInput {
   final String username;
   final String password;
 
@@ -834,7 +987,7 @@ class SignInInput extends AuthApiSetAuthStateInput {
   String toString() => 'SignInInput(username: $username, password: $password)';
 }
 
-class SignInWithPasskeyInput extends AuthApiSetAuthStateInput {
+class SignInWithPasskeyInput extends AuthActionInput {
   final String username;
 
   const SignInWithPasskeyInput({required this.username});
@@ -860,7 +1013,7 @@ class SignInWithPasskeyInput extends AuthApiSetAuthStateInput {
   String toString() => 'SignInWithPasskeyInput(username: $username)';
 }
 
-class ConfirmSignUpInput extends AuthApiSetAuthStateInput {
+class ConfirmSignUpInput extends AuthActionInput {
   final String username;
   final String code;
   final String? password;
@@ -905,7 +1058,7 @@ class ConfirmSignUpInput extends AuthApiSetAuthStateInput {
       'ConfirmSignUpInput(username: $username, code: $code, password: $password)';
 }
 
-class ResendSignUpCodeInput extends AuthApiSetAuthStateInput {
+class ResendSignUpCodeInput extends AuthActionInput {
   final String username;
 
   const ResendSignUpCodeInput({required this.username});
@@ -931,7 +1084,7 @@ class ResendSignUpCodeInput extends AuthApiSetAuthStateInput {
   String toString() => 'ResendSignUpCodeInput(username: $username)';
 }
 
-class SignOutInput extends AuthApiSetAuthStateInput {
+class SignOutInput extends AuthActionInput {
   const SignOutInput();
 
   factory SignOutInput.fromJson(Map<String, dynamic> json) {
@@ -954,7 +1107,7 @@ class SignOutInput extends AuthApiSetAuthStateInput {
   String toString() => 'SignOutInput()';
 }
 
-class ConfirmResetPasswordInput extends AuthApiSetAuthStateInput {
+class ConfirmResetPasswordInput extends AuthActionInput {
   final String username;
   final String code;
   final String newPassword;
@@ -999,7 +1152,7 @@ class ConfirmResetPasswordInput extends AuthApiSetAuthStateInput {
       'ConfirmResetPasswordInput(username: $username, code: $code, newPassword: $newPassword)';
 }
 
-class AutoSignInInput extends AuthApiSetAuthStateInput {
+class AutoSignInInput extends AuthActionInput {
   final String username;
 
   const AutoSignInInput({required this.username});
@@ -1025,7 +1178,7 @@ class AutoSignInInput extends AuthApiSetAuthStateInput {
   String toString() => 'AutoSignInInput(username: $username)';
 }
 
-class ConfirmSignInInput extends AuthApiSetAuthStateInput {
+class ConfirmSignInInput extends AuthActionInput {
   final String session;
   final ConfirmSignInInputChallenge challenge;
 
@@ -1062,7 +1215,7 @@ class ConfirmSignInInput extends AuthApiSetAuthStateInput {
       'ConfirmSignInInput(session: $session, challenge: $challenge)';
 }
 
-class StartPasskeyRegistrationInput extends AuthApiSetAuthStateInput {
+class StartPasskeyRegistrationInput extends AuthActionInput {
   const StartPasskeyRegistrationInput();
 
   factory StartPasskeyRegistrationInput.fromJson(Map<String, dynamic> json) {
@@ -1085,7 +1238,7 @@ class StartPasskeyRegistrationInput extends AuthApiSetAuthStateInput {
   String toString() => 'StartPasskeyRegistrationInput()';
 }
 
-class CompletePasskeyRegistrationInput extends AuthApiSetAuthStateInput {
+class CompletePasskeyRegistrationInput extends AuthActionInput {
   final String credential;
 
   const CompletePasskeyRegistrationInput({required this.credential});
@@ -1115,7 +1268,7 @@ class CompletePasskeyRegistrationInput extends AuthApiSetAuthStateInput {
       'CompletePasskeyRegistrationInput(credential: $credential)';
 }
 
-class ListPasskeysInput extends AuthApiSetAuthStateInput {
+class ListPasskeysInput extends AuthActionInput {
   const ListPasskeysInput();
 
   factory ListPasskeysInput.fromJson(Map<String, dynamic> json) {
@@ -1138,7 +1291,7 @@ class ListPasskeysInput extends AuthApiSetAuthStateInput {
   String toString() => 'ListPasskeysInput()';
 }
 
-class DeletePasskeyInput extends AuthApiSetAuthStateInput {
+class DeletePasskeyInput extends AuthActionInput {
   final String credentialId;
 
   const DeletePasskeyInput({required this.credentialId});
@@ -1164,7 +1317,7 @@ class DeletePasskeyInput extends AuthApiSetAuthStateInput {
   String toString() => 'DeletePasskeyInput(credentialId: $credentialId)';
 }
 
-class SetUpTotpInput extends AuthApiSetAuthStateInput {
+class SetUpTotpInput extends AuthActionInput {
   const SetUpTotpInput();
 
   factory SetUpTotpInput.fromJson(Map<String, dynamic> json) {
@@ -1187,7 +1340,7 @@ class SetUpTotpInput extends AuthApiSetAuthStateInput {
   String toString() => 'SetUpTotpInput()';
 }
 
-class VerifyTotpSetupInput extends AuthApiSetAuthStateInput {
+class VerifyTotpSetupInput extends AuthActionInput {
   final String code;
 
   const VerifyTotpSetupInput({required this.code});
@@ -1213,7 +1366,7 @@ class VerifyTotpSetupInput extends AuthApiSetAuthStateInput {
   String toString() => 'VerifyTotpSetupInput(code: $code)';
 }
 
-class GetMfaPreferenceInput extends AuthApiSetAuthStateInput {
+class GetMfaPreferenceInput extends AuthActionInput {
   const GetMfaPreferenceInput();
 
   factory GetMfaPreferenceInput.fromJson(Map<String, dynamic> json) {
@@ -1236,7 +1389,7 @@ class GetMfaPreferenceInput extends AuthApiSetAuthStateInput {
   String toString() => 'GetMfaPreferenceInput()';
 }
 
-class UpdateMfaPreferenceInput extends AuthApiSetAuthStateInput {
+class UpdateMfaPreferenceInput extends AuthActionInput {
   final UpdateMfaPreferenceInputSms? sms;
   final UpdateMfaPreferenceInputTotp? totp;
   final UpdateMfaPreferenceInputEmail? email;
@@ -1287,9 +1440,7 @@ class AuthApi {
   final BlocksClient _client;
   AuthApi(this._client);
 
-  Future<AuthState> setAuthState({
-    required AuthApiSetAuthStateInput input,
-  }) async {
+  Future<AuthState> setAuthState({required AuthActionInput input}) async {
     final params = <dynamic>[input.toJson()];
     final result = await _client.call('authApi.setAuthState', params);
     return AuthState.fromJson(result as Map<String, dynamic>);
@@ -1300,9 +1451,16 @@ class AuthApi {
 
 class Blocks {
   late final AuthApi authApi;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
+    _client = client;
     authApi = AuthApi(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for sync-to-mirror.sh. Builds a workspace laid out like the
-# aws-blocks-swift sync workflow's (mono/native/swift next to a mirror/ git
+# cdk-blocks-swift sync workflow's (mono/native/swift next to a mirror/ git
 # checkout) and runs a copy of the real script from inside mono/native/swift.
 
 set -euo pipefail

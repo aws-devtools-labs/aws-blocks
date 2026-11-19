@@ -29,7 +29,7 @@ void main() async {
   );
   check(
     signIn.status == NativeSignInResultStatus.signedIn,
-    'signIn completes (status=${signIn.status.name})',
+    'signIn completes (status=${signIn.status.toJson()})',
   );
   check(signIn.user?.username == user.username, 'signIn returns the username');
   check(signIn.user?.userId.isNotEmpty ?? false, 'signIn returns userId');
@@ -150,7 +150,7 @@ Future<void> _signUpFlow(Blocks blocks) async {
   );
   check(
     confirmed.status == NativeSignInResultStatus.signedIn,
-    'confirmSignUp auto-signs the user in (status=${confirmed.status.name})',
+    'confirmSignUp auto-signs the user in (status=${confirmed.status.toJson()})',
   );
   check(
     confirmed.user?.username == username,

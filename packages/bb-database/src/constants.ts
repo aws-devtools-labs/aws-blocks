@@ -172,6 +172,16 @@ export const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')
 // `public` is a DSQL system entity: it needs no search_path, no CREATE SCHEMA and no schema-level grant.
 export const searchPathFor = (schema: string): string | undefined => (schema === DEFAULT_SCHEMA ? undefined : schema);
 
+/** The name `Database` of `@aws-blocks/bb-data` derived from a full id, for its database and its config keys. */
+export const legacyName = (fullId: string): string => fullId.replace(/[^a-zA-Z0-9]/g, '_');
+
+// The config keys of a `LegacyDatabaseCluster`, in the form the earlier block used. The CDK layer writes them
+// and the Lambda runtime reads them; both sides derive them here.
+export const legacyClusterConfigKey = (
+	clusterFullId: string,
+	suffix: 'CLUSTER_ARN' | 'SECRET_ARN' | 'DATABASE',
+): string => `BLOCKS_${legacyName(clusterFullId)}_${suffix}`;
+
 // The config bucket key the CDK layer writes and the Lambda runtime reads; both sides derive it here.
 export const clusterConfigKey = (clusterFullId: string, suffix: 'ENDPOINT' | 'REGION'): string =>
 	`BLOCKS_${sanitizeConfigKey(clusterFullId)}_${suffix}`;

@@ -7,7 +7,15 @@
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart'
-    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -150,29 +158,63 @@ class Extras {
       'Extras(additionalProperties\$: ${additionalProperties$}, id: $id, additionalProperties: $additionalProperties)';
 }
 
-enum Level {
+sealed class Level {
+  static const values$ = LevelKnown.values$;
+  static const index$ = LevelKnown.index$;
+  static const name$ = LevelKnown.name$;
+  static const $hidden = LevelKnown.$hidden;
+  static const ok = LevelKnown.ok;
+  static const values = LevelKnown.values;
+
+  String toJson();
+  static Level fromJson(String json) =>
+      LevelKnown._jsonMap[json] ?? LevelUnknown(json);
+}
+
+enum LevelKnown implements Level {
   values$,
   index$,
   name$,
   $hidden,
   ok;
 
-  static const _jsonMap = <String, Level>{
+  static const _jsonMap = <String, LevelKnown>{
     'values': values$,
     'index': index$,
     'name': name$,
     '_hidden': $hidden,
     'ok': ok,
   };
-  static const _toJsonMap = <Level, String>{
+  static const _toJsonMap = <LevelKnown, String>{
     values$: 'values',
     index$: 'index',
     name$: 'name',
     $hidden: '_hidden',
     ok: 'ok',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static Level fromJson(String json) => _jsonMap[json]!;
+}
+
+final class LevelUnknown implements Level {
+  final String value;
+
+  const LevelUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LevelUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'LevelUnknown'
+      '($value)';
 }
 
 class Api {
@@ -201,9 +243,16 @@ class Api {
 
 class Blocks {
   late final Api api;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
+    _client = client;
     api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }

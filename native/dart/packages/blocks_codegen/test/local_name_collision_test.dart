@@ -350,6 +350,7 @@ void main() {
           'sessionStore: sessionStore);',
         ),
       );
+      expect(out, contains(r'    _client = $client;'));
       expect(out, contains(r'    client = ClientApi($client);'));
       expect(out, contains(r'    this.baseUrl = BaseUrlApi($client);'));
       expect(
@@ -365,6 +366,7 @@ void main() {
         out,
         contains(
           '    final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);\n'
+          '    _client = client;\n'
           '    api = Api(client);\n'
           '    todos = TodosApi(client);\n',
         ),

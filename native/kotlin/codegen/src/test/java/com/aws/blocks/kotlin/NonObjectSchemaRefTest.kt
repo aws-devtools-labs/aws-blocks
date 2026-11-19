@@ -55,21 +55,15 @@ class NonObjectSchemaRefTest : FunSpec({
             ),
         )
         val types = files.getValue("Types")
-        types shouldContain """
-            |@Serializable
-            |public enum class Level {
-            |  @SerialName("low")
-            |  Low,
-            |  @SerialName("high")
-            |  High,
-            |}
-        """.trimMargin()
-        types.count("enum class Level") shouldBe 1
+        // A result reaches it, so it is open.
+        types shouldContain "@Serializable(with = Level.Serializer::class)\npublic sealed class Level {"
+        types shouldContain "public val entries: List<Level> by lazy { listOf(Low, High) }"
+        types.count("sealed class Level ") shouldBe 1
         types shouldContain "public val level: Level,"
         types shouldContain "public val levels: List<Level>,"
         types shouldContain "public val byUser: Map<String, List<Level>>,"
         types shouldContain "public val maybe: Level?,"
-        types shouldNotContain "enum class Levels"
+        types shouldNotContain "class Levels"
         types shouldNotContain "Holder.Level"
     }
 
@@ -81,7 +75,7 @@ class NonObjectSchemaRefTest : FunSpec({
                 extra = """, "Other": { "type": "object", "properties": { "level": ${ref("Level")} }, "required": ["level"] }""",
             ),
         )
-        files.getValue("Types").count("enum class Level") shouldBe 1
+        files.getValue("Types").count("sealed class Level ") shouldBe 1
         val api = files.getValue("Api")
         api shouldContain "public suspend fun op(level: Level): Holder"
         api shouldContain "public suspend fun getLevel(): Level"

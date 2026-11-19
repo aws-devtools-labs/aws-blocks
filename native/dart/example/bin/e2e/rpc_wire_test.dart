@@ -88,7 +88,29 @@ void main() async {
     'a positional array with a null slot keeps `last` '
     '(got: middle=${positional['middle']} last=${positional['last']})',
   );
+
+  // The server sends no name for a missing method, so the client fills in
+  // the reserved code's own name rather than leaving an anonymous 500.
+  group('RPC wire: errors cross the wire by name');
+  try {
+    await raw.call('api.noSuchMethod', []);
+    check(false, 'a missing method throws');
+  } on ApiException catch (e) {
+    check(
+      e.status == 500 && isBlocksError(e, 'MethodNotFound'),
+      'a missing method is a 500 named MethodNotFound '
+      '(got: ${e.status} ${e.name})',
+    );
+  }
+
+  group('RPC wire: a call after close() fails without a request');
   raw.close();
+  try {
+    await raw.call('api.echoArgs', ['a']);
+    check(false, 'a call after close() throws');
+  } on ClientClosedException {
+    check(true, 'a call after close() throws ClientClosedException');
+  }
 
   printResults();
 }

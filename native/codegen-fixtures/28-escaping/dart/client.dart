@@ -7,33 +7,75 @@
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart'
-    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
-enum WidgetKind {
+sealed class WidgetKind {
+  static const cost$ = WidgetKindKnown.cost$;
+  static const a$b = WidgetKindKnown.a$b;
+  static const x$$y = WidgetKindKnown.x$$y;
+  static const b$c = WidgetKindKnown.b$c;
+  static const d_$e = WidgetKindKnown.d_$e;
+  static const values = WidgetKindKnown.values;
+
+  String toJson();
+  static WidgetKind fromJson(String json) =>
+      WidgetKindKnown._jsonMap[json] ?? WidgetKindUnknown(json);
+}
+
+enum WidgetKindKnown implements WidgetKind {
   cost$,
   a$b,
   x$$y,
   b$c,
   d_$e;
 
-  static const _jsonMap = <String, WidgetKind>{
+  static const _jsonMap = <String, WidgetKindKnown>{
     'cost\$': cost$,
     'a\$b': a$b,
     'x\$\$y': x$$y,
     'b-\$c': b$c,
     'd_\$e': d_$e,
   };
-  static const _toJsonMap = <WidgetKind, String>{
+  static const _toJsonMap = <WidgetKindKnown, String>{
     cost$: 'cost\$',
     a$b: 'a\$b',
     x$$y: 'x\$\$y',
     b$c: 'b-\$c',
     d_$e: 'd_\$e',
   };
+  @override
   String toJson() => _toJsonMap[this]!;
-  static WidgetKind fromJson(String json) => _jsonMap[json]!;
+}
+
+final class WidgetKindUnknown implements WidgetKind {
+  final String value;
+
+  const WidgetKindUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is WidgetKindUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'WidgetKindUnknown'
+      '($value)';
 }
 
 // --- API Namespaces ---
@@ -231,12 +273,19 @@ class Servers {
 
 class Blocks {
   late final Api api;
+  late final BlocksClient _client;
 
   Blocks({String? baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(
       baseUrl: baseUrl ?? Servers.primary,
       sessionStore: sessionStore,
     );
+    _client = client;
     api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }

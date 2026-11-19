@@ -119,16 +119,18 @@ export type {
 	ClusterKind,
 	ClusterType,
 	ConnectionStringSource,
+	DataApiOptions,
 	DatabaseClusterOptions,
 	DatabaseOptions,
 	ExistingClusterOptions,
 	ExistingClusterRef,
+	LegacyDatabaseClusterOptions,
 	ScopedDatabase,
 	SqlQuery,
 	Transaction,
 	TransactionOptions,
 } from '@aws-blocks/bb-database';
-export { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
+export { Database, DatabaseCluster, DatabaseErrors, LegacyDatabaseCluster, sql } from '@aws-blocks/bb-database';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {

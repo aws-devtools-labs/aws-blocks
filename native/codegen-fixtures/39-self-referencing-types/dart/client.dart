@@ -7,7 +7,15 @@
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart'
-    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
@@ -187,9 +195,16 @@ class Api {
 
 class Blocks {
   late final Api api;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
+    _client = client;
     api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }

@@ -7,6 +7,13 @@ import 'package:http/testing.dart';
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:test/test.dart';
 
+/// A [TransportException] for the `offline` [http.ClientException] the
+/// tests' clients throw, with that error as its cause.
+final _offline = isA<TransportException>()
+    .having((e) => e.statusCode, 'statusCode', isNull)
+    .having((e) => e.message, 'message', 'offline')
+    .having((e) => e.cause, 'cause', isA<http.ClientException>());
+
 void main() {
   group('OidcClient PKCE', () {
     test('generateVerifier produces url-safe base64 without padding', () {
@@ -335,9 +342,9 @@ void main() {
         await expectLater(
           t.client.refresh(),
           throwsA(
-            isA<OidcRequestException>()
-                .having((e) => e.statusCode, 'statusCode', status)
-                .having((e) => e.errorName, 'errorName', 'Busy'),
+            isA<ApiException>()
+                .having((e) => e.status, 'status', status)
+                .having((e) => e.name, 'name', 'Busy'),
           ),
         );
         await Future<void>.delayed(Duration.zero);
@@ -353,10 +360,7 @@ void main() {
       );
       await t.store.set('refresh_token', 'rt');
 
-      await expectLater(
-        t.client.refresh(),
-        throwsA(isA<http.ClientException>()),
-      );
+      await expectLater(t.client.refresh(), throwsA(_offline));
       await Future<void>.delayed(Duration.zero);
       expect(t.states, isEmpty);
       expect(await t.store.get('refresh_token'), 'rt');
@@ -509,7 +513,7 @@ void main() {
 
       await expectLater(
         client.onAuthFailure(),
-        throwsA(isA<OidcRequestException>()),
+        throwsA(isA<ApiException>().having((e) => e.status, 'status', 502)),
       );
       expect(await store.get('refresh_token'), 'rt_valid');
       expect(client.authState, isA<OidcLoading>());
@@ -751,7 +755,7 @@ void main() {
         await expectLater(
           client.restore(),
           throwsA(
-            isA<OidcRequestException>().having(
+            isA<TransportException>().having(
               (e) => e.statusCode,
               'statusCode',
               200,
@@ -842,8 +846,8 @@ void main() {
       await expectLater(
         client.restore(),
         throwsA(
-          isA<OidcRequestException>()
-              .having((e) => e.statusCode, 'statusCode', 404)
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 404)
               .having((e) => e.message, 'message', contains('session route')),
         ),
       );
@@ -870,9 +874,14 @@ void main() {
       await expectLater(
         client.restore(),
         throwsA(
-          isA<OidcRequestException>()
-              .having((e) => e.statusCode, 'statusCode', 500)
-              .having((e) => e.errorName, 'errorName', 'InternalError'),
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 500)
+              .having((e) => e.name, 'name', 'InternalError')
+              .having(
+                (e) => e.message,
+                'message',
+                'Session request failed: HTTP 500: boom',
+              ),
         ),
       );
       await Future<void>.delayed(Duration.zero);
@@ -888,7 +897,7 @@ void main() {
       // Skip the state a new listener gets first: these tests check changes.
       client.authStateChanges.skip(1).listen(states.add);
 
-      await expectLater(client.restore(), throwsA(isA<http.ClientException>()));
+      await expectLater(client.restore(), throwsA(_offline));
       await Future<void>.delayed(Duration.zero);
       expect(states, isEmpty);
     });
@@ -1019,12 +1028,12 @@ void main() {
         await expectLater(
           t.client.signOut(),
           throwsA(
-            isA<OidcRequestException>()
-                .having((e) => e.statusCode, 'statusCode', 503)
+            isA<ApiException>()
+                .having((e) => e.status, 'status', 503)
                 .having(
-                  (e) => e.errorName,
-                  'errorName',
-                  'SignOutIncompleteException',
+                  (e) => isBlocksError(e, 'SignOutIncompleteException'),
+                  'isBlocksError(SignOutIncompleteException)',
+                  isTrue,
                 ),
           ),
         );
@@ -1044,11 +1053,7 @@ void main() {
         await expectLater(
           t.client.signOut(),
           throwsA(
-            isA<OidcRequestException>().having(
-              (e) => e.statusCode,
-              'statusCode',
-              status,
-            ),
+            isA<ApiException>().having((e) => e.status, 'status', status),
           ),
         );
         await Future<void>.delayed(Duration.zero);
@@ -1149,11 +1154,13 @@ void main() {
     final failures = <String, (Future<http.Response> Function(), Matcher)>{
       'a transport error': (
         () async => throw http.ClientException('offline'),
-        isA<http.ClientException>(),
+        _offline,
       ),
       'a 500': (
         () async => http.Response(jsonEncode({'name': 'Boom'}), 500),
-        isA<OidcRequestException>().having((e) => e.statusCode, 'status', 500),
+        isA<ApiException>()
+            .having((e) => e.status, 'status', 500)
+            .having((e) => e.name, 'name', 'Boom'),
       ),
       'a cancelled request': (
         () async => throw http.RequestAbortedException(),
@@ -1206,7 +1213,7 @@ void main() {
       );
       expect(client.sessionCookieName, 'auth_app-sso');
 
-      await expectLater(client.signOut(), throwsA(isA<http.ClientException>()));
+      await expectLater(client.signOut(), throwsA(_offline));
 
       expect(session.cookies, {'auth_app-auth': 'main', 'other': 'keep'});
       expect(client.authState, isA<OidcSignedOut>());
@@ -1227,7 +1234,7 @@ void main() {
       );
       expect(client.sessionCookieName, isNull);
 
-      await expectLater(client.signOut(), throwsA(isA<OidcRequestException>()));
+      await expectLater(client.signOut(), throwsA(isA<ApiException>()));
       expect(session.cookies, {'auth_app-sso': 'sso'});
     });
 
@@ -1250,7 +1257,7 @@ void main() {
 
       final restored = client.restore();
       await Future<void>.delayed(Duration.zero);
-      await expectLater(client.signOut(), throwsA(isA<http.ClientException>()));
+      await expectLater(client.signOut(), throwsA(_offline));
       session.complete(
         http.Response(
           jsonEncode({
@@ -1295,7 +1302,9 @@ void main() {
 
   group('OidcClient fromJson', () {
     Matcher descriptorError(String message) => throwsA(
-      isA<FormatException>().having((e) => e.message, 'message', message),
+      isA<InvalidDescriptorException>()
+          .having((e) => e.message, 'message', message)
+          .having((e) => e.missingField, 'missingField', 'exchangePath'),
     );
 
     test('names a missing exchangePath', () {

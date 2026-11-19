@@ -7,18 +7,62 @@
 
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart'
-    show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+    show
+        ApiException,
+        BlocksClient,
+        BlocksException,
+        ClientClosedException,
+        InMemorySessionStore,
+        SessionStore,
+        TransportException,
+        isBlocksError;
 
 // --- Models ---
 
-enum CodeDeliveryDetailsDeliveryMedium {
+sealed class CodeDeliveryDetailsDeliveryMedium {
+  static const SMS = CodeDeliveryDetailsDeliveryMediumKnown.SMS;
+  static const EMAIL = CodeDeliveryDetailsDeliveryMediumKnown.EMAIL;
+  static const PHONE_NUMBER =
+      CodeDeliveryDetailsDeliveryMediumKnown.PHONE_NUMBER;
+  static const values = CodeDeliveryDetailsDeliveryMediumKnown.values;
+  static final Map<String, CodeDeliveryDetailsDeliveryMediumKnown> _byJson =
+      CodeDeliveryDetailsDeliveryMediumKnown.values.asNameMap();
+
+  String toJson();
+  static CodeDeliveryDetailsDeliveryMedium fromJson(String json) =>
+      _byJson[json] ?? CodeDeliveryDetailsDeliveryMediumUnknown(json);
+}
+
+enum CodeDeliveryDetailsDeliveryMediumKnown
+    implements CodeDeliveryDetailsDeliveryMedium {
   SMS,
   EMAIL,
   PHONE_NUMBER;
 
+  @override
   String toJson() => name;
-  static CodeDeliveryDetailsDeliveryMedium fromJson(String json) =>
-      values.byName(json);
+}
+
+final class CodeDeliveryDetailsDeliveryMediumUnknown
+    implements CodeDeliveryDetailsDeliveryMedium {
+  final String value;
+
+  const CodeDeliveryDetailsDeliveryMediumUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is CodeDeliveryDetailsDeliveryMediumUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'CodeDeliveryDetailsDeliveryMediumUnknown'
+      '($value)';
 }
 
 class CodeDeliveryDetails {
@@ -66,20 +110,86 @@ class CodeDeliveryDetails {
       'CodeDeliveryDetails(destination: $destination, deliveryMedium: $deliveryMedium, attributeName: $attributeName)';
 }
 
-enum AuthenticatedUserGroups {
-  admins,
-  users;
+sealed class AuthenticatedUserGroups {
+  static const users = AuthenticatedUserGroupsKnown.users;
+  static const admins = AuthenticatedUserGroupsKnown.admins;
+  static const values = AuthenticatedUserGroupsKnown.values;
+  static final Map<String, AuthenticatedUserGroupsKnown> _byJson =
+      AuthenticatedUserGroupsKnown.values.asNameMap();
 
-  String toJson() => name;
-  static AuthenticatedUserGroups fromJson(String json) => values.byName(json);
+  String toJson();
+  static AuthenticatedUserGroups fromJson(String json) =>
+      _byJson[json] ?? AuthenticatedUserGroupsUnknown(json);
 }
 
-enum AuthenticatedUserSignInProvider {
+enum AuthenticatedUserGroupsKnown implements AuthenticatedUserGroups {
+  users,
+  admins;
+
+  @override
+  String toJson() => name;
+}
+
+final class AuthenticatedUserGroupsUnknown implements AuthenticatedUserGroups {
+  final String value;
+
+  const AuthenticatedUserGroupsUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthenticatedUserGroupsUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'AuthenticatedUserGroupsUnknown'
+      '($value)';
+}
+
+sealed class AuthenticatedUserSignInProvider {
+  static const password = AuthenticatedUserSignInProviderKnown.password;
+  static const values = AuthenticatedUserSignInProviderKnown.values;
+  static final Map<String, AuthenticatedUserSignInProviderKnown> _byJson =
+      AuthenticatedUserSignInProviderKnown.values.asNameMap();
+
+  String toJson();
+  static AuthenticatedUserSignInProvider fromJson(String json) =>
+      _byJson[json] ?? AuthenticatedUserSignInProviderUnknown(json);
+}
+
+enum AuthenticatedUserSignInProviderKnown
+    implements AuthenticatedUserSignInProvider {
   password;
 
+  @override
   String toJson() => name;
-  static AuthenticatedUserSignInProvider fromJson(String json) =>
-      values.byName(json);
+}
+
+final class AuthenticatedUserSignInProviderUnknown
+    implements AuthenticatedUserSignInProvider {
+  final String value;
+
+  const AuthenticatedUserSignInProviderUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AuthenticatedUserSignInProviderUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'AuthenticatedUserSignInProviderUnknown'
+      '($value)';
 }
 
 class AuthenticatedUser {
@@ -203,34 +313,211 @@ class FederatedIdentity {
   String toString() => 'FederatedIdentity(providerId: $providerId, sub: $sub)';
 }
 
-enum CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
+sealed class CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
+  static const SMS =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .SMS;
+  static const TOTP =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .TOTP;
+  static const EMAIL =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .EMAIL;
+  static const values =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .values;
+  static final Map<
+    String,
+    CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+  >
+  _byJson =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .values
+          .asNameMap();
+
+  String toJson();
+  static CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes
+  fromJson(String json) =>
+      _byJson[json] ??
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown(
+        json,
+      );
+}
+
+enum CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
   SMS,
   TOTP,
   EMAIL;
 
+  @override
   String toJson() => name;
-  static CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes
-  fromJson(String json) => values.byName(json);
 }
 
-enum CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
+final class CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
+  final String value;
+
+  const CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown(
+    this.value,
+  );
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other
+          is CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown &&
+      value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown'
+      '($value)';
+}
+
+sealed class CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
+  static const TOTP =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .TOTP;
+  static const EMAIL =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .EMAIL;
+  static const values =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .values;
+  static final Map<
+    String,
+    CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+  >
+  _byJson =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+          .values
+          .asNameMap();
+
+  String toJson();
+  static CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes
+  fromJson(String json) =>
+      _byJson[json] ??
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown(
+        json,
+      );
+}
+
+enum CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesKnown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
   TOTP,
   EMAIL;
 
+  @override
   String toJson() => name;
-  static CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes
-  fromJson(String json) => values.byName(json);
 }
 
-enum CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges {
+final class CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypes {
+  final String value;
+
+  const CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown(
+    this.value,
+  );
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other
+          is CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown &&
+      value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAllowedMFATypesUnknown'
+      '($value)';
+}
+
+sealed class CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges {
+  static const PASSWORD =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+          .PASSWORD;
+  static const EMAIL_OTP =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+          .EMAIL_OTP;
+  static const SMS_OTP =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+          .SMS_OTP;
+  static const WEB_AUTHN =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+          .WEB_AUTHN;
+  static const values =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+          .values;
+  static final Map<
+    String,
+    CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+  >
+  _byJson =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+          .values
+          .asNameMap();
+
+  String toJson();
+  static CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges
+  fromJson(String json) =>
+      _byJson[json] ??
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesUnknown(
+        json,
+      );
+}
+
+enum CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesKnown
+    implements
+        CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges {
   PASSWORD,
   EMAIL_OTP,
   SMS_OTP,
   WEB_AUTHN;
 
+  @override
   String toJson() => name;
-  static CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges
-  fromJson(String json) => values.byName(json);
+}
+
+final class CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesUnknown
+    implements
+        CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallenges {
+  final String value;
+
+  const CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesUnknown(
+    this.value,
+  );
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other
+          is CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesUnknown &&
+      value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoConfirmSignInResultNextStepAvailableChallengesUnknown'
+      '($value)';
 }
 
 sealed class ContinueSignInCognitoConfirmSignInResultNextStep {
@@ -301,7 +588,9 @@ sealed class ContinueSignInCognitoConfirmSignInResultNextStep {
           json,
         );
       default:
-        throw ArgumentError('Unknown name: ${json['name']}');
+        return ContinueSignInCognitoConfirmSignInResultNextStepUnknown(
+          _blocksFrozenObject(json),
+        );
     }
   }
 }
@@ -966,34 +1255,236 @@ class CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep
       'CONFIRM_SIGN_UPContinueSignInCognitoConfirmSignInResultNextStep(codeDeliveryDetails: $codeDeliveryDetails)';
 }
 
-enum CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
+final class ContinueSignInCognitoConfirmSignInResultNextStepUnknown
+    extends ContinueSignInCognitoConfirmSignInResultNextStep {
+  final Map<String, dynamic> json;
+
+  const ContinueSignInCognitoConfirmSignInResultNextStepUnknown(this.json);
+
+  String get discriminator => json['name'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is ContinueSignInCognitoConfirmSignInResultNextStepUnknown &&
+      blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() =>
+      'ContinueSignInCognitoConfirmSignInResultNextStepUnknown'
+      '($json)';
+}
+
+sealed class CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
+  static const SMS =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .SMS;
+  static const TOTP =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .TOTP;
+  static const EMAIL =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .EMAIL;
+  static const values =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .values;
+  static final Map<
+    String,
+    CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+  >
+  _byJson =
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .values
+          .asNameMap();
+
+  String toJson();
+  static CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes
+  fromJson(String json) =>
+      _byJson[json] ??
+      CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown(
+        json,
+      );
+}
+
+enum CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
   SMS,
   TOTP,
   EMAIL;
 
+  @override
   String toJson() => name;
-  static CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes
-  fromJson(String json) => values.byName(json);
 }
 
-enum CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
+final class CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
+  final String value;
+
+  const CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown(
+    this.value,
+  );
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other
+          is CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown &&
+      value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'CONTINUE_SIGN_IN_WITH_MFA_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown'
+      '($value)';
+}
+
+sealed class CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
+  static const TOTP =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .TOTP;
+  static const EMAIL =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .EMAIL;
+  static const values =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .values;
+  static final Map<
+    String,
+    CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+  >
+  _byJson =
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+          .values
+          .asNameMap();
+
+  String toJson();
+  static CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes
+  fromJson(String json) =>
+      _byJson[json] ??
+      CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown(
+        json,
+      );
+}
+
+enum CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesKnown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
   TOTP,
   EMAIL;
 
+  @override
   String toJson() => name;
-  static CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes
-  fromJson(String json) => values.byName(json);
 }
 
-enum CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges {
+final class CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown
+    implements
+        CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypes {
+  final String value;
+
+  const CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown(
+    this.value,
+  );
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other
+          is CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown &&
+      value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTIONContinueSignInCognitoSignInResultNextStepAllowedMFATypesUnknown'
+      '($value)';
+}
+
+sealed class CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges {
+  static const PASSWORD =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+          .PASSWORD;
+  static const EMAIL_OTP =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+          .EMAIL_OTP;
+  static const SMS_OTP =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+          .SMS_OTP;
+  static const WEB_AUTHN =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+          .WEB_AUTHN;
+  static const values =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+          .values;
+  static final Map<
+    String,
+    CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+  >
+  _byJson =
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+          .values
+          .asNameMap();
+
+  String toJson();
+  static CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges
+  fromJson(String json) =>
+      _byJson[json] ??
+      CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesUnknown(
+        json,
+      );
+}
+
+enum CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesKnown
+    implements
+        CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges {
   PASSWORD,
   EMAIL_OTP,
   SMS_OTP,
   WEB_AUTHN;
 
+  @override
   String toJson() => name;
-  static CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges
-  fromJson(String json) => values.byName(json);
+}
+
+final class CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesUnknown
+    implements
+        CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallenges {
+  final String value;
+
+  const CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesUnknown(
+    this.value,
+  );
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other
+          is CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesUnknown &&
+      value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() =>
+      'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTIONContinueSignInCognitoSignInResultNextStepAvailableChallengesUnknown'
+      '($value)';
 }
 
 sealed class ContinueSignInCognitoSignInResultNextStep {
@@ -1064,7 +1555,9 @@ sealed class ContinueSignInCognitoSignInResultNextStep {
           json,
         );
       default:
-        throw ArgumentError('Unknown name: ${json['name']}');
+        return ContinueSignInCognitoSignInResultNextStepUnknown(
+          _blocksFrozenObject(json),
+        );
     }
   }
 }
@@ -1727,6 +2220,44 @@ class CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep
       'CONFIRM_SIGN_UPContinueSignInCognitoSignInResultNextStep(codeDeliveryDetails: $codeDeliveryDetails)';
 }
 
+final class ContinueSignInCognitoSignInResultNextStepUnknown
+    extends ContinueSignInCognitoSignInResultNextStep {
+  final Map<String, dynamic> json;
+
+  const ContinueSignInCognitoSignInResultNextStepUnknown(this.json);
+
+  String get discriminator => json['name'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is ContinueSignInCognitoSignInResultNextStepUnknown &&
+      blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() =>
+      'ContinueSignInCognitoSignInResultNextStepUnknown'
+      '($json)';
+}
+
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
+
 // --- API Namespaces ---
 
 sealed class CognitoConfirmSignInResult {
@@ -1734,14 +2265,44 @@ sealed class CognitoConfirmSignInResult {
   Map<String, dynamic> toJson();
   static CognitoConfirmSignInResult fromJson(Map<String, dynamic> json) {
     switch (json['status'] as String) {
-      case 'continueSignIn':
-        return ContinueSignInCognitoConfirmSignInResult.fromJson(json);
       case 'signedIn':
         return SignedInCognitoConfirmSignInResult.fromJson(json);
+      case 'continueSignIn':
+        return ContinueSignInCognitoConfirmSignInResult.fromJson(json);
       default:
-        throw ArgumentError('Unknown status: ${json['status']}');
+        return CognitoConfirmSignInResultUnknown(_blocksFrozenObject(json));
     }
   }
+}
+
+class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
+  final AuthenticatedUser user;
+
+  const SignedInCognitoConfirmSignInResult({required this.user});
+
+  factory SignedInCognitoConfirmSignInResult.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return SignedInCognitoConfirmSignInResult(
+      user: AuthenticatedUser.fromJson(json['user'] as Map<String, dynamic>),
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {'status': 'signedIn', 'user': user.toJson()};
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SignedInCognitoConfirmSignInResult && user == other.user;
+
+  @override
+  int get hashCode => user.hashCode;
+
+  @override
+  String toString() => 'SignedInCognitoConfirmSignInResult(user: $user)';
 }
 
 class ContinueSignInCognitoConfirmSignInResult
@@ -1779,15 +2340,53 @@ class ContinueSignInCognitoConfirmSignInResult
       'ContinueSignInCognitoConfirmSignInResult(nextStep: $nextStep)';
 }
 
-class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
+final class CognitoConfirmSignInResultUnknown
+    extends CognitoConfirmSignInResult {
+  final Map<String, dynamic> json;
+
+  const CognitoConfirmSignInResultUnknown(this.json);
+
+  String get discriminator => json['status'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is CognitoConfirmSignInResultUnknown &&
+      blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() =>
+      'CognitoConfirmSignInResultUnknown'
+      '($json)';
+}
+
+sealed class CognitoSignInResult {
+  const CognitoSignInResult();
+  Map<String, dynamic> toJson();
+  static CognitoSignInResult fromJson(Map<String, dynamic> json) {
+    switch (json['status'] as String) {
+      case 'signedIn':
+        return SignedInCognitoSignInResult.fromJson(json);
+      case 'continueSignIn':
+        return ContinueSignInCognitoSignInResult.fromJson(json);
+      default:
+        return CognitoSignInResultUnknown(_blocksFrozenObject(json));
+    }
+  }
+}
+
+class SignedInCognitoSignInResult extends CognitoSignInResult {
   final AuthenticatedUser user;
 
-  const SignedInCognitoConfirmSignInResult({required this.user});
+  const SignedInCognitoSignInResult({required this.user});
 
-  factory SignedInCognitoConfirmSignInResult.fromJson(
-    Map<String, dynamic> json,
-  ) {
-    return SignedInCognitoConfirmSignInResult(
+  factory SignedInCognitoSignInResult.fromJson(Map<String, dynamic> json) {
+    return SignedInCognitoSignInResult(
       user: AuthenticatedUser.fromJson(json['user'] as Map<String, dynamic>),
     );
   }
@@ -1800,28 +2399,13 @@ class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is SignedInCognitoConfirmSignInResult && user == other.user;
+      other is SignedInCognitoSignInResult && user == other.user;
 
   @override
   int get hashCode => user.hashCode;
 
   @override
-  String toString() => 'SignedInCognitoConfirmSignInResult(user: $user)';
-}
-
-sealed class CognitoSignInResult {
-  const CognitoSignInResult();
-  Map<String, dynamic> toJson();
-  static CognitoSignInResult fromJson(Map<String, dynamic> json) {
-    switch (json['status'] as String) {
-      case 'continueSignIn':
-        return ContinueSignInCognitoSignInResult.fromJson(json);
-      case 'signedIn':
-        return SignedInCognitoSignInResult.fromJson(json);
-      default:
-        throw ArgumentError('Unknown status: ${json['status']}');
-    }
-  }
+  String toString() => 'SignedInCognitoSignInResult(user: $user)';
 }
 
 class ContinueSignInCognitoSignInResult extends CognitoSignInResult {
@@ -1856,32 +2440,27 @@ class ContinueSignInCognitoSignInResult extends CognitoSignInResult {
   String toString() => 'ContinueSignInCognitoSignInResult(nextStep: $nextStep)';
 }
 
-class SignedInCognitoSignInResult extends CognitoSignInResult {
-  final AuthenticatedUser user;
+final class CognitoSignInResultUnknown extends CognitoSignInResult {
+  final Map<String, dynamic> json;
 
-  const SignedInCognitoSignInResult({required this.user});
+  const CognitoSignInResultUnknown(this.json);
 
-  factory SignedInCognitoSignInResult.fromJson(Map<String, dynamic> json) {
-    return SignedInCognitoSignInResult(
-      user: AuthenticatedUser.fromJson(json['user'] as Map<String, dynamic>),
-    );
-  }
+  String get discriminator => json['status'] as String;
 
   @override
-  Map<String, dynamic> toJson() {
-    return {'status': 'signedIn', 'user': user.toJson()};
-  }
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SignedInCognitoSignInResult && user == other.user;
+      other is CognitoSignInResultUnknown && blocksDeepEquals(json, other.json);
 
   @override
-  int get hashCode => user.hashCode;
+  int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'SignedInCognitoSignInResult(user: $user)';
+  String toString() =>
+      'CognitoSignInResultUnknown'
+      '($json)';
 }
 
 class Api {
@@ -1911,9 +2490,16 @@ class Api {
 
 class Blocks {
   late final Api api;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
+    _client = client;
     api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }

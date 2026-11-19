@@ -34,10 +34,10 @@ jobs:
         run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests|BlocksGeneratedNonIdentifierNamesTests"
 
       - name: Build for iOS
-        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+        run: xcodebuild build -scheme cdk-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
       - name: Run unit tests on iOS
-        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+        run: xcodebuild test -scheme cdk-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
 
   create-release-pr:
     name: Create Release PR
@@ -132,7 +132,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # This PR is opened with GITHUB_TOKEN, so its checks wait for a
-      # maintainer to approve the workflow runs on the PR. The aws-blocks-swift
+      # maintainer to approve the workflow runs on the PR. The cdk-blocks-swift
       # repo pulls the release from the swift@<version> tag after merge; see
       # the PR body for that step.
       - name: Create monorepo release PR

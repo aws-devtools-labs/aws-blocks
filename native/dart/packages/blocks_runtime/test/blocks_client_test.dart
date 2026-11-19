@@ -127,18 +127,14 @@ void main() {
           await expectLater(
             client.call('api.authRequired', []),
             throwsA(
-              isA<BlocksRpcException>()
-                  .having((e) => e.code, 'code', 401)
+              isA<ApiException>()
+                  .having((e) => e.status, 'status', 401)
                   .having(
                     (e) => e.message,
                     'message',
                     'Authentication required',
                   )
-                  .having(
-                    (e) => (e.data as Map)['name'],
-                    'data.name',
-                    'NotAuthenticatedException',
-                  ),
+                  .having((e) => e.name, 'name', 'NotAuthenticatedException'),
             ),
             reason: 'HTTP $status',
           );
@@ -168,7 +164,7 @@ void main() {
         );
         await expectLater(
           client.call('api.authRequired', []),
-          throwsA(isA<BlocksRpcException>().having((e) => e.code, 'code', 401)),
+          throwsA(isA<ApiException>().having((e) => e.status, 'status', 401)),
         );
         expect(calls, 2);
       },
@@ -229,7 +225,7 @@ void main() {
       expect(sentHeaders!['x-blocks-user-agent'], blocksUserAgentToken);
     });
 
-    test('throws BlocksRpcException on error response', () async {
+    test('throws ApiException on error response', () async {
       final mockClient = MockClient(
         (_) async => http.Response(
           jsonEncode({
@@ -244,8 +240,9 @@ void main() {
       expect(
         () => client.call('bad', {}),
         throwsA(
-          isA<BlocksRpcException>()
-              .having((e) => e.code, 'code', -32600)
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 500)
+              .having((e) => e.name, 'name', 'InvalidRequest')
               .having((e) => e.message, 'message', 'Invalid'),
         ),
       );
