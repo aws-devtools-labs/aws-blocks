@@ -93,6 +93,8 @@ const LEGACY_NAME_REQUIRED_LINES: Record<string, readonly string[]> = {
 	'.gitignore': [`${LEGACY}/`],
 	// Prose about an app's state BEFORE upgrading, which really was at the old path.
 	'.changeset/core-deploy-config-per-stage.md': ['may still have a deployed URL in'],
+	// The harness deploys a release from before the rename and reads the outputs file that the release wrote.
+	'test-apps/comprehensive/test/upgrade-sql-blocks.ts': ["for (const dir of ['.cdk-blocks-sandbox',"],
 };
 
 /** Every git-tracked file, repo-relative. */
