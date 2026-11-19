@@ -54,7 +54,7 @@ async function discoverPackages(): Promise<PackageInfo[]> {
 /**
  * Find all template package.json files inside create-blocks-app/templates/.
  * These contain @aws-cdk-blocks/* dependency versions that must be pinned
- * during canary publishes so scaffolded apps resolve the canary version.
+ * during canary and rc publishes so scaffolded apps resolve that version.
  */
 async function discoverTemplatePackageJsons(): Promise<string[]> {
 	const templatesDir = join(PACKAGES_DIR, "create-blocks-app", "templates");
@@ -181,40 +181,59 @@ function sanitizeBranchName(branch: string): string {
 
 interface ParsedArgs {
 	distTag: string;
-	canaryVersion: string | null;
+	/** The version every package publishes as (`--canary` or `--rc`), or `null` to keep each package's own. */
+	versionOverride: string | null;
 	/** `--pack-only <dir>`: write tarballs + manifest to `dir` for a later `npm publish`; no upload. */
 	packOnlyDir: string | null;
 }
 
+/** A release-candidate version: `X.Y.Z-rc.N`, no leading zeros, nothing after `N`. */
+const RC_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.(0|[1-9]\d*)$/;
+
 function parseArgs(): ParsedArgs {
 	const args = process.argv.slice(2);
 	const canaryIdx = args.indexOf("--canary");
+	const rcIdx = args.indexOf("--rc");
 	const packOnlyIdx = args.indexOf("--pack-only");
 	const packOnlyDir = packOnlyIdx !== -1 && args[packOnlyIdx + 1] ? resolve(args[packOnlyIdx + 1]!) : null;
+	const canaryBranch = canaryIdx !== -1 ? args[canaryIdx + 1] : undefined;
+	const rcVersion = rcIdx !== -1 ? args[rcIdx + 1] : undefined;
 
+	if (canaryIdx !== -1 && rcIdx !== -1) {
+		console.error("\n❌ --canary and --rc cannot be combined.\n");
+		process.exit(1);
+	}
+	if (rcIdx !== -1 && !(rcVersion && RC_VERSION.test(rcVersion))) {
+		console.error(`\n❌ --rc requires a version of the form X.Y.Z-rc.N (got ${JSON.stringify(rcVersion ?? "")}).\n`);
+		process.exit(1);
+	}
 	// Pack-only output is published to public npm, so it must never carry the `latest` dist-tag.
-	if (packOnlyDir && !(canaryIdx !== -1 && args[canaryIdx + 1])) {
-		console.error("\n❌ --pack-only requires --canary <branch>.\n");
+	if (packOnlyDir && !canaryBranch && !rcVersion) {
+		console.error("\n❌ --pack-only requires --canary <branch> or --rc <version>.\n");
 		process.exit(1);
 	}
 
-	if (canaryIdx !== -1 && args[canaryIdx + 1]) {
-		const safeBranch = sanitizeBranchName(args[canaryIdx + 1]);
+	if (rcVersion) {
+		return { distTag: "rc", versionOverride: rcVersion, packOnlyDir };
+	}
+
+	if (canaryBranch) {
+		const safeBranch = sanitizeBranchName(canaryBranch);
 		const shortSha = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
 		const timestamp = Math.floor(Date.now() / 1000);
 		return {
 			distTag: `canary-${safeBranch}`,
-			canaryVersion: `0.0.0-canary.${safeBranch}.${shortSha}.${timestamp}`,
+			versionOverride: `0.0.0-canary.${safeBranch}.${shortSha}.${timestamp}`,
 			packOnlyDir,
 		};
 	}
 
-	return { distTag: "latest", canaryVersion: null, packOnlyDir: null };
+	return { distTag: "latest", versionOverride: null, packOnlyDir: null };
 }
 
 // ── Publish orchestrator ───────────────────────────────────────────
 
-async function publish(publisher: Publisher | null, distTag: string, canaryVersion: string | null, packOnlyDir: string | null) {
+async function publish(publisher: Publisher | null, distTag: string, versionOverride: string | null, packOnlyDir: string | null) {
 	console.log("Discovering packages...");
 	let packages = await discoverPackages();
 
@@ -236,23 +255,23 @@ async function publish(publisher: Publisher | null, distTag: string, canaryVersi
 	const sorted = topoSort(packages);
 	console.log(`Topological order: ${sorted.map((p) => p.name).join(" → ")}`);
 
-	// Override versions for canary publishes
-	if (canaryVersion) {
+	// Override versions for canary and rc publishes
+	if (versionOverride) {
 		const packageNames = new Set(sorted.map((p) => p.name));
-		console.log(`\nCanary mode: overriding all versions to ${canaryVersion}`);
+		console.log(`\nVersion override (${distTag}): all packages → ${versionOverride}`);
 
 		for (const pkg of sorted) {
-			pkg.version = canaryVersion;
-			pkg.packageJson.version = canaryVersion;
+			pkg.version = versionOverride;
+			pkg.packageJson.version = versionOverride;
 
-			// Rewrite internal dependencies to point to the exact canary version
+			// Rewrite internal dependencies to point to the exact override version
 			const depMaps = [pkg.packageJson.dependencies, pkg.packageJson.peerDependencies].filter(
 				(d): d is Record<string, string> => !!d,
 			);
 			for (const deps of depMaps) {
 				for (const depName of Object.keys(deps)) {
 					if (packageNames.has(depName)) {
-						deps[depName] = canaryVersion;
+						deps[depName] = versionOverride;
 					}
 				}
 			}
@@ -275,9 +294,9 @@ async function publish(publisher: Publisher | null, distTag: string, canaryVersi
 		process.exit(1);
 	}
 
-	// Write canary versions to disk so npm pack picks them up
+	// Write override versions to disk so npm pack picks them up
 	const originalPackageJsons = new Map<string, string>();
-	if (canaryVersion) {
+	if (versionOverride) {
 		for (const pkg of sorted) {
 			const original = await readFile(pkg.packageJsonPath, "utf-8");
 			originalPackageJsons.set(pkg.packageJsonPath, original);
@@ -285,7 +304,7 @@ async function publish(publisher: Publisher | null, distTag: string, canaryVersi
 		}
 
 		// Also rewrite template package.json files so scaffolded apps
-		// resolve the canary version instead of "*" or "latest"
+		// resolve the override version instead of "*" or "latest"
 		const templatePkgPaths = await discoverTemplatePackageJsons();
 		const packageNames = new Set(sorted.map((p) => p.name));
 		for (const tplPath of templatePkgPaths) {
@@ -298,7 +317,7 @@ async function publish(publisher: Publisher | null, distTag: string, canaryVersi
 				if (!deps) continue;
 				for (const depName of Object.keys(deps)) {
 					if (packageNames.has(depName)) {
-						deps[depName] = canaryVersion;
+						deps[depName] = versionOverride;
 						changed = true;
 					}
 				}
@@ -307,7 +326,7 @@ async function publish(publisher: Publisher | null, distTag: string, canaryVersi
 			if (changed) {
 				originalPackageJsons.set(tplPath, original);
 				await writeFile(tplPath, JSON.stringify(tplPkg, null, 2) + "\n");
-				console.log(`  Pinned template deps → ${canaryVersion} in ${relative(ROOT, tplPath)}`);
+				console.log(`  Pinned template deps → ${versionOverride} in ${relative(ROOT, tplPath)}`);
 			}
 		}
 	}
@@ -456,7 +475,7 @@ async function publish(publisher: Publisher | null, distTag: string, canaryVersi
 
 // ── CLI entry point ────────────────────────────────────────────────
 
-const { distTag, canaryVersion, packOnlyDir } = parseArgs();
+const { distTag, versionOverride, packOnlyDir } = parseArgs();
 
 const bucket = process.env.S3_BUCKET;
 const cfDomain = process.env.CLOUDFRONT_DOMAIN;
@@ -487,7 +506,7 @@ if (packOnlyDir) {
 const modeLabel = mode === "s3" ? "S3" : mode === "pack-only" ? "pack-only" : "dry-run (local)";
 console.log(`AWS Blocks Publish — ${modeLabel} (dist-tag: ${distTag})\n`);
 
-const manifest = await publish(publisher, distTag, canaryVersion, packOnlyDir);
+const manifest = await publish(publisher, distTag, versionOverride, packOnlyDir);
 
 // Write manifest
 const manifestDir = packOnlyDir ?? (mode === "s3" ? ROOT : localRegistryDir(ROOT));

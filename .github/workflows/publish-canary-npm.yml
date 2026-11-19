@@ -1,18 +1,35 @@
-name: Publish Canary (npm)
+name: Publish Canary or RC (npm)
 
-# Publishes a canary build of the selected branch to public npm under the
-# `canary-<branch>` dist-tag (version 0.0.0-canary.<branch>.<sha>.<ts>).
+# Publishes a prerelease of every @aws-cdk-blocks package and the aws-cdk-blocks
+# umbrella to public npm. Pick `kind` when you run it:
+#
+#   canary  Any branch. Version 0.0.0-canary.<branch>.<sha>.<ts>, dist-tag
+#           `canary-<branch>`.
+#   rc      main only. Version `rc-version` (X.Y.Z-rc.N, e.g. 1.0.0-rc.0) for
+#           every package, dist-tag `rc`. Install with `aws-cdk-blocks@rc`.
+#
 # Never touches `latest` — stable releases live in publish-packages.yml.
 # The S3-registry canary lives in publish-canary.yml.
 #
 # Two jobs: `pack` builds, tests, and packs with no secrets. `publish` holds
 # NPM_TOKEN, runs no repo code (no checkout, no npm ci), verifies the packed
-# tarballs, and publishes them with provenance.
+# tarballs against the inputs, and publishes them with provenance.
 #
 # NOTE: npm versions are permanent and public (unpublish only works for 72h).
+# An rc version can be published once; the next build is rc.N+1.
 
 on:
   workflow_dispatch:
+    inputs:
+      kind:
+        description: 'canary: a build of this branch under canary-<branch>. rc: rc-version under the rc dist-tag (main only).'
+        type: choice
+        options: [canary, rc]
+        default: canary
+      rc-version:
+        description: 'rc only: the version every package publishes as, X.Y.Z-rc.N (e.g. 1.0.0-rc.0).'
+        type: string
+        required: false
 
 concurrency:
   group: publish-canary-npm
@@ -29,7 +46,43 @@ jobs:
       contents: read
     env:
       NODE_OPTIONS: '--test-reporter=spec'
+      KIND: ${{ inputs.kind }}
+      RC_VERSION: ${{ inputs.rc-version }}
+      BRANCH_NAME: ${{ github.ref_name }}
     steps:
+      # Fail before the 45-minute build when the inputs can't be published.
+      - name: Check inputs
+        run: |
+          set -euo pipefail
+          case "$KIND" in
+            canary)
+              if [[ ! "$BRANCH_NAME" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
+                echo "::error::Branch name contains unsafe characters"
+                exit 1
+              fi
+              ;;
+            rc)
+              if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+                echo "::error::An rc publishes from main only (this run is on $GITHUB_REF)"
+                exit 1
+              fi
+              if [[ ! "$RC_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]; then
+                echo "::error::rc-version must be X.Y.Z-rc.N, e.g. 1.0.0-rc.0 (got '$RC_VERSION')"
+                exit 1
+              fi
+              for name in @aws-cdk-blocks/core aws-cdk-blocks; do
+                if npm view "$name@$RC_VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+                  echo "::error::$name@$RC_VERSION is already on npm; pick the next rc number"
+                  exit 1
+                fi
+              done
+              ;;
+            *)
+              echo "::error::Unknown kind '$KIND'"
+              exit 1
+              ;;
+          esac
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -52,15 +105,14 @@ jobs:
       - name: E2E Test Local
         run: npm run test:e2e:local
 
-      - name: Pack canary
-        env:
-          BRANCH_NAME: ${{ github.ref_name }}
+      - name: Pack
         run: |
-          if [[ ! "$BRANCH_NAME" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
-            echo "::error::Branch name contains unsafe characters"
-            exit 1
+          set -euo pipefail
+          if [[ "$KIND" == rc ]]; then
+            npx tsx scripts/publish/publish.ts --rc "$RC_VERSION" --pack-only dist-npm
+          else
+            npx tsx scripts/publish/publish.ts --canary "$BRANCH_NAME" --pack-only dist-npm
           fi
-          npx tsx scripts/publish/publish.ts --canary "$BRANCH_NAME" --pack-only dist-npm
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -78,6 +130,9 @@ jobs:
     permissions:
       contents: read
       id-token: write # npm provenance
+    env:
+      KIND: ${{ inputs.kind }}
+      RC_VERSION: ${{ inputs.rc-version }}
     steps:
       # No checkout here, so no .nvmrc — keep in sync with it.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -90,13 +145,37 @@ jobs:
           name: canary-npm-tarballs
           path: dist-npm
 
+      # The manifest comes from the pack job, which ran repo code. Check it against
+      # the run's own inputs, not against itself.
       - name: Verify tarballs
         working-directory: dist-npm
         run: |
           set -euo pipefail
           DIST_TAG=$(jq -r .distTag publish-manifest.json)
-          if [[ ! "$DIST_TAG" =~ ^canary-[a-z0-9-]+$ ]]; then
-            echo "::error::Refusing dist-tag '$DIST_TAG' (must be canary-*)"
+          case "$KIND" in
+            canary)
+              tag_ok='^canary-[a-z0-9-]+$'
+              version_ok='^0\.0\.0-canary\.'
+              ;;
+            rc)
+              if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+                echo "::error::An rc publishes from main only (this run is on $GITHUB_REF)"
+                exit 1
+              fi
+              if [[ ! "$RC_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]; then
+                echo "::error::rc-version must be X.Y.Z-rc.N (got '$RC_VERSION')"
+                exit 1
+              fi
+              tag_ok='^rc$'
+              version_ok="^${RC_VERSION//./\\.}\$"
+              ;;
+            *)
+              echo "::error::Unknown kind '$KIND'"
+              exit 1
+              ;;
+          esac
+          if [[ ! "$DIST_TAG" =~ $tag_ok ]]; then
+            echo "::error::Refusing dist-tag '$DIST_TAG' for a $KIND publish"
             exit 1
           fi
           jq -c '.packages[]' publish-manifest.json | while read -r pkg; do
@@ -104,12 +183,12 @@ jobs:
             version=$(jq -r .version <<<"$pkg")
             file=$(jq -r .file <<<"$pkg")
             expected=$(jq -r .integrity <<<"$pkg")
-            if [[ ! "$name" =~ ^@aws-blocks/[a-z0-9-]+$ ]]; then
+            if [[ ! "$name" =~ ^(@aws-cdk-blocks/[a-z0-9-]+|aws-cdk-blocks)$ ]]; then
               echo "::error::Unexpected package name '$name'"
               exit 1
             fi
-            if [[ ! "$version" =~ ^0\.0\.0-canary\. ]]; then
-              echo "::error::$name: refusing non-canary version '$version'"
+            if [[ ! "$version" =~ $version_ok ]]; then
+              echo "::error::$name: refusing version '$version' for a $KIND publish"
               exit 1
             fi
             if [[ ! "$file" =~ ^[a-z0-9.-]+\.tgz$ ]]; then
@@ -131,12 +210,19 @@ jobs:
         run: |
           set -euo pipefail
           # Manifest is in topological order, so dependencies publish first.
-          # Already-published versions are skipped, so a rerun after a partial failure is safe.
+          # A version already on npm is skipped only when it is this exact tarball, so
+          # re-running the failed job after a partial publish is safe, and a second build
+          # never lands under a version that an earlier build already holds.
           jq -c '.packages[]' publish-manifest.json | while read -r pkg; do
             name=$(jq -r .name <<<"$pkg")
             version=$(jq -r .version <<<"$pkg")
             file=$(jq -r .file <<<"$pkg")
-            if npm view "$name@$version" version >/dev/null 2>&1; then
+            expected=$(jq -r .integrity <<<"$pkg")
+            if published=$(npm view "$name@$version" dist.integrity 2>/dev/null) && [[ -n "$published" ]]; then
+              if [[ "$published" != "$expected" ]]; then
+                echo "::error::$name@$version is already on npm from a different build"
+                exit 1
+              fi
               echo "$name@$version already on npm, skipping"
               continue
             fi
@@ -147,7 +233,7 @@ jobs:
         working-directory: dist-npm
         run: |
           {
-            echo "## Canary Published to npm 🐤"
+            echo "## Published to npm (\`$DIST_TAG\`)"
             echo ""
             echo "**Dist tag:** \`$DIST_TAG\`"
             echo ""
@@ -156,11 +242,11 @@ jobs:
             echo ""
             echo "### Install"
             echo '```bash'
-            echo "npm install @aws-blocks/blocks@$DIST_TAG"
+            echo "npm install aws-cdk-blocks@$DIST_TAG"
             echo '```'
             echo ""
             echo "### Create App"
             echo '```bash'
-            echo "npm create @aws-blocks/blocks-app@$DIST_TAG -- --template demo"
+            echo "npm create @aws-cdk-blocks/blocks-app@$DIST_TAG -- --template demo"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
