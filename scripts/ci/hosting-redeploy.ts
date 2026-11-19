@@ -7,7 +7,7 @@
 // asset proxy's build prefix, listener rules) would pass. This redeploys the
 // sandbox the e2e suite left running (BLOCKS_SANDBOX_KEEP=1) — a new build id
 // — and requires the door to serve the new build:
-// - `/.blocks-sandbox/config.json` names the new build id;
+// - `/.cdk-blocks-sandbox/config.json` names the new build id;
 // - `/` serves the SPA shell, and its hashed script loads;
 // - the API still answers same-origin.
 //
@@ -22,7 +22,7 @@ if (!process.argv[2]) {
 const appDir = resolve(process.argv[2]);
 
 const hostingUrl = (): string => {
-  const outputs = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
+  const outputs = JSON.parse(readFileSync(join(appDir, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
     string,
     Record<string, string>
   >;
@@ -41,7 +41,7 @@ const tryFetch = async (url: string, init?: RequestInit): Promise<Response | und
   }
 };
 const buildIdAt = async (url: string): Promise<string | undefined> => {
-  const res = await tryFetch(`${url}/.blocks-sandbox/config.json?__redeploy=${Date.now()}`);
+  const res = await tryFetch(`${url}/.cdk-blocks-sandbox/config.json?__redeploy=${Date.now()}`);
   if (res?.status !== 200) return undefined;
   return ((await res.json()) as { __blocksBuildId?: string }).__blocksBuildId;
 };

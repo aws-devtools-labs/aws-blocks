@@ -32,7 +32,7 @@ function runScript(scriptBody: string, env: Record<string, string>, cwd?: string
   const fullScript = `import { ApiNamespaceClient } from '${importPath}';\n${scriptBody}`;
   writeFileSync(scriptPath, fullScript);
   try {
-    // By default a fresh directory, so no `.blocks-sandbox/config.json` of the cwd answers before the browser fetch.
+    // By default a fresh directory, so no `.cdk-blocks-sandbox/config.json` of the cwd answers before the browser fetch.
     return execSync(`node ${scriptPath}`, {
       cwd: cwd ?? tmp,
       encoding: 'utf-8',
@@ -140,7 +140,7 @@ console.log(JSON.stringify({ result: await api.hello(), calls }));
 `, {});
     assert.deepStrictEqual(JSON.parse(result.split('\n').at(-1) ?? ''), {
       result: 'ok',
-      calls: ['/.blocks-sandbox/config.json', '/aws-blocks/api/greet'],
+      calls: ['/.cdk-blocks-sandbox/config.json', '/aws-blocks/api/greet'],
     });
   });
 });
@@ -455,13 +455,13 @@ describe('Client bundle safety (React Native / Hermes)', () => {
     assert.deepStrictEqual(clientGraph().nonRelativeImports, []);
   });
 
-  /** Run `fn` in a project directory whose `.blocks-sandbox/config.json` names an API URL. */
+  /** Run `fn` in a project directory whose `.cdk-blocks-sandbox/config.json` names an API URL. */
   function withConfigFile(fn: (projectDir: string) => void): void {
     const projectDir = mkdtempSync(join(tmpdir(), 'blocks-client-cwd-'));
     try {
-      mkdirSync(join(projectDir, '.blocks-sandbox'));
+      mkdirSync(join(projectDir, '.cdk-blocks-sandbox'));
       writeFileSync(
-        join(projectDir, '.blocks-sandbox', 'config.json'),
+        join(projectDir, '.cdk-blocks-sandbox', 'config.json'),
         JSON.stringify({ apiUrl: 'https://from-config-file.example.com/aws-blocks' }),
       );
       fn(projectDir);
@@ -470,7 +470,7 @@ describe('Client bundle safety (React Native / Hermes)', () => {
     }
   }
 
-  it('still reads .blocks-sandbox/config.json from the working directory under Node', () => {
+  it('still reads .cdk-blocks-sandbox/config.json from the working directory under Node', () => {
     withConfigFile((projectDir) => {
       const result = runScript(`
 globalThis.fetch = async (url) => {
@@ -505,7 +505,7 @@ try {
 `, {}, projectDir);
       // The only request is the fetch step: the apiUrl in the config file is never used.
       const requests = result.split('\n').filter((line) => line.startsWith('FETCH:'));
-      assert.deepStrictEqual(requests, ['FETCH:/.blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
+      assert.deepStrictEqual(requests, ['FETCH:/.cdk-blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
       assert.ok(result.includes('ERROR:Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
       assert.ok(result.includes('that needs Node.js 22.3 or later'), `Expected the error to name the Node.js requirement, got: ${result}`);
     });
@@ -513,7 +513,7 @@ try {
 });
 
 describe('Node.js client and a config.json an older deploy wrote', () => {
-  /** Run a client call in a fresh app whose `.blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
+  /** Run a client call in a fresh app whose `.cdk-blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
   async function callWith(config: (stub: string) => object, env: (stub: string) => Record<string, string> = () => ({})) {
     let calls = 0;
     const server = createServer((_req, res) => {
@@ -525,8 +525,8 @@ describe('Node.js client and a config.json an older deploy wrote', () => {
     const stub = `http://127.0.0.1:${(server.address() as AddressInfo).port}/aws-blocks/api`;
     const dir = mkdtempSync(join(tmpdir(), 'blocks-client-legacy-'));
     try {
-      mkdirSync(join(dir, '.blocks-sandbox'));
-      writeFileSync(join(dir, '.blocks-sandbox', 'config.json'), JSON.stringify(config(stub)));
+      mkdirSync(join(dir, '.cdk-blocks-sandbox'));
+      writeFileSync(join(dir, '.cdk-blocks-sandbox', 'config.json'), JSON.stringify(config(stub)));
       writeFileSync(
         join(dir, 'test.mjs'),
         `import { ApiNamespaceClient } from 'file://${CLIENT_MODULE}';\n` +
@@ -546,14 +546,14 @@ describe('Node.js client and a config.json an older deploy wrote', () => {
 
   it('refuses a production config.json, without calling it', async () => {
     const { stdout, calls } = await callWith((stub) => ({ apiUrl: stub, environment: 'production' }));
-    assert.match(stdout, /ERROR \.blocks-sandbox\/config\.json points at the deployed production stack .*written by an older deploy/);
+    assert.match(stdout, /ERROR \.cdk-blocks-sandbox\/config\.json points at the deployed production stack .*written by an older deploy/);
     assert.match(stdout, /npm run dev.*BLOCKS_API_URL/);
     assert.strictEqual(calls, 0);
   });
 
   it('refuses a sandbox config.json with an https URL', async () => {
     const { stdout } = await callWith(() => ({ apiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', environment: 'sandbox' }));
-    assert.match(stdout, /ERROR \.blocks-sandbox\/config\.json points at the deployed sandbox stack/);
+    assert.match(stdout, /ERROR \.cdk-blocks-sandbox\/config\.json points at the deployed sandbox stack/);
   });
 
   it('calls the stack BLOCKS_API_URL names on purpose', async () => {

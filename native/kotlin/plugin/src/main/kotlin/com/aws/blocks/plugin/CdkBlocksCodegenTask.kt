@@ -135,8 +135,8 @@ abstract class CdkBlocksCodegenTask : DefaultTask() {
         val fix = if (specUrl != null) {
             "the spec declares \"$name\" as \"$specUrl\""
         } else {
-            "the one for that deployment; the dev server writes it to .blocks-sandbox/config.json, " +
-                "a sandbox or production deploy to .blocks-sandbox/config.<stage>.json"
+            "the one for that deployment; the dev server writes it to .cdk-blocks-sandbox/config.json, " +
+                "a sandbox or production deploy to .cdk-blocks-sandbox/config.<stage>.json"
         }
         val uri = try {
             URI(url)

@@ -8,6 +8,8 @@ import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentT
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
 import { migrateLegacyDeployedConfig } from './deployed-config.js';
+import { migrateLegacySandboxDir } from './migrate-sandbox-dir.js';
+import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { join } from 'node:path';
 import { ignoreClosedOutput, log } from './log.js';
 import { runCapture } from './run-command.js';
@@ -173,7 +175,8 @@ export async function destroy(options: DestroyOptions) {
   ignoreClosedOutput();
   return trackCommand('destroy', async () => {
     log.progress('🗑️  Destroying production stack...');
-    migrateLegacyDeployedConfig(join(options.projectRoot, '.blocks-sandbox'));
+    migrateLegacySandboxDir(options.projectRoot);
+    migrateLegacyDeployedConfig(join(options.projectRoot, BLOCKS_SANDBOX_DIR));
 
     // The same environment as the production deploy: `.env.production` can set
     // AWS_PROFILE and AWS_REGION (an exported variable wins), so without it the

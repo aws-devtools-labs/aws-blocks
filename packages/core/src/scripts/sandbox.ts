@@ -4,6 +4,8 @@
 import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { readFileSync, existsSync, rmSync } from "node:fs";
 import { migrateLegacyDeployedConfig, writeDeployedConfig } from './deployed-config.js';
+import { migrateLegacySandboxDir } from './migrate-sandbox-dir.js';
+import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { join, resolve, dirname } from "node:path";
 import { deleteSandboxSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials, type AssertAwsCredentialsOptions } from './preflight-credentials.js';
@@ -422,7 +424,7 @@ export type SandboxFailurePhase = 'synth' | 'deploy';
 
 /**
  * What a failed sandbox deploy needs from the operator, by cause:
- * - `locked`: another CDK process is using the same `.blocks-sandbox` output;
+ * - `locked`: another CDK process is using the same `.cdk-blocks-sandbox` output;
  * - `in-progress`: CloudFormation is still updating the stack (for example after an interrupted deploy);
  * - `failed-stack`: a stack is left `*_FAILED` or `ROLLBACK_COMPLETE`, which Express Mode doesn't roll back;
  * - `synth`: the app failed to synthesize, so no stack was touched;
@@ -502,7 +504,7 @@ export function sandboxFailureHint(
     case 'locked':
       return [
         "",
-        `ℹ️  Another CDK command is using this app's .blocks-sandbox output (another \`${invocation}\` or`,
+        `ℹ️  Another CDK command is using this app's .cdk-blocks-sandbox output (another \`${invocation}\` or`,
         `   \`${destroyInvocation}\`). Let it finish or stop it, then re-run: run one sandbox command at a time.`,
       ].join("\n");
     case 'in-progress':
@@ -615,7 +617,7 @@ export async function startSandbox(options: SandboxOptions) {
 async function runStartSandbox(options: SandboxOptions, history: SandboxHistory) {
   const {
     backendPath,
-    outDir = ".blocks-sandbox",
+    outDir = ".cdk-blocks-sandbox",
     clientPort = 3000,
     devCommand,
     preview = false,
@@ -632,6 +634,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   // and a sandbox that starts a dev server can't run beside another dev server of the app.
   assertNoRunningSandbox(process.cwd(), invocation);
   if (!deployOnly) assertNoRunningDevServer(process.cwd(), invocation);
+  migrateLegacySandboxDir(process.cwd());
   migrateLegacyDeployedConfig(outDir);
 
   // Load .env.local so CDK can read secret ARNs and other config.
@@ -714,7 +717,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
     // deployed (not on local state that may be missing — a fresh clone, a
-    // cleaned .blocks-sandbox, another machine). The deploy below reuses this
+    // cleaned .cdk-blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
     // Each cdk step runs under the deploy's signal policy (see CdkRunOptions.deferSignals): a stray
     // SIGTERM must neither kill this process mid-deploy nor leave cdk running unwatched.
@@ -1624,7 +1627,7 @@ async function edgeStacksBlocked(deps: DestroyRetryDeps, stacks: AssemblyStack[]
  * relative to the project root. The retry reads the stack list from it. Its own
  * directory, so a production `destroy` running at the same time can't clear it.
  */
-const SANDBOX_DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/sandbox-destroy.out';
+const SANDBOX_DESTROY_ASSEMBLY_DIR = '.cdk-blocks-sandbox/sandbox-destroy.out';
 
 export async function destroySandbox(backendPath: string, options: { invocation?: string } = {}) {
   ignoreClosedOutput();
@@ -1659,7 +1662,8 @@ export async function runSandboxDestroy(
   log.progress("🗑️  Destroying sandbox...");
   // Its `cdk watch` would redeploy what this deletes, and shares the cloud assembly directory.
   assertNoRunningSandbox(process.cwd(), invocation);
-  migrateLegacyDeployedConfig(join(process.cwd(), '.blocks-sandbox'));
+  migrateLegacySandboxDir(process.cwd());
+  migrateLegacyDeployedConfig(join(process.cwd(), BLOCKS_SANDBOX_DIR));
 
   // Load .env.local first, as the sandbox deploy does: an AWS_PROFILE or
   // AWS_REGION set there selects the target, so the pre-check below must see it.

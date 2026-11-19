@@ -3,7 +3,7 @@
 
 /**
  * The deployed E2E suites resolve the app under test from the stage config a
- * deploy records (`.blocks-sandbox/config.<stage>.json`), never from the dev
+ * deploy records (`.cdk-blocks-sandbox/config.<stage>.json`), never from the dev
  * server's `config.json`, which a deploy no longer writes. The sandbox and
  * production E2E jobs broke with ENOENT when new suites read `config.json`
  * directly, so:
@@ -12,7 +12,7 @@
  *    working directory holds only that stage's config, pointing at a loopback
  *    stub; before the migration it threw ENOENT there.
  * 2. A source guard keeps every test file on the `api-url.js` helpers: only
- *    `api-url.ts` may name the dev server's config file under .blocks-sandbox.
+ *    `api-url.ts` may name the dev server's config file under .cdk-blocks-sandbox.
  */
 
 import { describe, test } from 'node:test';
@@ -41,9 +41,9 @@ export function apiUrlStageTests(): void {
 				const dir = mkdtempSync(join(tmpdir(), `api-url-${stage}-`));
 				try {
 					// Only this stage's config exists, as after its deploy.
-					mkdirSync(join(dir, '.blocks-sandbox'));
+					mkdirSync(join(dir, '.cdk-blocks-sandbox'));
 					writeFileSync(
-						join(dir, '.blocks-sandbox', `config.${stage}.json`),
+						join(dir, '.cdk-blocks-sandbox', `config.${stage}.json`),
 						JSON.stringify({ apiUrl: `http://127.0.0.1:${address.port}/aws-blocks/api` }),
 					);
 					const script =
@@ -74,12 +74,12 @@ export function apiUrlStageTests(): void {
 			});
 		}
 
-		test('no test file reads .blocks-sandbox/config.json except the api-url helper', () => {
+		test('no test file reads .cdk-blocks-sandbox/config.json except the api-url helper', () => {
 			const offenders: string[] = [];
 			for (const name of readdirSync(testDir)) {
 				if (!name.endsWith('.ts') || name === 'api-url.ts') continue;
 				const source = readFileSync(join(testDir, name), 'utf-8');
-				if (/['"`]\.blocks-sandbox\/config\.json['"`]/.test(source)) offenders.push(name);
+				if (/['"`]\.cdk-blocks-sandbox\/config\.json['"`]/.test(source)) offenders.push(name);
 			}
 			assert.deepStrictEqual(offenders, [], 'read the stage config through ./api-url.js instead');
 		});

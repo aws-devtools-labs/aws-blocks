@@ -322,7 +322,7 @@ describe('create-blocks-app template metadata', () => {
   });
 
   it('every template e2e test calls the dev server it reuses, or TEST_URL, never a URL a deploy recorded', () => {
-    // The Node client resolves BLOCKS_API_URL before it reads .blocks-sandbox/config.json. A test that
+    // The Node client resolves BLOCKS_API_URL before it reads .cdk-blocks-sandbox/config.json. A test that
     // left the choice to that file sent its sign-ups and writes to the stack a deploy had just recorded.
     const templatesDir = join(__dirname, '..', 'templates');
     const pin = 'process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;';
@@ -576,7 +576,9 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
       assert.match(result.stdout, /npm run sandbox\b/);
       assert.match(result.stdout, /npm run blocks:dev\b/);
-      assert.doesNotMatch(result.stdout, /\bcdk-blocks\b/);
+      // The CLI name as a command, not the `.cdk-blocks*` directory names the rebrand
+      // introduced: a next step must say `npm run <task>`, never invoke the binary.
+      assert.doesNotMatch(result.stdout, /(?<!\.)\bcdk-blocks\b(?!-)/);
       assert.ok(result.stdout.includes(task('sandbox')), result.stdout);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -1201,7 +1203,9 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(result.stdout, /http:\/\/localhost:3001\/aws-blocks\/api/);
       assert.doesNotMatch(result.stdout, /localhost:3000/);
       assert.match(result.stdout, /npm run help\b/);
-      assert.doesNotMatch(result.stdout, /\bcdk-blocks\b/);
+      // The CLI name as a command, not the `.cdk-blocks*` directory names the rebrand
+      // introduced: a next step must say `npm run <task>`, never invoke the binary.
+      assert.doesNotMatch(result.stdout, /(?<!\.)\bcdk-blocks\b(?!-)/);
       const web = join(tmpDir, 'web');
       const frontend = run([web, '--template', 'bare', '-y', '--skip-install']);
       assert.strictEqual(frontend.exitCode, 0, frontend.stderr);

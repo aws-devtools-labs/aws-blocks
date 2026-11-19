@@ -1,4 +1,4 @@
 node_modules/
 dist/
-.blocks-sandbox/
+.cdk-blocks-sandbox/
 .hosting/

@@ -181,9 +181,9 @@ export async function stackNameForStage(stage: string, cwd: string): Promise<str
 	}
 	if (stage === 'sandbox') {
 		// getStackName would create a sandbox id: there is no sandbox to manage without one.
-		if (!existsSync(join(projectRoot, '.blocks-sandbox', 'sandbox-id.txt'))) {
+		if (!existsSync(join(projectRoot, '.cdk-blocks-sandbox', 'sandbox-id.txt'))) {
 			throw new UsersCliError(
-				'No sandbox for this checkout (.blocks-sandbox/sandbox-id.txt is missing): deploy one with `npm run sandbox`, or pass --stack <name>.',
+				'No sandbox for this checkout (.cdk-blocks-sandbox/sandbox-id.txt is missing): deploy one with `npm run sandbox`, or pass --stack <name>.',
 			);
 		}
 		try {

@@ -16,11 +16,11 @@ npm run dev
 npm run sandbox
 
 # Regenerate the spec — run this after dev or sandbox, whichever you want the apps to target
-npm run spec                            # the dev server (.blocks-sandbox/config.json)
-BLOCKS_SPEC_STAGE=sandbox npm run spec  # the deployed sandbox (.blocks-sandbox/config.sandbox.json)
+npm run spec                            # the dev server (.cdk-blocks-sandbox/config.json)
+BLOCKS_SPEC_STAGE=sandbox npm run spec  # the deployed sandbox (.cdk-blocks-sandbox/config.sandbox.json)
 ```
 
-The dev server writes `.blocks-sandbox/config.json` with its own URL, and a sandbox deploy records the deployed API in `.blocks-sandbox/config.sandbox.json`. `blocks-generate-spec` copies one `apiUrl` into the spec's `servers` array: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one. So the spec describes **one** server:
+The dev server writes `.cdk-blocks-sandbox/config.json` with its own URL, and a sandbox deploy records the deployed API in `.cdk-blocks-sandbox/config.sandbox.json`. `blocks-generate-spec` copies one `apiUrl` into the spec's `servers` array: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one. So the spec describes **one** server:
 
 | Generated with | Generated `Servers` entry | URL |
 |---|---|---|
@@ -88,7 +88,7 @@ The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, 
 | Local (`npm run dev`) | `http://localhost:3001/aws-blocks/auth/callback` |
 | Sandbox (`npm run sandbox`) | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/auth/callback` |
 
-Read the sandbox host out of `.blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
+Read the sandbox host out of `.cdk-blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
 
 > **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/aws-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
 
@@ -112,7 +112,7 @@ The dev server re-reads the file on every request, so no restart is needed. `.bb
 
 #### Sandbox (`npm run sandbox`)
 
-A `secret: true` `AppSetting` is an SSM **SecureString** parameter at `/<stack-name>-<scope-id>-<setting-id>`, so with the stack name from `.blocks-sandbox/outputs.json` (its single top-level key, `typescript-stack-<sandbox-id>`) the parameter is:
+A `secret: true` `AppSetting` is an SSM **SecureString** parameter at `/<stack-name>-<scope-id>-<setting-id>`, so with the stack name from `.cdk-blocks-sandbox/outputs.json` (its single top-level key, `typescript-stack-<sandbox-id>`) the parameter is:
 
 ```
 /typescript-stack-<sandbox-id>-my-app-google-client-secret
@@ -123,7 +123,7 @@ The first `npm run sandbox` **creates the parameter with a random placeholder va
 The same thing from the CLI:
 
 ```bash
-STACK=typescript-stack-$(cat .blocks-sandbox/sandbox-id.txt)
+STACK=typescript-stack-$(cat .cdk-blocks-sandbox/sandbox-id.txt)
 aws ssm put-parameter --name "/$STACK-my-app-google-client-secret" \
   --type SecureString --value 'GOCSPX-your-secret-here' --overwrite
 ```

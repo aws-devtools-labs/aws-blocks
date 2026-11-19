@@ -261,7 +261,7 @@ describe('cdk-blocks migrate references', () => {
 				'cdk.out',
 				'dist',
 				'build-temp/aws-blocks/scripts',
-				'.blocks-sandbox',
+				'.cdk-blocks-sandbox',
 				'packages/x/node_modules',
 			])
 				app.files[`${dir}/notes.txt`] = mention;

@@ -165,12 +165,12 @@ EOF
 # Discovery uses TWO independent paths over a 90-iteration window (either confirms), sharing ONE
 # readiness bar — the app root `/` answers non-5xx (`< 500`). They differ only in how the port is found:
 # Path A parses it from the framework banner `AWS Blocks local server running on http://localhost:<port>`;
-# Path B probes the candidate ports for `/.blocks-sandbox/config.json` (served by our front door the
+# Path B probes the candidate ports for `/.cdk-blocks-sandbox/config.json` (served by our front door the
 # moment it binds), which finds the port independent of banner text/parse timing — its drift-proof win.
 # config.json is a discovery signal only (it answers before the proxied app on :3100 is up), so Path B
 # still confirms readiness with the same root `/` probe. If neither confirms, APP_BASE_URL stays empty
 # and we proceed (the cell fails honestly rather than hanging). See the inline block at the launch site.
-agent_run -- 'rm -f .blocks-sandbox/dev-server.*.pid' || true
+agent_run -- 'rm -f .cdk-blocks-sandbox/dev-server.*.pid' || true
 
 # The front-door ports the dev server may bind (3000/3001 only, never :3100). Single source of truth:
 # the free-port loop below AND the readiness probe further down both read $DEV_PORTS, so changing
@@ -191,7 +191,7 @@ done
 # selector_contract + functional_completeness in scoring.mjs — a flaky miss was punishing apps that
 # were actually up). Both paths use the SAME readiness bar — the app root `/` answers non-5xx (`< 500`)
 # — and differ only in how they find the port. Path A: parse the port from the startup banner. Path B:
-# probe the candidate ports for `/.blocks-sandbox/config.json`, which OUR front door serves the moment
+# probe the candidate ports for `/.cdk-blocks-sandbox/config.json`, which OUR front door serves the moment
 # it binds; a hit identifies our port WITHOUT depending on the banner text or grep/parse timing (its
 # win — it survives a banner-string change or a slow/garbled log write). config.json is a PORT-DISCOVERY
 # signal, not a readiness one: it answers 200 before spawnFrontend() brings up the proxied app on :3100
@@ -232,7 +232,7 @@ for i in $(seq 1 90); do
   # our app is on this port), confirm readiness with Path A's own root probe (`/` returns `< 500`)
   # before accepting. Banner-text drift stays covered; the gate is never weaker than Path A.
   for p in $DEV_PORTS; do
-    ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.blocks-sandbox/config.json") || ccode=000
+    ccode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}/.cdk-blocks-sandbox/config.json") || ccode=000
     if [ "$ccode" != "000" ] && [ "$ccode" -lt 400 ]; then
       rcode=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${p}") || rcode=000
       if [ "$rcode" != "000" ] && [ "$rcode" -lt 500 ]; then

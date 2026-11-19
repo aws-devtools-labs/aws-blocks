@@ -49,7 +49,7 @@ added alongside the spec's servers. Each becomes a constant on the generated `Se
 `prod("https://api.example.com/aws-blocks/api")` is reachable as `Servers.prod`.
 
 A server URL is the RPC URL itself: the `apiUrl` that `npm run dev` writes to
-`.blocks-sandbox/config.json`, or a deploy to `.blocks-sandbox/config.<stage>.json`, whose path ends
+`.cdk-blocks-sandbox/config.json`, or a deploy to `.cdk-blocks-sandbox/config.<stage>.json`, whose path ends
 in `/aws-blocks/api`. It is not the origin that serves it. The generated client posts to the URL as
 given, so an override such as `local("http://10.0.2.2:3001")` replaces the
 `http://localhost:3001/aws-blocks/api` the client would otherwise use with the bare origin, and

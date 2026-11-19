@@ -356,7 +356,7 @@ async function productionStack(ctx: Context, root: string): Promise<string> {
 
 /** The sandbox stack name, when this machine has created a sandbox id; reading never creates one. */
 async function sandboxStack(ctx: Context, root: string): Promise<string | null> {
-	if (!existsSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'))) return null;
+	if (!existsSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'))) return null;
 	const core = await ctx.core();
 	try {
 		return core.getStackName({ sandbox: true, projectRoot: root });
@@ -401,11 +401,11 @@ export type DeployResult = Pick<LastDeploy, 'apiUrl' | 'url' | 'stack' | 'accoun
 
 /**
  * Print the result of the deploy of `stage` that just ran, as JSON, from the
- * entry its runner recorded in `.blocks-sandbox/last-deploy.json`:
+ * entry its runner recorded in `.cdk-blocks-sandbox/last-deploy.json`:
  * - the stack outputs core read when it deployed, not that stage's outputs document
  *   again, which a later deploy of the same stage rewrites with only its own stacks
  *   and a failed one can blank;
- * - not `.blocks-sandbox/config.json`, which a dev server or sandbox rewrites with its own (local) URL;
+ * - not `.cdk-blocks-sandbox/config.json`, which a dev server or sandbox rewrites with its own (local) URL;
  * - the account and Region the runner deployed with: it loaded the stage env
  *   files, so its credentials can differ from this process's. Never queries AWS.
  */
@@ -600,7 +600,7 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	}
 	const root = ctx.enterRoot();
 	const core = await ctx.core();
-	const dir = join(root, '.blocks-sandbox');
+	const dir = join(root, '.cdk-blocks-sandbox');
 	const recorded = existsSync(dir)
 		? readdirSync(dir)
 				.map((name) => /^dev-server\.(\d+)\.pid$/.exec(name)?.[1])
@@ -711,10 +711,10 @@ export function sandboxPreview(ctx: Context): Promise<number> {
 export async function sandboxDestroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
-	if (!existsSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'))) {
+	if (!existsSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'))) {
 		// The CDK app would create a sandbox id, and `cdk destroy` of a stack that does not exist succeeds.
 		ctx.out.text(
-			'No sandbox on this machine (.blocks-sandbox/sandbox-id.txt is missing); nothing to delete.\n' +
+			'No sandbox on this machine (.cdk-blocks-sandbox/sandbox-id.txt is missing); nothing to delete.\n' +
 				'A sandbox deployed from another clone or before a `git clean` keeps running: delete its stack in the AWS console.',
 		);
 		return ExitCode.Ok;
@@ -769,7 +769,7 @@ const OUTPUTS_BASENAME: Readonly<Record<DeployStage, string>> = {
  */
 function forgetDeployRecords(root: string, stage: DeployStage, stack: string): void {
 	forgetLastDeploy(root, stage);
-	const dir = join(root, '.blocks-sandbox');
+	const dir = join(root, '.cdk-blocks-sandbox');
 	const readJson = (name: string): Record<string, unknown> | undefined => {
 		let value: unknown;
 		try {
@@ -803,7 +803,7 @@ function forgetDeployRecords(root: string, stage: DeployStage, stack: string): v
 
 /**
  * Open the console for this machine's sandbox stack, never another stack in
- * `.blocks-sandbox/outputs.json`. A production deploy no longer rewrites that
+ * `.cdk-blocks-sandbox/outputs.json`. A production deploy no longer rewrites that
  * file, since each stage now writes its own document, but one written before
  * that split still holds production's stack alone, so the stack is derived here
  * and the document is only ever corroboration. The Region is the one the sandbox
@@ -816,7 +816,7 @@ export async function sandboxConsole(ctx: Context): Promise<number> {
 	const root = ctx.enterRoot();
 	const stack = await sandboxStack(ctx, root);
 	if (stack === null) {
-		throw new CliError('no sandbox on this machine (.blocks-sandbox/sandbox-id.txt is missing).', {
+		throw new CliError('no sandbox on this machine (.cdk-blocks-sandbox/sandbox-id.txt is missing).', {
 			where: [`project: ${root}`],
 			hint: blocksCommand('sandbox', 'deploy'),
 		});
@@ -824,7 +824,7 @@ export async function sandboxConsole(ctx: Context): Promise<number> {
 	const last = readLastDeploy(root, 'sandbox');
 	let outputs: unknown;
 	try {
-		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', OUTPUTS_BASENAME.sandbox), 'utf-8'));
+		outputs = JSON.parse(readFileSync(join(root, '.cdk-blocks-sandbox', OUTPUTS_BASENAME.sandbox), 'utf-8'));
 	} catch {
 		// No outputs: only last-deploy.json can show that the sandbox was deployed.
 	}
