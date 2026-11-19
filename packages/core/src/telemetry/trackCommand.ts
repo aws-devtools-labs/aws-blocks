@@ -171,6 +171,9 @@ export async function trackExitCode(
   try {
     const code = await fn();
     state = stateForExitCode(code);
+    // A failure reported as an exit code has no error to classify; give it the
+    // category classifyError gives an unrecognized one, as every FAIL carries one.
+    if (state === 'FAIL') errorInfo = classifyError(undefined);
     return code;
   } catch (error: unknown) {
     errorInfo = classifyError(error);

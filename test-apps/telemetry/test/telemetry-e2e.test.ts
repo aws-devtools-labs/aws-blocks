@@ -33,7 +33,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join, dirname } from 'node:path';
+import { basename, join, dirname } from 'node:path';
 import { tmpdir, homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -433,8 +433,9 @@ const sandboxGroup = cloudGroup('sandbox');
 const productionGroup = cloudGroup('production');
 
 /**
- * The commands the CLI dispatcher tracks itself (packages/blocks/src/cli/telemetry.ts)
- * plus `sandbox deploy` and `sandbox preview`, run where no AWS account is
+ * The commands added to telemetry with the CLI dispatcher (tracked in the CLI,
+ * in core's entry points, or in the `blocks-generate-client` bin) plus
+ * `sandbox deploy` and `sandbox preview`, run where no AWS account is
  * reachable: their own app copy (so generated files never land in the app), their
  * own HOME without the `~/.aws` link, and every credential source blocked.
  */
@@ -462,7 +463,17 @@ interface CliCase {
   command: string;
   state: 'SUCCESS' | 'FAIL';
   exitCode: number;
+  /**
+   * False when the run sends no event: the CLI rejects a usage error of `secret`
+   * and `config` before it calls core, which is where those two are tracked.
+   */
+  emits?: false;
+  /** Run this script with node instead of the CLI task, as an app on vendored scripts runs a bin. */
+  script?: string;
 }
+
+const GENERATE_CLIENT_BIN = join(REPO_ROOT, 'packages', 'blocks', 'dist', 'generate-client-cli.js');
+const GENERATE_SPEC_BIN = join(REPO_ROOT, 'packages', 'core', 'dist', 'scripts', 'generate-spec-cli.js');
 
 /**
  * One case per invocation. SUCCESS cases need no AWS; FAIL cases stop at a
@@ -479,10 +490,22 @@ const CLI_CASES: CliCase[] = [
   { args: ['generate', 'spec'], command: 'generate:spec', state: 'SUCCESS', exitCode: 0 },
   { args: ['generate', 'client'], command: 'generate:client', state: 'SUCCESS', exitCode: 0 },
   { args: ['migrate', '--dry-run'], command: 'migrate', state: 'SUCCESS', exitCode: 0 },
+  {
+    args: ['cdk-blocks/index.ts', 'cdk-blocks/client.js'], script: GENERATE_CLIENT_BIN,
+    command: 'generate:client', state: 'SUCCESS', exitCode: 0,
+  },
+  {
+    args: ['cdk-blocks/missing.ts', 'cdk-blocks/client.js'], script: GENERATE_CLIENT_BIN,
+    command: 'generate:client', state: 'FAIL', exitCode: 2,
+  },
+  {
+    args: ['cdk-blocks/index.ts', 'cdk-blocks/blocks.spec.json'], script: GENERATE_SPEC_BIN,
+    command: 'generate:spec', state: 'SUCCESS', exitCode: 0,
+  },
   { args: ['whoami'], command: 'whoami', state: 'FAIL', exitCode: 1 },
-  { args: ['secret'], command: 'secret', state: 'FAIL', exitCode: 2 },
+  { args: ['secret'], command: 'secret', state: 'FAIL', exitCode: 2, emits: false },
   { args: ['secret', 'list'], command: 'secret', state: 'FAIL', exitCode: 1 },
-  { args: ['config'], command: 'config', state: 'FAIL', exitCode: 2 },
+  { args: ['config'], command: 'config', state: 'FAIL', exitCode: 2, emits: false },
   { args: ['config', 'list'], command: 'config', state: 'FAIL', exitCode: 1 },
   { args: ['db'], command: 'db', state: 'FAIL', exitCode: 2 },
   { args: ['db', 'status'], command: 'db', state: 'FAIL', exitCode: 2 },
@@ -1237,15 +1260,23 @@ function cliCommandSuites(): void {
     afterEach(() => { if (tmpDir) rmSync(tmpDir, { recursive: true, force: true }); });
 
     for (const c of CLI_CASES) {
-      test(`${c.state}: ${c.args.join(' ')} emits ${c.command}/${c.state}`, async () => {
+      const label = c.script ? `${basename(c.script)} ${c.args.join(' ')}` : c.args.join(' ');
+      const title = c.emits === false
+        ? `${label} exits ${c.exitCode} and emits nothing`
+        : `${c.state}: ${label} emits ${c.command}/${c.state}`;
+      test(title, async () => {
         tmpDir = createTmpDir('cli-command');
         const telemetryFile = uniqueTelemetryFile(tmpDir);
 
-        const result = await runCommand(process.execPath, [...BLOCKS_TASK, ...c.args], {
+        const result = await runCommand(process.execPath, [...(c.script ? [c.script] : BLOCKS_TASK), ...c.args], {
           ...inGroup, telemetryFile, timeoutMs: 120_000, env: NO_AWS_ENV,
         });
 
         assert.strictEqual(result.exitCode, c.exitCode, `exit code\nstderr: ${result.stderr.slice(-1000)}`);
+        if (c.emits === false) {
+          assert.ok(!(await waitForFile(telemetryFile, 3_000)), `${c.args.join(' ')} should emit no telemetry`);
+          return;
+        }
         assert.ok(await waitForFile(telemetryFile, 5_000), `${c.args.join(' ')} should emit telemetry`);
         const body = readTelemetryFile(telemetryFile);
         assert.strictEqual(body.event.command, c.command);
@@ -1261,17 +1292,19 @@ function cliCommandSuites(): void {
     afterEach(() => { if (tmpDir) rmSync(tmpDir, { recursive: true, force: true }); });
 
     for (const c of CLI_CASES) {
-      test(`${c.args.join(' ')}: same exit code with an unreachable endpoint`, async () => {
+      const label = c.script ? `${basename(c.script)} ${c.args.join(' ')}` : c.args.join(' ');
+      test(`${label}: same exit code with an unreachable endpoint`, async () => {
         tmpDir = createTmpDir('cli-unreachable');
         const telemetryFile = uniqueTelemetryFile(tmpDir);
 
-        const result = await runCommand(process.execPath, [...BLOCKS_TASK, ...c.args], {
+        const result = await runCommand(process.execPath, [...(c.script ? [c.script] : BLOCKS_TASK), ...c.args], {
           ...inGroup, telemetryFile, timeoutMs: 120_000,
           env: { ...NO_AWS_ENV, BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable', NODE_DEBUG: '' },
         });
 
         assert.strictEqual(result.exitCode, c.exitCode, `exit code\nstderr: ${result.stderr.slice(-1000)}`);
         assert.ok(!result.stderr.includes('BLOCKS-TELEMETRY'), 'a send failure must be invisible without NODE_DEBUG');
+        if (c.emits === false) return;
         const body = readTelemetryFile(telemetryFile);
         assert.strictEqual(body.event.state, c.state, "the recorded outcome is the command's own");
       });

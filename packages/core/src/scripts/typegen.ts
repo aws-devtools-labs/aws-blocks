@@ -15,4 +15,15 @@
  * @module
  */
 
-export { runTypegenCli } from '@aws-blocks/hosting/scripts';
+import { runTypegenCli as runHostingTypegenCli } from '@aws-blocks/hosting/scripts';
+import { trackExitCode } from '../telemetry/trackCommand.js';
+
+/**
+ * Run the typegen CLI and send one `generate:types` event for the run (its
+ * outcome from the exit code). Tracked here, not in the CLI, so an app still
+ * running a vendored `aws-blocks/scripts/typegen.ts` sends it too. With
+ * `--watch` the event is sent when the watcher ends on its own.
+ */
+export function runTypegenCli(argv: string[], deps?: Parameters<typeof runHostingTypegenCli>[1]): Promise<number> {
+  return trackExitCode('generate:types', () => runHostingTypegenCli(argv, deps));
+}

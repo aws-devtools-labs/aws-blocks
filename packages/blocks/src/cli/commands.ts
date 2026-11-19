@@ -1092,7 +1092,11 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 		operation: 'npm run generate-client',
 		tool: 'blocks-generate-client',
 		command: process.execPath,
-		args: [join(BLOCKS_DIST, 'generate-client-cli.js'), ...input.positionals.map((p) => resolve(ctx.startDir, p))],
+		args: [
+			join(BLOCKS_DIST, 'generate-client-cli.js'),
+			...input.positionals.map((p) => resolve(ctx.startDir, p)),
+			...telemetryArgs(ctx),
+		],
 		cwd: root,
 		// The worker imports the backend through tsx, so it needs the backend's jsx and paths too.
 		env: tsxTsconfigEnv(root, ctx.env),

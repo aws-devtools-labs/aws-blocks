@@ -74,6 +74,7 @@ describe('telemetry/trackExitCode', () => {
     const event = JSON.parse(received[0]);
     assert.strictEqual(event.event.command, 'whoami');
     assert.strictEqual(event.event.state, 'FAIL');
+    assert.deepStrictEqual(event.event.error, { code: 'UNKNOWN', phase: 'unknown' });
     assert.strictEqual(typeof event.event.duration, 'number');
   });
 

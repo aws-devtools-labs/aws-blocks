@@ -40,6 +40,7 @@ import {
 import { validateNativeCatalogs } from './validate-native-catalogs.js';
 import { type SpecValidationError, validateSpec } from './validate-spec.js';
 import { deployedConfigFile } from './deployed-config.js';
+import { trackCommand } from '../telemetry/trackCommand.js';
 
 // ── OpenRPC types (subset) ──────────────────────────────────────────────────
 
@@ -1135,6 +1136,19 @@ export function specConfigFile(stage: string | undefined): string {
  * declarations throw `NativeCatalogError` before any write.
  */
 export async function writeSpec(
+	foundationPath: string,
+	outputPath: string,
+	loader?: FoundationLoader,
+	options?: SpecGenerationOptions,
+): Promise<void> {
+	// One `generate:spec` event per run, from every entry point: core's
+	// `blocks-generate-spec` bin, the CLI's spec runner, and vendored scripts.
+	return trackCommand('generate:spec', () => writeSpecUntracked(foundationPath, outputPath, loader, options), {
+		projectRoot: dirname(dirname(foundationPath)),
+	});
+}
+
+async function writeSpecUntracked(
 	foundationPath: string,
 	outputPath: string,
 	loader?: FoundationLoader,

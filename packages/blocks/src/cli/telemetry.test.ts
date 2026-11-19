@@ -18,6 +18,13 @@ const CORE_TRACKED = [
 	'deploy',
 	'destroy',
 	'vendorize',
+	// Tracked at their entry point (core's runSecretCli, runConfigCli, writeSpec and
+	// runTypegenCli, and the blocks-generate-client bin), so vendored scripts send them too.
+	'secret',
+	'config',
+	'generate client',
+	'generate spec',
+	'generate types',
 ];
 
 describe('CLI telemetry coverage', () => {
@@ -34,8 +41,8 @@ describe('CLI telemetry coverage', () => {
 	});
 
 	it('names each event after its command path', () => {
-		assert.equal(trackedCommandName(['generate', 'client']), 'generate:client');
 		assert.equal(trackedCommandName(['dev', 'stop']), 'dev:stop');
+		assert.equal(trackedCommandName(['generate', 'client']), undefined);
 		assert.equal(trackedCommandName(['deploy']), undefined);
 		assert.equal(trackedCommandName(['toString']), undefined);
 	});
@@ -51,9 +58,9 @@ describe('CLI telemetry through main', () => {
 
 	it('records a tracked command that throws (a usage error, exit 2) as thrown', async () => {
 		const root = fixtureApp();
-		const run = await runCli(['secret'], { cwd: root });
+		const run = await runCli(['db'], { cwd: root });
 		assert.equal(run.code, 2);
-		assert.deepEqual(run.events, [{ command: 'secret', code: 'threw', projectRoot: root }]);
+		assert.deepEqual(run.events, [{ command: 'db', code: 'threw', projectRoot: root }]);
 	});
 
 	it('sends nothing from the CLI for a command core already tracks', async () => {
@@ -71,7 +78,7 @@ describe('CLI telemetry through main', () => {
 			assert.equal(broken.stdout, healthy.stdout);
 			assert.equal(broken.stderr, healthy.stderr);
 
-			const usage = await runCli(['secret'], { cwd: root, telemetryFailure: failure });
+			const usage = await runCli(['db'], { cwd: root, telemetryFailure: failure });
 			assert.equal(usage.code, 2);
 		});
 	}

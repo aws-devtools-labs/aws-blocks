@@ -26,10 +26,11 @@ in order:
   directory with the real HOME (unless a case sets its own). They run in order
   because several write the project config (`.blocks/config.json`) or the real
   HOME's global config.
-- **CLI commands**: every command the CLI dispatcher tracks itself (`help`,
-  `docs`, `dev stop` and its `cleanup` alias, `generate client|spec|types`,
-  `migrate`, `whoami`, `secret`, `config`, `db`) plus `sandbox deploy` and
-  `sandbox preview`, in their own app copy under `.e2e-groups/cli-commands` and
+- **CLI commands**: `help`, `docs`, `dev stop` and its `cleanup` alias,
+  `generate client|spec|types`, `migrate`, `whoami`, `secret`, `config`, `db`,
+  `sandbox deploy` and `sandbox preview`, plus the `blocks-generate-client` and
+  `blocks-generate-spec` bins run directly (as an app on vendored scripts runs
+  them), in their own app copy under `.e2e-groups/cli-commands` and
   their own HOME, with no `~/.aws` link and every AWS credential source blocked,
   so no case reaches an account. Each case runs twice: once to check its event
   is delivered, and once against an unreachable endpoint to check that the exit
