@@ -35,7 +35,11 @@ class FakeLauncher implements BrowserLauncher {
   FakeLauncher({this.onLaunch});
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) async {
     capturedAuthorizeUrl = authorizeUrl;
     capturedScheme = callbackScheme;
     if (onLaunch == null) {

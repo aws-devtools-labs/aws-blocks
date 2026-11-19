@@ -84,8 +84,8 @@ void main() {
     final joined = client.refresh();
     gate.complete();
 
-    await expectLater(first, throwsA(isA<http.ClientException>()));
-    await expectLater(joined, throwsA(isA<http.ClientException>()));
+    await expectLater(first, throwsA(isA<TransportException>()));
+    await expectLater(joined, throwsA(isA<TransportException>()));
   });
 
   test('a failing refresh nobody joined reports no unhandled error', () async {
@@ -95,6 +95,6 @@ void main() {
       store,
       (_) async => throw http.ClientException('offline'),
     );
-    await expectLater(client.refresh(), throwsA(isA<http.ClientException>()));
+    await expectLater(client.refresh(), throwsA(isA<TransportException>()));
   });
 }

@@ -157,10 +157,10 @@ Future<T?> expectError<T>(Future<T> Function() fn, {String? label}) async {
     _failed++;
     print('  ✗ ${label ?? "expected error"} — no error thrown');
     return null;
-  } on BlocksRpcException catch (e) {
+  } on ApiException catch (e) {
     _passed++;
     print(
-      '  ✓ ${label ?? "expected error"} — got BlocksRpcException(${e.code}): ${e.message}',
+      '  ✓ ${label ?? "expected error"}: got ApiException(${e.status} ${e.name}): ${e.message}',
     );
     return null;
   } catch (e) {
@@ -171,7 +171,7 @@ Future<T?> expectError<T>(Future<T> Function() fn, {String? label}) async {
 }
 
 /// Like [expectError], but passes only when the call throws a
-/// [BlocksRpcException] whose server error name (`error.data.name`) is [name].
+/// [ApiException] whose server error name ([ApiException.name]) is [name].
 /// Errors cross the wire by name, so suites assert on it rather than on the
 /// message.
 Future<void> expectErrorNamed(
@@ -183,13 +183,14 @@ Future<void> expectErrorNamed(
     await fn();
     _failed++;
     print('  ✗ $label — no error thrown (expected $name)');
-  } on BlocksRpcException catch (e) {
-    final data = e.data;
-    final actual = data is Map ? data['name'] : null;
-    check(actual == name, '$label — $name (got $actual: ${e.message})');
+  } on ApiException catch (e) {
+    check(
+      isBlocksError(e, name),
+      '$label: $name (got ${e.name}: ${e.message})',
+    );
   } catch (e) {
     _failed++;
-    print('  ✗ $label — expected BlocksRpcException $name, got $e');
+    print('  ✗ $label: expected ApiException $name, got $e');
   }
 }
 

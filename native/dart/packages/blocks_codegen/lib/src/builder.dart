@@ -53,16 +53,20 @@ const dartCoreTypeNames = {
 /// The generated client imports the runtime wholesale, so a bound export
 /// resolving to one of these would be ambiguous.
 const blocksRuntimeTypeNames = {
+  'ApiException',
   'AuthProvider',
   'AuthorizeParamsResponse',
   'BlocksClient',
   'BlocksConfig',
-  'BlocksRpcException',
+  'BlocksException',
   'BrowserLauncher',
+  'ClientClosedException',
   'FileDownloadHandle',
+  'FileTransferException',
   'FileUploadHandle',
   'InMemorySessionStore',
   'InMemoryTokenStore',
+  'InvalidDescriptorException',
   'OidcAuthState',
   'OidcCallbackException',
   'OidcCancelledException',
@@ -71,7 +75,6 @@ const blocksRuntimeTypeNames = {
   'OidcExchangeException',
   'OidcLoading',
   'OidcProvider',
-  'OidcRequestException',
   'OidcSignedIn',
   'OidcSignedOut',
   'OidcUnknownProviderException',
@@ -79,12 +82,17 @@ const blocksRuntimeTypeNames = {
   'PersistentSessionStore',
   'ProviderConfig',
   'RealtimeChannel',
+  'RealtimeChannelClosedException',
+  'RealtimeConnectionException',
+  'RealtimeException',
+  'RealtimeSubscriptionEndedException',
   'SessionStore',
   'StatePayload',
   'TokenStore',
+  'TransferableException',
+  'TransportException',
   'TypedOidcClient',
   'UnknownTransferable',
-  'WebSocketPool',
 };
 
 class TransferableBinding {
