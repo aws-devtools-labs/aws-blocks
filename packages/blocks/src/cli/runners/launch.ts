@@ -102,7 +102,14 @@ export function tsxTsconfigEnv(root: string, env: NodeJS.ProcessEnv): NodeJS.Pro
 	return existsSync(backend) ? { [TSX_TSCONFIG_ENV]: backend } : {};
 }
 
-export type RunnerName = 'dev-server' | 'sandbox' | 'sandbox-destroy' | 'deploy' | 'destroy' | 'generate-spec';
+export type RunnerName =
+	| 'dev-server'
+	| 'sandbox'
+	| 'sandbox-destroy'
+	| 'deploy'
+	| 'destroy'
+	| 'generate-spec'
+	| 'dashboard';
 
 /** The absolute path of a compiled runner. */
 export function runnerPath(name: RunnerName): string {

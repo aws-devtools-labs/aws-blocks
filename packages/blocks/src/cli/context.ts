@@ -30,6 +30,14 @@ export interface SpawnSpec {
 	/** Send the child's stdout to stderr, so that stdout carries only the CLI's JSON document. */
 	stdoutToStderr?: boolean;
 	/**
+	 * Give the child no stdin, so a tool that prompts takes its non-interactive
+	 * path instead. Set for a run that may not prompt (see {@link Context.interactive}:
+	 * no TTY, `--no-input` or `CI`), which the CLI cannot otherwise enforce in a
+	 * child: core decides by its own `process.stdin.isTTY`, which inherited
+	 * stdio would report as a terminal.
+	 */
+	ignoreStdin?: boolean;
+	/**
 	 * The child runs until it is stopped: `npm run dev` and `npm run sandbox` in
 	 * watch mode. The CLI stops it at once on a SIGTERM or SIGHUP (a supervisor,
 	 * `timeout`, a closed terminal, `kill <pid>`), whether or not the signal also
@@ -390,7 +398,7 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 			const child = spawnProcess(spec.command, spec.args, {
 				cwd: spec.cwd,
 				env: spec.env,
-				stdio: ['inherit', spec.stdoutToStderr ? 2 : 'inherit', 'inherit'],
+				stdio: [spec.ignoreStdin ? 'ignore' : 'inherit', spec.stdoutToStderr ? 2 : 'inherit', 'inherit'],
 			});
 			let interrupted = false;
 			let stopping = false;

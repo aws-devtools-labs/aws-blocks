@@ -19,6 +19,7 @@
 /** Task names that differ from the command path passed to the runner. */
 const TASK_NAMES: Readonly<Record<string, string>> = {
 	'dev stop': 'dev:stop',
+	'dashboard doctor': 'dashboard:doctor',
 	'sandbox deploy': 'sandbox:deploy',
 	'sandbox preview': 'sandbox:preview',
 	'sandbox destroy': 'sandbox:destroy',

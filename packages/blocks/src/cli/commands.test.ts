@@ -1209,6 +1209,26 @@ describe('lifecycle commands', () => {
 		}
 	});
 
+	it('exits a runner 130 on a Ctrl-C at a prompt, which readline reports as an abort rather than a signal', () => {
+		const fail = new URL('./runners/fail.js', import.meta.url).href;
+		for (const [error, expected, message] of [
+			["Object.assign(new Error('Aborted with Ctrl+C'), { code: 'ABORT_ERR' })", 130, 'Aborted with Ctrl\\+C'],
+			["new Error('the dashboard could not start')", 1, 'the dashboard could not start'],
+		] as const) {
+			const run = spawnSync(
+				process.execPath,
+				[
+					'--input-type=module',
+					'-e',
+					`const { exitWithError, asPromptInterruption } = await import(${JSON.stringify(fail)}); exitWithError(asPromptInterruption(${error}));`,
+				],
+				{ encoding: 'utf-8' },
+			);
+			assert.strictEqual(run.status, expected, `${error}: ${run.stderr}`);
+			assert.match(run.stderr, new RegExp(`^❌ ${message}\\n`));
+		}
+	});
+
 	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
 		const cwd = withSandboxId(fixtureApp());
 		for (const [argv, longRunning] of [
@@ -2331,6 +2351,109 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 		assert.strictEqual(lastDeploy(root).production?.live, false);
 		runRunner(root, 'deploy', options, ['--wait-live']);
 		assert.strictEqual(lastDeploy(root).production?.live, true);
+	});
+});
+
+describe('npm run dashboard', () => {
+	it('serves the app it is run from, as a long-running child', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dashboard'], { cwd: join(root, 'aws-blocks') });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const [spec] = run.spawned;
+		assert.strictEqual(spec.args[2], runnerPath('dashboard'));
+		assert.deepStrictEqual(runnerOptions(spec, 'dashboard'), { projectRoot: root, argv: [] });
+		// Ctrl-C ends the session, so a zero exit is not a completed operation.
+		assert.strictEqual(spec.longRunning, true);
+		assert.strictEqual(spec.cwd, root);
+	});
+
+	it('passes the port, the browser choice and every allowed origin', async () => {
+		const root = fixtureApp();
+		const argv = ['dashboard', '--port', '4500', '--no-open', '--allow-origin', 'https://a.test', '--allow-origin', 'https://b.test'];
+		const run = await runCli(argv, { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(runnerOptions(run.spawned[0], 'dashboard'), {
+			projectRoot: root,
+			argv: [],
+			port: 4500,
+			open: false,
+			allowOrigins: ['https://a.test', 'https://b.test'],
+		});
+	});
+
+	it('runs doctor as the subcommand, and not as a long-running child', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dashboard', 'doctor'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const [spec] = run.spawned;
+		assert.deepStrictEqual(runnerOptions(spec, 'dashboard'), { projectRoot: root, argv: ['doctor'] });
+		assert.strictEqual(spec.longRunning ?? false, false);
+	});
+
+	it('refuses a port that is not a port, and spawns nothing', async () => {
+		const root = fixtureApp();
+		for (const port of ['abc', '0', '70000']) {
+			const run = await runCli(['dashboard', '--port', port], { cwd: root });
+			assert.strictEqual(run.code, 2, `--port ${port}: ${run.stderr}`);
+			assert.strictEqual(run.spawned.length, 0, `--port ${port}`);
+		}
+	});
+
+	it('refuses an --allow-origin that is not an origin, and spawns nothing', async () => {
+		const root = fixtureApp();
+		for (const origin of ['*', 'example.test', 'file:///etc/passwd', '']) {
+			const run = await runCli(['dashboard', '--allow-origin', origin], { cwd: root });
+			assert.strictEqual(run.code, 2, `--allow-origin ${origin}: ${run.stderr}`);
+			assert.match(run.stderr, /option --allow-origin must be an origin such as https:\/\/host:port/);
+			assert.strictEqual(run.spawned.length, 0, `--allow-origin ${origin}`);
+		}
+	});
+
+	it('passes an origin on canonical, and says so when it differs from what was given', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dashboard', '--allow-origin', 'https://host.test:8443/ui'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(runnerOptions(run.spawned[0], 'dashboard'), {
+			projectRoot: root,
+			argv: [],
+			allowOrigins: ['https://host.test:8443'],
+		});
+		assert.match(run.stderr, /--allow-origin https:\/\/host\.test:8443\/ui is read as the origin https:\/\/host\.test:8443\./);
+	});
+
+	it('gives the runner no stdin when the run cannot prompt, so the install offer does not wait for an answer', async () => {
+		const root = fixtureApp();
+		for (const [argv, options, ignoreStdin] of [
+			[['dashboard'], { stdinIsTTY: true }, false],
+			[['dashboard', 'doctor'], { stdinIsTTY: true }, false],
+			[['--no-input', 'dashboard'], { stdinIsTTY: true }, true],
+			[['--no-input', 'dashboard', 'doctor'], { stdinIsTTY: true }, true],
+			[['dashboard'], { stdinIsTTY: true, env: { CI: 'true' } }, true],
+			[['dashboard'], { stdinIsTTY: false }, true],
+		] as const) {
+			const run = await runCli([...argv], { cwd: root, ...options });
+			assert.strictEqual(run.code, 0, run.stderr);
+			assert.strictEqual(run.spawned[0].ignoreStdin, ignoreStdin, `${argv.join(' ')} ${JSON.stringify(options)}`);
+		}
+	});
+
+	it('says that it prints text, rather than half-answering --output json', async () => {
+		// Each command names its own npm task, so the message and its Try: line are copyable:
+		// `dashboard doctor` is the `dashboard:doctor` script, not `npm run dashboard doctor`,
+		// which npm would pass to the dashboard script as an argument.
+		for (const [argv, task] of [
+			[['dashboard'], 'npm run dashboard'],
+			[['dashboard', 'doctor'], 'npm run dashboard:doctor'],
+		] as const) {
+			const run = await runCli([...argv, '--output', 'json'], { cwd: fixtureApp() });
+			assert.strictEqual(run.code, 2, run.stderr);
+			assert.ok(
+				run.stderr.includes(`--output json is not supported for "${task}": it prints text only.`),
+				`${argv.join(' ')}: ${run.stderr}`,
+			);
+			assert.ok(run.stderr.includes(`Try: ${task} -- --help`), `${argv.join(' ')}: ${run.stderr}`);
+			assert.strictEqual(run.spawned.length, 0, argv.join(' '));
+		}
 	});
 });
 

@@ -103,6 +103,23 @@ export function trackDevSession(): { started(): void } {
 }
 
 /**
+ * The error of a Ctrl-C at a prompt, as an operator stop; any other error
+ * unchanged.
+ *
+ * In a terminal, readline reads Ctrl-C as a key and rejects its `question`
+ * with an `AbortError` (code `ABORT_ERR`) rather than raising SIGINT. Core's
+ * offer to install `@aws-blocks/admin-ui` prompts that way, so the abort would
+ * reach {@link exitWithError} as an ordinary failure: the runner would exit 1
+ * and the CLI would report a failed command, not the documented interruption
+ * (130). The CLI's own prompts use `PromptInterrupted` for the same case.
+ */
+export function asPromptInterruption(error: unknown): unknown {
+	if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ABORT_ERR') return error;
+	const message = error instanceof Error ? error.message : String(error);
+	return Object.assign(new Error(message, { cause: error }), { operatorSignal: 'SIGINT' });
+}
+
+/**
  * Print the error's message and exit 1. The stack trace prints only at
  * `BLOCKS_LOG_LEVEL=debug` (`--debug`), as the CLI's own errors do: core has
  * usually printed its guidance for the failure already.
