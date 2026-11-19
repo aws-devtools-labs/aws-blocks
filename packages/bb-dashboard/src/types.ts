@@ -199,8 +199,8 @@ export interface DashboardOptions {
 
 	/**
 	 * Route path for the dashboard redirect endpoint.
-	 * When set to a string, registers a RawRoute at that path that 302-redirects
-	 * to the CloudWatch Dashboard console URL.
+	 * When set to a string, registers a RawRoute at that path. It serves a local
+	 * observability page in development and 302-redirects to CloudWatch in AWS.
 	 * Set to `false` to disable the route entirely (URL is still available via CfnOutput).
 	 *
 	 * The redirect requires AWS Console login to view the dashboard —

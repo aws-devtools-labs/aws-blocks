@@ -199,6 +199,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 	const { data: envData } = useQuery({
 		queryKey: ['environments'],
 		queryFn: () => apiGet<EnvironmentsResponse>('/api/v1/environments'),
+		enabled: ready && cloudStage !== undefined,
 	});
 	// The deployed-stack facts (stack name, region) for the selected cloud stage;
 	// undefined in the local environment, where no banner reads them.

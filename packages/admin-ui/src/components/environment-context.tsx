@@ -66,7 +66,7 @@ interface EnvironmentContextValue {
 const EnvironmentContext = createContext<EnvironmentContextValue>({
 	environment: DEFAULT_ENVIRONMENT,
 	setEnvironment: () => {},
-	cloudStage: DEFAULT_ENVIRONMENT,
+	cloudStage: undefined,
 	target: dataTargetFor(DEFAULT_ENVIRONMENT),
 	ready: false,
 	statuses: [],
@@ -94,6 +94,7 @@ export function EnvironmentProvider({ children }: { children: React.ReactNode })
 	const { data: environments } = useQuery({
 		queryKey: ['environments'],
 		queryFn: () => apiGet<EnvironmentsResponse>('/api/v1/environments'),
+		enabled: ready && !isLocalEnvironment(environment),
 	});
 
 	const stages = useMemo(() => meta?.stages.map((stage) => stage.name) ?? [], [meta]);

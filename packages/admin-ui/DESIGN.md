@@ -893,13 +893,9 @@ including `cloudBlockedReason`, the mode `useState` and the `useEffect` that for
 availability and its derived `{ mode, stage }` live in a module with unit tests, and the component maps that to
 markup and nothing else.
 
-**D82 — `sandbox` stays the default; the axis does not inherit the per-page `local` default.** The two
-selectors disagreed: the header defaulted to `sandbox` while both data switches defaulted to `local`. Under one
-value they must agree, and the ops pillars are what the dashboard is for — defaulting to `local` would open
-five of seven pages on "not applicable here". The consequence is deliberate and bounded: a block page now reads
-the deployed table rather than `.bb-data` on first load, which is a read; nothing is invoked or written without
-an explicit action, cloud writes stay behind the unlock gate, and an RPC call still names its target before it
-runs.
+**D82 — Fresh tabs start in `local`.** Browsing the local app requires neither AWS credentials nor a prior
+deployment. Read project metadata to offer the available stage names, but do not probe CloudFormation until
+the user selects a cloud stage. A saved stage is still respected when the tab reloads.
 
 **D83 — `unread` is a state of its own, beside `unknown`.** "We have not looked yet" and "we looked and could
 not tell" are different statements, and collapsing them makes a page mid-load indistinguishable from one whose

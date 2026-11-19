@@ -18,10 +18,9 @@ const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
 // keeps the last 100 traces in .bb-data/ and prints each one to stdout.
 const tracer = new Tracer(scope, 'tracer');
 
-// Dashboard: a CloudWatch Dashboard with health, logs, traces and the metrics
-// below. Cloud-only: under `npm run dev`, GET /aws-blocks/dashboard answers 503
-// with pointers to the local logs, metrics and traces; deployed, it redirects
-// to the dashboard.
+// Under `npm run dev`, GET /aws-blocks/dashboard shows the configured metrics
+// and where to inspect local logs and traces. After deployment, the same path
+// redirects to the CloudWatch Dashboard.
 new Dashboard(scope, 'dashboard', {
   title: 'My App',
   metrics: { metrics, metricConfigs: [{ name: 'OrdersPlaced' }] },
