@@ -36,8 +36,8 @@ let logs = captureLogger();
 beforeEach(() => {
 	logs = captureLogger();
 });
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 const OPTIONS = {

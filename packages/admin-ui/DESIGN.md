@@ -23,7 +23,7 @@ deliberately do not inherit.
 | --- | --- | --- |
 | Block discovery by parsing `cdk-blocks/**/*.ts` | absent | **Adopt**, with a generated type list |
 | Blocks grouped by category in the nav | absent | **Adopt** |
-| Local `.bb-data` browsing | absent | **Adopt** |
+| Local `.cdk-blocks/local/data` browsing | absent | **Adopt** |
 | Cloud DynamoDB browsing, key names from `DescribeTable` | absent | **Adopt**, with real pagination |
 | Cognito user pool browsing | absent | **Adopt**, with redaction applied |
 | Record create / edit / delete | absent (read-only) | **Adopt** behind the unlock |
@@ -159,7 +159,7 @@ is real. Never pay for a full scan to render a number.
 **D6 — Cloud writes read `DescribeTable` for every key, on every path.** No hardcoded `pk`/`sk`, and
 delete and put share one key-resolution helper.
 
-**D7 — The unlock gates cloud writes only.** `.bb-data` is dev fixture data inside the user's own
+**D7 — The unlock gates cloud writes only.** `.cdk-blocks/local/data` is dev fixture data inside the user's own
 git tree; requiring a production-grade unlock to edit it is friction without a matching blast radius.
 Local writes still need the session token, and are still refused while the dev server runs. Stated
 plainly because the console's equivalent gap (defect 6) is a hole only because it has no token.
@@ -205,7 +205,7 @@ map that the store's file was before it had a version, and it often names the va
 so the masking that applied to that store still applies. The declared key fields of a `KVStore` are
 user data and do not qualify.
 
-**D14 — The key schema travels from discovery to the reader.** A `.bb-data` pair store writes its key
+**D14 — The key schema travels from discovery to the reader.** A `.cdk-blocks/local/data` pair store writes its key
 as `JSON.stringify([pk, sk])`, so the field names exist only in the block's source. Discovery already
 resolves them, so `readData` passes the discovered `keySchema` through and the reader maps
 `'["u1","t9"]'` onto `{ userId: 'u1', todoId: 't9' }`. Without it the key column has no labels and
@@ -775,13 +775,13 @@ wholesale. The dev server imports the backend in-process, so those writes land o
 a separate process the dashboard neither starts nor holds a handle to (`dashboard.ts` boots only the admin-ui
 server). What a deployed stage reads is that same stdout after Lambda ships it to CloudWatch, which is exactly
 the step local has no equivalent of. A live tail has no local data source whatsoever. One near-miss worth
-recording so it is not mistaken for an opening: `bb-tracer` *does* persist to `.bb-data/<fullId>/traces.json`,
+recording so it is not mistaken for an opening: `bb-tracer` *does* persist to `.cdk-blocks/local/data/<fullId>/traces.json`,
 so a local file mechanism exists — for traces, which no dashboard page reads.
 
 **D77 — A local run is not a deployment.** Read from the writer rather than the reader:
 `createDeployRecorder` / `appendDeployHistoryRecord` (`core/src/scripts/deploy-history.ts`) is called from
 exactly two places, `deploy.ts` (`'production'`) and `sandbox.ts` (`'sandbox'`). `dev-server.ts` never imports
-it. So `.blocks/deploy-history.jsonl` cannot contain a local record, and the CloudFormation backfill needs a
+it. So `.cdk-blocks/deploy-history.jsonl` cannot contain a local record, and the CloudFormation backfill needs a
 resolvable stack name — which local has by definition not got.
 
 **D78 — A cloud-only pillar does not fire its request under `local`.** Logs search is a CloudWatch Logs
@@ -811,7 +811,7 @@ built and are not in the code: an optional `local` member on `EnvironmentsRespon
 (`listEnvironments` maps only the two real stages and probes nothing). The intent — do not reuse the
 CloudFormation vocabulary for local — did land, by the client-side union above. The liveness feature does
 not exist at all: the local card states what local READS, never that a dev server is currently up, and a
-missing dev server or an absent `.bb-data` store stays a per-block fact the data pages report. The
+missing dev server or an absent `.cdk-blocks/local/data` store stays a per-block fact the data pages report. The
 observation that killed the config-file approach: when this was decided, `.cdk-blocks-sandbox/config.json` was
 written by `dev-server.ts` *and* by `deploy.ts`/`sandbox.ts`, so its presence could not tell a local run
 from a deployed one. (A deploy now records its URL in `config.<stage>.json`; only a dev server writes
@@ -1075,7 +1075,7 @@ and `blockType`; `ApiError.code` gains `LOCKED` and `CONFLICT`. All optional, al
 - **DynamoDB types JSON cannot express.** Sets (`SS`/`NS`/`BS`), binary and `BigInt` are rejected at
   validation rather than silently mangled. An item already containing a set cannot be round-tripped
   through the editor, and the editor says so instead of corrupting it.
-- **A second local-mode source of truth.** `.bb-data` is read as the dev server's format; we do not
+- **A second local-mode source of truth.** `.cdk-blocks/local/data` is read as the dev server's format; we do not
   re-derive or migrate it.
 - **Serverless or multi-worker hosting of the dashboard server.** The unlock state and the project
   root are process-scoped by design. It stays a long-lived loopback process.

@@ -22,8 +22,8 @@ import { generateSpec } from '@aws-cdk-blocks/core/scripts';
 import { Auth, AuthErrors } from './index.mock.js';
 import { apiMethodNames, apiNamespaceOptionsOf } from './protect.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 let instance = 0;
 

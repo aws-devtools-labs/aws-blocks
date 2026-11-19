@@ -1,11 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, before, after } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
+import { after, before, test } from 'node:test';
 import { AsyncJob, AsyncJobErrors } from './index.mock.js';
-import { statusSchema, statusTableOptions, STATUS_TABLE_ID, JobStatusTracker } from './status.js';
+import { JobStatusTracker, STATUS_TABLE_ID, statusSchema, statusTableOptions } from './status.js';
 
 // Every handler in this file settles immediately. The transition history is what
 // makes intermediate states observable, so none of these tests pad the handler
@@ -13,6 +13,7 @@ import { statusSchema, statusTableOptions, STATUS_TABLE_ID, JobStatusTracker } f
 
 function cleanMockData(): void {
 	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	} catch {
 		/* ignore */
@@ -39,11 +40,14 @@ test('AsyncJob - records queued -> processing -> complete for an instant handler
 	assert.strictEqual(ran, true, 'handler should have run');
 	assert.strictEqual(status.state, 'complete');
 	assert.deepStrictEqual(
-		status.transitions.map(t => t.state),
+		status.transitions.map((t) => t.state),
 		['queued', 'processing', 'complete'],
 		'every intermediate state must be recorded even though the handler returned immediately',
 	);
-	assert.deepStrictEqual(status.transitions.map(t => t.attempt), [0, 1, 1]);
+	assert.deepStrictEqual(
+		status.transitions.map((t) => t.attempt),
+		[0, 1, 1],
+	);
 	assert.strictEqual(status.attempts, 1);
 	assert.strictEqual(status.jobId, jobId);
 	assert.strictEqual(status.error, undefined);
@@ -62,7 +66,7 @@ test('AsyncJob - transitions stay readable long after the job settled', async ()
 	// used to require setTimeout(1500) in the handler.
 	const status = await job.getStatus(jobId);
 	assert.deepStrictEqual(
-		status?.transitions.map(t => t.state),
+		status?.transitions.map((t) => t.state),
 		['queued', 'processing', 'complete'],
 	);
 });
@@ -76,8 +80,11 @@ test('AsyncJob - transitions are ordered and timestamped', async () => {
 	const { jobId } = await job.submit({ n: 1 });
 	const status = await job.waitUntilComplete(jobId, FAST_POLL);
 
-	const times = status.transitions.map(t => Date.parse(t.at));
-	assert.ok(times.every(t => Number.isFinite(t)), 'every transition needs a parseable timestamp');
+	const times = status.transitions.map((t) => Date.parse(t.at));
+	assert.ok(
+		times.every((t) => Number.isFinite(t)),
+		'every transition needs a parseable timestamp',
+	);
 	for (let i = 1; i < times.length; i++) {
 		assert.ok(times[i] >= times[i - 1], `transition ${i} must not predate transition ${i - 1}`);
 	}
@@ -102,10 +109,13 @@ test('AsyncJob - retries record processing twice then failed', async () => {
 	assert.strictEqual(attempts, 2, 'handler should run once per retry');
 	assert.strictEqual(status.state, 'failed');
 	assert.deepStrictEqual(
-		status.transitions.map(t => t.state),
+		status.transitions.map((t) => t.state),
 		['queued', 'processing', 'processing', 'failed'],
 	);
-	assert.deepStrictEqual(status.transitions.map(t => t.attempt), [0, 1, 2, 2]);
+	assert.deepStrictEqual(
+		status.transitions.map((t) => t.attempt),
+		[0, 1, 2, 2],
+	);
 	assert.strictEqual(status.attempts, 2);
 	assert.match(status.error ?? '', /handler blew up/);
 });
@@ -122,7 +132,10 @@ test('AsyncJob - queued is observable before the handler runs', async () => {
 	const status = await job.getStatus(jobId);
 
 	assert.strictEqual(status?.state, 'queued');
-	assert.deepStrictEqual(status?.transitions.map(t => t.state), ['queued']);
+	assert.deepStrictEqual(
+		status?.transitions.map((t) => t.state),
+		['queued'],
+	);
 	assert.strictEqual(status?.attempts, 0);
 });
 
@@ -136,15 +149,13 @@ test('AsyncJob - submitBatch records status for every job', async () => {
 	});
 
 	const { jobIds } = await job.submitBatch([{ n: 1 }, { n: 2 }, { n: 3 }]);
-	const statuses = await Promise.all(
-		jobIds.map(id => job.waitUntilComplete(id!, FAST_POLL)),
-	);
+	const statuses = await Promise.all(jobIds.map((id) => job.waitUntilComplete(id!, FAST_POLL)));
 
 	assert.strictEqual(seen.length, 3);
 	for (const status of statuses) {
 		assert.strictEqual(status.state, 'complete');
 		assert.deepStrictEqual(
-			status.transitions.map(t => t.state),
+			status.transitions.map((t) => t.state),
 			['queued', 'processing', 'complete'],
 		);
 	}
@@ -161,7 +172,7 @@ test('AsyncJob - getStatus returns null for an unknown job id', async () => {
 
 test('AsyncJob - waitUntilComplete throws Timeout while a job is still processing', async () => {
 	let release: (() => void) | undefined;
-	const gate = new Promise<void>(resolve => {
+	const gate = new Promise<void>((resolve) => {
 		release = resolve;
 	});
 
@@ -191,7 +202,7 @@ test('AsyncJob - waitUntilComplete throws Timeout while a job is still processin
 
 test('AsyncJob - waitUntilComplete rejects with the abort reason', async () => {
 	let release: (() => void) | undefined;
-	const gate = new Promise<void>(resolve => {
+	const gate = new Promise<void>((resolve) => {
 		release = resolve;
 	});
 
@@ -213,10 +224,13 @@ test('AsyncJob - waitUntilComplete rejects with the abort reason', async () => {
 	});
 	controller.abort(reason);
 
-	await assert.rejects(() => waiting, (err: Error) => {
-		assert.strictEqual(err, reason);
-		return true;
-	});
+	await assert.rejects(
+		() => waiting,
+		(err: Error) => {
+			assert.strictEqual(err, reason);
+			return true;
+		},
+	);
 
 	release!();
 	await job.waitUntilComplete(jobId, FAST_POLL);
@@ -248,16 +262,22 @@ test('AsyncJob - status methods throw StatusNotTracked when trackStatus is off',
 
 	const { jobId } = await job.submit({ n: 1 });
 
-	await assert.rejects(() => job.getStatus(jobId), (err: Error) => {
-		assert.strictEqual(err.name, AsyncJobErrors.StatusNotTracked);
-		assert.match(err.message, /trackStatus: true/);
-		return true;
-	});
+	await assert.rejects(
+		() => job.getStatus(jobId),
+		(err: Error) => {
+			assert.strictEqual(err.name, AsyncJobErrors.StatusNotTracked);
+			assert.match(err.message, /trackStatus: true/);
+			return true;
+		},
+	);
 
-	await assert.rejects(() => job.waitUntilComplete(jobId), (err: Error) => {
-		assert.strictEqual(err.name, AsyncJobErrors.StatusNotTracked);
-		return true;
-	});
+	await assert.rejects(
+		() => job.waitUntilComplete(jobId),
+		(err: Error) => {
+			assert.strictEqual(err.name, AsyncJobErrors.StatusNotTracked);
+			return true;
+		},
+	);
 });
 
 test('AsyncJob - tracked and untracked jobs keep their own status records', async () => {
@@ -287,7 +307,7 @@ test('AsyncJob - status schema rejects a numeric jobId so CDK provisions a strin
 
 	assert.ok(result.issues, 'a numeric jobId must produce issues');
 	assert.ok(
-		result.issues.some(i => i.path?.length === 1 && i.path[0] === 'jobId'),
+		result.issues.some((i) => i.path?.length === 1 && i.path[0] === 'jobId'),
 		'the issue must be attributed to the jobId field',
 	);
 });
@@ -338,7 +358,7 @@ test('JobStatusTracker - concurrent appends do not lose a transition', async () 
 	);
 	assert.strictEqual(status.transitions[0].state, 'queued');
 	assert.strictEqual(
-		status.transitions.filter(t => t.state === 'complete').length,
+		status.transitions.filter((t) => t.state === 'complete').length,
 		1,
 		'the terminal transition must survive a concurrent append',
 	);
@@ -354,7 +374,10 @@ test('JobStatusTracker - a late queued write does not clobber an earlier transit
 
 	const status = await tracker.get('job-late');
 	assert.strictEqual(status?.state, 'processing', 'state must not fall back to queued');
-	assert.deepStrictEqual(status?.transitions.map(t => t.state), ['queued', 'processing']);
+	assert.deepStrictEqual(
+		status?.transitions.map((t) => t.state),
+		['queued', 'processing'],
+	);
 });
 
 test('JobStatusTracker - a late queued write corrects the backfilled submission time', async () => {
@@ -391,7 +414,10 @@ test('JobStatusTracker - a late queued write corrects the backfilled submission 
 
 	// The correction must not cost anything else on the record.
 	assert.strictEqual(status.state, 'processing', 'state must not fall back to queued');
-	assert.deepStrictEqual(status.transitions.map(t => t.state), ['queued', 'processing']);
+	assert.deepStrictEqual(
+		status.transitions.map((t) => t.state),
+		['queued', 'processing'],
+	);
 	assert.strictEqual(status.attempts, 1);
 	assert.strictEqual(
 		status.transitions[1].at,
@@ -415,7 +441,10 @@ test('JobStatusTracker - queued only ever moves the submission time earlier', as
 	const status = await tracker.get('job-monotonic');
 	assert.strictEqual(status?.submittedAt, submittedAt);
 	assert.strictEqual(status.transitions[0].at, submittedAt);
-	assert.deepStrictEqual(status.transitions.map(t => t.state), ['queued']);
+	assert.deepStrictEqual(
+		status.transitions.map((t) => t.state),
+		['queued'],
+	);
 });
 
 test('JobStatusTracker - correcting the submission time does not drop a concurrent transition', async () => {
@@ -433,12 +462,11 @@ test('JobStatusTracker - correcting the submission time does not drop a concurre
 
 	const status = await tracker.get('job-both');
 	assert.strictEqual(status?.state, 'complete', 'the terminal transition must survive the correction');
-	assert.deepStrictEqual(status.transitions.map(t => t.state), ['queued', 'processing', 'complete']);
-	assert.strictEqual(
-		status.submittedAt,
-		submittedAt,
-		'the correction must survive a concurrent append',
+	assert.deepStrictEqual(
+		status.transitions.map((t) => t.state),
+		['queued', 'processing', 'complete'],
 	);
+	assert.strictEqual(status.submittedAt, submittedAt, 'the correction must survive a concurrent append');
 	assert.strictEqual(status.transitions[0].at, submittedAt);
 });
 

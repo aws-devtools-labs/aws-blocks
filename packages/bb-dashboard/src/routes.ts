@@ -41,7 +41,7 @@ export function mountDashboardRoute(
 					localObservability: {
 						logs: 'Check your terminal output - Logger BB writes structured JSON to stdout',
 						metrics: 'Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)',
-						traces: 'Tracer stores mock traces to .bb-data/ and logs them to stdout',
+						traces: 'Tracer stores mock traces to .cdk-blocks/local/data/ and logs them to stdout',
 					},
 				});
 				return;

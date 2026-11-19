@@ -11,7 +11,7 @@ import { contentPath, metaPath, deleteMarkerPath, versionContentPath, versionMet
 
 const scope = new Scope('version-delete');
 const bucketId = 'files';
-const dataDir = join(process.cwd(), '.bb-data', `${scope.fullId}-${bucketId}`);
+const dataDir = join(process.cwd(), '.cdk-blocks/local/data', `${scope.fullId}-${bucketId}`);
 const key = 'reports/document.txt';
 
 beforeEach(() => rmSync(dataDir, { recursive: true, force: true }));

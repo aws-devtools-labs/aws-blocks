@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { LEGACY_BLOCKS_DIR } from '../common/constants.js';
 
 const FIRST_RUN_NOTICE = `
 AWS CDK Blocks collects usage data to improve the product. Each event can include:
@@ -31,14 +32,14 @@ interface BlocksConfig {
 
 /**
  * Get or create a persistent installation ID.
- * Stored at `~/.blocks/telemetry/installation-id`.
+ * Stored at `~/.cdk-blocks/telemetry/installation-id`.
  * Generated as UUID v4 on first use.
  *
  * On first creation, prints a one-time notice to stderr informing
  * the user about telemetry collection.
  */
 export function getInstallationId(): string {
-  const filePath = join(homedir(), '.blocks', 'telemetry', 'installation-id');
+  const filePath = join(homedir(), '.cdk-blocks', 'telemetry', 'installation-id');
 
   try {
     const existing = readFileSync(filePath, 'utf-8').trim();
@@ -62,39 +63,43 @@ export function getInstallationId(): string {
 }
 
 /**
- * Get or create a persistent project ID.
- * Stored in `.blocks/config.json` under `telemetry.projectId` in the project root (cwd).
- * Generated as UUID v4 on first use.
+ * Get or create a persistent project ID. Stored in `.cdk-blocks/config.json` under
+ * `telemetry.projectId` in the project root (cwd). Generated as UUID v4 on first use.
  */
 export function getProjectId(): string {
-  const configPath = join(process.cwd(), '.blocks', 'config.json');
+  const configPath = join(process.cwd(), '.cdk-blocks', 'config.json');
+  const legacyPath = join(process.cwd(), LEGACY_BLOCKS_DIR, 'config.json');
 
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    const config: BlocksConfig = JSON.parse(content);
-    if (config.telemetry?.projectId) return config.telemetry.projectId;
-  } catch {
-    // File doesn't exist or invalid JSON
-  }
+  const read = (path: string): BlocksConfig | undefined => {
+    try {
+      return JSON.parse(readFileSync(path, 'utf-8')) as BlocksConfig;
+    } catch {
+      // File doesn't exist or invalid JSON
+      return undefined;
+    }
+  };
+
+  // The pre-rename file is read too, or every upgraded app that has not renamed
+  // its folder yet mints a fresh id and is counted as a second project.
+  const existing = read(configPath)?.telemetry?.projectId ?? read(legacyPath)?.telemetry?.projectId;
+  if (existing) return existing;
 
   const id = randomUUID();
+  // Write to the file the project is already using. Creating
+  // `.cdk-blocks/config.json` for a project whose `stackId` still lives in
+  // `.blocks/config.json` is what shadowed that key before, and it also makes
+  // `git mv .blocks .cdk-blocks` nest the folder instead of renaming it.
+  const target = existsSync(configPath) || !existsSync(legacyPath) ? configPath : legacyPath;
   try {
-    const dir = dirname(configPath);
+    const dir = dirname(target);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
 
     // Preserve existing config if present
-    let config: BlocksConfig = {};
-    try {
-      const existing = readFileSync(configPath, 'utf-8');
-      config = JSON.parse(existing);
-    } catch {
-      // No existing config
-    }
-
+    const config: BlocksConfig = read(target) ?? {};
     config.telemetry = { ...config.telemetry, projectId: id };
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+    writeFileSync(target, JSON.stringify(config, null, 2), 'utf-8');
   } catch {
     // If we can't persist, still return the generated ID for this session
   }

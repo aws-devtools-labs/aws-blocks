@@ -7,7 +7,12 @@
  * Used by standard BBs and available to customers writing custom Building Blocks.
  * Not part of the main '.' export — import from '@aws-cdk-blocks/core/bb-utils'.
  */
-export { getMockDataDir } from './common/mock-data.js';
+export {
+  getMockDataDir,
+  LEGACY_MOCK_DATA_DIR,
+  MOCK_DATA_DIR,
+  MockDataDirError,
+} from './common/mock-data.js';
 export { assertNotMockInDeployedEnv } from './common/runtime-guard.js';
 export { API_NAMESPACE_DISCOVER, API_NAMESPACE_MARKER } from './api.js';
 export { EventSourceMapping } from './lambda-handler.js';

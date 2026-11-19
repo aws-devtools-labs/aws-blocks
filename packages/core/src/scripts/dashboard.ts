@@ -25,7 +25,7 @@ export type DashboardCommand = 'serve' | 'doctor';
 
 export interface DashboardOptions {
 	/**
-	 * Root of the Blocks app (where package.json and .blocks/ live). When
+	 * Root of the Blocks app (where package.json and .cdk-blocks/ live). When
 	 * omitted the project is discovered from the working directory (or from
 	 * `--project`). An explicit value here wins over both and is used verbatim.
 	 */

@@ -18,7 +18,7 @@ synth fails loudly.
 ## Mock Implementation
 
 `index.mock.ts` implements the same surface locally (in-memory or on-disk under
-`.bb-data/{fullId}/`) so `npm run dev` and tests need no AWS account.
+`.cdk-blocks/local/data/{fullId}/`) so `npm run dev` and tests need no AWS account.
 
 ### Mock vs AWS Behavior Differences
 

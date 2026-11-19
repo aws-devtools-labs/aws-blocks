@@ -18,8 +18,8 @@ import { clientMessageFor } from './error-mapping.js';
 import { AuthErrors } from './index.aws.js';
 import { Browser, cognitoError, makeAwsAuth, signInAs, TEST_POOL_ID, wireView } from './test-support/aws-harness.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 async function rejection(p: Promise<unknown>): Promise<unknown> {
 	return p.then(

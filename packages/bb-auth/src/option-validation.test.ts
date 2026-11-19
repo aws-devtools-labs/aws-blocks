@@ -39,7 +39,7 @@ import {
 } from './option-validation.js';
 import type { AppSettingRef, AuthMockOptions } from './types.js';
 
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 let n = 0;
 const root = (): ScopeParent => ({ id: `optval${process.pid}x${++n}` });

@@ -22,9 +22,10 @@ import { Auth, AuthErrors } from './index.mock.js';
 import { Browser, wireView } from './test-support/aws-harness.js';
 import type { CodeDeliveryPurpose, CognitoAuthOptions, SignInNextStep } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 afterEach(() => {
 	mock.restoreAll();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
 

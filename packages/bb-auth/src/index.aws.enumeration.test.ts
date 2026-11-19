@@ -35,8 +35,8 @@ import type { AuthOptions } from './types.js';
 /** The options a pool that issues every MFA challenge was created from (the block rejects steps its options do not enable). */
 const MFA_ALL = { mfa: { mode: 'optional', types: ['SMS', 'TOTP', 'EMAIL'] } } as const;
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function apiFor<O extends AuthOptions>(auth: Auth<O>, ctx: BlocksContext): AuthStateApi {
 	return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx);

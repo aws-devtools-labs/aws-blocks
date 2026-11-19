@@ -21,7 +21,7 @@
   },
   "include": [
     "src/**/*",
-    ".blocks/**/*.d.ts"
+    ".cdk-blocks/**/*.d.ts"
   ],
   "references": [
     {

@@ -20,8 +20,8 @@ import { Auth } from './index.mock.js';
 import { Browser, captureLogger, makeAuth } from './test-helpers.js';
 import type { AuthOptions, SignInNextStep } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const delivery = { destination: '+*******0100', deliveryMedium: 'SMS' as const, attributeName: 'phone_number' };
 const STEPS = {

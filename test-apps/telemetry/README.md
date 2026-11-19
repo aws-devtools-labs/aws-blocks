@@ -9,7 +9,7 @@ test apps:
 
 - Its own test application (`test-apps/telemetry`, distinct from
   `test-apps/comprehensive`).
-- A suite-level `before()` seeds the pinned installation-id in `$HOME/.blocks/`
+- A suite-level `before()` seeds the pinned installation-id in `$HOME/.cdk-blocks/`
   so telemetry state is deterministic without affecting other suites.
 - Each captured event is written to a unique `--telemetry-file` path, so no test
   depends on another's file. The reader takes the first element of the array, so a
@@ -24,7 +24,7 @@ in order:
 
 - **local commands**: every case that needs no AWS account, from this
   directory with the real HOME (unless a case sets its own). They run in order
-  because several write the project config (`.blocks/config.json`) or the real
+  because several write the project config (`.cdk-blocks/config.json`) or the real
   HOME's global config.
 - **CLI commands**: `help`, `docs`, `dev stop` and its `cleanup` alias,
   `generate client|spec|types`, `migrate`, `whoami`, `secret`, `config`, `db`,
@@ -69,7 +69,7 @@ never share a stack, and the destroy scripts run from this directory (the CI
 Matching the CI setup (the "Seed fixed e2e telemetry installation ID" step in
 `.github/workflows/pr-checks.yml`), the suite pins a fixed installation ID
 (`00000000-0000-0000-0000-000000000e2e`) by writing
-`$HOME/.blocks/telemetry/installation-id` **before** any CLI invocation. This
+`$HOME/.cdk-blocks/telemetry/installation-id` **before** any CLI invocation. This
 keeps emitted `installationId` values deterministic and suppresses the
 first-run consent notice.
 

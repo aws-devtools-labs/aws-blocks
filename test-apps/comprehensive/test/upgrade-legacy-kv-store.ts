@@ -173,7 +173,7 @@ function materialize(treeRoot: string, variant: string, backend: string, preset:
 	const retarget = (text: string): string => retargetBlocksImports(text, names);
 	rmSync(dir, { recursive: true, force: true });
 	fixtureApps.push(dir);
-	for (const sub of ['cdk-blocks', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	for (const sub of ['cdk-blocks', 'scripts', '.cdk-blocks']) mkdirSync(join(dir, sub), { recursive: true });
 	const cdkEntry = readFileSync(join(APP, 'index.cdk.ts'), 'utf8').replace('BlocksPresets.sandbox', `BlocksPresets.${preset}`);
 	writeFileSync(join(dir, 'cdk-blocks', 'index.cdk.ts'), retarget(cdkEntry));
 	const source = readFileSync(join(APP, backend), 'utf8');
@@ -187,7 +187,7 @@ function materialize(treeRoot: string, variant: string, backend: string, preset:
 	writeFileSync(join(dir, 'scripts', 'deploy.ts'), retarget(readFileSync(join(APP, 'deploy.ts'), 'utf8')));
 	writeFileSync(join(dir, 'scripts', 'destroy.ts'), retarget(readFileSync(join(APP, 'destroy.ts'), 'utf8')));
 	writeFileSync(join(dir, 'cdk.json'), `${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk cdk-blocks/index.cdk.ts` }, null, 2)}\n`);
-	writeFileSync(join(dir, '.blocks', 'config.json'), `${JSON.stringify({ stackId: 'bb-test-upgrade', telemetry: { enabled: false } }, null, 2)}\n`);
+	writeFileSync(join(dir, '.cdk-blocks', 'config.json'), `${JSON.stringify({ stackId: 'bb-test-upgrade', telemetry: { enabled: false } }, null, 2)}\n`);
 	return dir;
 }
 

@@ -32,8 +32,8 @@ import {
 import { mockStateCapture } from './test-support/legacy-fixtures.js';
 import type { AppSettingRef, AuthOptions } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const oktaSecret: AppSettingRef = { fullId: 'okta-secret', get: async () => 'shh' };
 

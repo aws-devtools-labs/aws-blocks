@@ -27,7 +27,7 @@ const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // Locally no email is sent: `getLastAuthCode(name)` reads the verification code
-// the local auth block just issued for `name` (it finds the block's .bb-data/
+// the local auth block just issued for `name` (it finds the block's .cdk-blocks/local/data/
 // files itself). On AWS, Cognito emails it instead.
 
 // Wait for the Blocks server to be ready without depending on the sample API.
@@ -350,8 +350,8 @@ test('AsyncJob - submit, complete, and observe the effect', async () => {
 // Transactional email (no SES in local dev). EmailClient's public API is
 // send/sendBatch only (no read-back method, matching the AWS runtime), so the
 // mail is checked through the local outbox the mock documents for inspection:
-// `.bb-data/{fullId}/emails.json`, where fullId is `<scope id>-<block id>`.
-const outboxPath = join('.bb-data', 'my-app-mailer', 'emails.json');
+// `.cdk-blocks/local/data/{fullId}/emails.json`, where fullId is `<scope id>-<block id>`.
+const outboxPath = join('.cdk-blocks/local/data', 'my-app-mailer', 'emails.json');
 
 test('EmailClient - a sent welcome mail reaches the local outbox', async () => {
   await signUp(`email-${uniqueSuffix()}`);

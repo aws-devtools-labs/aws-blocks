@@ -22,7 +22,7 @@
  *      `token_use`, signature, expiry) without a JWKS fetch.
  *   3. **Session store + secret** — the nested `KVStore` / `AppSetting` resolve
  *      to their mock entries under default conditions (they persist to
- *      `.bb-data/`). The session `KVStore.put` is wrapped so tests can assert
+ *      `.cdk-blocks/local/data/`). The session `KVStore.put` is wrapped so tests can assert
  *      exactly what was written, including the TTL option.
  *
  * The config keys are set in `process.env` under the names

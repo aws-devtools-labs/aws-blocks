@@ -275,7 +275,7 @@ The bound is fixed. It is not the invocation's remaining time, so a second long 
 
 R4 is not met yet. Nothing stops a deploy that renames a `Database` or `DatabaseCluster` id. In production the removal policy of the cluster is `retain` by default, so the old cluster and its data stay. The application then points at a new, empty schema.
 
-The planned mechanism has three parts: a binding record in stack metadata, a marker in `.bb-data` for the dev server, and a guard that inspects a change set before `cdk deploy`.
+The planned mechanism has three parts: a binding record in stack metadata, a marker in `.cdk-blocks/local/data` for the dev server, and a guard that inspects a change set before `cdk deploy`.
 
 **The logical id of an owned cluster.** The cluster of a `Database` that owns it has the CloudFormation logical id `<fullId>DsqlCluster`, without the characters that a logical id cannot have. The id does not come from the construct path. `DistributedDatabase` of `@aws-blocks/bb-distributed-data` declared its cluster under that id. A `Database` with the id of a deployed `DistributedDatabase`, in the same scope and stack, is therefore the same resource to CloudFormation, and the deploy keeps the cluster. The runner reads the `_migrations` table of that block as it is: the table has an extra `id` column with a default. The database role has the same name in both blocks.
 
@@ -361,7 +361,7 @@ The package has one binary, `bb-database`. `npm run db` runs it from the project
 
 **A block that provisions its cluster.** The schema of such a block is its migration files, and its local database is PGlite.
 
-- `types --block <id>` applies the block's migration files to a new PGlite database in a temporary directory and reads the columns from it. It uses `prepareLocalSchema` (`src/migrations/local.ts`), the function that the local entry point runs before a block's first statement. The result does not depend on `.bb-data/`, and a running dev server is not touched.
+- `types --block <id>` applies the block's migration files to a new PGlite database in a temporary directory and reads the columns from it. It uses `prepareLocalSchema` (`src/migrations/local.ts`), the function that the local entry point runs before a block's first statement. The result does not depend on `.cdk-blocks/local/data/`, and a running dev server is not touched.
 - `status --block <id>` needs the block's real local ledger. PGlite takes one process, so the command copies the PGlite directory and opens the copy. With a dev server running, it shows what that process had written to disk.
 
 Neither command reads a deployed cluster.

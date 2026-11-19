@@ -177,7 +177,7 @@ This design means you can emit metrics anywhere — in hot loops, synchronous ca
 
 ## Local Development
 
-Metrics are written as EMF JSON to stdout — the same format as AWS. In local dev, you can see metric emissions in the terminal output. No disk persistence — metrics are ephemeral locally (unlike KVStore which persists to `.bb-data/`).
+Metrics are written as EMF JSON to stdout — the same format as AWS. In local dev, you can see metric emissions in the terminal output. No disk persistence — metrics are ephemeral locally (unlike KVStore which persists to `.cdk-blocks/local/data/`).
 
 Delete nothing to reset — there's no local state to clear.
 

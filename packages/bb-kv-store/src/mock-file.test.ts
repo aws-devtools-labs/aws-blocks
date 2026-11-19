@@ -17,6 +17,7 @@ import { KVStore } from './index.mock.js';
 
 beforeEach(() => {
 	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	} catch {}
 });
@@ -45,7 +46,7 @@ function recorder(): { warnings: string[]; logger: ChildLogger } {
  * options over the same directory would read the file as its own.
  */
 function dataDir(scope: { id: string }, id: string): string {
-	const dir = join('.bb-data', `${scope.id}-${id}`);
+	const dir = join('.cdk-blocks/local/data', `${scope.id}-${id}`);
 	mkdirSync(dir, { recursive: true });
 	return dir;
 }
@@ -86,7 +87,7 @@ describe('the current format', () => {
 			total: 12,
 		});
 		assert.deepEqual(warnings, []);
-		assert.equal(join('.bb-data', reloaded.fullId), dataDir(scope, 'orders'));
+		assert.equal(join('.cdk-blocks/local/data', reloaded.fullId), dataDir(scope, 'orders'));
 		assert.deepEqual(readdirSync(dataDir(scope, 'orders')), ['store.json']);
 	});
 });

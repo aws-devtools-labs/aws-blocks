@@ -146,7 +146,7 @@ framework-owned handler log group. To override the default for one compute, set
 In local dev (`npm run dev`), the Logger BB:
 - Writes structured JSON to stdout/stderr (same as production)
 - Does NOT persist logs to disk
-- Does NOT create any files in `.bb-data/`
+- Does NOT create any files in `.cdk-blocks/local/data/`
 - Retention has no local effect (it is a cloud-only, compute-level setting)
 - Log level comes from the `Logger`'s `level` option (default `'info'`)
 - Lines have no `awsRequestId` field: the dev server doesn't set a request id

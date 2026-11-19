@@ -3,4 +3,4 @@ cdk.out/
 node_modules/
 dist/
 .env
-.bb-data/
+.cdk-blocks/local/data/

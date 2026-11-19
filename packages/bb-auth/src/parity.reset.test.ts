@@ -26,8 +26,8 @@ import { Auth as MockAuth } from './index.mock.js';
 import { type AwsAuthHarness, Browser, cognitoError, makeAwsAuth, wireView } from './test-support/aws-harness.js';
 import type { AuthOptions, CodeDeliveryPurpose, ResetPasswordResult } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 const EMAIL = 'alice@example.com';

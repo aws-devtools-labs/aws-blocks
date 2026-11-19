@@ -576,7 +576,7 @@ interface SandboxHistory {
 }
 
 /**
- * Starts a sandbox, recording the run in `.blocks/deploy-history.jsonl`.
+ * Starts a sandbox, recording the run in `.cdk-blocks/deploy-history.jsonl`.
  *
  * The recorder starts HERE, before any work, as `deploy()` does. It used to be
  * created just before the CDK deploy, after credential and bootstrap preflight,

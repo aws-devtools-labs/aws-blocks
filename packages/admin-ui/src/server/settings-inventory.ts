@@ -35,8 +35,8 @@ import type { RawTemplate } from './resources.js';
  *
  * ## Two address spaces, one identity
  *
- * `fullId` identifies a setting everywhere, but the address differs by mode:
- * the mock keys `.bb-data/settings.json` by `fullId`, while a deployed stage
+ * `fullId` identifies a setting everywhere, but the address differs by mode: the
+ * mock keys `.cdk-blocks/local/data/settings.json` by `fullId`, while a deployed stage
  * addresses an SSM parameter by path. A join that used one key for both would
  * report every cloud setting as undeclared.
  */
@@ -294,9 +294,9 @@ export function cloudAddressFor(
  * Join declared settings against the addresses one stage actually holds.
  *
  * `mode` picks the address space: `local` keys by `fullId` (how the mock keys
- * `.bb-data/settings.json`), `cloud` by the SSM path `addresses` carries. Cloud
- * callers MUST supply that map (see {@link cloudAddressFor}): the deployed path
- * is stack-prefixed and so cannot be derived from source.
+ * `.cdk-blocks/local/data/settings.json`), `cloud` by the SSM path `addresses` carries.
+ * Cloud callers MUST supply that map (see {@link cloudAddressFor}): the deployed
+ * path is stack-prefixed and so cannot be derived from source.
  *
  * `live` must be what the stage HOLDS rather than what its template declares,
  * because those differ: a parameter can be deleted out of band. The cloud

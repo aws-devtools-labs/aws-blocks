@@ -18,8 +18,8 @@ import { INTERNAL_ERROR_MESSAGE } from './error-mapping.js';
 import { Auth, AuthErrors } from './index.mock.js';
 import { Browser } from './test-support/aws-harness.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** What an SDK raises for a denied call: its message names an account and a role ARN. */
 const RAW_BACKEND_ERROR = 'User: arn:aws:sts::111122223333:assumed-role/app-role/x is not authorized to perform: ses:SendEmail';

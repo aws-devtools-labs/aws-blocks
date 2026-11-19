@@ -245,7 +245,7 @@ Future<void> _returningCustomerFlow(
 
 /// Provisions the returning-customer user on the LOCAL dev server via the real
 /// sign-up → confirm flow, using the dev-only `cognitoGetLastCode` hook.
-/// Idempotent across runs that share `.bb-data`: an existing user is reused.
+/// Idempotent across runs that share `.cdk-blocks/local/data`: an existing user is reused.
 Future<void> _provisionLocalUser(
   Blocks blocks,
   String username,

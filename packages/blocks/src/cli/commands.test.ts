@@ -1407,7 +1407,7 @@ describe('destroy safety', () => {
 		});
 	});
 
-	it('says when CDK deployed another stack than the one .blocks/config.json names', async () => {
+	it('says when CDK deployed another stack than the one .cdk-blocks/config.json names', async () => {
 		const root = fixtureApp();
 		const record = (stack: string) => () => {
 			mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
@@ -1419,7 +1419,7 @@ describe('destroy safety', () => {
 		assert.strictEqual(other.code, 0, other.stderr);
 		assert.match(
 			other.stderr,
-			/Warning: CDK deployed the stack my-blocks-stack-prod, not demo-prod, which \.blocks\/config\.json names\.\n.*so that <stackId>-prod is my-blocks-stack-prod\./,
+			/Warning: CDK deployed the stack my-blocks-stack-prod, not demo-prod, which \.cdk-blocks\/config\.json names\.\n.*so that <stackId>-prod is my-blocks-stack-prod\./,
 		);
 		const same = await runCli(['deploy'], { cwd: root, env: AWS_ENV, onSpawn: record('demo-prod') });
 		assert.doesNotMatch(same.stderr, /Warning/);
@@ -1427,7 +1427,7 @@ describe('destroy safety', () => {
 
 	it('without a stackId, says <id>-prod must be the existing production stack, with a Try line', async () => {
 		const root = fixtureApp();
-		writeFileSync(join(root, '.blocks', 'config.json'), '{}');
+		writeFileSync(join(root, '.cdk-blocks', 'config.json'), '{}');
 		for (const argv of [['deploy'], ['destroy', '--yes']]) {
 			const run = await runCli(argv, { cwd: root, env: AWS_ENV });
 			assert.strictEqual(run.code, 1, argv.join(' '));
@@ -1911,22 +1911,22 @@ describe('JSON output', () => {
 		assert.match(run.stderr, /Try: npm run whoami -- --region <region>/);
 	});
 
-	it('whoami tells a malformed .blocks/config.json from a missing one or a missing stackId', async () => {
+	it('whoami tells a malformed .cdk-blocks/config.json from a missing one or a missing stackId', async () => {
 		const root = fixtureApp();
 		const core = { readAwsIdentity: async () => IDENTITY };
-		const config = join(root, '.blocks', 'config.json');
+		const config = join(root, '.cdk-blocks', 'config.json');
 		writeFileSync(config, '{bad json');
 		const bad = await runCli(['whoami'], { cwd: root, core });
 		assert.strictEqual(bad.code, 0, bad.stderr);
-		assert.match(bad.stdout, /Production: {2}\(invalid \.blocks\/config\.json\)/);
-		assert.match(bad.stderr, /Warning: \.blocks\/config\.json is not valid JSON/);
+		assert.match(bad.stdout, /Production: {2}\(invalid \.cdk-blocks\/config\.json\)/);
+		assert.match(bad.stderr, /Warning: \.cdk-blocks\/config\.json is not valid JSON/);
 		const deploy = await runCli(['deploy'], { cwd: root, env: AWS_ENV });
-		assert.match(deploy.stderr, /^Error: \.blocks\/config\.json is not valid JSON/);
+		assert.match(deploy.stderr, /^Error: \.cdk-blocks\/config\.json is not valid JSON/);
 		assert.doesNotMatch(deploy.stderr, /Try:/);
 		writeFileSync(config, '{}');
-		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no stackId in \.blocks\/config\.json\)/);
+		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no stackId in \.cdk-blocks\/config\.json\)/);
 		rmSync(config);
-		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no \.blocks\/config\.json\)/);
+		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no \.cdk-blocks\/config\.json\)/);
 	});
 
 	/** Write `.cdk-blocks-sandbox/last-deploy.json`, as the deploy runners do. */

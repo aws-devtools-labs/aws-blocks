@@ -39,5 +39,5 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 ## Local Development
 
 `npm run dev` runs the mock entry (`index.mock.ts`) — no AWS account required.
-Implement local state there (in-memory or on-disk under `.bb-data/`). Wipe local
-state with `rm -rf .bb-data`.
+Implement local state there (in-memory or on-disk under `.cdk-blocks/local/data/`). Wipe local
+state with `rm -rf .cdk-blocks/local/data .bb-data`.

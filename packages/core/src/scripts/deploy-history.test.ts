@@ -36,7 +36,7 @@ describe('deploy-history', () => {
 		if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it('appendDeployHistoryRecord creates .blocks and appends JSONL lines', () => {
+	it('appendDeployHistoryRecord creates .cdk-blocks and appends JSONL lines', () => {
 		const root = makeProjectRoot();
 		appendDeployHistoryRecord(root, { id: 'a', stage: 'production', startedAt: 't1', status: 'IN_PROGRESS' });
 		appendDeployHistoryRecord(root, { id: 'a', stage: 'production', startedAt: 't1', status: 'SUCCEEDED' });
@@ -47,7 +47,8 @@ describe('deploy-history', () => {
 	});
 
 	it('appendDeployHistoryRecord never throws when the path is unwritable', () => {
-		// A file where the .blocks DIRECTORY should be makes mkdirSync fail.
+		// A file where the .cdk-blocks DIRECTORY should be makes mkdirSync
+		// fail.
 		const root = makeProjectRoot();
 		appendDeployHistoryRecord(join(root, 'nope', '\0invalid'), {
 			id: 'a',
@@ -75,8 +76,8 @@ describe('deploy-history', () => {
 
 	it('recorder captures region and stackName when resolvable', () => {
 		const root = makeProjectRoot();
-		mkdirSync(join(root, '.blocks'), { recursive: true });
-		writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'my-app' }));
+		mkdirSync(join(root, '.cdk-blocks'), { recursive: true });
+		writeFileSync(join(root, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'my-app' }));
 		const originalRegion = process.env.AWS_REGION;
 		process.env.AWS_REGION = 'eu-central-1';
 		try {
@@ -91,7 +92,7 @@ describe('deploy-history', () => {
 		}
 	});
 
-	it('recorder omits stackName when .blocks/config.json has no stackId', () => {
+	it('recorder omits stackName when .cdk-blocks/config.json has no stackId', () => {
 		const root = makeProjectRoot();
 		const recorder = createDeployRecorder(root, 'production');
 		recorder.start();

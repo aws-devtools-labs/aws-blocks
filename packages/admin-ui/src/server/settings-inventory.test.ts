@@ -363,9 +363,9 @@ describe('joinSettings', () => {
 	});
 
 	/**
-	 * The mock keys `.bb-data/settings.json` by `fullId`, not by SSM path, so a
-	 * join that used one address space for both modes would report every local
-	 * setting as undeclared and every declaration as absent.
+	 * The mock keys `.cdk-blocks/local/data/settings.json` by `fullId`, not by SSM
+	 * path, so a join that used one address space for both modes would report
+	 * every local setting as undeclared and every declaration as absent.
 	 */
 	it('addresses local mode by fullId, not by parameter path', () => {
 		const inventory = joinSettings({

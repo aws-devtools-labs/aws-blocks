@@ -1,15 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { rmSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { beforeEach, test } from 'node:test';
 import { EmailClient, EmailErrors } from './index.mock.js';
 
 // Clean mock data between tests to avoid cross-contamination
 beforeEach(() => {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
+	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
+		rmSync('.bb-data', { recursive: true, force: true });
+	} catch {}
 });
 
 // ── Single recipient ────────────────────────────────────────────────────────
@@ -26,7 +29,7 @@ test('send to single recipient returns messageId', async () => {
 	assert.ok(result.messageId);
 	assert.ok(result.messageId.startsWith('mock-'));
 	// Verify persistence
-	const dataDir = join(process.cwd(), '.bb-data', 'root-test');
+	const dataDir = join(process.cwd(), '.cdk-blocks/local/data', 'root-test');
 	assert.ok(existsSync(join(dataDir, 'emails.json')));
 	const stored = JSON.parse(readFileSync(join(dataDir, 'emails.json'), 'utf8'));
 	assert.strictEqual(stored.length, 1);
@@ -48,7 +51,7 @@ test('send to multiple recipients', async () => {
 		body: 'Check this out',
 	});
 	assert.ok(result.messageId);
-	const dataDir = join(process.cwd(), '.bb-data', 'root-multi');
+	const dataDir = join(process.cwd(), '.cdk-blocks/local/data', 'root-multi');
 	const stored = JSON.parse(readFileSync(join(dataDir, 'emails.json'), 'utf8'));
 	assert.strictEqual(stored.length, 1);
 	assert.deepStrictEqual(stored[0].to, ['alice@example.com', 'bob@example.com']);
@@ -67,7 +70,7 @@ test('send HTML email', async () => {
 		html: '<h1>Hello</h1>',
 	});
 	assert.ok(result.messageId);
-	const dataDir = join(process.cwd(), '.bb-data', 'root-html');
+	const dataDir = join(process.cwd(), '.cdk-blocks/local/data', 'root-html');
 	const stored = JSON.parse(readFileSync(join(dataDir, 'emails.json'), 'utf8'));
 	assert.strictEqual(stored[0].html, '<h1>Hello</h1>');
 	assert.strictEqual(stored[0].body, 'Plain fallback');
@@ -146,7 +149,7 @@ test('allows message with exactly 50 recipients', async () => {
 	const recipients = Array.from({ length: 50 }, (_, i) => `user${i}@example.com`);
 	const result = await emailClient.send({ to: recipients, subject: 'Test', body: 'Body' });
 	assert.ok(result.messageId);
-	const dataDir = join(process.cwd(), '.bb-data', 'root-exact50');
+	const dataDir = join(process.cwd(), '.cdk-blocks/local/data', 'root-exact50');
 	const stored = JSON.parse(readFileSync(join(dataDir, 'emails.json'), 'utf8'));
 	assert.strictEqual(stored.length, 1);
 });
@@ -158,9 +161,7 @@ test('sendBatch marks message with more than 50 recipients as failed', async () 
 		fromAddress: 'noreply@example.com',
 	});
 	const recipients = Array.from({ length: 51 }, (_, i) => `user${i}@example.com`);
-	const result = await emailClient.sendBatch([
-		{ to: recipients, subject: 'Too many', body: 'Body' },
-	]);
+	const result = await emailClient.sendBatch([{ to: recipients, subject: 'Too many', body: 'Body' }]);
 	assert.strictEqual(result.results.length, 1);
 	assert.strictEqual(result.results[0].status, 'failed');
 	assert.ok(result.results[0].error!.includes('50'));
@@ -237,7 +238,7 @@ test('sendBatch sends a batch of 100 messages (the default maxBatchSize)', async
 		assert.strictEqual(r.status, 'success');
 		assert.ok(r.messageId);
 	}
-	const dataDir = join(process.cwd(), '.bb-data', 'root-bigbatch');
+	const dataDir = join(process.cwd(), '.cdk-blocks/local/data', 'root-bigbatch');
 	const stored = JSON.parse(readFileSync(join(dataDir, 'emails.json'), 'utf8'));
 	assert.strictEqual(stored.length, 100);
 });
@@ -256,7 +257,7 @@ test('sendBatch sends all messages within small batch', async () => {
 	for (const r of result.results) {
 		assert.strictEqual(r.status, 'success');
 	}
-	const dataDir = join(process.cwd(), '.bb-data', 'root-batchok');
+	const dataDir = join(process.cwd(), '.cdk-blocks/local/data', 'root-batchok');
 	const stored = JSON.parse(readFileSync(join(dataDir, 'emails.json'), 'utf8'));
 	assert.strictEqual(stored.length, 3);
 });
@@ -275,7 +276,7 @@ test('emails persist across instances', async () => {
 	});
 	await emailClient2.send({ to: 'user2@example.com', subject: 'Second', body: 'Second body' });
 
-	const dataDir = join(process.cwd(), '.bb-data', 'root-persist');
+	const dataDir = join(process.cwd(), '.cdk-blocks/local/data', 'root-persist');
 	const stored = JSON.parse(readFileSync(join(dataDir, 'emails.json'), 'utf8'));
 	assert.strictEqual(stored.length, 2);
 	assert.strictEqual(stored[0].subject, 'First');

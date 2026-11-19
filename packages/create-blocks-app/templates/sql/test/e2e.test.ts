@@ -27,7 +27,7 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
  * address with a 6-digit code, then signs the user in. Locally no email is
  * sent: `getLastAuthCode` reads the code the local auth block issued (it finds
- * the block's .bb-data/ files itself). On AWS, Cognito emails it instead.
+ * the block's .cdk-blocks/local/data/ files itself). On AWS, Cognito emails it instead.
  *
  * `user` defaults to this file's clients (the cookie jar `installCookieJar`
  * installs); pass `createTestClient(app)` for another user with a session of

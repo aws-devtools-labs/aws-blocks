@@ -333,7 +333,7 @@ async function confirm(
 	return ExitCode.Failure;
 }
 
-/** The production stack name; a CLI error when `.blocks/config.json` is missing. */
+/** The production stack name; a CLI error when `.cdk-blocks/config.json` is missing. */
 async function productionStack(ctx: Context, root: string): Promise<string> {
 	const core = await ctx.core();
 	try {
@@ -906,12 +906,12 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 		);
 	}
 	if (code !== ExitCode.Ok) return code;
-	// CDK deploys the stacks that index.cdk.ts defines, whatever .blocks/config.json says.
+	// CDK deploys the stacks that index.cdk.ts defines, whatever .cdk-blocks/config.json says.
 	const deployed = readLastDeploy(root, 'production')?.stack;
 	if (deployed && deployed !== stack) {
 		ctx.out.error(
-			`Warning: CDK deployed the stack ${deployed}, not ${stack}, which .blocks/config.json names.\n` +
-				`  npm run destroy and npm run whoami use ${stack}; set "stackId" in .blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
+			`Warning: CDK deployed the stack ${deployed}, not ${stack}, which .cdk-blocks/config.json names.\n` +
+				`  npm run destroy and npm run whoami use ${stack}; set "stackId" in .cdk-blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
 		);
 	}
 	emitDeployResult(ctx, root, 'production', 'npm run deploy');
@@ -988,11 +988,11 @@ export async function whoami(ctx: Context): Promise<number> {
 		} catch (error) {
 			// Reported as null, with the reason in the text.
 			const message = error instanceof Error ? error.message : String(error);
-			if (!existsSync(join(root, '.blocks', 'config.json'))) noProduction = '(no .blocks/config.json)';
+			if (!existsSync(join(root, '.cdk-blocks', 'config.json'))) noProduction = '(no .cdk-blocks/config.json)';
 			else if (/not valid JSON/.test(message)) {
-				noProduction = '(invalid .blocks/config.json)';
+				noProduction = '(invalid .cdk-blocks/config.json)';
 				ctx.out.warn(message);
-			} else noProduction = '(no stackId in .blocks/config.json)';
+			} else noProduction = '(no stackId in .cdk-blocks/config.json)';
 		}
 	}
 	const sandboxName = root ? await sandboxStack(ctx, root) : null;
@@ -1116,7 +1116,7 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 		// Its own `❌` line says why it failed, as blocks-generate-client's does.
 		tool: 'blocks-generate-spec',
 		options: { backendPath, outputPath },
-		// Importing the backend creates its local mock storage (`.bb-data/`) in the working
+		// Importing the backend creates its local mock storage (`.cdk-blocks/local/data/`) in the working
 		// directory: outside an app, that is the backend's directory, not wherever the user is.
 		cwd: root ?? dirname(backendPath),
 	});

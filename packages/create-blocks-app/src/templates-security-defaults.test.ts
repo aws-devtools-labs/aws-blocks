@@ -34,6 +34,8 @@ const SECRET_PATHS = [
   'credentials',
   'config/credentials',
   '.aws/credentials',
+  '.cdk-blocks/local/data/settings.json',
+  // Left on disk and still read, so an older CLI writing here must not be stageable.
   '.bb-data/settings.json',
 ];
 

@@ -30,7 +30,7 @@ Dashboard API (versioned route handlers under app/api/v1/)
   │  delegates to
   ▼
 DataProvider (src/server/data-provider.ts — swappable)
-  └─ LocalDataProvider: .blocks state + AWS calls with local credentials
+  └─ LocalDataProvider: .cdk-blocks state + AWS calls with local credentials
      (a future in-account provider swaps in without touching SPA or routes)
 ```
 

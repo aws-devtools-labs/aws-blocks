@@ -123,7 +123,7 @@ Requires a sign-in on the email + password block (`auth-basic`). Todos are keyed
 ## Clearing Local Data
 
 ```bash
-rm -rf .bb-data
+rm -rf .cdk-blocks/local/data .bb-data
 ```
 
 Then restart the dev server.

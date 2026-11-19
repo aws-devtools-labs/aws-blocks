@@ -24,7 +24,7 @@ deployed.
    saves a [phase snapshot](#phase-snapshots), checks package provenance, runs `npm run build`,
    starts `npm run dev` as `node` and drives Chromium (`ui.mjs`) through every behavior added so
    far. Contract controls are located by accessible name among form fields only. It then checks
-   that the records it created appear under the app's Blocks mock data directory (`.bb-data`), a
+   that the records it created appear under the app's Blocks mock data directory (`.cdk-blocks/local/data`), a
    heuristic that catches storage outside Blocks but not a backend writing its own files there.
    Finally it restarts the server and checks the records again in a fresh browser context.
 6. Each trial uploads its allowlisted result as artifact `harbor-result-<arm>-<trial>` and, when
@@ -128,7 +128,7 @@ statistics live in `stats.py`, shared with the [local calibration](#local-calibr
 Before any check, after the agent's processes are killed and before provenance, build, server
 start or the browser exercise, `verify.py` writes `/logs/verifier/snapshot.tar.gz`
 (`task/tests/snapshot.py`): `todo-app/` as the agent left it, without any `node_modules`
-directory but with `.bb-data` and the lockfile, plus `verifier-state.json`, a copy of the
+directory but with `.cdk-blocks/local/data` and the lockfile, plus `verifier-state.json`, a copy of the
 verifier's record list seeded by the earlier phases. Writing it first means it exists whether
 the checks pass, fail or time out; a snapshot error is logged and never fails the phase. Harbor
 moves each phase's `/logs/verifier` into `steps/<phase>/verifier/`, so every phase keeps its own

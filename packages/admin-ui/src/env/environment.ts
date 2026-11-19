@@ -13,7 +13,7 @@
  * port from the project. So the 2x2 had only three reachable meanings, and this
  * module models exactly those three as one value:
  *
- *     local            → the dev server and `.bb-data` on this machine
+ *     local            → the dev server and `.cdk-blocks/local/data` on this machine
  *     sandbox          → the per-developer deployed stack
  *     production       → the shared deployed stack
  *
@@ -179,7 +179,7 @@ export interface EnvironmentStatus {
 	detail?: string;
 }
 
-const LOCAL_DETAIL = 'Reads the dev server and the .bb-data store on this machine. Nothing deployed is touched.';
+const LOCAL_DETAIL = 'Reads the dev server and the .cdk-blocks/local/data store on this machine. Nothing deployed is touched.';
 
 const UNREAD_DETAIL = 'Its deployment state has not been read yet.';
 
@@ -244,7 +244,7 @@ export function environmentStatuses(
 	return environmentIdsFor(stages).map((id) => {
 		if (isLocalEnvironment(id)) {
 			// Local needs no stack and no credentials, so it is always offered. A
-			// missing dev server or an absent `.bb-data` store is a per-block fact
+			// missing dev server or an absent `.cdk-blocks/local/data` store is a per-block fact
 			// the data pages already state; it is not this environment's existence.
 			return { id, state: 'local', selectable: true, detail: LOCAL_DETAIL };
 		}

@@ -144,7 +144,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 				outputs.join(''),
 				/^Usage: npm run db -- <command> \[options\]\n[\s\S]*\n {2}types \[--name <name>\] \[--schema <schema>\] \[--out <file>\]\n/,
 			);
-			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'cdk-blocks', 'package.json']);
+			assert.deepStrictEqual(readdirSync(root).sort(), ['.cdk-blocks', 'cdk-blocks', 'package.json']);
 		}
 	});
 
@@ -157,7 +157,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 			outputs.join(''),
 			/^Usage: npm run db -- <command> \[options\]\n[\s\S]*\n {2}migrate \[dir\] \[--name <name>\] \[--schema <schema>\] \[--types <file> \| --no-types\]\n/,
 		);
-		assert.ok(!existsSync(join(root, '.bb-data')));
+		assert.ok(!existsSync(join(root, '.cdk-blocks/local/data')));
 	});
 
 	it('vendorize help prints usage without starting the vendorize process', async () => {
@@ -258,7 +258,7 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			assert.strictEqual(run.code, 2, run.stderr + outputs.join(''));
 			assert.deepStrictEqual(run.spawned[0].args.slice(1), ['connect', '--no-input']);
 			assert.match(outputs.join(''), /pass the connection string on stdin with --value-stdin/);
-			assert.ok(!existsSync(join(cwd, '.bb-data')));
+			assert.ok(!existsSync(join(cwd, '.cdk-blocks/local/data')));
 		}
 	});
 });

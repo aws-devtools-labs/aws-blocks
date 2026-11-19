@@ -20,7 +20,7 @@
  * ## Why this file exists at all
  *
  * The dashboard used to take a stage's region from the deploy *record*
- * (`.blocks/deploy-history.jsonl`), which re-derives the region at deploy time
+ * (`.cdk-blocks/deploy-history.jsonl`), which re-derives the region at deploy time
  * through `resolveRegion()` — env, then `aws configure get region`, then a
  * hardcoded `us-east-1`. That resolution can disagree with the region CDK
  * actually deployed to, and once written, a wrong region is indistinguishable

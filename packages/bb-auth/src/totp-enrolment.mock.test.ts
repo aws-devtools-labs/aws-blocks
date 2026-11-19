@@ -20,8 +20,8 @@ import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
 import type { CodeDeliveryPurpose, CognitoAuthMockOptions } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 let counter = 0;

@@ -130,7 +130,7 @@ describe('buildDoctorChecks — local dev server', () => {
 });
 
 describe('buildDoctorChecks — bb-data', () => {
-	it('warns with the generate-data remediation when .bb-data is absent', () => {
+	it('warns with the generate-data remediation when .cdk-blocks/local/data is absent', () => {
 		const checks = buildDoctorChecks(input({ localDevServer: { ...healthyServer, bbDataPresent: false } }));
 		const check = byId(checks, 'bb-data');
 		assert.strictEqual(check.status, 'warn');
@@ -342,9 +342,9 @@ describe('runDoctor', () => {
 
 	function makeProject(): string {
 		tmpDir = join(tmpdir(), `admin-ui-doctor-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'temp-doctor-app' }));
-		writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'temp-doctor-app-abc' }));
+		writeFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'temp-doctor-app-abc' }));
 		return tmpDir;
 	}
 

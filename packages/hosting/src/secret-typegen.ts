@@ -53,7 +53,7 @@ export const DEFAULT_TYPEGEN_MODULE = DEFAULT_TYPEGEN_MODULES[0];
 export const DEFAULT_TYPEGEN_INCLUDE = ['cdk-blocks/**/*.{ts,tsx,mts,cts}', 'src/**/*.{ts,tsx,mts,cts}'];
 
 /** Default output path (relative to `cwd`) for the generated augmentation. */
-export const DEFAULT_TYPEGEN_OUT = '.blocks/hosting-values.d.ts';
+export const DEFAULT_TYPEGEN_OUT = '.cdk-blocks/hosting-values.d.ts';
 
 /** A `secret()` / `config()` call whose key is not a string literal — skipped, reported. */
 export interface DynamicCallSite {
@@ -401,7 +401,7 @@ export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanR
 	const files = await fg(include, {
 		cwd,
 		absolute: true,
-		ignore: ['**/node_modules/**', '**/dist/**', '**/.blocks/**', '**/*.d.ts'],
+		ignore: ['**/node_modules/**', '**/dist/**', '**/.cdk-blocks/**', '**/*.d.ts'],
 	});
 
 	const ts = await loadTypeScript();

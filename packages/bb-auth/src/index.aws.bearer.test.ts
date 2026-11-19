@@ -37,9 +37,10 @@ import { FakeIdp as OidcIdp } from './test-support/fake-idp.js';
 
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const ISSUER = `https://cognito-idp.${TEST_REGION}.amazonaws.com/${TEST_POOL_ID}`;
 const HOSTED_UI_CLIENT_ID = 'bearerhosteduiclient0000';

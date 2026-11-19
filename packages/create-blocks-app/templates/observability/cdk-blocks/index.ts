@@ -15,7 +15,7 @@ const log = new Logger(scope, 'orders-log');
 const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
 
 // Tracer: wrap work in segments. Deployed it records X-Ray segments; locally it
-// keeps the last 100 traces in .bb-data/ and prints each one to stdout.
+// keeps the last 100 traces in .cdk-blocks/local/data/ and prints each one to stdout.
 const tracer = new Tracer(scope, 'tracer');
 
 // Under `npm run dev`, GET /cdk-blocks/dashboard shows the configured metrics

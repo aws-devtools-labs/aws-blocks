@@ -27,8 +27,8 @@ import {
 	TEST_POOL_ID,
 } from './test-support/aws-harness.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function groupsReply(...names: string[]) {
 	return { Groups: names.map((GroupName) => ({ GroupName, UserPoolId: TEST_POOL_ID })) };

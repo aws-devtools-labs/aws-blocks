@@ -19,7 +19,7 @@ def _keep(member):
 
 
 def capture(app, state, target):
-    """Write `target` atomically: todo-app/ (with .bb-data and lockfile) and verifier-state.json."""
+    """Write `target` atomically: todo-app/ (with .cdk-blocks/local/data and lockfile) and verifier-state.json."""
     target = Path(target)
     partial = target.with_name(target.name + '.partial')
     with tarfile.open(partial, 'w:gz') as archive:

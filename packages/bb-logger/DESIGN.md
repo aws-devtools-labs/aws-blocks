@@ -86,7 +86,7 @@ Priority order (highest wins):
 
 The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts`) directly. Both environments use the same code: write structured JSON to `process.stdout` / `process.stderr`. There is no mock-specific behavior because the logging mechanism (stdout/stderr → CloudWatch) is provided by the Lambda runtime, not by the BB.
 
-- No files created in `.bb-data/` — logs are ephemeral.
+- No files created in `.cdk-blocks/local/data/` — logs are ephemeral.
 - Retention is a cloud-only concept (no local CloudWatch equivalent); it is a
   compute-level setting and has no effect locally.
 - Log level filtering works identically to production.

@@ -15,7 +15,7 @@ import { trackCommand } from './telemetry.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * The `stackId` written to `.blocks/config.json`: `name` reduced to letters, digits and hyphens, cut to
+ * The `stackId` written to `.cdk-blocks/config.json`: `name` reduced to letters, digits and hyphens, cut to
  * 16 characters, plus a 6-character random suffix. A name that starts with a character other than a
  * letter, or with "aws" in any letter case, gets the prefix `app-`.
  */
@@ -796,9 +796,9 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
-  // Generate .blocks/config.json with a unique stackId
+  // Generate .cdk-blocks/config.json with a unique stackId
   const stackId = generateStackId(appName);
-  const blocksConfigDir = join(targetDir, '.blocks');
+  const blocksConfigDir = join(targetDir, '.cdk-blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
@@ -965,7 +965,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     // `"generateClient": false` keeps the overlay's own cdk-blocks/client.js (the Cognito token
     // and the amplify_outputs.json API URL): the dev server would replace it with the generic one.
     blocksConfig: { dev: { port: 3001, frontend: false, generateClient: false } },
-    gitignoreEntries: ['.cdk-blocks-sandbox', '.bb-data/'],
+    gitignoreEntries: ['.cdk-blocks-sandbox', '.cdk-blocks/local/', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });
@@ -1129,7 +1129,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   // Generate blocks/config.json with a unique stackId
   const baseName = (existingPkg.name || basename(resolve(targetDir)));
   const stackId = generateStackId(baseName);
-  const blocksConfigDir = join(targetDir, '.blocks');
+  const blocksConfigDir = join(targetDir, '.cdk-blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
 
@@ -1163,7 +1163,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     },
     scripts: { ...tasks, 'dev:server': tasks.dev },
     blocksConfig: backendDevConfig(templatePkg.blocks),
-    gitignoreEntries: ['.cdk-blocks-sandbox', 'cdk.out/', 'cdk-blocks/client.js', 'cdk-blocks/blocks.spec.json', '.bb-data/'],
+    gitignoreEntries: ['.cdk-blocks-sandbox', 'cdk.out/', 'cdk-blocks/client.js', 'cdk-blocks/blocks.spec.json', '.cdk-blocks/local/', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });

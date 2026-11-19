@@ -18,8 +18,8 @@ import { Auth } from './index.mock.js';
 import { totpCode } from './engines/totp.js';
 import { getLastAuthCode, totpCodeFor } from './testing.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 let n = 0;

@@ -41,9 +41,10 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function bind(api: AuthStateApi, ctx: BlocksContext): AuthStateApi {
 	const target: unknown = api;
@@ -351,9 +352,9 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 		assert.strictEqual((await res.json()).name, AuthErrors.IdpError);
 	});
 
-	test('users.json in .bb-data/<fullId>/ is the directory when no inline users are given', async () => {
+	test('users.json in .cdk-blocks/local/data/<fullId>/ is the directory when no inline users are given', async () => {
 		const auth = new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
-		const dir = join('.bb-data', auth.fullId);
+		const dir = join('.cdk-blocks/local/data', auth.fullId);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
 			join(dir, 'users.json'),
