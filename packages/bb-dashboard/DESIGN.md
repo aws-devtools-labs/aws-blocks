@@ -238,23 +238,39 @@ Row 3 (y=18): [Log Volume (24w, 6h)]
 
 ### Route Implementation
 
-The Dashboard always registers a `GET` RawRoute that 302-redirects to the CloudWatch Dashboard URL:
+Unless `routePath: false`, each Dashboard registers a `GET` RawRoute that
+302-redirects to its own CloudWatch Dashboard URL:
 
-1. **CDK layer:** Sets a `BB_DASHBOARD_URL` environment variable on the Lambda handler containing the dashboard console URL token. Registers the RawRoute for route validation.
-2. **Runtime layer:** Registers a `RawRoute` with a handler that reads the env var and redirects:
+1. **CDK layer:** Registers the console URL token with `registerConfig()` under
+   `BLOCKS_DASHBOARD_URL_${sanitizeConfigKey(fullId)}`. The config registry writes
+   it to S3; the compute loads it into `process.env` before importing the backend.
+   Registers the RawRoute for route validation. Dashboard construct paths,
+   resource logical IDs, and dashboard names are unchanged.
+2. **Runtime layer:** Reads that dashboard-scoped key for `Dashboard.url` and
+   passes the URL to its redirect handler:
    ```typescript
    // Internally equivalent to:
    new RawRoute(scope, 'dashboard-redirect', {
      path: options.routePath ?? '/aws-blocks/dashboard',
      method: 'GET',
      handler: async (ctx) => {
-       const url = process.env.BB_DASHBOARD_URL;
+       const url = dashboard.url;
+       if (!url) {
+         ctx.response.status = 503;
+         ctx.response.send({ message: 'CloudWatch Dashboards are a cloud-only resource.' });
+         return;
+       }
        ctx.response.status = 302;
        ctx.response.headers.set('Location', url);
        ctx.response.send('');
      },
    });
    ```
+   The route-specific URL takes priority over the old shared `BB_DASHBOARD_URL`
+   setting. The runtime still reads the old key when the scoped key is absent,
+   for compatibility with an earlier single-dashboard deployment. New synths
+   do not write a shared dashboard URL. Multiple dashboards need distinct route
+   paths (or `routePath: false`).
 3. **Mock layer:** Returns 503 with `{ message, hint, localObservability: { logs, metrics, traces } }` directing the user to run `npx cdk deploy` and pointing at local observability output
 4. **Security:** Route is public — the URL alone grants no data access (AWS Console login required)
 

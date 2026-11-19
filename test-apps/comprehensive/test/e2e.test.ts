@@ -47,6 +47,7 @@ import { knowledgeBaseTests } from './knowledge-base.test.js';
 import { emailClientTests } from './email-client.test.js';
 import { rawRouteTests } from './raw-route.test.js';
 import { consoleShortcutTests } from './console-shortcuts.test.js';
+import { dashboardTests } from './dashboard.test.js';
 import { cliClientTests } from './cli-client.test.js';
 import { tracerTests } from './tracer.test.js';
 import { metricsTests } from './metrics.test.js';
@@ -418,6 +419,7 @@ rawRouteTests();
 
 // Console shortcut tests (separate file)
 consoleShortcutTests();
+dashboardTests();
 
 // CLI client tests (separate file)
 cliClientTests(() => api);

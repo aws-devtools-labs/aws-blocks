@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { BlocksPresets, BlocksStack, finalizeDashboards } from '@aws-blocks/core/cdk';
+import { BlocksPresets, BlocksStack, finalizeDashboards, getRegisteredConfigValue, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -181,6 +181,28 @@ describe('Dashboard synth ids', () => {
 			{ path: dash.node.path, logicalIds: Object.keys(resources), names: Object.values(resources).map((r: any) => r.Properties.DashboardName) },
 			{ path: 'DashboardIds/dashboard', logicalIds: ['dashboardE8F903B5'], names: ['DashboardIds-dashboard'] },
 		);
+	});
+});
+
+describe('Dashboard URL config', () => {
+	test('registers a separate URL for same-id dashboards in different scopes', async () => {
+		const stack = await makeStack('DashboardConfig');
+		const ops = new Scope('ops', { parent: stack });
+		const billing = new Scope('billing', { parent: stack });
+		const opsDashboard = new Dashboard(ops, 'dashboard', { routePath: false });
+		const billingDashboard = new Dashboard(billing, 'dashboard', { routePath: false });
+
+		assert.deepStrictEqual(
+			stack.resolve(getRegisteredConfigValue(stack, 'BLOCKS_DASHBOARD_URL_DASHBOARDCONFIG_OPS_DASHBOARD')),
+			stack.resolve(opsDashboard.url),
+		);
+		assert.deepStrictEqual(
+			stack.resolve(getRegisteredConfigValue(stack, 'BLOCKS_DASHBOARD_URL_DASHBOARDCONFIG_BILLING_DASHBOARD')),
+			stack.resolve(billingDashboard.url),
+		);
+		assert.strictEqual(getRegisteredConfigValue(stack, 'BB_DASHBOARD_URL'), undefined);
+		finalizeDashboards(stack);
+		Template.fromStack(stack).resourceCountIs('AWS::CloudWatch::Dashboard', 2);
 	});
 });
 
