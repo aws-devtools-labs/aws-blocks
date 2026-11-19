@@ -26,14 +26,17 @@ import {
 } from './framework-sink.js';
 import { Scope } from '../common/index.js';
 
+// Prevent an inherited CDK telemetry opt-out from disabling enabled-path tests.
+delete process.env.CDK_DISABLE_CLI_TELEMETRY;
+
 describe('telemetry framework-sink (synth child -> parent bridge)', () => {
   const prev = process.env[FRAMEWORK_SINK_ENV];
-  const prevDisable = process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+  const prevDisable = process.env.CDK_DISABLE_CLI_TELEMETRY;
   afterEach(() => {
     if (prev === undefined) delete process.env[FRAMEWORK_SINK_ENV];
     else process.env[FRAMEWORK_SINK_ENV] = prev;
-    if (prevDisable === undefined) delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    else process.env.AWS_BLOCKS_DISABLE_TELEMETRY = prevDisable;
+    if (prevDisable === undefined) delete process.env.CDK_DISABLE_CLI_TELEMETRY;
+    else process.env.CDK_DISABLE_CLI_TELEMETRY = prevDisable;
   });
 
   it('round-trips the framework the child wrote back to the parent', () => {
@@ -69,7 +72,7 @@ describe('telemetry framework-sink (synth child -> parent bridge)', () => {
     const sink = join(dir, 'framework');
     try {
       process.env[FRAMEWORK_SINK_ENV] = sink;
-      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+      process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
       writeFrameworkSink('nextjs');
       assert.strictEqual(existsSync(sink), false);
     } finally {
@@ -98,7 +101,7 @@ describe('telemetry framework-sink (synth child -> parent bridge)', () => {
     try {
       for (const name of tmpVars) process.env[name] = privateTmp;
       assert.strictEqual(tmpdir(), privateTmp, 'test setup: tmpdir() must resolve to the private directory');
-      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+      process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
 
       assert.strictEqual(createFrameworkSink(), undefined);
       assert.deepStrictEqual(

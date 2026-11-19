@@ -380,7 +380,7 @@ A failed RPC call (a method that throws, or a call to an unknown API namespace o
 
 | | |
 |---|---|
-| Namespace | `AWSBlocks` |
+| Namespace | `CDKBlocks` |
 | Metric | `RpcErrors` (Count) |
 | Dimensions | `FunctionName`, `StatusClass` (`4xx` for a client error such as an `ApiError` with status 403, `5xx` for anything else, including an unexpected error and the handler's 504 timeout) |
 | Also in the log line | `Status`, `ApiNamespace` and `Method`, searchable with CloudWatch Logs Insights |
@@ -773,6 +773,24 @@ jq '.executionRole.statements[] | {actions, blocks}' cdk.out/my-app.blocks-iam.j
 The report is CDK-only and doesn't change the CloudFormation template.
 
 The file is written on **every** synth, whether or not `permissionsBoundary` is set, so expect it in `cdk.out/` if you check that directory's contents. It's a side file only: it isn't part of any CloudFormation template and isn't listed as a cloud-assembly artifact in `cdk.out/manifest.json`, so it isn't deployed and `cdk diff` (which compares stack templates) doesn't see it. Producing it costs one walk over the stack's constructs per synth, which is small next to bundling.
+
+### When the role's grants outgrow its inline policy
+
+Grants land on the role's inline default policy, which IAM caps at 10,240 characters. When an app's grants go past that, synth still succeeds: CDK packs the overflow into managed policies (sized to stay under IAM's 6,144-character limit) attached to the role. Blocks keep calling `grant*()` as before.
+
+To fit more grants into fewer policies, the role's statements are merged before they are packed. Merging combines statements with the same effect and conditions (and no `Sid`, `NotAction` or `NotResource` differences) that share their actions or their resources. It never combines both lists at once, so no permission is added. The role's policy is merged at every size, so the template doesn't switch back and forth as grants are added.
+
+CDK fills the default policy and the overflow policies in order, so adding or removing a grant can move statements from one policy to another, and CloudFormation updates those policies in parallel ([aws/aws-cdk#35611](https://github.com/aws/aws-cdk/issues/35611)). So that a deploy doesn't remove a statement from its old policy before its new policy is attached, each overflow policy gets a logical ID derived from its contents (`BlocksOverflowPolicy<hash>`), and the role's default policy depends on them. A changed overflow policy is created as a new resource before the default policy is updated, and the old one is deleted in CloudFormation's cleanup phase. Overflow policies whose statements didn't change keep their logical IDs. IAM is eventually consistent, so a newly attached policy can still take a few seconds to apply. Because the default policy depends on every overflow policy, making a resource depend on one specific grant to the execution role (for example `grant.applyBefore()`, a grant's `policyDependable`, or constructs such as AgentCore Memory given the execution role) while the role is also granted access to that resource can make CloudFormation report a circular dependency. To fix it, make the resource depend on the whole role, or use a separate role for it.
+
+IAM also limits how many managed policies one role can carry: 20 by default, up to 25 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role and the Building Blocks that grant the most. To fix it, consolidate resources where possible, or move some Building Blocks into a separate Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
+
+```json
+{ "context": { "@aws-blocks/core:managedPoliciesPerRoleQuota": 25 } }
+```
+
+The check counts the policies the role carries after the deploy. During a deploy that changes overflow policies, the role briefly carries both the old and the new copy of each changed one, so a role at or close to the quota can fail that deploy in CloudFormation; keep some room below the quota. Synth warns when the role is within the quota but a deploy that replaces every overflow policy would exceed it.
+
+Overflow statements appear in `<stack>.blocks-iam.json` like any other, with `policy` naming the managed policy they were packed into.
 
 ### Cap every role: `defaults.permissionsBoundary`
 
@@ -1308,7 +1326,7 @@ Every app's CDK bootstrap execution role (the role CloudFormation deploys the ap
 | `AWS::SNS::Topic`, `TopicPolicy`, `Subscription` | `sns:*` on `arn:aws:sns:*:ACCOUNT:<id>-*` |
 | `AWS::CloudWatch::Alarm` | `PutMetricAlarm`, `DescribeAlarms`, `DeleteAlarms` and the tag actions on `alarm:<id>-*` |
 | `AWS::CloudWatch::Dashboard` | `PutDashboard`, `GetDashboard`, `DeleteDashboards`, `TagResource`, `UntagResource`, `ListTagsForResource` on `dashboard/<id>-*`. Without the tag actions the deploy still succeeds: CloudFormation retries the create without tags (its events say "Retrying request without including tags") and the dashboard has no `app` tag |
-| `AWS::IAM::ManagedPolicy` (AWS Blocks' `BlocksRoleOverflowPolicy*`) | the policy and policy-version actions on `arn:aws:iam::ACCOUNT:policy/<id>-*` (attachable only to the app's roles, through the fence) |
+| `AWS::IAM::ManagedPolicy` (AWS Blocks' `BlocksOverflowPolicy*`) | the policy and policy-version actions on `arn:aws:iam::ACCOUNT:policy/<id>-*` (attachable only to the app's roles, through the fence) |
 | `AWS::ResourceGroups::Group` | `resource-groups:*` on `group/<id>-*`; `cloudformation:DescribeStacks`, `ListStackResources`, `tag:GetResources` on `*` |
 | `AWS::S3Vectors::VectorBucket`, `Index`, `VectorBucketPolicy` | by name, not tag: `s3vectors:*` on `bucket/<id>-*` and `bucket/<id>-*/index/*`, and a deny on every other bucket (`VectorBuckets` and `VectorBucketsOnlyOwn`, below) |
 | `AWS::RDS::DBCluster`, `DBInstance`, `DBSubnetGroup`, `DBClusterParameterGroup`, `DBParameterGroup`, `OptionGroup` | `rds:*` on `cluster:`, `db:`, `subgrp:`, `cluster-pg:`, `pg:`, `og:`, `cluster-snapshot:` and `snapshot:<id>-*`; create and modify against RDS's `default…` parameter and option groups; `ec2:Describe*` on `*` |

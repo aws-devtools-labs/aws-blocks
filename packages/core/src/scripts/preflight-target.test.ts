@@ -138,7 +138,6 @@ describe('deploy/sandbox configured target', () => {
 						AWS_CONFIG_FILE: config,
 						AWS_SHARED_CREDENTIALS_FILE: credentials,
 						AWS_EC2_METADATA_DISABLED: 'true',
-						AWS_BLOCKS_DISABLE_TELEMETRY: '1',
 						CDK_DISABLE_CLI_TELEMETRY: 'true',
 						CDK_DEFAULT_REGION: 'us-west-2',
 					};

@@ -12,6 +12,7 @@
  * or installed.
  */
 import { vendorize } from './vendorize/index.js';
+import { findProjectRoot } from './cli/context.js';
 import { trackCommand } from '@aws-blocks/core/scripts';
 
 const USAGE = `Usage: npm run vendorize <package-name> [-- --force]
@@ -40,6 +41,8 @@ if (!packageName) {
   process.exit(1);
 }
 
+// This bin never chdirs to the project root, so consent would otherwise resolve CDK's
+// context from the shell's directory and miss the project's own opt-out.
 trackCommand('vendorize', async () => {
   vendorize(packageName, { force });
-});
+}, { projectRoot: findProjectRoot(process.cwd()) });

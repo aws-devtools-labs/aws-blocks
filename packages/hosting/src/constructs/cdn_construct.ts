@@ -1445,9 +1445,9 @@ export class CdnConstruct extends Construct {
         : []),
       ...(hasCompute
         ? [
-            // 500: Don't cache Lambda 500s — they're likely transient.
-            // Image-opt Lambda returns 500 for missing images; caching
-            // that error would serve stale errors to all users.
+            // 500: Don't cache Lambda 500s — they're likely transient, and
+            // caching one would serve a stale error to all users. (A missing
+            // source image is a 404 from the image-opt Lambda, not a 500.)
             // 502/503/504: not cached either (see withServerErrorsNotCached).
             {
               httpStatus: 500,

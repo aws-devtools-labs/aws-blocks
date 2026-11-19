@@ -311,7 +311,7 @@ async function runDeploy(options: DeployOptions) {
     // Framework resolves in the cdk synth child (where Hosting is built); it writes the
     // value to this file so the parent can attach it to telemetry. Created immediately
     // before the spawn, so a failure earlier in the command leaves nothing behind.
-    const frameworkSink = createFrameworkSink();
+    const frameworkSink = createFrameworkSink(options.projectRoot);
 
     try {
       await runStreaming(
@@ -326,8 +326,8 @@ async function runDeploy(options: DeployOptions) {
           env: {
             ...process.env,
             NODE_OPTIONS: '--conditions=cdk',
-            ...getCdkTelemetryEnv('production'),
-            ...getFrameworkSinkEnv(frameworkSink),
+            ...getCdkTelemetryEnv('production', options.projectRoot),
+            ...getFrameworkSinkEnv(frameworkSink, options.projectRoot),
           },
           curated: cdkOutput.streams,
           onHostingUrl: (url) => {

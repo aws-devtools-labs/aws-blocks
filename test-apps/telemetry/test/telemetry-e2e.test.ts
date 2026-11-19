@@ -73,10 +73,6 @@ function seedPinnedInstallationId(homeDir?: string): void {
   writeFileSync(filePath, PINNED_INSTALLATION_ID, 'utf-8');
 }
 
-function globalConfigPath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), '.blocks', 'config.json');
-}
-
 function uniqueTelemetryFile(dir: string): string {
   return join(dir, `telemetry-event-${fileCounter++}.json`);
 }
@@ -790,7 +786,7 @@ function localCommandSuites(): void {
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=1 prevents telemetry', async () => {
+    test('CDK_DISABLE_CLI_TELEMETRY=1 prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-env');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
@@ -799,7 +795,7 @@ function localCommandSuites(): void {
         telemetryFile,
         env: {
           PORT: String(port),
-          AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+          CDK_DISABLE_CLI_TELEMETRY: '1',
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
         },
         timeoutMs: 12_000,
@@ -810,7 +806,32 @@ function localCommandSuites(): void {
       assertNotDelivered(result.stderr);
     });
 
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=true prevents telemetry', async () => {
+    test("cdk.context.json cli-telemetry=false prevents telemetry", async () => {
+      tmpHome = createTmpDir('disable-cdk-context');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+      // What `cdk cli-telemetry --disable` records, and the only opt-out the app itself carries.
+      const contextFile = join(APP_ROOT, 'cdk.context.json');
+      const original = existsSync(contextFile) ? readFileSync(contextFile, 'utf-8') : null;
+      writeFileSync(contextFile, JSON.stringify({ 'cli-telemetry': false }));
+
+      try {
+        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+          telemetryFile,
+          env: { PORT: String(port), BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable' },
+          timeoutMs: 12_000,
+        });
+
+        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
+        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
+        assertNotDelivered(result.stderr);
+      } finally {
+        if (original !== null) writeFileSync(contextFile, original);
+        else rmSync(contextFile, { force: true });
+      }
+    });
+
+    test('CDK_DISABLE_CLI_TELEMETRY=true prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-env-true');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
@@ -819,7 +840,7 @@ function localCommandSuites(): void {
         telemetryFile,
         env: {
           PORT: String(port),
-          AWS_BLOCKS_DISABLE_TELEMETRY: 'true',
+          CDK_DISABLE_CLI_TELEMETRY: 'true',
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
         },
         timeoutMs: 12_000,
@@ -830,118 +851,14 @@ function localCommandSuites(): void {
       assertNotDelivered(result.stderr);
     });
 
-    test('global config telemetry.enabled=false prevents telemetry', async () => {
-      tmpHome = createTmpDir('disable-global');
-      // Write global config disabling telemetry in real HOME
-      const globalCfg = globalConfigPath();
-      const hadConfig = existsSync(globalCfg);
-      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
-      mkdirSync(dirname(globalCfg), { recursive: true });
-      writeFileSync(globalCfg, JSON.stringify({ telemetry: { enabled: false } }));
-
-      try {
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-        const port = getNextPort();
-
-        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          telemetryFile,
-          env: {
-            PORT: String(port),
-            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
-          },
-          timeoutMs: 12_000,
-        });
-
-        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
-        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
-      } finally {
-        // Restore original state
-        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
-        else rmSync(globalCfg, { force: true });
-      }
-    });
-
-    test('per-project config telemetry.enabled=false prevents telemetry', async () => {
-      tmpHome = createTmpDir('disable-project');
-      // Write per-project config disabling telemetry
-      const projectConfig = join(APP_ROOT, '.blocks', 'config.json');
-      const originalContent = existsSync(projectConfig) ? readFileSync(projectConfig, 'utf-8') : null;
-
-      try {
-        mkdirSync(dirname(projectConfig), { recursive: true });
-        writeFileSync(projectConfig, JSON.stringify({ telemetry: { enabled: false } }));
-
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-        const port = getNextPort();
-
-        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          telemetryFile,
-          env: {
-            PORT: String(port),
-            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
-          },
-          timeoutMs: 12_000,
-        });
-
-        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
-        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
-      } finally {
-        // Restore original config
-        if (originalContent !== null) {
-          writeFileSync(projectConfig, originalContent);
-        } else {
-          rmSync(projectConfig, { force: true });
-        }
-      }
-    });
-
-    test('a project config enabling telemetry cannot re-enable a global disable', async () => {
-      tmpHome = createTmpDir('disable-global-project-enabled');
-      const globalCfg = globalConfigPath(tmpHome);
-      // Must be the real path: the dev server resolves its project config from APP_ROOT.
-      const projectConfig = join(APP_ROOT, '.blocks', 'config.json');
-      const originalProject = existsSync(projectConfig) ? readFileSync(projectConfig, 'utf-8') : null;
-
-      mkdirSync(dirname(globalCfg), { recursive: true });
-      writeFileSync(globalCfg, JSON.stringify({ telemetry: { enabled: false } }));
-      mkdirSync(dirname(projectConfig), { recursive: true });
-      writeFileSync(projectConfig, JSON.stringify({ telemetry: { enabled: true } }));
-
-      try {
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-        const port = getNextPort();
-
-        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          home: tmpHome,
-          telemetryFile,
-          env: {
-            PORT: String(port),
-            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
-            npm_config_cache: join(homedir(), '.npm'),
-          },
-          timeoutMs: 12_000,
-        });
-
-        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
-        // Consent gates the file sink too (D-018): a disabled run writes nothing.
-        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
-      } finally {
-        if (originalProject !== null) writeFileSync(projectConfig, originalProject);
-        else rmSync(projectConfig, { force: true });
-      }
-    });
-
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=0 does NOT disable', async () => {
+    test('CDK_DISABLE_CLI_TELEMETRY=0 does NOT disable', async () => {
       tmpHome = createTmpDir('disable-zero');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
       const result = await spawnDevServer({
         port, telemetryFile,
-        env: { AWS_BLOCKS_DISABLE_TELEMETRY: '0' },
+        env: { CDK_DISABLE_CLI_TELEMETRY: '0' },
       });
       devProcess = result.process;
 
@@ -1178,7 +1095,7 @@ function localCommandSuites(): void {
         telemetryFile,
         env: {
           PORT: String(port),
-          AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+          CDK_DISABLE_CLI_TELEMETRY: '1',
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
         },
         timeoutMs: 12_000,
@@ -1232,117 +1149,6 @@ function localCommandSuites(): void {
       });
 
       assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'consent notice should NOT show when id exists');
-    });
-  });
-
-  // ── 11. Telemetry consent task ────────────────────────────────────────────
-
-  describe('telemetry task', () => {
-    let tmpHome: string;
-
-    afterEach(() => {
-      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
-    });
-
-    test('bare command shows status', async () => {
-      tmpHome = createTmpDir('cli-bare');
-      const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'telemetry'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-      });
-      assert.strictEqual(result.exitCode, 0, result.stderr);
-      assert.match(result.stdout, /Telemetry:/);
-    });
-
-    test('--help shows usage information', async () => {
-      tmpHome = createTmpDir('cli-help');
-      const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'telemetry', '--help'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-      });
-      assert.ok(result.stdout.includes('--enable'), '--help should mention --enable');
-      assert.ok(result.stdout.includes('--disable'), '--help should mention --disable');
-    });
-
-    test('--disable creates config with telemetry.enabled=false', async () => {
-      tmpHome = createTmpDir('cli-disable');
-      const configPath = join(APP_ROOT, '.blocks', 'config.json');
-      const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
-
-      try {
-        const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'telemetry', '--disable'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, false);
-      } finally {
-        if (originalContent !== null) writeFileSync(configPath, originalContent);
-        else rmSync(configPath, { force: true });
-      }
-    });
-
-    test('--enable creates config with telemetry.enabled=true', async () => {
-      tmpHome = createTmpDir('cli-enable');
-      const configPath = join(APP_ROOT, '.blocks', 'config.json');
-      const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
-
-      try {
-        const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'telemetry', '--enable'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, true);
-      } finally {
-        if (originalContent !== null) writeFileSync(configPath, originalContent);
-        else rmSync(configPath, { force: true });
-      }
-    });
-
-    test('--status shows current telemetry status', async () => {
-      tmpHome = createTmpDir('cli-status');
-      const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'telemetry', '--status'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-      });
-      assert.strictEqual(result.exitCode, 0);
-      assert.ok(result.stdout.includes('Telemetry:') || result.stdout.includes('telemetry'), '--status should show telemetry state');
-    });
-
-    test('--disable --global writes global config', async () => {
-      tmpHome = createTmpDir('cli-disable-global');
-      const globalCfg = globalConfigPath();
-      const hadConfig = existsSync(globalCfg);
-      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
-
-      try {
-        const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'telemetry', '--disable', '--global'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, false);
-      } finally {
-        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
-        else rmSync(globalCfg, { force: true });
-      }
-    });
-
-    test('--enable --global writes global config', async () => {
-      tmpHome = createTmpDir('cli-enable-global');
-      const globalCfg = globalConfigPath();
-      const hadConfig = existsSync(globalCfg);
-      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
-
-      try {
-        const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'telemetry', '--enable', '--global'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, true);
-      } finally {
-        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
-        else rmSync(globalCfg, { force: true });
-      }
     });
   });
 

@@ -89,6 +89,8 @@ export interface BlocksTelemetryEvent {
  * Options for the `trackCommand` utility.
  */
 export interface TrackCommandOptions {
+  /** Project root for the consent lookup; see {@link isTelemetryEnabled}. */
+  projectRoot?: string;
   template?: string;
   templateVersion?: string;
   framework?: ReportedFramework;
@@ -114,4 +116,6 @@ export interface BuildAndSendEventOptions {
     templateVersion?: string;
   };
   counters?: { blocksCount: number; customBuildingBlocks?: number };
+  /** Project root for the consent lookup; see {@link isTelemetryEnabled}. */
+  projectRoot?: string;
 }

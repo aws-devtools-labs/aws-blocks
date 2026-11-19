@@ -1,0 +1,109 @@
+{
+  "_comment": "Shared case table for the CDK CLI telemetry opt-out, read by packages/core/src/telemetry/cdk-consent.test.ts and packages/create-blocks-app/src/telemetry.test.ts so the two consent copies are pinned to the same behaviour. `null` means the mechanism is absent. cdkJson and userCdkJson are the value of context['cli-telemetry'] in ./cdk.json and ~/.cdk.json; cdkContextJson is the top-level ['cli-telemetry'] of ./cdk.context.json. `expected` is the result of isTelemetryEnabled().",
+  "cases": [
+    {
+      "name": "no CDK opt-out anywhere",
+      "cdkEnv": null,
+      "cdkJson": null,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": true
+    },
+    {
+      "name": "CDK_DISABLE_CLI_TELEMETRY=1",
+      "cdkEnv": "1",
+      "cdkJson": null,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": false
+    },
+    {
+      "name": "CDK_DISABLE_CLI_TELEMETRY=true",
+      "cdkEnv": "true",
+      "cdkJson": null,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": false
+    },
+    {
+      "name": "CDK_DISABLE_CLI_TELEMETRY=TRUE is not CDK's disable",
+      "cdkEnv": "TRUE",
+      "cdkJson": null,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": true
+    },
+    {
+      "name": "CDK_DISABLE_CLI_TELEMETRY=yes is not CDK's disable",
+      "cdkEnv": "yes",
+      "cdkJson": null,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": true
+    },
+    {
+      "name": "CDK_DISABLE_CLI_TELEMETRY=0",
+      "cdkEnv": "0",
+      "cdkJson": null,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": true
+    },
+    {
+      "name": "cdk.json context disables",
+      "cdkEnv": null,
+      "cdkJson": false,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": false
+    },
+    {
+      "name": "cdk.json context disables with the string \"false\"",
+      "cdkEnv": null,
+      "cdkJson": "false",
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": false
+    },
+    {
+      "name": "cdk.context.json disables, as `cdk cli-telemetry --disable` writes it",
+      "cdkEnv": null,
+      "cdkJson": null,
+      "cdkContextJson": false,
+      "userCdkJson": null,
+      "expected": false
+    },
+    {
+      "name": "~/.cdk.json context disables globally",
+      "cdkEnv": null,
+      "cdkJson": null,
+      "cdkContextJson": null,
+      "userCdkJson": false,
+      "expected": false
+    },
+    {
+      "name": "a cdk.json enable shadows a cdk.context.json disable, as in CDK",
+      "cdkEnv": null,
+      "cdkJson": true,
+      "cdkContextJson": false,
+      "userCdkJson": null,
+      "expected": true
+    },
+    {
+      "name": "a cdk.context.json disable outranks a ~/.cdk.json enable",
+      "cdkEnv": null,
+      "cdkJson": null,
+      "cdkContextJson": false,
+      "userCdkJson": true,
+      "expected": false
+    },
+    {
+      "name": "a cdk.json enable does not re-enable the env var",
+      "cdkEnv": "1",
+      "cdkJson": true,
+      "cdkContextJson": null,
+      "userCdkJson": null,
+      "expected": false
+    }
+  ]
+}

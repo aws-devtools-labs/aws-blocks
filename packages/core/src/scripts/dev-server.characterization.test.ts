@@ -1308,7 +1308,7 @@ import { startDevServer } from ${JSON.stringify(join(__dirname, 'dev-server.js')
 startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port, typegen: false })});
 `);
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
-    const env: NodeJS.ProcessEnv = { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1' };
+    const env: NodeJS.ProcessEnv = { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' };
     // Log at the default level so the request log lines are part of the characterization.
     delete env.BLOCKS_DEV_QUIET;
     delete env.BLOCKS_LOG_LEVEL;

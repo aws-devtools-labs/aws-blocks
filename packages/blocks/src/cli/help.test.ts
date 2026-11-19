@@ -35,7 +35,7 @@ describe('root help', () => {
 		const listed = listedCommands(help);
 		const runnable = [
 			'dev', 'dev:stop', 'sandbox', 'sandbox:deploy', 'sandbox:preview', 'sandbox:destroy', 'sandbox:console',
-			'docs', 'docs:api', 'docs:search', 'deploy', 'destroy', 'whoami', 'secret', 'config', 'telemetry',
+			'docs', 'docs:api', 'docs:search', 'deploy', 'destroy', 'whoami', 'secret', 'config',
 			'generate-client', 'spec', 'typegen', 'db', 'vendorize', 'migrate', 'help',
 		];
 		assert.deepStrictEqual(listed.sort(), [...runnable].sort());

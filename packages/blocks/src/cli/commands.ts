@@ -1070,36 +1070,6 @@ export async function config(ctx: Context, input: CommandInput): Promise<number>
 	return inProcess(ctx, () => core.runConfigCli(input.passthrough, valueCliOptions(ctx)));
 }
 
-export async function telemetry(ctx: Context, input: CommandInput): Promise<number> {
-	const actions = new Set<string>();
-	for (const action of ['status', 'enable', 'disable']) if (input.flags[action] === true) actions.add(action);
-	const [positional] = input.positionals;
-	if (positional !== undefined) {
-		if (!['status', 'enable', 'disable'].includes(positional)) {
-			const hint = suggest(positional, ['status', 'enable', 'disable']);
-			throw new UsageError(`unknown telemetry action "${positional}".${hint ? ` Did you mean "${hint}"?` : ''}`, {
-				hint: blocksCommand('telemetry', '--help'),
-			});
-		}
-		actions.add(positional);
-	}
-	if (actions.size > 1) throw new UsageError(`choose one telemetry action, not ${[...actions].join(' and ')}.`);
-	const action = [...actions][0] ?? 'status';
-	const root = ctx.findRoot();
-	const global = input.flags.global === true;
-	// A project setting needs a project: never write .blocks/config.json into a directory that is not an app.
-	if (!root && action !== 'status' && !global) {
-		throw new UsageError(`not inside an AWS Blocks app, so there is no project to ${action} telemetry for.`, {
-			hint: `npm run telemetry -- ${action} --global, or run it in your app directory`,
-		});
-	}
-	// Core reads the project setting from the working directory: the app, or the -C directory outside one.
-	ctx.deps.chdir(root ?? ctx.startDir);
-	const core = await ctx.core();
-	const argv = ['node', 'cdk-blocks', `--${action}`, ...(global ? ['--global'] : [])];
-	return inProcess(ctx, () => core.telemetry({ argv }));
-}
-
 // ── Generate ─────────────────────────────────────────────────────────────────
 
 const BLOCKS_DIST = fileURLToPath(new URL('..', import.meta.url));

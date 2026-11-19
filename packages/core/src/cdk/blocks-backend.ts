@@ -37,6 +37,7 @@ import {
 	snapshotChildren,
 } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { enableRolePolicyPacking } from './role-policy-packing.js';
 import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
 import { applyAppIdentity } from './app-identity.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
@@ -271,6 +272,12 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
+	// Merge combinable statements before CDK packs any overflow into managed
+	// policies, give those overflow policies content-derived logical IDs so a
+	// deploy adds moved statements before it removes them, and fail synth with a
+	// fix if the role would exceed the managed-policies-per-role quota
+	// (role-policy-packing.ts).
+	enableRolePolicyPacking(executionRole, scope);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
 	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an

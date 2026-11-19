@@ -942,7 +942,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       // Keep Cognito middleware and the API URL from amplify_outputs.json.
       'blocks:generate-client': clientScript,
       'generate-client': clientScript,
-      ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'telemetry', 'help', 'db', 'migrate']
+      ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'help', 'db', 'migrate']
         .map(name => [name, standalone.scripts[name]])),
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,

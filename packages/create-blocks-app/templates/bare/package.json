@@ -36,7 +36,6 @@
     "docs:api": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --api",
     "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
     "whoami": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- whoami",
-    "telemetry": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- telemetry",
     "migrate": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- migrate",
     "help": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- --help",
     "generate-client": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client",
