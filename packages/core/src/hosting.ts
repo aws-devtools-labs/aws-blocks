@@ -241,6 +241,10 @@ export interface HostingProps {
    * injected into the environment.
    * Omit if the app is already pre-built.
    *
+   * Can be omitted for `nextjs`, `nitro`, `astro` and `sveltekit` too: their
+   * adapters build the app themselves, so a missing build output dir is not an
+   * error then (the adapter builds it).
+   *
    * Not run on a destroy (`npm run destroy`, `npm run sandbox:destroy`) when a
    * build output already exists, or on a deploy with
    * `BLOCKS_SKIP_FRONTEND_BUILD=1`, which deploys the existing build output
@@ -256,7 +260,8 @@ export interface HostingProps {
 
   /**
    * Path to the build output directory (e.g. `'dist'` or `'.next'`).
-   * Auto-detected based on framework when omitted.
+   * Auto-detected based on framework when omitted: `.next` (Next.js),
+   * `.output` (Nitro), `build` (SvelteKit), else `dist`.
    */
   buildOutputDir?: string;
 
@@ -991,9 +996,20 @@ export function frontendReuseMarker(
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
   sveltekit: 'build',
+  nitro: '.output',
+  astro: 'dist',
   spa: 'dist',
   static: 'dist',
 };
+
+/**
+ * The frameworks whose built-in adapter builds the app itself (OpenNext for
+ * Next.js, `nuxt build`/`nitro build`, `astro build`, `vite build` for
+ * SvelteKit), with what its deploy needs: Astro's and SvelteKit's Node server
+ * adapter, the Nitro preset. With no `buildCommand` there is nothing to build
+ * before the adapter runs, and a missing output dir is the adapter's to build.
+ */
+const SELF_BUILDING_FRAMEWORKS: ReadonlySet<string> = new Set(['nextjs', 'nitro', 'astro', 'sveltekit']);
 
 /**
  * A framework adapter error for a build output that isn't there: the
@@ -1237,7 +1253,15 @@ export class Hosting extends Construct {
     // ── 3. Validate the build output dir ─────────────────────────
     const buildOutputDir = props.buildOutputDir;
 
-    if (!existsSync(expectedOutputDir)) {
+    // A built-in adapter that builds the app runs even when its output isn't
+    // there yet; under BLOCKS_SKIP_FRONTEND_BUILD=1 it doesn't build, so the
+    // output has to be there.
+    const adapterBuilds =
+      !props.buildCommand &&
+      !props.customAdapter &&
+      reuseBuild !== 'required' &&
+      SELF_BUILDING_FRAMEWORKS.has(framework);
+    if (!adapterBuilds && !existsSync(expectedOutputDir)) {
       throw new Error(
         `Build output directory not found: ${expectedOutputDir}\n` +
           (reuseBuild === 'required'

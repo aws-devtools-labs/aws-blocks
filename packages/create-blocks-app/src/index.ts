@@ -1125,6 +1125,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
   const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
   await writeBackendTsconfig(awsBlocksDest, existingPkg);
+  await fitHostingToFramework(join(awsBlocksDest, 'index.cdk.ts'), detectProjectFramework(existingPkg));
 
   // Generate blocks/config.json with a unique stackId
   const baseName = (existingPkg.name || basename(resolve(targetDir)));
@@ -1196,6 +1197,43 @@ interface PackageDeps {
 /** Whether the project builds with Next.js, whose `next build` ignores project references when it type-checks. */
 function usesNext(pkg: PackageDeps): boolean {
   return Boolean(pkg.dependencies?.next || pkg.devDependencies?.next);
+}
+
+/** The packages that make a project a Nitro app (Nuxt and the other Nitro frameworks), in the order Hosting checks them. */
+const NITRO_PACKAGES = ['nuxt', 'nitropack', '@solidjs/start', '@analogjs/platform-server', '@tanstack/start'];
+
+/**
+ * The framework `Hosting` detects for a project from its package.json, by the rules of
+ * `detectFramework` in `@aws-blocks/hosting/adapters` (which this CLI doesn't load: the
+ * project may not have installed it yet). A test checks that the two agree.
+ */
+export function detectProjectFramework(pkg: PackageDeps & { peerDependencies?: Record<string, unknown> }): string {
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
+  if ('next' in deps) return 'nextjs';
+  if (NITRO_PACKAGES.some(name => name in deps)) return 'nitro';
+  if ('astro' in deps) return 'astro';
+  if ('@sveltejs/kit' in deps) return 'sveltekit';
+  return 'spa';
+}
+
+/** The template's build settings in its `Hosting` props: Vite's (`npm run build` into `dist/`), or the Next.js template's. */
+const TEMPLATE_BUILD_SETTINGS = /\n {4}buildCommand: 'npm run build',\n {4}(?:buildOutputDir: 'dist'|framework: 'nextjs'),\n/;
+
+/**
+ * Fits the `Hosting` props in the copied backend's `index.cdk.ts` to the project's
+ * framework. The template's are a Vite app's: `npm run build`, then deploy `dist/`.
+ * The Next.js, Nuxt (Nitro), Astro and SvelteKit adapters build the app themselves,
+ * with what their deploy needs (OpenNext; Astro's and SvelteKit's Node adapter,
+ * which an app may not have installed), and read their own output dir. For such a
+ * project the props name the framework and leave the build to the adapter:
+ * running `npm run build` first fails an Astro app without a server adapter, and
+ * `dist` is not where Nuxt, SvelteKit or Next.js write their build.
+ */
+async function fitHostingToFramework(indexCdk: string, framework: string): Promise<void> {
+  if (framework === 'spa' || !(await exists(indexCdk))) return;
+  const source = await readFile(indexCdk, 'utf-8');
+  const updated = source.replace(TEMPLATE_BUILD_SETTINGS, `\n    framework: '${framework}',\n`);
+  if (updated !== source) await writeFile(indexCdk, updated);
 }
 
 /**

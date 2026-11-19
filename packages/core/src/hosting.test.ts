@@ -275,6 +275,32 @@ describe('Hosting', () => {
       );
     });
 
+    // An adapter that builds the app itself (SvelteKit, Astro, Nuxt/Nitro, Next.js)
+    // needs no build before it runs: with no buildCommand, the missing output dir
+    // is the adapter's to build, not a synth error. Each adapter here stops at its
+    // version check (no framework is installed), which proves it ran.
+    for (const [framework, dependency, adapterError] of [
+      ['sveltekit', '@sveltejs/kit', 'UnsupportedSvelteKitVersionError'],
+      ['astro', 'astro', 'UnsupportedAstroVersionError'],
+    ] as const) {
+      it(`runs the ${framework} adapter, which builds the app, when there is no build output and no buildCommand`, () => {
+        fs.writeFileSync(
+          path.join(tmpDir, 'package.json'),
+          JSON.stringify({ name: 'test', dependencies: { [dependency]: '*' } }),
+        );
+        const app = new App();
+        const stack = new Stack(app, `NoBuildYet-${framework}`);
+        assert.throws(
+          () => new Hosting(stack, 'Hosting', { root: tmpDir, framework, api: MOCK_API }),
+          (err: Error) => {
+            assert.ok(!err.message.includes('Build output directory not found'), `Expected the adapter to run, got: ${err.message}`);
+            assert.strictEqual(err.name, adapterError);
+            return true;
+          },
+        );
+      });
+    }
+
     it('exposes bucket and distribution resources for composition', () => {
       createSpaBuildOutput(tmpDir);
 
