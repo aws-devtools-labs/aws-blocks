@@ -70,6 +70,7 @@ import {
 	apiPathToRoutes,
 	routableApiPaths,
 	backendBaseUrl,
+	BLOCKS_PATH_PREFIXES,
 	DEFAULT_API_PATHS,
 	globToProxyPath,
 	hasInnerWildcard,
@@ -90,7 +91,7 @@ export type ApiGatewayRestConstructProps = {
 	 * Every path pattern the single-compute (`'*'`) backend serves — the
 	 * `DoorInput.origins.api.paths`: `/cdk-blocks/*` plus the backend's raw
 	 * routes. Each becomes a resource proxied to the same path on the backend.
-	 * @default ['/cdk-blocks/*']
+	 * @default ['/cdk-blocks/*', '/aws-blocks/*']
 	 */
 	apiPaths?: readonly string[];
 	/**
@@ -257,7 +258,9 @@ export class ApiGatewayRestConstruct extends Construct {
 				}
 			} else {
 				const ns = origin.namespace;
-				addProxyRoute(`/cdk-blocks/api/${ns}/{proxy+}`, `${base}/cdk-blocks/api/${ns}/{proxy}`);
+				for (const prefix of BLOCKS_PATH_PREFIXES) {
+					addProxyRoute(`${prefix}/api/${ns}/{proxy+}`, `${base}/cdk-blocks/api/${ns}/{proxy}`);
+				}
 			}
 		}
 

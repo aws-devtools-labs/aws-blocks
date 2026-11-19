@@ -253,7 +253,7 @@ export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs
 
 ### `stubIdp()` is local and sandbox only
 
-`AuthOIDC` serves a `stubIdp()` provider in local development and on sandbox deployments only, and so does `Auth`: it runs in `npm run dev`, a sandbox (`npm run sandbox`) serves it from the deployed backend under `/cdk-blocks/auth/idp/<id>/`, and synthesizing any other deployment with it fails. Its issuer on a sandbox is the API Gateway URL, the same one `AuthOIDC`'s deployed stub used, so its users keep their `userId`. The codemod moves each `stubIdp(…)` across unchanged.
+`AuthOIDC` serves a `stubIdp()` provider in local development and on sandbox deployments only, and so does `Auth`: it runs in `npm run dev`, a sandbox (`npm run sandbox`) serves it from the deployed backend under `/cdk-blocks/auth/idp/<id>/`, and synthesizing any other deployment with it fails. Its issuer on a sandbox is the API Gateway URL plus `/cdk-blocks/auth/idp/<id>`; `AuthOIDC`'s deployed stub used `/aws-blocks/auth/idp/<id>`, so a sandbox stub user gets a new `userId`. The codemod moves each `stubIdp(…)` across unchanged.
 
 A sandbox stub signs users in **without credentials**: anyone who can reach the sandbox can open its account picker and sign in as any of its users (or its built-in default user), with every claim and group they carry. Synth says so with a `@aws-blocks/bb-auth:StubIdpDeployed` warning.
 

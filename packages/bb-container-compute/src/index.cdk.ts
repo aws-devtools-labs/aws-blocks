@@ -545,7 +545,7 @@ export class ContainerCompute extends ComputeBase {
 				);
 			}
 			// Scoped to the shared listener and named after the path alone
-			// (`/cdk-blocks/api/render` → `Route-aws-blocks-api-render`), so moving a
+			// (`/cdk-blocks/api/render` → `Route-cdk-blocks-api-render`), so moving a
 			// namespace to another container compute updates the rule's target in place
 			// rather than replacing it — a new rule couldn't take the priority the old
 			// one still holds until CloudFormation deletes it.

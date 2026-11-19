@@ -55,12 +55,15 @@ export const routableApiPaths = (scope: IConstruct, door: string, patterns: Iter
  */
 export const backendBaseUrl = (ingressUrl: string): string => Fn.select(0, Fn.split('/cdk-blocks/api', ingressUrl));
 
+/** The canonical `/cdk-blocks` path prefix, then its legacy `/aws-blocks` alias. */
+export const BLOCKS_PATH_PREFIXES: readonly string[] = ['/cdk-blocks', '/aws-blocks'];
+
 /**
  * The default API path set for a single-compute backend when the door was not
  * handed `DoorInput.origins.api.paths`: the reserved `/cdk-blocks/*` subtree
  * (RPC, and sign-in at `/cdk-blocks/auth/*`), and its legacy `/aws-blocks/*` alias.
  */
-export const DEFAULT_API_PATHS: readonly string[] = ['/cdk-blocks/*', '/aws-blocks/*'];
+export const DEFAULT_API_PATHS: readonly string[] = BLOCKS_PATH_PREFIXES.map((prefix) => `${prefix}/*`);
 
 /** Whether a route-table pattern has a wildcard API Gateway can't express (anything but one trailing `/*`). */
 export const hasInnerWildcard = (pattern: string): boolean => {

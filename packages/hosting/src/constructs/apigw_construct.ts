@@ -51,6 +51,7 @@ import {
   apiPathToRoutes,
   routableApiPaths,
   backendBaseUrl,
+  BLOCKS_PATH_PREFIXES,
   DEFAULT_API_PATHS,
   globToProxyPath,
   hasInnerWildcard,
@@ -70,7 +71,7 @@ export type ApiGatewayConstructProps = {
    * Every path pattern the single-compute (`'*'`) backend serves — the
    * `DoorInput.origins.api.paths`: `/cdk-blocks/*` plus the backend's raw
    * routes. Each becomes a route proxied to the same path on the backend.
-   * @default ['/cdk-blocks/*']
+   * @default ['/cdk-blocks/*', '/aws-blocks/*']
    */
   apiPaths?: readonly string[];
   /**
@@ -198,7 +199,7 @@ export class ApiGatewayConstruct extends Construct {
     // path-routes its namespace to that compute's ingress. A lone `'*'` origin
     // is the single-compute case: every API path (`/cdk-blocks/*`, which covers
     // sign-in at `/cdk-blocks/auth/*`, plus the backend's raw routes) → one
-    // backend; a named namespace routes `/cdk-blocks/api/{ns}/*`.
+    // backend; a named namespace routes `/cdk-blocks/api/{ns}/*` and its `/aws-blocks/` twin.
     const backendPaths = new Set<string>();
     for (const origin of plan.backend?.origins ?? []) {
       // Split the ingress URL on the `/cdk-blocks/api` suffix (token-safe) to get
@@ -222,11 +223,16 @@ export class ApiGatewayConstruct extends Construct {
         }
       } else {
         const ns = origin.namespace;
-        this.api.addRoutes({
-          path: `/cdk-blocks/api/${ns}/{proxy+}`,
-          methods: [HttpMethod.ANY],
-          integration: new HttpUrlIntegration(`BackendNs-${ns}`, `${base}/cdk-blocks/api/${ns}/{proxy}`),
-        });
+        for (const prefix of BLOCKS_PATH_PREFIXES) {
+          this.api.addRoutes({
+            path: `${prefix}/api/${ns}/{proxy+}`,
+            methods: [HttpMethod.ANY],
+            integration: new HttpUrlIntegration(
+              prefix === BLOCKS_PATH_PREFIXES[0] ? `BackendNs-${ns}` : `BackendNsLegacy-${ns}`,
+              `${base}/cdk-blocks/api/${ns}/{proxy}`,
+            ),
+          });
+        }
       }
     }
 

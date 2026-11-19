@@ -115,27 +115,55 @@ class OidcClient implements AuthProvider {
   late final Future<void> _ready = _migrateLegacyTokens();
 
   /// The exchange route of the `Auth` block version 0.2.0 stored the
-  /// unprefixed tokens for.
-  static const _legacyExchangePath = '/cdk-blocks/auth/exchange';
+  /// unprefixed tokens for, under its current `/cdk-blocks/` prefix.
+  static const _defaultExchangePath = '/cdk-blocks/auth/exchange';
 
-  /// Moves tokens stored under the unprefixed keys, by version 0.2.0 or
-  /// earlier, to this client's prefixed keys, so an upgrade doesn't sign a
-  /// bearer session out. Version 0.2.0 only signed in against the default
-  /// `Auth` block, so it moves them only into a [fromJson] client whose
-  /// [exchangePath] is that block's, `/cdk-blocks/auth/exchange`, and only
-  /// when it has no tokens of its own yet, whatever other clients share
-  /// [tokenStore] and in whatever order they are used. Otherwise it leaves
-  /// them where they are.
+  static const _canonicalPrefix = '/cdk-blocks/';
+  static const _legacyPrefix = '/aws-blocks/';
+
+  /// The key prefixes earlier versions stored this client's tokens under,
+  /// newest first: the `/aws-blocks/` twin of [_keyPrefix], used before the
+  /// routes moved to `/cdk-blocks/`, then, for the default block, none.
+  List<String> get _legacyKeyPrefixes {
+    final canonicalExchange = exchangePath.startsWith(_legacyPrefix)
+        ? '$_canonicalPrefix${exchangePath.substring(_legacyPrefix.length)}'
+        : exchangePath;
+    return [
+      if (_keyPrefix.startsWith(_canonicalPrefix))
+        '$_legacyPrefix${_keyPrefix.substring(_canonicalPrefix.length)}',
+      if (canonicalExchange == _defaultExchangePath) '',
+    ];
+  }
+
+  /// Moves tokens an earlier version stored under older keys to this
+  /// client's keys, so an upgrade doesn't sign a bearer session out: the
+  /// `/aws-blocks/`-prefixed keys of the same block, else the unprefixed
+  /// keys of version 0.2.0 or earlier. Version 0.2.0 only signed in against
+  /// the default `Auth` block, so the unprefixed keys move only into a
+  /// [fromJson] client for that block (`/cdk-blocks/auth/exchange`, or its
+  /// `/aws-blocks/` twin). Nothing moves when the client already has tokens
+  /// of its own, whatever other clients share [tokenStore] and in whatever
+  /// order they are used.
   Future<void> _migrateLegacyTokens() async {
-    if (_keyPrefix.isEmpty || exchangePath != _legacyExchangePath) return;
+    if (_keyPrefix.isEmpty) return;
+    final prefixes = _legacyKeyPrefixes;
+    if (prefixes.isEmpty) return;
     for (final name in _legacyTokenNames) {
       if (await tokenStore.get(_key(name)) != null) return;
     }
-    for (final name in _legacyTokenNames) {
-      final value = await tokenStore.get(name);
-      if (value == null) continue;
-      await tokenStore.set(_key(name), value);
-      await tokenStore.delete(name);
+    for (final prefix in prefixes) {
+      var moved = false;
+      for (final name in [
+        ..._legacyTokenNames,
+        if (prefix.isNotEmpty) _sessionCookiesKey,
+      ]) {
+        final value = await tokenStore.get('$prefix$name');
+        if (value == null) continue;
+        await tokenStore.set(_key(name), value);
+        await tokenStore.delete('$prefix$name');
+        moved = true;
+      }
+      if (moved) return;
     }
   }
 

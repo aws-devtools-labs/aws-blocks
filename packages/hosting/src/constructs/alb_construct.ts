@@ -50,7 +50,7 @@ import type { HostingPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
-import { DEFAULT_API_PATHS, routableApiPaths } from './apigw_routes.js';
+import { BLOCKS_PATH_PREFIXES, DEFAULT_API_PATHS, routableApiPaths } from './apigw_routes.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import type { OriginHandle } from './layer.js';
 import { assetProxyEnvironment } from './asset_proxy_core.js';
@@ -114,7 +114,7 @@ export type AlbConstructProps = {
    * `DoorInput.origins.api.paths`: `/cdk-blocks/*` plus the backend's raw
    * routes. Each reaches the API forwarder, as each gets a CloudFront behavior
    * on the CloudFront door.
-   * @default ['/cdk-blocks/*']
+   * @default ['/cdk-blocks/*', '/aws-blocks/*']
    */
   apiPaths?: readonly string[];
   /**
@@ -411,7 +411,7 @@ export class AlbConstruct extends Construct {
     // the API is same-origin with the frontend (session cookies flow, no CORS). A
     // lone `'*'` origin is the single-compute case: every API path (`/cdk-blocks/*`,
     // which covers sign-in at `/cdk-blocks/auth/*`, plus the backend's raw routes)
-    // → one backend; a named namespace routes `/cdk-blocks/api/{ns}/*`. These
+    // → one backend; a named namespace routes `/cdk-blocks/api/{ns}/*` and its `/aws-blocks/` twin. These
     // rules win over the route/catch-all rules (lowest priority numbers). A rule
     // holds at most 5 condition values and 6 wildcards, so the paths are packed up to 5 to a rule (4
     // beside the origin-verify header of a locked ALB).
@@ -419,7 +419,7 @@ export class AlbConstruct extends Construct {
     let ruleCount = 0;
     for (const origin of plan.backend?.origins ?? []) {
       const ns = origin.namespace;
-      const paths = ns === '*' ? routableApiPaths(this, 'ALB', props.apiPaths ?? DEFAULT_API_PATHS) : [`/cdk-blocks/api/${ns}/*`];
+      const paths = ns === '*' ? routableApiPaths(this, 'ALB', props.apiPaths ?? DEFAULT_API_PATHS) : BLOCKS_PATH_PREFIXES.map((prefix) => `${prefix}/api/${ns}/*`);
       const idSuffix = ns === '*' ? 'Default' : ns;
       const apiProxy = new LambdaFunction(this, `ApiProxy${idSuffix}`, {
         runtime: DEFAULT_NODE_RUNTIME,

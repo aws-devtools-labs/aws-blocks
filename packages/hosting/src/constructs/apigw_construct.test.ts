@@ -188,9 +188,13 @@ describe('ApiGatewayConstruct — with backend proxy', () => {
       },
     };
     const t = synth(plan);
-    // 2 static + 2 namespace routes + $default = 5
-    t.resourceCountIs('AWS::ApiGatewayV2::Route', 5);
+    // 2 static + 2 namespaces on both prefixes + $default = 7
+    t.resourceCountIs('AWS::ApiGatewayV2::Route', 7);
     t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
+    const routeKeys = Object.values(t.findResources('AWS::ApiGatewayV2::Route')).map((r) => String(r.Properties.RouteKey));
+    for (const key of ['ANY /cdk-blocks/api/notes/{proxy+}', 'ANY /aws-blocks/api/notes/{proxy+}', 'ANY /aws-blocks/api/users/{proxy+}']) {
+      assert.ok(routeKeys.includes(key), key);
+    }
   });
 });
 
@@ -241,6 +245,19 @@ describe('ApiGatewayRestConstruct — with backend proxy', () => {
 		t.hasResourceProperties('AWS::ApiGateway::Method', {
 			Integration: { Type: 'HTTP_PROXY' },
 		});
+	});
+
+	it('routes a named namespace on both the /cdk-blocks and legacy /aws-blocks prefixes', () => {
+		const t = synthRest({
+			...staticPlan,
+			backend: { origins: [{ namespace: 'notes', ingress: { kind: 'url', url: 'https://notes.example.com/cdk-blocks/api' } }] },
+		});
+		const parts = Object.values(t.findResources('AWS::ApiGateway::Resource')).map((r) => String(r.Properties.PathPart));
+		assert.ok(parts.includes('cdk-blocks'));
+		assert.ok(parts.includes('aws-blocks'));
+		assert.equal(parts.filter((p) => p === 'notes').length, 2);
+		const uris = Object.values(t.findResources('AWS::ApiGateway::Method')).map((r) => JSON.stringify(r.Properties.Integration?.Uri ?? ''));
+		assert.ok(uris.every((u) => !u.includes('/aws-blocks/api/notes')), 'the legacy route targets the canonical backend path');
 	});
 });
 

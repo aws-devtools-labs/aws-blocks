@@ -172,6 +172,11 @@ describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
     const t = synth(plan);
     // 1 redirect + 2 namespace API rules = 3 rules.
     t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 3);
+    const paths = rulePaths(t).flatMap((r) => r.paths);
+    for (const ns of ['notes', 'users']) {
+      assert.ok(paths.includes(`/cdk-blocks/api/${ns}/*`), ns);
+      assert.ok(paths.includes(`/aws-blocks/api/${ns}/*`), `legacy ${ns}`);
+    }
   });
 });
 

@@ -952,6 +952,44 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertNil(ssoScoped)
     }
 
+    /// Tokens stored under a block's `/aws-blocks/` exchange path, before the routes moved to `/cdk-blocks/`,
+    /// move to that block's `/cdk-blocks/` keys, ahead of any unscoped ones.
+    func testTokensUnderTheLegacyPrefixedKeysMoveToEachBlock() async {
+        let shared = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
+        let store = shared.tokenStore
+        await store.set("access_token", value: "unscoped-access")
+        await store.set("expires_at", value: "9999999999000")
+        for (block, token) in [("auth", "main-access"), ("auth/sso", "sso-access")] {
+            await store.set(tokenKey("access_token", exchangePath: "/aws-blocks/\(block)/exchange"), value: token)
+            await store.set(tokenKey("expires_at", exchangePath: "/aws-blocks/\(block)/exchange"), value: "9999999999000")
+        }
+        let main = makeClient(named: "cdk-blocks/auth", on: shared)
+        let sso = makeClient(named: "cdk-blocks/auth/sso", on: shared)
+
+        let ssoToken = await sso.getAccessToken()
+        let mainToken = await main.getAccessToken()
+        let legacyMain = await store.get(tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange"))
+        let unscoped = await store.get("access_token")
+        XCTAssertEqual(ssoToken, "sso-access")
+        XCTAssertEqual(mainToken, "main-access")
+        XCTAssertNil(legacyMain)
+        XCTAssertEqual(unscoped, "unscoped-access")
+    }
+
+    /// A default block pinned to its `/aws-blocks/` routes still takes the unscoped tokens.
+    func testDefaultBlockOnTheLegacyPrefixAdoptsTheUnscopedTokens() async {
+        let shared = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
+        let store = shared.tokenStore
+        await store.set("access_token", value: "legacy-access")
+        await store.set("expires_at", value: "9999999999000")
+        let main = makeClient(named: "aws-blocks/auth", on: shared)
+
+        let token = await main.getAccessToken()
+        let unscoped = await store.get("access_token")
+        XCTAssertEqual(token, "legacy-access")
+        XCTAssertNil(unscoped)
+    }
+
     func testClientsFirstUsingTheStoreTogetherAdoptTheUnscopedSessionOnce() async {
         let store = RendezvousTokenStore(
             ["access_token": "legacy-access", "refresh_token": "legacy-refresh", "expires_at": "9999999999000"],
@@ -1311,7 +1349,7 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "no exchange")
     }
 
-    /// The origin raw routes are requested at: the client URL cut at its first `cdk-blocks` segment.
+    /// The origin raw routes use the client URL cut at its first `cdk-blocks` or legacy `aws-blocks` segment.
     func testRawRouteBaseKeepsTheStageAndCutsAtTheFirstBlocksSegment() {
         let cases = [
             ("https://x.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api",

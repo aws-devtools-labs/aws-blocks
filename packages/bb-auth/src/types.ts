@@ -194,7 +194,7 @@ export interface AuthCommonOptions {
 	/** Session cookie and server-side session record behaviour. */
 	session?: SessionOptions;
 
-	/** HTTP paths for the federated redirect flow. All must sit under `/cdk-blocks/auth/`. */
+	/** HTTP paths for the federated redirect flow. They must sit under `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	redirects?: RedirectOptions;
 
 	/**
@@ -1163,8 +1163,7 @@ export interface StubIdpSettings {
  * URL.
  *
  * In a sandbox, the issuer is the API Gateway's own HTTPS URL plus
- * `/cdk-blocks/auth/idp/<id>`, the same value `AuthOIDC`'s deployed stub used,
- * so `userId`s carry over. A sandbox stub signs users in **without
+ * `/cdk-blocks/auth/idp/<id>`. A sandbox stub signs users in **without
  * credentials** — see `stubIdp()`.
  */
 export interface StubProvider extends Omit<DirectOidcProvider, 'type'> {

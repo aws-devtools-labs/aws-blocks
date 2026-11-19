@@ -180,6 +180,53 @@ void main() {
       expect(await store.get('/cdk-blocks/auth/refresh_token'), isNull);
     });
 
+    test('moves /aws-blocks/-prefixed tokens to each block', () async {
+      final store = InMemoryTokenStore();
+      await store.set('/aws-blocks/auth/access_token', 'main-old');
+      await store.set('/aws-blocks/auth/session_cookies', '["s"]');
+      await store.set('/aws-blocks/auth/sso/access_token', 'sso-old');
+      final inAnHour = DateTime.now().add(const Duration(hours: 1));
+      for (final base in ['/aws-blocks/auth', '/aws-blocks/auth/sso']) {
+        await store.set(
+          '$base/expires_at',
+          '${inAnHour.millisecondsSinceEpoch}',
+        );
+      }
+      final main = client(store, '/cdk-blocks/auth', 'google');
+      final sso = client(store, '/cdk-blocks/auth/sso', 'corp');
+
+      expect(await sso.getAccessToken(), 'sso-old');
+      expect(await main.getAccessToken(), 'main-old');
+      expect(await store.get('/cdk-blocks/auth/session_cookies'), '["s"]');
+      expect(await store.get('/aws-blocks/auth/access_token'), isNull);
+      expect(await store.get('/aws-blocks/auth/sso/access_token'), isNull);
+    });
+
+    test('prefers /aws-blocks/-prefixed tokens over unprefixed ones', () async {
+      final store = await legacyStore();
+      await store.set('/aws-blocks/auth/access_token', 'newer-at');
+      await store.set(
+        '/aws-blocks/auth/expires_at',
+        (await store.get('expires_at'))!,
+      );
+      final main = client(store, '/cdk-blocks/auth', 'google');
+
+      expect(await main.getAccessToken(), 'newer-at');
+      expect(await store.get('access_token'), 'old-at');
+    });
+
+    test(
+      'a default block pinned to /aws-blocks/auth takes the unprefixed tokens',
+      () async {
+        final store = await legacyStore();
+        final main = client(store, '/aws-blocks/auth', 'google');
+
+        expect(await main.getAccessToken(), 'old-at');
+        expect(await store.get('/aws-blocks/auth/refresh_token'), 'old-rt');
+        expect(await store.get('access_token'), isNull);
+      },
+    );
+
     test(
       'a client built with the constructor reads them where they are',
       () async {

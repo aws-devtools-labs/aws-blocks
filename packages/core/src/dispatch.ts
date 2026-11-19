@@ -285,7 +285,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       // `/cdk-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
       // JSON-RPC body, and a per-namespace path must name the same one (see
       // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
-      // handling below. Both match a legacy `/cdk-blocks/...` path as its
+      // handling below. Both match a legacy `/aws-blocks/...` path as its
       // `/cdk-blocks/...` twin.
       const requestPath = request.path;
       if (!isRpcPath(requestPath)) {
