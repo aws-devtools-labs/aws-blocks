@@ -387,7 +387,7 @@ Future<void> main() async {
 
 A subscription's stream closes normally only when you cancel it or call `close()`. Any other end, such as the channel token expiring after about an hour or the socket closing, emits a `RealtimeException` and then closes the stream. The SDK doesn't reconnect or renew by itself: call the API method that returned the channel again and subscribe to the new handle.
 
-**Auth flows**: each auth action's input is its own class in a sealed union, so a misspelled field or action doesn't compile. `AuthState.state` is an enum, and its actions arrive at runtime, so render them by name and skip the ones you don't know.
+**Auth flows**: each auth action's input is its own class in a sealed union, so a misspelled field or action doesn't compile. `AuthState.state` is a sealed type whose known values are constants (`AuthStateState.signedIn`), and its actions arrive at runtime, so render them by name and skip the ones you don't know. A value a newer backend adds decodes to `AuthStateStateUnknown`, whose `value` is the string as sent, so an exhaustive `switch` needs a case for it.
 
 **File transfers**: presigned upload/download URLs are wrapped in handle objects with simple `.upload(bytes)` / `.download()` methods.
 
