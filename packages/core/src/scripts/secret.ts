@@ -5,13 +5,13 @@
  * `npm run secret` — manage a Blocks app's **secrets** (AWS Secrets Manager),
  * pinned to the Blocks `/blocks/<stackId>/secrets` namespace (scoped to the app's
  * stable `stackId` from `.blocks/config.json`, so two apps in one account never
- * collide). Thin wrapper over the shared `@aws-blocks/hosting` CLI with the kind
+ * collide). Thin wrapper over the shared `@aws-cdk-blocks/hosting` CLI with the kind
  * fixed to `secret`. The `config` counterpart is `./config.ts`.
  *
  * @module
  */
 
-import { listValues, removeValue, runValueCli, setValue } from '@aws-blocks/hosting/scripts';
+import { listValues, removeValue, runValueCli, setValue } from '@aws-cdk-blocks/hosting/scripts';
 import { blocksSecretPrefix } from '../secret-naming.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 

@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): `npm run sandbox` ends with its dev server, and `npm run dev:stop` says it stopped the sandbox
@@ -8,4 +8,4 @@ fix(core): `npm run sandbox` ends with its dev server, and `npm run dev:stop` sa
 
 - `startSandbox()` now stops the session (its `cdk watch` included) when its dev server exits: exit code 0 when the dev server was stopped, 1 with `The local dev server exited (code N); stopping the sandbox session.` when it failed.
 - The sandbox passes its pid to the dev server in `BLOCKS_SANDBOX_SESSION`, which records it in its pidfile record as `sandbox: { pid }` and keeps it out of the frontend's environment. `stopDevServer()` then waits for that session to end, returns it as `StopResult.sandbox`, and reports `Stopped the npm run sandbox session on :3000 …: its dev server and its cdk watch. Its AWS resources are still deployed; \`npm run sandbox:destroy\` deletes them.`, or a warning when the session has not ended.
-- New exports: `SANDBOX_SESSION_ENV` from `@aws-blocks/core/scripts/dev-pidfile`, and `sandboxDevServerExitCode()` from the sandbox module.
+- New exports: `SANDBOX_SESSION_ENV` from `@aws-cdk-blocks/core/scripts/dev-pidfile`, and `sandboxDevServerExitCode()` from the sandbox module.

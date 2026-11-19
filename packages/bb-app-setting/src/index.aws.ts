@@ -8,15 +8,15 @@ import {
 	PutParameterCommand,
 } from '@aws-sdk/client-ssm';
 import type { GetParameterCommandOutput } from '@aws-sdk/client-ssm';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { assertValueWithinSizeLimit } from './validation.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 // Re-export public types from types module (canonical source)
 export { AppSettingErrors } from './errors.js';

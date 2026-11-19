@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { Metrics, MetricsErrors } from './index.mock.js';
 import { Metrics as AwsMetrics } from './index.aws.js';
 import type { MetricsEmitter } from './types.js';

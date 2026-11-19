@@ -24,10 +24,10 @@ body:
       description: Select the package(s) related to this issue.
       multiple: true
       options:
-        - "@aws-blocks/core"
-        - "@aws-blocks/blocks"
-        - "@aws-blocks/foundations"
-        - "@aws-blocks/create-blocks-app"
+        - "@aws-cdk-blocks/core"
+        - "aws-cdk-blocks"
+        - "@aws-cdk-blocks/foundations"
+        - "@aws-cdk-blocks/create-blocks-app"
         - "Building Block: auth"
         - "Building Block: data"
         - "Building Block: file-bucket"

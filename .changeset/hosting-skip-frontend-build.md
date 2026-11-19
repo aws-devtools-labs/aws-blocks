@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/hosting": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": patch
+"@aws-cdk-blocks/hosting": patch
+"aws-cdk-blocks": patch
 ---
 
 `Hosting` no longer rebuilds the frontend on a synth that doesn't need it:

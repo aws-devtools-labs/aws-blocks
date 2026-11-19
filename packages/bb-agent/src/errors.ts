@@ -1,15 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { blocksError as coreBlocksError, brandBlocksError, isBlocksError, isWireSafeError } from '@aws-blocks/core';
+import { blocksError as coreBlocksError, brandBlocksError, isBlocksError, isWireSafeError } from '@aws-cdk-blocks/core';
 
 /**
  * Typed error constants for Agent BB. Use with `isBlocksError()` in catch blocks.
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { AgentErrors } from '@aws-blocks/bb-agent';
+ * import { isBlocksError } from '@aws-cdk-blocks/core';
+ * import { AgentErrors } from '@aws-cdk-blocks/bb-agent';
  *
  * try {
  *   await agent.getConversation(id, { userId });

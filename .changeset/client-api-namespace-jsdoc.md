@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 docs(core): name the `ApiNamespace` constructor's second parameter `label` and document it

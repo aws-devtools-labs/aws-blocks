@@ -5,7 +5,7 @@
  * Shared types for KVStore. Imported by mock, aws, cdk, and browser entry
  * points. This file has zero runtime dependencies and holds types only.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // ── Keys ────────────────────────────────────────────────────────────────────
@@ -484,7 +484,7 @@ export interface TableOptions {
 	table?: ExternalTableRef;
 	/**
 	 * Optional logger for internal KVStore operations. Accepts a `Logger` instance
-	 * or any `ChildLogger` from `@aws-blocks/bb-logger`.
+	 * or any `ChildLogger` from `@aws-cdk-blocks/bb-logger`.
 	 *
 	 * When omitted, a default Logger at warn level is created, so the fallback
 	 * warnings of `readValidation: 'coerce'` are logged. It logs nothing during
@@ -492,7 +492,7 @@ export interface TableOptions {
 	 *
 	 * @example
 	 * ```typescript
-	 * import { Logger } from '@aws-blocks/bb-logger';
+	 * import { Logger } from '@aws-cdk-blocks/bb-logger';
 	 * const log = new Logger(scope, 'app', { level: 'debug' });
 	 * const store = new KVStore(scope, 'cache', { logger: log });
 	 * ```

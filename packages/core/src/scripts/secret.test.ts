@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { afterEach, describe, it, mock } from 'node:test';
-import { ValueCliUsageError } from '@aws-blocks/hosting/scripts';
+import { ValueCliUsageError } from '@aws-cdk-blocks/hosting/scripts';
 import { runConfigCli } from './config.js';
 import { runSecretCli } from './secret.js';
 

@@ -1,8 +1,8 @@
 ---
-'@aws-blocks/auth-common': patch
-'@aws-blocks/bb-auth': patch
-'@aws-blocks/blocks': patch
-'@aws-blocks/create-blocks-app': patch
+'@aws-cdk-blocks/auth-common': patch
+'@aws-cdk-blocks/bb-auth': patch
+'aws-cdk-blocks': patch
+'@aws-cdk-blocks/create-blocks-app': patch
 ---
 
 The sign-in UI now shows a signed-in user's email address instead of a generated id. When users sign in with their email or phone number (`users: { signInWith: ['email'] }`), Amazon Cognito gives each user a generated username (a UUID), and the `Authenticator` and `AccountMenuBar` showed that UUID ("Signed in as: 815424a9-…").

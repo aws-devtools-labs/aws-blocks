@@ -8,8 +8,8 @@
  * The URL is injected via the `BB_DASHBOARD_URL` environment variable by the
  * CDK layer at deploy time.
  */
-import type { ScopeParent } from '@aws-blocks/core';
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -56,7 +56,7 @@ export class Dashboard extends Scope {
 
 		const routePath = options?.routePath;
 		if (routePath !== false) {
-			mountDashboardRoute(scope, routePath ?? '/aws-blocks/dashboard', this.url);
+			mountDashboardRoute(scope, routePath ?? '/cdk-blocks/dashboard', this.url);
 		}
 	}
 }

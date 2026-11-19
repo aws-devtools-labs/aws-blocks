@@ -1,6 +1,6 @@
 # Blocks API-Only Application
 
-A headless JSON API service on AWS Blocks — no frontend. The starting point for a
+A headless JSON API service on AWS CDK Blocks — no frontend. The starting point for a
 backend behind a mobile app, a CLI, or a third-party client. Ships a public
 health check plus an auth-gated CRUD resource with per-user isolation.
 
@@ -8,7 +8,7 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 > over JSON-RPC. It still owns backend state (here a `KVStore`); a real
 > API almost always does.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template api-only`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template api-only`
 
 ## For Coding Agents
 
@@ -110,7 +110,7 @@ Use `GET` for health checks; `HEAD /healthz` is not routed and returns 404.
 
 ```bash
 # The health check is public — no cookie needed:
-curl -X POST http://localhost:3001/aws-blocks/api \
+curl -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.health","params":[],"id":1}'
 # method = "<namespace>.<methodName>"; params = positional array.

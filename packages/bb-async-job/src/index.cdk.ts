@@ -5,15 +5,15 @@ import { Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { EventSourceMapping, registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
-import { resolvePerInstanceConcurrency } from '@aws-blocks/core';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
-import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
-import { foreignComputeProblem } from '@aws-blocks/core/cdk/internal';
-import type { ScopeParent } from '@aws-blocks/core';
+import { BuildingBlockScope } from '@aws-cdk-blocks/core/cdk';
+import { EventSourceMapping, registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-cdk-blocks/core/cdk';
+import { resolvePerInstanceConcurrency } from '@aws-cdk-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import { ContainerCompute } from '@aws-cdk-blocks/bb-container-compute/cdk';
+import { sanitizeConfigKey } from '@aws-cdk-blocks/core/bb-utils';
+import { foreignComputeProblem } from '@aws-cdk-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -253,7 +253,7 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		return synthGuard('AsyncJob', 'waitUntilComplete');
 	}
 
-	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-cdk-blocks/core/cdk`).
 	submit(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submit'); }
 	submitBatch(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submitBatch'); }
 }

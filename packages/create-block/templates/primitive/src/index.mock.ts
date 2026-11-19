@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
-import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import { Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.

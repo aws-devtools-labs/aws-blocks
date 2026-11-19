@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { ApiNamespace, Scope, KVStore, ApiError } from '@aws-blocks/blocks';
-import { Auth } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Scope, KVStore, ApiError } from 'aws-cdk-blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('hosting-ssr-test');
 

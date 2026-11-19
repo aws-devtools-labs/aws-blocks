@@ -25,7 +25,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BlocksPresets, BlocksStack, Hosting } from '@aws-blocks/blocks/cdk';
+import { BlocksPresets, BlocksStack, Hosting } from 'aws-cdk-blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
@@ -33,8 +33,8 @@ import type { IConstruct } from 'constructs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LAMBDA_PRINCIPALS = new Set(['lambda.amazonaws.com', 'edgelambda.amazonaws.com']);
-const WARNING_ID = '@aws-blocks/core:serviceRoleTrustWithoutSourceCondition';
-const KEY_WARNING_ID = '@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition';
+const WARNING_ID = '@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition';
+const KEY_WARNING_ID = '@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition';
 
 interface TrustStatement {
   Principal?: { Service?: string | string[] };

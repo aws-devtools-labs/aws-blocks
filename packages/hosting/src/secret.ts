@@ -20,8 +20,8 @@
  * This is the "two intent functions" model (I1, Approach B).
  *
  * This module is **framework-neutral and dependency-free** (no CDK, no AWS SDK,
- * no `@aws-blocks/*`), so any consumer — the `Hosting` construct, a plain
- * framework app, or `@aws-blocks/pipeline` — imports the same markers.
+ * no `@aws-cdk-blocks/*`), so any consumer — the `Hosting` construct, a plain
+ * framework app, or `@aws-cdk-blocks/pipeline` — imports the same markers.
  *
  * @module
  */
@@ -39,7 +39,7 @@ export type SecretStore = 'ssm' | 'secrets-manager';
 export type ValueKind = 'secret' | 'config';
 
 /** Unique brand. `Symbol.for` so it survives across module/realm copies. */
-export const MANAGED_BRAND: unique symbol = Symbol.for('@aws-blocks/hosting.ManagedValue');
+export const MANAGED_BRAND: unique symbol = Symbol.for('@aws-cdk-blocks/hosting.ManagedValue');
 
 /** Marker returned by {@link secret} — a sensitive value in AWS Secrets Manager. */
 export interface SecretValue {
@@ -330,7 +330,7 @@ export function decodeManagedValue(v: unknown): ManagedValue {
 const JSON_PASSTHROUGH_SCHEMA: StandardSchemaV1<unknown> = {
 	'~standard': {
 		version: 1,
-		vendor: '@aws-blocks/hosting',
+		vendor: '@aws-cdk-blocks/hosting',
 		validate: (value: unknown) => ({ value }),
 	},
 };

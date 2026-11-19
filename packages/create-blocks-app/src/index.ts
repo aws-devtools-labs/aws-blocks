@@ -33,8 +33,23 @@ export function generateStackId(name: string): string {
   return `${sanitized}-${randomBytes(4).toString('hex').slice(0, 6)}`;
 }
 
+/** The umbrella publishes unscoped, so a scope test alone would not recognise it. */
+export const UMBRELLA_PKG = 'aws-cdk-blocks';
+const SCOPE = '@aws-cdk-blocks/';
+
+/** Whether `name` is one of this monorepo's published packages. */
+export const isBlocksPackage = (name: string): boolean => name.startsWith(SCOPE) || name === UMBRELLA_PKG;
+
+/**
+ * The `packages/<dir>` directory holding `name`. The unscoped umbrella lives in `blocks`.
+ * Only meaningful for a name {@link isBlocksPackage} accepts: anything else is returned
+ * unchanged or truncated, so test first.
+ */
+export const blocksPackageDir = (name: string): string =>
+  name === UMBRELLA_PKG ? 'blocks' : name.slice(SCOPE.length);
+
 // npm `file:` installs a single package without resolving its nested
-// `@aws-blocks/*` deps from the monorepo — it expects them to be
+// `@aws-cdk-blocks/*` deps from the monorepo — it expects them to be
 // hoisted, which only happens inside the workspace. For out-of-monorepo
 // scaffolds we have to spell every sibling out as its own `file:` dep.
 async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]): Promise<Set<string>> {
@@ -43,7 +58,7 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
     if (!entry.isDirectory()) continue;
     try {
       const pkg = JSON.parse(await readFile(join(parentDir, entry.name, 'package.json'), 'utf-8'));
-      if (typeof pkg.name === 'string' && pkg.name.startsWith('@aws-blocks/')) {
+      if (typeof pkg.name === 'string' && isBlocksPackage(pkg.name)) {
         monorepoPkgs.add(pkg.name);
       }
     } catch {
@@ -57,11 +72,11 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
     const name = queue.shift()!;
     if (collected.has(name) || !monorepoPkgs.has(name)) continue;
     collected.add(name);
-    const pkgName = name.replace('@aws-blocks/', '');
+    const pkgName = blocksPackageDir(name);
     try {
       const sub = JSON.parse(await readFile(join(parentDir, pkgName, 'package.json'), 'utf-8'));
       for (const dep of Object.keys(sub.dependencies ?? {})) {
-        if (dep.startsWith('@aws-blocks/')) queue.push(dep);
+        if (isBlocksPackage(dep)) queue.push(dep);
       }
     } catch {
       // Missing / unparseable — skip.
@@ -70,41 +85,41 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
   return collected;
 }
 
-// --- @aws-blocks/* version stamping ----------------------------------------
+// --- @aws-cdk-blocks/* version stamping ----------------------------------------
 //
 // Templates (and the add-to-existing paths below) write `*` for every
-// `@aws-blocks/*` package as a placeholder. Inside the monorepo the placeholder
+// `@aws-cdk-blocks/*` package as a placeholder. Inside the monorepo the placeholder
 // becomes a `file:` path to the sibling package. From the published CLI it
 // becomes the caret range listed in create-blocks-app's own devDependencies,
 // which `changeset version` moves to each new release line. A scaffolded app
 // therefore starts on the line this CLI release was tested against, takes later
 // releases on that line on reinstall, and never moves to a new (pre-1.0:
 // breaking) line until its owner edits the range. The CLI and
-// `@aws-blocks/blocks` form a changesets `fixed` group (.changeset/config.json),
+// `aws-cdk-blocks` form a changesets `fixed` group (.changeset/config.json),
 // so every blocks release, including one forced by a new line of a package
 // blocks depends on, also publishes the CLI with the moved ranges.
 
 /**
- * Reads the range to stamp for each `@aws-blocks/*` package from
+ * Reads the range to stamp for each `@aws-cdk-blocks/*` package from
  * create-blocks-app's own manifest. The packages the CLI writes into a
  * scaffolded app are listed there as devDependencies (never installed by
  * customers), so `changeset version` keeps each range on the package's
  * current release line.
  *
  * @param cliPkg - create-blocks-app's parsed package.json.
- * @returns Package name to range, e.g. `{ '@aws-blocks/blocks': '^0.9.0' }`.
- * @throws When no `@aws-blocks/*` devDependency is listed, or one is `*` or
+ * @returns Package name to range, e.g. `{ 'aws-cdk-blocks': '^0.9.0' }`.
+ * @throws When no `@aws-cdk-blocks/*` devDependency is listed, or one is `*` or
  *   empty. Either is a packaging bug, so the CLI fails before it writes
  *   anything.
  *
  * @example
- * resolveStampedVersions({ devDependencies: { '@aws-blocks/blocks': '^0.9.0' } });
- * // -> { '@aws-blocks/blocks': '^0.9.0' }
+ * resolveStampedVersions({ devDependencies: { 'aws-cdk-blocks': '^0.9.0' } });
+ * // -> { 'aws-cdk-blocks': '^0.9.0' }
  */
 export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string, string> }): Record<string, string> {
   const versions: Record<string, string> = {};
   for (const [name, range] of Object.entries(cliPkg.devDependencies ?? {})) {
-    if (!name.startsWith('@aws-blocks/')) continue;
+    if (!isBlocksPackage(name)) continue;
     if (typeof range !== 'string' || range === '' || range === '*') {
       throw new Error(
         `Internal error: create-blocks-app lists ${name} with the range "${range}", which pins nothing. ` +
@@ -115,7 +130,7 @@ export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string
   }
   if (Object.keys(versions).length === 0) {
     throw new Error(
-      'Internal error: create-blocks-app lists no @aws-blocks/* devDependencies, so it cannot pin the versions it scaffolds. ' +
+      `Internal error: create-blocks-app lists no ${UMBRELLA_PKG} or @aws-cdk-blocks/* devDependencies, so it cannot pin the versions it scaffolds. ` +
       'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
     );
   }
@@ -123,9 +138,9 @@ export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string
 }
 
 /**
- * Replaces each `*` placeholder for an `@aws-blocks/*` package in `deps` with
+ * Replaces each `*` placeholder for an `@aws-cdk-blocks/*` package in `deps` with
  * its range from `versions`, in place. Concrete ranges, `file:` paths and
- * non-`@aws-blocks` entries are left as they are.
+ * non-`@aws-cdk-blocks` entries are left as they are.
  *
  * @param deps - A dependency map to stamp (may be undefined).
  * @param versions - The ranges from {@link resolveStampedVersions}.
@@ -135,7 +150,7 @@ export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string
 export function stampBlocksVersions(deps: Record<string, string> | undefined, versions: Record<string, string>): void {
   if (!deps) return;
   for (const [name, range] of Object.entries(deps)) {
-    if (!name.startsWith('@aws-blocks/') || range !== '*') continue;
+    if (!isBlocksPackage(name) || range !== '*') continue;
     const stamp = versions[name];
     if (!stamp) {
       throw new Error(
@@ -398,7 +413,7 @@ function rootDirectoryIgnoreState(lines: string[], name: string): 'ignored' | 'u
  * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES},
  *   and `node_modules` when no existing line ignores or un-ignores it (these steps add dependencies)
  * - Monorepo detection and file: path rewriting
- * - Stamping `*` placeholders for `@aws-blocks/*` deps with the CLI's ranges
+ * - Stamping `*` placeholders for `@aws-cdk-blocks/*` deps with the CLI's ranges
  *   (published CLI only; a range the project already lists in `dependencies`
  *   is kept)
  * - Running npm install
@@ -418,7 +433,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
   const deps = { ...options.deps };
   const devDeps = { ...options.devDeps };
 
-  // From the published CLI, resolve `@aws-blocks/*` placeholders before any
+  // From the published CLI, resolve `@aws-cdk-blocks/*` placeholders before any
   // file is touched, so a packaging bug fails without a half-written project.
   const localMonorepo = await isLocalMonorepo();
   if (!localMonorepo) {
@@ -456,11 +471,11 @@ async function addBlocksWorkspace(targetDir: string, options: {
   if (localMonorepo) {
     const parentDir = MONOREPO_PACKAGES_DIR;
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d: string) =>
-      d.startsWith('@aws-blocks/'),
+      isBlocksPackage(d),
     );
     const allBlocksDeps = await collectNestedBlocksDeps(parentDir, seed);
     for (const dep of allBlocksDeps) {
-      const pkgName = dep.replace('@aws-blocks/', '');
+      const pkgName = blocksPackageDir(dep);
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
   }
@@ -530,7 +545,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
     const eol = gitignore.includes('\r\n') ? '\r\n' : '\n';
     const secretLines = secretsToAdd.length > 0 ? [...secretsToAdd, ...exceptions] : [];
     if (dependencyLines.length > 0) gitignore += `${eol}# Dependencies${eol}${dependencyLines.join(eol)}${eol}`;
-    if (toAdd.length > 0) gitignore += `${eol}# AWS Blocks${eol}${toAdd.join(eol)}${eol}`;
+    if (toAdd.length > 0) gitignore += `${eol}# AWS CDK Blocks${eol}${toAdd.join(eol)}${eol}`;
     if (secretLines.length > 0) {
       gitignore += `${eol}# Secrets and key material — never commit${eol}${secretLines.join(eol)}${eol}`;
     }
@@ -548,7 +563,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
 /** Reuse the selected template's CDK Blocks tasks, not its frontend or lifecycle scripts. */
 function templateTasks(scripts: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(scripts).filter(([name, command]) =>
-    name !== 'prebuild' && command.startsWith(`node --input-type=module -e "import '@aws-blocks/blocks/run'" -- `),
+    name !== 'prebuild' && command.startsWith(`node --input-type=module -e "import 'aws-cdk-blocks/run'" -- `),
   ));
 }
 
@@ -697,12 +712,12 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     console.error('when the CLI detects a compatible existing project. It cannot be');
     console.error('scaffolded as a fresh app.');
     console.error('');
-    console.error('To scaffold a fresh Blocks app, choose a different template:');
-    console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
+    console.error('To scaffold a fresh AWS CDK Blocks app, choose a different template:');
+    console.error('  npx @aws-cdk-blocks/create-blocks-app my-app --template default');
     console.error('');
     console.error('To integrate Blocks into an existing project, run this from');
     console.error('the project root:');
-    console.error('  npx @aws-blocks/create-blocks-app');
+    console.error('  npx @aws-cdk-blocks/create-blocks-app');
     process.exit(1);
   }
 
@@ -726,7 +741,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     .replace(/-+/g, '-')
     .replace(/-$/, '') || 'blocks-app';
   
-  // From the published CLI, resolve the `@aws-blocks/*` ranges before anything
+  // From the published CLI, resolve the `@aws-cdk-blocks/*` ranges before anything
   // is written (see the version stamping section above). Stamping a copy of
   // the template's manifest here makes a placeholder with no range throw now,
   // not after the template has been copied.
@@ -737,7 +752,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     stampBlocksVersions({ ...templatePkg.devDependencies }, stampedVersions);
   }
 
-  console.log(`Creating Blocks app in ${targetDir}...`);
+  console.log(`Creating AWS CDK Blocks app in ${targetDir}...`);
 
   // Copy template
   await mkdir(targetDir, { recursive: true });
@@ -759,7 +774,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // Record the template version that scaffolded this project
   pkg.blocksTemplateVersion = templatePkg.version;
   
-  // When running from the local monorepo, rewrite @aws-blocks/* deps
+  // When running from the local monorepo, rewrite @aws-cdk-blocks/* deps
   // to file: paths so they resolve to sibling packages. When running from
   // the published registry (via npx), the sibling packages won't exist on
   // disk, so the `*` placeholders are stamped with the caret ranges this CLI
@@ -767,11 +782,11 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   if (localMonorepo) {
     const parentDir = MONOREPO_PACKAGES_DIR;
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d) =>
-      d.startsWith('@aws-blocks/'),
+      isBlocksPackage(d),
     );
     const allBlocksDeps = await collectNestedBlocksDeps(parentDir, seed);
     for (const dep of allBlocksDeps) {
-      const pkgName = dep.replace('@aws-blocks/', '');
+      const pkgName = blocksPackageDir(dep);
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
   } else if (stampedVersions) {
@@ -791,7 +806,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   // The template's local dev port: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
-  console.log('\n✓ Blocks app created!');
+  console.log('\n✓ AWS CDK Blocks app created!');
   console.log(`\nNext steps:`);
   console.log(`  cd ${quoteForShell(targetDir)}`);
   if (skipInstall) {
@@ -799,7 +814,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   }
   console.log(`  npm run dev`);
   if (templatePkg.blocks?.dev?.frontend === false) {
-    console.log(`\nThe API then listens on http://localhost:${devPort}/aws-blocks/api (backend only; README.md has a curl example).`);
+    console.log(`\nThe API then listens on http://localhost:${devPort}/cdk-blocks/api (backend only; README.md has a curl example).`);
   } else {
     console.log(`\nThen open http://localhost:${devPort}`);
   }
@@ -819,7 +834,7 @@ function quoteForShell(path: string): string {
 async function integrateWithAmplify(targetDir: string, skipConfirm = false, skipInstall = false) {
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected Amplify Gen 2 project (amplify/backend.ts found)\n');
-  console.log('This will add Blocks to your existing Amplify project:');
+  console.log('This will add AWS CDK Blocks to your existing Amplify project:');
   console.log('');
   console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  amplify/blocks.ts     (wires Blocks into Amplify backend)');
@@ -840,7 +855,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('\n📦 Scaffolding Blocks...\n');
 
   // 1. Copy cdk-blocks/ template. Its package.json declares its own
-  // `@aws-blocks/*` placeholders, which the published CLI stamps too; they are
+  // `@aws-cdk-blocks/*` placeholders, which the published CLI stamps too; they are
   // stamped in memory before the copy, so a placeholder with no range throws
   // before anything is written (see the version stamping section above).
   const templateDir = join(__dirname, '../templates/amplify');
@@ -927,7 +942,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   const clientScript = 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx cdk-blocks/scripts/generate-client.ts';
   const scripts = await addBlocksWorkspace(targetDir, {
     // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
-    deps: { '@aws-blocks/blocks': '*' },
+    deps: { 'aws-cdk-blocks': '*' },
     devDeps: {
       'tsx': '^4.7.0',
       'esbuild': '^0.27.1',
@@ -1074,7 +1089,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   }
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected existing project (package.json found)\n');
-  console.log('This will add AWS Blocks backend to your project:');
+  console.log('This will add an AWS CDK Blocks backend to your project:');
   console.log('');
   console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  cdk.json              (CDK configuration)');
@@ -1090,9 +1105,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   console.log('\n📦 Adding Blocks backend...\n');
 
-  // From the published CLI, check the `@aws-blocks/*` placeholder below has a
+  // From the published CLI, check the `@aws-cdk-blocks/*` placeholder below has a
   // range before anything is written (addBlocksWorkspace stamps it later).
-  const blocksDeps = { '@aws-blocks/blocks': '*' };
+  const blocksDeps = { 'aws-cdk-blocks': '*' };
   if (!(await isLocalMonorepo())) stampBlocksVersions({ ...blocksDeps }, await loadStampedVersions());
 
   // 1. Copy cdk-blocks/ from the requested template. The dev task detects the
@@ -1154,7 +1169,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   });
   await tailorTaskExamples(awsBlocksDest, scripts, ['index.ts', 'index.cdk.ts']);
 
-  console.log('\n✓ AWS Blocks backend added to your project!\n');
+  console.log('\n✓ AWS CDK Blocks backend added to your project!\n');
   console.log('Next steps:');
   console.log(`  npm run ${scripts.sandbox}  # Deploy backend to your AWS sandbox`);
   console.log(`  npm run ${scripts['dev:server']}  # Run local dev server`);
@@ -1237,7 +1252,7 @@ async function printUsage() {
 
   console.log(`Usage: create-blocks-app [directory] [options]
 
-Create a new AWS Blocks app or add Blocks to an existing project.
+Create a new AWS CDK Blocks app or add AWS CDK Blocks to an existing project.
 
 The mode is auto-detected based on the target directory:
 
@@ -1274,10 +1289,10 @@ ${templateList}
   -h, --help             Show this help message
 
 Examples:
-  npx @aws-blocks/create-blocks-app                            Add Blocks to current project
-  npx @aws-blocks/create-blocks-app .                          Add Blocks to current project
-  npx @aws-blocks/create-blocks-app my-app                     Create a standalone Blocks starter app
-  npx @aws-blocks/create-blocks-app . --yes --template nextjs  Non-interactive scaffold with the Next.js template
+  npx @aws-cdk-blocks/create-blocks-app                            Add Blocks to current project
+  npx @aws-cdk-blocks/create-blocks-app .                          Add Blocks to current project
+  npx @aws-cdk-blocks/create-blocks-app my-app                     Create a standalone Blocks starter app
+  npx @aws-cdk-blocks/create-blocks-app . --yes --template nextjs  Non-interactive scaffold with the Next.js template
 `);
 }
 
@@ -1364,11 +1379,11 @@ async function create() {
       for (const entry of conflicts) console.error(`  ${entry}`);
       console.error('');
     }
-    console.error('To add Blocks to an existing project, run from the project root:');
-    console.error('  npx @aws-blocks/create-blocks-app');
+    console.error('To add AWS CDK Blocks to an existing project, run from the project root:');
+    console.error('  npx @aws-cdk-blocks/create-blocks-app');
     console.error('');
-    console.error('To create a fresh Blocks app, specify a new directory:');
-    console.error('  npx @aws-blocks/create-blocks-app my-app');
+    console.error('To create a fresh AWS CDK Blocks app, specify a new directory:');
+    console.error('  npx @aws-cdk-blocks/create-blocks-app my-app');
     process.exit(1);
   }, { template: templateName, templateVersion: templatePkgVersion });
 }

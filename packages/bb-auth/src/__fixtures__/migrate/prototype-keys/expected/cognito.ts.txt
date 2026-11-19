@@ -1,5 +1,5 @@
-import { Auth } from '@aws-blocks/bb-auth';
-import { Scope } from '@aws-blocks/core';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('cognito');
 export const auth = new Auth(scope, 'auth', { emailPassword: { autoSignIn: false } });

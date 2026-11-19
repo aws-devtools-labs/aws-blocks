@@ -4,7 +4,7 @@
  * This file is imported by amplify/blocks.ts to wire Blocks into the Amplify backend.
  * It is NOT a standalone CDK app — Amplify's `ampx` CLI orchestrates synthesis.
  */
-import { BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, BlocksPresets } from 'aws-cdk-blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { Stack } from 'aws-cdk-lib';

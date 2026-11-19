@@ -27,9 +27,9 @@
  */
 
 import crypto from 'node:crypto';
-import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLocalDevRequest } from '@aws-blocks/auth-common/cookies';
-import type { BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLocalDevRequest } from '@aws-cdk-blocks/auth-common/cookies';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { sessionCookieName } from './cdk/contract.js';
 
 /**

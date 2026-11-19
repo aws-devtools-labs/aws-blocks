@@ -1,5 +1,5 @@
 ---
-'@aws-blocks/core': patch
+'@aws-cdk-blocks/core': patch
 ---
 
 `sandbox:destroy` and production `destroy` now recognise a throttled teardown

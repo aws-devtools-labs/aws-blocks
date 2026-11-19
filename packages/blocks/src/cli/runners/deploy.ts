@@ -9,7 +9,7 @@
  * recorded too, with `live: false`, and still exits 1.
  */
 
-import * as core from '@aws-blocks/core/scripts';
+import * as core from '@aws-cdk-blocks/core/scripts';
 import { exitWithError } from './fail.js';
 import { type DeployedOutputs, recordLastDeploy } from './last-deploy.js';
 

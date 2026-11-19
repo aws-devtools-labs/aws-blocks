@@ -7,7 +7,7 @@
  * so an invalid `rate()`/`cron()` fails fast instead of being rejected by
  * EventBridge minutes into a deploy).
  */
-import { blocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-cdk-blocks/core';
 import { CronJobErrors } from './errors.js';
 
 /** Parsed rate expression. */

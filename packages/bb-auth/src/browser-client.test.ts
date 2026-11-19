@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth/browser-client` — a web frontend on another
+ * `@aws-cdk-blocks/bb-auth/browser-client` — a web frontend on another
  * origin signs in through the block's existing relay transport, then reads
  * `GET <base>/session` and signs out with `POST <base>/signout?format=json`.
  *
@@ -15,7 +15,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import { BLOCKS_AUTH_PREFIX, clearRouteRegistry, isBlocksError } from '@aws-blocks/core';
+import { BLOCKS_AUTH_PREFIX, clearRouteRegistry, isBlocksError } from '@aws-cdk-blocks/core';
 import { type AuthClient, createAuthClient } from './browser-client.js';
 import { stubIdpConfigKeys } from './cdk/contract.js';
 import { AuthErrors } from './errors.js';

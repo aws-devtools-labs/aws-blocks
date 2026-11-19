@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/blocks": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(blocks): a SIGTERM to `npm run dev` waits for its runner's cleanup on procps-ng 3.3.10 too

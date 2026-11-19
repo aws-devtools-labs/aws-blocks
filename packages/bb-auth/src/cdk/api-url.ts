@@ -15,14 +15,14 @@
  * @internal
  */
 
-import { type BuildingBlockScope, getBlocksRoot } from '@aws-blocks/core/cdk';
+import { type BuildingBlockScope, getBlocksRoot } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 
 /** The RPC prefix the backend's `apiUrl` ends with (`BLOCKS_RPC_PREFIX` in core). */
-export const RPC_PREFIX = '/aws-blocks/api';
+export const RPC_PREFIX = '/cdk-blocks/api';
 
 /**
- * The backend's RPC URL (`https://<api>.execute-api.<region>.amazonaws.com/<stage>/aws-blocks/api`),
+ * The backend's RPC URL (`https://<api>.execute-api.<region>.amazonaws.com/<stage>/cdk-blocks/api`),
  * or `undefined` when there is none: the shared gateway of the owning backend
  * root once `create()` has built it, else the legacy `apiUrl` of the block's
  * compute (test doubles still model the compute-owned gateway). Call only at

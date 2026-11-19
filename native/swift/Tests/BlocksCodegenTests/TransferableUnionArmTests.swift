@@ -133,7 +133,7 @@ final class TransferableUnionArmTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys]
         func encoded<T: Encodable>(_ value: T) throws -> String { String(decoding: try encoder.encode(value), as: UTF8.self) }
 
-        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/aws-blocks/api"))
+        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/cdk-blocks/api"))
         do {
             let feed = try await api.openFeed()
             if case .result_Variant0(let notes) = feed {

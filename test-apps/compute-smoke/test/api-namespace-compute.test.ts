@@ -14,7 +14,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient } from 'aws-cdk-blocks/client';
 import { METHOD_NOT_FOUND, requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
 type WhereAmI = { functionName: string | null; memoryMb: string | null; requestUrl: string };
@@ -80,7 +80,7 @@ export function apiNamespaceComputeTests(ctx: ComputeTestContext) {
     } else {
       test('a call to the bare endpoint runs on the default compute', async () => {
         // Raw HTTP callers, and native clients released before per-namespace paths,
-        // POST every call to the bare `/aws-blocks/api`: it dispatches by the body, on
+        // POST every call to the bare `/cdk-blocks/api`: it dispatches by the body, on
         // the default compute, even for a namespace that has its own.
         const onDefault = await whereAmI('api');
         const reply = await rpcCall(ctx.apiUrl(), 'reports.whereAmI');

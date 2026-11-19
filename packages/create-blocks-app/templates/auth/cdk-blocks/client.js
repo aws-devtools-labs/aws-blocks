@@ -7,7 +7,7 @@
 // render pass before the dev server finishes its initial generation.
 // ============================================================
 
-import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from 'aws-cdk-blocks/client';
 
 export const api = __BLOCKS_ApiNamespaceClient__('api');
 export const authApi = __BLOCKS_ApiNamespaceClient__('authApi');

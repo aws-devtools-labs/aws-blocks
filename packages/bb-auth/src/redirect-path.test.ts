@@ -10,7 +10,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { isSafeRedirectPath, safeRedirectPath, signInRedirectPath } from './redirect-path.js';
 
@@ -18,7 +18,7 @@ const APP = 'https://app.example.com';
 
 /** Where a browser on `APP` lands for `Location: <location>`. */
 function landsOn(location: string): string {
-	return new URL(location, `${APP}/aws-blocks/auth/callback`).origin;
+	return new URL(location, `${APP}/cdk-blocks/auth/callback`).origin;
 }
 
 const UNSAFE = [

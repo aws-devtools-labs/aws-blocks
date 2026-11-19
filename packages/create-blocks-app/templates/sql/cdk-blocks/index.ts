@@ -28,7 +28,7 @@ import {
   DatabaseErrors,
   isBlocksError,
   sql,
-} from '@aws-blocks/blocks';
+} from 'aws-cdk-blocks';
 
 const scope = new Scope('my-app');
 

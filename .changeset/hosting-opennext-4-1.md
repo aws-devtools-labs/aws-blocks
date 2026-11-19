@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/hosting": patch
-"@aws-blocks/blocks": patch
-"@aws-blocks/create-blocks-app": patch
+"@aws-cdk-blocks/hosting": patch
+"aws-cdk-blocks": patch
+"@aws-cdk-blocks/create-blocks-app": patch
 ---
 
 chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1

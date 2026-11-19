@@ -1,5 +1,5 @@
-import { hasAuthError } from '@aws-blocks/blocks/client';
-import type { AuthState } from '@aws-blocks/blocks';
+import { hasAuthError } from 'aws-cdk-blocks/client';
+import type { AuthState } from 'aws-cdk-blocks';
 
 export function message(state: AuthState): string {
 	if (state.errorName === 'NotAuthenticatedException') return 'Please sign in again';

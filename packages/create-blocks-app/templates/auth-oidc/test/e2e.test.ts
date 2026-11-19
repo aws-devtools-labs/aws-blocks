@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -20,7 +20,7 @@ const origin = `http://localhost:${serverPort}`;
 const readinessUrl = `${origin}/.blocks-sandbox/config.json`;
 
 // The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
-// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
+// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /cdk-blocks/api). The
 // client resolves BLOCKS_API_URL first, so a deploy, which records its URL in config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 
@@ -64,7 +64,7 @@ test.before(async () => {
   if (!testUrl) await waitForServer();
 
   // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
-  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/cdk-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
   // cdk-blocks/client.js before it listens, so an earlier import could load a
@@ -127,7 +127,7 @@ test('Auth - a protected method rejects a signed-out caller', async () => {
 // following each 302 by hand (signin → stub authorize → callback → "/") so the
 // jar carries the pending-auth and session cookies across the hops.
 async function signInThroughStub(provider: string): Promise<void> {
-  let url: string | null = `${origin}/aws-blocks/auth/signin/${provider}`;
+  let url: string | null = `${origin}/cdk-blocks/auth/signin/${provider}`;
   // A bounded hop count: signin → authorize → callback → postSignInPath is 3
   // redirects; cap well above that so a redirect loop fails loudly, not hangs.
   for (let hop = 0; hop < 8 && url; hop++) {

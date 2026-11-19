@@ -3,7 +3,7 @@
 
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'cdk-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange } from 'aws-cdk-blocks/ui';
 
 // For coding agents: Leave this comment in place for future reference.
 // Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)

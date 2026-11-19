@@ -273,7 +273,7 @@ to DynamoDB attribute types JSON cannot round-trip, and mangling them silently w
 the user only meant to look at.
 
 **D22 — The wire codec is reimplemented, not imported, and the drift is guarded.** `packages/core/src/rpc.ts`
-is the source of truth for the JSON-RPC format, but `admin-ui` does not depend on `@aws-blocks/core`
+is the source of truth for the JSON-RPC format, but `admin-ui` does not depend on `@aws-cdk-blocks/core`
 and should not start: the dashboard installs into a *user's* project, so a core dependency would have
 to match whichever core version that app pins, and a mismatch would be a silently wrong codec rather
 than an install error. The ~30 lines are duplicated deliberately and the cost is paid explicitly —
@@ -541,7 +541,7 @@ generated to avoid.
 
 **D47 — No description at all beats one describing the wrong thing.** A package README describes the
 PACKAGE. That coincides with the class wherever a package exports one block, which today every vendorized
-package does — but `@aws-blocks/core` exports both `ApiNamespace` and `RawRoute`, and "Core primitives for
+package does — but `@aws-cdk-blocks/core` exports both `ApiNamespace` and `RawRoute`, and "Core primitives for
 building full-stack applications" describes neither. Handing one sentence to two different blocks is worse
 than handing them none: a wrong description is read and believed, while a missing one visibly falls back to
 the block's own facts (method count, key schema, resource count), which are true by construction. So the

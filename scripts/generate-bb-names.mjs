@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Generates official-bb-names.generated.ts for @aws-blocks/core.
+ * Generates official-bb-names.generated.ts for @aws-cdk-blocks/core.
  *
  * Reads the vendorize map from packages/blocks/package.json and extracts all
  * Building Block names, plus NON_VENDORIZED_BB_NAMES, into a deduplicated Set

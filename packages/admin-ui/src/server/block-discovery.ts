@@ -33,10 +33,10 @@ import { BLOCK_CATALOG } from './block-catalog.generated.js';
  * list of known block names. That is wrong in three directions at once, and all
  * three occur in real projects:
  *
- * 1. `import * as blocks from '@aws-blocks/blocks'; new blocks.KVStore(...)` —
+ * 1. `import * as blocks from 'aws-cdk-blocks'; new blocks.KVStore(...)` —
  *    the callee text is `blocks.KVStore`, which is in no name list, so a real
  *    block is silently missing from the dashboard.
- * 2. `import { KVStore as Store } from '@aws-blocks/bb-kv-store'; new Store(...)` —
+ * 2. `import { KVStore as Store } from '@aws-cdk-blocks/bb-kv-store'; new Store(...)` —
  *    the callee text is `Store`, so an aliased block disappears the same way.
  * 3. `class KVStore {}` declared locally and instantiated — the callee text is
  *    `KVStore`, so a user's own unrelated class is reported as an AWS block,
@@ -44,7 +44,7 @@ import { BLOCK_CATALOG } from './block-catalog.generated.js';
  *
  * So we resolve the identifier back to the import it came from: collect the
  * file's import bindings, then accept a `new X(...)` only when `X`'s binding
- * resolves to an `@aws-blocks/*` module, and look the catalog up by the
+ * resolves to an `@aws-cdk-blocks/*` module, and look the catalog up by the
  * module's EXPORTED name rather than the local alias. A `new X(...)` with no
  * such binding is skipped without comment — `new Date()` or `new MyThing()` is
  * not a gap worth reporting to the user.
@@ -53,7 +53,7 @@ import { BLOCK_CATALOG } from './block-catalog.generated.js';
  *
  * A construct that clearly is a block declaration but that we cannot turn into
  * a `DiscoveredBlock` goes to `unknownConstructs` with a reason: an
- * `@aws-blocks/*` class the catalog has never heard of (`'unknown-type'`), or a
+ * `@aws-cdk-blocks/*` class the catalog has never heard of (`'unknown-type'`), or a
  * known block whose id argument is not a string literal (`'non-literal-id'`).
  * Both are visible gaps rather than absences.
  *
@@ -71,8 +71,11 @@ export const CONFIG_PREVIEW_LIMIT = 800;
 /** Appended to a `configPreview` that hit `CONFIG_PREVIEW_LIMIT`. */
 export const CONFIG_PREVIEW_TRUNCATION_MARKER = '… (truncated)';
 
-/** Every block class is exported from a package under this scope. */
-const AWS_BLOCKS_MODULE_PREFIX = '@aws-blocks/';
+/** Every block class is exported from a package under this scope, or from the umbrella. */
+const AWS_BLOCKS_MODULE_PREFIX = '@aws-cdk-blocks/';
+
+/** The umbrella re-exports every block and publishes unscoped, so it is matched by name. */
+const AWS_BLOCKS_UMBRELLA_MODULE = 'aws-cdk-blocks';
 
 /** Not a block: the construct that owns them, and the source of `fullId`. */
 const SCOPE_CLASS = 'Scope';
@@ -145,7 +148,11 @@ interface ScanState {
 }
 
 function isAwsBlocksModule(moduleSpecifier: string): boolean {
-	return moduleSpecifier.startsWith(AWS_BLOCKS_MODULE_PREFIX);
+	return (
+		moduleSpecifier.startsWith(AWS_BLOCKS_MODULE_PREFIX) ||
+		moduleSpecifier === AWS_BLOCKS_UMBRELLA_MODULE ||
+		moduleSpecifier.startsWith(`${AWS_BLOCKS_UMBRELLA_MODULE}/`)
+	);
 }
 
 /** Always POSIX separators, so a path is stable across platforms. */
@@ -195,7 +202,7 @@ function collectImportBindings(sourceFile: ts.SourceFile): Map<string, ImportBin
 }
 
 /**
- * Resolve a `new X(...)` / `new ns.X(...)` callee to the `@aws-blocks/*` class
+ * Resolve a `new X(...)` / `new ns.X(...)` callee to the `@aws-cdk-blocks/*` class
  * it names, or `undefined` when it does not name one.
  *
  * `undefined` covers the case that matters most: an identifier with no import
@@ -232,7 +239,7 @@ function lineOf(sourceFile: ts.SourceFile, node: ts.Node): number {
 /**
  * Whether the call is shaped like a block declaration: `new X(scope, 'id', ...)`.
  *
- * Used only for an unrecognised `@aws-blocks/*` class, to tell a block we have
+ * Used only for an unrecognised `@aws-cdk-blocks/*` class, to tell a block we have
  * not heard of from the other things those packages export (clients, errors,
  * helpers). Without the shape test, every `new DatabaseErrors(...)` would be
  * reported as a missing block.
@@ -509,7 +516,7 @@ function scanFile(absolutePath: string, relativePath: string, state: ScanState):
 	): void => {
 		const entry = BLOCK_CATALOG.get(resolved.importedName);
 		if (!entry) {
-			// An `@aws-blocks/*` class the catalog does not know. Reported, not
+			// An `@aws-cdk-blocks/*` class the catalog does not know. Reported, not
 			// dropped: a third-party or newly added block must show up as a gap.
 			if (looksLikeBlockCall(args)) {
 				state.unknown.push({
@@ -570,7 +577,7 @@ function scanFile(absolutePath: string, relativePath: string, state: ScanState):
 
 	const inspect = (node: ts.NewExpression): void => {
 		const resolved = resolveBlockClass(node.expression, bindings);
-		// No `@aws-blocks/*` binding: the user's own class, or a third-party
+		// No `@aws-cdk-blocks/*` binding: the user's own class, or a third-party
 		// one. Not a block, and not a gap — skip without reporting.
 		if (!resolved) return;
 		const line = lineOf(sourceFile, node);

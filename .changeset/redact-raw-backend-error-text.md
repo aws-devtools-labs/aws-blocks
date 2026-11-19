@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-agent": patch
-"@aws-blocks/bb-email-client": patch
+"@aws-cdk-blocks/bb-agent": patch
+"@aws-cdk-blocks/bb-email-client": patch
 ---
 
 fix: stop sending raw backend error text to clients

@@ -208,7 +208,7 @@ describe('resolveProject — descendant scan', () => {
 
 	it('ignores a decoy marker inside node_modules', () => {
 		const root = makeRoot('node-modules-decoy');
-		makeProject(makeDir(root, 'node_modules', '@aws-blocks', 'core'));
+		makeProject(makeDir(root, 'node_modules', '@aws-cdk-blocks', 'core'));
 
 		const result = resolveProject({ startDir: root, maxChildDepth: 4 });
 

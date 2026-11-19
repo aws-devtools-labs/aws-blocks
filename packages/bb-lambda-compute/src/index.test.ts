@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { beforeEach, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

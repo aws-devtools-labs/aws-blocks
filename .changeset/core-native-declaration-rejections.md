@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/core": minor
+"aws-cdk-blocks": minor
 ---
 
 fix(core): reject malformed native declarations instead of dropping them

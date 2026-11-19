@@ -4,7 +4,7 @@
 /**
  * Every relative link in the package-root README.md must point at a file that
  * is published at the package root — the README is what npm renders and what
- * sits in `node_modules/@aws-blocks/blocks/`, so a target missing from the
+ * sits in `node_modules/aws-cdk-blocks/`, so a target missing from the
  * `files` list is a dead link for consumers.
  *
  * No tracked Markdown or TypeScript file of the repository may keep a merge

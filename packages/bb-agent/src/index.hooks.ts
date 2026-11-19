@@ -14,7 +14,7 @@
  * 4. User sends message — chunks arrive via the already-open subscription
  */
 
-import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
+import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-cdk-blocks/bb-realtime';
 import type { AgentStreamChunk, JSONValue } from './types.js';
 import type { ApprovalMetadata, ChatMessage } from './index.chat.js';
 import { agentErrorFromChunk, persistedTurnError } from './errors.js';

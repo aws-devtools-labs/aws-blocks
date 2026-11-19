@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
-import { isBlocksError } from '@aws-blocks/core';
+import { KVStore, KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AsyncJobErrors, blocksError } from './errors.js';
 import type { AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from './types.js';

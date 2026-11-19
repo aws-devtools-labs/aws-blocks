@@ -5,13 +5,13 @@
  * `npm run config` — manage a Blocks app's non-sensitive **config** values (SSM
  * Parameter Store), pinned to the Blocks `/blocks/<stackId>/config` namespace
  * (scoped to the app's stable `stackId` from `.blocks/config.json`). Thin wrapper
- * over the shared `@aws-blocks/hosting` CLI with the kind fixed to `config`. The
+ * over the shared `@aws-cdk-blocks/hosting` CLI with the kind fixed to `config`. The
  * `secret` counterpart is `./secret.ts`.
  *
  * @module
  */
 
-import { listValues, removeValue, runValueCli, setValue } from '@aws-blocks/hosting/scripts';
+import { listValues, removeValue, runValueCli, setValue } from '@aws-cdk-blocks/hosting/scripts';
 import { blocksConfigPrefix } from '../secret-naming.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 

@@ -11,8 +11,8 @@
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { Secret, SecretErrors } from '@aws-blocks/bb-secret';
+ * import { isBlocksError } from '@aws-cdk-blocks/core';
+ * import { Secret, SecretErrors } from '@aws-cdk-blocks/bb-secret';
  *
  * const secret = new Secret(scope, 'api-key', { allowRuntimeWrite: true });
  *

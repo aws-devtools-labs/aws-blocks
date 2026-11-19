@@ -18,7 +18,7 @@ import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 
 import { BlocksPresets, type BlocksDefaults } from './blocks-defaults.js';
 import { type DynamoDbProtectionOptions, type ExternalKmsKeyRef, resolveDynamoDbProtection } from './dynamodb-protection.js';
 
-const IDENTITY = { warningPrefix: '@aws-blocks/bb-test', fromKmsKeyHint: 'TestBlock.fromKmsKey' } as const;
+const IDENTITY = { warningPrefix: '@aws-cdk-blocks/bb-test', fromKmsKeyHint: 'TestBlock.fromKmsKey' } as const;
 const HINT = IDENTITY.fromKmsKeyHint;
 const PREFIX = IDENTITY.warningPrefix;
 

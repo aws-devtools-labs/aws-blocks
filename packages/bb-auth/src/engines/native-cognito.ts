@@ -53,7 +53,7 @@
  * @internal
  */
 
-import { ApiError, getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers } from '@aws-blocks/core';
+import { ApiError, getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import {
 	AdminGetUserCommand,
 	AdminListGroupsForUserCommand,

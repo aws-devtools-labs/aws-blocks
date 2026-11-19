@@ -5,7 +5,7 @@
  * Shared types for KnowledgeBase. Imported by mock, aws, browser, and cdk entry points.
  * This file has zero runtime dependencies — types only.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type { z } from 'zod';
 
 // ── Source Configuration ────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ export type KnowledgeBaseAgentToolResult = {
  * A tool definition returned by `KnowledgeBase.asAgentTool()`. Pass it to the `tool()` factory in
  * an Agent's `tools` callback (`tools: (tool) => ({ searchDocs: tool(kb.asAgentTool({ ... })) })`).
  *
- * It is a plain object shaped like `@aws-blocks/bb-agent`'s `ToolDefinition`, so the knowledge
+ * It is a plain object shaped like `@aws-cdk-blocks/bb-agent`'s `ToolDefinition`, so the knowledge
  * base doesn't depend on the agent package. `untrustedOutput` is always `true`: retrieved text
  * is content you don't control.
  */

@@ -8,14 +8,14 @@
  * that narrows the runtime getters to your declared keys (autocomplete + typo
  * errors) with no call-site change.
  *
- * Thin pass-through to the `@aws-blocks/hosting` engine — the getters live on
- * `@aws-blocks/hosting`, so the generated file augments that module by default;
+ * Thin pass-through to the `@aws-cdk-blocks/hosting` engine — the getters live on
+ * `@aws-cdk-blocks/hosting`, so the generated file augments that module by default;
  * a Blocks app needs no extra configuration.
  *
  * @module
  */
 
-import { runTypegenCli as runHostingTypegenCli } from '@aws-blocks/hosting/scripts';
+import { runTypegenCli as runHostingTypegenCli } from '@aws-cdk-blocks/hosting/scripts';
 import { trackExitCode } from '../telemetry/trackCommand.js';
 
 /**

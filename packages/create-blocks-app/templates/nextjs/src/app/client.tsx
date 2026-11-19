@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { api } from 'cdk-blocks';
-import { injectTheme } from '@aws-blocks/blocks/theme';
-import { StatusMessage, type StatusMessageHandle } from '@aws-blocks/blocks/ui';
+import { injectTheme } from 'aws-cdk-blocks/theme';
+import { StatusMessage, type StatusMessageHandle } from 'aws-cdk-blocks/ui';
 
 injectTheme();
 

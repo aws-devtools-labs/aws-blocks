@@ -1,6 +1,6 @@
 // Fixture of `upgrade-legacy-kv-store.ts --mode options`. One store for each option combination of release 0.4.0.
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
 new KVStore(scope, 's0');

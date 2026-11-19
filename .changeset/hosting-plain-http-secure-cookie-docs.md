@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/hosting": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/hosting": patch
+"aws-cdk-blocks": patch
 ---
 
 docs(hosting): explain what a plain-HTTP front door does to session cookies

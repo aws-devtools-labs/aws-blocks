@@ -15,7 +15,7 @@
  * mode, port 5432) and with the port changed to 6543 (transaction mode), where a scope that outlives its
  * transaction would reach another caller.
  *
- * Uses only the package entry, the Kysely entry and `@aws-blocks/core`. The block is built with the override
+ * Uses only the package entry, the Kysely entry and `@aws-cdk-blocks/core`. The block is built with the override
  * form of `DatabaseCluster.fromExisting()`; nothing is read from a settings store.
  *
  * Requires env vars:
@@ -34,9 +34,9 @@ import assert from 'node:assert';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
-import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-cdk-blocks/bb-database';
+import { DatabaseDialect } from '@aws-cdk-blocks/bb-database/kysely';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import { type Generated, Kysely, sql as ksql, type Transaction } from 'kysely';
 import { caPem, env, need, withPort } from './support.js';
 

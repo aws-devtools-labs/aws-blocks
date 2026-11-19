@@ -4,15 +4,24 @@
 /**
  * Blocks canary.
  *
- * Scaffolds a fresh app from a published @aws-blocks registry, then builds it,
+ * Scaffolds a fresh app from a published @aws-cdk-blocks registry, then builds it,
  * runs its local e2e (mocks) and runs `cdk synth` (no AWS credentials).
  *
  * Usage:
  *   tsx scripts/canary/run-canary.ts [--template <name>] [--registry <url>] [--keep]
  *
  * Environment:
- *   BLOCKS_REGISTRY_URL    Scoped registry for @aws-blocks (overridden by --registry).
+ *   BLOCKS_REGISTRY_URL    Default registry the scaffolded app installs from (overridden by --registry).
  *   BLOCKS_REGISTRY_TOKEN  Auth token for the registry (omit for an open registry).
+ *
+ * The registry is set as npm's DEFAULT, not per scope: npm resolves a registry
+ * per scope, so a `@aws-cdk-blocks:registry=` line cannot route the unscoped
+ * `aws-cdk-blocks` umbrella. So whatever `--registry` points at has to answer
+ * for EVERY package the scaffolded app installs, third-party ones included.
+ * `scripts/publish/serve-local-registry.ts` forwards those upstream and is the
+ * supported target; a registry serving only this repo's keys (the S3/CloudFront
+ * one `publish.ts` uploads to) would 404 `zod`, `aws-cdk-lib` and the rest, so
+ * it needs the local proxy in front of it.
  */
 
 import { execFileSync } from "node:child_process";
@@ -121,7 +130,10 @@ function main(): void {
     NODE_OPTIONS: "--test-reporter=spec",
   };
 
-  const npmrcLines = [`@aws-blocks:registry=${args.registry}`];
+  // The default registry, not a scope line: npm resolves a registry per scope,
+  // so `@aws-cdk-blocks:registry=` cannot route the unscoped `aws-cdk-blocks`
+  // umbrella the templates depend on.
+  const npmrcLines = [`registry=${args.registry}`];
   if (process.env.BLOCKS_REGISTRY_TOKEN) {
     // npm keys the token on //host/path/ (scheme stripped).
     const hostPath = args.registry.replace(/^https?:/, "");
@@ -138,14 +150,14 @@ function main(): void {
     console.log("\n=== Verify registry access ===");
     const cliVersion = capture(
       "npm",
-      ["view", "@aws-blocks/create-blocks-app", "version"],
+      ["view", "@aws-cdk-blocks/create-blocks-app", "version"],
       { cwd: workDir, env },
     );
-    console.log(`  @aws-blocks/create-blocks-app@${cliVersion}`);
+    console.log(`  @aws-cdk-blocks/create-blocks-app@${cliVersion}`);
 
     // ── Install the CLI from the published registry ─────────
     console.log("\n=== Install create-blocks-app from published registry ===");
-    run("npm", ["install", "@aws-blocks/create-blocks-app@latest", "--silent"], {
+    run("npm", ["install", "@aws-cdk-blocks/create-blocks-app@latest", "--silent"], {
       cwd: workDir,
       env,
     });

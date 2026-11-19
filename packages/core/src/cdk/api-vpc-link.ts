@@ -91,7 +91,6 @@ export function addLoadBalancerMethod(
 		},
 	});
 	const method = resource.addMethod('ANY', integration);
-	ingress.routePath(path);
 	// A VPC link v2 integration names its load balancer in `IntegrationTarget`,
 	// which the L2 has no property for. API Gateway wants the load balancer's ARN
 	// (a listener ARN is rejected); the URI's port selects the listener.

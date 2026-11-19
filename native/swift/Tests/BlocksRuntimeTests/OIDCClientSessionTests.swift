@@ -181,15 +181,15 @@ extension OIDCClientTests {
         BlocksClient.clearCookies()
         defer { BlocksClient.clearCookies() }
         stubSessionCookieRoutes(mainCookies: "auth_main=a1; Path=/; Secure; HttpOnly")
-        let launched = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
-        let sso = "/aws-blocks/auth/sso"
+        let launched = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
+        let sso = "/cdk-blocks/auth/sso"
         _ = try await Self.authClient(on: launched, sessionCookieName: "auth_main")
             .exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
         _ = try await Self.authClient(on: launched, base: sso, providers: ["corp"], sessionCookieName: "auth_sso")
             .exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
 
         // A fresh in-memory token store: the recorded names are gone, the cookies are still in the jar.
-        let relaunched = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let relaunched = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let main = try Self.authClient(on: relaunched, sessionCookieName: "auth_main")
         let other = try Self.authClient(on: relaunched, base: sso, providers: ["corp"], sessionCookieName: "auth_sso")
         do {
@@ -208,9 +208,9 @@ extension OIDCClientTests {
         BlocksClient.clearCookies()
         defer { BlocksClient.clearCookies() }
         stubSessionCookieRoutes(mainCookies: "auth_main=a1; Path=/; Secure; HttpOnly, prefs=p1; Path=/")
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let main = try Self.authClient(on: blocksClient, sessionCookieName: "auth_main")
-        let other = try Self.authClient(on: blocksClient, base: "/aws-blocks/auth/sso", providers: ["corp"])
+        let other = try Self.authClient(on: blocksClient, base: "/cdk-blocks/auth/sso", providers: ["corp"])
         _ = try await main.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
         _ = try await other.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
 
@@ -230,12 +230,12 @@ extension OIDCClientTests {
     private func stubSessionCookieRoutes(mainCookies: String) {
         OIDCMockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)
-            if url.path == "/aws-blocks/auth/signout" {
+            if url.path == "/cdk-blocks/auth/signout" {
                 throw URLError(.cannotConnectToHost)
             }
-            let (cookie, body): (String?, [String: Any]) = if url.path == "/aws-blocks/auth/exchange" {
+            let (cookie, body): (String?, [String: Any]) = if url.path == "/cdk-blocks/auth/exchange" {
                 (mainCookies, ["user": ["userId": "a", "username": "a"]])
-            } else if url.path == "/aws-blocks/auth/sso/exchange" {
+            } else if url.path == "/cdk-blocks/auth/sso/exchange" {
                 ("auth_sso=b1; Path=/; Secure; HttpOnly", ["user": ["userId": "b", "username": "b"]])
             } else {
                 (nil, ["user": ["userId": "b", "username": "b"]])
@@ -250,7 +250,7 @@ extension OIDCClientTests {
     private func cookieHeaderOfARestore(by client: OIDCClient<String>) async throws -> String {
         _ = try await client.restore()
         let request = try XCTUnwrap(OIDCMockURLProtocol.requests.last)
-        XCTAssertEqual(request.url?.path, "/aws-blocks/auth/sso/session")
+        XCTAssertEqual(request.url?.path, "/cdk-blocks/auth/sso/session")
         return request.value(forHTTPHeaderField: "Cookie") ?? ""
     }
 
@@ -267,12 +267,12 @@ extension OIDCClientTests {
         defer { BlocksClient.clearCookies() }
         OIDCMockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)
-            if url.path == "/aws-blocks/auth/signout" {
+            if url.path == "/cdk-blocks/auth/signout" {
                 return try signOutResponse(request)
             }
-            let (cookie, body): (String?, [String: Any]) = if url.path == "/aws-blocks/auth/exchange" {
+            let (cookie, body): (String?, [String: Any]) = if url.path == "/cdk-blocks/auth/exchange" {
                 ("auth_main=a1; Path=/; Secure; HttpOnly", ["user": ["userId": "a", "username": "a"]])
-            } else if url.path == "/aws-blocks/auth/sso/exchange" {
+            } else if url.path == "/cdk-blocks/auth/sso/exchange" {
                 ("auth_sso=b1; Path=/; Secure; HttpOnly", ["user": ["userId": "b", "username": "b"]])
             } else {
                 (nil, ["user": ["userId": "b", "username": "b"]])
@@ -281,13 +281,13 @@ extension OIDCClientTests {
             let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)!
             return (response, try JSONSerialization.data(withJSONObject: body))
         }
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let main = try Self.authClient(on: blocksClient)
-        let sso = try Self.authClient(on: blocksClient, base: "/aws-blocks/auth/sso", providers: ["corp"])
+        let sso = try Self.authClient(on: blocksClient, base: "/cdk-blocks/auth/sso", providers: ["corp"])
         _ = try await main.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
         _ = try await sso.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
         let store = blocksClient.tokenStore
-        let refreshKey = tokenKey("refresh_token", exchangePath: "/aws-blocks/auth/exchange")
+        let refreshKey = tokenKey("refresh_token", exchangePath: "/cdk-blocks/auth/exchange")
         await store.set(refreshKey, value: "rt")
 
         let events = try await states(of: main) {
@@ -306,7 +306,7 @@ extension OIDCClientTests {
         XCTAssertEqual(events, [.signedOut], file: file, line: line)
         _ = try await sso.restore()
         let session = try XCTUnwrap(OIDCMockURLProtocol.requests.last, file: file, line: line)
-        XCTAssertEqual(session.url?.path, "/aws-blocks/auth/sso/session", file: file, line: line)
+        XCTAssertEqual(session.url?.path, "/cdk-blocks/auth/sso/session", file: file, line: line)
         let cookies = session.value(forHTTPHeaderField: "Cookie") ?? ""
         XCTAssertTrue(cookies.contains("auth_sso=b1"), cookies, file: file, line: line)
         XCTAssertFalse(cookies.contains("auth_main"), cookies, file: file, line: line)
@@ -320,12 +320,12 @@ extension OIDCClientTests {
         OIDCMockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)
             let path = url.path
-            let (cookie, body): (String?, [String: Any]) = if path == "/aws-blocks/auth/exchange" {
-                ("authsession_a=a1; Path=/aws-blocks/auth; Secure; HttpOnly", ["user": ["userId": "a", "username": "a"]])
-            } else if path == "/aws-blocks/auth/sso/exchange" {
-                ("authsession_b=b1; Path=/aws-blocks/auth/sso; Secure; HttpOnly", ["user": ["userId": "b", "username": "b"]])
-            } else if path == "/aws-blocks/auth/signout" {
-                ("authsession_a=; Max-Age=0; Path=/aws-blocks/auth; Secure; HttpOnly", [:])
+            let (cookie, body): (String?, [String: Any]) = if path == "/cdk-blocks/auth/exchange" {
+                ("authsession_a=a1; Path=/cdk-blocks/auth; Secure; HttpOnly", ["user": ["userId": "a", "username": "a"]])
+            } else if path == "/cdk-blocks/auth/sso/exchange" {
+                ("authsession_b=b1; Path=/cdk-blocks/auth/sso; Secure; HttpOnly", ["user": ["userId": "b", "username": "b"]])
+            } else if path == "/cdk-blocks/auth/signout" {
+                ("authsession_a=; Max-Age=0; Path=/cdk-blocks/auth; Secure; HttpOnly", [:])
             } else {
                 (nil, ["user": ["userId": "b", "username": "b"]])
             }
@@ -333,9 +333,9 @@ extension OIDCClientTests {
             let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)!
             return (response, try JSONSerialization.data(withJSONObject: body))
         }
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession())
         let main = try Self.authClient(on: blocksClient)
-        let sso = try Self.authClient(on: blocksClient, base: "/aws-blocks/auth/sso", providers: ["corp"])
+        let sso = try Self.authClient(on: blocksClient, base: "/cdk-blocks/auth/sso", providers: ["corp"])
         _ = try await main.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "")
         _ = try await sso.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "corp", state: "s", nonce: "")
 
@@ -343,7 +343,7 @@ extension OIDCClientTests {
         _ = try await sso.restore()
 
         let session = try XCTUnwrap(OIDCMockURLProtocol.requests.last)
-        XCTAssertEqual(session.url?.path, "/aws-blocks/auth/sso/session")
+        XCTAssertEqual(session.url?.path, "/cdk-blocks/auth/sso/session")
         let cookies = session.value(forHTTPHeaderField: "Cookie") ?? ""
         XCTAssertTrue(cookies.contains("authsession_b=b1"), cookies)
         XCTAssertFalse(cookies.contains("authsession_a"), cookies)
@@ -405,7 +405,7 @@ extension OIDCClientTests {
             let body: [String: Any] = ["user": ["userId": "https://idp.example.com:sub-1", "username": "alice"]]
             return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
         }
-        let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: makeMockSession())
+        let blocksClient = BlocksClient(url: "https://api.example.com/prod/cdk-blocks/api", session: makeMockSession())
         let client = try Self.authClient(on: blocksClient)
         let state = await firstState(of: client)
 
@@ -414,7 +414,7 @@ extension OIDCClientTests {
         XCTAssertEqual(user?.userId, "https://idp.example.com:sub-1")
         XCTAssertEqual(
             OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
-            ["https://api.example.com/prod/aws-blocks/auth/session"]
+            ["https://api.example.com/prod/cdk-blocks/auth/session"]
         )
         let event = await state.value
         XCTAssertEqual(event, user.map(OIDCAuthState.signedIn))
@@ -427,11 +427,11 @@ extension OIDCClientTests {
             let body: [String: Any] = ["user": ["userId": "u1", "username": "alice"]]
             return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
         }
-        let blocksClient = BlocksClient(url: "http://localhost:3001/aws-blocks/api", session: makeMockSession())
-        var named = Self.authDescriptor(base: "/aws-blocks/auth/sso", callback: "/aws-blocks/auth/sso/return")
-        named["sessionPath"] = "/aws-blocks/auth/sso/current"
+        let blocksClient = BlocksClient(url: "http://localhost:3001/cdk-blocks/api", session: makeMockSession())
+        var named = Self.authDescriptor(base: "/cdk-blocks/auth/sso", callback: "/cdk-blocks/auth/sso/return")
+        named["sessionPath"] = "/cdk-blocks/auth/sso/current"
         let withPath = try OIDCClient<String>.fromJSON(named, baseUrl: blocksClient.baseUrl, client: blocksClient)
-        let derived = try Self.authClient(on: blocksClient, base: "/aws-blocks/auth/sso", callback: "/aws-blocks/auth/sso/return")
+        let derived = try Self.authClient(on: blocksClient, base: "/cdk-blocks/auth/sso", callback: "/cdk-blocks/auth/sso/return")
 
         let first = try await withPath.restore()
         let second = try await derived.restore()
@@ -440,7 +440,7 @@ extension OIDCClientTests {
         XCTAssertEqual(second?.userId, "u1")
         XCTAssertEqual(
             OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
-            ["http://localhost:3001/aws-blocks/auth/sso/current", "http://localhost:3001/aws-blocks/auth/sso/session"]
+            ["http://localhost:3001/cdk-blocks/auth/sso/current", "http://localhost:3001/cdk-blocks/auth/sso/session"]
         )
     }
 
@@ -448,7 +448,7 @@ extension OIDCClientTests {
     func holdingClient() async throws -> (OIDCClient<String>, HoldingTokenStore) {
         let store = HoldingTokenStore()
         let blocksClient = BlocksClient(
-            url: "https://api.example.com/aws-blocks/api",
+            url: "https://api.example.com/cdk-blocks/api",
             session: makeMockSession(),
             ownsSession: true,
             tokenStore: store
@@ -473,7 +473,7 @@ extension OIDCClientTests {
             return (okResponse(for: url), try JSONSerialization.data(withJSONObject: body))
         }
         let (client, store) = try await holdingClient()
-        await store.arm(tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange"))
+        await store.arm(tokenKey("access_token", exchangePath: "/cdk-blocks/auth/exchange"))
 
         let restoring = Task { try await client.restore() }
         await store.waitUntilHeld()
@@ -484,7 +484,7 @@ extension OIDCClientTests {
         XCTAssertEqual(restored, user)
         let state = await client.authState
         XCTAssertEqual(state, .signedIn(user))
-        let access = await store.get(tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange"))
+        let access = await store.get(tokenKey("access_token", exchangePath: "/cdk-blocks/auth/exchange"))
         XCTAssertEqual(access, "at-new")
     }
 
@@ -497,7 +497,7 @@ extension OIDCClientTests {
         }
         let (client, store) = try await holdingClient()
         _ = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n")
-        await store.arm(tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange"))
+        await store.arm(tokenKey("access_token", exchangePath: "/cdk-blocks/auth/exchange"))
 
         let restoring = Task { try await client.restore() }
         await store.waitUntilHeld()
@@ -758,7 +758,7 @@ extension OIDCClientTests {
     func testARestoreClearingAfterA401LeavesASignInThatFinishesMeanwhile() async throws {
         OIDCMockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)
-            if url.path == "/aws-blocks/auth/session" {
+            if url.path == "/cdk-blocks/auth/session" {
                 return (errorResponse(for: url, status: 401), Data("{}".utf8))
             }
             // A cookie-only answer, as with `tokens: false`.
@@ -769,9 +769,9 @@ extension OIDCClientTests {
         BlocksClient.clearCookies()
         defer { BlocksClient.clearCookies() }
         let store = HoldingWriteTokenStore()
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession(), tokenStore: store)
         let client = try Self.authClient(on: blocksClient)
-        let key = tokenKey("access_token", exchangePath: "/aws-blocks/auth/exchange")
+        let key = tokenKey("access_token", exchangePath: "/cdk-blocks/auth/exchange")
         await store.arm(.delete, key)
 
         let restore = Task { try await client.restore() }
@@ -786,7 +786,7 @@ extension OIDCClientTests {
 
         let state = await client.authState
         XCTAssertEqual(state, .signedIn(user))
-        let cookieNames = await store.get(tokenKey("session_cookies", exchangePath: "/aws-blocks/auth/exchange"))
+        let cookieNames = await store.get(tokenKey("session_cookies", exchangePath: "/cdk-blocks/auth/exchange"))
         XCTAssertEqual(cookieNames, "auth_main")
     }
 
@@ -800,9 +800,9 @@ extension OIDCClientTests {
             return (okResponse(for: url), try JSONSerialization.data(withJSONObject: body))
         }
         let store = HoldingWriteTokenStore()
-        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession(), tokenStore: store)
+        let blocksClient = BlocksClient(url: "https://api.example.com/cdk-blocks/api", session: makeMockSession(), tokenStore: store)
         let client = try Self.authClient(on: blocksClient)
-        let key = { (name: String) in tokenKey(name, exchangePath: "/aws-blocks/auth/exchange") }
+        let key = { (name: String) in tokenKey(name, exchangePath: "/cdk-blocks/auth/exchange") }
         await store.set(key("refresh_token"), value: "rt")
         await store.arm(.set, key("access_token"))
 

@@ -11,7 +11,7 @@
  *
  * Each `stubIdp()` provider gets its own issuer, mounted as `RawRoute`s:
  *
- * | Method | Path (under `/aws-blocks/auth/idp/<id>`) | |
+ * | Method | Path (under `/cdk-blocks/auth/idp/<id>`) | |
  * |---|---|---|
  * | GET  | `/.well-known/openid-configuration` | discovery document |
  * | GET  | `/jwks.json` | the ES256 public key |
@@ -71,8 +71,8 @@ import {
 } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { type JWK, jwtVerify, SignJWT } from 'jose';
 import { escapeHtml } from '../federation-routes.js';
 import type { StubIdpSettings, StubUser } from '../types.js';
@@ -403,10 +403,10 @@ interface AuthorizeRequest {
  * - the app base, `appBaseUrl(ctx)` (`BLOCKS_PUBLIC_ORIGIN`, else this request's
  *   origin plus stage) — what the direct engine builds its `redirect_uri` from,
  *   and the base `/logout` checks `post_logout_redirect_uri` against;
- * - the stub's own issuer base (the issuer URL minus its `/aws-blocks/auth/idp/<id>`
+ * - the stub's own issuer base (the issuer URL minus its `/cdk-blocks/auth/idp/<id>`
  *   path): locally this request's origin, deployed the API Gateway URL the CDK
  *   layer registered — the server the native SDKs (Kotlin, Swift, Dart) build
- *   their relay `redirect_uri` from (`<server>/aws-blocks/auth/callback`).
+ *   their relay `redirect_uri` from (`<server>/cdk-blocks/auth/callback`).
  *
  * Compared exactly, as a real IdP compares a registered redirect URI.
  */

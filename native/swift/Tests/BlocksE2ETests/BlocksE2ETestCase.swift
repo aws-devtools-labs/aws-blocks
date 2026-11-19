@@ -26,7 +26,7 @@ enum AuthErrorNames {
 class BlocksE2ETestCase: XCTestCase {
     static let blocksUrl: String = ProcessInfo.processInfo.environment["BLOCKS_URL"]
         .flatMap { $0.isEmpty ? nil : $0 }
-        ?? "http://localhost:3001/aws-blocks/api"
+        ?? "http://localhost:3001/cdk-blocks/api"
 
     static let server: BlocksServer = .init(name: "e2e", url: blocksUrl)
 

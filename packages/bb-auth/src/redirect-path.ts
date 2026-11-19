@@ -4,7 +4,7 @@
 /**
  * The one check every same-origin redirect target goes through: the
  * `redirectPath` of a sign-in (`getSignInUrl()` and
- * `GET /aws-blocks/auth/signin/<id>?redirectPath=`), `redirects.postSignInPath`
+ * `GET /cdk-blocks/auth/signin/<id>?redirectPath=`), `redirects.postSignInPath`
  * and `redirects.postSignOutPath`. Anything that becomes a `Location` header
  * (or the path part of an absolute URL handed to an IdP) is passed through
  * {@link safeRedirectPath}, and its **normalised** result is what is emitted —
@@ -25,7 +25,7 @@
  * @internal
  */
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 
 /** A placeholder origin no real request can have (`.invalid` is reserved, RFC 6761). */

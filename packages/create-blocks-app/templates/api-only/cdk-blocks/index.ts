@@ -18,7 +18,7 @@
  * npm run docs <Block>... prints their docs (--help for more)
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, Auth, KVStore, FileBucket, RawRoute } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, Auth, KVStore, FileBucket, RawRoute } from 'aws-cdk-blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');

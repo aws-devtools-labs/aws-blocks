@@ -9,8 +9,8 @@ import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, test } from 'node:test';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Scope } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Scope } from '@aws-cdk-blocks/core';
 import { frameworkKey } from './internal.mock.js';
 
 const BB_DATA = join(process.cwd(), '.bb-data');

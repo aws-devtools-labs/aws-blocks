@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Browser stub for `@aws-blocks/bb-secret/internal`. Framework keys are
+// Browser stub for `@aws-cdk-blocks/bb-secret/internal`. Framework keys are
 // server-side only, so creating one in client code throws.
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { SecretErrors } from './errors.js';
 import type { FrameworkKey } from './internal-shared.js';
 

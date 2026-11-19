@@ -5,4 +5,4 @@
 // forward from the pre-rename directory (D-031). A local re-implementation would
 // mint a new id instead, deploy to a different stack, and leave the old sandbox
 // standing in the account.
-export { getSandboxId } from '@aws-blocks/blocks/scripts';
+export { getSandboxId } from 'aws-cdk-blocks/scripts';

@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/core': minor
-'@aws-blocks/blocks': patch
+'@aws-cdk-blocks/core': minor
+'aws-cdk-blocks': patch
 ---
 
 **Breaking: `AWS_BLOCKS_DISABLE_TEMPLATE_METADATA` is renamed to `CDK_BLOCKS_DISABLE_TEMPLATE_METADATA`.** The old name is no longer read and nothing falls back, so a script or CI job that sets it has to be updated.

@@ -34,8 +34,8 @@
  */
 
 import crypto from 'node:crypto';
-import { ApiError, type BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals, getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import { ApiError, type BlocksContext } from '@aws-cdk-blocks/core';
+import { constantTimeEquals, getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 import { createRemoteJWKSet, type JWTPayload, jwtVerify } from 'jose';
 import { AuthErrors } from '../errors.js';
 import { safeRedirectPath, signInRedirectPath } from '../redirect-path.js';
@@ -61,7 +61,7 @@ const DEFAULT_SCOPES = ['openid', 'email', 'profile'];
 /** Default when the IdP reports no lifetime: one hour. */
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const HTTP_TIMEOUT_MS = 10_000;
-const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
+const DEFAULT_CALLBACK_PATH = '/cdk-blocks/auth/callback';
 const USER_AGENT = 'aws-blocks-bb-auth';
 
 /** What discovery (or the endpoints override) yields. */

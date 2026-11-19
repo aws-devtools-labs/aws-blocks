@@ -6,7 +6,7 @@
  * owns a front-door port, its exclusive claim, and its release.
  *
  * It has no dependency beyond Node.js, so the `npm run dev` launcher loads it
- * (`@aws-blocks/core/scripts/dev-pidfile`) to claim the session the moment it
+ * (`@aws-cdk-blocks/core/scripts/dev-pidfile`) to claim the session the moment it
  * starts, well before the dev server it starts has loaded (see
  * {@link claimDevSession}).
  */

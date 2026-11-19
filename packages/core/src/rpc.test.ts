@@ -88,13 +88,13 @@ describe('parseRpcRequest — per-namespace path', () => {
   const body = JSON.stringify({ jsonrpc: '2.0', method: 'orders.list', params: [], id: 3 });
 
   it('accepts a path whose namespace matches the body prefix', () => {
-    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/orders' });
+    const result = parseRpcRequest(body, { pathname: '/cdk-blocks/api/orders' });
     assert.ok(result.ok);
     if (result.ok) assert.strictEqual(result.request.apiNamespace, 'orders');
   });
 
   it('accepts the bare endpoint and no pathname — the body prefix decides', () => {
-    for (const options of [{ pathname: '/aws-blocks/api' }, { pathname: '/aws-blocks/api/' }, {}]) {
+    for (const options of [{ pathname: '/cdk-blocks/api' }, { pathname: '/cdk-blocks/api/' }, {}]) {
       const result = parseRpcRequest(body, options);
       assert.ok(result.ok, JSON.stringify(options));
       if (result.ok) assert.strictEqual(result.request.apiNamespace, 'orders');
@@ -102,19 +102,19 @@ describe('parseRpcRequest — per-namespace path', () => {
   });
 
   it('accepts a trailing slash after the namespace', () => {
-    assert.ok(parseRpcRequest(body, { pathname: '/aws-blocks/api/orders/' }).ok);
+    assert.ok(parseRpcRequest(body, { pathname: '/cdk-blocks/api/orders/' }).ok);
   });
 
   it('compares namespaces case-sensitively', () => {
     // Export names are case-sensitive, and so is API Gateway routing: accepting
     // `/Orders` for `orders.list` would let a request reach the default compute's
     // catch-all for a namespace routed elsewhere.
-    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/Orders' });
+    const result = parseRpcRequest(body, { pathname: '/cdk-blocks/api/Orders' });
     assert.strictEqual(result.ok, false);
   });
 
   it('rejects a per-namespace path deeper than one segment', () => {
-    for (const pathname of ['/aws-blocks/api/orders/list', '/aws-blocks/api//orders', '/aws-blocks/api/orders//']) {
+    for (const pathname of ['/cdk-blocks/api/orders/list', '/cdk-blocks/api//orders', '/cdk-blocks/api/orders//']) {
       const result = parseRpcRequest(body, { pathname });
       assert.strictEqual(result.ok, false, pathname);
       if (!result.ok) assert.match(JSON.parse(result.response).error.message, /not a deeper path/, pathname);
@@ -124,14 +124,14 @@ describe('parseRpcRequest — per-namespace path', () => {
   it('clips caller-supplied names it echoes in the error', () => {
     const long = 'x'.repeat(10_000);
     const result = parseRpcRequest(JSON.stringify({ jsonrpc: '2.0', method: `${long}.list`, id: 4 }), {
-      pathname: `/aws-blocks/api/${long}y`,
+      pathname: `/cdk-blocks/api/${long}y`,
     });
     assert.strictEqual(result.ok, false);
     if (!result.ok) assert.ok(result.response.length < 400, `response stays small: ${result.response.length} chars`);
   });
 
   it('rejects a path whose namespace differs from the body prefix', () => {
-    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/reports' });
+    const result = parseRpcRequest(body, { pathname: '/cdk-blocks/api/reports' });
     assert.strictEqual(result.ok, false);
     if (!result.ok) {
       const parsed = JSON.parse(result.response);
@@ -487,7 +487,7 @@ describe('ApiError status ↔ JSON-RPC error code', () => {
   });
 
   it('encodes an ApiError built by a SEPARATELY bundled copy of core with its status, name and retriable intact', () => {
-    // Reproduces the real failure: a duplicated `@aws-blocks/core` nests a private
+    // Reproduces the real failure: a duplicated `@aws-cdk-blocks/core` nests a private
     // copy under a dependency (e.g. bb-kv-store), so the ApiError thrown
     // there is NOT `instanceof` the ApiError class this serializer imports. A plain
     // `instanceof` check misses it and collapses the deliberate 409 into a nameless

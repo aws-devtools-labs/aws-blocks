@@ -15,12 +15,12 @@ describe('deployed config — where a deploy records its API URL', () => {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-deployed-config-'));
     try {
       const out = join(dir, '.cdk-blocks-sandbox');
-      writeDeployedConfig(out, 'production', 'https://p.example/aws-blocks/api');
-      writeDeployedConfig(out, 'sandbox', 'https://s.example/aws-blocks/api');
+      writeDeployedConfig(out, 'production', 'https://p.example/cdk-blocks/api');
+      writeDeployedConfig(out, 'sandbox', 'https://s.example/cdk-blocks/api');
       assert.deepStrictEqual(readdirSync(out).sort(), ['config.production.json', 'config.sandbox.json']);
       assert.ok(!existsSync(join(out, 'config.json')));
       assert.deepStrictEqual(JSON.parse(readFileSync(join(out, deployedConfigFile('sandbox')), 'utf-8')), {
-        apiUrl: 'https://s.example/aws-blocks/api',
+        apiUrl: 'https://s.example/cdk-blocks/api',
         environment: 'sandbox',
       });
     } finally {
@@ -36,11 +36,11 @@ describe('deployed config — where a deploy records its API URL', () => {
   });
 
   it("tells an older deploy's config.json from a dev server's", () => {
-    assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://p.example/aws-blocks/api', environment: 'production' }), 'production');
-    assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://s.example/prod/aws-blocks/api', environment: 'sandbox' }), 'sandbox');
+    assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://p.example/cdk-blocks/api', environment: 'production' }), 'production');
+    assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://s.example/prod/cdk-blocks/api', environment: 'sandbox' }), 'sandbox');
     // The dev servers of `npm run dev` and `npm run sandbox` (which proxies to the sandbox) write http URLs.
-    assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }), null);
-    assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://10.0.0.5:3000/aws-blocks/api', environment: 'sandbox' }), null);
+    assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://localhost:3000/cdk-blocks/api', environment: 'local' }), null);
+    assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://10.0.0.5:3000/cdk-blocks/api', environment: 'sandbox' }), null);
     assert.strictEqual(legacyDeployedStage(null), null);
   });
 
@@ -52,18 +52,18 @@ describe('deployed config — where a deploy records its API URL', () => {
     try {
       mkdirSync(out);
       migrateLegacyDeployedConfig(out); // no config.json: nothing to do
-      const prod = { apiUrl: 'https://stub/aws-blocks/api', environment: 'production' };
+      const prod = { apiUrl: 'https://stub/cdk-blocks/api', environment: 'production' };
       write('config.json', prod);
       migrateLegacyDeployedConfig(out);
       assert.ok(!existsSync(join(out, 'config.json')));
       assert.deepStrictEqual(read('config.production.json'), prod);
 
-      write('config.json', { apiUrl: 'https://old/aws-blocks/api', environment: 'production' });
+      write('config.json', { apiUrl: 'https://old/cdk-blocks/api', environment: 'production' });
       migrateLegacyDeployedConfig(out);
       assert.ok(!existsSync(join(out, 'config.json')));
       assert.deepStrictEqual(read('config.production.json'), prod, 'a newer deploy record wins');
 
-      const local = { apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'sandbox' };
+      const local = { apiUrl: 'http://localhost:3000/cdk-blocks/api', environment: 'sandbox' };
       write('config.json', local);
       migrateLegacyDeployedConfig(out);
       assert.deepStrictEqual(read('config.json'), local);

@@ -1,4 +1,4 @@
-import { ApiNamespace, CronJob, KVStore, Scope } from '@aws-blocks/blocks';
+import { ApiNamespace, CronJob, KVStore, Scope } from 'aws-cdk-blocks';
 
 // For coding agents: Leave these comments in place for future reference.
 // Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
@@ -49,7 +49,7 @@ new CronJob(scope, 'paused', {
 });
 
 // Every method below is a public RPC endpoint — no auth by default.
-// To gate one, add the `Auth` block from '@aws-blocks/blocks'
+// To gate one, add the `Auth` block from 'aws-cdk-blocks'
 // (`const auth = new Auth(scope, 'auth')`) and call it first — see
 // `npm run docs Auth`:
 //   const user = await auth.requireAuth(context);

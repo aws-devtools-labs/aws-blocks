@@ -13,8 +13,8 @@ import {
 	GetIngestionJobCommand,
 	type IngestionJobSummary,
 } from '@aws-sdk/client-bedrock-agent';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type {
 	KnowledgeBaseOptions,
 	RetrieveOptions,
@@ -30,8 +30,8 @@ import { blocksError, KnowledgeBaseErrors } from './errors.js';
 import { createAgentTool } from './agent-tool.js';
 import { normalizeMaxResults } from './normalize.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 export type {
 	KnowledgeBaseOptions,

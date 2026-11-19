@@ -1,5 +1,5 @@
-import type { AuthUser } from '@aws-blocks/auth-common';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { AuthUser } from '@aws-cdk-blocks/auth-common';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 /**
  * Auth flow the User Pool Client advertises.
  *
@@ -1012,7 +1012,7 @@ export interface FetchAuthSessionOptions {
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
+ * import { isBlocksError } from '@aws-cdk-blocks/core';
  * import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
  *
  * try {

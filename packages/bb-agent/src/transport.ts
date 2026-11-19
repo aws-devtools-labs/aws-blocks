@@ -17,12 +17,12 @@
  * observer-only attach, and decoupled produce/consume.
  */
 
-import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
+import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-cdk-blocks/bb-realtime';
 import type { AgentStreamChunk, InterruptResponse } from './types.js';
 
 /**
  * The wire format an app's `subscribe` adapter hands to `channel.subscribe(...)` to
- * hydrate a live channel. Re-exported from `@aws-blocks/bb-realtime` so transport
+ * hydrate a live channel. Re-exported from `@aws-cdk-blocks/bb-realtime` so transport
  * consumers (and `createChat` users typing a `refresh` return) can name it without a
  * second import, and so a `refresh` typed against it is the exact type bb-realtime's
  * `SubscribeOptions.refresh` expects.

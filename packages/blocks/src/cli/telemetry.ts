@@ -12,7 +12,7 @@
  * bin. They are not listed here: listing them would count every run twice.
  */
 
-import type { trackExitCode as coreTrackExitCode } from '@aws-blocks/core/track-command';
+import type { trackExitCode as coreTrackExitCode } from '@aws-cdk-blocks/core/track-command';
 
 export type CommandName = Parameters<typeof coreTrackExitCode>[0];
 
@@ -41,7 +41,7 @@ type TrackExitCode = (
 export type LoadTelemetry = () => Promise<{ trackExitCode: TrackExitCode }>;
 
 /** The real loader. Imported lazily: commands with no event never load it. */
-export const loadCoreTelemetry: LoadTelemetry = () => import('@aws-blocks/core/track-command');
+export const loadCoreTelemetry: LoadTelemetry = () => import('@aws-cdk-blocks/core/track-command');
 
 /**
  * Run `run` and send one telemetry event for it when `path` is a command only the
@@ -62,7 +62,7 @@ export function withCommandTelemetry(
  * Run `run` and send one `commandName` event for it.
  *
  * Telemetry never changes the command's result. If core's `./track-command` entry
- * cannot be loaded (for example an installed `@aws-blocks/core` that predates it) or
+ * cannot be loaded (for example an installed `@aws-cdk-blocks/core` that predates it) or
  * the project root cannot be resolved, the command runs untracked. If the tracker
  * throws, before or after running the command, or returns another code, the
  * command's own exit code or error is what this returns.

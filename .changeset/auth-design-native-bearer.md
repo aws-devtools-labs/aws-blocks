@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-auth": patch
+"@aws-cdk-blocks/bb-auth": patch
 ---
 
 docs(bb-auth): the native SDKs authenticate with the session cookie, not bearer tokens

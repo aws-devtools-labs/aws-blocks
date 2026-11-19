@@ -2,7 +2,7 @@
 
 Design document for AsyncJob. For usage, examples, and best practices, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-async-job`
+**Package:** `@aws-cdk-blocks/bb-async-job`
 **Type:** Primitive (new infrastructure)
 **AWS Services:** Amazon SQS with either AWS Lambda or Amazon ECS on AWS Fargate
 

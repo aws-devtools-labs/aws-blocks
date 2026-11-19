@@ -60,7 +60,7 @@ try {
 const JSON_NO_INPUT = ['--no-input', '--output', 'json'];
 
 // Builds the block in local mode with the connection's short name and runs one statement. The package entry
-// and `@aws-blocks/core` are given by URL, because this file is outside the repository.
+// and `@aws-cdk-blocks/core` are given by URL, because this file is outside the repository.
 const SELECT_ONE = `
 import { readFileSync } from 'node:fs';
 const [coreUrl, entryUrl, caFile] = process.argv.slice(2);
@@ -243,7 +243,7 @@ describe('bb-database connect E2E: Supabase', { skip }, () => {
 		writeFileSync(script, SELECT_ONE);
 		const run = await runNode(
 			script,
-			[import.meta.resolve('@aws-blocks/core'), pathToFileURL(PACKAGE_ENTRY).href, ws.caFile],
+			[import.meta.resolve('@aws-cdk-blocks/core'), pathToFileURL(PACKAGE_ENTRY).href, ws.caFile],
 			{ cwd: ws.cwd },
 		);
 		assert.strictEqual(run.code, 0, `the child process failed${outputOf(run)}`);

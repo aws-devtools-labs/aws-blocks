@@ -1,6 +1,6 @@
-import { Auth, AuthErrors } from '@aws-blocks/bb-auth';
-import { type AuthenticatedUser } from '@aws-blocks/bb-auth';
-import { Scope } from '@aws-blocks/core';
+import { Auth, AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { type AuthenticatedUser } from '@aws-cdk-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 export const users = new Auth(scope, 'users', {});

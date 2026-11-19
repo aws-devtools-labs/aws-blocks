@@ -15,8 +15,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import { type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
+import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { type BlocksContext, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { Auth, stubIdp } from './index.mock.js';
 import { displayNameOf } from './state-machine.js';
 import { Browser } from './test-helpers.js';
@@ -270,7 +270,7 @@ describe('AuthState.user.displayName for a directly federated OIDC user', () => 
 			providers: { corp: stubIdp({ users: [user], onAuthorize: (r) => r.users[0] }) },
 		});
 		const b = new TestBrowser();
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		const toCallback = await b.fetch(location(start, server.origin));
 		await b.fetch(location(toCallback, server.origin));
 		return bind(auth.createApi(), b.context(server.origin)).getAuthState();

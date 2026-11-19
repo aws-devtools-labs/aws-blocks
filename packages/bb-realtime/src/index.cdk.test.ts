@@ -16,9 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets, Scope, type BlocksDefaults } from '@aws-blocks/core/cdk';
-import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { BlocksStack, BlocksPresets, Scope, type BlocksDefaults } from '@aws-cdk-blocks/core/cdk';
+import type { DefaultComputeFactory } from '@aws-cdk-blocks/core/cdk/internal';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Realtime } from './index.cdk.js';
 
@@ -203,9 +203,9 @@ function synthUnderCdkConditions(): { type: string; properties: any }[] {
 		`
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { Realtime } from '@aws-blocks/bb-realtime';
+import { BlocksStack, BlocksPresets } from '@aws-cdk-blocks/core/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import { Realtime } from '@aws-cdk-blocks/bb-realtime';
 
 const stack = await BlocksStack.create(new cdk.App(), 'KeySchemaProbeStack', {
 	backendHandlerPath: ${JSON.stringify(handlerPath)},

@@ -31,7 +31,7 @@ Replace the scaffold's starter content with your chat UI.
 
 ### The `api` namespace (primary surface)
 
-Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /aws-blocks/api`) with:
+Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /cdk-blocks/api`) with:
 
 - **`api.ask(message)`** — runs one agent turn through the **agent block** and returns structured data `{ reply, toolsUsed, citations }`:
   - `reply` — the agent's answer text. It must literally contain what the tool returned: the retrieved fact (`QUOKKA-9F42`, `1337`, `NBS-7Q6X`) for KB questions, or the tracking code (`TRK-9F42-OK`) for order questions.

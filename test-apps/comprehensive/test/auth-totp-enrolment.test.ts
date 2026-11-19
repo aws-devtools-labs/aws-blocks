@@ -3,8 +3,8 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import { totpCodeFor } from '@aws-blocks/blocks/utils';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { totpCodeFor } from 'aws-cdk-blocks/utils';
 import type { api as apiType, authApi as authApiType, authCMfaApi as authCMfaApiType } from 'cdk-blocks';
 import { codePoller } from './poll-for-code.js';
 

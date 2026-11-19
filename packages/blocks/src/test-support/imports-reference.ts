@@ -3,7 +3,7 @@
 
 /**
  * Generates `IMPORTS.md`, the "what to import from where" reference: every
- * app-facing entry of `@aws-blocks/blocks`, where it runs, and each name it
+ * app-facing entry of `aws-cdk-blocks`, where it runs, and each name it
  * exports (value or type-only), read from the built declaration files with the
  * TypeScript compiler. `imports-reference.test.ts` fails when the committed
  * file differs; `npm run update:imports` rewrites it.
@@ -136,7 +136,7 @@ function readEntries(specifiers: readonly string[], conditions: string[] = []): 
 	}
 }
 
-const specifierOf = (key: string) => `@aws-blocks/blocks${key.slice(1)}`;
+const specifierOf = (key: string) => `aws-cdk-blocks${key.slice(1)}`;
 
 /** The content `IMPORTS.md` must have for the current build. */
 export function renderImportsReference(): string {
@@ -148,7 +148,7 @@ export function renderImportsReference(): string {
 		'dependencies' in pkg && pkg.dependencies && typeof pkg.dependencies === 'object' ? pkg.dependencies : {};
 	// The packages whose root entry has a browser build of its own (a `browser` export condition).
 	const blockPackages = Object.keys(dependencies).filter((name) => {
-		if (!name.startsWith('@aws-blocks/')) return false;
+		if (!name.startsWith('@aws-cdk-blocks/')) return false;
 		const manifest: unknown = JSON.parse(
 			readFileSync(join(PACKAGE_DIR, '..', '..', 'node_modules', name, 'package.json'), 'utf8'),
 		);
@@ -174,9 +174,9 @@ export function renderImportsReference(): string {
 		'',
 		'<!-- Generated from the built packages by `npm run update:imports`; do not edit. -->',
 		'',
-		'Every app-facing entry of `@aws-blocks/blocks`, where it runs, and every name it exports. A **value** can be imported normally; a **type** only with `import type` (or `import { type … }`).',
+		'Every app-facing entry of `aws-cdk-blocks`, where it runs, and every name it exports. A **value** can be imported normally; a **type** only with `import type` (or `import { type … }`).',
 		'',
-		"The rule that matters most: **code that runs under the `browser` condition imports no values from the root `@aws-blocks/blocks`**. That covers browser bundles and the templates' e2e tests (`npm run test:e2e` runs `tsx -C browser`). The root is the backend entry and the only one with a `browser` condition, under which it resolves to an empty module; every subpath resolves to the same file everywhere. Such code imports from `/client`, `/ui` and `/theme`, the e2e tests also from `/utils`, and a block's error constants come from that block's own package (`KVStoreErrors` from `@aws-blocks/bb-kv-store`; see [Root values in browser code](#root-values-in-browser-code)). The typed client of your own API is `import { api } from 'cdk-blocks'` (your backend module), not an `@aws-blocks/blocks` entry.",
+		"The rule that matters most: **code that runs under the `browser` condition imports no values from the root `aws-cdk-blocks`**. That covers browser bundles and the templates' e2e tests (`npm run test:e2e` runs `tsx -C browser`). The root is the backend entry and the only one with a `browser` condition, under which it resolves to an empty module; every subpath resolves to the same file everywhere. Such code imports from `/client`, `/ui` and `/theme`, the e2e tests also from `/utils`, and a block's error constants come from that block's own package (`KVStoreErrors` from `@aws-cdk-blocks/bb-kv-store`; see [Root values in browser code](#root-values-in-browser-code)). The typed client of your own API is `import { api } from 'cdk-blocks'` (your backend module), not an `aws-cdk-blocks` entry.",
 		'',
 		'| Entry | Runs in | For |',
 		'|---|---|---|',
@@ -187,7 +187,7 @@ export function renderImportsReference(): string {
 		'',
 		'## Root values in browser code',
 		'',
-		"Code run under the `browser` condition can’t import values from the root. These root values have a browser export: in a browser-safe entry of `@aws-blocks/blocks`, or in the browser build of the package that defines them, which carries its error constants and pure helpers (the Building Block classes there are stubs, so they are not listed). Those packages are dependencies of `@aws-blocks/blocks`; to import one directly, add it to your app’s `dependencies`. An error can also be matched by its name string, with nothing extra installed: `isBlocksError(e, 'ConditionalCheckFailedException')` from `@aws-blocks/blocks/client`.",
+		"Code run under the `browser` condition can’t import values from the root. These root values have a browser export: in a browser-safe entry of `aws-cdk-blocks`, or in the browser build of the package that defines them, which carries its error constants and pure helpers (the Building Block classes there are stubs, so they are not listed). Those packages are dependencies of `aws-cdk-blocks`; to import one directly, add it to your app’s `dependencies`. An error can also be matched by its name string, with nothing extra installed: `isBlocksError(e, 'ConditionalCheckFailedException')` from `aws-cdk-blocks/client`.",
 		'',
 		'| Name | In browser code, import from |',
 		'|---|---|',

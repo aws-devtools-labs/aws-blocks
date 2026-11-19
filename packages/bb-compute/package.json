@@ -1,5 +1,5 @@
 {
-  "name": "@aws-blocks/bb-compute",
+  "name": "@aws-cdk-blocks/bb-compute",
   "version": "0.2.0",
   "keywords": [
     "aws-blocks",
@@ -10,12 +10,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "url": "git+https://github.com/aws/cdk-blocks.git",
     "directory": "packages/bb-compute"
   },
-  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-compute#readme",
+  "homepage": "https://github.com/aws/cdk-blocks/tree/main/packages/bb-compute#readme",
   "bugs": {
-    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+    "url": "https://github.com/aws/cdk-blocks/issues"
   },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
@@ -49,9 +49,9 @@
     "test": "node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.8.0",
-    "@aws-blocks/bb-lambda-compute": "^0.7.0",
-    "@aws-blocks/bb-container-compute": "^0.2.0"
+    "@aws-cdk-blocks/core": "^0.8.0",
+    "@aws-cdk-blocks/bb-lambda-compute": "^0.7.0",
+    "@aws-cdk-blocks/bb-container-compute": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

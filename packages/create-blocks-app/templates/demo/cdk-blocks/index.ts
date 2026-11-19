@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, Auth, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase, Database, sql } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, Auth, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase, Database, sql } from 'aws-cdk-blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -14,7 +14,7 @@ const DEMO_COOKIE_ATTRS = 'HttpOnly; SameSite=Lax';
 
 /**
  * Cookie attributes for a request. Follows the same rule as the auth cookie
- * (`@aws-blocks/auth-common`): `Secure` everywhere except plain-HTTP localhost,
+ * (`@aws-cdk-blocks/auth-common`): `Secure` everywhere except plain-HTTP localhost,
  * where the dev server can't serve HTTPS and some browsers drop `Secure` cookies.
  */
 function demoCookieAttrs(headers: Headers): string {
@@ -74,7 +74,7 @@ const docs = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
 // in SES in the deployment account and Region. The placeholder is on the
 // reserved `.invalid` domain, which can never be verified, so it works locally
 // but every send fails on AWS; synth warns about it
-// (@aws-blocks/bb-email-client:UnverifiableSender) until you change it.
+// (@aws-cdk-blocks/bb-email-client:UnverifiableSender) until you change it.
 const EMAIL_SENDER = 'noreply@replace-with-your-verified-domain.invalid';
 const email = new EmailClient(scope, 'mailer', { fromAddress: EMAIL_SENDER });
 

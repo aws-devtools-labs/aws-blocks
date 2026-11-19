@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-cron-job": minor
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-cron-job": minor
+"aws-cdk-blocks": patch
 ---
 
 feat(bb-cron-job): run a CronJob on a container compute for long-running jobs
@@ -10,7 +10,7 @@ Assign a container `Compute` to run a scheduled job longer than a serverless
 compute's 15-minute limit:
 
 ```ts
-import { Compute, CronJob } from '@aws-blocks/blocks';
+import { Compute, CronJob } from 'aws-cdk-blocks';
 
 const worker = new Compute(scope, 'worker', { type: 'container', size: { vcpu: 1, memory: 2048 } });
 

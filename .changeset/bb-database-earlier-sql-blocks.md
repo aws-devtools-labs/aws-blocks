@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-database": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-database": minor
+"aws-cdk-blocks": minor
 ---
 
 An app that deployed a SQL block of an earlier release keeps its database.

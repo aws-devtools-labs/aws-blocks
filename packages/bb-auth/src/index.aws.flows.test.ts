@@ -14,9 +14,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthActionInput, AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
-import { getSdkIdentifiers, registerSdkIdentifiers } from '@aws-blocks/core';
+import type { AuthActionInput, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { getSdkIdentifiers, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { cognitoConfigKeys } from './cdk/contract.js';
 import { INTERNAL_ERROR_MESSAGE } from './error-mapping.js';
 import { Auth, AuthErrors, type SignInNextStep, type SignInResult } from './index.aws.js';

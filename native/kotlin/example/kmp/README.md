@@ -1,6 +1,6 @@
 # Kotlin Multiplatform Example App
 
-A Compose Multiplatform app demonstrating the AWS Blocks Kotlin plugin across Android, iOS, and Desktop (JVM) targets. It uses a shared UI written in Compose with platform-specific entry points.
+A Compose Multiplatform app demonstrating the AWS CDK Blocks Kotlin plugin across Android, iOS, and Desktop (JVM) targets. It uses a shared UI written in Compose with platform-specific entry points.
 
 ## Features Demonstrated
 

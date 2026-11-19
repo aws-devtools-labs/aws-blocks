@@ -20,7 +20,7 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 Future<void> main() async {
   // No WidgetsFlutterBinding.ensureInitialized() needed: the secure store
   // creates the binding itself before its first read.
-  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   await client.call('authApi.getAuthState', const []);
 }
 ```
@@ -81,7 +81,7 @@ import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 
 final tokenStore = FlutterSecureStore();
 final client = BlocksClient(
-  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  baseUrl: 'https://your-api.example.com/cdk-blocks/api',
   tokenStore: tokenStore,
 );
 ```
@@ -95,7 +95,7 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 import 'blocks.blocks.dart'; // the generated client
 
-final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
 final OidcClient oidc = await blocks.oidcApi.getClient();
 await oidc.signIn(
   'google',

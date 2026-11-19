@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { registerTracer, Scope, synthGuard } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { registerTracer, Scope, synthGuard } from '@aws-cdk-blocks/core/cdk';
 import type { TracerOptions } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -30,7 +30,7 @@ export class Tracer extends Scope {
 		}
 	}
 
-	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-cdk-blocks/core/cdk`).
 	startSegment(..._args: unknown[]): never { return synthGuard('Tracer', 'startSegment'); }
 	addAnnotation(..._args: unknown[]): never { return synthGuard('Tracer', 'addAnnotation'); }
 	addMetadata(..._args: unknown[]): never { return synthGuard('Tracer', 'addMetadata'); }

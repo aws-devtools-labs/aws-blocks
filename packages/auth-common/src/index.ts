@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 
 // Canonical auth error vocabulary + guards. See `errors.ts`.
 export type { AuthErrorName } from './errors.js';

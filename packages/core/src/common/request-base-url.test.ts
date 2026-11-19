@@ -6,13 +6,13 @@ import assert from 'node:assert';
 import * as first from './request-base-url.js';
 
 // Dynamic on purpose: a query string gives Node a separate module instance, as a
-// duplicated `@aws-blocks/core` copy in a dependency tree would. A static import
+// duplicated `@aws-cdk-blocks/core` copy in a dependency tree would. A static import
 // would resolve to the same instance as `first`.
 const second: typeof first = await import(`./request-base-url.js?copy=${Date.now()}`);
 
-describe('getRequestBaseUrl across duplicate copies of @aws-blocks/core', () => {
+describe('getRequestBaseUrl across duplicate copies of @aws-cdk-blocks/core', () => {
 	const ctx = {
-		request: { url: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/auth/callback') },
+		request: { url: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/cdk-blocks/auth/callback') },
 	};
 
 	it('a base set by one copy is read by another (the stage survives)', () => {

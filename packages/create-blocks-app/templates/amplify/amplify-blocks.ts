@@ -4,7 +4,7 @@
  * Wires Building Blocks into the Amplify backend via a nested stack.
  * Passes Cognito config so Blocks can verify bearer tokens.
  */
-import { registerConfig } from '@aws-blocks/blocks/cdk';
+import { registerConfig } from 'aws-cdk-blocks/cdk';
 import type { Stack } from 'aws-cdk-lib';
 import { createBlocksBackend } from '../cdk-blocks/index.cdk.js';
 

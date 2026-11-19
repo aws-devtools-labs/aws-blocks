@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `createTestClient()` (`@aws-blocks/blocks/utils`): each test user's calls
+ * `createTestClient()` (`aws-cdk-blocks/utils`): each test user's calls
  * carry that user's cookies and no one else's — not another test user's, not
  * the shared jar `installCookieJar()` puts on `fetch`. Against a real HTTP
  * server on loopback that sets a session cookie per sign-in.
@@ -12,7 +12,7 @@ import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, test } from 'node:test';
-import { ApiNamespaceClient } from '@aws-blocks/core/client';
+import { ApiNamespaceClient } from '@aws-cdk-blocks/core/client';
 import { createTestClient, getLastAuthCode, installCookieJar } from './utils.js';
 
 type SessionApi = {
@@ -44,7 +44,7 @@ before(async () => {
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-	url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/aws-blocks/api`;
+	url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/cdk-blocks/api`;
 });
 
 after(() => {
@@ -138,7 +138,7 @@ describe('createTestClient', () => {
 		assert.strictEqual(seen.length, 2);
 	});
 
-	test('getLastAuthCode is exported next to it (from @aws-blocks/bb-auth/testing)', () => {
+	test('getLastAuthCode is exported next to it (from @aws-cdk-blocks/bb-auth/testing)', () => {
 		assert.strictEqual(typeof getLastAuthCode, 'function');
 	});
 });

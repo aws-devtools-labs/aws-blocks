@@ -15,7 +15,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { isBlocksError, registerSdkIdentifiers } from '@aws-blocks/core';
+import { isBlocksError, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { INTERNAL_ERROR_MESSAGE } from './error-mapping.js';
 import { AuthErrors } from './index.aws.js';
 import {

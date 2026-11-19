@@ -58,7 +58,7 @@ export type ReportedFramework = (typeof REPORTED_FRAMEWORKS)[number];
  * blocks. Events are kept for up to 1 year, and logs of all requests,
  * blocked or not, for up to 10 years.
  * Keep the first-run notice (`FIRST_RUN_NOTICE` in `identifiers.ts` and in
- * `create-blocks-app`'s `telemetry.ts`) and the `@aws-blocks/blocks` README in
+ * `create-blocks-app`'s `telemetry.ts`) and the `aws-cdk-blocks` README in
  * sync with this list.
  */
 export interface BlocksTelemetryEvent {

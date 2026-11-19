@@ -13,8 +13,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthState } from '@aws-blocks/auth-common';
-import { ApiError } from '@aws-blocks/core';
+import type { AuthState } from '@aws-cdk-blocks/auth-common';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser, captureLogger, makeAuth } from './test-helpers.js';

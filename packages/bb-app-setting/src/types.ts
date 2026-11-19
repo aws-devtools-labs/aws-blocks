@@ -9,7 +9,7 @@
  * Both `index.mock.ts` and `index.aws.ts` re-export from here.
  */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 /**
  * Configuration options for creating an AppSetting.
