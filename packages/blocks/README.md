@@ -388,7 +388,7 @@ An event can include:
 - the AWS CDK Blocks and CDK versions, the framework, and the template name and version
 - the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent)
 
-The runner does not collect source files or ask for personal identifiers. The package manager user agent and template metadata are included as supplied: keep personal information, paths and secrets out of custom values. The collection endpoint receives your IP address; it is stored only in logs of requests blocked by the firewall. Events are kept for up to 1 year, and request logs for up to 10 years.
+The runner does not collect source files or ask for personal identifiers. The package manager user agent and template metadata are included as supplied: keep personal information, paths and secrets out of custom values. As with any HTTPS request, the collection endpoint also receives your IP address. It is not stored, except in logs of requests that the endpoint's firewall blocks. Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years.
 
 ### Output and exit codes
 
@@ -483,7 +483,7 @@ The lifecycle commands run the app's TypeScript with `tsx`:
 
 ### Migrating an existing app
 
-The `cdk-blocks` executable is not installed, and a global install or an `npx` invocation is not a substitute. For an app whose scripts call it or run generated `cdk-blocks/scripts/*.ts` wrappers:
+The `cdk-blocks` executable is not installed, and a global install or an `npx` invocation is not a substitute. For an app whose scripts call it or run generated `aws-blocks/scripts/*.ts` wrappers:
 
 1. Update the app's `aws-cdk-blocks` dependency to a release that exports `/run`.
 2. Install dependencies and commit that update.

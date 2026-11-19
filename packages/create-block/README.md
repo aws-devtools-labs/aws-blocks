@@ -17,7 +17,7 @@ npm run new:bb -- SearchIndex
 |---|---|---|
 | **contributor** | inside the cdk-blocks monorepo | generates `packages/bb-<name>` and wires it into `aws-cdk-blocks`, the root `workspaces`, the comprehensive test app, and a changeset |
 | **customer** | inside your own npm-workspaces repo | generates `packages/bb-<name>`, registers it in your root `workspaces`, and `npm install`s so your app can import it — no publish; your app code is untouched |
-| **external** | anywhere else | generates a standalone `@<scope>/bb-<name>` package (`keywords: ["cdk-blocks"]`), no workspace wiring |
+| **external** | anywhere else | generates a standalone `@<scope>/bb-<name>` package (`keywords: ["aws-blocks"]`), no workspace wiring |
 
 ## Options
 

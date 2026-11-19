@@ -87,7 +87,7 @@ This template is backend-only. To add a frontend:
    npx @aws-cdk-blocks/create-blocks-app ../react-reference --template react --skip-install
    ```
    Use its root `index.html`, `vite.config.ts`, React entry point and TypeScript project layout (including `cdk-blocks/tsconfig.json`). Replace the sample React component with your own; keep this app's backend and tests.
-   Merge the reference app's frontend dependencies, `build` and `typecheck` scripts, and `blocks.dev` settings into your root `package.json`, then run `npm install`. Vite serves the root `index.html`; `npm run dev` proxies it on http://localhost:3000.
+   Merge the reference app's frontend dependencies (including the React types), `build` and `typecheck` scripts into your root `package.json`. Set `blocks.dev` to `{ "port": 3001, "frontendPort": 3100 }`, replacing `frontend: false`. Run `npm install`, then `npm run build` and `npm run test:e2e`. Keeping port 3001 lets the existing tests and `npm run dev` use the same server.
 
 2. **Import APIs in your frontend:**
    ```ts

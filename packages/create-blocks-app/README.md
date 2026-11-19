@@ -93,7 +93,7 @@ Run `npm run help` for the task list or `npm run help sandbox destroy` for one t
 
 In an existing project, the CLI preserves existing scripts and avoids their `pre` and `post` hooks. It tries `blocks:<name>` for a conflicting unprefixed name, then numbered variants if needed. Use the name printed by the CLI, or find the `aws-cdk-blocks/run` entry with the task's trailing command in `package.json`.
 
-An app whose scripts run `cdk-blocks/scripts/*.ts` wrappers: update `aws-cdk-blocks`, then run `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate` from the app root to switch its scripts to this form and delete the wrappers it generated. See [Migrating an existing app](https://github.com/aws/cdk-blocks/tree/main/packages/blocks#migrating-an-existing-app).
+An app whose scripts run `aws-blocks/scripts/*.ts` wrappers: update `aws-cdk-blocks`, then run `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate` from the app root to switch its scripts to this form and delete the wrappers it generated. See [Migrating an existing app](https://github.com/aws/cdk-blocks/tree/main/packages/blocks#migrating-an-existing-app).
 
 ### `@aws-cdk-blocks/*` Dependency Versions
 

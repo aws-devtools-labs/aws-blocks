@@ -85,7 +85,7 @@ curl -X POST http://localhost:3001/cdk-blocks/api \
 ## Adding a frontend later
 
 This template is backend-only. To add a frontend, add `Hosting` to
-`cdk-blocks/index.cdk.ts` (`npm run docs Hosting`) and remove
+`cdk-blocks/index.cdk.ts` (`npm run docs core -- --section Hosting`) and remove
 `"frontend": false` from the dev server settings in `package.json` (`AGENTS.md`
 describes them). For a wired example, scaffold the `react` template in another
 directory and compare its `package.json`, `vite.config.ts` and
