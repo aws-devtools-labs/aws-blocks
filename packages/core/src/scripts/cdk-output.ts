@@ -23,6 +23,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { stripVTControlCharacters } from 'node:util';
 import {
   type CuratedStreams,
   createLineAssembler,
@@ -118,11 +119,8 @@ const NOISE_LINE =
 const EXPECTED_OPENNEXT_LINE =
   /Wrapper aws-lambda-streaming and converter aws-apigw-v1 are not compatible|^For the wrapper aws-lambda-streaming you should only use the following converters: aws-apigw-v2\s*$/;
 
-/** An ANSI color code (OpenNext colors its `ERROR` label). */
-const ANSI_COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
-
-/** `line` without ANSI color codes. */
-const withoutAnsi = (line: string): string => line.replace(ANSI_COLOR, '');
+/** `line` without ANSI color codes (OpenNext colors its `ERROR` label). */
+const withoutAnsi = (line: string): string => stripVTControlCharacters(line);
 
 /**
  * A line that reports a failure or rollback. Shown verbatim at `normal`:
