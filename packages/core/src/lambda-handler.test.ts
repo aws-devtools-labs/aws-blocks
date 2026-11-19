@@ -2457,7 +2457,7 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     const event = makeEvent({ headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'api.probe', params: [], id: 1 }) });
     const result = await invoke(uaProbeBackend(), event);
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/kotlin/9.9.9');
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0 client/kotlin/9.9.9');
   });
 
   it('drops the token when the header arrives under two letter cases', async () => {
@@ -2469,7 +2469,7 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     const event = makeEvent({ headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'api.probe', params: [], id: 1 }) });
     const result = await invoke(uaProbeBackend(), event);
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0');
   });
 
   it('drops the token when the header is repeated on the wire, as the container does', async () => {
@@ -2480,7 +2480,7 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     };
     const result = await invoke(uaProbeBackend(), event);
     const body = JSON.parse(result.body);
-    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 cdk-blocks/0.5.0');
   });
 
 });
