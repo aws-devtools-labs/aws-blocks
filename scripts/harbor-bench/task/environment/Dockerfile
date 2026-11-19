@@ -21,7 +21,7 @@ COPY bench /opt/bench
 RUN mkdir -p /app /var/lib/harbor-verifier \
     && chown node:node /app \
     && chmod 700 /var/lib/harbor-verifier \
-    && printf '@aws-blocks:registry=http://localhost:4873/registry/\nregistry=https://registry.npmjs.org/\naudit=false\nfund=false\nupdate-notifier=false\n' > /etc/bench-npmrc \
+    && printf 'registry=http://localhost:4873/registry/\naudit=false\nfund=false\nupdate-notifier=false\n' > /etc/bench-npmrc \
     && touch /etc/bench-npm-globalrc \
     && chmod -R a-w /opt/registry /opt/bench /etc/bench-npmrc /etc/bench-npm-globalrc
 

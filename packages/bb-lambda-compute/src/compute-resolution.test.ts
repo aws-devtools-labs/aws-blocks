@@ -17,12 +17,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
-import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import { BlocksStack, BlocksPresets, Scope } from '@aws-cdk-blocks/core/cdk';
+import type { DefaultComputeFactory } from '@aws-cdk-blocks/core/cdk/internal';
 import { LambdaCompute } from './index.cdk.js';
 
 // Inject LambdaCompute as the default-compute factory so `.compute` resolves to
-// it — the same thing @aws-blocks/blocks does for real apps, here passed through
+// it — the same thing aws-cdk-blocks does for real apps, here passed through
 // create()'s internal defaultComputeFactory option.
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
 

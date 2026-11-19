@@ -273,9 +273,9 @@ await replace(moduleUrl('wait-live'), {
 });
 const { deploy } = await import(moduleUrl('deploy'));
 // The running dev server's config, which the Node client and the e2e tests read.
-const local = { apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' };
+const local = { apiUrl: 'http://localhost:3000/cdk-blocks/api', environment: 'local' };
 // LEGACY: the config.json a sandbox deploy from core 0.8.0 or earlier wrote, with the sandbox's AWS URL.
-const legacy = { apiUrl: 'https://stub.example/prod/aws-blocks/api', environment: 'sandbox' };
+const legacy = { apiUrl: 'https://stub.example/prod/cdk-blocks/api', environment: 'sandbox' };
 mkdirSync('.cdk-blocks-sandbox', { recursive: true });
 writeFileSync('.cdk-blocks-sandbox/config.json', JSON.stringify(process.env.LEGACY ? legacy : local));
 await deploy({

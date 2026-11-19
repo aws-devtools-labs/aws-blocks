@@ -35,7 +35,7 @@ export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>(
  * to every log line), so everything one request logs can be correlated.
  *
  * Registered on `globalThis.__BLOCKS_REQUEST_ID_STORE__` and read from there, so
- * a Building Block that resolves its own copy of `@aws-blocks/core` still sees
+ * a Building Block that resolves its own copy of `@aws-cdk-blocks/core` still sees
  * the store the handler populated.
  */
 const REQUEST_ID_STORE_KEY = '__BLOCKS_REQUEST_ID_STORE__';
@@ -55,7 +55,7 @@ globalStores[REQUEST_ID_STORE_KEY] = requestIdStore;
  * Lambda this is the invocation's `awsRequestId` (the id in the function's
  * `START`/`END`/`REPORT` log lines). The local dev server sets none.
  *
- * Exported for Building Block authors from `@aws-blocks/core/bb-utils`.
+ * Exported for Building Block authors from `@aws-cdk-blocks/core/bb-utils`.
  */
 export function currentRequestId(): string | undefined {
   const id = requestIdStore.getStore();

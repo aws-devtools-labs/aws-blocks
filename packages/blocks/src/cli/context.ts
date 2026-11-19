@@ -13,13 +13,13 @@ import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
-import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
+import type * as CoreScriptsModule from '@aws-cdk-blocks/core/scripts';
 import { loadCoreScripts } from './core-load.js';
 import { CliError, UsageError } from './errors.js';
 import { Output, type OutputFormat, type OutputStream } from './output.js';
 import type { Globals, ParsedInvocation } from './parse.js';
 
-/** The `@aws-blocks/core/scripts` module. Tests replace parts of it. */
+/** The `@aws-cdk-blocks/core/scripts` module. Tests replace parts of it. */
 export type CoreScripts = typeof CoreScriptsModule;
 
 export interface SpawnSpec {
@@ -95,7 +95,7 @@ export interface CliDeps {
 	 */
 	argv: string[];
 	/**
-	 * Load `@aws-blocks/core/scripts`. A seam rather than a static import, so that
+	 * Load `@aws-cdk-blocks/core/scripts`. A seam rather than a static import, so that
 	 * `npm run --help` and usage errors do not load core, and tests can replace it.
 	 */
 	core(): Promise<CoreScripts>;
@@ -202,7 +202,7 @@ export function stageEnv(env: NodeJS.ProcessEnv, root: string, stage: keyof type
 	return copy;
 }
 
-/** The installed `@aws-blocks/blocks` version. */
+/** The installed `aws-cdk-blocks` version. */
 export function blocksVersion(): string {
 	const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8')) as {
 		version: string;
@@ -298,20 +298,20 @@ export class Context {
 		}
 	}
 
-	/** The project root, if the command runs inside an AWS Blocks app. */
+	/** The project root, if the command runs inside an AWS CDK Blocks app. */
 	findRoot(): string | undefined {
 		if (this.root === null) this.root = findProjectRoot(this.startDir);
 		return this.root;
 	}
 
-	/** The project root, or a CLI error when the command runs outside an AWS Blocks app. */
+	/** The project root, or a CLI error when the command runs outside an AWS CDK Blocks app. */
 	requireRoot(opts?: { allowLegacyBackendDir?: boolean }): string {
 		const root = opts?.allowLegacyBackendDir
 			? (this.findRoot() ?? findLegacyProjectRoot(this.startDir))
 			: this.findRoot();
 		if (!root) {
 			throw new CliError(
-				`not inside an AWS Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
+				`not inside an AWS CDK Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
 				{
 					hint: 'run the command from your app directory, or pass -C <app-dir>',
 				},

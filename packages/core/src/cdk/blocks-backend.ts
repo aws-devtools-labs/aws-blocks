@@ -116,13 +116,13 @@ export interface BlocksBackendProps {
 
 /**
  * Core's `create()` props: the public {@link BlocksBackendProps} plus the
- * required `defaultComputeFactory`, spread on by the umbrella (`@aws-blocks/blocks`).
+ * required `defaultComputeFactory`, spread on by the umbrella (`aws-cdk-blocks`).
  * Customers use {@link BlocksBackendProps} and never set the factory.
  *
  * @internal
  */
 export interface CoreBlocksBackendProps extends BlocksBackendProps {
-	/** Builds the backend's default compute. Injected by `@aws-blocks/blocks`. */
+	/** Builds the backend's default compute. Injected by `aws-cdk-blocks`. */
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
@@ -215,7 +215,7 @@ export function assertBlocksDefaults(
 	}
 	throw new Error(
 		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
-			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
+			"  import { BlocksPresets } from 'aws-cdk-blocks/cdk';\n" +
 			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
 			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
 			`cdk-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
@@ -438,7 +438,7 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
  * stamps each non-default one with its own id (`BLOCKS_API_COMPUTE_ID`). The
  * dispatcher (see `apiNamespaceFilterFromEnv`) then refuses, on the default
  * compute, a namespace placed elsewhere — including on the bare
- * `/aws-blocks/api` endpoint — and, on a non-default compute, every namespace
+ * `/cdk-blocks/api` endpoint — and, on a non-default compute, every namespace
  * that isn't its own. Nothing is set when no namespace has its own compute: the
  * default compute serves them all either way.
  *
@@ -466,7 +466,7 @@ export function applyStrictNamespacePlacement(
 		cdk.Annotations.of(defaultCompute).addWarningV2(
 			'blocks:apigateway:bare-endpoint-serves-placed-namespaces',
 			`API namespaces on their own compute (${placed.join(', ')}) can also be called through the bare ` +
-				'/aws-blocks/api endpoint, which runs them on the default compute instead. To serve each namespace ' +
+				'/cdk-blocks/api endpoint, which runs them on the default compute instead. To serve each namespace ' +
 				"only on its own compute, add `strictNamespacePlacement: true` to the stack's `defaults` (keep the " +
 				'preset you already use); the typed clients already call each namespace at its own path. If raw ' +
 				'callers still need the bare endpoint for these namespaces, acknowledge this warning by calling ' +
@@ -654,7 +654,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	}
 	/**
 	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
-	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * `/cdk-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
 	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
 	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
 	 * deploy-time value works (a `CfnOutput`, Amplify outputs, …).
@@ -771,7 +771,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Lambda function (the shared gateway's target), and a block reading
 		// `this.compute` in its constructor (during that import) must resolve to
 		// it. The factory is supplied by the umbrella
-		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+		// aws-cdk-blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		backend._defaultCompute = props.defaultComputeFactory(backend);
 		// file:// URL (not a raw path) so the cache-busting query works on Windows,

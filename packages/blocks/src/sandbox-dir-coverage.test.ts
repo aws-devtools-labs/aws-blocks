@@ -72,7 +72,7 @@ const SERVED_CONSTANT = 'BLOCKS_SANDBOX_SERVED_DIR';
 
 /**
  * Shipped source naming the published path as TEXT: a comment has no interpolation to
- * make, and `@aws-blocks/hosting` cannot import the constant at all. Each entry is safe
+ * make, and `@aws-cdk-blocks/hosting` cannot import the constant at all. Each entry is safe
  * only because the file has no disk-facing sandbox path to confuse it with, which
  * `sandbox-url-decoupling.test.ts` asserts. Do not add a file that touches both.
  */

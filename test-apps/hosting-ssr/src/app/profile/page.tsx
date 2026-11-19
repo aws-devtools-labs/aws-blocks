@@ -1,6 +1,6 @@
 import { api } from 'hosting-ssr-aws-blocks';
 import { redirect } from 'next/navigation';
-import { withAuth } from '@aws-blocks/blocks/server';
+import { withAuth } from 'aws-cdk-blocks/server';
 
 export const dynamic = 'force-dynamic';
 

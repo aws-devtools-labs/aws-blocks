@@ -7,7 +7,7 @@
 // (startSandbox uses process.cwd() as projectRoot). The stack name still comes
 // from BLOCKS_STACK_NAME / BLOCKS_STACK_SUFFIX in index.cdk.ts.
 
-import { startSandbox } from '@aws-blocks/blocks/scripts';
+import { startSandbox } from 'aws-cdk-blocks/scripts';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 

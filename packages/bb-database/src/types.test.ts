@@ -5,7 +5,7 @@
 // `tsc --build` fails. The runtime test only confirms the file compiled, so the rules cannot be skipped.
 import assert from 'node:assert';
 import { test } from 'node:test';
-import type { Scope } from '@aws-blocks/core';
+import type { Scope } from '@aws-cdk-blocks/core';
 import type { DatabaseCluster as DatabaseClusterType, Database as DatabaseType } from './index.mock.js';
 import type { ClusterKind, ScopedDatabase } from './types.js';
 

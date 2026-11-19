@@ -3,8 +3,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
-import { AppSettingErrors } from '@aws-blocks/bb-app-setting';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { AppSettingErrors } from '@aws-cdk-blocks/bb-app-setting';
 import type { api as apiType } from 'cdk-blocks';
 import { getTestSupport } from './test-support.js';
 

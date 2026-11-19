@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @aws-blocks/bb-file-bucket/mock-middleware
+ * @aws-cdk-blocks/bb-file-bucket/mock-middleware
  *
  * Self-registering client middleware for local dev.
  * Hydrates { __blocks: 'file-bucket/download' } and { __blocks: 'file-bucket/upload' }
  * descriptors into live file handles with .download() / .upload() methods.
  */
 
-import { registerMiddleware } from '@aws-blocks/core/client';
+import { registerMiddleware } from '@aws-cdk-blocks/core/client';
 import type { FileDownloadClient, FileUploadClient } from './types.js';
 
 export type { FileDownloadClient, FileUploadClient };

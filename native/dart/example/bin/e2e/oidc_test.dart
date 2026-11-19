@@ -14,9 +14,9 @@
 ///   - provider:      google            (stubIdp(), keyed `google`)
 ///   - relay origin:  nativebindings://auth
 ///   - RPC (authed):  api.oidcRequireAuth   (bound to the `auth-oidc` block)
-///   - auth routes:   `Auth`'s fixed routes under /aws-blocks/auth/* at the
+///   - auth routes:   `Auth`'s fixed routes under /cdk-blocks/auth/* at the
 ///                    API **origin** — NOT under the JSON-RPC prefix
-///                    (/aws-blocks/api). The client is the one the
+///                    (/cdk-blocks/api). The client is the one the
 ///                    backend's `oidcAuthApi.getClient()` returns
 ///                    (`Auth.createOidcApi()`), on the RPC URL; it cuts
 ///                    the origin itself.
@@ -109,17 +109,17 @@ class HttpRelayLauncher implements BrowserLauncher {
 }
 
 /// Strip the JSON-RPC suffix to derive the API origin the OIDC relay routes
-/// (/aws-blocks/auth/*) resolve against. Handles both the deployed
-/// (`/aws-blocks/api`) and the local dev (`/aws-blocks`) layouts.
+/// (/cdk-blocks/auth/*) resolve against. Handles both the deployed
+/// (`/cdk-blocks/api`) and the local dev (`/cdk-blocks`) layouts.
 String _deriveOidcBase(String blocksUrl) {
   final uri = Uri.parse(blocksUrl.trim());
-  // The auth routes (/aws-blocks/auth/*) resolve against the API *origin*
+  // The auth routes (/cdk-blocks/auth/*) resolve against the API *origin*
   // (scheme://host plus any API Gateway stage prefix like `/prod`), NOT the
-  // JSON-RPC path; the route paths carry the `/aws-blocks` prefix. Strip
-  // everything from the first `/aws-blocks` segment onward, so this is robust to
-  // a path containing `/aws-blocks/api` once, multiple times (a doubled
-  // BLOCKS_URL), or just `/aws-blocks` — all collapse to the same origin+stage.
-  final idx = uri.path.indexOf('/aws-blocks');
+  // JSON-RPC path; the route paths carry the `/cdk-blocks` prefix. Strip
+  // everything from the first `/cdk-blocks` segment onward, so this is robust to
+  // a path containing `/cdk-blocks/api` once, multiple times (a doubled
+  // BLOCKS_URL), or just `/cdk-blocks` — all collapse to the same origin+stage.
+  final idx = uri.path.indexOf('/cdk-blocks');
   final stagePath = idx >= 0 ? uri.path.substring(0, idx) : uri.path;
   final base = '${uri.scheme}://${uri.authority}$stagePath';
   return base.replaceAll(RegExp(r'/+$'), '');
@@ -128,7 +128,7 @@ String _deriveOidcBase(String blocksUrl) {
 void main() async {
   final rpcUrl =
       (Platform.environment['BLOCKS_URL'] ??
-              'http://localhost:3001/aws-blocks/api')
+              'http://localhost:3001/cdk-blocks/api')
           .trim();
   final oidcBase = _deriveOidcBase(rpcUrl);
 

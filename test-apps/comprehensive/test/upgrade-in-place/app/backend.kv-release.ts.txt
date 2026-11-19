@@ -3,8 +3,8 @@
 
 // Fixture of `upgrade-legacy-kv-store.ts`: the app on release 0.4.0.
 
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 import { z } from 'zod';
 
 const scope = new Scope('upgrade');

@@ -209,7 +209,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 		// The block, as `npm run dev` runs it: its first statement applies the file.
 		const script =
 			`const { Database, sql } = await import(${JSON.stringify(INDEX_MOCK)});` +
-			`const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-blocks/core'))});` +
+			`const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-cdk-blocks/core'))});` +
 			"await new Database(new Scope('app'), 'main').query(sql`SELECT 1`);";
 		await new Promise<void>((resolve, reject) =>
 			execFile(process.execPath, ['--input-type=module', '-e', script], { cwd }, (error, _out, stderr) =>

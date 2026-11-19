@@ -131,7 +131,7 @@ updates:
     versioning-strategy: increase
     ignore:
       # Published from this repo; the templates track them with "*".
-      - dependency-name: "@aws-blocks/*"
+      - dependency-name: "@aws-cdk-blocks/*"
       # Minor and patch only: template majors move by hand.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]

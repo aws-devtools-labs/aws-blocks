@@ -25,17 +25,17 @@
  * at compile time; at every protected call at runtime, and in spec generation).
  *
  * The spec generator lists the methods through the namespace's discovery
- * handler (`API_NAMESPACE_DISCOVER`, from `@aws-blocks/core/bb-utils`): only it calls
+ * handler (`API_NAMESPACE_DISCOVER`, from `@aws-cdk-blocks/core/bb-utils`): only it calls
  * `methods` without a session, with a placeholder user, and it is never called
  * to serve a request.
  *
  * @internal
  */
 
-import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { ApiError, ApiNamespace } from '@aws-blocks/core';
+import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { ApiError, ApiNamespace } from '@aws-cdk-blocks/core';
 // Core's discovery-handler key: read by the spec generator only.
-import { API_NAMESPACE_DISCOVER } from '@aws-blocks/core/bb-utils';
+import { API_NAMESPACE_DISCOVER } from '@aws-cdk-blocks/core/bb-utils';
 import type {
 	ApiMethods,
 	AuthenticatedUser,

@@ -79,10 +79,10 @@ describe('kebab derivation', () => {
 });
 
 describe('name derivation by mode', () => {
-	test('contributor uses @aws-blocks scope', () => {
+	test('contributor uses @aws-cdk-blocks scope', () => {
 		const n = deriveNames('SearchIndex', 'contributor', 'ignored');
 		assert.strictEqual(n.folder, 'bb-search-index');
-		assert.strictEqual(n.pkgName, '@aws-blocks/bb-search-index');
+		assert.strictEqual(n.pkgName, '@aws-cdk-blocks/bb-search-index');
 	});
 	test('external uses the given scope', () => {
 		const n = deriveNames('SearchIndex', 'external', 'acme');

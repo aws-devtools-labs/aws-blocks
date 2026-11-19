@@ -284,7 +284,7 @@ console.log('[Comprehensive Test App] Loaded — all Building Blocks wired up');
 // Agent Chat
 // ============================================================================
 
-import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
+import { createChat, realtimeTransport } from '@aws-cdk-blocks/bb-agent/client';
 
 const chatMessages = document.getElementById('chat-messages')!;
 const chatInput = document.getElementById('chat-input') as HTMLInputElement;

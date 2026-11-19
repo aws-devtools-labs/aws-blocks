@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 
 // ─── IMPORTANT ───────────────────────────────────────────────────────────────
 // Do NOT use local files, in-memory arrays, or local databases for persistence.
@@ -31,7 +31,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 // ─── Examples (uncomment to use) ─────────────────────────────────────────────
 //
-// import { Auth, KVStore, Realtime } from '@aws-blocks/blocks';
+// import { Auth, KVStore, Realtime } from 'aws-cdk-blocks';
 // import { z } from 'zod';  // zod ships with new bare apps; when adding AWS Blocks to an existing project, run npm install zod
 //
 // // Auth (full API: npm run docs Auth):
@@ -42,7 +42,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 //   codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
 // });
 // export const authApi = auth.createApi();
-// // Frontend: Authenticator(authApi) from '@aws-blocks/blocks/ui'
+// // Frontend: Authenticator(authApi) from 'aws-cdk-blocks/ui'
 // // Tests/programmatic (sign-up confirms the email with a 6-digit code):
 // //   authApi.setAuthState({ action: 'signUp', username: '...', password: '...', email: '...' })
 // //   authApi.setAuthState({ action: 'confirmSignUp', username: '...', code: '123456' })

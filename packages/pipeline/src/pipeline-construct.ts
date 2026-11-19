@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { pathToFileURL } from 'node:url';
-import { defaultPrefixForKind, isManagedValue, secretStoreLocator } from '@aws-blocks/hosting';
-import { isCdkSecret, resolveSecretsAtSynth } from '@aws-blocks/hosting/constructs';
+import { defaultPrefixForKind, isManagedValue, secretStoreLocator } from '@aws-cdk-blocks/hosting';
+import { isCdkSecret, resolveSecretsAtSynth } from '@aws-cdk-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
@@ -49,7 +49,7 @@ function resolveRelativeToCaller(relativePath: string): string {
 
       // Skip framework frames so we land on the USER's file: this package's own
       // machinery (`pipeline-construct`), node_modules, and the Blocks `core`
-      // Pipeline wrapper (`@aws-blocks/core` re-exports Pipeline via a subclass at
+      // Pipeline wrapper (`@aws-cdk-blocks/core` re-exports Pipeline via a subclass at
       // `core/{src,dist}/pipeline/index.*` that injects the Blocks namespace — in a
       // monorepo/workspace its frame is NOT under node_modules, so match it here).
       const isFrameworkFrame =

@@ -1,5 +1,5 @@
 import { api, authBasicApi, authCognitoApi, oidcAuthStateApi } from 'cdk-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/bb-auth/ui';
+import { Authenticator, onAuthChange } from '@aws-cdk-blocks/bb-auth/ui';
 
 function esc(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

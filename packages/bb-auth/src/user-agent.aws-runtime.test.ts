@@ -5,7 +5,7 @@
  * `Auth`'s session store reports `Auth` as its parent block on the wire.
  *
  * Runs in the package's second test pass, under `--conditions=aws-runtime`, so
- * `@aws-blocks/bb-kv-store` resolves its AWS entry and signs a real request.
+ * `@aws-cdk-blocks/bb-kv-store` resolves its AWS entry and signs a real request.
  * The first pass (default condition) resolves the mock store, which has no SDK
  * client; there the suite is skipped rather than passing vacuously.
  *
@@ -17,9 +17,9 @@
 
 import assert from 'node:assert';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
-import { clearRouteRegistry, Scope } from '@aws-blocks/core';
-import { CORE_VERSION } from '@aws-blocks/core/version';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { clearRouteRegistry, Scope } from '@aws-cdk-blocks/core';
+import { CORE_VERSION } from '@aws-cdk-blocks/core/version';
 import { Auth } from './index.aws.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -102,7 +102,7 @@ async function capturedUserAgentFor(scope: ScopeParent): Promise<string> {
 	return captured;
 }
 
-/** Whether `@aws-blocks/bb-kv-store` resolved its AWS entry (this pass runs under `aws-runtime`). */
+/** Whether `@aws-cdk-blocks/bb-kv-store` resolved its AWS entry (this pass runs under `aws-runtime`). */
 function storeIsAws(): boolean {
 	clearRouteRegistry();
 	return sessionStore(makeAuth({ id: 'probe-app' })).docClient !== undefined;

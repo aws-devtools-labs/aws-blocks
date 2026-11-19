@@ -1,6 +1,6 @@
-import { Auth, Auth as Federated, github } from '@aws-blocks/bb-auth';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Scope } from '@aws-blocks/core';
+import { Auth, Auth as Federated, github } from '@aws-cdk-blocks/bb-auth';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });

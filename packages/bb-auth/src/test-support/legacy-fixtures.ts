@@ -33,6 +33,10 @@
  * names the deletion commit; use its parent), `npm ci && npm run build`, then
  * in `packages/bb-auth`: `UPDATE_LEGACY_FIXTURES=1 node --test dist/legacy-fixtures.proof.test.js`,
  * and copy the rewritten fixtures here. There is no other source for them.
+ *
+ * Specifiers of this repo's own packages were later rewritten to the
+ * `@aws-cdk-blocks` names so they resolve in this checkout, so the fixtures are
+ * no longer byte-equal to the capture. Regenerate, then apply the same rewrite.
  */
 
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';

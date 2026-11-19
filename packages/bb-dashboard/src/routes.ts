@@ -9,8 +9,8 @@
  * (set by the CDK layer) or from the provided deployment URL.
  */
 
-import { RawRoute, type BlocksContext } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { RawRoute, type BlocksContext } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 
 /** Environment variable key used to pass the dashboard URL from CDK to runtime. */
 export const BB_DASHBOARD_URL_ENV = 'BB_DASHBOARD_URL';
@@ -19,7 +19,7 @@ export const BB_DASHBOARD_URL_ENV = 'BB_DASHBOARD_URL';
  * Mount the dashboard redirect route on the given scope.
  *
  * @param scope - Parent scope to register the RawRoute on.
- * @param routePath - HTTP path for the redirect (e.g., '/aws-blocks/dashboard').
+ * @param routePath - HTTP path for the redirect (e.g., '/cdk-blocks/dashboard').
  * @param dashboardUrl - Fallback CloudWatch URL when the environment does not supply one.
  */
 export function mountDashboardRoute(

@@ -63,7 +63,7 @@ export type ComputeApiIngress =
 			/** Subnets for the VPC link's network interfaces (the load balancer's subnets). */
 			readonly subnets: ec2.SubnetSelection;
 			/**
-			 * Route an exact request path (`/aws-blocks/api/{name}`) on the listener to
+			 * Route an exact request path (`/cdk-blocks/api/{name}`) on the listener to
 			 * this compute. Called once per namespace path by the gateway build.
 			 */
 			routePath(path: string): void;
@@ -88,7 +88,7 @@ export type ComputeApiIngress =
  * every compute when the app contains a `Tracer` (presence-gated).
  *
  * The abstract base lives in core (a framework primitive); concrete computes
- * live in their own packages (e.g. `LambdaCompute` in `@aws-blocks/bb-lambda-compute`).
+ * live in their own packages (e.g. `LambdaCompute` in `@aws-cdk-blocks/bb-lambda-compute`).
  *
  * A `ComputeBase` is itself a {@link ComputeProvider} that provides itself, so a
  * raw backing is interchangeable with the public `Compute` block wherever a

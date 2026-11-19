@@ -1,5 +1,5 @@
-import type { BlocksContext } from '@aws-blocks/core';
-import { Scope } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { AuthCognito } from './barrel.js';
 import { AuthCognito as Cognito, CognitoErrors } from './local.js';
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Compile-only checks for `@aws-blocks/bb-auth/ui`'s typed overrides. Each
+ * Compile-only checks for `@aws-cdk-blocks/bb-auth/ui`'s typed overrides. Each
  * `@ts-expect-error` asserts the next line is a type error; if it stops being
  * one, the build fails.
  *

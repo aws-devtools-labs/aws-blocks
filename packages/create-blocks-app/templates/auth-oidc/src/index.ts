@@ -1,6 +1,6 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'cdk-blocks';
-import { Authenticator, onAuthChange, injectTheme } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange, injectTheme } from 'aws-cdk-blocks/ui';
 
 injectTheme();
 
@@ -19,7 +19,7 @@ function showMessage(el: HTMLElement, text: string, cls?: 'success' | 'error') {
 document.addEventListener('DOMContentLoaded', () => {
   // The Authenticator renders the signed-out state's external sign-in action
   // as an HTML form that redirects to the block's per-provider
-  // `/aws-blocks/auth/signin/<provider>` route. Locally that drives the
+  // `/cdk-blocks/auth/signin/<provider>` route. Locally that drives the
   // in-process stub IdP; with a real provider it redirects to the IdP's own
   // login page. It re-renders on sign-in/out and offers a sign-out button.
   const authContainer = document.getElementById('auth-container');

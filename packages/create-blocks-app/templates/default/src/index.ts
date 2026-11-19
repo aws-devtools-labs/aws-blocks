@@ -5,7 +5,7 @@
  * Imports the typed backend API via `cdk-blocks` (auto-generated proxy).
  */
 import { api, authApi } from 'cdk-blocks';
-import { AccountMenuBar, AuthenticatedContent, injectTheme, StatusMessage } from '@aws-blocks/blocks/ui';
+import { AccountMenuBar, AuthenticatedContent, injectTheme, StatusMessage } from 'aws-cdk-blocks/ui';
 import { html, render } from 'lit-html';
 
 injectTheme();

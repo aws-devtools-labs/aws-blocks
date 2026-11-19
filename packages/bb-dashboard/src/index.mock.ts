@@ -7,12 +7,12 @@
  * The dev server serves a local observability page at the configured path,
  * without creating a CloudWatch dashboard or resolving credentials.
  */
-import type { ScopeParent } from '@aws-blocks/core';
-import { RawRoute, Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { RawRoute, Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { renderLocalDashboard } from './local-dashboard.js';
 import type { DashboardOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import { assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-dashboard');
@@ -35,7 +35,7 @@ export type {
  * @example
  * ```typescript
  * const dashboard = new Dashboard(scope, 'dashboard', { title: 'My App' });
- * // Logs: "[Dashboard] Local dashboard: /aws-blocks/dashboard"
+ * // Logs: "[Dashboard] Local dashboard: /cdk-blocks/dashboard"
  * // dashboard.url === null
  * ```
  */
@@ -67,7 +67,7 @@ export class Dashboard extends Scope {
 
 		const routePath = options?.routePath;
 		if (routePath !== false) {
-			const path = routePath ?? '/aws-blocks/dashboard';
+			const path = routePath ?? '/cdk-blocks/dashboard';
 			const page = renderLocalDashboard(title, options);
 			new RawRoute(scope, 'dashboard-redirect', {
 				method: 'GET',

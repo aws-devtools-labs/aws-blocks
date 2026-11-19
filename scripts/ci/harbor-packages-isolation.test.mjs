@@ -175,9 +175,9 @@ describe('plain-tree guard', () => {
 		return { status: r.status, output: readFileSync(out, 'utf8'), buildDir };
 	}
 	const registry = (d) => {
-		mkdirSync(join(d, 'dist-registry', 'registry', '@aws-blocks'), { recursive: true });
+		mkdirSync(join(d, 'dist-registry', 'registry', '@aws-cdk-blocks'), { recursive: true });
 		writeFileSync(join(d, 'dist-registry', 'publish-manifest.json'), '{}');
-		writeFileSync(join(d, 'dist-registry', 'registry', '@aws-blocks', 'core-1.0.0.tgz'), 'x');
+		writeFileSync(join(d, 'dist-registry', 'registry', '@aws-cdk-blocks', 'core-1.0.0.tgz'), 'x');
 		return join(d, 'dist-registry');
 	};
 	const rejects = (name, setup) =>

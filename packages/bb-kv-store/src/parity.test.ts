@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { z } from 'zod';
 import { KVStore as AwsKVStore } from './index.aws.js';
 import { KVStore, KVStoreErrors } from './index.mock.js';

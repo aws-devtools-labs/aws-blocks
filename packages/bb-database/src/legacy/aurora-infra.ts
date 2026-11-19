@@ -7,7 +7,7 @@
 // Do not change a construct id, a property or a default here. The migration function of the earlier block is
 // not declared; the block's own migration resources take its place.
 
-import type { VpcContext } from '@aws-blocks/core/cdk';
+import type { VpcContext } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';

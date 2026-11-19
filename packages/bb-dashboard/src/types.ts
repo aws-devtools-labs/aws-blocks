@@ -14,7 +14,7 @@
 // ── Observability BB structural interfaces ──────────────────────────────────
 
 /**
- * Structural interface satisfied by `@aws-blocks/bb-metrics` instances.
+ * Structural interface satisfied by `@aws-cdk-blocks/bb-metrics` instances.
  * Requires `namespace` which is the resolved CloudWatch namespace
  * (either explicitly configured or defaulting to the Metrics BB's scope fullId).
  */
@@ -206,7 +206,7 @@ export interface DashboardOptions {
 	 * The redirect requires AWS Console login to view the dashboard —
 	 * exposing the URL alone grants no data access.
 	 *
-	 * @default '/aws-blocks/dashboard'
+	 * @default '/cdk-blocks/dashboard'
 	 */
 	routePath?: string | false;
 }

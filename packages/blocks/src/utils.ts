@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { CLIENT_FETCH_STORE } from '@aws-blocks/core/bb-utils';
+import { CLIENT_FETCH_STORE } from '@aws-cdk-blocks/core/bb-utils';
 
 let installed = false;
 
@@ -17,7 +17,7 @@ let installed = false;
  *
  * @example
  * ```typescript
- * import { installCookieJar } from '@aws-blocks/blocks/utils';
+ * import { installCookieJar } from 'aws-cdk-blocks/utils';
  * installCookieJar();
  *
  * const { api, authApi } = await import('cdk-blocks');
@@ -75,7 +75,7 @@ function withCookieJar(jar: Map<string, string>, send: typeof fetch): typeof fet
   return wrapper;
 }
 
-/** The key an `ApiNamespaceClient` (`@aws-blocks/core/client`) answers with its namespace. */
+/** The key an `ApiNamespaceClient` (`@aws-cdk-blocks/core/client`) answers with its namespace. */
 const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
 
 /**
@@ -146,7 +146,7 @@ function bindClient<C extends object>(client: C, send: typeof fetch): C {
  *
  * @example
  * ```typescript
- * import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
+ * import { createTestClient, getLastAuthCode } from 'aws-cdk-blocks/utils';
  *
  * const app = await import('cdk-blocks');
  * const owner = createTestClient(app);
@@ -176,7 +176,7 @@ export function createTestClient<const T extends object>(clients: T): T {
   });
 }
 
-export { type GetLastAuthCodeOptions, getLastAuthCode, totpCodeFor } from '@aws-blocks/bb-auth/testing';
+export { type GetLastAuthCodeOptions, getLastAuthCode, totpCodeFor } from '@aws-cdk-blocks/bb-auth/testing';
 
 /**
  * Returns true if a server is already listening on the given port.
@@ -186,7 +186,7 @@ export { type GetLastAuthCodeOptions, getLastAuthCode, totpCodeFor } from '@aws-
  *
  * @example
  * ```typescript
- * import { isServerRunning } from '@aws-blocks/blocks/utils';
+ * import { isServerRunning } from 'aws-cdk-blocks/utils';
  *
  * if (!await isServerRunning()) {
  *   server = spawn('npm', ['run', 'dev:server'], { ... });

@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, test } from 'node:test';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { Secret, SecretErrors, type SecretOptions, type WritableSecret } from './index.mock.js';

@@ -60,6 +60,8 @@ import {
 	UNAUTHENTICATED_AWS_ACTIONS,
 	UsageError,
 	upgradeRevisionErrors,
+	blocksNamesFromUmbrella,
+	retargetBlocksImports,
 } from './lib.js';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -191,7 +193,7 @@ describe('the base revision: pinned to the last AuthCognito release, and refused
 	test('the package must really be bb-auth-cognito', () => {
 		assert.strictEqual(legacyPackageProblem({ name: LEGACY_PACKAGE_NAME, version: '0.1.10' }, 'r'), null);
 		assert.match(
-			legacyPackageProblem({ name: '@aws-blocks/bb-auth' }, 'r') ?? '',
+			legacyPackageProblem({ name: '@aws-cdk-blocks/bb-auth' }, 'r') ?? '',
 			/not @aws-blocks\/bb-auth-cognito/,
 		);
 		assert.ok(legacyPackageProblem(null, 'r'));
@@ -892,5 +894,55 @@ describe('JSON-RPC and the session cookie', () => {
 		);
 		assert.strictEqual(extractSessionCookie(['auth_x=v; Max-Age=0'], now), null);
 		assert.strictEqual(extractSessionCookie([], now), null);
+	});
+});
+
+describe('blocksNamesFromUmbrella', () => {
+	test('scopes siblings under the unscoped umbrella name', () => {
+		assert.deepStrictEqual(blocksNamesFromUmbrella('aws-cdk-blocks'), {
+			umbrella: 'aws-cdk-blocks',
+			scope: '@aws-cdk-blocks/',
+		});
+	});
+
+	test("keeps a scoped umbrella's own scope, as the pre-rename base revision has", () => {
+		assert.deepStrictEqual(blocksNamesFromUmbrella('@aws-blocks/blocks'), {
+			umbrella: '@aws-blocks/blocks',
+			scope: '@aws-blocks/',
+		});
+	});
+});
+
+describe('retargetBlocksImports', () => {
+	const before = blocksNamesFromUmbrella('@aws-blocks/blocks');
+
+	test('retargets the umbrella, its subpaths and the sibling scope', () => {
+		const source = [
+			"import { ApiNamespace, Scope } from 'aws-cdk-blocks';",
+			"import { BlocksPresets } from 'aws-cdk-blocks/cdk';",
+			"import { deploy } from 'aws-cdk-blocks/scripts';",
+			"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
+			'',
+		].join('\n');
+		assert.strictEqual(
+			retargetBlocksImports(source, before),
+			[
+				"import { ApiNamespace, Scope } from '@aws-blocks/blocks';",
+				"import { BlocksPresets } from '@aws-blocks/blocks/cdk';",
+				"import { deploy } from '@aws-blocks/blocks/scripts';",
+				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				'',
+			].join('\n'),
+		);
+	});
+
+	test('leaves the app\'s own aws-blocks workspace package alone', () => {
+		const source = "import { authApi } from 'aws-blocks';\n";
+		assert.strictEqual(retargetBlocksImports(source, before), source);
+	});
+
+	test('is a no-op for the current checkout', () => {
+		const source = "import { Scope } from 'aws-cdk-blocks';\nimport { KVStore } from '@aws-cdk-blocks/bb-kv-store';\n";
+		assert.strictEqual(retargetBlocksImports(source, blocksNamesFromUmbrella('aws-cdk-blocks')), source);
 	});
 });

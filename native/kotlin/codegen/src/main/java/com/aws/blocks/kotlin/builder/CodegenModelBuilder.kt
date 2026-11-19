@@ -35,7 +35,7 @@ import kotlinx.serialization.json.booleanOrNull
 private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
 
 /** The path a Blocks backend serves RPC on. */
-private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
+private const val DEFAULT_RPC_PATH = "/cdk-blocks/api"
 
 /**
  * What a narrowed type argument resolves to until something names it: the values the spec permits,

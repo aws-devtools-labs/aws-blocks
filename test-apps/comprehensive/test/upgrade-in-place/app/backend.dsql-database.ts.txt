@@ -4,7 +4,7 @@
 // Fixture of `upgrade-sql-blocks.ts`: the same app on this checkout. The block is a `Database` with
 // the id and the migrations directory of the `DistributedDatabase`.
 
-import { ApiNamespace, Database, Scope, sql } from '@aws-blocks/blocks';
+import { ApiNamespace, Database, Scope, sql } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
 const ledger = new Database(scope, 'ledger', { migrationsPath: './cdk-blocks/migrations' });

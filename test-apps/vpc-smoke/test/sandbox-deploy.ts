@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { startSandbox } from '@aws-blocks/blocks/scripts';
+import { startSandbox } from 'aws-cdk-blocks/scripts';
 
 const backendPath = process.argv[2];
 

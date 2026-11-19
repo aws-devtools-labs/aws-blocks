@@ -4,11 +4,11 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
-import { blocksError, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
-import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { blocksError, registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
 import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
@@ -31,7 +31,7 @@ export type {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 // Secrets share the same local store as AppSetting — `.bb-data/settings.json`,
-// a flat `{ key: value }` map at the project root — so the `/aws-blocks/settings`
+// a flat `{ key: value }` map at the project root — so the `/cdk-blocks/settings`
 // route surfaces settings AND secrets in one place, locally and when deployed.
 // The CURRENT value lives here as a plain `{ key: value }` entry (human-editable
 // via the route). Version HISTORY (current + previous, for get({ version }) /

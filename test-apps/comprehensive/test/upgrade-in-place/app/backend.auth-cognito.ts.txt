@@ -12,8 +12,8 @@
  * is exactly the customer's upgrade.
  */
 
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { AuthCognito } from '@aws-cdk-blocks/bb-auth-cognito';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
 

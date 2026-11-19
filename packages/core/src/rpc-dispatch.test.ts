@@ -9,7 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { secret, config, isManagedValue as hostingIsManagedValue } from '@aws-blocks/hosting';
+import { secret, config, isManagedValue as hostingIsManagedValue } from '@aws-cdk-blocks/hosting';
 import { ApiNamespace } from './api.js';
 import { isApiNamespace, isDispatchableExport, isScopeLike, markServerOnlyFunction, resolveApiNamespace, resolveApiMethod, rpcErrorHttpStatus, httpErrorStatusExports } from './rpc-dispatch.js';
 import { ApiError, blocksError } from './errors.js';

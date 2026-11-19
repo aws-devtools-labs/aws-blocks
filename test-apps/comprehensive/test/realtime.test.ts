@@ -4,7 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { api as apiType } from 'cdk-blocks';
 
 type Cursor = Parameters<typeof apiType.realtimePublishCursor>[0];

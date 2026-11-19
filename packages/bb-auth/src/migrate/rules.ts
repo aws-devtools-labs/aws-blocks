@@ -24,9 +24,14 @@ export type OldBlock = 'basic' | 'cognito' | 'oidc';
 export const TODO_TAG = 'TODO(aws-blocks-auth-migrate)';
 
 /** The new package. */
-export const NEW_MODULE = '@aws-blocks/bb-auth';
+export const NEW_MODULE = '@aws-cdk-blocks/bb-auth';
 
-/** Old package specifier → which block it is. */
+/**
+ * Old package specifier → which block it is. These shipped only under the
+ * original `@aws-blocks` scope and were never republished under
+ * `@aws-cdk-blocks`, so the names the codemod looks for in a user's code are
+ * the old ones.
+ */
 export const OLD_MODULES: Readonly<Record<string, OldBlock>> = {
 	'@aws-blocks/bb-auth-basic': 'basic',
 	'@aws-blocks/bb-auth-cognito': 'cognito',
@@ -35,7 +40,7 @@ export const OLD_MODULES: Readonly<Record<string, OldBlock>> = {
 
 /** Old sub-path specifiers that have a direct replacement. */
 export const OLD_SUBPATHS: Readonly<Record<string, string>> = {
-	'@aws-blocks/bb-auth-cognito/ui': '@aws-blocks/bb-auth/ui',
+	'@aws-blocks/bb-auth-cognito/ui': '@aws-cdk-blocks/bb-auth/ui',
 };
 
 /**
@@ -57,7 +62,7 @@ export const SUBPATH_NAME_RULES: Readonly<Record<string, Readonly<Record<string,
 /**
  * Old sub-path specifiers with no replacement module (the codemod leaves a
  * TODO). Both re-exported `AuthOIDC`'s browser entry: the names that also
- * exist in `@aws-blocks/bb-auth` (its `oidc` rows in {@link NAME_RULES}) are
+ * exist in `@aws-cdk-blocks/bb-auth` (its `oidc` rows in {@link NAME_RULES}) are
  * moved there; the client handle and its helpers have no equivalent.
  */
 export const DEAD_SUBPATHS: Readonly<Record<string, string>> = {
@@ -75,24 +80,72 @@ export function unknownOldSubpath(spec: string): boolean {
 /** TODOs for import shapes the codemod can't rewrite. */
 export const IMPORT_TODOS = {
 	noEquivalent: (names: readonly string[]): string =>
-		`${names.join(', ')} ${names.length === 1 ? 'has' : 'have'} no equivalent in @aws-blocks/bb-auth: remove ${names.length === 1 ? 'its' : 'their'} uses.`,
-	emptyImport: 'this import names nothing: delete it (or import what you use from @aws-blocks/bb-auth).',
-	unknownSubpath: 'this old auth package path was never public: import from @aws-blocks/bb-auth instead.',
+		`${names.join(', ')} ${names.length === 1 ? 'has' : 'have'} no equivalent in @aws-cdk-blocks/bb-auth: remove ${names.length === 1 ? 'its' : 'their'} uses.`,
+	emptyImport: 'this import names nothing: delete it (or import what you use from @aws-cdk-blocks/bb-auth).',
+	unknownSubpath: 'this old auth package path was never public: import from @aws-cdk-blocks/bb-auth instead.',
 	namespaceUse:
 		'the codemod cannot follow this use of the namespace: rename any AuthBasic / AuthCognito / AuthOIDC names reached through it by hand (MIGRATION.md, "Names").',
 } as const;
 
 /**
- * Umbrella specifiers. Their module specifier is kept (at the cutover release
- * `@aws-blocks/blocks` re-exports `Auth` and its types); only old names are
- * renamed.
+ * Umbrella specifiers the codemod recognizes, each mapped to the specifier it
+ * writes. Every app this codemod can run on imports the OLD umbrella:
+ * `AuthBasic` / `AuthCognito` / `AuthOIDC` were only ever exported from
+ * `@aws-blocks/blocks@<=0.9`, and no released `aws-cdk-blocks` exports them. So
+ * the old names are recognized and rewritten; the new names map to themselves,
+ * which covers an app whose dependency was already renamed by hand.
+ *
+ * Only old auth names are renamed on these imports: at the cutover release the
+ * umbrella still re-exports `Auth` and its types.
  */
-export const UMBRELLA_MODULES: ReadonlySet<string> = new Set(['@aws-blocks/blocks', '@aws-blocks/blocks/cdk']);
+export const UMBRELLA_MODULES: ReadonlySet<string> = new Set([
+	'@aws-blocks/blocks',
+	'@aws-blocks/blocks/cdk',
+	'aws-cdk-blocks',
+	'aws-cdk-blocks/cdk',
+]);
+
+const OLD_UMBRELLA = '@aws-blocks/blocks';
+const NEW_UMBRELLA = 'aws-cdk-blocks';
+
+/**
+ * `spec` rewritten to the renamed umbrella, or undefined when `spec` is not an
+ * umbrella specifier at all.
+ *
+ * A prefix rule rather than a list: the umbrella exports eleven subpaths
+ * (`./client`, `./ui`, `./server`, `./scripts`, `./lambda-handler`, `./utils`
+ * and the rest), and auth apps import from several of them, so listing a couple
+ * would leave a migrated file importing from both `aws-cdk-blocks` and
+ * `@aws-blocks/blocks/client`. A new subpath is covered without a change here.
+ *
+ * {@link UMBRELLA_MODULES} stays the narrower set, because only the root and
+ * `/cdk` ever exported the old auth classes, so only those get NAME rewriting.
+ */
+export function renameUmbrellaSpecifier(spec: string): string | undefined {
+	if (spec === OLD_UMBRELLA) return NEW_UMBRELLA;
+	if (spec.startsWith(`${OLD_UMBRELLA}/`)) return `${NEW_UMBRELLA}/${spec.slice(OLD_UMBRELLA.length + 1)}`;
+	if (spec === NEW_UMBRELLA || spec.startsWith(`${NEW_UMBRELLA}/`)) return spec;
+	return undefined;
+}
+
+/**
+ * `auth-common` specifiers the codemod recognizes, each mapped to the specifier
+ * it writes. As with the umbrella, an app being migrated still imports the old
+ * name, so an existing `@aws-blocks/auth-common` import must be deduplicated
+ * against the renamed one rather than left as a second import of the same
+ * module.
+ */
+export const AUTH_COMMON_MODULE_RENAMES: ReadonlyMap<string, string> = new Map([
+	['@aws-blocks/auth-common', '@aws-cdk-blocks/auth-common'],
+	['@aws-blocks/auth-common/ui', '@aws-cdk-blocks/auth-common/ui'],
+	['@aws-cdk-blocks/auth-common', '@aws-cdk-blocks/auth-common'],
+	['@aws-cdk-blocks/auth-common/ui', '@aws-cdk-blocks/auth-common/ui'],
+]);
 
 /** What one imported name becomes. */
 export interface NameRule {
 	/**
-	 * The new export name. Omitted: the same name exists in `@aws-blocks/bb-auth`.
+	 * The new export name. Omitted: the same name exists in `@aws-cdk-blocks/bb-auth`.
 	 * `null`: the export is gone (the specifier is kept, with a TODO, so the
 	 * compiler points at every use).
 	 */
@@ -116,8 +169,8 @@ export type OidcFactory = 'google' | 'github' | 'customOidc' | 'customOauth2' | 
 const same = (role: NameRule['role']): NameRule => ({ role });
 
 /**
- * `@aws-blocks/auth-common` types that `AuthBasic` re-exported. The umbrella
- * re-exports them from `@aws-blocks/auth-common` itself (before and after the
+ * `@aws-cdk-blocks/auth-common` types that `AuthBasic` re-exported. The umbrella
+ * re-exports them from `@aws-cdk-blocks/auth-common` itself (before and after the
  * cutover), so they are never rewritten on an umbrella import.
  */
 const AUTH_COMMON_NAMES: ReadonlySet<string> = new Set([
@@ -172,16 +225,16 @@ export const NAME_RULES: Readonly<Record<OldBlock, Readonly<Record<string, NameR
 		envVarNames: {
 			to: null,
 			role: 'value',
-			todo: 'envVarNames() is gone. Read pool identifiers with getSdkIdentifiers(auth) from @aws-blocks/blocks.',
+			todo: 'envVarNames() is gone. Read pool identifiers with getSdkIdentifiers(auth) from aws-cdk-blocks.',
 		},
 		isRetriableAuthError: {
 			to: null,
 			role: 'value',
-			todo: 'isRetriableAuthError() is not exported by @aws-blocks/bb-auth. Match the names you retry on with isAuthError(e, AuthErrors.X).',
+			todo: 'isRetriableAuthError() is not exported by @aws-cdk-blocks/bb-auth. Match the names you retry on with isAuthError(e, AuthErrors.X).',
 		},
 		SessionStore: { to: null, role: 'value', todo: 'SessionStore was internal and is gone.' },
 		SessionRecord: { to: null, role: 'type', todo: 'SessionRecord was internal and is gone.' },
-		// Unchanged names (also exported by @aws-blocks/bb-auth).
+		// Unchanged names (also exported by @aws-cdk-blocks/bb-auth).
 		AdminAction: same('type'),
 		AdminActionGate: same('type'),
 		AdminCreateInit: same('type'),
@@ -235,11 +288,11 @@ export const NAME_RULES: Readonly<Record<OldBlock, Readonly<Record<string, NameR
 		},
 		CodeDeliveryFn: same('type'),
 		PasswordPolicy: same('type'),
-		// Re-exported from @aws-blocks/auth-common by AuthBasic; bb-auth does not re-export them.
+		// Re-exported from @aws-cdk-blocks/auth-common by AuthBasic; bb-auth does not re-export them.
 		...Object.fromEntries(
 			[...AUTH_COMMON_NAMES].map((n): [string, NameRule] => [
 				n,
-				{ to: null, role: 'type', todo: `Import ${n} from @aws-blocks/blocks instead.` },
+				{ to: null, role: 'type', todo: `Import ${n} from aws-cdk-blocks instead.` },
 			]),
 		),
 	},
@@ -276,8 +329,8 @@ export const NAME_RULES: Readonly<Record<OldBlock, Readonly<Record<string, NameR
 /**
  * The old names that are *specific* to one block: those with an explicit `to`
  * in {@link NAME_RULES}. Shared names (`SignInResult`, `CodeDeliveryFn`, …)
- * are re-exported by the umbrella at cutover from `@aws-blocks/bb-auth`, and
- * the `@aws-blocks/auth-common` types from that package, so they need no rewrite.
+ * are re-exported by the umbrella at cutover from `@aws-cdk-blocks/bb-auth`, and
+ * the `@aws-cdk-blocks/auth-common` types from that package, so they need no rewrite.
  */
 const UMBRELLA_SPECIFIC: ReadonlyMap<string, OldBlock> = new Map(
 	(['cognito', 'basic', 'oidc'] as const).flatMap((block) =>
@@ -307,11 +360,11 @@ export const COGNITO_METHOD_RENAMES: Readonly<Record<string, string>> = {
 
 /** `AuthOIDC` members with no `Auth` equivalent. */
 export const OIDC_GONE_MEMBERS: Readonly<Record<string, string>> = {
-	handleCallback: 'Auth serves the callback route itself (GET /aws-blocks/auth/callback); remove this call.',
-	handleCallbackDispatch: 'Auth serves the callback route itself (GET /aws-blocks/auth/callback); remove this call.',
-	handleExchange: 'Auth serves POST /aws-blocks/auth/exchange itself; remove this call.',
-	getAuthorizeParams: 'Auth serves POST /aws-blocks/auth/authorize-params/<id> itself; remove this call.',
-	refreshBearerTokens: 'Auth serves POST /aws-blocks/auth/exchange/refresh itself; remove this call.',
+	handleCallback: 'Auth serves the callback route itself (GET /cdk-blocks/auth/callback); remove this call.',
+	handleCallbackDispatch: 'Auth serves the callback route itself (GET /cdk-blocks/auth/callback); remove this call.',
+	handleExchange: 'Auth serves POST /cdk-blocks/auth/exchange itself; remove this call.',
+	getAuthorizeParams: 'Auth serves POST /cdk-blocks/auth/authorize-params/<id> itself; remove this call.',
+	refreshBearerTokens: 'Auth serves POST /cdk-blocks/auth/exchange/refresh itself; remove this call.',
 	signInRoutePath: 'Use getSignInUrl(context, provider) instead.',
 	signInBasePath: 'Use getSignInUrl(context, provider) instead.',
 	providers: 'Auth has no providers getter; the provider ids are the keys of the providers option.',
@@ -579,8 +632,8 @@ export const TODOS = {
 		"AuthenticatedUser.claims is optional now: it is set for users of a store: 'builtin' block, and absent for user-pool users (a cognitoFederated() provider becomes one). Read it as claims?.x.",
 	namespaceImport: 'namespace import of an old auth package: rename its members by hand (MIGRATION.md, "Names").',
 	dynamicImport:
-		'dynamic import of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.',
-	requireCall: 'require() of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.',
+		'dynamic import of an old auth package: point it at @aws-cdk-blocks/bb-auth and rename its members by hand.',
+	requireCall: 'require() of an old auth package: point it at @aws-cdk-blocks/bb-auth and rename its members by hand.',
 	typeArguments: 'explicit type arguments on the old class: Auth<O> captures the options literal; drop them.',
 	unknownReceiver: (method: string, to: string): string =>
 		`if this is an AuthCognito instance, ${method}() is now ${to}().`,

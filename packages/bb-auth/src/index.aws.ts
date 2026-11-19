@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth` — `aws-runtime` entry (Lambda).
+ * `@aws-cdk-blocks/bb-auth` — `aws-runtime` entry (Lambda).
  *
  * `Auth` is the real engine-agnostic `AuthBase` (sessions,
  * cookies, guards, the `createApi()` state machine) over the Cognito SDK
@@ -26,10 +26,10 @@
  * same Lambda; the layer routes it to the block (`presignup-trigger.ts`).
  */
 
-import { frameworkKey } from '@aws-blocks/bb-secret/internal';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { ApiError, getDeploymentType } from '@aws-blocks/core';
-import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
+import { frameworkKey } from '@aws-cdk-blocks/bb-secret/internal';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { ApiError, getDeploymentType } from '@aws-cdk-blocks/core';
+import { EventSourceMapping } from '@aws-cdk-blocks/core/bb-utils';
 import { AuthBase, type AuthLayer, defineAuthLayer } from './auth-base.js';
 import { CognitoAccessTokenVerifier } from './bearer-cognito.js';
 import { cognitoConfigKeys, preSignUpTriggerConfigKey, stubIdpConfigKeys } from './cdk/contract.js';
@@ -90,7 +90,7 @@ function deployedStubIdp(
 
 /**
  * The AWS layer: the session secret is the `session-secret` framework key
- * (`frameworkKey()` from `@aws-blocks/bb-secret/internal`), at the same
+ * (`frameworkKey()` from `@aws-cdk-blocks/bb-secret/internal`), at the same
  * construct id `AuthCognito` used. Under `defaults.secretsStore: 'ssm'` that is
  * the same SSM parameter, so existing sessions keep verifying after the switch;
  * under `'secrets-manager'` (the production preset) it is a new Secrets Manager
@@ -164,8 +164,8 @@ const AWS_LAYER: AuthLayer = {
 };
 
 /**
- * The unified auth Building Block, published as `@aws-blocks/bb-auth` and exported
- * from `@aws-blocks/blocks`. See the package README.
+ * The unified auth Building Block, published as `@aws-cdk-blocks/bb-auth` and exported
+ * from `aws-cdk-blocks`. See the package README.
  *
  * @typeParam O - The options literal, captured with `const` so inline options
  * narrow the method surface without `as const`.

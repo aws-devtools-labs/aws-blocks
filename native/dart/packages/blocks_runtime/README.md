@@ -22,99 +22,127 @@ export const authApi = auth.createApi();
 export const oidcApi = auth.createOidcApi();
 ```
 
+The sample below is a `ChangeNotifier` a Flutter widget can listen to. It opens the identity provider's logout URL with `url_launcher`, so add that package to your app's `dependencies` too.
+
+An `Auth` block on the default store signs in through its `providers` only once it is deployed. To sign in through a provider while running locally, give the provider to a `store: 'builtin'` block with `stubIdp()`, and export that block's `createOidcApi()`; the `Auth` block's README has the details.
+
 ```dart
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
+
 import 'blocks.blocks.dart'; // the generated client
 
-const rpcUrl = 'https://api.example.com/aws-blocks/api';
+/// The app's sign-in state, driven by an `Auth` block's two exports.
+class AuthModel extends ChangeNotifier {
+  AuthModel(this.blocks);
 
-// blocks_runtime_flutter keeps the session in secure storage by default
-// (see Sessions), so a restarted app is still signed in.
-final blocks = Blocks(baseUrl: rpcUrl);
-// Listed in the block's redirects.allowedRelayOrigins.
-const relayTo = 'com.example.app://auth';
+  final Blocks blocks;
 
-// On launch: the state of the session the cookie store kept, and the
-// block's OIDC client. Both calls throw when the backend can't be reached,
-// so show the error and offer a retry.
-AuthState? state;
-TypedOidcClient<OidcApiGetClientProvider>? oidc;
-String? error;
-try {
-  state = await blocks.authApi.getAuthState();
-  oidc = await blocks.oidcApi.getClient();
-} on Exception catch (e) {
-  error = 'Could not reach the server: $e';
-}
+  // Listed in the block's redirects.allowedRelayOrigins.
+  static const relayTo = 'com.example.app://auth';
 
-/// The federated sign-in buttons: one per provider the client can sign in
-/// with, as the generated enum.
-List<OidcApiGetClientProvider> get signInButtons => [
-  for (final name in oidc?.providers ?? const <String>[])
-    ?OidcApiGetClientProvider.fromProviderName(name),
-];
+  AuthState? state;
+  TypedOidcClient<OidcApiGetClientProvider>? oidc;
+  String? error;
 
-/// What a federated sign-in button runs.
-Future<void> signInWith(OidcApiGetClientProvider provider) async {
-  error = null;
-  await oidc!.signIn(
-    provider,
-    launcher: FlutterBrowserLauncher(),
-    relayTo: relayTo,
-  );
-  state = await blocks.authApi.getAuthState();
-}
-
-/// Runs [action] with the [values] the user typed into its fields. Render
-/// every action but the `signIn:<id>` ones, which [signInButtons] replaces,
-/// and render an action that carries `unavailable` disabled, with that text,
-/// so it never gets here.
-Future<void> run(AuthAction action, Map<String, String> values) async {
-  error = null;
-  if (action.name == 'signOut' && action.url != null) {
-    // A federated sign-out. Never submit it through setAuthState, which
-    // drops the IdP's logout URL. Open that URL to end the IdP's session too.
-    final logoutUrl = await oidc!.signOut();
-    if (logoutUrl != null) await launchUrl(logoutUrl);
-    state = await blocks.authApi.getAuthState();
-  } else {
-    // A plain action. Its result is the next state, such as
-    // confirmingSignUp after a sign-up.
-    final next = await blocks.authApi.setAuthState(
-      input: switch (action.name) {
-        'signIn' => SignInInput(
-          username: values['username']!,
-          password: values['password']!,
-        ),
-        'signUp' => SignUpInput(
-          username: values['username']!,
-          password: values['password']!,
-          // Every field other than username and password, such as `email`,
-          // goes in additionalProperties.
-          additionalProperties: {'email': values['email']!},
-        ),
-        'confirmSignUp' => ConfirmSignUpInput(
-          username: values['username']!,
-          code: values['code']!,
-        ),
-        // Offered after confirmSignUp when the block signs the user in
-        // automatically: submit it to finish signing in.
-        'autoSignIn' => AutoSignInInput(username: values['username']!),
-        // ...one case for each other action the block offers.
-        _ => throw UnsupportedError(action.name),
-      },
-    );
-    // Either way, show the error, if any: a wrong password, for example.
-    error = next.error;
-    // A retriable failure, such as a wrong confirmation code, keeps the
-    // current state and form. Anything else, including a failed sign-in, is
-    // the next state.
-    if (next.retriable == true) return;
-    state = next;
+  /// On launch: the state of the session the store kept, and the block's
+  /// OIDC client. Both calls throw when the backend can't be reached, so show
+  /// the error and offer a retry.
+  Future<void> load() async {
+    try {
+      state = await blocks.authApi.getAuthState();
+      oidc = await blocks.oidcApi.getClient();
+    } on BlocksException catch (e) {
+      error = 'Could not reach the server: ${e.message}';
+    }
+    notifyListeners();
   }
-  // Render state?.state, state?.user, state?.actions and error.
+
+  /// The federated sign-in buttons: one per provider the client can sign in
+  /// with, as the generated enum.
+  List<OidcApiGetClientProvider> get signInButtons => [
+    for (final name in oidc?.providers ?? const <String>[])
+      ?OidcApiGetClientProvider.fromProviderName(name),
+  ];
+
+  /// What a federated sign-in button runs. On iOS and Android the browser
+  /// returns through [relayTo]; on macOS, Linux and Windows the client signs
+  /// in through a loopback listener and needs no launcher.
+  Future<void> signInWith(OidcApiGetClientProvider provider) async {
+    error = null;
+    final mobile =
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.android;
+    try {
+      await oidc!.signIn(
+        provider,
+        launcher: mobile ? FlutterBrowserLauncher() : null,
+        relayTo: relayTo,
+      );
+    } on OidcCancelledException {
+      // The user closed the browser, or the sign-in timed out.
+      return;
+    }
+    state = await blocks.authApi.getAuthState();
+    notifyListeners();
+  }
+
+  /// Runs [action] with the [values] the user typed into its fields. Render
+  /// every action but the `signIn:<id>` ones, which [signInButtons] replaces,
+  /// and render an action that carries `unavailable` disabled, with that
+  /// text, so it never gets here.
+  Future<void> run(AuthAction action, Map<String, String> values) async {
+    error = null;
+    if (action.name == 'signOut' && action.url != null) {
+      // A federated sign-out. Never submit it through setAuthState, which
+      // drops the IdP's logout URL. Open that URL to end the IdP's session
+      // too.
+      final logoutUrl = await oidc!.signOut();
+      if (logoutUrl != null) await launchUrl(logoutUrl);
+      state = await blocks.authApi.getAuthState();
+    } else {
+      // A plain action. Its result is the next state, such as
+      // confirmingSignUp after a sign-up.
+      final next = await blocks.authApi.setAuthState(
+        input: switch (action.name) {
+          'signIn' => SignInInput(
+            username: values['username']!,
+            password: values['password']!,
+          ),
+          'signUp' => SignUpInput(
+            username: values['username']!,
+            password: values['password']!,
+            // Every other field the action lists goes in
+            // additionalProperties.
+            additionalProperties: {
+              for (final MapEntry(:key, :value) in values.entries)
+                if (key != 'username' && key != 'password') key: value,
+            },
+          ),
+          'confirmSignUp' => ConfirmSignUpInput(
+            username: values['username']!,
+            code: values['code']!,
+          ),
+          // Offered after confirmSignUp when the block signs the user in
+          // automatically: submit it to finish signing in.
+          'autoSignIn' => AutoSignInInput(username: values['username']!),
+          'signOut' => const SignOutInput(),
+          // ...one case for each other action the block offers.
+          _ => throw UnsupportedError(action.name),
+        },
+      );
+      // Either way, show the error, if any: a wrong password, for example.
+      error = next.error;
+      // A retriable failure, such as a wrong confirmation code, keeps the
+      // current state and form. Anything else, including a failed sign-in,
+      // is the next state.
+      if (next.retriable != true) state = next;
+    }
+    // Render state?.state, state?.user, state?.actions and error.
+    notifyListeners();
+  }
 }
 ```
 
@@ -130,6 +158,8 @@ Future<void> run(AuthAction action, Map<String, String> values) async {
 - New actions can appear in a later version of the block. Render or skip actions you don't know by `name`, and don't fail on them.
 - For `relayTo` on mobile, prefer a verified App Link (Android) or Universal Link (iOS) over a bare custom scheme. Another app can register the same custom scheme and receive the relay redirect; with a custom scheme, PKCE is what stops it from using the code, because only this app holds the verifier.
 - Sign in with `signIn`. `signInDirect`, the direct flow, sends the IdP a custom-scheme `redirect_uri`, which most identity providers reject.
+
+Register the backend's callback with the identity provider, not an address in the app: every platform's `signIn` sends the IdP the backend's HTTPS callback as its `redirect_uri`, and the backend relays the result to the app. That callback is the client's `baseUrl` with its final `/cdk-blocks/api` replaced by the block's `redirects.callbackPath`, `/cdk-blocks/auth/callback` unless you set one. A deployed API keeps its stage: for `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api`, register `https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/auth/callback`. If the IdP asks for a sign-out URL, register the same prefix followed by the block's `redirects.postSignOutPath` (`/` by default), here `https://abc123.execute-api.us-west-2.amazonaws.com/prod/`.
 
 ### Federated sign-in on each platform
 
@@ -198,7 +228,7 @@ void main() {
       store: FileTokenStore(applicationId: 'com.example.notes_cli'),
     ),
   );
-  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   print(client.sessionStore is PersistentSessionStore); // true
 }
 ```
@@ -226,7 +256,7 @@ A read or write that fails never throws into your app: the session keeps working
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.
 
-RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the Blocks server has allowed it since `@aws-blocks/core` 0.6.0.
+RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the Blocks server has allowed it since `@aws-blocks/core` 0.6.0 (and every `@aws-cdk-blocks/core`).
 
 On web the token is dropped on the other paths. The presigned upload and download set `User-Agent`, which browsers ignore because it is a forbidden header name. The WebSocket upgrade omits it because browsers do not allow custom headers on the upgrade request.
 

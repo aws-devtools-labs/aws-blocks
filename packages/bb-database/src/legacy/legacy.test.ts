@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { DataApiEngine } from '../engines/data-api-engine.js';
 import { Database as LambdaDatabase, LegacyDatabaseCluster as LambdaLegacyCluster } from '../index.aws.js';
 import { Database, LegacyDatabaseCluster, sql } from '../index.mock.js';

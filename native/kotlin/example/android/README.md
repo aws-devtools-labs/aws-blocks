@@ -1,6 +1,6 @@
 # Android Example App
 
-A native Android app demonstrating the AWS Blocks Kotlin plugin. It uses Jetpack Compose for its UI and exercises several block types against a shared backend spec.
+A native Android app demonstrating the AWS CDK Blocks Kotlin plugin. It uses Jetpack Compose for its UI and exercises several block types against a shared backend spec.
 
 ## Features Demonstrated
 

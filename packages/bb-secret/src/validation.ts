@@ -4,7 +4,7 @@
 // Shared by the mock and aws-runtime entries. Kept out of errors.ts so the
 // browser entry, which re-exports SecretErrors, does not import core.
 
-import { brandBlocksError } from '@aws-blocks/core';
+import { brandBlocksError } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
 

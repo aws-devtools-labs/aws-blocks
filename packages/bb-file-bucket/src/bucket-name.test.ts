@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-blocks/core';
+import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-cdk-blocks/core';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
 import { FileBucket } from './index.mock.js';
 

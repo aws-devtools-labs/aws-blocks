@@ -5,22 +5,22 @@
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { ApiNamespace, Compute, Scope, KVStore, LegacyKVStore, getDeploymentType, Realtime, Database, DatabaseCluster, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
-export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
-import type { EmailMessage } from '@aws-blocks/blocks';
-import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
-import { ApiError, isBlocksError, type BlocksContext } from '@aws-blocks/core';
-import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BuiltinProvider, type UserCandidate } from '@aws-blocks/bb-auth';
-import { AsyncJob } from '@aws-blocks/bb-async-job';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Secret } from '@aws-blocks/bb-secret';
-import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
-import { Tracer } from '@aws-blocks/bb-tracer';
-import { Logger } from '@aws-blocks/bb-logger';
-import { simulateConflict } from '@aws-blocks/bb-database/testing';
+import { ApiNamespace, Compute, Scope, KVStore, LegacyKVStore, getDeploymentType, Realtime, Database, DatabaseCluster, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from 'aws-cdk-blocks';
+export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from 'aws-cdk-blocks';
+import type { EmailMessage } from 'aws-cdk-blocks';
+import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-cdk-blocks/bb-kv-store';
+import { ApiError, isBlocksError, type BlocksContext } from '@aws-cdk-blocks/core';
+import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BuiltinProvider, type UserCandidate } from '@aws-cdk-blocks/bb-auth';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Secret } from '@aws-cdk-blocks/bb-secret';
+import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-cdk-blocks/bb-knowledge-base';
+import { Tracer } from '@aws-cdk-blocks/bb-tracer';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import { simulateConflict } from '@aws-cdk-blocks/bb-database/testing';
 import { z } from 'zod';
 import { Kysely, sql as kyselySql } from 'kysely';
-import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
+import { DatabaseDialect } from '@aws-cdk-blocks/bb-database/kysely';
 import type { Tables as DbxTables } from './dbx.types.js';
 import type { Tables as DbxcTables } from './dbxc.types.js';
 
@@ -297,7 +297,7 @@ const authC = new Auth(scope, 'authC', {
 //
 // `totpVerification: 'rfc6238'`: the local pool checks TOTP codes as Cognito
 // does, so the tests answer with real codes (`totpCodeFor` from
-// `@aws-blocks/blocks/utils`) and a wrong secret fails locally too. Mock-only;
+// `aws-cdk-blocks/utils`) and a wrong secret fails locally too. Mock-only;
 // the deployed pool always verifies.
 //
 // Only `TOTP` in `types` (stated explicitly: `Auth` would otherwise default to
@@ -395,12 +395,12 @@ const oidcAuthExtras = new Auth(scope, 'oidc-auth-extras', {
     'google-extras': e2eOidcProvider(),
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/extras/callback',
-    signOutPath: '/aws-blocks/auth/extras/signout',
+    callbackPath: '/cdk-blocks/auth/extras/callback',
+    signOutPath: '/cdk-blocks/auth/extras/signout',
   },
   // Bearer-token auth is enabled on this instance so e2e tests can exercise
-  // the native-client flow — /aws-blocks/auth/extras/exchange returns tokens
-  // alongside the user, and /aws-blocks/auth/extras/refresh renews tokens.
+  // the native-client flow — /cdk-blocks/auth/extras/exchange returns tokens
+  // alongside the user, and /cdk-blocks/auth/extras/refresh renews tokens.
   allowBearerAuth: true,
   onSignIn: async (user) => {
     const email = user.attributes.email ?? null;
@@ -425,15 +425,15 @@ const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
     'google-relay': e2eOidcProvider(),
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/relay/callback',
-    signOutPath: '/aws-blocks/auth/relay/signout',
+    callbackPath: '/cdk-blocks/auth/relay/callback',
+    signOutPath: '/cdk-blocks/auth/relay/signout',
     allowedRelayOrigins: [relayOrigin('testapp://auth')],
   },
   allowBearerAuth: true,
 });
 
 // Fourth OIDC instance — a web frontend on ANOTHER origin than this API signs in
-// with the browser redirect client (`@aws-blocks/bb-auth/browser-client`).
+// with the browser redirect client (`@aws-cdk-blocks/bb-auth/browser-client`).
 // It uses the relay transport with `relayTo` = the frontend's return page; a
 // loopback `http://127.0.0.1:<port>` frontend is always allowed, and a deployed
 // frontend's HTTPS origin would go in `allowedRelayOrigins`. Custom paths keep its
@@ -444,8 +444,8 @@ const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
     'web-idp': e2eOidcProvider(),
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/web/callback',
-    signOutPath: '/aws-blocks/auth/web/signout',
+    callbackPath: '/cdk-blocks/auth/web/callback',
+    signOutPath: '/cdk-blocks/auth/web/signout',
     allowedRelayOrigins: [relayOrigin('https://app.example.com')],
   },
 });
@@ -495,8 +495,8 @@ new Auth(scope, 'auth-gated-idp', {
       : { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' },
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/gated/callback',
-    signOutPath: '/aws-blocks/auth/gated/signout',
+    callbackPath: '/cdk-blocks/auth/gated/callback',
+    signOutPath: '/cdk-blocks/auth/gated/signout',
   },
   validateUser: gatedPolicy,
 });
@@ -527,8 +527,8 @@ new Auth(scope, 'oidc-auth-hookfail', {
       }
     : { 'hookfail-raw': { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' } },
   redirects: {
-    callbackPath: '/aws-blocks/auth/hookfail/callback',
-    signOutPath: '/aws-blocks/auth/hookfail/signout',
+    callbackPath: '/cdk-blocks/auth/hookfail/callback',
+    signOutPath: '/cdk-blocks/auth/hookfail/signout',
   },
   onSignIn: async (user) => {
     if (user.signInProvider === 'hookfail-api') {
@@ -695,7 +695,7 @@ const trackedFailingJob = new AsyncJob(scope, 'tracked-failing-job', {
 });
 
 // Agent BB - AI agent with tools and conversation persistence
-import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels } from '@aws-cdk-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   removalPolicy: 'destroy',
@@ -1131,7 +1131,7 @@ const email = new EmailClient(scope, 'email', {
 });
 
 // Metrics - Custom application metrics (CloudWatch via EMF)
-import { Metrics } from '@aws-blocks/bb-metrics';
+import { Metrics } from '@aws-cdk-blocks/bb-metrics';
 
 const metrics = new Metrics(scope, 'appMetrics', {
   namespace: 'TestApp/Metrics',
@@ -3402,8 +3402,8 @@ const authSocial = localDev
         },
       },
       redirects: {
-        callbackPath: '/aws-blocks/auth/social/callback',
-        signOutPath: '/aws-blocks/auth/social/signout',
+        callbackPath: '/cdk-blocks/auth/social/callback',
+        signOutPath: '/cdk-blocks/auth/social/signout',
       },
     })
   : undefined;

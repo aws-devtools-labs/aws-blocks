@@ -56,7 +56,7 @@ test.afterAll(async () => {
 
 /** Call `testSupport.provisionUser` and return the raw JSON-RPC response body. */
 async function callProvisionUser(request: APIRequestContext, secret: string, username: string, password: string) {
-  const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+  const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {
     headers: { 'Content-Type': 'application/json' },
     data: JSON.stringify({
       jsonrpc: '2.0',
@@ -105,7 +105,7 @@ test.describe('Notes Manager — Hosting preview mode', () => {
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
-    expect(config.apiUrl).toBe('/aws-blocks/api');
+    expect(config.apiUrl).toBe('/cdk-blocks/api');
   });
 
   test('3. SPA fallback — deep path still loads the app', async ({ page }) => {
@@ -157,7 +157,7 @@ test.describe('Notes Manager — Hosting preview mode', () => {
     // up, and the record returned belongs to the user asked for. Called over
     // JSON-RPC directly — testUser signed up in the previous serial test.
     const rpc = async (method: string, args: unknown[]) => {
-      const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+      const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {
         headers: { 'Content-Type': 'application/json' },
         data: { jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 },
       });

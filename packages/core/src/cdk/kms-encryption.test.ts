@@ -7,7 +7,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { type KmsEncryptionOption, resolveKmsEncryption } from './kms-encryption.js';
 
-const IDENTITY = { warningPrefix: '@aws-blocks/bb-test', fromKmsKeyHint: 'Thing.fromKmsKey' };
+const IDENTITY = { warningPrefix: '@aws-cdk-blocks/bb-test', fromKmsKeyHint: 'Thing.fromKmsKey' };
 const KEY_ARN = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234';
 
 function resolve(option: KmsEncryptionOption | undefined) {
@@ -43,7 +43,7 @@ test('resolveKmsEncryption: an unrecognized value fails the synth with the block
 				assert.ok(err instanceof Error);
 				assert.match(err.message, /Unrecognized encryption/);
 				assert.match(err.message, /'aws-managed', 'customer-managed', or Thing\.fromKmsKey\(arn\)/);
-				assert.match(err.message, /@aws-blocks\/bb-test/);
+				assert.match(err.message, /@aws-cdk-blocks\/bb-test/);
 				// The bad value is named verbatim: strings as-is, objects as JSON (never '[object Object]').
 				const rendered = typeof option === 'string' ? option : JSON.stringify(option);
 				assert.ok(err.message.includes(`Unrecognized encryption '${rendered}'`), err.message);

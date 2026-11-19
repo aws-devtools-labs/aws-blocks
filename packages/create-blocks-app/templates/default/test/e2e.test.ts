@@ -18,8 +18,8 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isBlocksError } from '@aws-blocks/blocks/client';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { isBlocksError } from 'aws-cdk-blocks/client';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -37,7 +37,7 @@ let authApi: typeof AuthApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 // The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
-// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
+// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /cdk-blocks/api). The
 // client resolves BLOCKS_API_URL first, so a deploy, which records its URL in config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
@@ -83,7 +83,7 @@ test.before(async () => {
   if (!testUrl) await waitForServer();
 
   // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
-  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/cdk-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
   // cdk-blocks/client.js before it listens, so an earlier import could load a

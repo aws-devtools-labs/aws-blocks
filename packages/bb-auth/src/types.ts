@@ -8,15 +8,15 @@
  * values (no `const`, `function` or `class`), so every entry point — mock,
  * AWS, CDK and browser — can re-export it without pulling in runtime code.
  *
- * Status: published as `@aws-blocks/bb-auth` and exported from the
- * `@aws-blocks/blocks` umbrella. The option groups and the gated method surface
+ * Status: published as `@aws-cdk-blocks/bb-auth` and exported from the
+ * `aws-cdk-blocks` umbrella. The option groups and the gated method surface
  * below are the contract the runtime layers implement. `types-test.ts` is the compile-time proof
  * that the mode gates work and that `Auth<O>` stays covariant in `O`.
  */
 
-import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-cdk-blocks/auth-common';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
@@ -194,7 +194,7 @@ export interface AuthCommonOptions {
 	/** Session cookie and server-side session record behaviour. */
 	session?: SessionOptions;
 
-	/** HTTP paths for the federated redirect flow. All must sit under `/aws-blocks/auth/`. */
+	/** HTTP paths for the federated redirect flow. They must sit under `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	redirects?: RedirectOptions;
 
 	/**
@@ -408,7 +408,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 	 *
 	 * What is accepted (the same as `AuthOIDC`, so the native SDKs work
 	 * unchanged): a directly federated OIDC provider's JWT access token — the
-	 * one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/refresh`
+	 * one `/cdk-blocks/auth/exchange` returns and `/cdk-blocks/auth/refresh`
 	 * renews — verified against the provider's JWKS (issuer, audience = its
 	 * client id, expiry); or, for a user-pool user, the Cognito access token.
 	 * The session cookie takes precedence when a request carries both. A token
@@ -550,8 +550,8 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	/**
 	 * Accept `Authorization: Bearer <access token>` in addition to the session
 	 * cookie, for native and CLI clients that cannot hold a cookie: the
-	 * provider's JWT access token that `/aws-blocks/auth/exchange` returns and
-	 * `/aws-blocks/auth/refresh` renews, verified against the provider's JWKS
+	 * provider's JWT access token that `/cdk-blocks/auth/exchange` returns and
+	 * `/cdk-blocks/auth/refresh` renews, verified against the provider's JWKS
 	 * (issuer, audience = its client id, expiry). See
 	 * {@link CognitoAuthOptions.allowBearerAuth} for the details. The object
 	 * form (extra Cognito app clients) needs `store: 'cognito'`.
@@ -1151,7 +1151,7 @@ export interface StubIdpSettings {
 /**
  * A provider served by the built-in **stub IdP** — a real, local OIDC
  * provider (ES256-signed ID tokens, discovery, JWKS, PKCE S256) mounted on the
- * dev server under `/aws-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
+ * dev server under `/cdk-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
  * and put it in a `store: 'builtin'` block's `providers`.
  *
  * Local development and sandbox deployments only: in `npm run dev` it gives
@@ -1163,8 +1163,7 @@ export interface StubIdpSettings {
  * URL.
  *
  * In a sandbox, the issuer is the API Gateway's own HTTPS URL plus
- * `/aws-blocks/auth/idp/<id>`, the same value `AuthOIDC`'s deployed stub used,
- * so `userId`s carry over. A sandbox stub signs users in **without
+ * `/cdk-blocks/auth/idp/<id>`. A sandbox stub signs users in **without
  * credentials** — see `stubIdp()`.
  */
 export interface StubProvider extends Omit<DirectOidcProvider, 'type'> {
@@ -1508,9 +1507,9 @@ export interface SessionOptions {
 
 /** Settings for {@link AuthCommonOptions.redirects}. */
 export interface RedirectOptions {
-	/** @default '/aws-blocks/auth/callback' — must start with `/aws-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/callback' — must start with `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	callbackPath?: string;
-	/** @default '/aws-blocks/auth/signout' — must start with `/aws-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/signout' — must start with `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	signOutPath?: string;
 	/** Where the browser lands after a successful federated sign-in. @default '/' */
 	postSignInPath?: string;
@@ -1531,7 +1530,7 @@ export interface RedirectOptions {
 	postSignOutPath?: string;
 	/**
 	 * Origins a native or CLI client's relay sign-in may redirect back to
-	 * (`POST /aws-blocks/auth/authorize-params/<id>` with `relayTo`), each built
+	 * (`POST /cdk-blocks/auth/authorize-params/<id>` with `relayTo`), each built
 	 * with `relayOrigin()`. Loopback (`http://127.0.0.1`, `http://[::1]`, any
 	 * port) and the API's own origin are always allowed.
 	 *
@@ -2061,7 +2060,7 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O
  * `getAuthState()`'s `actions`: `` `signIn:${id}` `` for each configured
  * provider id (`never` when there is none; `` `signIn:${string}` `` for the
  * wide `AuthOptions`). The action carries a `url`; the client navigates to it
- * rather than calling `setAuthState`. Narrows `@aws-blocks/bb-auth/ui`'s
+ * rather than calling `setAuthState`. Narrows `@aws-cdk-blocks/bb-auth/ui`'s
  * `AuthFederatedActionName` to this block's providers.
  *
  * @example
@@ -2085,7 +2084,7 @@ export type FederatedActionNameOf<O extends AuthOptions> = `signIn:${ProviderIdO
  *
  * @example
  * ```typescript
- * import { onAuthChange } from '@aws-blocks/bb-auth/ui';
+ * import { onAuthChange } from '@aws-cdk-blocks/bb-auth/ui';
  * import { authApi } from 'cdk-blocks';
  *
  * onAuthChange(authApi, (user) => {
@@ -2166,7 +2165,7 @@ export interface OidcClientDescriptor<P extends string = string> {
  * {@link OidcClientDescriptor}; a native SDK turns that into a live OIDC
  * client whose `signIn` takes only `P`. A browser receives the plain
  * descriptor: for a web frontend use `createAuthClient()` from
- * `@aws-blocks/bb-auth/browser-client` instead.
+ * `@aws-cdk-blocks/bb-auth/browser-client` instead.
  */
 export interface OidcClientHandle<P extends string = string> {
 	/** See {@link OidcClientDescriptor.providers}. */
@@ -2723,7 +2722,7 @@ export interface CognitoAuthMockOptions extends CognitoAuthOptions {
 	 * - `'rfc6238'` — the code must be the shared secret's RFC 6238 code
 	 *   (HMAC-SHA-1, 6 digits, 30 s steps, one step of clock skew either way),
 	 *   as Cognito and authenticator apps compute it. Compute one in a test
-	 *   with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils`.
+	 *   with `totpCodeFor(sharedSecret)` from `aws-cdk-blocks/utils`.
 	 *   Catches a wrong secret or `otpauth://` URI locally instead of only on a
 	 *   deployed pool.
 	 *
@@ -3777,7 +3776,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Browser redirect client (`@aws-blocks/bb-auth/browser-client`)
+// Browser redirect client (`@aws-cdk-blocks/bb-auth/browser-client`)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -3852,16 +3851,16 @@ export interface AuthClientEnvironment {
 /** Options for {@link createAuthClient}. */
 export interface AuthClientOptions {
 	/**
-	 * Where the `Auth` block's routes (`/aws-blocks/auth/*`) are served: the
+	 * Where the `Auth` block's routes (`/cdk-blocks/auth/*`) are served: the
 	 * API's origin, plus the API Gateway stage when you call the gateway URL
 	 * directly. For example `'https://api.example.com'` or
 	 * `'https://abc123.execute-api.us-east-1.amazonaws.com/prod'`. Defaults to
 	 * the page's own origin.
 	 */
 	baseUrl?: string;
-	/** The block's `redirects.callbackPath`. @default '/aws-blocks/auth/callback' */
+	/** The block's `redirects.callbackPath`. @default '/cdk-blocks/auth/callback' */
 	callbackPath?: string;
-	/** The block's `redirects.signOutPath`. @default '/aws-blocks/auth/signout' */
+	/** The block's `redirects.signOutPath`. @default '/cdk-blocks/auth/signout' */
 	signOutPath?: string;
 	/**
 	 * Where the provider's answer returns in this app: the page that calls
@@ -3877,7 +3876,7 @@ export interface AuthClientOptions {
 /**
  * Redirect sign-in for a web frontend on another origin than the `Auth`
  * block's API. Created by `createAuthClient()` from
- * `@aws-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
+ * `@aws-cdk-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
  */
 export interface AuthClient<P extends string = string> {
 	/**

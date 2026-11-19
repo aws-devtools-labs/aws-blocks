@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev:api": "tsx watch cdk-blocks/scripts/server.ts",
-    "dev:nuxt": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api nuxt dev",
+    "dev:nuxt": "BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api nuxt dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:nuxt\"",
     "build": "nuxt build",
     "start": "node .output/server/index.mjs",
@@ -20,11 +20,11 @@
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "@aws-blocks/bb-auth": "*",
-    "@aws-blocks/blocks": "*",
+    "@aws-cdk-blocks/bb-auth": "1.0.0-rc.0",
+    "aws-cdk-blocks": "1.0.0-rc.0",
     "nuxt": "^4.6.3",
     "vue": "^3.5.44"
   },

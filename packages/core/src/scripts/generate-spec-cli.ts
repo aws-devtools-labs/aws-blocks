@@ -5,7 +5,7 @@
 /**
  * CLI wrapper for `writeSpec()`. Generates `cdk-blocks/blocks.spec.json` from a
  * backend entry point. Exposed as the `blocks-generate-spec` bin entry on
- * `@aws-blocks/core`, so any Blocks app can invoke it via
+ * `@aws-cdk-blocks/core`, so any Blocks app can invoke it via
  * `npx blocks-generate-spec`.
  *
  * Usage:
@@ -40,7 +40,7 @@ async function selectLoader(foundationPath: string): Promise<FoundationLoader | 
 	try {
 		// `tsx/esm/api` is a peer-style helper. We require the consuming app to
 		// have it installed (via the template's devDependencies) rather than
-		// bundling it into @aws-blocks/core, so the runtime Lambda path stays
+		// bundling it into @aws-cdk-blocks/core, so the runtime Lambda path stays
 		// JS-only. If it's missing, fall through to the helpful error below.
 		const mod = await import('tsx/esm/api');
 		tsImport = (mod as { tsImport?: typeof tsImport }).tsImport;

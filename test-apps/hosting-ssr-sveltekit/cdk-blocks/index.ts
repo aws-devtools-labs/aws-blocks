@@ -1,13 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiNamespace, Scope, KVStore } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore } from 'aws-cdk-blocks';
 
 const scope = new Scope('hosting-ssr-sveltekit');
 
 const counters = new KVStore(scope, 'counters', {});
 
-// Minimal backend proving the single-origin /aws-blocks/* CloudFront proxy
+// Minimal backend proving the single-origin /cdk-blocks/* CloudFront proxy
 // reaches the Blocks API from a SvelteKit app with no CORS.
 export const api = new ApiNamespace(scope, 'api', () => ({
   async ping() {

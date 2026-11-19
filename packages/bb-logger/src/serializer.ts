@@ -7,7 +7,7 @@
  * BigInt conversion, Error object extraction, and log level filtering.
  */
 
-import { currentRequestId } from '@aws-blocks/core/bb-utils';
+import { currentRequestId } from '@aws-cdk-blocks/core/bb-utils';
 import type { LogLevel } from './types.js';
 import { LoggingErrors } from './errors.js';
 

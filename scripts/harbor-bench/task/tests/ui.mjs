@@ -44,7 +44,7 @@ async function prior(reason, action) {
 }
 async function mutate(action) {
 	const [response] = await Promise.all([
-		page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes('/aws-blocks/')),
+		page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes('/cdk-blocks/')),
 		action(),
 	]);
 	await response.finished();

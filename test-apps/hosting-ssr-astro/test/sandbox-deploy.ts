@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { startSandbox, destroySandbox } from '@aws-blocks/blocks/scripts';
+import { startSandbox, destroySandbox } from 'aws-cdk-blocks/scripts';
 import { waitForHostingReady } from '../../../scripts/ci/hosting-ready.js';
 
 const backendPath = process.argv[2];

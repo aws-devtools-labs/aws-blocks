@@ -11,8 +11,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
-import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
+import { AuthErrors, isAuthError } from '@aws-cdk-blocks/bb-auth';
 import type { api as apiType, strictStatusApi as strictStatusApiType } from 'cdk-blocks';
 
 /** Run `call` with a `fetch` spy (test plumbing) that records the HTTP status of every response. */

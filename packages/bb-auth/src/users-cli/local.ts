@@ -34,7 +34,7 @@ import {
 	usernameShadowsContact,
 } from './target.js';
 
-/** Where the dev server records its process (`@aws-blocks/core`'s singleton guard): `.cdk-blocks-sandbox/dev-server.<port>.pid`. */
+/** Where the dev server records its process (`@aws-cdk-blocks/core`'s singleton guard): `.cdk-blocks-sandbox/dev-server.<port>.pid`. */
 const PIDFILE = /^dev-server\.\d+\.pid$/;
 
 /** True when a signal can be delivered to `pid`. `EPERM` (exists, not ours) counts as alive. */

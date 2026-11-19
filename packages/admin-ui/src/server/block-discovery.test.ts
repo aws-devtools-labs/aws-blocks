@@ -40,7 +40,7 @@ describe('discoverBlocks — a simple project', () => {
 	it('reports type, id, fullId, category, file and line for each block', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('shop');",
 				"export const store = new KVStore(scope, 'store', {});",
@@ -87,7 +87,7 @@ describe('discoverBlocks — import-binding resolution (the point of this module
 	it('finds a block constructed through a namespace import (callee text `blocks.KVStore`)', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import * as blocks from '@aws-blocks/blocks';",
+				"import * as blocks from 'aws-cdk-blocks';",
 				'',
 				"const scope = new blocks.Scope('ns-app');",
 				"export const store = new blocks.KVStore(scope, 'store');",
@@ -108,7 +108,7 @@ describe('discoverBlocks — import-binding resolution (the point of this module
 	it('finds an aliased import and reports the EXPORTED name as `type`', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore as Store } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore as Store } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('aliased');",
 				"export const store = new Store(scope, 'cache');",
@@ -131,7 +131,7 @@ describe('discoverBlocks — import-binding resolution (the point of this module
 	it('does NOT report a locally declared class that shares a block name', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope } from '@aws-blocks/blocks';",
+				"import { Scope } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('local');",
 				'',
@@ -151,10 +151,10 @@ describe('discoverBlocks — import-binding resolution (the point of this module
 		assert.deepStrictEqual(result.unknownConstructs, []);
 	});
 
-	it('ignores `new` of unrelated classes and of non-@aws-blocks imports', () => {
+	it('ignores `new` of unrelated classes and of non-@aws-cdk-blocks imports', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				"import { Client } from 'some-third-party';",
 				'',
 				"const scope = new Scope('mixed');",
@@ -175,8 +175,8 @@ describe('discoverBlocks — import-binding resolution (the point of this module
 	it('ignores a type-only import, which cannot be constructed', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope } from '@aws-blocks/blocks';",
-				"import type { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { Scope } from 'aws-cdk-blocks';",
+				"import type { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				'',
 				"const scope = new Scope('typed');",
 				'declare const factory: () => KVStore;',
@@ -191,11 +191,11 @@ describe('discoverBlocks — import-binding resolution (the point of this module
 });
 
 describe('discoverBlocks — nothing block-shaped is dropped', () => {
-	it('surfaces an unrecognised @aws-blocks class as unknown-type, absent from blocks', () => {
+	it('surfaces an unrecognised @aws-cdk-blocks class as unknown-type, absent from blocks', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope } from '@aws-blocks/blocks';",
-				"import { VectorIndex } from '@aws-blocks/bb-vector-index';",
+				"import { Scope } from 'aws-cdk-blocks';",
+				"import { VectorIndex } from '@aws-cdk-blocks/bb-vector-index';",
 				'',
 				"const scope = new Scope('gap');",
 				"export const index = new VectorIndex(scope, 'embeddings', { dims: 1536 });",
@@ -213,7 +213,7 @@ describe('discoverBlocks — nothing block-shaped is dropped', () => {
 	it('reports an unrecognised class reached through a namespace import by its written text', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import * as blocks from '@aws-blocks/blocks';",
+				"import * as blocks from 'aws-cdk-blocks';",
 				'',
 				"const scope = new blocks.Scope('gap-ns');",
 				"export const thing = new blocks.SomeNewBlock(scope, 'thing');",
@@ -227,11 +227,11 @@ describe('discoverBlocks — nothing block-shaped is dropped', () => {
 		]);
 	});
 
-	it('does not report an @aws-blocks construct whose call is not block-shaped', () => {
+	it('does not report an @aws-cdk-blocks construct whose call is not block-shaped', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope } from '@aws-blocks/blocks';",
-				"import { DatabaseErrors } from '@aws-blocks/bb-database';",
+				"import { Scope } from 'aws-cdk-blocks';",
+				"import { DatabaseErrors } from '@aws-cdk-blocks/bb-database';",
 				'',
 				"const scope = new Scope('helpers');",
 				"export const err = new DatabaseErrors('boom');",
@@ -247,7 +247,7 @@ describe('discoverBlocks — nothing block-shaped is dropped', () => {
 	it('surfaces a known block whose id is not a string literal as non-literal-id', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('dyn');",
 				"const name = 'from-variable';",
@@ -272,7 +272,7 @@ describe('discoverBlocks — nothing block-shaped is dropped', () => {
 	it('emits both blocks of a duplicate fullId rather than deduping the collision away', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('dup');",
 				"export const a = new KVStore(scope, 'store');",
@@ -293,31 +293,31 @@ describe('discoverBlocks — which files are scanned', () => {
 	it('finds blocks in a second file and excludes scripts/, the shims and .d.ts', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				"const scope = new Scope('multi');",
 				"export const store = new KVStore(scope, 'store');",
 			),
 			// Blocks may be declared in a factory helper, not just the entry file.
 			'cdk-blocks/tables/orders.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				'export function makeOrders(scope: unknown) {',
 				"\treturn new KVStore(scope, 'orders');",
 				'}',
 			),
 			'cdk-blocks/scripts/sandbox.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				"export const ignored = new KVStore({} as never, 'from-scripts');",
 			),
 			'cdk-blocks/index.cdk.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				"export const ignored = new KVStore({} as never, 'from-cdk');",
 			),
 			'cdk-blocks/index.handler.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				"export const ignored = new KVStore({} as never, 'from-handler');",
 			),
 			'cdk-blocks/generated.d.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				"export const ignored = new KVStore({} as never, 'from-dts');",
 			),
 		});
@@ -334,16 +334,16 @@ describe('discoverBlocks — which files are scanned', () => {
 	it('caps the scan at maxFiles and says so', () => {
 		const root = makeProject({
 			'cdk-blocks/a.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				"export const scope = new Scope('capped');",
 				"export const a = new KVStore(scope, 'a');",
 			),
 			'cdk-blocks/b.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				"export const b = new KVStore({} as never, 'b');",
 			),
 			'cdk-blocks/c.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				"export const c = new KVStore({} as never, 'c');",
 			),
 		});
@@ -375,7 +375,7 @@ describe('discoverBlocks — extracted fields', () => {
 
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('described');",
 				"export const todos = new KVStore(scope, 'todos');",
@@ -388,13 +388,13 @@ describe('discoverBlocks — extracted fields', () => {
 	});
 
 	it('omits the description for a block whose package exports several classes', () => {
-		// @aws-blocks/core exports ApiNamespace and RawRoute, so its README
+		// @aws-cdk-blocks/core exports ApiNamespace and RawRoute, so its README
 		// describes neither and the catalog deliberately carries no description.
 		assert.strictEqual(BLOCK_CATALOG.get('ApiNamespace')?.description, undefined);
 
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, ApiNamespace } from '@aws-blocks/blocks';",
+				"import { Scope, ApiNamespace } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('undescribed');",
 				"export const api = new ApiNamespace(scope, 'api', () => ({}));",
@@ -410,7 +410,7 @@ describe('discoverBlocks — extracted fields', () => {
 	it('reads ApiNamespace methods and parameter names for both declaration forms', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, ApiNamespace } from '@aws-blocks/blocks';",
+				"import { Scope, ApiNamespace } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('api-app');",
 				"export const api = new ApiNamespace(scope, 'api', (context) => ({",
@@ -440,7 +440,7 @@ describe('discoverBlocks — extracted fields', () => {
 	it('takes the RETURNED literal of a factory handler, not the first literal it contains', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, ApiNamespace } from '@aws-blocks/blocks';",
+				"import { Scope, ApiNamespace } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('factory');",
 				"export const api = new ApiNamespace(scope, 'api', (context) => {",
@@ -465,7 +465,7 @@ describe('discoverBlocks — extracted fields', () => {
 	it('emits no methods rather than guessing when the returned literal is ambiguous', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, ApiNamespace } from '@aws-blocks/blocks';",
+				"import { Scope, ApiNamespace } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('ambiguous');",
 				"export const api = new ApiNamespace(scope, 'api', (context) => {",
@@ -491,7 +491,7 @@ describe('discoverBlocks — extracted fields', () => {
 	it('extracts keySchema from string literals and omits it when a part is a variable', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('tables');",
 				"const pk = 'tenant';",
@@ -520,7 +520,7 @@ describe('discoverBlocks — extracted fields', () => {
 		const filler = 'x'.repeat(CONFIG_PREVIEW_LIMIT + 200);
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				'',
 				"const scope = new Scope('preview');",
 				"export const small = new KVStore(scope, 'small', { ttlSeconds: 60 });",
@@ -540,7 +540,7 @@ describe('discoverBlocks — extracted fields', () => {
 	it('reports nothing about what is deployed — that join lives on the resources side', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				"const scope = new Scope('declared');",
 				"export const store = new KVStore(scope, 'store');",
 			),
@@ -565,7 +565,7 @@ describe('discoverBlocks — scope and project name', () => {
 		const root = makeProject({
 			'package.json': JSON.stringify({ name: 'from-package-json' }),
 			'cdk-blocks/index.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				"export const store = new KVStore({} as never, 'store');",
 			),
 		});
@@ -580,11 +580,11 @@ describe('discoverBlocks — scope and project name', () => {
 	it('takes the first Scope deterministically when several exist', () => {
 		const root = makeProject({
 			'cdk-blocks/a-first.ts': source(
-				"import { Scope } from '@aws-blocks/core';",
+				"import { Scope } from '@aws-cdk-blocks/core';",
 				"export const one = new Scope('first');",
 			),
 			'cdk-blocks/z-second.ts': source(
-				"import { Scope } from '@aws-blocks/core';",
+				"import { Scope } from '@aws-cdk-blocks/core';",
 				"export const two = new Scope('second');",
 			),
 		});
@@ -636,11 +636,11 @@ describe('discoverBlocks — failure modes never throw', () => {
 	it('reports PARSE_FAILED for a broken file but still returns what the others declare', () => {
 		const root = makeProject({
 			'cdk-blocks/broken.ts': source(
-				"import { KVStore } from '@aws-blocks/bb-kv-store';",
+				"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
 				'export const oops = new KVStore(',
 			),
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				"const scope = new Scope('resilient');",
 				"export const store = new KVStore(scope, 'store');",
 			),
@@ -677,7 +677,7 @@ describe('discoverBlocks — failure modes never throw', () => {
 	it('does not mutate the options object it is given', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				"const scope = new Scope('pure');",
 				"export const store = new KVStore(scope, 'store');",
 			),
@@ -694,7 +694,7 @@ describe('discoverBlocks — an AppSetting declaration', () => {
 	it('derives the framework default parameter path from the scope and id', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AppSetting } from '@aws-blocks/blocks';",
+				"import { Scope, AppSetting } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				"export const retries = new AppSetting(scope, 'max-retries', { value: '3' });",
 			),
@@ -714,7 +714,7 @@ describe('discoverBlocks — an AppSetting declaration', () => {
 	it('keeps an explicitly named parameter path instead of deriving one', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AppSetting } from '@aws-blocks/blocks';",
+				"import { Scope, AppSetting } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				"export const flag = new AppSetting(scope, 'flag', { name: '/shared/flag', value: 'on' });",
 			),
@@ -736,7 +736,7 @@ describe('discoverBlocks — an AppSetting declaration', () => {
 	it('reports a non-literal parameter name as unresolved rather than guessing', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AppSetting } from '@aws-blocks/blocks';",
+				"import { Scope, AppSetting } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				'const seeded = process.env.DB_PARAM as string;',
 				"export const dbUrl = new AppSetting(scope, 'db-url', { name: seeded, secret: true });",
@@ -755,7 +755,7 @@ describe('discoverBlocks — an AppSetting declaration', () => {
 	it('treats a secret flag it cannot evaluate as a secret', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AppSetting } from '@aws-blocks/blocks';",
+				"import { Scope, AppSetting } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				'const hide = true;',
 				"export const a = new AppSetting(scope, 'a', { secret: hide });",
@@ -774,7 +774,7 @@ describe('discoverBlocks — an AppSetting declaration', () => {
 	it('records that the app validates writes against a schema', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AppSetting } from '@aws-blocks/blocks';",
+				"import { Scope, AppSetting } from 'aws-cdk-blocks';",
 				"import { z } from 'zod';",
 				"const scope = new Scope('shop');",
 				"export const limits = new AppSetting(scope, 'limits', { schema: z.object({}), value: {} });",
@@ -789,7 +789,7 @@ describe('discoverBlocks — an AppSetting declaration', () => {
 	it('reports a setting declared with no options at all', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AppSetting } from '@aws-blocks/blocks';",
+				"import { Scope, AppSetting } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				"export const bare = new AppSetting(scope, 'bare');",
 			),
@@ -811,7 +811,7 @@ describe('discoverBlocks — an AppSetting declaration', () => {
 	it('leaves the field off a block that is not a setting', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, KVStore } from '@aws-blocks/blocks';",
+				"import { Scope, KVStore } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				"export const store = new KVStore(scope, 'store', {});",
 			),
@@ -827,7 +827,7 @@ describe('discoverBlocks — AppSetting.fromExisting', () => {
 	it('discovers a setting declared by the static factory, marked external', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AppSetting } from '@aws-blocks/blocks';",
+				"import { Scope, AppSetting } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				"export const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: '/seeded/db', secret: true });",
 			),
@@ -852,7 +852,7 @@ describe('discoverBlocks — AppSetting.fromExisting', () => {
 	it('discovers it through a namespace import', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import * as blocks from '@aws-blocks/blocks';",
+				"import * as blocks from 'aws-cdk-blocks';",
 				"const scope = new blocks.Scope('shop');",
 				"export const k = blocks.AppSetting.fromExisting(scope, 'k', { name: '/seeded/k' });",
 			),
@@ -872,7 +872,7 @@ describe('discoverBlocks — AppSetting.fromExisting', () => {
 	it('ignores another block type\u2019s fromExisting, which has a different shape', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope, AuthCognito } from '@aws-blocks/blocks';",
+				"import { Scope, AuthCognito } from 'aws-cdk-blocks';",
 				"const scope = new Scope('shop');",
 				"export const auth = AuthCognito.fromExisting('eu-west-1_abc', 'client123');",
 			),
@@ -887,7 +887,7 @@ describe('discoverBlocks — AppSetting.fromExisting', () => {
 	it('ignores a fromExisting on something that is not a block at all', () => {
 		const root = makeProject({
 			'cdk-blocks/index.ts': source(
-				"import { Scope } from '@aws-blocks/blocks';",
+				"import { Scope } from 'aws-cdk-blocks';",
 				"import { Thing } from './thing.js';",
 				"const scope = new Scope('shop');",
 				"export const t = Thing.fromExisting(scope, 't', { name: '/x' });",

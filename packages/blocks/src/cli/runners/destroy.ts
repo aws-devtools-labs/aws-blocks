@@ -3,7 +3,7 @@
 
 /** Runs with the `tsx` loader, started by `npm run destroy` after the confirmation. */
 
-import { type DestroyOptions, destroy } from '@aws-blocks/core/scripts';
+import { type DestroyOptions, destroy } from '@aws-cdk-blocks/core/scripts';
 import { exitWithError } from './fail.js';
 
 const options = JSON.parse(process.argv[2]) as DestroyOptions;

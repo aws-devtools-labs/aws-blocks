@@ -72,7 +72,7 @@ function asModule(code: string): string {
 	const needed = new Set(
 		UMBRELLA_NAMES.filter((n) => !imported.has(n) && (uses(n) || setup.some((l) => l.includes(`new ${n}(`)))),
 	);
-	const header = needed.size > 0 ? [`import { ${[...needed].join(', ')} } from '@aws-blocks/blocks';`] : [];
+	const header = needed.size > 0 ? [`import { ${[...needed].join(', ')} } from 'aws-cdk-blocks';`] : [];
 	// Imports are hoisted, so the setup may precede the snippet's own imports.
 	return [...header, ...setup, body, 'export {};', ''].join('\n');
 }

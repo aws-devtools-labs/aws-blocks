@@ -112,7 +112,7 @@ An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatc
 
 **Date**: 2026-04-07
 **Authors:** Jon Wire
-**Status:** Amended by [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) (2026-10-03). The three auth blocks named below were replaced by one block, `Auth` (`@aws-blocks/bb-auth`). The auth-first convention still governs its identifiers — `Auth`, `AuthOptions`, `AuthErrors`, `AuthenticatedUser`; packages `bb-auth`, `auth-common`. The original record follows unchanged.
+**Status:** Amended by [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) (2026-10-03). The three auth blocks named below were replaced by one block, `Auth` (`@aws-cdk-blocks/bb-auth`). The auth-first convention still governs its identifiers — `Auth`, `AuthOptions`, `AuthErrors`, `AuthenticatedUser`; packages `bb-auth`, `auth-common`. The original record follows unchanged.
 
 ### Context
 Auth Building Blocks span multiple packages (`AuthBasic`, `AuthOIDC`, `AuthCognito`) and share a common interface. We needed a naming convention for the classes, types, and packages.
@@ -218,7 +218,7 @@ All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `
 - `crossDomain: false` (default) → `SameSite=Lax; Secure` (prod) / `SameSite=Lax` (plain-HTTP localhost; `Lax` does not require `Secure`).
 - `crossDomain: true` → `SameSite=None; Secure; Partitioned` (prod) / `SameSite=None; Secure` (localhost; CHIPS `Partitioned` requires HTTPS, so it is dropped).
 
-The attribute selection lives in one shared helper, `@aws-blocks/auth-common/cookies` (`resolveCookieSecurity` / `buildCookieSecurityAttrs`), which every BB calls. A cross-BB parity test asserts identical output for identical inputs so the family converges structurally, not by coincidence of matching strings.
+The attribute selection lives in one shared helper, `@aws-cdk-blocks/auth-common/cookies` (`resolveCookieSecurity` / `buildCookieSecurityAttrs`), which every BB calls. A cross-BB parity test asserts identical output for identical inputs so the family converges structurally, not by coincidence of matching strings.
 
 This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on the single-origin dev proxy: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
 
@@ -445,7 +445,7 @@ Stack name scheme:
 
 The sandbox identifier is generated per-machine and stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
 
-Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/blocks/scripts` and accept an optional `projectRoot` parameter (defaults to `process.cwd()`).
+Both helpers (`getStackId`, `getSandboxId`) are exported from `aws-cdk-blocks/scripts` and accept an optional `projectRoot` parameter (defaults to `process.cwd()`).
 
 ### Rationale
 - **Collision avoidance:** The 6-char hex suffix in `stackId` provides ~16.8M combinations (16⁶), making accidental collisions between same-named apps in a shared account negligible.
@@ -733,7 +733,7 @@ A run appends every event it emits to the file it created. The create path keeps
 ### Known limitation
 Ownership is per process, so two runs sharing one `--telemetry-file` path keep only the first run's events: the second gets `EEXIST`, finds the path absent from its own set, and writes nothing. That is D-010 clause 3 applied to a path this process did not create, and it is unchanged by this decision — the behavior is identical before and after.
 
-`create-blocks-app` carries a near-copy of the sink, not an identical one: its event parameter is `Record<string, unknown>` rather than `BlocksTelemetryEvent`, and it imports `dirname` directly instead of `path.dirname`. The duplication is deliberate — that package avoids depending on `@aws-blocks/core`, whose postinstall needs devDependencies absent from a registry install (see that file's header). The header justifies a separate implementation; it does not commit the two to parity.
+`create-blocks-app` carries a near-copy of the sink, not an identical one: its event parameter is `Record<string, unknown>` rather than `BlocksTelemetryEvent`, and it imports `dirname` directly instead of `path.dirname`. The duplication is deliberate — that package avoids depending on `@aws-cdk-blocks/core`, whose postinstall needs devDependencies absent from a registry install (see that file's header). The header justifies a separate implementation; it does not commit the two to parity.
 
 Two asymmetries are left standing on purpose. As of this decision `create-blocks-app` emits one event per process — `trackCommand` has a single call site (`index.ts:781`) and the package declares no `exports` — so its append branch is not reachable in production, and the containment test core carries (`still sends the HTTP event when the append throws`) is not ported to it. Its dispatch also has no enclosing `try/catch`, unlike core's, so a throw escaping the sink would reject `trackCommand`. Both sinks swallow their own errors, so nothing throws today. That gap predates this decision and is unchanged by it.
 
@@ -791,7 +791,7 @@ A Building Block declares its native packages and transferable bindings under an
 ### Decision
 The scan reads every manifest the spec project can resolve. It is not restricted to the project's own `dependencies`. Generation-time rules bound what a declaration can do, and the authoring guide below specifies them. Publisher trust is bounded by none of them.
 
-Reading every manifest costs one open per installed package — 1804 files from this repo's test app. Only a narrower scan would reduce that, which is the deferred alternative below. A manifest that will not parse is fatal only when its text carries `aws-blocks` as a JSON key, decoding `\uXXXX` first, so a corrupt unrelated dependency cannot stop generation — matching the namespace anywhere in the text would make every `@aws-blocks/*` dependency string and the `aws-blocks` keyword that `create-block` scaffolds fatal when corrupt. A manifest that cannot be read at all is warned and skipped, because that test cannot be run on bytes the walk never obtained, and D-016 already settled that a hard throw is too blunt for a condition the project cannot fix.
+Reading every manifest costs one open per installed package — 1804 files from this repo's test app. Only a narrower scan would reduce that, which is the deferred alternative below. A manifest that will not parse is fatal only when its text carries `aws-blocks` as a JSON key, decoding `\uXXXX` first, so a corrupt unrelated dependency cannot stop generation — matching the namespace anywhere in the text would make every `@aws-cdk-blocks/*` dependency string and the `aws-blocks` keyword that `create-block` scaffolds fatal when corrupt. A manifest that cannot be read at all is warned and skipped, because that test cannot be run on bytes the walk never obtained, and D-016 already settled that a hard throw is too blunt for a condition the project cannot fix.
 
 ### Rationale
 The decision that moved declarations out of a `Scope` call and into `package.json` did so on the grounds that they *are* dependencies: build-related configuration belongs where a node or web app already declares its dependencies. Reading them with Node's own resolution follows from that framing. A direct-dependency filter would treat a declaration as something narrower than a dependency, which is the one thing the carrier decision ruled out.
@@ -965,12 +965,12 @@ An app that upgrades still has a pre-split `outputs.json` on disk, and it can ho
 AWS Blocks shipped three auth Building Blocks — `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc` — plus `auth-common`. Users could not tell which to pick or why, and nothing in the framework answered the question. The blocks also disagreed on error names and on what `userId` means, and `AuthBasic` and `AuthCognito` used the same cookie name with incompatible payloads.
 
 ### Decision
-Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured through one options object: a block-level `store` and one `providers` map whose entries carry a `type`. [D-024](#d-024-auth-options-store--providers) records that shape.
+Replace all three with one block, `Auth` (`@aws-cdk-blocks/bb-auth`), configured through one options object: a block-level `store` and one `providers` map whose entries carry a `type`. [D-024](#d-024-auth-options-store--providers) records that shape.
 
 - **Two federation engines.** A provider either federates through a Cognito user pool (`store: 'cognito'`, the default) or is verified by your backend directly, with no Cognito involved (`store: 'builtin'`). Google, Facebook, Amazon, Apple and SAML providers always federate through Cognito.
 - **No Cognito resources unless something needs them.** A `store: 'builtin'` block creates no user pool.
 - **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
-- **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
+- **Hard cutover.** The three old packages are removed in the release that publishes `@aws-cdk-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
 - **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids for the user pool, the app client and the session secret, its pool name and its session format, so an app that switches keeps its user pool and its users. Signed-in sessions do not carry over: the session store is a new table, so each user signs in once (`packages/bb-auth/MIGRATION.md`).
 - **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
 
@@ -983,7 +983,7 @@ Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured thr
 ### Alternatives Considered
 - **Keep three blocks and document the choice.** Leaves the decision with the user and keeps three error vocabularies and `userId` meanings.
 - **Route every provider through Cognito.** One token format, but a 200× smaller free tier for OIDC users, no offline federated sign-in and no PKCE-only IdPs.
-- **A deprecation window with runtime aliases.** Doubles the surface to test and keeps the ambiguity alive; the codemod (`npx @aws-blocks/bb-auth migrate`) and `MIGRATION.md` cover the move instead.
+- **A deprecation window with runtime aliases.** Doubles the surface to test and keeps the ambiguity alive; the codemod (`npx @aws-cdk-blocks/bb-auth migrate`) and `MIGRATION.md` cover the move instead.
 
 ### References
 - User doc and comparison table: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#which-option-and-why)
@@ -1454,7 +1454,7 @@ A scaffolded app keeps its backend in `cdk-blocks/`, and the frontend imports it
 
 ### Alternatives Considered
 - **A. Global Node types everywhere (the previous templates).** No errors, but browser code can use Node globals unchecked, and a narrower frontend `tsconfig` still fails in `cdk-blocks/`. Kept for Next.js only.
-- **B. `/// <reference types="node" />` in `@aws-blocks/blocks`'s published declarations.** Fixes the Node types but not `lib` or strictness differences: in a test, a Vite app with `auth-cognito` went from 11 to 8 errors and still failed.
+- **B. `/// <reference types="node" />` in `aws-cdk-blocks`'s published declarations.** Fixes the Node types but not `lib` or strictness differences: in a test, a Vite app with `auth-cognito` went from 11 to 8 errors and still failed.
 - **D. Generated declarations** (`cdk-blocks/.types/`, written by `prepare`/`prebuild` hooks and the dev server; the first revision of #1111). Works without changing the frontend `tsconfig`, but adds a generation step with its own freshness logic. In review, its `tsc --build` over a narrow root missed edits to imported modules and dependency changes, and it made the old layout a hard error for existing apps.
 - **E. Generate an explicit API type or schema** (for example, from `blocks.spec.json`). A much larger change, and TypeScript inference is the source of truth today.
 

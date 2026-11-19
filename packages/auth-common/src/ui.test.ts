@@ -1235,7 +1235,7 @@ describe('test hooks', () => {
 				{
 					name: 'signIn:google',
 					label: 'Sign in with Google',
-					url: '/aws-blocks/auth/signin/google',
+					url: '/cdk-blocks/auth/signin/google',
 					method: 'GET',
 					fields: [],
 					unavailable: hint,
@@ -1243,7 +1243,7 @@ describe('test hooks', () => {
 				{
 					name: 'signIn:okta',
 					label: 'Sign in with Okta',
-					url: '/aws-blocks/auth/signin/okta',
+					url: '/cdk-blocks/auth/signin/okta',
 					method: 'GET',
 					fields: [],
 				},

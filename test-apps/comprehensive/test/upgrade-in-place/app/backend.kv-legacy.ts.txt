@@ -6,9 +6,9 @@
 // `KVStore` with a new id. The third deploy is this file without the lines
 // that end with the `legacy` marker.
 
-import { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-blocks/bb-kv-store';
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
-import { isBlocksError } from '@aws-blocks/core';
+import { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { z } from 'zod';
 
 const scope = new Scope('upgrade');

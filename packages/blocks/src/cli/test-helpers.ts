@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as realCore from '@aws-blocks/core/scripts';
+import * as realCore from '@aws-cdk-blocks/core/scripts';
 import { type ChildResult, type CliDeps, type CoreScripts, PromptInterrupted, type SpawnSpec } from './context.js';
 import { main } from './main.js';
 import { DEV_FAILURE_FILE_ENV, DEV_STATE } from './runners/launch.js';

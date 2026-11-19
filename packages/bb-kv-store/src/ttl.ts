@@ -6,7 +6,7 @@
  * on the exact epoch-seconds value written and on when an item counts as
  * expired. Zero runtime dependencies beyond the error constants.
  */
-import { blocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-cdk-blocks/core';
 import { KVStoreErrors } from './errors.js';
 import type { Expiry } from './types.js';
 

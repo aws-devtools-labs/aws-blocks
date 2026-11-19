@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth` — `browser` entry.
+ * `@aws-cdk-blocks/bb-auth` — `browser` entry.
  *
  * `Auth` runs server-side only. This stub keeps every name importable from a
  * browser bundle (so shared code type-checks and links) and re-exports the
@@ -11,7 +11,7 @@
  *
  * Deliberately imports nothing from `./index.mock.js` or the runtime stub, so
  * no server code reaches a browser bundle: its only runtime imports are the
- * error constants (`@aws-blocks/auth-common`, which resolves `@aws-blocks/core`
+ * error constants (`@aws-cdk-blocks/auth-common`, which resolves `@aws-cdk-blocks/core`
  * to core's browser entry) and the pure `fromExisting` helper.
  * `index.browser.test.ts` walks the built import graph and loads this entry
  * under `--conditions=browser` to keep it that way.
@@ -21,7 +21,7 @@
  * gains an export, add it here — a re-export for constants and pure helpers, a
  * throwing stub for anything server-side.
  *
- * The sign-in UI lives in `@aws-blocks/bb-auth/ui`.
+ * The sign-in UI lives in `@aws-cdk-blocks/bb-auth/ui`.
  */
 
 import { makeExternalUserPoolRef } from './external-pool.js';

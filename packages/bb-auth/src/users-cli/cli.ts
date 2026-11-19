@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `npx @aws-blocks/bb-auth users <command>` — put users in the groups an
+ * `npx @aws-cdk-blocks/bb-auth users <command>` — put users in the groups an
  * `Auth` block declares (`users.groups`), locally or on a deployed stack.
  * The supported way to make the first admin.
  *
@@ -31,7 +31,7 @@ import type { DeployedClients } from './deployed.js';
 import { localTarget, runningDevServers, selectLocalPool } from './local.js';
 import { type PoolTarget, type ResolvedUser, type UserSelector, UsersCliError } from './target.js';
 
-export const USERS_USAGE = `Usage: npx @aws-blocks/bb-auth users <command> [options]
+export const USERS_USAGE = `Usage: npx @aws-cdk-blocks/bb-auth users <command> [options]
 
 Manage the group membership of an Auth block's users (users.groups).
 
@@ -62,8 +62,8 @@ a group since dropped from users.groups is still accepted until .bb-data/ is
 reset. The pool line shows the AWS account and Region of a deployed pool.
 
 Examples:
-  npx @aws-blocks/bb-auth users add-to-group you@example.com admin
-  npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes`;
+  npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin
+  npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes`;
 
 type Command = 'add-to-group' | 'remove-from-group' | 'list-groups';
 const COMMANDS: readonly Command[] = ['add-to-group', 'remove-from-group', 'list-groups'];
@@ -170,7 +170,7 @@ export function parseUsersArgs(argv: readonly string[]): UsersArgs {
  * this machine's sandbox, `<stackId>-<sandboxId>`.
  */
 export async function stackNameForStage(stage: string, cwd: string): Promise<string> {
-	const { getStackName } = await import('@aws-blocks/core/scripts');
+	const { getStackName } = await import('@aws-cdk-blocks/core/scripts');
 	const projectRoot = resolve(cwd);
 	if (stage === 'prod' || stage === 'production') {
 		try {

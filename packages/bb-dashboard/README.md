@@ -1,4 +1,4 @@
-# @aws-blocks/bb-dashboard
+# @aws-cdk-blocks/bb-dashboard
 
 Auto-generated CloudWatch Dashboard for application observability.
 
@@ -17,7 +17,7 @@ Auto-generated CloudWatch Dashboard for application observability.
 ## Installation
 
 ```bash
-npm install @aws-blocks/bb-dashboard
+npm install @aws-cdk-blocks/bb-dashboard
 ```
 
 ## Quick Start
@@ -25,7 +25,7 @@ npm install @aws-blocks/bb-dashboard
 ### Minimal
 
 ```typescript
-import { Dashboard } from '@aws-blocks/bb-dashboard';
+import { Dashboard } from '@aws-cdk-blocks/bb-dashboard';
 
 const dashboard = new Dashboard(scope, 'dashboard');
 // After deploy: a CloudWatch Dashboard with a health + logs section for every
@@ -43,8 +43,8 @@ namespace isn't tied to a compute), so they're passed explicitly, one section
 per namespace.
 
 ```typescript
-import { Metrics } from '@aws-blocks/bb-metrics';
-import { Tracer } from '@aws-blocks/bb-tracer';
+import { Metrics } from '@aws-cdk-blocks/bb-metrics';
+import { Tracer } from '@aws-cdk-blocks/bb-tracer';
 
 new Tracer(scope, 'tracing');    // → traces section on every compute
 const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
@@ -126,7 +126,7 @@ otherwise leak an internal type before customers can construct a compute).
 | `title` | `string` | `id` | Dashboard display title |
 | `dashboardName` | `string` | `scope.fullId` | CloudWatch Dashboard name (max 255 characters, auto-truncated) |
 | `defaultTimeRange` | `string` | `'-PT3H'` | Default time range (ISO 8601 duration) |
-| `routePath` | `string \| false` | `'/aws-blocks/dashboard'` | Route path for the redirect. Set to `false` to disable |
+| `routePath` | `string \| false` | `'/cdk-blocks/dashboard'` | Route path for the redirect. Set to `false` to disable |
 
 ### `MetricConfig`
 
@@ -143,7 +143,7 @@ Configuration for a single pre-registered CloudWatch metric.
 ## Error Constants
 
 ```typescript
-import { DashboardErrors } from '@aws-blocks/bb-dashboard';
+import { DashboardErrors } from '@aws-cdk-blocks/bb-dashboard';
 
 DashboardErrors.InvalidMetricConfig // 'InvalidMetricConfigException'
 ```
@@ -173,7 +173,7 @@ Grouped per compute, then an app-wide metrics section:
 
 ## Dashboard Redirect Route
 
-The Dashboard BB registers a `GET` route (default: `/aws-blocks/dashboard`).
+The Dashboard BB registers a `GET` route (default: `/cdk-blocks/dashboard`).
 Set `routePath: false` to disable it.
 
 - **In AWS:** Redirects to the full CloudWatch console URL (requires AWS login).
@@ -195,7 +195,7 @@ log widgets appear for every compute unless you set `logs: false`.
 
 ## Local Development
 
-Run `npm run dev` and open `/aws-blocks/dashboard` on the dev server. The page lists configured
+Run `npm run dev` and open `/cdk-blocks/dashboard` on the dev server. The page lists configured
 metric names by namespace and points to the terminal for log and metric values and `.bb-data/`
 for saved traces. It does not query AWS or expose raw telemetry. Live CloudWatch charts are
 available only on the deployed dashboard.

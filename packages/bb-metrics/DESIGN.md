@@ -2,7 +2,7 @@
 
 Design document for Metrics. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-metrics`
+**Package:** `@aws-cdk-blocks/bb-metrics`
 **Type:** Primitive (no new infrastructure created)
 **AWS Service:** Amazon CloudWatch Metrics (via Embedded Metric Format)
 

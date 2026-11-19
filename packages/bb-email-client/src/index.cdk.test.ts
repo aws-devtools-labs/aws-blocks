@@ -11,7 +11,7 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-cdk-blocks/core/cdk';
 import { EmailClient } from './index.cdk.js';
 
 // Minimal BlocksStack-shaped parent exposing the shared `executionRole` the
@@ -109,8 +109,8 @@ function synthWarnings(
 		});
 }
 
-const SENDER_WARNING = '@aws-blocks/bb-email-client:UnverifiableSender';
-const REPLY_TO_WARNING = '@aws-blocks/bb-email-client:UndeliverableReplyTo';
+const SENDER_WARNING = '@aws-cdk-blocks/bb-email-client:UnverifiableSender';
+const REPLY_TO_WARNING = '@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo';
 
 for (const fromAddress of [
 	'noreply@example.com',

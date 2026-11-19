@@ -1,11 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { AsyncJob } from '@aws-blocks/bb-async-job';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
-import { getConfigSync, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { getConfigSync, registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
 import { CRON_RUNNER_ID, cronRunnerConfigKey, toCronJobEvent } from './runner.js';
 import type { CronJobEvent, CronJobOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';

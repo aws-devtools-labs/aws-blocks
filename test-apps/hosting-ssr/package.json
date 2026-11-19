@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev:api": "tsx watch cdk-blocks/scripts/server.ts",
-    "dev:next": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev",
+    "dev:next": "BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api next dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:next\"",
     "build": "next build",
     "typegen": "hosting-typegen",
@@ -21,12 +21,12 @@
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "@aws-blocks/bb-auth": "*",
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/hosting": "*",
+    "@aws-cdk-blocks/bb-auth": "1.0.0-rc.0",
+    "aws-cdk-blocks": "1.0.0-rc.0",
+    "@aws-cdk-blocks/hosting": "1.0.0-rc.0",
     "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

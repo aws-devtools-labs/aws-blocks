@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 /**
  * Shared types for the Secret Building Block.
  *
@@ -115,7 +115,7 @@ export interface SecretOptions<T = string> {
 	allowRuntimeWrite?: boolean;
 	/**
 	 * Optional logger for internal Secret operations. Accepts a `Logger` instance
-	 * or any `ChildLogger` from `@aws-blocks/bb-logger`.
+	 * or any `ChildLogger` from `@aws-cdk-blocks/bb-logger`.
 	 *
 	 * When omitted, a default Logger at error level is created (silent during
 	 * normal operation, only emits on errors).

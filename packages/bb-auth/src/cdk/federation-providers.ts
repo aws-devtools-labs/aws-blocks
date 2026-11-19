@@ -24,7 +24,7 @@
 import { safeRedirectPath } from '../redirect-path.js';
 import type { CognitoOidcProviderOptions, ResolvedAuthOptions, SamlProviderOptions } from '../resolve-options.js';
 import type { ProviderCommon, ProviderSecretRef } from '../types.js';
-import { AUTH_ROUTE_PREFIX, type CognitoFederatedKind, cognitoFederatedProviders } from './contract.js';
+import { AUTH_ROUTE_PREFIX, type CognitoFederatedKind, cognitoFederatedProviders, LEGACY_AUTH_ROUTE_PREFIX } from './contract.js';
 
 /** Cognito `ProviderType` values `Auth` registers. */
 export type IdpProviderType = 'Google' | 'Facebook' | 'LoginWithAmazon' | 'SignInWithApple' | 'OIDC' | 'SAML';
@@ -435,8 +435,9 @@ export function assertRedirectPaths(options: ResolvedAuthOptions): void {
 		if (path === undefined) continue;
 		if (
 			typeof path !== 'string' ||
-			!path.startsWith(`${AUTH_ROUTE_PREFIX}/`) ||
-			path.length === `${AUTH_ROUTE_PREFIX}/`.length ||
+			![AUTH_ROUTE_PREFIX, LEGACY_AUTH_ROUTE_PREFIX].some(
+				(prefix) => path.startsWith(`${prefix}/`) && path.length > `${prefix}/`.length,
+			) ||
 			/[*?#\s]/.test(path)
 		) {
 			throw new Error(

@@ -11,7 +11,7 @@
  * constructor) and fails `cdk synth` / `cdk deploy` before anything reaches
  * CloudFormation. Runs only when the block lives in a `BlocksStack` /
  * `BlocksBackend` (which gives the app directory). The block claims its file
- * (`claimBaseline`), so the stack-level check in `@aws-blocks/core` — which
+ * (`claimBaseline`), so the stack-level check in `@aws-cdk-blocks/core` — which
  * fails synth for a pool-owning baseline no block claims, i.e. a renamed or
  * removed block — leaves it to this one.
  *
@@ -34,9 +34,9 @@
  */
 
 import { dirname, isAbsolute, resolve } from 'node:path';
-import type { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { claimBaseline, deployTimeLambdaCode, hasOrphanedBaselines } from '@aws-blocks/core/cdk/internal';
+import type { BuildingBlockScope } from '@aws-cdk-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME } from '@aws-cdk-blocks/core/cdk';
+import { claimBaseline, deployTimeLambdaCode, hasOrphanedBaselines } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -59,7 +59,7 @@ export const GUARD_IDS = {
 /**
  * `dist/immutability-guard-lambda/` — the esbuild bundle (`npm run build:lambda`).
  * A vendorized copy has no `dist/`, so its source is bundled at synth instead
- * (`deployTimeLambdaCode` in `@aws-blocks/core/cdk/internal`).
+ * (`deployTimeLambdaCode` in `@aws-cdk-blocks/core/cdk/internal`).
  */
 const LAMBDA = {
 	moduleUrl: import.meta.url,
@@ -80,7 +80,7 @@ export function snapshotOfPool(cfnPool: cognito.CfnUserPool): PoolImmutables {
 }
 
 /** Warning id: a block's first-ever baseline records that it owns no pool. */
-export const FIRST_BASELINE_WITHOUT_POOL = '@aws-blocks/bb-auth:FirstBaselineWithoutPool';
+export const FIRST_BASELINE_WITHOUT_POOL = '@aws-cdk-blocks/bb-auth:FirstBaselineWithoutPool';
 
 /** The warning text for {@link FIRST_BASELINE_WITHOUT_POOL}. */
 export function firstBaselineWithoutPool(fullId: string): string {
@@ -88,7 +88,7 @@ export function firstBaselineWithoutPool(fullId: string): string {
 		`Auth '${fullId}': this is the block's first baseline, and it records no user pool owned by the block ` +
 		'(no pool-backed sign-in method, or `userPool` wraps one). If this stack previously had a user pool for this ' +
 		'block (e.g. from `AuthCognito`), this deploy will delete it, and every user in it, unless that pool was ' +
-		"already deployed with `removalPolicy: 'retain'` — see MIGRATION.md in @aws-blocks/bb-auth (\"Before every " +
+		"already deployed with `removalPolicy: 'retain'` — see MIGRATION.md in @aws-cdk-blocks/bb-auth (\"Before every " +
 		'deploy: the checklist"). Deploy the migrated code unchanged first, commit its baseline, and only then ' +
 		'change the configuration; synth then refuses the pool removal. A new app with no earlier pool can ignore this.'
 	);
@@ -155,7 +155,7 @@ function addBaselineCheck(block: BuildingBlockScope, cfnPool: cognito.CfnUserPoo
 					return [outcome.message];
 				case 'created':
 					annotations.addInfoV2(
-						'@aws-blocks/bb-auth:BaselineCreated',
+						'@aws-cdk-blocks/bb-auth:BaselineCreated',
 						`Auth '${fullId}': wrote the user-pool baseline ${outcome.file}. Commit it — later synths compare ` +
 							'against it and refuse changes Cognito cannot apply to an existing pool.',
 					);
@@ -171,20 +171,20 @@ function addBaselineCheck(block: BuildingBlockScope, cfnPool: cognito.CfnUserPoo
 					break;
 				case 'updated':
 					annotations.addInfoV2(
-						'@aws-blocks/bb-auth:BaselineUpdated',
+						'@aws-cdk-blocks/bb-auth:BaselineUpdated',
 						`Auth '${fullId}': updated the user-pool baseline ${outcome.file} (a permitted change). Commit it.`,
 					);
 					break;
 				case 'deferred':
 					annotations.addInfoV2(
-						'@aws-blocks/bb-auth:BaselineDeferred',
+						'@aws-cdk-blocks/bb-auth:BaselineDeferred',
 						`Auth '${fullId}': not writing its first user-pool baseline yet, because this stack has an orphaned ` +
 							'baseline (see the error). If this block is a renamed one, restoring its old id resolves both.',
 					);
 					break;
 				case 'rebaselined':
 					annotations.addInfoV2(
-						'@aws-blocks/bb-auth:Rebaselined',
+						'@aws-cdk-blocks/bb-auth:Rebaselined',
 						`Auth '${fullId}': ${REBASELINE_ENV} accepted the current user-pool configuration into ${outcome.file}. ` +
 							'Commit it. The deploy-time guard still refuses a change the live pool cannot take.',
 					);

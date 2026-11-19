@@ -5,8 +5,8 @@
  * RFC 6238 TOTP (HMAC-SHA-1, 6 digits, 30-second steps) for the local user
  * pool: the codes authenticator apps compute and Cognito verifies. The mock
  * engine checks codes with it when `Auth` is created with
- * `totpVerification: 'rfc6238'`; `totpCodeFor` (`@aws-blocks/bb-auth/testing`,
- * re-exported from `@aws-blocks/blocks/utils`) computes the codes for tests
+ * `totpVerification: 'rfc6238'`; `totpCodeFor` (`@aws-cdk-blocks/bb-auth/testing`,
+ * re-exported from `aws-cdk-blocks/utils`) computes the codes for tests
  * with {@link totpCode} (pinned to the RFC's vectors).
  *
  * Mock- and test-helper-only, never imported by the AWS or browser entries.
@@ -15,7 +15,7 @@
  */
 
 import crypto from 'node:crypto';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 

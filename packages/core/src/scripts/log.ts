@@ -102,7 +102,7 @@ export const log = {
 /**
  * Write errors that mean the reader of stdout/stderr is gone: a closed pipe (`EPIPE`), a hung-up terminal (`EIO`).
  * The task runner keeps its own copy, because it must not load this entry on every command; a test of
- * `@aws-blocks/blocks` fails when the two differ.
+ * `aws-cdk-blocks` fails when the two differ.
  */
 export const CLOSED_OUTPUT_CODES: readonly string[] = ['EPIPE', 'EIO', 'ERR_STREAM_DESTROYED'];
 

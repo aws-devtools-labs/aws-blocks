@@ -6,14 +6,14 @@ Each target has its own file in `.cdk-blocks-sandbox/`:
 
 ```bash
 cat .cdk-blocks-sandbox/config.json             # the running dev server (npm run dev, or the one npm run sandbox runs)
-# {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
+# {"apiUrl":"http://localhost:3000/cdk-blocks/api","environment":"local"}
 cat .cdk-blocks-sandbox/config.sandbox.json     # the last sandbox deploy
-# {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"sandbox"}
+# {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api","environment":"sandbox"}
 cat .cdk-blocks-sandbox/config.production.json  # the last production deploy
-# {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"production"}
+# {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api","environment":"production"}
 ```
 
-Only a dev server writes `config.json`, and the Node.js client reads it, so a deploy never redirects local tests or scripts to AWS. In production with Hosting, browser requests go through CloudFront (same-origin at `/aws-blocks/api`), but `config.production.json` still contains the underlying API Gateway URL.
+Only a dev server writes `config.json`, and the Node.js client reads it, so a deploy never redirects local tests or scripts to AWS. In production with Hosting, browser requests go through CloudFront (same-origin at `/cdk-blocks/api`), but `config.production.json` still contains the underlying API Gateway URL.
 
 ### Over HTTP the config lives at `/.blocks-sandbox/config.json`
 
@@ -21,7 +21,7 @@ The browser client fetches its config from the **dotted** path `/.blocks-sandbox
 
 ```bash
 curl http://localhost:3000/.blocks-sandbox/config.json
-# → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
+# → {"apiUrl":"http://localhost:3000/cdk-blocks/api","environment":"local"}
 
 curl -o /dev/null -w '%{http_code}\n' http://localhost:3000/config.json
 # → 404   (expected, this path never existed)
@@ -33,7 +33,7 @@ curl -o /dev/null -w '%{http_code}\n' http://localhost:3000/config.json
 
 The typed client (`import { api } from 'cdk-blocks'`) handles all RPC automatically. This section is for low-level troubleshooting only.
 
-**Format:** JSON-RPC 2.0 — every namespace is served at `POST /aws-blocks/api`. (The typed client posts to `/aws-blocks/api/<namespace>`, which works too; the namespace in the path must match the one in `method`.)
+**Format:** JSON-RPC 2.0 — every namespace is served at `POST /cdk-blocks/api`. (The typed client posts to `/cdk-blocks/api/<namespace>`, which works too; the namespace in the path must match the one in `method`.)
 
 ```bash
 # "Is it alive?" check:
@@ -58,17 +58,17 @@ curl -X POST $(cat .cdk-blocks-sandbox/config.json | jq -r .apiUrl) \
 
 ```bash
 # api.createNote("Hello", "World")
-curl -X POST http://localhost:3000/aws-blocks/api \
+curl -X POST http://localhost:3000/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.createNote","params":["Hello","World"],"id":1}'
 
 # authApi.getAuthState()
-curl -X POST http://localhost:3000/aws-blocks/api \
+curl -X POST http://localhost:3000/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"authApi.getAuthState","params":[],"id":1}'
 
 # authApi.setAuthState (sign up)
-curl -X POST http://localhost:3000/aws-blocks/api \
+curl -X POST http://localhost:3000/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"signUp","username":"alice@example.com","password":"Secret123!"}],"id":1}'
 ```
@@ -77,9 +77,9 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| 404 on `/api/...` or `/authApi/...` | Wrong URL — every call goes under `/aws-blocks/api` | Use `POST /aws-blocks/api` with method in the body |
-| `-32600` `Invalid Request: the path addresses namespace "…" but the method is in namespace "…"` | The namespace after `/aws-blocks/api/` differs from the one in `method` (names are case-sensitive) | Use the same export name in both, or post to the bare `/aws-blocks/api` |
-| `-32600` `Invalid Request: an RPC call goes to /aws-blocks/api or /aws-blocks/api/<namespace>, not a deeper path` | Extra path segments after the namespace | Post to `/aws-blocks/api/<namespace>` exactly |
+| 404 on `/api/...` or `/authApi/...` | Wrong URL — every call goes under `/cdk-blocks/api` | Use `POST /cdk-blocks/api` with method in the body |
+| `-32600` `Invalid Request: the path addresses namespace "…" but the method is in namespace "…"` | The namespace after `/cdk-blocks/api/` differs from the one in `method` (names are case-sensitive) | Use the same export name in both, or post to the bare `/cdk-blocks/api` |
+| `-32600` `Invalid Request: an RPC call goes to /cdk-blocks/api or /cdk-blocks/api/<namespace>, not a deeper path` | Extra path segments after the namespace | Post to `/cdk-blocks/api/<namespace>` exactly |
 | HTTP 200 but `{"error":...}` in body | Normal JSON-RPC error response | Read `error.message` — not a routing problem |
 | `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `cdk-blocks/index.ts` |
 | `config.json` not found | No dev server has started in this app | Run `npm run dev`, or set `BLOCKS_API_URL` to the API you mean to call |
@@ -118,7 +118,7 @@ pkill -f "tsx watch"
 
 ## `Frontend server unavailable` (502)
 
-The dev server listens on one port (3000 by default). It answers the API (`POST /aws-blocks/api`), your `RawRoute`s and `/.blocks-sandbox/config.json` itself, and proxies every other request to the frontend dev server (Next.js or Vite) on the frontend port, 3100 by default (`package.json#blocks.dev.frontendPort`, or `--frontend-port`). The body `Frontend server unavailable` with status **502** means that proxy could not reach anything on the frontend port. The API is unaffected.
+The dev server listens on one port (3000 by default). It answers the API (`POST /cdk-blocks/api`), your `RawRoute`s and `/.blocks-sandbox/config.json` itself, and proxies every other request to the frontend dev server (Next.js or Vite) on the frontend port, 3100 by default (`package.json#blocks.dev.frontendPort`, or `--frontend-port`). The body `Frontend server unavailable` with status **502** means that proxy could not reach anything on the frontend port. The API is unaffected.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
@@ -132,9 +132,9 @@ Without a frontend (`--no-frontend`, `"frontend": false`, or no `next` / `vite` 
 
 | Response | Cause | Fix |
 |----------|-------|-----|
-| 403 `Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-blocks/core` README, "Local Development") |
+| 403 `Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-cdk-blocks/core` README, "Local Development") |
 | 404 `The AWS Blocks JSON-RPC API expects POST, not GET.` | An RPC path was requested with another method, for example by opening it in a browser | Call it with `POST` (see [RPC Wire Protocol](#rpc-wire-protocol)) |
-| 403 `{"error":"Forbidden: cross-origin request rejected"}` | A `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` names another site | Call from a loopback origin or the host in `BLOCKS_DEV_HOST`; see the `@aws-blocks/core` README, "Local Development", for the allowed origins |
+| 403 `{"error":"Forbidden: cross-origin request rejected"}` | A `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` names another site | Call from a loopback origin or the host in `BLOCKS_DEV_HOST`; see the `@aws-cdk-blocks/core` README, "Local Development", for the allowed origins |
 | 415 `Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json` | A JSON-RPC call sent without `Content-Type: application/json` | Send that header (with `curl`, `-H 'Content-Type: application/json'`); the generated clients already do |
 
 ## Auth cookies not persisting
@@ -143,12 +143,12 @@ Session cookies are `HttpOnly; SameSite=Lax`, plus `Secure` over HTTPS. With `cr
 
 ```bash
 # Sign in and save cookies
-curl -c cookies.txt -X POST http://localhost:3000/aws-blocks/api \
+curl -c cookies.txt -X POST http://localhost:3000/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"signIn","username":"alice@example.com","password":"Secret123!"}],"id":1}'
 
 # Use cookies for authenticated calls
-curl -b cookies.txt -X POST http://localhost:3000/aws-blocks/api \
+curl -b cookies.txt -X POST http://localhost:3000/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.listNotes","params":[],"id":1}'
 ```

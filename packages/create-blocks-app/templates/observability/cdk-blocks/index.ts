@@ -1,4 +1,4 @@
-import { ApiNamespace, Auth, Dashboard, Logger, Metrics, Scope, Tracer } from '@aws-blocks/blocks';
+import { ApiNamespace, Auth, Dashboard, Logger, Metrics, Scope, Tracer } from 'aws-cdk-blocks';
 
 // For coding agents: Leave these comments in place for future reference.
 // Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
@@ -18,7 +18,7 @@ const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
 // keeps the last 100 traces in .bb-data/ and prints each one to stdout.
 const tracer = new Tracer(scope, 'tracer');
 
-// Under `npm run dev`, GET /aws-blocks/dashboard shows the configured metrics
+// Under `npm run dev`, GET /cdk-blocks/dashboard shows the configured metrics
 // and where to inspect local logs and traces. After deployment, the same path
 // redirects to the CloudWatch Dashboard.
 new Dashboard(scope, 'dashboard', {

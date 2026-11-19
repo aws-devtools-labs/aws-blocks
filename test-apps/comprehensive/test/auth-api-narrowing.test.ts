@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { AuthErrors } from '@aws-blocks/bb-auth';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
 import type {
   api as apiType,
   authApi as authApiType,

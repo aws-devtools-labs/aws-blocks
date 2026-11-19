@@ -1,6 +1,6 @@
 # Telemetry E2E Test App
 
-Isolated end-to-end tests for the AWS Blocks telemetry system.
+Isolated end-to-end tests for the AWS CDK Blocks telemetry system.
 
 ## Isolation
 

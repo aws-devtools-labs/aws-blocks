@@ -24,8 +24,8 @@
  */
 
 import crypto from 'node:crypto';
-import { registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import { getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { selfSignUpEnabled } from '../cdk/contract.js';
 import {
 	DECOY_FIRST_FACTORS,

@@ -9,6 +9,6 @@
  * `COMPUTE_API_FRONT_DOOR` from the environment like the deploy. Run it once per
  * leg you deployed, from the app directory.
  */
-import { destroySandbox } from '@aws-blocks/blocks/scripts';
+import { destroySandbox } from 'aws-cdk-blocks/scripts';
 
 await destroySandbox(process.argv[2]);

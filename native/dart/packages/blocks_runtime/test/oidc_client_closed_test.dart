@@ -10,7 +10,7 @@ import 'package:test/test.dart';
 
 const _descriptor = {
   '__blocks': 'oidc/client',
-  'exchangePath': '/aws-blocks/auth/exchange',
+  'exchangePath': '/cdk-blocks/auth/exchange',
   'providers': ['google'],
   'providerConfigs': {
     'google': {
@@ -48,7 +48,7 @@ class _AuthRoutes extends http.BaseClient {
 /// A `BlocksClient` whose every call returns [result] as its JSON-RPC
 /// result.
 BlocksClient _blocksReturning(Object? result) => BlocksClient(
-  baseUrl: 'http://localhost:3001/aws-blocks/api',
+  baseUrl: 'http://localhost:3001/cdk-blocks/api',
   client: MockClient(
     (_) async => http.Response(
       jsonEncode({'jsonrpc': '2.0', 'id': 1, 'result': result}),

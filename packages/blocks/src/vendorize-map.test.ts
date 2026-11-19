@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Validates the aws-blocks.vendorize map in @aws-blocks/blocks/package.json:
+ * Validates the aws-blocks.vendorize map in aws-cdk-blocks/package.json:
  * 1. Every listed package resolves and exports the declared symbols
  * 2. Every vendorizable BB dependency is present in the map
  */

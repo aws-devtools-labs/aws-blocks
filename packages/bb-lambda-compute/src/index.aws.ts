@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 /**
  * AWS-runtime entry point for `LambdaCompute`.
  *
@@ -15,7 +15,7 @@ import type { ScopeParent } from '@aws-blocks/core';
  * any `{ compute }` reference resolves) but provisions nothing and pulls in no
  * CDK. `setEnv` is a no-op — configuration is injected at synth, not at runtime.
  */
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import type { LambdaComputeProps } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 

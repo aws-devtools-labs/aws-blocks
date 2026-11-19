@@ -167,7 +167,7 @@ EOF
 # `npm run dev` on it, so drop it, then free the front-door ports (3000/3001 only, never :3100).
 # Discovery uses TWO independent paths over a 90-iteration window (either confirms), sharing ONE
 # readiness bar — the app root `/` answers non-5xx (`< 500`). They differ only in how the port is found:
-# Path A parses it from the framework banner `AWS Blocks local server running on http://localhost:<port>`;
+# Path A parses it from the framework banner `AWS CDK Blocks local server running on http://localhost:<port>`;
 # Path B probes the candidate ports for `/.blocks-sandbox/config.json` (served by our front door the
 # moment it binds), which finds the port independent of banner text/parse timing — its drift-proof win.
 # config.json is a discovery signal only (it answers before the proxied app on :3100 is up), so Path B
@@ -217,7 +217,7 @@ for i in $(seq 1 90); do
   # is actually up (a 502 = front door bound but frontend still booting). Path B below reuses this exact
   # root check as its readiness bar, so the two paths agree on "ready" — they differ only in how the
   # port is found (banner grep vs config.json probe).
-  port=$(grep -oE 'AWS Blocks local server running on http://localhost:[0-9]+' "${CELL_TMP}/dev.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
+  port=$(grep -oE 'AWS CDK Blocks local server running on http://localhost:[0-9]+' "${CELL_TMP}/dev.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
   if [ -n "${port:-}" ]; then
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${port}") || code=000
     if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then

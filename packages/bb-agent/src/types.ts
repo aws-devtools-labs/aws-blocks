@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { z } from 'zod';
-import type { RealtimeChannel } from '@aws-blocks/bb-realtime';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { RealtimeChannel } from '@aws-cdk-blocks/bb-realtime';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 /** Any JSON-serializable value. */
 export type JSONValue = string | number | boolean | null | { [key: string]: JSONValue } | JSONValue[];

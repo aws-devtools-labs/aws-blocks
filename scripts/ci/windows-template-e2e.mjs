@@ -85,7 +85,10 @@ async function main() {
   const baseTmp = process.env.RUNNER_TEMP || tmpdir();
   const work = mkdtempSync(join(baseTmp, 'bb-win-e2e-'));
   const userNpmrc = join(work, '.npmrc');
-  writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY}\n`);
+  // The default registry, not a scope line: npm resolves a registry per scope,
+  // so `@aws-cdk-blocks:registry=` cannot route the unscoped `aws-cdk-blocks`
+  // umbrella. See scripts/ci/templates-e2e.mjs for the full rationale.
+  writeFileSync(userNpmrc, `registry=${REGISTRY}\n`);
   // This harness is test traffic, not real usage; suppress CLI telemetry so a
   // local run (no CI env var set) is not counted as a real user. See the
   // cross-platform driver templates-e2e.mjs for the full rationale.
@@ -96,7 +99,7 @@ async function main() {
     CDK_DISABLE_CLI_TELEMETRY: '1',
   };
 
-  run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });
+  run('npm', ['install', '@aws-cdk-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
   // The app name becomes the stack-name prefix (.blocks/config.json stackId).
   // Keep it under `bb-test-`: the CI role can only delete stacks with the test

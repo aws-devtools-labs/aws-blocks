@@ -137,11 +137,11 @@ test.describe('Blog with Auth — SSR Hosting', () => {
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
-    // Local dev uses http://localhost:PORT/aws-blocks/api, production uses relative /aws-blocks/api
+    // Local dev uses http://localhost:PORT/cdk-blocks/api, production uses relative /cdk-blocks/api
     if (ENV === 'local') {
-      expect(config.apiUrl).toContain('/aws-blocks/api');
+      expect(config.apiUrl).toContain('/cdk-blocks/api');
     } else {
-      expect(config.apiUrl).toBe('/aws-blocks/api');
+      expect(config.apiUrl).toBe('/cdk-blocks/api');
     }
   });
 
@@ -578,7 +578,7 @@ test.describe('Secrets & config (secret() → Secrets Manager, config() → SSM)
 
     // Write both values out of band via the shipped CLI helpers (same code path
     // as `npm run secret -- set` / `npm run config -- set`, region from AWS_REGION).
-    const { setSecret, setConfig, removeSecret, removeConfig } = await import('@aws-blocks/blocks/scripts');
+    const { setSecret, setConfig, removeSecret, removeConfig } = await import('aws-cdk-blocks/scripts');
     const demoSecret = `sk_e2e_${randomBytes(12).toString('hex')}`;
     const demoConfig = JSON.stringify({ beta: true, run: randomBytes(4).toString('hex') });
 

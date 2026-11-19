@@ -28,7 +28,7 @@ final class DeterministicEncodingTests: XCTestCase {
     private let sortedTags = #"{"alpha":1,"bravo":2,"charlie":3,"delta":4,"echo":5,"foxtrot":6,"golf":7,"hotel":8,"#
         + #""india":9,"juliet":10,"kilo":11}"#
 
-    private var client: BlocksClient { BlocksClient(url: "http://localhost:3001/aws-blocks/api") }
+    private var client: BlocksClient { BlocksClient(url: "http://localhost:3001/cdk-blocks/api") }
 
     private func string(_ data: Data) -> String { String(bytes: data, encoding: .utf8) ?? "" }
 
@@ -62,7 +62,7 @@ final class DeterministicEncodingTests: XCTestCase {
             return (response, Data(#"{"jsonrpc":"2.0","result":null,"id":1}"#.utf8))
         }
         defer { MockURLProtocol.handler = nil }
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api", session: URLSession(configuration: config))
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api", session: URLSession(configuration: config))
         for _ in 0 ..< 3 {
             // A fresh dictionary each time: its storage, and so its unsorted key order, can differ.
             // Named apart from the `tags` property so it doesn't shadow it inside its own initializer.
@@ -83,7 +83,7 @@ final class DeterministicEncodingTests: XCTestCase {
             return (response, Data("{}".utf8))
         }
         defer { MockURLProtocol.handler = nil }
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api", session: URLSession(configuration: config))
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api", session: URLSession(configuration: config))
         _ = try await client.postRawRoute(path: "/auth/exchange", body: tags)
         XCTAssertEqual(sent, sortedTags)
     }

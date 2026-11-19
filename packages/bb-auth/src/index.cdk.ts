@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth` — `cdk` entry (synth).
+ * `@aws-cdk-blocks/bb-auth` — `cdk` entry (synth).
  *
  * Provisions the user pool, the app client, the groups and the session secret
  * of `AuthCognito` under the same construct ids, so an existing `AuthCognito`
@@ -32,9 +32,9 @@
  * `TypeError`.
  */
 
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { frameworkKey } from '@aws-blocks/bb-secret/internal';
-import type { ScopeParent } from '@aws-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { frameworkKey } from '@aws-cdk-blocks/bb-secret/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import {
 	ApiNamespace,
 	BuildingBlockScope,
@@ -43,7 +43,7 @@ import {
 	isSandboxContext,
 	registerConfig,
 	synthGuard,
-} from '@aws-blocks/core/cdk';
+} from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -109,8 +109,8 @@ export { relayOrigin } from './relay.js';
 export type * from './types.js';
 
 /**
- * The unified auth Building Block (CDK layer), published as `@aws-blocks/bb-auth`
- * and exported from `@aws-blocks/blocks`. See the package README.
+ * The unified auth Building Block (CDK layer), published as `@aws-cdk-blocks/bb-auth`
+ * and exported from `aws-cdk-blocks`. See the package README.
  *
  * Creates, when the configuration needs a user pool (see {@link AuthOptions}):
  * - `cognito.UserPool` (`pool`), named `fullId` — or `UserPool.fromUserPoolId`
@@ -402,7 +402,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					? users.map((u) => `'${u.email}'`).join(', ')
 					: `its built-in default user ('${providerId}-user@stub.invalid')`;
 			cdk.Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-auth:StubIdpDeployed',
+				'@aws-cdk-blocks/bb-auth:StubIdpDeployed',
 				`Auth '${this.fullId}': providers.${providerId} is a stubIdp() provider, served by this sandbox ` +
 					'deployment. The stub IdP signs users in WITHOUT CREDENTIALS: anyone who can reach ' +
 					`this sandbox can sign in as the stub's users (${who}), with every claim and group they carry. ` +
@@ -481,7 +481,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		// made directly against Cognito, or a federated first sign-in, is not seen.
 		if (opts.userPool && opts.validateUser !== undefined) {
 			cdk.Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-auth:ValidateUserExternalPool',
+				'@aws-cdk-blocks/bb-auth:ValidateUserExternalPool',
 				`Auth '${this.fullId}': \`validateUser\` is set on a pool wrapped with \`userPool\`, so no PreSignUp ` +
 					'trigger is attached (the pool and its triggers belong to its owner). It runs in-process on ' +
 					'`signUp`, `admin.createUser` and every sign-in, but users created directly in Cognito — a `SignUp` ' +
@@ -495,7 +495,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		if (this.userPool && !opts.userPool && opts.removalPolicy === undefined) {
 			const resolved = this.defaults.removalPolicy === cdk.RemovalPolicy.RETAIN ? 'retain' : 'destroy';
 			cdk.Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-auth:RemovalPolicyUnset',
+				'@aws-cdk-blocks/bb-auth:RemovalPolicyUnset',
 				`Auth '${this.fullId}': \`removalPolicy\` is not set, so the user pool follows the stack default ` +
 					`('${resolved}'). Set \`removalPolicy: 'retain'\` explicitly for any pool that holds real users — ` +
 					'deleting the pool deletes every user in it, and they cannot be recovered.',
@@ -682,8 +682,8 @@ const AUTH_ROUTE_CLAIMS = Symbol.for('blocks:AuthRouteClaims');
  * loads (`DuplicateRouteException`) fail synth instead, with the fix. Scoped like the runtime's route table: per
  * backend, so the same paths in two stacks are fine. A block's sign-in routes (`exchange`, `session`, …) live beside
  * `callbackPath`, its sign-out routes are `signOutPath`, and a stub IdP's routes are keyed by its provider key alone,
- * so one block's `signOutPath` can still land on another block's sign-in route (`/aws-blocks/auth/session`). A block
- * whose own `redirects` put two of its routes on one path (`signOutPath: '/aws-blocks/auth/session'`) fails too.
+ * so one block's `signOutPath` can still land on another block's sign-in route (`/cdk-blocks/auth/session`). A block
+ * whose own `redirects` put two of its routes on one path (`signOutPath: '/cdk-blocks/auth/session'`) fails too.
  */
 function claimAuthRoutes(block: Auth, id: string, opts: ResolvedAuthOptions): void {
 	const claims = getOrCreateOnRoot(

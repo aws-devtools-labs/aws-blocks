@@ -123,7 +123,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
     });
     children.push(peer);
 
-    await waitUntil(() => devOut.includes('AWS Blocks local server running') || exited(dev), 'the dev server to listen', () => devOut);
+    await waitUntil(() => devOut.includes('AWS CDK Blocks local server running') || exited(dev), 'the dev server to listen', () => devOut);
     assert.ok(!exited(dev), `dev server exited early:\n${devOut}`);
     await waitUntil(() => exited(peer), 'the peer to exit', () => devOut);
 

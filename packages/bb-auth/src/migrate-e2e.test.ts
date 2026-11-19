@@ -3,7 +3,7 @@
 
 /**
  * End to end: run `bb-auth migrate` on real `AuthCognito` app code and compile
- * the output against the real, built `@aws-blocks/bb-auth` types. Also compiles
+ * the output against the real, built `@aws-cdk-blocks/bb-auth` types. Also compiles
  * every "after" snippet in `MIGRATION.md`, so the guide stays correct for `Auth`
  * as it exists at HEAD.
  */
@@ -13,7 +13,7 @@ import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 import ts from 'typescript';
 import { runMigrate } from './migrate/cli.js';
 import { Browser } from './test-helpers.js';
@@ -38,7 +38,7 @@ const FROZEN_COGNITO_API = join(PACKAGE_DIR, 'src', '__fixtures__', 'authcognito
 
 /**
  * Stage the frozen `AuthCognito` API in `dir` (its own scratch directory, never
- * one the codemod runs over), plus `@aws-blocks/blocks` as it
+ * one the codemod runs over), plus `aws-cdk-blocks` as it
  * was before the cutover for the names an `AuthCognito` app imports from it (the
  * umbrella re-exported them from `@aws-blocks/bb-auth-cognito`, exactly these
  * two lines), and return the `paths` that resolve both.
@@ -62,7 +62,13 @@ export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 	return {
 		'@aws-blocks/bb-auth-cognito': [join(dir, '.authcognito-api', 'index.d.ts')],
 		'@aws-blocks/bb-auth-cognito/ui': [join(dir, '.authcognito-api', 'ui.d.ts')],
+		// The umbrella is mapped under the name it had before the cutover: `AuthCognito` was
+		// only ever exported from `@aws-blocks/blocks`, so that is what an app being migrated
+		// imports. The codemod rewrites it to `aws-cdk-blocks` on the lines it touches.
 		'@aws-blocks/blocks': [join(dir, 'umbrella-before-cutover.ts')],
+		// `auth-common` is a live package here, renamed by the cutover, so the BEFORE app's
+		// pre-cutover specifier is mapped at this checkout's copy. Its types did not change.
+		'@aws-blocks/auth-common/ui': [join(REPO_ROOT, 'packages', 'auth-common', 'dist', 'ui.d.ts')],
 	};
 }
 
@@ -113,11 +119,11 @@ describe('bb-auth migrate — end to end, typechecked against the real Auth type
 		assert.deepStrictEqual(await migrateDir(dir), []);
 	});
 
-	test('an app importing @aws-blocks/bb-auth-cognito directly compiles against @aws-blocks/bb-auth', async () => {
+	test('an app importing @aws-blocks/bb-auth-cognito directly compiles against @aws-cdk-blocks/bb-auth', async () => {
 		const dir = scratch('direct');
 		const files = writeFiles(dir, {
 			'cdk-blocks/auth.ts': `import { AuthCognito, AuthCognitoErrors, type CognitoUser } from '@aws-blocks/bb-auth-cognito';
-import { ApiNamespace, Scope, isBlocksError } from '@aws-blocks/core';
+import { ApiNamespace, Scope, isBlocksError } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('app');
 export const auth = new AuthCognito(scope, 'auth', {
@@ -163,7 +169,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 	},
 }));
 `,
-			'cdk-blocks/routes.ts': `import type { BlocksContext } from '@aws-blocks/core';
+			'cdk-blocks/routes.ts': `import type { BlocksContext } from '@aws-cdk-blocks/core';
 import { auth } from './auth.js';
 
 export async function devices(context: BlocksContext) {
@@ -179,7 +185,7 @@ export async function devices(context: BlocksContext) {
 		const changed = await migrateDir(dir);
 		assert.deepStrictEqual([...changed].sort(), [join('cdk-blocks', 'auth.ts'), join('cdk-blocks', 'routes.ts')]);
 		const out = readFileSync(files[0] ?? '', 'utf8');
-		assert.match(out, /from '@aws-blocks\/bb-auth';/);
+		assert.match(out, /from '@aws-cdk-blocks\/bb-auth';/);
 		assert.match(out, /mfa: \{ mode: 'optional', types: \['TOTP'\] \}/);
 		assert.match(out, /updateUserAttributes\(context, \{ 'custom:tenant': tenant \}\)/);
 		assert.deepStrictEqual(typecheck(files), [], 'compiles against Auth after the run');
@@ -237,7 +243,7 @@ export const api = new blocks.ApiNamespace(scope, 'api', (context) => ({
 		const changed = await migrateDir(dir);
 		assert.deepStrictEqual([...changed].sort(), [join('cdk-blocks', 'index.ts'), join('src', 'sign-in.ts')]);
 		const ui = readFileSync(files[0] ?? '', 'utf8');
-		assert.match(ui, /from '@aws-blocks\/bb-auth\/ui';/);
+		assert.match(ui, /from '@aws-cdk-blocks\/bb-auth\/ui';/);
 		assert.match(ui, /authOverrides\(options\)/);
 		assert.doesNotMatch(ui, /import \{\s*\}/, 'never an empty import');
 		const backend = readFileSync(files[1] ?? '', 'utf8');
@@ -253,7 +259,7 @@ export const api = new blocks.ApiNamespace(scope, 'api', (context) => ({
 		// AuthCognito's signUp() defaulted autoSignIn to false; Auth's emailPassword.autoSignIn defaults to true.
 		const [file] = writeFiles(dir, {
 			'index.ts': `import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 
 const codes: string[] = [];
 const auth = new AuthCognito({ id: 'migrate-signup-${process.pid}' }, 'auth', {

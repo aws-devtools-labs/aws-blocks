@@ -1,4 +1,4 @@
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 
 // The Authenticator UI (createApi()) auto-signed users in after confirmSignUp,

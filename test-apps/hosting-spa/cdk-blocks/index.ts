@@ -5,8 +5,8 @@
 // Auth (email + password) + notes CRUD + public stats
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { ApiNamespace, Compute, Scope, KVStore, ApiError, RawRoute } from '@aws-blocks/blocks';
-import { Auth } from '@aws-blocks/bb-auth';
+import { ApiNamespace, Compute, Scope, KVStore, ApiError, RawRoute } from 'aws-cdk-blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('hosting-spa-test');
 
@@ -253,7 +253,7 @@ export const testSupport = testSupportSecret
 
 // Multi-compute behind Hosting: `isolatedApi` runs on its own, smaller compute.
 // Through Hosting's front door (CloudFront, or the ALB leg) the call still lands
-// on that compute, because Hosting forwards /aws-blocks/api/* to the shared
+// on that compute, because Hosting forwards /cdk-blocks/api/* to the shared
 // gateway, which routes it.
 function lambdaIdentity() {
   return {
@@ -270,7 +270,7 @@ export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
   },
 }), { compute: isolatedCompute });
 
-// A raw route outside /aws-blocks/*: every front door must route it to the
+// A raw route outside /cdk-blocks/*: every front door must route it to the
 // backend same-origin. It echoes the decoded query, so the e2e can check that
 // an encoded value survives the door unchanged.
 new RawRoute(scope, 'echoQuery', {

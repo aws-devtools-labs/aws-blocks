@@ -73,7 +73,7 @@ private final class InvalidationRecorder: NSObject, URLSessionDelegate {
 }
 
 final class BlocksClientLifecycleTests: XCTestCase {
-    private let url = "http://127.0.0.1:9/aws-blocks/api"
+    private let url = "http://127.0.0.1:9/cdk-blocks/api"
 
     override func setUp() {
         super.setUp()

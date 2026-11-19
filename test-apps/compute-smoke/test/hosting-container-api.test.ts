@@ -4,11 +4,11 @@
 /**
  * The container namespace through a Hosting distribution: on the `cloudfront`
  * leg, Hosting's default CloudFront door fronts the API as well (see
- * cdk-blocks/index.cdk.ts), and routes `/aws-blocks/api/containerApi` straight
+ * cdk-blocks/index.cdk.ts), and routes `/cdk-blocks/api/containerApi` straight
  * to the container's load balancer through a VPC origin of its own — with its
  * own response-headers policy and its own copy of the viewer-request function
  * that stamps the forwarded host. The typed client calls
- * `POST {HostingUrl}/aws-blocks/api/containerApi`, as a frontend served from
+ * `POST {HostingUrl}/cdk-blocks/api/containerApi`, as a frontend served from
  * that distribution does.
  *
  * Applies to the `cloudfront` leg only: the `apigateway` leg deploys no Hosting.
@@ -17,7 +17,7 @@
 import { before, describe, test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient } from 'aws-cdk-blocks/client';
 import type { ComputeTestContext } from './context.js';
 
 type WhereAmI = { computeId: string | null; functionName: string | null; requestUrl: string };
@@ -35,7 +35,7 @@ const READY_BUDGET_MS = 300_000;
 export function hostingContainerApiTests(ctx: ComputeTestContext) {
   const skip = ctx.frontDoor !== 'cloudfront' && 'Only the cloudfront leg deploys a Hosting distribution';
   /** The RPC endpoint on Hosting's distribution: the same domain the site is served from. */
-  const hostingApiUrl = () => `${ctx.hostingUrl()}/aws-blocks/api`;
+  const hostingApiUrl = () => `${ctx.hostingUrl()}/cdk-blocks/api`;
   const containerApi = () => ApiNamespaceClient<ContainerApi>('containerApi', { url: hostingApiUrl() });
 
   describe('API namespace on a container compute, through Hosting', { skip }, () => {

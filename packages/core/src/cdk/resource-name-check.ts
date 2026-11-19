@@ -144,7 +144,7 @@ function field(value: unknown, key: string): unknown {
 /** Per backend root: whether the name check is registered. */
 const RESOURCE_NAME_CHECK = Symbol.for('blocks:ResourceNameCheck');
 
-/** A `Scope` as this check reads it: structural, so a second copy of `@aws-blocks/core` in the tree is recognized too. */
+/** A `Scope` as this check reads it: structural, so a second copy of `@aws-cdk-blocks/core` in the tree is recognized too. */
 interface ScopeLike extends IConstruct {
 	readonly id: string;
 	readonly bbName?: string;

@@ -1,4 +1,4 @@
-import type { BlocksContext } from '@aws-blocks/blocks';
+import type { BlocksContext } from 'aws-cdk-blocks';
 import { auth } from './auth.js';
 
 export async function tokens(context: BlocksContext) {

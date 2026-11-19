@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Generates block-catalog.generated.ts for @aws-blocks/admin-ui.
+ * Generates block-catalog.generated.ts for @aws-cdk-blocks/admin-ui.
  *
  * The dashboard's block discovery has to recognise the block classes a user
  * instantiates in their own `cdk-blocks/` source. Hardcoding that list is how
@@ -41,7 +41,7 @@ import { extractBlurb } from './sync-catalog.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 
-/** Package name (minus the @aws-blocks/bb- prefix) -> BlockCategory. */
+/** Package name (minus the @aws-cdk-blocks/bb- prefix) -> BlockCategory. */
 const CATEGORY_BY_PACKAGE = {
 	'kv-store': 'data',
 	database: 'data',
@@ -68,10 +68,10 @@ const CATEGORY_BY_PACKAGE = {
  * hardcoding that CATEGORY_BY_PACKAGE exists to avoid.
  */
 const NON_VENDORIZED = [
-	{ type: 'ApiNamespace', category: 'core', source: '@aws-blocks/core' },
-	{ type: 'RawRoute', category: 'core', source: '@aws-blocks/core' },
-	{ type: 'Hosting', category: 'hosting', source: '@aws-blocks/hosting' },
-	{ type: 'Pipeline', category: 'hosting', source: '@aws-blocks/pipeline' },
+	{ type: 'ApiNamespace', category: 'core', source: '@aws-cdk-blocks/core' },
+	{ type: 'RawRoute', category: 'core', source: '@aws-cdk-blocks/core' },
+	{ type: 'Hosting', category: 'hosting', source: '@aws-cdk-blocks/hosting' },
+	{ type: 'Pipeline', category: 'hosting', source: '@aws-cdk-blocks/pipeline' },
 ];
 
 const entries = [];
@@ -109,7 +109,7 @@ export function normalizeDescription(raw) {
  * block class.
  *
  * A package README describes the PACKAGE. Where that package exports one block
- * the two coincide, and today every vendorized package does. `@aws-blocks/core`
+ * the two coincide, and today every vendorized package does. `@aws-cdk-blocks/core`
  * does not — it exports both `ApiNamespace` and `RawRoute` — and "Core
  * primitives for building full-stack applications" describes neither of them.
  * Handing the same sentence to two different blocks is worse than handing them
@@ -143,9 +143,9 @@ export function attachDescriptions(catalogEntries, descriptionFor) {
 	return { entries: described, suppressed, overlong };
 }
 
-/** `@aws-blocks/bb-kv-store` -> `bb-kv-store`, the directory under packages/. */
+/** `@aws-cdk-blocks/bb-kv-store` -> `bb-kv-store`, the directory under packages/. */
 export function packageDirName(source) {
-	return source.replace('@aws-blocks/', '');
+	return source.replace('@aws-cdk-blocks/', '');
 }
 
 /** A TS single-quoted string literal, which is the style this file emits. */
@@ -172,7 +172,7 @@ export function displayColumns(line) {
  * for that width, so the generated file is already formatted and `biome format`
  * has nothing to say about it:
  *
- *   ['RawRoute', { category: 'core', source: '@aws-blocks/core' }],   // fits
+ *   ['RawRoute', { category: 'core', source: '@aws-cdk-blocks/core' }],   // fits
  *   [                                                                 // object wrapped
  *     'Agent',
  *     { category: 'ai', source: '…', description: '…' },
@@ -216,7 +216,7 @@ function buildEntries(vendorize) {
 	const unmapped = [];
 
 	for (const [pkg, names] of Object.entries(vendorize)) {
-		const shortName = pkg.replace('@aws-blocks/bb-', '').replace('@aws-blocks/', '');
+		const shortName = pkg.replace('@aws-cdk-blocks/bb-', '').replace('@aws-cdk-blocks/', '');
 		const category = CATEGORY_BY_PACKAGE[shortName];
 		if (!category) {
 			unmapped.push(pkg);
