@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-kv-store": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-kv-store": patch
+"aws-cdk-blocks": patch
 ---
 
 feat(bb-kv-store): `LegacyKVStore` is the store of release 0.4.0 or earlier, for an upgrade

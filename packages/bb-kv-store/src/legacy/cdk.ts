@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
-import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { BuildingBlockScope, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import { resolveDynamoDbProtection } from '@aws-cdk-blocks/core/cdk/internal';
 import { Annotations, RemovalPolicy } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, type ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -45,7 +45,7 @@ export class LegacyKVStore extends BuildingBlockScope {
 			).filter((key) => options[key] !== undefined);
 			if (ignoredForExisting.length > 0) {
 				Annotations.of(this).addWarningV2(
-					'@aws-blocks/bb-kv-store:IgnoredOptionsForExistingTable',
+					'@aws-cdk-blocks/bb-kv-store:IgnoredOptionsForExistingTable',
 					`Ignoring ${ignoredForExisting.join(', ')} because this table is wrapped via fromExisting() — ` +
 						`the existing table owns its own durability/encryption configuration.`,
 				);
@@ -61,7 +61,7 @@ export class LegacyKVStore extends BuildingBlockScope {
 						? RemovalPolicy.RETAIN
 						: this.defaults.removalPolicy;
 			const protection = resolveDynamoDbProtection(this, options, this.defaults, {
-				warningPrefix: '@aws-blocks/bb-kv-store',
+				warningPrefix: '@aws-cdk-blocks/bb-kv-store',
 				fromKmsKeyHint: 'KVStore.fromKmsKey',
 			});
 			this.table = new Table(this, 'table', {

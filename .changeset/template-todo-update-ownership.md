@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/create-blocks-app": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/create-blocks-app": patch
+"aws-cdk-blocks": patch
 ---
 
 Templates: per-user data is keyed on `userSub`, and `updateTodo` can no longer write into another user's list.

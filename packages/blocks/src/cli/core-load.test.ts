@@ -22,7 +22,7 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * An app with this CLI installed and an `@aws-blocks/core` 0.0.1 that has none of the
+ * An app with this CLI installed and an `@aws-cdk-blocks/core` 0.0.1 that has none of the
  * entries the CLI loads, as an upgrade that kept an older core leaves it.
  */
 function appWithOldCore(): string {
@@ -30,28 +30,28 @@ function appWithOldCore(): string {
 	writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'old-core-app', type: 'module' }));
 	mkdirSync(join(app, 'cdk-blocks'));
 	writeFileSync(join(app, 'cdk-blocks', 'index.ts'), 'export {};\n');
-	const blocks = join(app, 'node_modules', '@aws-blocks', 'blocks');
+	const blocks = join(app, 'node_modules', 'aws-cdk-blocks');
 	cpSync(join(PACKAGE, 'package.json'), join(blocks, 'package.json'));
 	cpSync(join(PACKAGE, 'dist', 'cli'), join(blocks, 'dist', 'cli'), { recursive: true });
-	const core = join(app, 'node_modules', '@aws-blocks', 'core');
+	const core = join(app, 'node_modules', '@aws-cdk-blocks', 'core');
 	mkdirSync(core, { recursive: true });
 	writeFileSync(
 		join(core, 'package.json'),
-		JSON.stringify({ name: '@aws-blocks/core', version: '0.0.1', type: 'module', exports: { '.': './index.js' } }),
+		JSON.stringify({ name: '@aws-cdk-blocks/core', version: '0.0.1', type: 'module', exports: { '.': './index.js' } }),
 	);
 	writeFileSync(join(core, 'index.js'), 'export {};\n');
 	return app;
 }
 
 function blocks(app: string, ...argv: string[]) {
-	return spawnSync(process.execPath, ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--', ...argv], {
+	return spawnSync(process.execPath, ['--input-type=module', '-e', "import 'aws-cdk-blocks/run'", '--', ...argv], {
 		cwd: app,
 		encoding: 'utf-8',
 		env: { ...process.env, CI: '1' },
 	});
 }
 
-describe('an installed @aws-blocks/core that does not match the CLI', () => {
+describe('an installed @aws-cdk-blocks/core that does not match the CLI', () => {
 	it('fails a command that needs core with a clear reinstall message, and keeps --version and --help', () => {
 		const app = appWithOldCore();
 		const run = blocks(app, 'whoami');
@@ -60,12 +60,12 @@ describe('an installed @aws-blocks/core that does not match the CLI', () => {
 		assert.match(
 			lines[0],
 			new RegExp(
-				`^Error: @aws-blocks/blocks ${escapeRegExp(version)} cannot load @aws-blocks/core 0\\.0\\.1, which does not match it: Package subpath '\\./scripts' is not defined by "exports"`,
+				`^Error: aws-cdk-blocks ${escapeRegExp(version)} cannot load @aws-cdk-blocks/core 0\\.0\\.1, which does not match it: Package subpath '\\./scripts' is not defined by "exports"`,
 			),
 		);
 		assert.ok(
 			lines.includes(
-				`Try: reinstall @aws-blocks/core to match @aws-blocks/blocks ${version}: npm install '@aws-blocks/core@${dependencies['@aws-blocks/core']}'`,
+				`Try: reinstall @aws-cdk-blocks/core to match aws-cdk-blocks ${version}: npm install '@aws-cdk-blocks/core@${dependencies['@aws-cdk-blocks/core']}'`,
 			),
 			run.stderr,
 		);
@@ -79,29 +79,29 @@ describe('an installed @aws-blocks/core that does not match the CLI', () => {
 
 	it('names the failure only when loading core failed', () => {
 		const notExported = Object.assign(
-			new Error(`Package subpath './scripts/dev-pidfile' is not defined by "exports" in /app/node_modules/@aws-blocks/core/package.json`),
+			new Error(`Package subpath './scripts/dev-pidfile' is not defined by "exports" in /app/node_modules/@aws-cdk-blocks/core/package.json`),
 			{ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' },
 		);
 		// Node's message on Windows names the package by its path, with backslashes.
 		const notExportedOnWindows = Object.assign(
 			new Error(
-				`Package subpath './scripts' is not defined by "exports" in C:\\app\\node_modules\\@aws-blocks\\core\\package.json`,
+				`Package subpath './scripts' is not defined by "exports" in C:\\app\\node_modules\\@aws-cdk-blocks\\core\\package.json`,
 			),
 			{ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' },
 		);
 		const missingExport = new SyntaxError(
-			"The requested module '@aws-blocks/core/scripts' does not provide an export named 'claimDevSession'",
+			"The requested module '@aws-cdk-blocks/core/scripts' does not provide an export named 'claimDevSession'",
 		);
-		const notInstalled = Object.assign(new Error("Cannot find package '@aws-blocks/core' imported from /app/x.js"), {
+		const notInstalled = Object.assign(new Error("Cannot find package '@aws-cdk-blocks/core' imported from /app/x.js"), {
 			code: 'ERR_MODULE_NOT_FOUND',
 		});
 		for (const error of [notExported, notExportedOnWindows, missingExport, notInstalled]) {
-			assert.match(coreMismatchError(error)?.message ?? '', /cannot load @aws-blocks\/core.*, which does not match it: /);
+			assert.match(coreMismatchError(error)?.message ?? '', /cannot load @aws-cdk-blocks\/core.*, which does not match it: /);
 		}
 		const other = Object.assign(new Error("Cannot find package 'left-pad' imported from /app/x.js"), {
 			code: 'ERR_MODULE_NOT_FOUND',
 		});
-		for (const error of [other, new SyntaxError('Unexpected token'), new TypeError('@aws-blocks/core broke'), 'x']) {
+		for (const error of [other, new SyntaxError('Unexpected token'), new TypeError('@aws-cdk-blocks/core broke'), 'x']) {
 			assert.strictEqual(coreMismatchError(error), undefined);
 		}
 	});

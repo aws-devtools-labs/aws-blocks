@@ -59,7 +59,7 @@ export function vendorize(input: string, options: VendorizeOptions = {}): void {
   // Remove any nested copy of this package inside the umbrella blocks package.
   // npm may install a nested copy if versions don't align. Removing it forces
   // Node to resolve through the hoisted workspace symlink.
-  const blocksPkgJson = findPackageJson('@aws-blocks/blocks');
+  const blocksPkgJson = findPackageJson('aws-cdk-blocks');
   if (blocksPkgJson) {
     const blocksDir = dirname(blocksPkgJson);
     const nestedPath = join(blocksDir, 'node_modules', ...packageName.split('/'));

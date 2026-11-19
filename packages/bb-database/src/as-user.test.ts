@@ -5,7 +5,7 @@
 // the user, and nothing else does.
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { type Generated, Kysely, sql as ksql } from 'kysely';
 import { CLAIMS_SETTING } from './constants.js';
 import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';

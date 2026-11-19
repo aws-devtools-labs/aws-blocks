@@ -14,7 +14,7 @@
  * @internal
  */
 
-import type { AuthActionInput, AuthStateApi, AuthUser, AuthUserOf } from '@aws-blocks/auth-common';
+import type { AuthActionInput, AuthStateApi, AuthUser, AuthUserOf } from '@aws-cdk-blocks/auth-common';
 import {
 	AuthenticatedContent,
 	Authenticator,
@@ -22,8 +22,8 @@ import {
 	onAuthChange,
 	submitAuthAction,
 	subscribeAuthState,
-} from '@aws-blocks/auth-common/ui';
-import type { ScopeParent } from '@aws-blocks/core';
+} from '@aws-cdk-blocks/auth-common/ui';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type {
 	AnySignInNextStep,
 	AppSettingRef,

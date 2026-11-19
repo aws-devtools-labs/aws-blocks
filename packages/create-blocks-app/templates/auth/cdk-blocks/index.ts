@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, Auth } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, Auth } from 'aws-cdk-blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 

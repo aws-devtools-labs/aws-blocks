@@ -4,10 +4,10 @@
 /**
  * Runs with the `tsx` loader, started by `npm run spec`. With tsx the default
  * loader of `writeSpec` imports a TypeScript backend directly. The output
- * matches the `blocks-generate-spec` CLI of `@aws-blocks/core`.
+ * matches the `blocks-generate-spec` CLI of `@aws-cdk-blocks/core`.
  */
 
-import { log, readNativeDeclarations, writeSpec } from '@aws-blocks/core/scripts';
+import { log, readNativeDeclarations, writeSpec } from '@aws-cdk-blocks/core/scripts';
 
 const { backendPath, outputPath } = JSON.parse(process.argv[2]) as { backendPath: string; outputPath: string };
 

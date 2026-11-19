@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
 export interface QueueOptions {

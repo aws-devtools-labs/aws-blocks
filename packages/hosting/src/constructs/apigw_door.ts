@@ -12,7 +12,7 @@
  *
  * Serverless — pay-per-request, scale-to-zero, no VPC/NAT. `build` creates a
  * route per origin (asset-proxy → private S3, SSR/image Lambdas), proxies every
- * API path (`/aws-blocks/*` plus the backend's raw routes) same-origin natively
+ * API path (`/cdk-blocks/*` plus the backend's raw routes) same-origin natively
  * (so cookie auth works with no CORS), and maps the custom domain when the app
  * has one. On the HTTP API, SSR responses are buffered (an HTTP API Lambda
  * integration can't stream, so `HostingConstruct` builds the server buffered);
@@ -23,7 +23,7 @@
  * by the asset proxy instead, with the CloudFront door's semantics (each
  * redirect source gets a route to it). Responses routed straight to the
  * server, the image function or the backend bypass it; synth names what is not
- * applied (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * applied (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  */
 import { Fn } from 'aws-cdk-lib';
 import { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
@@ -58,7 +58,7 @@ export const apiGatewayDoor = defineFrontDoor<ApiGatewayDoorInput, FrontDoorResu
    * URL's host segment (index 2 of `https://host/…`).
    */
   build(scope, input) {
-    // Route every API path the app has (`/aws-blocks/*` + the raw routes).
+    // Route every API path the app has (`/cdk-blocks/*` + the raw routes).
     const apiPaths = input.apiGateway.apiPaths ?? input.origins.api?.paths;
     if ((input.apiType ?? 'http') === 'rest') {
       const apigw = new ApiGatewayRestConstruct(scope, 'ApiGateway', {

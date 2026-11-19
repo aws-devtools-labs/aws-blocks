@@ -15,7 +15,7 @@
  * @internal
  */
 
-import { ApiNamespace, type BlocksContext, type ScopeParent } from '@aws-blocks/core';
+import { ApiNamespace, type BlocksContext, type ScopeParent } from '@aws-cdk-blocks/core';
 import type { AuthenticatedUser } from './index.mock.js';
 import { Auth } from './index.mock.js';
 

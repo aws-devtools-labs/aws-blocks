@@ -9,7 +9,7 @@ import assert from 'node:assert';
  * methods with an actionable synth-time error.
  */
 import { test } from 'node:test';
-import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
+import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';

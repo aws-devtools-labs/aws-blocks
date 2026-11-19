@@ -267,7 +267,7 @@ describe('stopDevServer on Windows — ends the session from its top', () => {
   const proc = (pid: number, ppid: number, created: string, command = ''): WindowsProcess => ({ pid, ppid, created, command });
   const session = (overrides: Array<[number, WindowsProcess]> = []) =>
     new Map<number, WindowsProcess>([
-      [10, proc(10, 1, '100', '"C:\\node.exe" --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev')],
+      [10, proc(10, 1, '100', '"C:\\node.exe" --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev')],
       [20, proc(20, 10, '200', WIN_TSX)],
       [30, proc(30, 20, '300', '"C:\\node.exe" dev-server.js')],
       ...overrides,
@@ -541,7 +541,7 @@ describe('runStopCli', () => {
 });
 
 describe('stopDevServer — a dev task launcher whose dev server is still starting', () => {
-  const CLI = 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev';
+  const CLI = 'node --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev';
   const starting = JSON.stringify({ pid: 700, ppid: 600, port: 3000, command: CLI, parentCommand: 'bash', starting: true });
 
   it('SIGTERMs the CLI alone, never its caller, waits for it, and removes the pidfile it left', async () => {

@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { join, relative, dirname, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -12,8 +12,8 @@ import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFil
 import { createAgentTool } from './agent-tool.js';
 import { blocksError, KnowledgeBaseErrors } from './errors.js';
 import { normalizeMaxResults } from './normalize.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.

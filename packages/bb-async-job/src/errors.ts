@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { brandBlocksError } from '@aws-blocks/core';
+import { brandBlocksError } from '@aws-cdk-blocks/core';
 
 import type { BatchSubmitResult } from './types.js';
 
@@ -37,7 +37,7 @@ export const AsyncJobErrors = {
  * from core so every block shares one implementation (single source of the
  * name-as-contract rule) rather than a per-package copy.
  */
-export { blocksError } from '@aws-blocks/core';
+export { blocksError } from '@aws-cdk-blocks/core';
 
 /**
  * Thrown by `submitBatch` when one or more messages fail to enqueue (AWS only).

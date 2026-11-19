@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { injectTheme } from '@aws-blocks/blocks/theme';
+import { injectTheme } from 'aws-cdk-blocks/theme';
 import { App } from './App';
 
 injectTheme();

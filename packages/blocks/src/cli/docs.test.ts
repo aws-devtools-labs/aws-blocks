@@ -34,16 +34,16 @@ const FILES: Record<string, string> = {
 	].join('\n'),
 	'API.md': [
 		'```ts',
-		"import { KVStore } from '@aws-blocks/bb-kv-store';",
-		"import { PutOptions as DTPutOptions } from '@aws-blocks/bb-distributed-table';",
-		"import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';",
+		"import { KVStore } from '@aws-cdk-blocks/bb-kv-store';",
+		"import { PutOptions as DTPutOptions } from '@aws-cdk-blocks/bb-distributed-table';",
+		"import { PutOptions as KVPutOptions } from '@aws-cdk-blocks/bb-kv-store';",
 		'export { DTPutOptions }',
 		'',
 		'export { KVPutOptions }',
 		'',
 		'export { KVStore }',
 		'',
-		'export * from "@aws-blocks/core";',
+		'export * from "@aws-cdk-blocks/core";',
 		'',
 		'// @public',
 		'export function getSdkIdentifiers(bb: KVStore<any>): {',
@@ -77,7 +77,7 @@ const FILES: Record<string, string> = {
 	].join('\n'),
 	'core/API.md': [
 		'```ts',
-		"import { config } from '@aws-blocks/hosting';",
+		"import { config } from '@aws-cdk-blocks/hosting';",
 		'',
 		'export { config }',
 		'',
@@ -271,16 +271,16 @@ const FILES: Record<string, string> = {
 	),
 };
 
-const VENDORIZE = { '@aws-blocks/bb-kv-store': ['KVStore'], '@aws-blocks/bb-distributed-table': ['DistributedTable'] };
+const VENDORIZE = { '@aws-cdk-blocks/bb-kv-store': ['KVStore'], '@aws-cdk-blocks/bb-distributed-table': ['DistributedTable'] };
 
 /**
  * The installed package beside its docs, shaped like the real one: package.json `exports` with subpath entries (the
  * client re-exports core's whole, core's names it re-exports in clauses; /ui's names come in a multi-line clause),
- * `/cdk` and entries without types, and a browser entry of @aws-blocks/blocks that exports nothing.
+ * `/cdk` and entries without types, and a browser entry of aws-cdk-blocks that exports nothing.
  */
 const PACKAGE: Record<string, string> = {
 	'package.json': JSON.stringify({
-		name: '@aws-blocks/blocks',
+		name: 'aws-cdk-blocks',
 		exports: {
 			'.': { browser: './dist/index.browser.js', types: './dist/index.d.ts', default: './dist/index.js' },
 			'./cdk': { types: './dist/index.cdk.d.ts', default: './dist/index.cdk.js' },
@@ -304,13 +304,13 @@ const PACKAGE: Record<string, string> = {
 	'dist/index.cdk.d.ts': 'export declare function cdkOnly(): void;\n',
 	'dist/index.browser.d.ts': 'export {};\n',
 	// The main types entry re-exports hosting's names from an installed package, as core's does.
-	'dist/index.d.ts': "export { config } from '@aws-blocks/hosting';\n",
-	'node_modules/@aws-blocks/hosting/package.json': JSON.stringify({
-		name: '@aws-blocks/hosting',
+	'dist/index.d.ts': "export { config } from '@aws-cdk-blocks/hosting';\n",
+	'node_modules/@aws-cdk-blocks/hosting/package.json': JSON.stringify({
+		name: '@aws-cdk-blocks/hosting',
 		exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
 	}),
-	'node_modules/@aws-blocks/hosting/dist/index.js': '',
-	'node_modules/@aws-blocks/hosting/dist/index.d.ts': [
+	'node_modules/@aws-cdk-blocks/hosting/dist/index.js': '',
+	'node_modules/@aws-cdk-blocks/hosting/dist/index.d.ts': [
 		'/**',
 		' * Reads a config value.',
 		' */',
@@ -332,17 +332,17 @@ const PACKAGE: Record<string, string> = {
 	].join('\n'),
 	// bb-locker's installed type file: VaultImpl, imported from another file, with doc comments on its members (one
 	// with unbalanced brackets in its prose) and long enough that a member card prints only that member.
-	'node_modules/@aws-blocks/bb-locker/package.json': JSON.stringify({
-		name: '@aws-blocks/bb-locker',
+	'node_modules/@aws-cdk-blocks/bb-locker/package.json': JSON.stringify({
+		name: '@aws-cdk-blocks/bb-locker',
 		exports: { '.': { types: './dist/index.mock.d.ts', default: './dist/index.mock.js' } },
 	}),
-	'node_modules/@aws-blocks/bb-locker/dist/index.mock.js': "export { VaultImpl } from './impl.js';\n",
-	'node_modules/@aws-blocks/bb-locker/dist/index.mock.d.ts': [
+	'node_modules/@aws-cdk-blocks/bb-locker/dist/index.mock.js': "export { VaultImpl } from './impl.js';\n",
+	'node_modules/@aws-cdk-blocks/bb-locker/dist/index.mock.d.ts': [
 		"import { VaultImpl } from './impl.js';",
 		"export type Vault<T = string> = Omit<VaultImpl<T>, 'put'>;",
 	].join('\n'),
-	'node_modules/@aws-blocks/bb-locker/dist/impl.js': 'export class VaultImpl {}\n',
-	'node_modules/@aws-blocks/bb-locker/dist/impl.d.ts': [
+	'node_modules/@aws-cdk-blocks/bb-locker/dist/impl.js': 'export class VaultImpl {}\n',
+	'node_modules/@aws-cdk-blocks/bb-locker/dist/impl.d.ts': [
 		'/**',
 		' * A vault of one value.',
 		' */',
@@ -356,12 +356,12 @@ const PACKAGE: Record<string, string> = {
 		'    put(value: T): Promise<void>;',
 		'}',
 	].join('\n'),
-	'node_modules/@aws-blocks/bb-kv-store/package.json': JSON.stringify({
-		name: '@aws-blocks/bb-kv-store',
+	'node_modules/@aws-cdk-blocks/bb-kv-store/package.json': JSON.stringify({
+		name: '@aws-cdk-blocks/bb-kv-store',
 		exports: { '.': { types: './dist/index.mock.d.ts', default: './dist/index.mock.js' } },
 	}),
-	'node_modules/@aws-blocks/bb-kv-store/dist/index.mock.js': 'export class KVStore {}\n',
-	'node_modules/@aws-blocks/bb-kv-store/dist/index.mock.d.ts': [
+	'node_modules/@aws-cdk-blocks/bb-kv-store/dist/index.mock.js': 'export class KVStore {}\n',
+	'node_modules/@aws-cdk-blocks/bb-kv-store/dist/index.mock.d.ts': [
 		'export declare class KVStore<T> extends Scope {',
 		'    /**',
 		'     * Reads a value; null when the key is missing.',
@@ -376,7 +376,7 @@ let dir: string;
 let index: DocsIndex;
 
 const BACKEND_ONLY =
-	'(backend only: @aws-blocks/blocks/client, which browser code and tests import values from, does not export it)';
+	'(backend only: aws-cdk-blocks/client, which browser code and tests import values from, does not export it)';
 const A_TYPE = '(a type: the same import works in browser code and tests)';
 
 function render(names: string[], options: Partial<DocsRequest> = {}): string {
@@ -416,7 +416,7 @@ describe('npm run docs <block>', () => {
 			'DistributedTable',
 			'distributed-table',
 			'distributedtable',
-			'@aws-blocks/bb-distributed-table',
+			'@aws-cdk-blocks/bb-distributed-table',
 		]) {
 			assert.strictEqual(render([name]), expected, name);
 		}
@@ -481,7 +481,7 @@ describe('npm run docs <export or option>', () => {
 		const lines = out.split('\n');
 		assert.strictEqual(
 			lines[0],
-			"ApiError: class in @aws-blocks/core. Backend: import { ApiError } from '@aws-blocks/blocks'; Browser code and tests: import { ApiError } from '@aws-blocks/blocks/client';",
+			"ApiError: class in @aws-cdk-blocks/core. Backend: import { ApiError } from 'aws-cdk-blocks'; Browser code and tests: import { ApiError } from 'aws-cdk-blocks/client';",
 		);
 		assert.match(
 			out,
@@ -491,38 +491,38 @@ describe('npm run docs <export or option>', () => {
 		assert.match(out, /^# core\/README\.md\n\(lines 12-14\)\n### Throwing\nThrow `new ApiError/m);
 	});
 
-	it('says when @aws-blocks/blocks does not re-export an export, and imports it from its package', () => {
+	it('says when aws-cdk-blocks does not re-export an export, and imports it from its package', () => {
 		assert.match(
 			render(['kvKeyOf']),
-			/^kvKeyOf: function in @aws-blocks\/bb-kv-store\. import \{ kvKeyOf \} from '@aws-blocks\/bb-kv-store'; \(not re-exported by @aws-blocks\/blocks\)$/m,
+			/^kvKeyOf: function in @aws-cdk-blocks\/bb-kv-store\. import \{ kvKeyOf \} from '@aws-cdk-blocks\/bb-kv-store'; \(not re-exported by aws-cdk-blocks\)$/m,
 		);
 		assert.strictEqual(
 			render(['internalHelper']).split('\n')[0],
-			`internalHelper: function in @aws-blocks/core. import { internalHelper } from '@aws-blocks/blocks'; ${BACKEND_ONLY}`,
+			`internalHelper: function in @aws-cdk-blocks/core. import { internalHelper } from 'aws-cdk-blocks'; ${BACKEND_ONLY}`,
 		);
 	});
 
-	it('imports a name that only a package @aws-blocks/blocks re-exports whole re-exports, or only a subpath entry has', () => {
+	it('imports a name that only a package aws-cdk-blocks re-exports whole re-exports, or only a subpath entry has', () => {
 		const imports = {
-			isBlocksError: "import { isBlocksError } from '@aws-blocks/blocks/client';",
-			ScopeOptions: "import type { ScopeOptions } from '@aws-blocks/blocks/client';",
+			isBlocksError: "import { isBlocksError } from 'aws-cdk-blocks/client';",
+			ScopeOptions: "import type { ScopeOptions } from 'aws-cdk-blocks/client';",
 		};
 		for (const [exported, line] of Object.entries(imports)) {
 			assert.strictEqual(
 				render([exported.toLowerCase()]).split('\n')[0],
-				`${exported}: export, with no declaration in the docs. Browser code and tests: ${line} (@aws-blocks/blocks itself does not export it)`,
+				`${exported}: export, with no declaration in the docs. Browser code and tests: ${line} (aws-cdk-blocks itself does not export it)`,
 			);
 		}
 		fails(() => render(['cdkOnly']), ExitCode.Usage, /no block, export or option named "cdkOnly"/);
 	});
 
 	it("prints the declaration and doc comment of an export the reports lack from the entry's type files", () => {
-		// Followed from dist/index.d.ts to the installed @aws-blocks/hosting; a function, so backend only.
+		// Followed from dist/index.d.ts to the installed @aws-cdk-blocks/hosting; a function, so backend only.
 		const config = render(['config']).split('\n');
 		assert.deepStrictEqual(config.slice(0, 7), [
-			`config: function in @aws-blocks/hosting. import { config } from '@aws-blocks/blocks'; ${BACKEND_ONLY}`,
+			`config: function in @aws-cdk-blocks/hosting. import { config } from 'aws-cdk-blocks'; ${BACKEND_ONLY}`,
 			'',
-			'# @aws-blocks/hosting/dist/index.d.ts',
+			'# @aws-cdk-blocks/hosting/dist/index.d.ts',
 			'/**',
 			' * Reads a config value.',
 			' */',
@@ -532,9 +532,9 @@ describe('npm run docs <export or option>', () => {
 		// Followed through /ui's multi-line `export { … } from` clause.
 		const onAuthChange = render(['onAuthChange']).split('\n');
 		assert.deepStrictEqual(onAuthChange.slice(0, 3), [
-			"onAuthChange: function in @aws-blocks/blocks. import { onAuthChange } from '@aws-blocks/blocks/ui'; (@aws-blocks/blocks itself does not export it)",
+			"onAuthChange: function in aws-cdk-blocks. import { onAuthChange } from 'aws-cdk-blocks/ui'; (aws-cdk-blocks itself does not export it)",
 			'',
-			'# @aws-blocks/blocks/dist/auth-ui.d.ts',
+			'# aws-cdk-blocks/dist/auth-ui.d.ts',
 		]);
 		assert.match(
 			onAuthChange.join('\n'),
@@ -544,7 +544,7 @@ describe('npm run docs <export or option>', () => {
 		// Through `export *` to a declaration in the file itself; an interface gets `import type`.
 		assert.strictEqual(
 			render(['BlocksRequest']).split('\n')[0],
-			"BlocksRequest: interface in @aws-blocks/blocks. Browser code and tests: import type { BlocksRequest } from '@aws-blocks/blocks/client'; (@aws-blocks/blocks itself does not export it)",
+			"BlocksRequest: interface in aws-cdk-blocks. Browser code and tests: import type { BlocksRequest } from 'aws-cdk-blocks/client'; (aws-cdk-blocks itself does not export it)",
 		);
 	});
 
@@ -560,7 +560,7 @@ describe('npm run docs <export or option>', () => {
 		assert.deepStrictEqual(
 			out.split('\n').filter((line) => line.startsWith('getSdkIdentifiers:')),
 			[
-				`getSdkIdentifiers: function in @aws-blocks/blocks. import { getSdkIdentifiers } from '@aws-blocks/blocks'; ${BACKEND_ONLY}`,
+				`getSdkIdentifiers: function in aws-cdk-blocks. import { getSdkIdentifiers } from 'aws-cdk-blocks'; ${BACKEND_ONLY}`,
 			],
 		);
 		assert.match(
@@ -570,31 +570,31 @@ describe('npm run docs <export or option>', () => {
 		assert.doesNotMatch(out, /Record<string, string>|# core\/API\.md/);
 	});
 
-	it('prints the name @aws-blocks/blocks exports a declaration under, as `import type` for a type, and finds it by that name', () => {
+	it('prints the name aws-cdk-blocks exports a declaration under, as `import type` for a type, and finds it by that name', () => {
 		const original = render(['PutOptions']).split('\n');
 		// Types are not backend only: `import type` is erased, and TypeScript resolves the types entry, not the
 		// browser condition that `npm run test:e2e` runs under.
 		assert.deepStrictEqual(original.slice(0, 2), [
-			`PutOptions: type in @aws-blocks/bb-distributed-table. import type { DTPutOptions } from '@aws-blocks/blocks'; ${A_TYPE}`,
-			`PutOptions: interface in @aws-blocks/bb-kv-store. import type { KVPutOptions } from '@aws-blocks/blocks'; ${A_TYPE}`,
+			`PutOptions: type in @aws-cdk-blocks/bb-distributed-table. import type { DTPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}`,
+			`PutOptions: interface in @aws-cdk-blocks/bb-kv-store. import type { KVPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}`,
 		]);
 		for (const name of ['DTPutOptions', 'dtputoptions']) {
 			const out = render([name]);
 			assert.ok(
 				out.startsWith(
-					`DTPutOptions: type PutOptions in @aws-blocks/bb-distributed-table. import type { DTPutOptions } from '@aws-blocks/blocks'; ${A_TYPE}\n`,
+					`DTPutOptions: type PutOptions in @aws-cdk-blocks/bb-distributed-table. import type { DTPutOptions } from 'aws-cdk-blocks'; ${A_TYPE}\n`,
 				),
 				out,
 			);
 			assert.match(out, /^# bb-distributed-table\/API\.md\nexport type PutOptions<T> = \{$/m);
 			assert.doesNotMatch(out, /bb-kv-store/);
 		}
-		assert.match(render(['KVPutOptions']), /^KVPutOptions: interface PutOptions in @aws-blocks\/bb-kv-store\./m);
+		assert.match(render(['KVPutOptions']), /^KVPutOptions: interface PutOptions in @aws-cdk-blocks\/bb-kv-store\./m);
 	});
 
 	it('finds an option by member name: the declarations that have it and the README section that uses it', () => {
 		const out = render(['ifFieldEquals']);
-		assert.match(out, /^ifFieldEquals: member of PutOptions \(@aws-blocks\/bb-distributed-table\)$/m);
+		assert.match(out, /^ifFieldEquals: member of PutOptions \(@aws-cdk-blocks\/bb-distributed-table\)$/m);
 		assert.match(out, /export type PutOptions<T> = \{\n {4}ifNotExists: true;\n {4}ifFieldEquals\?: never;/);
 		assert.match(out, /^# bb-distributed-table\/README\.md\n\(lines 6-11\)\n## Conditional Operations/m);
 	});
@@ -608,13 +608,13 @@ describe('npm run docs <export or option>', () => {
 		// A path to a doc the block lacks fails rather than printing the README, as a name that does not exist does.
 		fails(() => render(['bb-kv-store/DESIGN.md']), ExitCode.Usage, /^bb-kv-store has no DESIGN\.md\. Its files: /);
 		assert.match(
-			render(['node_modules/@aws-blocks/blocks/docs/bb-kv-store/README.md']),
+			render(['node_modules/aws-cdk-blocks/docs/bb-kv-store/README.md']),
 			/^# bb-kv-store\/README\.md\n/,
 		);
-		for (const name of ['ui', '@aws-blocks/blocks/ui']) {
+		for (const name of ['ui', 'aws-cdk-blocks/ui']) {
 			assert.strictEqual(
 				render([name]),
-				"@aws-blocks/blocks/ui (3 names): import { <name> } from '@aws-blocks/blocks/ui';\n  Authenticator, AuthStateApi, onAuthChange\nA name's declaration: npm run docs <name>\n",
+				"aws-cdk-blocks/ui (3 names): import { <name> } from 'aws-cdk-blocks/ui';\n  Authenticator, AuthStateApi, onAuthChange\nA name's declaration: npm run docs <name>\n",
 			);
 		}
 	});
@@ -638,7 +638,7 @@ describe('npm run docs <export or option>', () => {
 		// The member comes from the installed type file, with its doc comment, in place of the report's lines.
 		assert.ok(
 			get.includes(
-				'\n# @aws-blocks/bb-kv-store/dist/index.mock.d.ts\nexport declare class KVStore<T> extends Scope {\n    /**\n     * Reads a value; null when the key is missing.\n     */\n    get(key: string): Promise<T | null>;\n}\n',
+				'\n# @aws-cdk-blocks/bb-kv-store/dist/index.mock.d.ts\nexport declare class KVStore<T> extends Scope {\n    /**\n     * Reads a value; null when the key is missing.\n     */\n    get(key: string): Promise<T | null>;\n}\n',
 			),
 			get,
 		);
@@ -648,15 +648,15 @@ describe('npm run docs <export or option>', () => {
 	it("finds a constructor const's member on what its construct signature returns", () => {
 		assert.strictEqual(
 			render(['Hub.publish']).split('\n')[0],
-			'publish: member of HubServer (what new Hub(…) returns) (@aws-blocks/bb-hub)',
+			'publish: member of HubServer (what new Hub(…) returns) (@aws-cdk-blocks/bb-hub)',
 		);
 	});
 
 	it('reads what a report only names (ae-forgotten-export) from the installed type file, with doc comments', () => {
-		const header = ['# @aws-blocks/bb-locker/dist/impl.d.ts', '(VaultImpl: not exported by its package)'];
+		const header = ['# @aws-cdk-blocks/bb-locker/dist/impl.d.ts', '(VaultImpl: not exported by its package)'];
 		// `Vault` is the report's alias of VaultImpl, so Vault.get is VaultImpl's get, with its doc comment.
 		assert.deepStrictEqual(render(['Vault.get']).split('\n').slice(0, 11), [
-			'get: member of VaultImpl (the type of Vault) (@aws-blocks/bb-locker)',
+			'get: member of VaultImpl (the type of Vault) (@aws-cdk-blocks/bb-locker)',
 			'',
 			...header,
 			'export declare class VaultImpl<T = string> {',
@@ -675,7 +675,7 @@ describe('npm run docs <export or option>', () => {
 		// Vault is `Omit<VaultImpl<T>, 'put'>`: it has no put, which WritableVault adds back.
 		assert.deepStrictEqual(render(['Vault.put']).split('\n').slice(0, 2), [
 			"Vault leaves out put: export type Vault<T = string> = Omit<VaultImpl<T>, 'put'>;",
-			'put: member of WritableVault (@aws-blocks/bb-locker)',
+			'put: member of WritableVault (@aws-cdk-blocks/bb-locker)',
 		]);
 		// The alias's card adds what it stands for, without doc comments when that is long.
 		const vault = render(['Vault']);
@@ -687,7 +687,7 @@ describe('npm run docs <export or option>', () => {
 		);
 		assert.strictEqual(
 			render(['VaultImpl']).split('\n')[0],
-			'VaultImpl: class in @aws-blocks/bb-locker, not exported: it is the type of Vault.',
+			'VaultImpl: class in @aws-cdk-blocks/bb-locker, not exported: it is the type of Vault.',
 		);
 	});
 
@@ -724,7 +724,7 @@ describe('npm run docs <export or option>', () => {
 	it('looks up Owner.member as that member of that declaration only', () => {
 		assert.match(
 			render(['putoptions.IFFIELDEQUALS']),
-			/^ifFieldEquals: member of PutOptions \(@aws-blocks\/bb-distributed-table\)$/m,
+			/^ifFieldEquals: member of PutOptions \(@aws-cdk-blocks\/bb-distributed-table\)$/m,
 		);
 		// A known owner without that member names its members, and nothing else.
 		fails(
@@ -744,7 +744,7 @@ describe('npm run docs <export or option>', () => {
 		const protect = render(['Auth.protect']);
 		assert.deepStrictEqual(protect.split('\n').slice(0, 4), [
 			`Auth inherits protect from AuthBase: ${auth}`,
-			'protect: member of AuthBase (@aws-blocks/bb-auth)',
+			'protect: member of AuthBase (@aws-cdk-blocks/bb-auth)',
 			'',
 			'# bb-auth/API.md',
 		]);
@@ -907,7 +907,7 @@ describe('npm run docs --section, bare and with a topic', () => {
 	it('names the members whose value an error name is, and what other packages a filter names', () => {
 		assert.strictEqual(
 			render(['HubClosedException']).split('\n')[0],
-			'HubClosedException: the value of HubErrors.Closed (@aws-blocks/bb-hub)',
+			'HubClosedException: the value of HubErrors.Closed (@aws-cdk-blocks/bb-hub)',
 		);
 		assert.match(
 			render(['spec'], { exports: true }),
@@ -975,25 +975,25 @@ describe('npm run docs --section, bare and with a topic', () => {
 });
 
 describe('npm run docs --exports', () => {
-	it("lists by package every name @aws-blocks/blocks exports, its own declarations over a wildcard's, then each entry's", () => {
+	it("lists by package every name aws-cdk-blocks exports, its own declarations over a wildcard's, then each entry's", () => {
 		const out = render([], { exports: true });
 		assert.match(
 			out,
-			/^Names you can import from @aws-blocks\/blocks in backend code \(\d+\): import \{ <name> \} from '@aws-blocks\/blocks';$/m,
+			/^Names you can import from aws-cdk-blocks in backend code \(\d+\): import \{ <name> \} from 'aws-cdk-blocks';$/m,
 		);
-		assert.match(out, /^ {2}@aws-blocks\/bb-distributed-table: DTPutOptions \(PutOptions\)$/m);
-		assert.match(out, /^ {2}@aws-blocks\/bb-kv-store: KVPutOptions \(PutOptions\), KVStore$/m);
-		assert.match(out, /^ {2}@aws-blocks\/blocks: getSdkIdentifiers$/m);
+		assert.match(out, /^ {2}@aws-cdk-blocks\/bb-distributed-table: DTPutOptions \(PutOptions\)$/m);
+		assert.match(out, /^ {2}@aws-cdk-blocks\/bb-kv-store: KVPutOptions \(PutOptions\), KVStore$/m);
+		assert.match(out, /^ {2}aws-cdk-blocks: getSdkIdentifiers$/m);
 		// A report's `_` exports are importable too: listed, though cards leave them out.
-		assert.match(out, /^ {2}@aws-blocks\/core: _resetCache, ApiError, internalHelper$/m);
-		assert.match(out, /^ {2}@aws-blocks\/hosting: config$/m);
+		assert.match(out, /^ {2}@aws-cdk-blocks\/core: _resetCache, ApiError, internalHelper$/m);
+		assert.match(out, /^ {2}@aws-cdk-blocks\/hosting: config$/m);
 		assert.ok(
 			out.endsWith(
 				[
-					'Browser code and tests (npm run test:e2e runs tsx -C browser) get no value from @aws-blocks/blocks (import type of its types works); they import values from @aws-blocks/blocks/client.',
+					'Browser code and tests (npm run test:e2e runs tsx -C browser) get no value from aws-cdk-blocks (import type of its types works); they import values from aws-cdk-blocks/client.',
 					"The other entries' names: import { <name> } from '<entry>';",
-					'  @aws-blocks/blocks/client (7): ApiError, ApiNamespaceClient, BlocksContext, BlocksRequest, isBlocksError, Scope, ScopeOptions',
-					'  @aws-blocks/blocks/ui (3): Authenticator, AuthStateApi, onAuthChange',
+					'  aws-cdk-blocks/client (7): ApiError, ApiNamespaceClient, BlocksContext, BlocksRequest, isBlocksError, Scope, ScopeOptions',
+					'  aws-cdk-blocks/ui (3): Authenticator, AuthStateApi, onAuthChange',
 					'Its declaration and docs: npm run docs <name>',
 					'',
 				].join('\n'),
@@ -1006,13 +1006,13 @@ describe('npm run docs --exports', () => {
 	it('filters by the names after it, one line per name with its kind, the declaration an alias is and its entries', () => {
 		const out = render(['putoptions', 'error', 'authchange'], { exports: true });
 		assert.deepStrictEqual(out.split('\n').slice(0, 7), [
-			'Names you can import from @aws-blocks/blocks in backend code containing "putoptions" or "error" or "authchange" (3): import { <name> } from \'@aws-blocks/blocks\';',
-			'Browser code and tests (npm run test:e2e runs tsx -C browser) get no value from @aws-blocks/blocks (import type of its types works); they import values from @aws-blocks/blocks/client. Other entries as marked.',
-			'  ApiError       class in @aws-blocks/core; also from @aws-blocks/blocks/client',
-			'  DTPutOptions   type in @aws-blocks/bb-distributed-table (PutOptions there)',
-			'  isBlocksError  only from @aws-blocks/blocks/client',
-			'  KVPutOptions   interface in @aws-blocks/bb-kv-store (PutOptions there)',
-			'  onAuthChange   only from @aws-blocks/blocks/ui',
+			'Names you can import from aws-cdk-blocks in backend code containing "putoptions" or "error" or "authchange" (3): import { <name> } from \'aws-cdk-blocks\';',
+			'Browser code and tests (npm run test:e2e runs tsx -C browser) get no value from aws-cdk-blocks (import type of its types works); they import values from aws-cdk-blocks/client. Other entries as marked.',
+			'  ApiError       class in @aws-cdk-blocks/core; also from aws-cdk-blocks/client',
+			'  DTPutOptions   type in @aws-cdk-blocks/bb-distributed-table (PutOptions there)',
+			'  isBlocksError  only from aws-cdk-blocks/client',
+			'  KVPutOptions   interface in @aws-cdk-blocks/bb-kv-store (PutOptions there)',
+			'  onAuthChange   only from aws-cdk-blocks/ui',
 		]);
 		fails(
 			() => render(['nothing-like-it'], { exports: true }),
@@ -1024,18 +1024,18 @@ describe('npm run docs --exports', () => {
 
 	it("lists an entry's names for a filter that names the entry, and filters names by the others", () => {
 		const ui = [
-			"@aws-blocks/blocks/ui (3 names): import { <name> } from '@aws-blocks/blocks/ui';",
+			"aws-cdk-blocks/ui (3 names): import { <name> } from 'aws-cdk-blocks/ui';",
 			'  Authenticator, AuthStateApi, onAuthChange',
 			"A name's declaration: npm run docs <name>",
 			'',
 		].join('\n');
 		assert.strictEqual(render(['ui'], { exports: true }), ui);
-		assert.strictEqual(render(['@aws-blocks/blocks/ui'], { exports: true }), ui);
+		assert.strictEqual(render(['aws-cdk-blocks/ui'], { exports: true }), ui);
 		const both = render(['UI', 'putoptions'], { exports: true });
 		assert.ok(both.startsWith(ui), both);
 		assert.match(
 			both,
-			/^Names you can import from @aws-blocks\/blocks in backend code containing "putoptions" \(2\)/m,
+			/^Names you can import from aws-cdk-blocks in backend code containing "putoptions" \(2\)/m,
 		);
 	});
 });
@@ -1044,12 +1044,12 @@ describe('npm run docs --exports, when no export has the filter', () => {
 	it('names the declarations it does not re-export, the members and the names from other packages that have it', () => {
 		assert.match(
 			render(['kvkey'], { exports: true }),
-			/^Declared by a block it does not re-export: kvKeyOf \(import from @aws-blocks\/bb-kv-store\)$/m,
+			/^Declared by a block it does not re-export: kvKeyOf \(import from @aws-cdk-blocks\/bb-kv-store\)$/m,
 		);
 		assert.strictEqual(
 			render(['iffield', 'standard'], { exports: true }),
 			[
-				'@aws-blocks/blocks exports no name containing "iffield" or "standard".',
+				'aws-cdk-blocks exports no name containing "iffield" or "standard".',
 				'Members that contain it: ifFieldEquals (of PutOptions)',
 				'Names from other packages: StandardSchemaV1 (from @standard-schema/spec)',
 				"A name's declaration and docs: npm run docs <name>",
@@ -1105,7 +1105,7 @@ describe('npm run docs --search', () => {
 		}
 		assert.match(
 			render([], { search: 'onAuthChange' }),
-			/^no doc mentions "onAuthChange"; it is a name you can look up:\nonAuthChange: function in @aws-blocks\/blocks\. import \{ onAuthChange \} from '@aws-blocks\/blocks\/ui';/m,
+			/^no doc mentions "onAuthChange"; it is a name you can look up:\nonAuthChange: function in aws-cdk-blocks\. import \{ onAuthChange \} from 'aws-cdk-blocks\/ui';/m,
 		);
 	});
 
@@ -1124,7 +1124,7 @@ describe('npm run docs --search', () => {
 describe('npm run docs (no name)', () => {
 	it('lists every block with its classes, purpose and other files, then the framework docs as files', () => {
 		const out = render([]);
-		assert.match(out, /^AWS CDK Blocks docs for @aws-blocks\/blocks 1\.2\.3\n/);
+		assert.match(out, /^AWS CDK Blocks docs for aws-cdk-blocks 1\.2\.3\n/);
 		assert.match(
 			out,
 			/^ {2}bb-distributed-table {2}DistributedTable: Tables with indexes\. \[API\.md, DESIGN\.md\]$/m,
@@ -1132,7 +1132,7 @@ describe('npm run docs (no name)', () => {
 		assert.match(out, /^ {2}bb-kv-store {11}KVStore: Values by key\. \[API\.md\]$/m);
 		assert.match(
 			out,
-			/^Framework docs \(each name is one file of the docs folder, not a folder\):\n {2}guide {17}README\.md of @aws-blocks\/blocks: How an app[^\n]*\n {2}troubleshooting {7}TROUBLESHOOTING\.md of @aws-blocks\/blocks: /m,
+			/^Framework docs \(each name is one file of the docs folder, not a folder\):\n {2}guide {17}README\.md of aws-cdk-blocks: How an app[^\n]*\n {2}troubleshooting {7}TROUBLESHOOTING\.md of aws-cdk-blocks: /m,
 		);
 		fails(() => render([], { api: true }), ExitCode.Usage, /name a block/);
 		assert.strictEqual(render([], { toc: true }), out);
@@ -1167,7 +1167,7 @@ describe('npm run docs output names no path on disk', () => {
 	let app: string;
 	before(() => {
 		app = mkdtempSync(join(tmpdir(), 'blocks-docs-app-'));
-		const pkg = join(app, 'node_modules', '@aws-blocks', 'blocks');
+		const pkg = join(app, 'node_modules', 'aws-cdk-blocks');
 		for (const [base, files] of [
 			[join(pkg, 'docs'), FILES],
 			[pkg, PACKAGE],
@@ -1315,8 +1315,8 @@ describe('npm run docs --output json', () => {
 		const out = json(['ApiError']);
 		assert.strictEqual(out.name, 'ApiError');
 		assert.strictEqual(out.kind, 'class');
-		assert.strictEqual(out.package, '@aws-blocks/core');
-		assert.strictEqual(out.import, "import { ApiError } from '@aws-blocks/blocks';");
+		assert.strictEqual(out.package, '@aws-cdk-blocks/core');
+		assert.strictEqual(out.import, "import { ApiError } from 'aws-cdk-blocks';");
 		assert.match(String(out.declaration), /^export class ApiError extends Error \{\n/);
 		const docs = out.docs as DocPart[];
 		assert.deepStrictEqual(
@@ -1327,21 +1327,21 @@ describe('npm run docs --output json', () => {
 			],
 		);
 		assert.match(docs[1].text ?? '', /^### Throwing\n/);
-		// A type imports with `import type`; a renamed export under its @aws-blocks/blocks name.
-		assert.strictEqual(json(['DTPutOptions']).import, "import type { DTPutOptions } from '@aws-blocks/blocks';");
+		// A type imports with `import type`; a renamed export under its aws-cdk-blocks name.
+		assert.strictEqual(json(['DTPutOptions']).import, "import type { DTPutOptions } from 'aws-cdk-blocks';");
 	});
 
 	it("prints Owner.member as a member, with its owner's import and the type file it comes from", () => {
 		const out = json(['KVStore.get']);
 		assert.strictEqual(out.kind, 'member');
 		assert.deepStrictEqual(out.of, ['KVStore']);
-		assert.strictEqual(out.import, "import { KVStore } from '@aws-blocks/blocks';");
+		assert.strictEqual(out.import, "import { KVStore } from 'aws-cdk-blocks';");
 		assert.deepStrictEqual(
 			(out.docs as DocPart[]).map((d) => d.doc),
-			['@aws-blocks/bb-kv-store/dist/index.mock.d.ts', 'bb-kv-store/README.md'],
+			['@aws-cdk-blocks/bb-kv-store/dist/index.mock.d.ts', 'bb-kv-store/README.md'],
 		);
 		// What the export stands for: Vault is `Omit<VaultImpl, 'put'>`, imported from its own package.
-		assert.strictEqual(json(['Vault.get']).import, "import { Vault } from '@aws-blocks/bb-locker';");
+		assert.strictEqual(json(['Vault.get']).import, "import { Vault } from '@aws-cdk-blocks/bb-locker';");
 		assert.match(String(json(['Auth.protect']).notes), /^Auth inherits protect from AuthBase/);
 	});
 
@@ -1352,9 +1352,9 @@ describe('npm run docs --output json', () => {
 			{
 				name: 'DTPutOptions',
 				kind: 'type',
-				package: '@aws-blocks/bb-distributed-table',
-				entry: '@aws-blocks/blocks',
-				import: "import type { DTPutOptions } from '@aws-blocks/blocks';",
+				package: '@aws-cdk-blocks/bb-distributed-table',
+				entry: 'aws-cdk-blocks',
+				import: "import type { DTPutOptions } from 'aws-cdk-blocks';",
 				original: 'PutOptions',
 			},
 		);
@@ -1363,8 +1363,8 @@ describe('npm run docs --output json', () => {
 			{
 				name: 'onAuthChange',
 				kind: 'export',
-				entry: '@aws-blocks/blocks/ui',
-				import: "import { onAuthChange } from '@aws-blocks/blocks/ui';",
+				entry: 'aws-cdk-blocks/ui',
+				import: "import { onAuthChange } from 'aws-cdk-blocks/ui';",
 			},
 		);
 		const filtered = json(['putoptions'], { exports: true }).names as { name: string }[];
@@ -1462,7 +1462,7 @@ describe('npm run docs through the CLI', () => {
 			assert.match(
 				run.stdout,
 				new RegExp(
-					`^Auth inherits ${member} from AuthBase: export class Auth<.*\\n${member}: member of AuthBase \\(@aws-blocks/bb-auth\\)\\n`,
+					`^Auth inherits ${member} from AuthBase: export class Auth<.*\\n${member}: member of AuthBase \\(@aws-cdk-blocks/bb-auth\\)\\n`,
 				),
 			);
 		}
@@ -1492,7 +1492,7 @@ describe('npm run docs through the CLI', () => {
 				{ cwd: tmpdir(), encoding: 'utf8' },
 			);
 			assert.strictEqual(run.status, 0, `${conditions.join(' ')}: ${run.stderr}`);
-			assert.match(run.stdout, /^get: member of SecretImpl \(the type of Secret\) \(@aws-blocks\/bb-secret\)\n/);
+			assert.match(run.stdout, /^get: member of SecretImpl \(the type of Secret\) \(@aws-cdk-blocks\/bb-secret\)\n/);
 		}
 	});
 
@@ -1519,7 +1519,7 @@ describe('npm run docs through the CLI', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.match(
 			run.stdout,
-			/^Names you can import from @aws-blocks\/blocks in backend code containing "Error" \(/,
+			/^Names you can import from aws-cdk-blocks in backend code containing "Error" \(/,
 		);
 	});
 });

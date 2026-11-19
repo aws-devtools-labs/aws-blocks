@@ -123,7 +123,7 @@ function registerRoutes() {
       ctx.response.send({ rest: ctx.request.params['*'] });
     },
   });
-  // Matches every three-segment POST, `/aws-blocks/api/<namespace>` included: the
+  // Matches every three-segment POST, `/cdk-blocks/api/<namespace>` included: the
   // per-namespace RPC cases below pin that the RPC subtree skips RawRoute matching.
   registerRoute({
     method: 'POST',
@@ -149,7 +149,7 @@ function rpcBody(method: string, params: unknown = [], id: number | string = 1):
 function rpcEvent(overrides: Record<string, any> = {}) {
   return {
     httpMethod: 'POST',
-    path: '/aws-blocks/api',
+    path: '/cdk-blocks/api',
     headers: { 'Content-Type': 'application/json', Host: API_HOST },
     body: rpcBody('api.echo', ['hi']),
     isBase64Encoded: false,
@@ -215,8 +215,8 @@ const CASES: Record<string, Case> = {
   'rpc invalid JSON body': { event: rpcEvent({ body: '{not json' }) },
   'rpc empty body': { event: rpcEvent({ body: null }) },
   'rpc named params': { event: rpcEvent({ body: rpcBody('api.echo', { msg: 'named' }, 'req-7') }) },
-  'rpc per-namespace path': { event: rpcEvent({ path: '/aws-blocks/api/api' }) },
-  'rpc per-namespace path that mismatches the body': { event: rpcEvent({ path: '/aws-blocks/api/other' }) },
+  'rpc per-namespace path': { event: rpcEvent({ path: '/cdk-blocks/api/api' }) },
+  'rpc per-namespace path that mismatches the body': { event: rpcEvent({ path: '/cdk-blocks/api/other' }) },
   'rpc base64 body': {
     event: rpcEvent({ body: Buffer.from(rpcBody('api.body', ['ignored'])).toString('base64'), isBase64Encoded: true }),
   },
@@ -235,7 +235,7 @@ const CASES: Record<string, Case> = {
   },
   'preflight from an allowed origin': {
     cors: 'https://app\\.example\\.com',
-    event: getEvent('/aws-blocks/api', { httpMethod: 'OPTIONS', headers: { Host: API_HOST, origin: ALLOWED_ORIGIN } }),
+    event: getEvent('/cdk-blocks/api', { httpMethod: 'OPTIONS', headers: { Host: API_HOST, origin: ALLOWED_ORIGIN } }),
   },
   'preflight without an allowlist': {
     event: getEvent('/users/1', { httpMethod: 'OPTIONS', headers: { Host: API_HOST, origin: ALLOWED_ORIGIN } }),
@@ -268,7 +268,7 @@ const CASES: Record<string, Case> = {
     event: {
       version: '2.0',
       headers: { 'content-type': 'application/json', host: API_HOST },
-      requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+      requestContext: { http: { method: 'POST', path: '/cdk-blocks/api' } },
       body: rpcBody('api.login'),
       isBase64Encoded: false,
     },
@@ -277,7 +277,7 @@ const CASES: Record<string, Case> = {
     event: {
       version: '2.0',
       headers: { 'content-type': 'application/json', host: API_HOST },
-      requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+      requestContext: { http: { method: 'POST', path: '/cdk-blocks/api' } },
       body: rpcBody('api.signOutAndFail'),
       isBase64Encoded: false,
     },
@@ -289,7 +289,7 @@ const CASES: Record<string, Case> = {
     event: {
       version: '2.0',
       headers: { 'content-type': 'application/json', host: API_HOST },
-      requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+      requestContext: { http: { method: 'POST', path: '/cdk-blocks/api' } },
       body: rpcBody('api.signInAndFail'),
       isBase64Encoded: false,
     },
@@ -308,7 +308,7 @@ const CASES: Record<string, Case> = {
   // gets the CORS rejection, not a 200.
   'preflight from a disallowed origin': {
     cors: 'https://app\\.example\\.com',
-    event: getEvent('/aws-blocks/api', { httpMethod: 'OPTIONS', headers: { Host: API_HOST, Origin: 'https://other.example' } }),
+    event: getEvent('/cdk-blocks/api', { httpMethod: 'OPTIONS', headers: { Host: API_HOST, Origin: 'https://other.example' } }),
   },
   'rpc url on a custom domain': {
     event: rpcEvent({ headers: { 'Content-Type': 'application/json', Host: 'api.example.com' } }),
@@ -319,7 +319,7 @@ const CASES: Record<string, Case> = {
       version: '2.0',
       headers: { 'content-type': 'application/json', host: API_HOST },
       cookies: ['sid=abc', 'theme=dark'],
-      requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+      requestContext: { http: { method: 'POST', path: '/cdk-blocks/api' } },
       body: rpcBody('api.echo', ['hi']),
       isBase64Encoded: false,
     },
@@ -353,7 +353,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"sid=abc\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"sid=abc\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
   },
   "rpc success without origin": {
     "statusCode": 200,
@@ -367,7 +367,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc success with no origin while an allowlist is configured": {
     "statusCode": 200,
@@ -381,7 +381,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc success with an unvalidated client user agent": {
     "statusCode": 200,
@@ -395,7 +395,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc mixed-case valid client user agent header": {
     "statusCode": 200,
@@ -409,7 +409,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
   },
   "rpc mixed-case Cookie header": {
     "statusCode": 200,
@@ -423,7 +423,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"Mixed=1\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"Mixed=1\",\"userAgent\":null},\"id\":1}"
   },
   "rpc sets two cookies, a custom header and a status": {
     "statusCode": 201,
@@ -573,7 +573,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"named\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":\"req-7\"}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"named\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":\"req-7\"}"
   },
   "rpc per-namespace path": {
     "statusCode": 200,
@@ -587,7 +587,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc per-namespace path that mismatches the body": {
     "statusCode": 200,
@@ -640,7 +640,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc url ignores a non-loopback forwarded host": {
     "statusCode": 200,
@@ -654,7 +654,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "cross-origin request from a disallowed origin": {
     "statusCode": 403,
@@ -966,7 +966,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://api.example.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://api.example.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "payload v2 rpc with cookies only in event.cookies": {
     "statusCode": 200,
@@ -978,7 +978,7 @@ const EXPECTED: Record<string, unknown> = {
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc with null headers": {
     "statusCode": 200,
@@ -992,7 +992,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://localhost/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://localhost/cdk-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   }
 };
 

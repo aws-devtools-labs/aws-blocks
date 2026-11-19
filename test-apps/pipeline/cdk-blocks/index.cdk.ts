@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 

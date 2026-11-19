@@ -1,6 +1,6 @@
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Scope } from '@aws-blocks/core';
-import { Auth, github, stubIdp } from '@aws-blocks/bb-auth';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Scope } from '@aws-cdk-blocks/core';
+import { Auth, github, stubIdp } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('app');
 const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });

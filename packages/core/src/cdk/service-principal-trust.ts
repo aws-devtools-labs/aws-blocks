@@ -12,7 +12,7 @@ import { forEachBlocksKmsKey, forEachBlocksRole, isAppOwnedRole, markBlocksOwned
  *
  * @internal
  */
-export const SERVICE_PRINCIPAL_TRUST_WARNING_ID = '@aws-blocks/core:serviceRoleTrustWithoutSourceCondition';
+export const SERVICE_PRINCIPAL_TRUST_WARNING_ID = '@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition';
 
 /**
  * Acknowledgement id of the warning reported for an app-owned KMS key whose key
@@ -21,7 +21,7 @@ export const SERVICE_PRINCIPAL_TRUST_WARNING_ID = '@aws-blocks/core:serviceRoleT
  *
  * @internal
  */
-export const KMS_KEY_POLICY_WARNING_ID = '@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition';
+export const KMS_KEY_POLICY_WARNING_ID = '@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition';
 
 /**
  * Service principals whose trust statements need no source condition: Lambda
@@ -57,8 +57,8 @@ function cloudWatchRoleLogicalId(account: cdk.CfnResource): string | undefined {
  * Whether `service` on `role` is the `apigateway.amazonaws.com` trust of an API
  * Gateway CloudWatch Logs role: a role that an `AWS::ApiGateway::Account` in
  * the same stack names as its `CloudWatchRoleArn`. That covers the stack-level
- * role `ensureApiGatewayAccount` creates (`@aws-blocks/core` and
- * `@aws-blocks/hosting`) and the `cloudWatchRole` a CDK `RestApi` creates by
+ * role `ensureApiGatewayAccount` creates (`@aws-cdk-blocks/core` and
+ * `@aws-cdk-blocks/hosting`) and the `cloudWatchRole` a CDK `RestApi` creates by
  * default. The trust stays unconditioned: API Gateway does not send
  * `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role,
  * so either condition stops log delivery. Only that principal on such a role

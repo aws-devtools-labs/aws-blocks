@@ -44,12 +44,12 @@ function rpcRequest(method: string): DispatchRequest {
   const text = JSON.stringify({ jsonrpc: '2.0', method, params: [], id: 1 });
   return {
     method: 'POST',
-    path: '/aws-blocks/api',
+    path: '/cdk-blocks/api',
     origin: '',
     cookie: '',
     clientUserAgent: undefined,
     headers: () => new Headers({ 'content-type': 'application/json' }),
-    url: () => new URL('http://localhost/aws-blocks/api'),
+    url: () => new URL('http://localhost/cdk-blocks/api'),
     baseUrl: () => 'http://localhost',
     body: () => ({ text, stream: null }),
   };

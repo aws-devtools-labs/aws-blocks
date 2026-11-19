@@ -9,7 +9,7 @@
  *
  * ## The route table
  *
- * `<base>` is the directory of `redirects.callbackPath` — `/aws-blocks/auth`
+ * `<base>` is the directory of `redirects.callbackPath` — `/cdk-blocks/auth`
  * by default — and `<id>` is `encodeURIComponent(providerId)`. Every path is
  * explicit: **no wildcard and no root route** (AGENTS.md rule 12). They are
  * the paths `AuthOIDC` serves, so the native SDKs keep working.
@@ -27,7 +27,7 @@
  * | `auth-refresh` | POST | `<base>/refresh` | bearer refresh — only with `allowBearerAuth` |
  * | `auth-refresh-exchange` | POST | `<base>/exchange/refresh` | the same — the path the Swift and Dart SDKs default to |
  *
- * plus, on the mock only, the stub IdP's routes under `/aws-blocks/auth/idp/<id>/`
+ * plus, on the mock only, the stub IdP's routes under `/cdk-blocks/auth/idp/<id>/`
  * (`engines/stub-idp.ts`).
  *
  * ## Three transports
@@ -58,17 +58,18 @@
  */
 
 import crypto from 'node:crypto';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import {
 	ApiError,
 	BLOCKS_AUTH_PREFIX,
+	canonicalBlocksPath,
 	type BlocksContext,
 	getRegisteredRoutes,
 	RawRoute,
 	RawRouteErrors,
 	type RegisteredRoute,
 	type Scope,
-} from '@aws-blocks/core';
+} from '@aws-cdk-blocks/core';
 import { bearerAuthEnabled } from './cdk/contract.js';
 import { clearPendingAuth, hasPendingAuth, readPendingAuth } from './engines/pending-auth.js';
 import type {
@@ -150,8 +151,8 @@ export interface FederationRoutePaths {
 
 /**
  * Derive (and validate) the route paths. Throws a plain configuration `Error`
- * at construction for a path outside `/aws-blocks/auth/` — a deployed
- * CloudFront app only proxies that subtree.
+ * at construction for a path outside `/cdk-blocks/auth/` and its legacy
+ * `/aws-blocks/auth/` alias — a deployed CloudFront app only proxies those subtrees.
  */
 export function federationRoutePaths(options: ResolvedAuthOptions): FederationRoutePaths {
 	const redirects = options.redirects ?? {};
@@ -159,7 +160,7 @@ export function federationRoutePaths(options: ResolvedAuthOptions): FederationRo
 		['callbackPath', redirects.callbackPath],
 		['signOutPath', redirects.signOutPath],
 	] as const) {
-		if (value !== undefined && (typeof value !== 'string' || !value.startsWith(`${BLOCKS_AUTH_PREFIX}/`))) {
+		if (value !== undefined && (typeof value !== 'string' || !canonicalBlocksPath(value).startsWith(`${BLOCKS_AUTH_PREFIX}/`))) {
 			throw new Error(
 				`Auth: redirects.${key} must be a path under '${BLOCKS_AUTH_PREFIX}/' (e.g. '${BLOCKS_AUTH_PREFIX}/callback'), ` +
 					`got ${JSON.stringify(value)}. Auth routes live under the reserved namespace so a deployed CloudFront app proxies them.`,
@@ -264,7 +265,7 @@ function sendUnavailablePage(
 		`<h1>${escapeHtml(title)}</h1>`,
 		`<p><strong>${escapeHtml(unavailable.hint)}</strong></p>`,
 		`<p>${escapeHtml(unavailable.message)}</p>`,
-		`<p>Error: <code>${escapeHtml(AuthErrors.ProviderUnavailable)}</code>. See "Social sign-in" in the Auth README (<code>@aws-blocks/bb-auth</code>).</p>`,
+		`<p>Error: <code>${escapeHtml(AuthErrors.ProviderUnavailable)}</code>. See "Social sign-in" in the Auth README (<code>@aws-cdk-blocks/bb-auth</code>).</p>`,
 		'<p><a href="/">Back to the app</a></p>',
 		'</main>',
 		'</body>',
@@ -480,7 +481,8 @@ const mountedBy = new WeakMap<RegisteredRoute['handler'], string>();
 
 /** The registered callback / sign-out routes at `paths`. */
 function routesAt(paths: FederationRoutePaths): RegisteredRoute[] {
-	return getRegisteredRoutes().filter((r) => r.path === paths.callback || r.path === paths.signOut);
+	const wanted = [paths.callback, paths.signOut].map(canonicalBlocksPath);
+	return getRegisteredRoutes().filter((r) => wanted.includes(r.path));
 }
 
 /**

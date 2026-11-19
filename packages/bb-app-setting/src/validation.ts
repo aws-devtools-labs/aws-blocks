@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { blocksError as prefixedBlocksError, brandBlocksError } from '@aws-blocks/core';
+import { blocksError as prefixedBlocksError, brandBlocksError } from '@aws-cdk-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { InternalAppSettingOptions } from './types.js';
 

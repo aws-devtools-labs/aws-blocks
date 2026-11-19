@@ -44,7 +44,7 @@ export function apiUrlStageTests(): void {
 					mkdirSync(join(dir, '.cdk-blocks-sandbox'));
 					writeFileSync(
 						join(dir, '.cdk-blocks-sandbox', `config.${stage}.json`),
-						JSON.stringify({ apiUrl: `http://127.0.0.1:${address.port}/aws-blocks/api` }),
+						JSON.stringify({ apiUrl: `http://127.0.0.1:${address.port}/cdk-blocks/api` }),
 					);
 					const script =
 						`import { callRpc } from ${JSON.stringify(join(testDir, 'test-support.js'))};\n` +

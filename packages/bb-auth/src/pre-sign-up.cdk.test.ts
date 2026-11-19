@@ -22,7 +22,7 @@ import { synthBlocksApp } from './test-support/blocks-app-synth.js';
 import { type CfnResourceJson, type CfnTemplateJson, synthUnderCdkConditions } from './test-support/cdk-synth.js';
 import { freshAppDir } from './test-support/guard-synth.js';
 
-const IMPORTS = "import { Auth } from '@aws-blocks/bb-auth';";
+const IMPORTS = "import { Auth } from '@aws-cdk-blocks/bb-auth';";
 const VALIDATE = "validateUser: async () => { throw new Error('no'); }";
 
 function synth(build: string) {
@@ -280,7 +280,7 @@ describe('validateUser provisions the PreSignUp trigger (CDK)', () => {
 
 	test('social federation + validateUser: trigger on the pool, still no cycle', () => {
 		const { template } = synthUnderCdkConditions({
-			imports: `${IMPORTS}\nimport { AppSetting } from '@aws-blocks/bb-app-setting';`,
+			imports: `${IMPORTS}\nimport { AppSetting } from '@aws-cdk-blocks/bb-app-setting';`,
 			build: `new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g', clientSecret: new AppSetting(stack, 'g-secret', { secret: true }) } }, ${VALIDATE} })`,
 		});
 		const [, pool] = onlyOne(template, 'AWS::Cognito::UserPool');
@@ -319,7 +319,7 @@ describe('PreSignUp trigger: one handler per user pool, claimed at synth', () =>
 	// `aws:cognito-idp:<user pool id>`; the CDK layer claims the same key (the
 	// pool's id token) when it wires the trigger, so a second claim on that pool
 	// fails synth instead of every cold start.
-	const CLAIM_IMPORTS = `${IMPORTS} import { EventSourceMapping, Scope } from '@aws-blocks/core/cdk';`;
+	const CLAIM_IMPORTS = `${IMPORTS} import { EventSourceMapping, Scope } from '@aws-cdk-blocks/core/cdk';`;
 	/** Builds `auth`, then has another block claim the trigger key of `auth`'s pool; reports the error, if any. */
 	function claimAfter(authLine: string) {
 		return synthUnderCdkConditions({

@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AwsIdentity } from '@aws-blocks/core/scripts';
+import type { AwsIdentity } from '@aws-cdk-blocks/core/scripts';
 import {
 	frontendPortWarning,
 	keepsOwnClient,
@@ -1165,7 +1165,7 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 
 /**
  * The absolute path of a package's bin: from the app's own install first, then
- * from the dependencies of `@aws-blocks/blocks`.
+ * from the dependencies of `aws-cdk-blocks`.
  */
 export function resolvePackageBin(root: string, packageName: string, bin: string): string | undefined {
 	for (const from of [join(root, 'package.json'), fileURLToPath(import.meta.url)]) {
@@ -1205,12 +1205,12 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 		});
 	}
 	const help = input.flags.help === true;
-	// A verb's help works outside an app too, when @aws-blocks/bb-database is installed next to @aws-blocks/blocks.
+	// A verb's help works outside an app too, when @aws-cdk-blocks/bb-database is installed next to aws-cdk-blocks.
 	const root = help ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
-	const cli = resolvePackageBin(root, '@aws-blocks/bb-database', 'bb-database');
+	const cli = resolvePackageBin(root, '@aws-cdk-blocks/bb-database', 'bb-database');
 	if (!cli) {
-		throw new CliError('cannot find the bb-database CLI of @aws-blocks/bb-database.', {
-			hint: 'npm install @aws-blocks/bb-database',
+		throw new CliError('cannot find the bb-database CLI of @aws-cdk-blocks/bb-database.', {
+			hint: 'npm install @aws-cdk-blocks/bb-database',
 		});
 	}
 	// The CLI's own --yes and --no-input are not forwarded with the other tokens, and bb-database has the same

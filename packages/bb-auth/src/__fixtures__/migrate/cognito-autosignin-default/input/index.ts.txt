@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope } from '@aws-blocks/core';
+import { ApiNamespace, Scope } from '@aws-cdk-blocks/core';
 import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 
 // AuthCognito's signUp() did not sign the user in unless it passed

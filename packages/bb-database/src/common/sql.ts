@@ -9,7 +9,7 @@
  *
  * @example
  * ```ts
- * import { sql } from '@aws-blocks/blocks';
+ * import { sql } from 'aws-cdk-blocks';
  *
  * const rows = await db.query(sql`SELECT * FROM users WHERE age > ${18}`);
  * // Executes: SELECT * FROM users WHERE age > $1  with params: [18]

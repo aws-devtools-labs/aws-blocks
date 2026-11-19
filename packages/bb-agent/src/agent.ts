@@ -1,13 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, isWireSafeError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { Realtime } from '@aws-blocks/bb-realtime';
-import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, isWireSafeError } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { Realtime } from '@aws-cdk-blocks/bb-realtime';
+import { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 // Runtime values from `@strands-agents/sdk` are deferred to loadStrands(); only types
 // are imported here (erased at compile time). See loadStrands() / issue #153.
 import type { Agent as StrandsAgent, SnapshotStorage } from '@strands-agents/sdk';
@@ -111,7 +111,7 @@ export function errorCauseShape(error: unknown): { name?: string; httpStatusCode
  * Lazily import the Strands SDK runtime, caching the module after the first load.
  *
  * Importing the Agent BB must not eagerly evaluate `@strands-agents/sdk`: the
- * `@aws-blocks/blocks` umbrella re-exports `Agent` statically, so a static top-level
+ * `aws-cdk-blocks` umbrella re-exports `Agent` statically, so a static top-level
  * import here would load Strands — and its non-optional `@modelcontextprotocol/sdk`
  * and `@opentelemetry/api` peers — for every app that touches the umbrella, even
  * ones that never create an agent (see issue #153). Deferring the import to first

@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import { resetRpcIdForTests } from './rpc-codec.js';
 import { type InvokeResult, type NonJsonBody, invokeRpc } from './rpc-invoke.js';
 
-const ENDPOINT = 'http://localhost:3000/aws-blocks/api';
+const ENDPOINT = 'http://localhost:3000/cdk-blocks/api';
 
 interface Captured {
 	url: string;
@@ -49,6 +49,42 @@ function stepClock(step: number): () => number {
 function nonJson(result: InvokeResult): NonJsonBody {
 	return result.body as NonJsonBody;
 }
+
+describe('invokeRpc — an older dev server on the legacy path', () => {
+	it('retries a 404 at /aws-blocks/api and reports the endpoint it called', async () => {
+		const calls: string[] = [];
+		const fetchImpl = ((input: string | URL | Request) => {
+			calls.push(String(input));
+			return Promise.resolve(
+				String(input).endsWith('/cdk-blocks/api')
+					? new Response('{"error":"Not Found"}', { status: 404 })
+					: jsonResponse({ jsonrpc: '2.0', id: 1, result: 1 }),
+			);
+		}) as unknown as typeof fetch;
+		const result = await invokeRpc({ endpoint: ENDPOINT, method: 'todos.count', params: [], fetchImpl });
+		assert.deepStrictEqual(calls, [ENDPOINT, 'http://localhost:3000/aws-blocks/api']);
+		assert.strictEqual(result.httpStatus, 200);
+		assert.strictEqual(result.endpoint, 'http://localhost:3000/aws-blocks/api');
+	});
+
+	it('does not retry a 404 JSON-RPC error envelope: the method already ran', async () => {
+		const { fetchImpl, calls } = stubFetch(
+			jsonResponse({ jsonrpc: '2.0', id: 1, error: { code: 404, message: 'No such todo' } }, 404),
+		);
+		const result = await invokeRpc({ endpoint: ENDPOINT, method: 'todos.get', params: ['x'], fetchImpl });
+		assert.strictEqual(calls.length, 1);
+		assert.strictEqual(result.endpoint, ENDPOINT);
+		assert.strictEqual(result.httpStatus, 404);
+		assert.strictEqual(result.rpcError?.message, 'No such todo');
+	});
+
+	it('does not retry a 404 from an endpoint off the RPC path', async () => {
+		const { fetchImpl, calls } = stubFetch(new Response('nope', { status: 404 }));
+		const result = await invokeRpc({ endpoint: 'https://api.example.com/custom', method: 'todos.count', params: [], fetchImpl });
+		assert.strictEqual(calls.length, 1);
+		assert.strictEqual(result.httpStatus, 404);
+	});
+});
 
 describe('invokeRpc — a successful call', () => {
 	it('posts the exact JSON-RPC wire body and reports the result', async () => {

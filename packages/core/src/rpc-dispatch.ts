@@ -36,7 +36,7 @@ export function isApiNamespace(value: unknown): boolean {
 
 /**
  * True for a `Scope` subclass instance — every Building Block. Structural (same
- * check `generate-client` uses) so it holds across duplicate `@aws-blocks/core`
+ * check `generate-client` uses) so it holds across duplicate `@aws-cdk-blocks/core`
  * copies, where an `instanceof Scope` would not.
  */
 export function isScopeLike(value: unknown): boolean {
@@ -47,11 +47,11 @@ export function isScopeLike(value: unknown): boolean {
 
 /**
  * Brand on `secret()` / `config()` managed values (`MANAGED_BRAND` in
- * `@aws-blocks/hosting`). Re-derived from the same global-registry key rather than
- * imported, so the Lambda runtime path doesn't pull `@aws-blocks/hosting` into every
+ * `@aws-cdk-blocks/hosting`). Re-derived from the same global-registry key rather than
+ * imported, so the Lambda runtime path doesn't pull `@aws-cdk-blocks/hosting` into every
  * customer bundle; `rpc-dispatch.test.ts` pins it to hosting's real brand.
  */
-const MANAGED_VALUE_BRAND = Symbol.for('@aws-blocks/hosting.ManagedValue');
+const MANAGED_VALUE_BRAND = Symbol.for('@aws-cdk-blocks/hosting.ManagedValue');
 
 /** True for a `secret()` / `config()` marker — inert deferred data, never an API. */
 function isManagedValue(value: unknown): boolean {
@@ -63,14 +63,14 @@ function isManagedValue(value: unknown): boolean {
  * method is added). Membership is by function identity, so a copy of the method
  * made by spread, `Object.assign` or destructuring is the same function and is
  * refused too, however it reaches the module's exports. Held on a global-registry
- * key so duplicate `@aws-blocks/core` copies in one bundle share one set. Meant
+ * key so duplicate `@aws-cdk-blocks/core` copies in one bundle share one set. Meant
  * for long-lived, bounded method identities (one admin surface per block), not
  * per-request closures.
  *
  * shortcut: a new function that wraps or `bind`s an admin method is not in the
  * set; that is an application method and needs its own caller check.
  */
-const SERVER_ONLY_FUNCTIONS = Symbol.for('@aws-blocks/core.ServerOnlyFunctions');
+const SERVER_ONLY_FUNCTIONS = Symbol.for('@aws-cdk-blocks/core.ServerOnlyFunctions');
 
 function serverOnlyFunctions(): WeakSet<object> {
   const registry = globalThis as unknown as Record<symbol, WeakSet<object> | undefined>;
@@ -81,7 +81,7 @@ function serverOnlyFunctions(): WeakSet<object> {
 /**
  * Mark `fn` as a server-side API: the RPC dispatcher never serves it, as an
  * export or as a method, wherever it is copied. Calling it from server code is
- * unaffected. Exported through `@aws-blocks/core/internal`.
+ * unaffected. Exported through `@aws-cdk-blocks/core/internal`.
  *
  * @internal
  */

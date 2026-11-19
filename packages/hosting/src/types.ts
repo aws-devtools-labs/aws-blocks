@@ -275,7 +275,7 @@ export type HostingProps = {
    * change-without-redeploy value, do **not** put it here: reference it with
    * `secret('KEY')` (→ AWS Secrets Manager) or `config('KEY')` (→ SSM Parameter Store)
    * and read it at runtime with `getSecret('KEY')` / `getConfig('KEY')` from the
-   * CDK-free `@aws-blocks/hosting` value API. Only the store locator is injected —
+   * CDK-free `@aws-cdk-blocks/hosting` value API. Only the store locator is injected —
    * never the value — and the value never enters the template.
    *
    * @example
@@ -361,7 +361,7 @@ export type HostingProps = {
      * no caching headers while this TTL is positive, or an error status
      * CloudFront caches without caching headers: 404, 414, 500-504). Where the guard cannot be installed (e.g. a Lambda Web
      * Adapter server that is not Node.js), synth emits a
-     * `@aws-blocks/hosting:SsrCacheGuardNotInstalled` warning instead.
+     * `@aws-cdk-blocks/hosting:SsrCacheGuardNotInstalled` warning instead.
      * Responses already `private`/`no-store` (or `no-cache` without
      * `s-maxage`) are left alone. Adding the credential to
      * `cacheKeyCookies`/`cacheKeyHeaders` puts it in the cache key and keeps

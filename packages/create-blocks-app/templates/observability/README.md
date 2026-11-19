@@ -1,6 +1,6 @@
 # Blocks Observability Application
 
-Backend-only AWS Blocks app showing the observability Building Blocks on one
+Backend-only AWS CDK Blocks app showing the observability Building Blocks on one
 API call. `api.placeOrder(item)` writes a structured log line (**Logger**),
 emits an `OrdersPlaced` metric (**Metrics**) and runs inside a `placeOrder`
 trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.
@@ -8,7 +8,7 @@ trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.
 needs a signed-in user. Sign-up confirms the email with a 6-digit code, which
 `npm run dev` prints in its terminal locally. No frontend included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template observability`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template observability`
 
 ## Getting Started
 
@@ -24,7 +24,7 @@ What each one does locally and deployed:
 | Logger | One JSON line per call in the terminal | CloudWatch Logs |
 | Metrics | EMF JSON lines in the terminal | CloudWatch metrics, extracted from the logs |
 | Tracer | Last 100 traces in `.bb-data/`, each also printed | AWS X-Ray |
-| Dashboard | `GET /aws-blocks/dashboard` answers 503 with pointers to the above | A CloudWatch Dashboard; the route redirects to it |
+| Dashboard | `GET /cdk-blocks/dashboard` answers 503 with pointers to the above | A CloudWatch Dashboard; the route redirects to it |
 
 `test:e2e` reads the log and metric lines from the dev server it starts. If a
 dev server is already running, it skips those two checks and runs the rest.
@@ -70,7 +70,7 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 
 | Command | Backend | API URL |
 |---------|---------|---------|
-| `npm run dev` | Local RPC dev server on http://localhost:3001 | `http://localhost:3001/aws-blocks/api` |
+| `npm run dev` | Local RPC dev server on http://localhost:3001 | `http://localhost:3001/cdk-blocks/api` |
 | `npm run sandbox` | Deployed to AWS, `cdk watch --hotswap` keeps it in sync | Deployed API Gateway URL |
 | `npm run sandbox:deploy` | Deployed to AWS once, then exits (no watch); for scripts and CI | Deployed API Gateway URL |
 | `npm run deploy` | Deployed to AWS | Deployed API Gateway URL |
@@ -78,20 +78,20 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 ### RPC endpoint (local dev)
 
 ```bash
-# The dev server's RPC endpoint is JSON-RPC 2.0 at POST /aws-blocks/api:
+# The dev server's RPC endpoint is JSON-RPC 2.0 at POST /cdk-blocks/api:
 # placeOrder needs a signed-in user: sign up, confirm the code `npm run dev` prints
 # ([auth] signUp code for me@example.com: 123456), then sign in. Keep the session cookie
 # in a jar outside the project, so the session token is never committed.
-curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"signUp","username":"me@example.com","password":"TestPass123!"}],"id":1}'
-curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"confirmSignUp","username":"me@example.com","code":"123456"}],"id":2}'
-curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+curl -c /tmp/blocks-cookies.txt -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"autoSignIn","username":"me@example.com"}],"id":3}'
-curl -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+curl -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.placeOrder","params":["coffee"],"id":4}'
 # method = "<namespace>.<methodName>" (namespace = the exported variable name in cdk-blocks/index.ts: `export const api = …` → api); params = positional array.
@@ -149,7 +149,7 @@ This template is backend-only. To add a frontend:
 
 3. **Add Hosting to `cdk-blocks/index.cdk.ts`:**
    ```ts
-   import { Hosting } from '@aws-blocks/blocks/cdk';
+   import { Hosting } from 'aws-cdk-blocks/cdk';
 
    if (!sandboxMode) {
      new Hosting(blocksStack, 'Hosting', {

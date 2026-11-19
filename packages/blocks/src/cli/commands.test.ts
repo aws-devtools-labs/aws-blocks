@@ -11,8 +11,8 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
-import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
+import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-cdk-blocks/core/scripts/dev-pidfile';
+import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-cdk-blocks/core/scripts';
 import { DEV_RESTART_POLICY, decideDevRestart, redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import { blocksCommand } from './errors.js';
@@ -123,9 +123,9 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(calls.at(-1), ['set', 'K', '--', '--profile', '-q']);
 		assert.strictEqual(literal.env.AWS_PROFILE, undefined);
 
-		const vendorize = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--no-input', '-y'], { cwd: root });
+		const vendorize = await runCli(['vendorize', '@aws-cdk-blocks/bb-kv-store', '--no-input', '-y'], { cwd: root });
 		assert.strictEqual(vendorize.code, 0, vendorize.stderr);
-		assert.deepStrictEqual(vendorize.spawned[0].args.slice(1), ['@aws-blocks/bb-kv-store']);
+		assert.deepStrictEqual(vendorize.spawned[0].args.slice(1), ['@aws-cdk-blocks/bb-kv-store']);
 		// bb-database has the same two answers: they are passed on after the tool's tokens, as its own options.
 		const db = await runCli(['db', 'types', '--no-input', '-y'], { cwd: root });
 		assert.strictEqual(db.code, 0, db.stderr);
@@ -137,7 +137,7 @@ describe('passthrough commands', () => {
 			['config', 'list', '--output', 'json'],
 			['secret', 'list', '--query', 'keys'],
 			['secret', 'list', '--region', 'nowhere'],
-			['vendorize', '@aws-blocks/bb-kv-store', '--output', 'json'],
+			['vendorize', '@aws-cdk-blocks/bb-kv-store', '--output', 'json'],
 			['db', 'status', '--output', 'json'],
 			['config', 'set', 'K', 'v', '--profile'],
 		]) {
@@ -344,7 +344,7 @@ describe('passthrough commands', () => {
 			['set', '--help'],
 		]);
 		// No verb (or an unknown one): the CLI's own help, and nothing runs.
-		const vendorize = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--force', '--help'], { cwd: root });
+		const vendorize = await runCli(['vendorize', '@aws-cdk-blocks/bb-kv-store', '--force', '--help'], { cwd: root });
 		assert.strictEqual(vendorize.code, 0, vendorize.stderr);
 		assert.match(vendorize.stdout, /Usage: npm run vendorize/);
 		assert.strictEqual(vendorize.spawned.length, 0);
@@ -376,11 +376,11 @@ describe('passthrough commands', () => {
 	});
 
 	it('forwards vendorize arguments verbatim', async () => {
-		const run = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--force'], { cwd: fixtureApp() });
+		const run = await runCli(['vendorize', '@aws-cdk-blocks/bb-kv-store', '--force'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const [spec] = run.spawned;
 		assert.match(spec.args[0], /dist[\\/]vendorize\.js$/);
-		assert.deepStrictEqual(spec.args.slice(1), ['@aws-blocks/bb-kv-store', '--force']);
+		assert.deepStrictEqual(spec.args.slice(1), ['@aws-cdk-blocks/bb-kv-store', '--force']);
 	});
 
 	it('exits 2 when vendorize gets no package, two packages or an unknown option', async () => {
@@ -1222,7 +1222,7 @@ describe('help for passthrough subcommands', () => {
 		const db = await runCli(['help', 'db', 'migrate', './dir', '--yes'], { cwd: root });
 		assert.strictEqual(db.code, 0, db.stderr);
 		assert.deepStrictEqual(db.spawned[0].args.slice(1), ['migrate', '--help']);
-		const vendorize = await runCli(['help', 'vendorize', '@aws-blocks/bb-kv-store'], { cwd: root });
+		const vendorize = await runCli(['help', 'vendorize', '@aws-cdk-blocks/bb-kv-store'], { cwd: root });
 		assert.match(vendorize.stdout, /Usage: npm run vendorize/);
 		assert.strictEqual(vendorize.spawned.length, 0);
 	});
@@ -1915,7 +1915,7 @@ describe('JSON output', () => {
 				);
 				writeFileSync(
 					join(root, '.cdk-blocks-sandbox', 'config.json'),
-					JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }),
+					JSON.stringify({ apiUrl: 'http://localhost:3000/cdk-blocks/api', environment: 'local' }),
 				);
 				return { code: 0 };
 			},
@@ -2199,7 +2199,7 @@ describe('the deploy runners record the result', () => {
 	 * deploy of the same app rewrites outputs.json with only its own stack.
 	 */
 	function runRunner(root: string, runner: RunnerName, options: unknown, args: string[] = [], failLive = false): void {
-		const coreUrl = import.meta.resolve('@aws-blocks/core/scripts');
+		const coreUrl = import.meta.resolve('@aws-cdk-blocks/core/scripts');
 		const fixture = `
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { mock } from 'node:test';

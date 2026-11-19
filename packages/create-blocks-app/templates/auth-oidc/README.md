@@ -1,11 +1,11 @@
 # Blocks Auth (OIDC) App
 
-A frontend on AWS Blocks with **OpenID Connect (OIDC) / OAuth 2.0** sign-in end
+A frontend on AWS CDK Blocks with **OpenID Connect (OIDC) / OAuth 2.0** sign-in end
 to end. Users sign in with an external identity provider (Google, GitHub, Okta,
 any OIDC provider); the Building Block turns the authorization-code flow into an
 authenticated session your API consumes. Vite + vanilla DOM frontend.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template auth-oidc`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template auth-oidc`
 
 ## Getting Started
 
@@ -25,7 +25,7 @@ hook decides who signs in (here, a single demo user). Synth refuses `stubIdp()`
 for production, so `cdk-blocks/index.ts` picks the provider with
 `getDeploymentType()`: before `npm run deploy`, replace the production entry's
 `issuer` and `clientId` with your IdP's (Okta, Entra ID, Auth0, any OIDC
-provider) and register `<your origin>/aws-blocks/auth/callback` as its redirect
+provider) and register `<your origin>/cdk-blocks/auth/callback` as its redirect
 URI. Anyone who can reach a sandbox can sign in as the stub's users.
 
 ## Project Structure
@@ -42,7 +42,7 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
 - **Auth with direct OIDC federation** (`store: 'builtin'`) — your backend
   verifies each sign-in itself and the block keeps only sessions: no Cognito
   user pool. The sign-in kickoff, callback, token exchange and session cookie
-  are all owned by the block under `/aws-blocks/auth/*`. A user's `userId` is
+  are all owned by the block under `/cdk-blocks/auth/*`. A user's `userId` is
   `` `${issuer}:${sub}` ``.
 - **Deny-by-default API** (`auth.protect`) — `ping` is the one public method;
   every method under `methods` runs only for a signed-in caller and gets the

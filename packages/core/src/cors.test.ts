@@ -303,7 +303,7 @@ describe('getCorsPatterns — invalid regex entries are dropped', () => {
       const handler = createLambdaHandler(async () => backend);
       const result = await handler({
         httpMethod: 'POST',
-        path: '/aws-blocks/api',
+        path: '/cdk-blocks/api',
         headers: { 'Content-Type': 'application/json', origin: 'https://x.test' },
         body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
         isBase64Encoded: false,
@@ -677,7 +677,7 @@ describe('createLambdaHandler — CORS origin validation', () => {
   function makeEvent(overrides: Record<string, any> = {}) {
     return {
       httpMethod: 'POST',
-      path: '/aws-blocks/api',
+      path: '/cdk-blocks/api',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
       isBase64Encoded: false,
@@ -749,7 +749,7 @@ describe('createLambdaHandler — CORS origin validation', () => {
   it('OPTIONS preflight with allowed origin returns 200 with CORS headers', async () => {
     const result = await invoke(echoBackend, makeEvent({
       httpMethod: 'OPTIONS',
-      path: '/aws-blocks/api',
+      path: '/cdk-blocks/api',
       headers: { origin: 'http://localhost:3000' },
       body: null,
     }));
@@ -772,7 +772,7 @@ describe('createLambdaHandler — CORS origin validation', () => {
   it('OPTIONS preflight with rejected origin returns 403', async () => {
     const result = await invoke(echoBackend, makeEvent({
       httpMethod: 'OPTIONS',
-      path: '/aws-blocks/api',
+      path: '/cdk-blocks/api',
       headers: { origin: 'https://evil.com' },
       body: null,
     }));
@@ -793,7 +793,7 @@ describe('createLambdaHandler — CORS wildcard pattern (.*)', () => {
   function makeEvent(overrides: Record<string, any> = {}) {
     return {
       httpMethod: 'POST',
-      path: '/aws-blocks/api',
+      path: '/cdk-blocks/api',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
       isBase64Encoded: false,
@@ -836,7 +836,7 @@ describe('createLambdaHandler — CORS hosting origin (literal channel)', () => 
   function makeEvent(overrides: Record<string, any> = {}) {
     return {
       httpMethod: 'POST',
-      path: '/aws-blocks/api',
+      path: '/cdk-blocks/api',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
       isBase64Encoded: false,

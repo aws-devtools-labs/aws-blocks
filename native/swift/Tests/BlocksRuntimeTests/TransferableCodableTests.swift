@@ -176,7 +176,7 @@ final class TransferableCodableTests: XCTestCase {
     // MARK: - OIDCClient
 
     func testOIDCClientDecodesWithTheClientFromUserInfo() throws {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         let oidc = try client.makeDecoder().decode(OIDCClient<String>.self, from: Data(Self.oidcJSON.utf8))
 
         XCTAssertEqual(oidc.providers, ["google"])
@@ -184,12 +184,12 @@ final class TransferableCodableTests: XCTestCase {
         XCTAssertEqual(oidc.refreshPath, "/auth/exchange/refresh")
         XCTAssertEqual(oidc.signOutPath, "/auth/signout")
         XCTAssertEqual(oidc.providerConfigs["google"]?.clientId, "cid")
-        XCTAssertEqual(oidc.baseUrl, "http://localhost:3001/aws-blocks/api")
+        XCTAssertEqual(oidc.baseUrl, "http://localhost:3001/cdk-blocks/api")
         XCTAssertTrue(oidc.client === client)
     }
 
     func testMakeDecoderCarriesTheClient() {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         XCTAssertTrue(client.makeDecoder().userInfo[.blocksClient] as? BlocksClient === client)
     }
 
@@ -203,7 +203,7 @@ final class TransferableCodableTests: XCTestCase {
     }
 
     func testEncodingAnOIDCClientThrows() throws {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         let decoded = try client.makeDecoder().decode(OIDCClient<String>.self, from: Data(Self.oidcJSON.utf8))
         let constructed = OIDCClient<String>(
             exchangePath: "/e", refreshPath: "/r", signOutPath: "/s", providers: ["p"],
@@ -214,7 +214,7 @@ final class TransferableCodableTests: XCTestCase {
     }
 
     func testOIDCClientsInNestedModelsAndArraysDecode() throws {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         let json = """
         {"primary":{"label":"Google","client":\(Self.oidcJSON)},\
         "options":[{"label":"A","client":\(Self.oidcJSON)},{"label":"B","client":\(Self.oidcJSON)}]}
@@ -230,7 +230,7 @@ final class TransferableCodableTests: XCTestCase {
 
     func testChannelMessagesDecodeWithTheOuterUserInfo() throws {
         // A message type holding an OIDC client hydrates it with the client of the decoder that decoded the channel.
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         let channel = try client.makeDecoder().decode(RealtimeChannel<SignInOption>.self, from: Data(Self.channelJSON.utf8))
         let option = try channel.deserializer(Data(#"{"label":"L","client":\#(Self.oidcJSON)}"#.utf8))
         XCTAssertTrue(option.client.client === client)

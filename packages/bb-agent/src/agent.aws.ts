@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomUUID } from 'node:crypto';
-import { getConfig, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
-import type { FileBucket } from '@aws-blocks/bb-file-bucket';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { getConfig, getSdkIdentifiers, installClientUserAgent } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import type { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { SnapshotStorage } from '@strands-agents/sdk';
 import { S3Storage } from '@strands-agents/sdk/session/s3-storage';

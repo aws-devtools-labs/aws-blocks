@@ -8,12 +8,12 @@
  * at the configured path. Since no CloudWatch Dashboard exists locally, the
  * route returns a 503 with a helpful message directing the user to deploy.
  */
-import type { ScopeParent } from '@aws-blocks/core';
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import { assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-dashboard');
@@ -68,7 +68,7 @@ export class Dashboard extends Scope {
 
 		const routePath = options?.routePath;
 		if (routePath !== false) {
-			const path = routePath ?? '/aws-blocks/dashboard';
+			const path = routePath ?? '/cdk-blocks/dashboard';
 			mountDashboardRoute(scope, path, null);
 		}
 

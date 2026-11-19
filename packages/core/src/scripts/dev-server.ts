@@ -149,7 +149,7 @@ const STATE_CHANGING_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PAT
  * `PATCH`, `DELETE`) that carries this `Origin`. This is the cross-site request
  * forgery check. The `Host` check ({@link isAllowedDevRequestHost}) doesn't
  * stop it: a page on another site that sends a `POST` to
- * `http://localhost:3000/aws-blocks/api` addresses the dev server by its real,
+ * `http://localhost:3000/cdk-blocks/api` addresses the dev server by its real,
  * loopback name. A `text/plain` body even goes without a CORS preflight, so the
  * call would run before the browser hides the answer. Allowed origins:
  *
@@ -304,7 +304,7 @@ export interface BlocksRuntimeConfig {
  * Build the runtime config the browser fetches at `${BLOCKS_SANDBOX_PREFIX}/config.json`.
  * The browser targets the dev server's own front door on the host it binds
  * (see {@link devUrlHost}); in sandbox mode the dev server proxies
- * `/aws-blocks/api` to the deployed API, so the shape is the same in both
+ * `/cdk-blocks/api` to the deployed API, so the shape is the same in both
  * modes — only `environment` differs.
  */
 export function buildBlocksConfig(port: number, isSandbox: boolean, host = '127.0.0.1'): BlocksRuntimeConfig {
@@ -317,7 +317,7 @@ export function buildBlocksConfig(port: number, isSandbox: boolean, host = '127.
 /**
  * The runtime config the dev server answers at `${BLOCKS_SANDBOX_PREFIX}/config.json`:
  * {@link buildBlocksConfig}, except that a server bound to all interfaces (`0.0.0.0`, `::`)
- * serves the same-origin `apiUrl` `/aws-blocks/api`. A browser can load the app at any of
+ * serves the same-origin `apiUrl` `/cdk-blocks/api`. A browser can load the app at any of
  * the machine's addresses, and the absolute `http://localhost:<port>` would send it to
  * another origin, or to another machine. The `.cdk-blocks-sandbox/config.json` file keeps the
  * absolute URL: Node.js reads it, and a relative URL has no origin there.
@@ -432,7 +432,7 @@ export function typegenWatchOptions(): { unref: true; log: (msg: string) => void
 
 async function startTypegenWatch(): Promise<(() => void) | undefined> {
   try {
-    const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
+    const { scanValueKeys, watchHostingValues } = await import('@aws-cdk-blocks/hosting/scripts');
     const scan = await scanValueKeys();
     if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
       return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
@@ -956,7 +956,7 @@ export function devStopCommand(port: number): string {
   return port === 3000 ? 'npm run dev:stop' : `npm run dev:stop -- --port ${port}`;
 }
 
-/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-blocks/bb-database`). */
+/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-cdk-blocks/bb-database`). */
 const LOCAL_ENGINE_CLOSERS = Symbol.for('aws-blocks.local-engine-closers');
 
 /** How long {@link closeLocalEngines} waits for the engines: within `tsx watch`'s 5 s, with the frontend's teardown. */
@@ -1131,13 +1131,13 @@ export async function startDevServer(options: DevServerOptions) {
 
   // Detect sandbox: if BLOCKS_API_URL env var is set (by sandbox.ts), proxy to it.
   const isSandbox = !!process.env.BLOCKS_API_URL;
-  const apiTarget = isSandbox ? process.env.BLOCKS_API_URL!.replace(/\/aws-blocks\/api$/, '') : null;
+  const apiTarget = isSandbox ? process.env.BLOCKS_API_URL!.replace(/\/cdk-blocks\/api$/, '') : null;
 
   // Write config for client-side JS — always reflects the current mode.
   // In sandbox, point the browser at the localhost front door (not the raw
   // execute-api URL) so the data-plane RPC is same-origin with the page and the
   // session cookie — set host-scoped to localhost during the auth callback — is
-  // sent on every request. The dev server proxies `/aws-blocks/api` to
+  // sent on every request. The dev server proxies `/cdk-blocks/api` to
   // BLOCKS_API_URL server-side, so the request still reaches the deployed Lambda.
   // This makes sandbox single-origin, matching `npm run dev` and the prod
   // CloudFront proxy; `crossDomain` stays unnecessary.
@@ -1566,7 +1566,7 @@ export async function startDevServer(options: DevServerOptions) {
       try { recorded = parsePidRecord(readFileSync(pidfilePath, 'utf-8')); } catch { /* no pidfile */ }
       if (recorded?.pid !== process.pid) claimDevPidfile(pidfilePath, selfRecord);
     } catch { /* best effort: the server runs on, as it would without a record */ }
-    console.log(`AWS Blocks local server running on ${frontDoor}`);
+    console.log(`AWS CDK Blocks local server running on ${frontDoor}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
     // Spawn frontend dev server after Blocks server is ready
@@ -2399,7 +2399,7 @@ function handleApiRequest(
     return;
   }
 
-  // Anything that reaches here didn't match `POST /aws-blocks/api`. Returning a
+  // Anything that reaches here didn't match `POST /cdk-blocks/api`. Returning a
   // bare empty 404 leaves a developer poking at the endpoint (e.g. opening it in
   // a browser, which sends a GET, or trying a REST-style URL) with no feedback.
   // Reply with a small JSON hint pointing at the one supported shape. When the
@@ -2407,12 +2407,12 @@ function handleApiRequest(
   const wrongMethodOnApi = isRpcPath(url.pathname);
   const message = wrongMethodOnApi
     ? `The AWS Blocks JSON-RPC API expects POST, not ${method}.`
-    : 'Not found. The AWS Blocks JSON-RPC API is served at POST /aws-blocks/api.';
+    : 'Not found. The AWS Blocks JSON-RPC API is served at POST /cdk-blocks/api.';
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(
     JSON.stringify({
       error: message,
-      // On an RPC path, echo the path the caller hit (e.g. `/aws-blocks/api/{namespace}`).
+      // On an RPC path, echo the path the caller hit (e.g. `/cdk-blocks/api/{namespace}`).
       expected: { method: 'POST', path: wrongMethodOnApi ? url.pathname : BLOCKS_RPC_PREFIX },
     }),
   );

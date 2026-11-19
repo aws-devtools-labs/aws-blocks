@@ -63,7 +63,7 @@ class _OwnStore implements SessionStore {
 /// Lets queued write-throughs finish. They only await microtasks here.
 Future<void> _settle() => Future<void>.delayed(Duration.zero);
 
-final _api = Uri.parse('https://api.example.com/aws-blocks/api');
+final _api = Uri.parse('https://api.example.com/cdk-blocks/api');
 
 /// A JSON-RPC result, with [setCookie] as its `Set-Cookie` header if given.
 http.Response _rpc(Object? result, {String? setCookie}) => http.Response(
@@ -508,7 +508,7 @@ void main() {
         const {
           'providers': ['google'],
           'providerConfigs': <String, dynamic>{},
-          'exchangePath': '/aws-blocks/auth/exchange',
+          'exchangePath': '/cdk-blocks/auth/exchange',
           'sessionCookieName': 'blocks_auth',
         },
         baseUrl: _api.toString(),
@@ -565,7 +565,7 @@ void main() {
       Future<void> signIn(OidcClient client) => client.exchange(
         code: 'c',
         verifier: 'v',
-        callbackUrl: 'https://api.example.com/aws-blocks/auth/callback',
+        callbackUrl: 'https://api.example.com/cdk-blocks/auth/callback',
         provider: 'google',
         state: 's',
         nonce: 'n',
@@ -636,9 +636,9 @@ void main() {
 
       String? sent;
       final oidc = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/sign-out',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/sign-out',
         providers: const [],
         providerConfigs: const {},
         baseUrl: _api.toString(),

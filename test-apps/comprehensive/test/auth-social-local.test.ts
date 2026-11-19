@@ -12,7 +12,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { AuthErrors } from '@aws-blocks/bb-auth';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
 import type { authSocialApi as authSocialApiType } from 'cdk-blocks';
 import { testBaseUrl } from './api-url.js';
 
@@ -30,7 +30,7 @@ export function authSocialLocalTests(getApi: () => typeof authSocialApiType) {
       const google = state.actions.find((a) => a.name === 'signIn:google');
       assert.ok(google, 'the Google action is still listed');
       assert.strictEqual(google.unavailable, HINT);
-      assert.strictEqual(google.url, '/aws-blocks/auth/social/signin/google');
+      assert.strictEqual(google.url, '/cdk-blocks/auth/social/signin/google');
       // Email + password stays usable on the same block.
       const signIn = state.actions.find((a) => a.name === 'signIn');
       assert.ok(signIn);
@@ -38,7 +38,7 @@ export function authSocialLocalTests(getApi: () => typeof authSocialApiType) {
     });
 
     test('the sign-in route answers a browser with an HTML page, an API client with the JSON error', async () => {
-      const url = `${getBaseUrl()}/aws-blocks/auth/social/signin/google`;
+      const url = `${getBaseUrl()}/cdk-blocks/auth/social/signin/google`;
       const page = await fetch(url, { redirect: 'manual', headers: { accept: 'text/html' } });
       assert.strictEqual(page.status, 501);
       assert.match(page.headers.get('content-type') ?? '', /^text\/html/);

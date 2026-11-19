@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/create-blocks-app": minor
+"@aws-cdk-blocks/create-blocks-app": minor
 ---
 
 feat(templates): scaffold data models on `KVStore` with a `schema` and a `key`

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { Pipeline } from '@aws-blocks/core/cdk';
+import { Pipeline } from '@aws-cdk-blocks/core/cdk';
 
 const app = new cdk.App();
 

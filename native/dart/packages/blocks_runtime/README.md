@@ -28,7 +28,7 @@ import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'blocks.blocks.dart'; // the generated client
 
-const rpcUrl = 'https://api.example.com/aws-blocks/api';
+const rpcUrl = 'https://api.example.com/cdk-blocks/api';
 
 // blocks_runtime_flutter keeps the session in secure storage by default
 // (see Sessions), so a restarted app is still signed in.
@@ -198,7 +198,7 @@ void main() {
       store: FileTokenStore(applicationId: 'com.example.notes_cli'),
     ),
   );
-  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   print(client.sessionStore is PersistentSessionStore); // true
 }
 ```
@@ -226,7 +226,7 @@ A read or write that fails never throws into your app: the session keeps working
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.
 
-RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the Blocks server has allowed it since `@aws-blocks/core` 0.6.0.
+RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the Blocks server has allowed it since `@aws-blocks/core` 0.6.0 (and every `@aws-cdk-blocks/core`).
 
 On web the token is dropped on the other paths. The presigned upload and download set `User-Agent`, which browsers ignore because it is a forbidden header name. The WebSocket upgrade omits it because browsers do not allow custom headers on the upgrade request.
 

@@ -21,7 +21,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ApiError, type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
+import { ApiError, type BlocksContext, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { SignJWT } from 'jose';
 import { bearerClientIdsConfigKey, federationConfigKeys } from './cdk/contract.js';
 import { Auth, AuthErrors } from './index.aws.js';

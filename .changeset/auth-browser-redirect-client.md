@@ -1,12 +1,12 @@
 ---
-'@aws-blocks/bb-auth': minor
-'@aws-blocks/blocks': minor
+'@aws-cdk-blocks/bb-auth': minor
+'aws-cdk-blocks': minor
 ---
 
-A web frontend served from another origin than its API can sign in with a federated provider. `createAuthClient()` from the new `@aws-blocks/bb-auth/browser-client` entry (also exported from `@aws-blocks/blocks/ui`) replaces `AuthOIDC`'s `getClient()` browser client:
+A web frontend served from another origin than its API can sign in with a federated provider. `createAuthClient()` from the new `@aws-cdk-blocks/bb-auth/browser-client` entry (also exported from `aws-cdk-blocks/ui`) replaces `AuthOIDC`'s `getClient()` browser client:
 
 ```typescript
-import { createAuthClient } from '@aws-blocks/bb-auth/browser-client';
+import { createAuthClient } from '@aws-cdk-blocks/bb-auth/browser-client';
 
 const auth = createAuthClient({ baseUrl: 'https://api.example.com', redirectUri: 'https://app.example.com/return' });
 await auth.signInWithRedirect({ provider: 'okta' });   // on the sign-in button
@@ -19,7 +19,7 @@ It signs in through the block's existing routes with PKCE and a signed, CSRF-bou
 
 Two of the block's routes back it:
 
-- `GET /aws-blocks/auth/session` returns the signed-in user (the same fields `getAuthState()` sends) or `401 NotAuthenticatedException`.
+- `GET /cdk-blocks/auth/session` returns the signed-in user (the same fields `getAuthState()` sends) or `401 NotAuthenticatedException`.
 - `POST <signOutPath>?format=json` answers `200 { logoutUrl? }`. Without the parameter it answers `204`, as the native SDKs expect.
 
 `handleSignInRedirect()` asks the exchange for no bearer tokens (`tokens: false` in the body, honoured with `allowBearerAuth`), so a refresh token never reaches a JavaScript-readable response. It also confirms the session cookie comes back to the API: when it does not (a frontend on another registrable domain without `session.crossDomain: true` or the CORS allowlist, or a browser blocking third-party cookies), it rejects with `InternalErrorException` and a message naming those settings, instead of reporting a user that the next `fetchAuthSession()` calls signed out.

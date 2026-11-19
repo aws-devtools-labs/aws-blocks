@@ -16,8 +16,8 @@ import { dirname, join } from 'node:path';
  */
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
-import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute';
+import { BlocksPresets, BlocksStack } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { containerMainEntry } from './bundle.js';
@@ -146,12 +146,12 @@ describe('ContainerCompute — review-finding fixes', () => {
 		});
 		// Register at least one config entry so finalizeConfigRegistry creates the
 		// BucketDeployment the service must order itself after.
-		const { registerConfig } = await import('@aws-blocks/core/cdk');
+		const { registerConfig } = await import('@aws-cdk-blocks/core/cdk');
 		registerConfig(compute as never, 'BLOCKS_SMOKE_FLAG', 'on');
 
 		// finalizeConfigRegistry runs before compute.finalize() in create(); mirror
 		// that ordering here so the deployment exists when finalize wires the dep.
-		const { finalizeConfigRegistry } = await import('@aws-blocks/core/cdk');
+		const { finalizeConfigRegistry } = await import('@aws-cdk-blocks/core/cdk');
 		finalizeConfigRegistry(stack as never, (stack as never as { executionRole: unknown }).executionRole as never, [
 			compute as never,
 		]);
@@ -400,9 +400,9 @@ describe('ContainerCompute — the default image runs as a non-root user', () =>
 		// Run the generated entry against stub modules and read the path it sets,
 		// rather than matching its source text.
 		const dir = join(tmpDir, 'entry-run');
-		const coreDir = join(dir, 'node_modules', '@aws-blocks', 'core');
+		const coreDir = join(dir, 'node_modules', '@aws-cdk-blocks', 'core');
 		mkdirSync(coreDir, { recursive: true });
-		writeFileSync(join(coreDir, 'package.json'), '{"name":"@aws-blocks/core","type":"module","main":"index.js"}');
+		writeFileSync(join(coreDir, 'package.json'), '{"name":"@aws-cdk-blocks/core","type":"module","main":"index.js"}');
 		writeFileSync(
 			join(coreDir, 'index.js'),
 			'export const loadConfigToProcessEnv = async () => {};\n' +
@@ -691,8 +691,8 @@ describe('ContainerCompute — API ingress', () => {
 		assert.strictEqual(render.loadBalancer, preview.loadBalancer);
 		assert.strictEqual(render.port, 10_000);
 		assert.strictEqual(preview.port, 10_000);
-		render.routePath('/aws-blocks/api/render');
-		preview.routePath('/aws-blocks/api/preview');
+		render.routePath('/cdk-blocks/api/render');
+		preview.routePath('/cdk-blocks/api/preview');
 		const template = Template.fromStack(stack);
 		template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
 		template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
@@ -721,12 +721,12 @@ describe('ContainerCompute — API ingress', () => {
 				Object.values(rules).map((r) => [r.Properties.Conditions[0].PathPatternConfig.Values[0], r.Properties.Priority]),
 			);
 		};
-		const both = await prioritiesFor(['/aws-blocks/api/render', '/aws-blocks/api/preview']);
-		const reversed = await prioritiesFor(['/aws-blocks/api/preview', '/aws-blocks/api/render']);
-		const alone = await prioritiesFor(['/aws-blocks/api/render']);
-		assert.notStrictEqual(both['/aws-blocks/api/render'], both['/aws-blocks/api/preview']);
+		const both = await prioritiesFor(['/cdk-blocks/api/render', '/cdk-blocks/api/preview']);
+		const reversed = await prioritiesFor(['/cdk-blocks/api/preview', '/cdk-blocks/api/render']);
+		const alone = await prioritiesFor(['/cdk-blocks/api/render']);
+		assert.notStrictEqual(both['/cdk-blocks/api/render'], both['/cdk-blocks/api/preview']);
 		assert.deepStrictEqual(reversed, both);
-		assert.strictEqual(alone['/aws-blocks/api/render'], both['/aws-blocks/api/render']);
+		assert.strictEqual(alone['/cdk-blocks/api/render'], both['/cdk-blocks/api/render']);
 		for (const priority of Object.values(both) as number[]) assert.ok(priority >= 1 && priority <= 50_000);
 	});
 
@@ -734,7 +734,7 @@ describe('ContainerCompute — API ingress', () => {
 		const { stack, computes } = await stackWith(['render', 'worker']);
 		const ingress = computes[0].apiIngress();
 		assert.ok(ingress?.kind === 'load-balancer');
-		ingress.routePath('/aws-blocks/api/render');
+		ingress.routePath('/cdk-blocks/api/render');
 		const envOf = (compute: string) => {
 			const [, taskDef] = Object.entries(Template.fromStack(stack).findResources('AWS::ECS::TaskDefinition')).find(([id]) =>
 				id.includes(compute),
@@ -751,21 +751,36 @@ describe('ContainerCompute — API ingress', () => {
 			const { stack, computes } = await stackWith(['render', 'preview'], 'ApiIngressMove');
 			const ingress = computes.find((c) => c.node.id === compute)?.apiIngress();
 			assert.ok(ingress?.kind === 'load-balancer');
-			ingress.routePath('/aws-blocks/api/render');
+			ingress.routePath('/cdk-blocks/api/render');
 			return Object.keys(Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
 		};
 		// Moving a namespace between containers updates its rule in place, never replaces it.
 		assert.deepStrictEqual(await ruleIdOn('preview'), await ruleIdOn('render'));
 	});
 
+	test('a rule keeps the logical ID and priority it had under the pre-rename /aws-blocks prefix', async () => {
+		const { stack, computes } = await stackWith(['render'], 'ApiIngressLegacyIdentity');
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		ingress.routePath('/cdk-blocks/api/render');
+		const rules = Object.entries(Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+		assert.strictEqual(rules.length, 1);
+		const [[id, rule]] = rules;
+		// Same ID and priority a deploy before the rename created for `/aws-blocks/api/render`,
+		// so the upgrade updates the rule's path in place instead of replacing it.
+		assert.match(id, /Routeawsblocksapirender/);
+		assert.strictEqual(rule.Properties.Priority, 43785);
+		assert.deepStrictEqual(rule.Properties.Conditions[0].PathPatternConfig.Values, ['/cdk-blocks/api/render']);
+	});
+
 	test('two paths that map to one rule priority fail synth, naming both and their computes', async () => {
 		const { computes } = await stackWith(['render', 'preview']);
 		const [render, preview] = computes.map((c) => c.apiIngress());
 		assert.ok(render?.kind === 'load-balancer' && preview?.kind === 'load-balancer');
-		render.routePath('/aws-blocks/api/orders428');
+		render.routePath('/cdk-blocks/api/orders428');
 		assert.throws(
-			() => preview.routePath('/aws-blocks/api/orders842'),
-			/'\/aws-blocks\/api\/orders428' \(compute 'ApiIngressrenderpreview\/render'\) and '\/aws-blocks\/api\/orders842' \(compute 'ApiIngressrenderpreview\/preview'\) map to the same load balancer rule priority/,
+			() => preview.routePath('/cdk-blocks/api/orders842'),
+			/'\/cdk-blocks\/api\/orders428' \(compute 'ApiIngressrenderpreview\/render'\) and '\/cdk-blocks\/api\/orders842' \(compute 'ApiIngressrenderpreview\/preview'\) map to the same load balancer rule priority/,
 		);
 	});
 
@@ -773,7 +788,7 @@ describe('ContainerCompute — API ingress', () => {
 		const { computes } = await stackWith(['render']);
 		const ingress = computes[0].apiIngress();
 		assert.ok(ingress?.kind === 'load-balancer');
-		const path = `/aws-blocks/api/${'n'.repeat(113)}`;
+		const path = `/cdk-blocks/api/${'n'.repeat(113)}`;
 		assert.throws(() => ingress.routePath(path), /129 characters; a load balancer rule matches at most 128/);
 	});
 
@@ -784,7 +799,7 @@ describe('ContainerCompute — API ingress', () => {
 		let routed = 0;
 		for (let i = 0; routed < 101; i++) {
 			try {
-				ingress.routePath(`/aws-blocks/api/ns${i}`);
+				ingress.routePath(`/cdk-blocks/api/ns${i}`);
 				routed++;
 			} catch {
 				// A name that collides with an earlier one's priority: skip it.
@@ -824,7 +839,7 @@ describe('ContainerCompute — API ingress', () => {
 			if (servesApi) {
 				const ingress = compute.apiIngress();
 				assert.ok(ingress?.kind === 'load-balancer');
-				ingress.routePath('/aws-blocks/api/render');
+				ingress.routePath('/cdk-blocks/api/render');
 			}
 			compute.finalize();
 			const policies = Object.values(Template.fromStack(stack as unknown as cdk.Stack).findResources('AWS::ApplicationAutoScaling::ScalingPolicy'));
@@ -844,7 +859,7 @@ describe('ContainerCompute — API ingress', () => {
 		const { stack, computes } = await stackWith(['render']);
 		const ingress = computes[0].apiIngress();
 		assert.ok(ingress?.kind === 'load-balancer');
-		ingress.routePath('/aws-blocks/api/render');
+		ingress.routePath('/cdk-blocks/api/render');
 		const template = Template.fromStack(stack).toJSON();
 		const [ruleId] = Object.entries(template.Resources).find(([, r]: [string, any]) => r.Type === 'AWS::ElasticLoadBalancingV2::ListenerRule') ?? [];
 		const [, service] = Object.entries(template.Resources).find(([, r]: [string, any]) => r.Type === 'AWS::ECS::Service') ?? [];
@@ -859,7 +874,7 @@ describe('ContainerCompute — API ingress', () => {
 		const ingress = computes[0].apiIngress();
 		assert.ok(ingress?.kind === 'load-balancer');
 		assert.deepStrictEqual(titles(computes[0]), [], 'no API widgets before a path is routed');
-		ingress.routePath('/aws-blocks/api/render');
+		ingress.routePath('/cdk-blocks/api/render');
 		assert.deepStrictEqual(titles(computes[0]).sort(), ['API Latency (p99)', 'API Requests and 5xx Errors', 'API Task Health']);
 	});
 });

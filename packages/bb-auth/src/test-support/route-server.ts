@@ -11,7 +11,7 @@
 
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { type BlocksContext, matchRoute } from '@aws-blocks/core';
+import { type BlocksContext, matchRoute } from '@aws-cdk-blocks/core';
 
 /** A running route server. */
 export interface RouteServer {
@@ -130,7 +130,7 @@ export class TestBrowser {
 				body: null,
 				json: async () => ({}),
 				text: async () => '',
-				url: new URL(`${origin}/aws-blocks/api`),
+				url: new URL(`${origin}/cdk-blocks/api`),
 				params: {},
 			},
 			response: { headers: new Headers(), status: 200, send: () => {} },

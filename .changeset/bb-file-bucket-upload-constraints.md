@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-file-bucket": minor
-"@aws-blocks/blocks": minor
+"@aws-cdk-blocks/bb-file-bucket": minor
+"aws-cdk-blocks": minor
 ---
 
 feat(bb-file-bucket): signed upload constraints, opt-in download disposition, stricter key validation and 400 for invalid input

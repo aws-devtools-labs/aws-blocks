@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev:api": "tsx watch cdk-blocks/scripts/server.ts",
-    "dev:astro": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api astro dev",
+    "dev:astro": "BLOCKS_API_URL=http://localhost:3001/cdk-blocks/api astro dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:astro\"",
     "build": "astro build",
     "preview": "astro preview",
@@ -20,10 +20,10 @@
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*"
+    "aws-cdk-blocks": "*"
   },
   "devDependencies": {
     "@astrojs/preact": "^4.1.3",

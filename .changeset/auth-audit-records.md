@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth": minor
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-auth": minor
+"aws-cdk-blocks": patch
 ---
 
 `Auth` can now write an audit record for each session lifecycle event. Set `audit: true` and every session issued, failed sign-in, sign-out and session revocation (after a password reset, `admin.revokeUserSessions` or `deleteUser`) writes one JSON log line, with the event name as the message and `AuthAuditRecord` fields: the block, provider, user `sub`, outcome, and a reason or error name. A metric filter such as `{ $.event = "auth.signin.failed" }` turns them into an alarm.

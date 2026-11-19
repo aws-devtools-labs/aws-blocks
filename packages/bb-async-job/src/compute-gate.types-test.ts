@@ -21,8 +21,8 @@
  * @internal
  */
 
-import type { ScopeParent } from '@aws-blocks/core';
-import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import type { ComputeProvider } from '@aws-cdk-blocks/core/cdk/internal';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AsyncJob } from './index.mock.js';
 

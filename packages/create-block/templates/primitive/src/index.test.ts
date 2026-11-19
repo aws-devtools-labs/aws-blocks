@@ -4,7 +4,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { __BB_CLASS__, __BB_CLASS__Errors } from './index.mock.js';
 
 // A real, typed parent Scope — no casts (this test represents customer usage).

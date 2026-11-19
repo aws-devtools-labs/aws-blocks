@@ -57,7 +57,7 @@
  */
 
 import crypto from 'node:crypto';
-import { ApiError, type BlocksContext, getSdkIdentifiers, registerSdkIdentifiers } from '@aws-blocks/core';
+import { ApiError, type BlocksContext, getSdkIdentifiers, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import {
 	FetchError,
@@ -87,8 +87,8 @@ import type {
 
 /** The scopes the hosted-UI client allows. The IdP's own scopes are part of its registration. */
 const HOSTED_UI_SCOPES = ['openid', 'email', 'profile'] as const;
-const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
-const DEFAULT_SIGN_OUT_PATH = '/aws-blocks/auth/signout';
+const DEFAULT_CALLBACK_PATH = '/cdk-blocks/auth/callback';
+const DEFAULT_SIGN_OUT_PATH = '/cdk-blocks/auth/signout';
 /** Default when Cognito reports no lifetime: one hour (Cognito's default). */
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const HTTP_TIMEOUT_MS = 10_000;

@@ -58,8 +58,8 @@ The project has multiple documentation layers at different levels. Use these can
 |---|---|---|---|
 | App README | Customer's own `<app>/README.md` (scaffolded from templates) | `./README.md` | App developers |
 | App AGENTS file | Customer's own `<app>/AGENTS.md` (injected from `create-blocks-app/resources/AGENTS.md`) | `./AGENTS.md` | AI agents building the app |
-| Blocks README | `packages/blocks/README.md` | `npm run docs guide` prints it (the file is `node_modules/@aws-blocks/blocks/README.md`) | Developers/agents needing framework docs |
-| Individual block docs | `packages/blocks/docs/<pkg>/` (compiled) | `npm run docs <Block>` prints them (the files are in `node_modules/@aws-blocks/blocks/docs/<pkg>/`) | Deep-dive on specific BBs |
+| Blocks README | `packages/blocks/README.md` | `npm run docs guide` prints it (the file is `node_modules/aws-cdk-blocks/README.md`) | Developers/agents needing framework docs |
+| Individual block docs | `packages/blocks/docs/<pkg>/` (compiled) | `npm run docs <Block>` prints them (the files are in `node_modules/aws-cdk-blocks/docs/<pkg>/`) | Deep-dive on specific BBs |
 | Repo README | Root `README.md` | GitHub repo landing page | GitHub visitors, potential contributors |
 | Contributor AGENTS file | Root `AGENTS.md` | GitHub repo | AI agents and humans contributing to the framework |
 

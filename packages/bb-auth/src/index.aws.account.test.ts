@@ -14,7 +14,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { ACCESS_DENIED_MESSAGE, clientMessageFor } from './error-mapping.js';
 import { AuthErrors } from './index.aws.js';
 import { Browser, captureLogger, cognitoError, makeAwsAuth, signInAs, wireView } from './test-support/aws-harness.js';

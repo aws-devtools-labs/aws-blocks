@@ -23,19 +23,19 @@
     "deploy": "tsx cdk-blocks/deploy.ts",
     "test": "npm run typecheck && npm run test:e2e",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
-    "docs": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs",
-    "docs:search": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --search",
-    "docs:api": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- docs --api",
-    "spec": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate spec",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize",
-    "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
-    "whoami": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- whoami",
-    "migrate": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- migrate",
-    "help": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- help",
-    "generate-client": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- generate client"
+    "docs": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs",
+    "docs:search": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --search",
+    "docs:api": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --api",
+    "spec": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate spec",
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize",
+    "db": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- db",
+    "whoami": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- whoami",
+    "migrate": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- migrate",
+    "help": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- help",
+    "generate-client": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "latest",
+    "aws-cdk-blocks": "latest",
     "zod": "^4.3.0"
   },
   "devDependencies": {

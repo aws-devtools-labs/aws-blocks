@@ -75,7 +75,7 @@ if [ -z "$BLOCKS_URL" ]; then
   echo "   ℹ️  Using local server port $PORT"
   npx tsx cdk-blocks/scripts/server.ts > /tmp/blocks-e2e-server.log 2>&1 &
   SERVER_PID=$!
-  BLOCKS_URL="http://localhost:$PORT/aws-blocks/api"
+  BLOCKS_URL="http://localhost:$PORT/cdk-blocks/api"
 
   # Wait for server
   for i in $(seq 1 30); do
@@ -107,7 +107,7 @@ else
   # before the function is warm. Poll the JSON-RPC endpoint until it answers
   # HTTP 200 (it returns 200 with a JSON-RPC error body for any payload, which
   # proves the Lambda is up and serving) so no suite eats the cold-start on its
-  # first call. Hits the same Lambda that serves /aws-blocks/auth/* (OIDC), so it protects
+  # first call. Hits the same Lambda that serves /cdk-blocks/auth/* (OIDC), so it protects
   # the OIDC suite's first POST too. Bounded backoff; fails loudly if never ready.
   echo ""
   echo "♨️  Step 4b: Warm up endpoint (poll until HTTP 200)"

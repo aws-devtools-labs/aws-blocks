@@ -1,8 +1,8 @@
 # LambdaCompute — Design
 
-Design document for `@aws-blocks/bb-lambda-compute`. For usage, see [README.md](./README.md).
+Design document for `@aws-cdk-blocks/bb-lambda-compute`. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-lambda-compute`
+**Package:** `@aws-cdk-blocks/bb-lambda-compute`
 **Type:** Compute (framework infrastructure, not a customer-facing data block)
 **AWS Services:** Lambda (`NodejsFunction`). The API Gateway REST API in front of
 it is a single stack-level shared gateway, provisioned by core — not owned per compute.
@@ -14,7 +14,7 @@ first-class type — rather than inlining a Lambda in core — lets one app run 
 multiple compute targets (Lambda, containers, customer-owned) and target
 namespaces and handlers at specific ones.
 
-`Compute` (the abstract base) lives in `@aws-blocks/core` because it is a
+`Compute` (the abstract base) lives in `@aws-cdk-blocks/core` because it is a
 framework primitive: `Scope`, the base every block extends, resolves the compute
 a handler runs on, so the type it resolves to must be visible to core. The
 concrete `LambdaCompute` lives in its own package so core never depends on a
@@ -42,15 +42,15 @@ supplies the implementation.
 The API Gateway REST API is **not** owned here. `LambdaCompute.apiHandler()`
 returns `fn`, and the stack-level **shared REST API** (built by core in
 `packages/core/src/cdk/shared-gateway.ts`) integrates it:
-  - the `/aws-blocks` resource gets a proxy so `RawRoute` sub-paths reach the
+  - the `/cdk-blocks` resource (and its legacy `/aws-blocks` twin) gets a proxy so `RawRoute` sub-paths reach the
     function;
-  - `/aws-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
+  - `/cdk-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
     endpoint), plus a `{proxy+}` for the per-namespace RPC paths
-    (`/aws-blocks/api/{namespace}`);
+    (`/cdk-blocks/api/{namespace}`);
   - the root gets a catch-all proxy so all other paths reach the function.
   - **Multi-compute** — those resources all integrate the **default** compute's
     function. A **non-default** `LambdaCompute` that hosts namespaces gets its
-    own integration plus a literal `/aws-blocks/api/{namespace}` (ANY) resource
+    own integration plus a literal `/cdk-blocks/api/{namespace}` (ANY) resource
     for each namespace it hosts, keyed by the namespace's **export** name (what
     the client calls), and a single API-scoped invoke permission however many
     namespaces that is; a compute hosting no namespace gets no resource.
@@ -109,7 +109,7 @@ layer (a no-op in the non-CDK layers — see below).
 | `logRetention` | `defaults.logRetention` | Retention of this compute's handler log group only; the shared gateway's access logs follow the stack-wide default. |
 | `architecture` | `ARM_64` | Graviton, ~20% cheaper per GB-second at equal performance. Only settable on a directly constructed `LambdaCompute`; the `Compute` block does not expose it. |
 
-The `Compute` block (`@aws-blocks/bb-compute`) maps `{ type: 'serverless' }` to
+The `Compute` block (`@aws-cdk-blocks/bb-compute`) maps `{ type: 'serverless' }` to
 a `LambdaCompute` it owns, forwarding `memory`, `maxTimeoutSeconds`, and
 `logRetention`. The default compute is built without options.
 
@@ -222,17 +222,17 @@ of which live in this package (it only consumes the VPC context; see
 ## How the default compute is injected
 
 Core must obtain a `LambdaCompute` **without importing it**. The dependency
-arrow only points one way — `@aws-blocks/bb-lambda-compute` depends on
-`@aws-blocks/core`, never the reverse — because the reverse would be a cycle and
+arrow only points one way — `@aws-cdk-blocks/bb-lambda-compute` depends on
+`@aws-cdk-blocks/core`, never the reverse — because the reverse would be a cycle and
 would drag the concrete CDK class (and `aws-cdk-lib`) into core. So core defines
 the seam (a factory *type* and a required props field), and the umbrella
-`@aws-blocks/blocks` — the one package that depends on both core and this one —
+`aws-cdk-blocks` — the one package that depends on both core and this one —
 supplies a concrete factory through a normal `import`.
 
 ### The three participants
 
 - **Core owns the seam** (`packages/core/src/cdk/compute/default-compute-factory.ts`,
-  exposed via `@aws-blocks/core/cdk/internal`): just the factory *type*.
+  exposed via `@aws-cdk-blocks/core/cdk/internal`): just the factory *type*.
 
   ```ts
   export type DefaultComputeFactory = (root: BlocksStack | BlocksBackend) => Compute;
@@ -256,16 +256,16 @@ supplies a concrete factory through a normal `import`.
 
   The factory rides on the props but **not the customer-facing type** — it lives
   on `CoreBlocksStackProps`, absent from the public `BlocksStackProps`, so a
-  bare-`@aws-blocks/core` caller who omits it gets a compile error, not a runtime
+  bare-`@aws-cdk-blocks/core` caller who omits it gets a compile error, not a runtime
   one. Because it is required, core needs no runtime "no factory" guard.
 
-- **The umbrella supplies the factory** (`@aws-blocks/blocks`, `index.cdk.ts`) —
+- **The umbrella supplies the factory** (`aws-cdk-blocks`, `index.cdk.ts`) —
   a plain import of the concrete class, and a thin wrapper around `create()` that
   injects it:
 
   ```ts
-  import { BlocksStack as CoreBlocksStack } from '@aws-blocks/core/cdk';
-  import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+  import { BlocksStack as CoreBlocksStack } from '@aws-cdk-blocks/core/cdk';
+  import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute';
 
   const lambdaDefaultComputeFactory = (root) => new LambdaCompute(root, 'DefaultCompute');
 
@@ -279,12 +279,12 @@ supplies a concrete factory through a normal `import`.
   The umbrella's wrapper accepts only the public `(scope, id, props)`, so a
   customer can't set the factory through it.
 
-  The `import` is a real, visible edge (`@aws-blocks/blocks` → this package) that
+  The `import` is a real, visible edge (`aws-cdk-blocks` → this package) that
   the module graph, bundler, and `lint:deps` all see — not a load-bearing
   side-effect import.
 
 - **The customer calls the umbrella's wrapper.** Every app already does
-  `import { BlocksStack } from '@aws-blocks/blocks/cdk'`, so the call site is
+  `import { BlocksStack } from 'aws-cdk-blocks/cdk'`, so the call site is
   unchanged (`BlocksStack.create(app, id, { backendHandlerPath, backendCDKPath })`);
   the factory is injected for them.
 
@@ -304,8 +304,8 @@ supplies a concrete factory through a normal `import`.
 4. `Scope.compute` and the delegating `handler` accessor read from
    `_defaultCompute`; `gateway` / `apiUrl` read from the shared gateway.
 
-A bare-`@aws-blocks/core` caller must supply `defaultComputeFactory` on the props
-(it is required); any app using `@aws-blocks/blocks` gets it injected for free.
+A bare-`@aws-cdk-blocks/core` caller must supply `defaultComputeFactory` on the props
+(it is required); any app using `aws-cdk-blocks` gets it injected for free.
 
-The `DefaultComputeFactory` type stays on `@aws-blocks/core/cdk/internal`; none
+The `DefaultComputeFactory` type stays on `@aws-cdk-blocks/core/cdk/internal`; none
 of this is public, customer-facing surface.

@@ -79,7 +79,7 @@ final class GeneratedEntryPointTests: XCTestCase {
     func testZeroArgumentInitFollowsTheFirstServer() {
         let blocks = Blocks()
         XCTAssertEqual(blocks.server, Servers.default)
-        XCTAssertEqual(blocks.client.baseUrl, "https://example.invalid/prod/aws-blocks/api")
+        XCTAssertEqual(blocks.client.baseUrl, "https://example.invalid/prod/cdk-blocks/api")
     }
 
     func testEveryNamespaceRunsOnTheOneClient() async throws {
@@ -199,7 +199,7 @@ final class GeneratedEntryPointTests: XCTestCase {
     @available(*, deprecated)
     func testDeprecatedServerInitBuildsItsOwnLiveClient() async {
         // Port 9 refuses the connection, so a URLError shows the bridge's own client sent the request.
-        let users = Users(server: BlocksServer(name: "refused", url: "http://127.0.0.1:9/aws-blocks/api"))
+        let users = Users(server: BlocksServer(name: "refused", url: "http://127.0.0.1:9/cdk-blocks/api"))
         do {
             _ = try await users.list()
             XCTFail("expected a connection error")

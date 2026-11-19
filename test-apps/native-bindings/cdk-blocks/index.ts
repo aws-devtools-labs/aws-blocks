@@ -13,10 +13,10 @@ import {
   Realtime,
   RealtimeChannel,
   FileBucket,
-} from '@aws-blocks/blocks';
-import { Auth, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
-import type { AuthenticatedUser, AuthOptions, CodeDeliveryPurpose, SignInResult } from '@aws-blocks/bb-auth';
-export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
+} from 'aws-cdk-blocks';
+import { Auth, relayOrigin, stubIdp } from '@aws-cdk-blocks/bb-auth';
+import type { AuthenticatedUser, AuthOptions, CodeDeliveryPurpose, SignInResult } from '@aws-cdk-blocks/bb-auth';
+export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from 'aws-cdk-blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -129,7 +129,7 @@ const oidcAuth = new Auth(scope, 'auth-oidc', {
 
 // --- Auth: a second federated block on its own routes ---------------------------
 // Two blocks with `providers` can't share sign-in routes, so this one moves them
-// under `/aws-blocks/auth/sso/`. Its callback is `return`, not `callback`, so a
+// under `/cdk-blocks/auth/sso/`. Its callback is `return`, not `callback`, so a
 // native client that ignores the `callbackPath` from `getClient()` and assumes
 // the default name fails here. Its stub is keyed `corp`, because a stub IdP's
 // routes are keyed by provider key alone and `auth-oidc` already serves
@@ -141,8 +141,8 @@ const ssoAuth = new Auth(scope, 'auth-sso', {
     corp: stubIdp({ onAuthorize: (req) => req.users[0] }),
   },
   redirects: {
-    callbackPath: '/aws-blocks/auth/sso/return',
-    signOutPath: '/aws-blocks/auth/sso/signout',
+    callbackPath: '/cdk-blocks/auth/sso/return',
+    signOutPath: '/cdk-blocks/auth/sso/signout',
     allowedRelayOrigins: [relayOrigin('nativebindings://auth'), relayOrigin('com.example.nativebindings://auth')],
   },
 });
@@ -492,7 +492,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // --------------------------------------------------------------------------
-  // Auth: the second federated block (`auth-sso`, routes under /aws-blocks/auth/sso/)
+  // Auth: the second federated block (`auth-sso`, routes under /cdk-blocks/auth/sso/)
   // --------------------------------------------------------------------------
 
   async ssoRequireAuth(): Promise<OidcUserInfo> {

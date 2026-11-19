@@ -98,7 +98,9 @@ describe('the docs pointers of a scaffolded app', () => {
 
 	it('never send an agent to node_modules for docs or types', () => {
 		for (const { where, text } of lines.filter((l) => l.text.includes('node_modules'))) {
-			assert.doesNotMatch(text, /docs|README|\.d\.ts|@aws-blocks|API\.md/i, `${where}: ${text}`);
+			// No `@`: the umbrella that ships the docs is `node_modules/aws-cdk-blocks/...`,
+			// and dropping it still covers the scoped siblings.
+			assert.doesNotMatch(text, /docs|README|\.d\.ts|aws-cdk-blocks|API\.md/i, `${where}: ${text}`);
 		}
 	});
 });

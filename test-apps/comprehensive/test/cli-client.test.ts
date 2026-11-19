@@ -127,7 +127,7 @@ export function cliClientTests(getApi: () => typeof apiType) {
             });
             server.keepAliveTimeout = 60_000;
             await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-            const url = 'http://127.0.0.1:' + server.address().port + '/aws-blocks/api';
+            const url = 'http://127.0.0.1:' + server.address().port + '/cdk-blocks/api';
             const { generateClient } = await import(clientUrl);
             const { api } = generateClient(${retry === undefined ? '{ url }' : '{ url, retryStaleConnection: false }'});
             const first = await api.echoData('first');

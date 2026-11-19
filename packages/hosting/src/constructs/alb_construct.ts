@@ -14,7 +14,7 @@
  * same target share a rule (up to 5 condition values each), and trailing rules
  * that only repeat the default target are dropped; synth warns when the rules
  * exceed the default quota of 100 per load balancer
- * (`@aws-blocks/hosting:AlbRuleLimit`).
+ * (`@aws-cdk-blocks/hosting:AlbRuleLimit`).
  *
  * What the ALB does NOT have (it has no edge): global edge caching, skew
  * protection, geo restriction. Unsupported settings are a type error in
@@ -25,7 +25,7 @@
  * by the asset proxy (and the headers by the API forwarder) with the CloudFront
  * door's semantics; responses the ALB sends straight to the server or image
  * function don't pass through them, which synth reports
- * (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  *
  * With a custom domain (`domain`) the listener is HTTPS (TLS 1.2+, the
  * `RECOMMENDED_TLS` policy) with a port 80 → 443 redirect, Route 53 alias
@@ -50,7 +50,7 @@ import type { HostingPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
-import { routableApiPaths } from './apigw_routes.js';
+import { BLOCKS_PATH_PREFIXES, DEFAULT_API_PATHS, routableApiPaths } from './apigw_routes.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import type { OriginHandle } from './layer.js';
 import { assetProxyEnvironment } from './asset_proxy_core.js';
@@ -111,10 +111,10 @@ export type AlbConstructProps = {
   monitoring?: boolean;
   /**
    * Every path pattern the single-compute (`'*'`) backend serves — the
-   * `DoorInput.origins.api.paths`: `/aws-blocks/*` plus the backend's raw
+   * `DoorInput.origins.api.paths`: `/cdk-blocks/*` plus the backend's raw
    * routes. Each reaches the API forwarder, as each gets a CloudFront behavior
    * on the CloudFront door.
-   * @default ['/aws-blocks/*']
+   * @default ['/cdk-blocks/*', '/aws-blocks/*']
    */
   apiPaths?: readonly string[];
   /**
@@ -409,9 +409,9 @@ export class AlbConstruct extends Construct {
     // a small forwarder Lambda target (ALB can't target an external HTTPS URL, so
     // a Lambda relays it) — the ALB analogue of CloudFront's addApiBehaviors, so
     // the API is same-origin with the frontend (session cookies flow, no CORS). A
-    // lone `'*'` origin is the single-compute case: every API path (`/aws-blocks/*`,
-    // which covers sign-in at `/aws-blocks/auth/*`, plus the backend's raw routes)
-    // → one backend; a named namespace routes `/aws-blocks/api/{ns}/*`. These
+    // lone `'*'` origin is the single-compute case: every API path (`/cdk-blocks/*`,
+    // which covers sign-in at `/cdk-blocks/auth/*`, plus the backend's raw routes)
+    // → one backend; a named namespace routes `/cdk-blocks/api/{ns}/*` and its `/aws-blocks/` twin. These
     // rules win over the route/catch-all rules (lowest priority numbers). A rule
     // holds at most 5 condition values and 6 wildcards, so the paths are packed up to 5 to a rule (4
     // beside the origin-verify header of a locked ALB).
@@ -419,7 +419,7 @@ export class AlbConstruct extends Construct {
     let ruleCount = 0;
     for (const origin of plan.backend?.origins ?? []) {
       const ns = origin.namespace;
-      const paths = ns === '*' ? routableApiPaths(this, 'ALB', props.apiPaths ?? ['/aws-blocks/*']) : [`/aws-blocks/api/${ns}/*`];
+      const paths = ns === '*' ? routableApiPaths(this, 'ALB', props.apiPaths ?? DEFAULT_API_PATHS) : BLOCKS_PATH_PREFIXES.map((prefix) => `${prefix}/api/${ns}/*`);
       const idSuffix = ns === '*' ? 'Default' : ns;
       const apiProxy = new LambdaFunction(this, `ApiProxy${idSuffix}`, {
         runtime: DEFAULT_NODE_RUNTIME,
@@ -428,10 +428,10 @@ export class AlbConstruct extends Construct {
         timeout: Duration.seconds(30),
         memorySize: 256,
         environment: {
-          // Ingress base WITHOUT the `/aws-blocks/api` suffix (token-safe: split
+          // Ingress base WITHOUT the `/cdk-blocks/api` suffix (token-safe: split
           // the resolved URL on the suffix and take the base). Works for a Lambda
           // API Gateway, a container ALB, or a BYOC endpoint alike.
-          API_GW_BASE: Fn.select(0, Fn.split('/aws-blocks/api', origin.ingress.url)),
+          API_GW_BASE: Fn.select(0, Fn.split('/cdk-blocks/api', origin.ingress.url)),
         },
       });
       const apiTg = new elbv2.ApplicationTargetGroup(this, `ApiProxyTg${idSuffix}`, {
@@ -450,7 +450,7 @@ export class AlbConstruct extends Construct {
               `for the backend's API paths (${paths.length} paths, ${pathsPerRule} per rule).`,
             resolution:
               'Group the raw routes under fewer path prefixes (a parameterized route `/hooks/{id}` is one `/hooks/*` ' +
-              'pattern), or move them under `/aws-blocks/`.',
+              'pattern), or move them under `/cdk-blocks/`.',
           });
         }
         listener.addTargetGroups(`ApiRoute${apiPriority}`, {
@@ -518,7 +518,7 @@ export class AlbConstruct extends Construct {
     }
     if (ruleCount > ALB_DEFAULT_RULE_QUOTA) {
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:AlbRuleLimit',
+        '@aws-cdk-blocks/hosting:AlbRuleLimit',
         `The ALB front door needs ${ruleCount} listener rules; a load balancer allows ${ALB_DEFAULT_RULE_QUOTA} by default, ` +
           'so the deploy fails unless the quota (Elastic Load Balancing: Rules per Application Load Balancer) was raised. ' +
           'Group routes and redirects under fewer path prefixes, or use the CloudFront door.',
@@ -596,7 +596,7 @@ export class AlbConstruct extends Construct {
       // No zone: nothing in the stack resolves the name to the ALB. Behind the
       // stacked door the edge connects to that name, so it fails until a record exists.
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:AlbDomainWithoutRecords',
+        '@aws-cdk-blocks/hosting:AlbDomainWithoutRecords',
         `The ALB serves ${domain.names.join(', ')} but has no hosted zone, so no DNS records are created. ` +
           (originSecret
             ? 'The stacked door\'s edge connects to that name, so requests fail until it resolves to the ALB. '

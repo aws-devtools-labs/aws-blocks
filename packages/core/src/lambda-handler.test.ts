@@ -22,7 +22,7 @@ beforeEach(() => {
 function makeEvent(overrides: Record<string, any> = {}) {
   return {
     httpMethod: 'POST',
-    path: '/aws-blocks/api',
+    path: '/cdk-blocks/api',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
     isBase64Encoded: false,
@@ -312,7 +312,7 @@ describe('createLambdaHandler — strict API namespace placement (defaults.stric
     };
   }
 
-  function rpc(namespace: string, path = '/aws-blocks/api') {
+  function rpc(namespace: string, path = '/cdk-blocks/api') {
     return makeEvent({ path, body: JSON.stringify({ jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 }) });
   }
 
@@ -332,7 +332,7 @@ describe('createLambdaHandler — strict API namespace placement (defaults.stric
     { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
     async () => {
       const calls: string[] = [];
-      for (const path of ['/aws-blocks/api', '/aws-blocks/api/api']) {
+      for (const path of ['/cdk-blocks/api', '/cdk-blocks/api/api']) {
         const body = JSON.parse((await invoke(placedBackend(calls), rpc('api', path))).body);
         assert.strictEqual(body.result, 'api', path);
       }
@@ -344,7 +344,7 @@ describe('createLambdaHandler — strict API namespace placement (defaults.stric
     { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, BLOCKS_API_COMPUTE_ID: 'app-reports' },
     async () => {
       const calls: string[] = [];
-      const served = JSON.parse((await invoke(placedBackend(calls), rpc('reports', '/aws-blocks/api/reports'))).body);
+      const served = JSON.parse((await invoke(placedBackend(calls), rpc('reports', '/cdk-blocks/api/reports'))).body);
       assert.strictEqual(served.result, 'reports');
       const refused = JSON.parse((await invoke(placedBackend(calls), rpc('api'))).body);
       assert.strictEqual(refused.error?.code, -32601);
@@ -398,13 +398,13 @@ describe('createLambdaHandler — strict API namespace placement (defaults.stric
       try {
         const calls: string[] = [];
         const handler = createLambdaHandler(async () => placedBackend(calls));
-        await assert.rejects(async () => handler(rpc('reports', '/aws-blocks/api/reports')), message);
+        await assert.rejects(async () => handler(rpc('reports', '/cdk-blocks/api/reports')), message);
         assert.deepStrictEqual(calls, [], 'nothing was served');
         // The same environment, once it carries a readable map, initializes.
         for (const k of keys) delete process.env[k];
         process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
         process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
-        const res = (await handler(rpc('reports', '/aws-blocks/api/reports'))) as { body: string };
+        const res = (await handler(rpc('reports', '/cdk-blocks/api/reports'))) as { body: string };
         assert.strictEqual(JSON.parse(res.body).result, 'reports');
       } finally {
         for (const [k, v] of Object.entries(saved)) {
@@ -439,7 +439,7 @@ describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
 // ── per-namespace RPC path dispatch ──────────────────────────────────────────
 
 describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
-  it('dispatches a call sent to /aws-blocks/api/{namespace}', async () => {
+  it('dispatches a call sent to /cdk-blocks/api/{namespace}', async () => {
     const backend = {
       reports: (_ctx: BlocksContext) => ({
         async generate(id: string) { return { id, done: true }; },
@@ -447,7 +447,7 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
     };
 
     const result = await invoke(backend, makeEvent({
-      path: '/aws-blocks/api/reports',
+      path: '/cdk-blocks/api/reports',
       body: JSON.stringify({ jsonrpc: '2.0', method: 'reports.generate', params: ['r1'], id: 1 }),
     }));
 
@@ -456,7 +456,7 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
     assert.deepStrictEqual(body.result, { id: 'r1', done: true });
   });
 
-  it('still dispatches a call sent to the bare /aws-blocks/api using the body prefix (back-compat)', async () => {
+  it('still dispatches a call sent to the bare /cdk-blocks/api using the body prefix (back-compat)', async () => {
     const backend = {
       api: (_ctx: BlocksContext) => ({
         async echo(msg: string) { return { msg }; },
@@ -464,7 +464,7 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
     };
 
     const result = await invoke(backend, makeEvent({
-      path: '/aws-blocks/api',
+      path: '/cdk-blocks/api',
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hi'], id: 7 }),
     }));
 
@@ -484,7 +484,7 @@ describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
     };
 
     const result = await invoke(backend, makeEvent({
-      path: '/aws-blocks/api/reports',
+      path: '/cdk-blocks/api/reports',
       body: JSON.stringify({ jsonrpc: '2.0', method: 'api.generate', params: [], id: 2 }),
     }));
 
@@ -824,7 +824,7 @@ describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
       });
 
       assert.ok(
-        logged.some((line) => line.includes('2 copies of @aws-blocks/core are loaded')),
+        logged.some((line) => line.includes('2 copies of @aws-cdk-blocks/core are loaded')),
         `expected the copy count in the diagnostic, got: ${JSON.stringify(logged)}`,
       );
     } finally {
@@ -1112,9 +1112,9 @@ function makeV2Event(overrides: Record<string, any> = {}) {
   return {
     version: '2.0',
     routeKey: '$default',
-    rawPath: '/aws-blocks/api',
+    rawPath: '/cdk-blocks/api',
     rawQueryString: '',
-    requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+    requestContext: { http: { method: 'POST', path: '/cdk-blocks/api' } },
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: [], id: 1 }),
     isBase64Encoded: false,
@@ -1374,7 +1374,7 @@ describe('createLambdaHandler — RPC error response Set-Cookie', () => {
 
 function makeApiGatewayV2Event(overrides: Record<string, any> = {}) {
   return {
-    requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+    requestContext: { http: { method: 'POST', path: '/cdk-blocks/api' } },
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
     isBase64Encoded: false,
@@ -2030,11 +2030,11 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
   it('takes only the host from a loopback X-Forwarded-Host, never a query, fragment or userinfo', () => {
     for (const forwarded of ['localhost:3000?role=admin#injected', 'user:pw@localhost:3000/evil']) {
       const url = buildEventUrl({
-        path: '/aws-blocks/api/x',
+        path: '/cdk-blocks/api/x',
         headers: { 'x-forwarded-host': forwarded, Host: EXECUTE_API },
         queryStringParameters: { a: '1' },
       });
-      assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/x?a=1', forwarded);
+      assert.strictEqual(url.href, 'http://localhost:3000/cdk-blocks/api/x?a=1', forwarded);
     }
     const noQuery = buildEventUrl({ path: '/x', headers: { 'x-forwarded-host': 'localhost:3000?role=admin#injected', Host: EXECUTE_API } });
     assert.strictEqual(noQuery.href, 'http://localhost:3000/x');
@@ -2054,7 +2054,7 @@ describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
     if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
     else process.env.BLOCKS_PUBLIC_HOSTS = previous;
   });
-  const throughDoor = (headers: Record<string, string>, path = '/aws-blocks/api/reports') => ({
+  const throughDoor = (headers: Record<string, string>, path = '/cdk-blocks/api/reports') => ({
     path,
     headers: { Host: EXECUTE_API, 'X-Forwarded-Proto': 'https', ...headers },
     requestContext: { stage: 'prod' },
@@ -2063,17 +2063,17 @@ describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
 
   it('reports the URL the viewer called: its host, no stage', () => {
     const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
-    assert.strictEqual(url.href, `https://${VIEWER}/aws-blocks/api/reports?a=1`);
+    assert.strictEqual(url.href, `https://${VIEWER}/cdk-blocks/api/reports?a=1`);
   });
 
   it("reports a custom domain the door serves, whatever the header's letter case", () => {
     const url = buildEventUrl(throughDoor({ 'X-Blocks-Public-Host': 'App.Example.com' }));
-    assert.strictEqual(url.href, 'https://app.example.com/aws-blocks/api/reports?a=1');
+    assert.strictEqual(url.href, 'https://app.example.com/cdk-blocks/api/reports?a=1');
   });
 
   it("ignores a host that isn't one of the backend's front doors (a direct execute-api caller)", () => {
     const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': 'attacker.example' }));
-    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/cdk-blocks/api/reports?a=1`);
   });
 
   it('ignores a list of hosts, and a host with a port', () => {
@@ -2101,7 +2101,7 @@ describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
     process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
     for (const host of ['a.tenant.example.com', 'deep.a.tenant.example.com', 'A.Tenant.Example.com']) {
       const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
-      assert.strictEqual(url.href, `https://${host.toLowerCase()}/aws-blocks/api/reports?a=1`, host);
+      assert.strictEqual(url.href, `https://${host.toLowerCase()}/cdk-blocks/api/reports?a=1`, host);
     }
   });
 
@@ -2125,12 +2125,12 @@ describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
   it('ignores the header when the backend has no front-door hosts', () => {
     delete process.env.BLOCKS_PUBLIC_HOSTS;
     const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
-    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/cdk-blocks/api/reports?a=1`);
   });
 
   it('keeps the loopback dev-server origin first (a sandbox proxying through the door)', () => {
     const url = buildEventUrl(throughDoor({ 'x-forwarded-host': 'localhost:3000', 'x-blocks-public-host': VIEWER }));
-    assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/reports?a=1');
+    assert.strictEqual(url.href, 'http://localhost:3000/cdk-blocks/api/reports?a=1');
   });
 
   it('never moves to another host on a //- or /\\-prefixed path', () => {
@@ -2313,7 +2313,7 @@ describe('createLambdaHandler — RawRoute ctx.request.url on a deployed stage',
   });
 
   it('getRequestBaseUrl falls back to the request origin outside the Lambda handler (local dev)', () => {
-    const ctx = { request: { url: new URL('http://localhost:3000/aws-blocks/auth/callback?code=x') } };
+    const ctx = { request: { url: new URL('http://localhost:3000/cdk-blocks/auth/callback?code=x') } };
     assert.strictEqual(getRequestBaseUrl(ctx), 'http://localhost:3000');
   });
 });
@@ -2514,7 +2514,7 @@ function dispatchBackend() {
     plainApi: { async ping() { return 'pong'; } },
     notes: new FakeBlock(),
     // A secret() marker whose (callable) schema must not become an endpoint.
-    stripeKey: { [Symbol.for('@aws-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
+    stripeKey: { [Symbol.for('@aws-cdk-blocks/hosting.ManagedValue')]: true, key: 'STRIPE_KEY', kind: 'secret', schema: (v: unknown) => v },
   };
 }
 

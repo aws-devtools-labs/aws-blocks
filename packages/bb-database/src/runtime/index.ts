@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { isWireSafeError } from '@aws-blocks/core';
+import { isWireSafeError } from '@aws-cdk-blocks/core';
 import type { DatabaseEngine, TransactionHandle } from '../common/engine.js';
 import { type SqlQuery, unwrapQuery } from '../common/sql.js';
 import type { StandardSchemaV1 } from '@standard-schema/spec';

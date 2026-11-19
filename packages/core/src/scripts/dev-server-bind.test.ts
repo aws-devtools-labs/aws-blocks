@@ -133,7 +133,7 @@ describe('dev server Host header check (DNS rebinding)', () => {
 
   const rpcBody = JSON.stringify({ jsonrpc: '2.0', method: 'testApi.ping', params: [], id: 1 });
   const rpc = (host: string | undefined, contentType = 'application/json') =>
-    send(host, { method: 'POST', path: '/aws-blocks/api', headers: { 'Content-Type': contentType }, body: rpcBody });
+    send(host, { method: 'POST', path: '/cdk-blocks/api', headers: { 'Content-Type': contentType }, body: rpcBody });
 
   before(async () => {
     const probe = createServer();
@@ -189,7 +189,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
   });
 
   it('rejects a preflight from a rebinding Host too', async () => {
-    const res = await send(`evil.example:${port}`, { method: 'OPTIONS', path: '/aws-blocks/api' });
+    const res = await send(`evil.example:${port}`, { method: 'OPTIONS', path: '/cdk-blocks/api' });
     assert.strictEqual(res.status, 403);
   });
 
@@ -283,7 +283,7 @@ describe('dev server request Origin and Content-Type checks', () => {
 
 /**
  * The Host check above passes for a cross-site request forgery: a page on
- * another site that POSTs to `http://localhost:<port>/aws-blocks/api` sends a
+ * another site that POSTs to `http://localhost:<port>/cdk-blocks/api` sends a
  * legitimate loopback `Host`. A `text/plain` body is a "simple" request that the
  * browser sends without a preflight, so the RPC would run. The dev server
  * refuses a state-changing request from a foreign `Origin`, and an RPC call
@@ -301,7 +301,7 @@ describe('dev server cross-origin RPC check (cross-site request forgery)', () =>
   ): Promise<{ status: number; body: string }> {
     return new Promise((resolve, reject) => {
       const req = httpRequest(
-        { host: '127.0.0.1', port, method: 'POST', path: '/aws-blocks/api', headers: { Host: `localhost:${port}`, ...headers } },
+        { host: '127.0.0.1', port, method: 'POST', path: '/cdk-blocks/api', headers: { Host: `localhost:${port}`, ...headers } },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (c: Buffer) => chunks.push(c));
@@ -410,7 +410,7 @@ describe('dev server Origin and Content-Type checks in sandbox mode (API proxied
   ): Promise<{ status: number; body: string }> {
     return new Promise((resolve, reject) => {
       const req = httpRequest(
-        { host: '127.0.0.1', port, method: 'POST', path: '/aws-blocks/api', headers: { Host: `localhost:${port}`, ...headers } },
+        { host: '127.0.0.1', port, method: 'POST', path: '/cdk-blocks/api', headers: { Host: `localhost:${port}`, ...headers } },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (c: Buffer) => chunks.push(c));
@@ -452,7 +452,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
       ...process.env,
       CDK_DISABLE_CLI_TELEMETRY: '1',
       BLOCKS_DEV_QUIET: '1',
-      BLOCKS_API_URL: `http://127.0.0.1:${upstreamPort}/aws-blocks/api`,
+      BLOCKS_API_URL: `http://127.0.0.1:${upstreamPort}/cdk-blocks/api`,
     };
     delete env.BLOCKS_DEV_HOST;
     devProcess = spawn(tsxBin, [join(tempDir, 'run-dev.ts')], { cwd: tempDir, env, stdio: ['ignore', 'pipe', 'pipe'] });

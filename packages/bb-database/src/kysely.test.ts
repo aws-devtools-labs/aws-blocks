@@ -4,7 +4,7 @@
 // Kysely through DatabaseDialect, against the local engine of an aurora cluster.
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { type Generated, Kysely, sql as ksql } from 'kysely';
 import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
 import { DatabaseDialect } from './kysely.js';

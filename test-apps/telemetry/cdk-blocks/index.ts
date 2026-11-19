@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, RawRoute, AppSetting, KVStore } from '@aws-blocks/blocks';
+import { Scope, RawRoute, AppSetting, KVStore } from 'aws-cdk-blocks';
 
 const scope = new Scope('telemetry-e2e-test');
 

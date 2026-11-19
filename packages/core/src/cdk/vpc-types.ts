@@ -130,7 +130,7 @@ export interface VpcRequirements {
 	 * BB has built anything, so the group does not exist yet. Declare it in a
 	 * second `registerVpcRequirements(this, { endpointClientSecurityGroups: [sg]
 	 * })` call once it does, importing that function from
-	 * `@aws-blocks/core/cdk/internal` — the framework-internal entry point,
+	 * `@aws-cdk-blocks/core/cdk/internal` — the framework-internal entry point,
 	 * which carries no backward-compatibility guarantee, unlike this type.
 	 * Registrations accumulate, so the second call adds to the first. A group
 	 * the BB is handed or imports needs no second call: pass it in the
@@ -153,7 +153,7 @@ export interface VpcRequirements {
 	 * Declared the same way, and for the same reason, as
 	 * {@link VpcRequirements.endpointClientSecurityGroups}: a construct the BB
 	 * creates itself goes in a second `registerVpcRequirements` call from
-	 * `@aws-blocks/core/cdk/internal`.
+	 * `@aws-cdk-blocks/core/cdk/internal`.
 	 */
 	endpointClientDependents?: IConstruct[];
 }

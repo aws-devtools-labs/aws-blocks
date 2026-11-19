@@ -1,5 +1,5 @@
 ---
-'@aws-blocks/bb-auth': minor
+'@aws-cdk-blocks/bb-auth': minor
 ---
 
 Add `auth.createOidcApi()`, the native SDKs' OIDC client

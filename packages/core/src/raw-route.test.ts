@@ -400,22 +400,25 @@ describe('HTTP method validation', () => {
   });
 });
 
-// ── FIX 6: Reserve /cdk-blocks namespace ────────────────────────────────────
+// ── FIX 6: Reserve /cdk-blocks namespace (and its legacy /aws-blocks alias) ──
 
-describe('/aws-blocks namespace reservation', () => {
-  it('registering /aws-blocks/api throws', () => {
-    assert.throws(
-      () => registerRoute({ method: 'GET', path: '/aws-blocks/api', handler: noop }),
-      (err: Error) => {
-        assert.ok(err.message.includes('reserved for RPC dispatch'));
-        return true;
-      },
-    );
+describe('/cdk-blocks namespace reservation', () => {
+  it('rejects /CDK-BLOCKS/API and the exact /cdk-blocks namespace', () => {
+    for (const path of ['/CDK-BLOCKS/API', '/cdk-blocks']) {
+      assert.throws(() => registerRoute({ method: 'GET', path, handler: noop }), /reserved for RPC dispatch/, path);
+    }
   });
 
-  it('registering /aws-blocks/api/foo throws', () => {
+  it('rejects the legacy /aws-blocks/api subtree', () => {
     assert.throws(
       () => registerRoute({ method: 'GET', path: '/aws-blocks/api/foo', handler: noop }),
+      /reserved for RPC dispatch/,
+    );
+  });
+
+  it('registering /cdk-blocks/api throws', () => {
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/api', handler: noop }),
       (err: Error) => {
         assert.ok(err.message.includes('reserved for RPC dispatch'));
         return true;
@@ -423,9 +426,19 @@ describe('/aws-blocks namespace reservation', () => {
     );
   });
 
-  it('registering /aws-blocks/api/ (trailing slash) throws', () => {
+  it('registering /cdk-blocks/api/foo throws', () => {
     assert.throws(
-      () => registerRoute({ method: 'GET', path: '/aws-blocks/api/', handler: noop }),
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/api/foo', handler: noop }),
+      (err: Error) => {
+        assert.ok(err.message.includes('reserved for RPC dispatch'));
+        return true;
+      },
+    );
+  });
+
+  it('registering /cdk-blocks/api/ (trailing slash) throws', () => {
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/api/', handler: noop }),
       (err: Error) => {
         assert.ok(err.message.includes('reserved for RPC dispatch'));
         return true;
@@ -463,15 +476,15 @@ describe('/aws-blocks namespace reservation', () => {
     );
   });
 
-  it('allows /aws-blocks/dashboard (not under /aws-blocks/api)', () => {
+  it('allows /cdk-blocks/dashboard (not under /cdk-blocks/api)', () => {
     assert.doesNotThrow(() => {
-      registerRoute({ method: 'GET', path: '/aws-blocks/dashboard', handler: noop });
+      registerRoute({ method: 'GET', path: '/cdk-blocks/dashboard', handler: noop });
     });
   });
 
-  it('allows /aws-blocks/health (not under /aws-blocks/api)', () => {
+  it('allows /cdk-blocks/health (not under /cdk-blocks/api)', () => {
     assert.doesNotThrow(() => {
-      registerRoute({ method: 'GET', path: '/aws-blocks/health', handler: noop });
+      registerRoute({ method: 'GET', path: '/cdk-blocks/health', handler: noop });
     });
   });
 
@@ -501,9 +514,9 @@ describe('/aws-blocks namespace reservation', () => {
     });
   });
 
-  it('allows /aws-blocks/api-docs (not exactly /aws-blocks/api)', () => {
+  it('allows /cdk-blocks/api-docs (not exactly /cdk-blocks/api)', () => {
     assert.doesNotThrow(() => {
-      registerRoute({ method: 'GET', path: '/aws-blocks/api-docs', handler: noop });
+      registerRoute({ method: 'GET', path: '/cdk-blocks/api-docs', handler: noop });
     });
   });
 });
@@ -827,7 +840,7 @@ describe('resolveRoutePath', () => {
 
 // ── Cross-copy registry sharing ─────────────────────────────────────────────
 //
-// A bundle can contain more than one physical copy of @aws-blocks/core (an
+// A bundle can contain more than one physical copy of @aws-cdk-blocks/core (an
 // unlucky dependency tree, no dedupe). With module-local registry state, every
 // copy gets its own route table: Building Blocks register into theirs, the
 // dispatcher reads its own, and the routes 404 silently.
@@ -972,14 +985,14 @@ describe('duplicate core copies are announced', () => {
     return result.stderr;
   }
 
-  it('warns when a second copy of @aws-blocks/core joins the shared registry', () => {
+  it('warns when a second copy of @aws-cdk-blocks/core joins the shared registry', () => {
     const stderr = useInFreshProcess(1);
-    assert.match(stderr, /2 copies of @aws-blocks\/core/);
+    assert.match(stderr, /2 copies of @aws-cdk-blocks\/core/);
   });
 
   it('stays silent for a healthy single-copy install', () => {
     const stderr = useInFreshProcess(null);
-    assert.doesNotMatch(stderr, /copies of @aws-blocks\/core/);
+    assert.doesNotMatch(stderr, /copies of @aws-cdk-blocks\/core/);
   });
 
   it('warns once per copy, not once per registry access', () => {
@@ -992,7 +1005,7 @@ describe('duplicate core copies are announced', () => {
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
     assert.strictEqual(result.status, 0, result.stderr);
 
-    const warnings = result.stderr.split('\n').filter((line) => line.includes('copies of @aws-blocks/core'));
+    const warnings = result.stderr.split('\n').filter((line) => line.includes('copies of @aws-cdk-blocks/core'));
     assert.strictEqual(warnings.length, 1, `expected exactly one warning, got: ${JSON.stringify(warnings)}`);
   });
 });
@@ -1000,7 +1013,7 @@ describe('duplicate core copies are announced', () => {
 // ── A peer copy's state is adopted, not trusted ─────────────────────────────
 //
 // The registry key is a permanent contract: copies sharing a process are
-// usually different *versions* of @aws-blocks/core, so the shape may only grow
+// usually different *versions* of @aws-cdk-blocks/core, so the shape may only grow
 // — a copy that renamed the key would re-split the registry silently, each key
 // holding its own copy counter. The other half of that contract is this side:
 // a copy must cope with a state a peer left without the fields it expects.
@@ -1047,7 +1060,7 @@ describe('registry state from a peer copy is adopted, not trusted', () => {
 // module instance all along — which is precisely the mistake that produced the
 // original defect. This block loads two genuinely separate copies (two
 // directory trees, two module instances, the shape a bundler emits from a
-// nested `node_modules/@aws-blocks/core`) and replays the production sequence:
+// nested `node_modules/@aws-cdk-blocks/core`) and replays the production sequence:
 // a Building Block registers its route through one copy, the dispatcher looks
 // it up through the other.
 //
@@ -1080,8 +1093,8 @@ const TWO_COPY_ENTRY = `
 import * as a from './copy-a/dist/raw-route.js';
 import * as b from './copy-b/dist/raw-route.js';
 
-a.registerRoute({ method: 'GET', path: '/aws-blocks/auth/signin/google', handler: async () => {} });
-const matched = b.matchRoute('GET', '/aws-blocks/auth/signin/google');
+a.registerRoute({ method: 'GET', path: '/cdk-blocks/auth/signin/google', handler: async () => {} });
+const matched = b.matchRoute('GET', '/cdk-blocks/auth/signin/google');
 
 const observed = {
   distinctInstances: a !== b,
@@ -1117,7 +1130,7 @@ function runTwoCopyProbe({ bundle }: { bundle: boolean }): TwoCopyProbe {
   try {
     // Copy A belongs to the Building Block, copy B to the dispatcher. Each is
     // laid out as an installed package — `package.json` beside `dist/`, the
-    // shape npm produces for a nested `node_modules/@aws-blocks/core`. The
+    // shape npm produces for a nested `node_modules/@aws-cdk-blocks/core`. The
     // manifest has to come along: a real install has one, and it is what a
     // bundler reads for `type` and `sideEffects` — without it the bundle here
     // would be built under different rules than the deployed one.
@@ -1175,7 +1188,7 @@ describe('two physical core copies share one registry', () => {
   it('dispatches a route the other copy registered', () => {
     assert.strictEqual(
       probe.matchedPath,
-      '/aws-blocks/auth/signin/google',
+      '/cdk-blocks/auth/signin/google',
       'the dispatcher copy must resolve a route registered through the other copy',
     );
   });
@@ -1188,7 +1201,7 @@ describe('two physical core copies share one registry', () => {
 
   it('counts and announces both copies', () => {
     assert.strictEqual(probe.copiesReported, 2);
-    assert.match(probe.stderr, /2 copies of @aws-blocks\/core/);
+    assert.match(probe.stderr, /2 copies of @aws-cdk-blocks\/core/);
   });
 });
 
@@ -1235,11 +1248,28 @@ describe('the shared registry survives bundling', () => {
   });
 
   it('dispatches a route the other copy registered', () => {
-    assert.strictEqual(probe.matchedPath, '/aws-blocks/auth/signin/google');
+    assert.strictEqual(probe.matchedPath, '/cdk-blocks/auth/signin/google');
     assert.strictEqual(probe.routesSeenByDispatcher, 1);
   });
 
   it('keeps the registry key greppable in the bundle', () => {
     assert.ok(probe.bundleText?.includes('__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__'));
+  });
+});
+
+describe('legacy /aws-blocks prefix', () => {
+  it('serves a route registered under /cdk-blocks at its /aws-blocks twin too', () => {
+    registerRoute({ method: 'GET', path: '/cdk-blocks/auth/callback', handler: noop });
+    assert.strictEqual(matchRoute('GET', '/cdk-blocks/auth/callback')?.route.path, '/cdk-blocks/auth/callback');
+    assert.strictEqual(matchRoute('GET', '/aws-blocks/auth/callback')?.route.path, '/cdk-blocks/auth/callback');
+  });
+
+  it('registers a legacy /aws-blocks path under its canonical /cdk-blocks path', () => {
+    registerRoute({ method: 'GET', path: '/aws-blocks/settings', handler: noop });
+    assert.strictEqual(getRegisteredRoutes().at(-1)?.path, '/cdk-blocks/settings');
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/cdk-blocks/settings', handler: noop }),
+      (err: Error) => err.name === RawRouteErrors.DuplicateRoute,
+    );
   });
 });

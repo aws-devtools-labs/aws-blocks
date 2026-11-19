@@ -595,8 +595,8 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
 
   describe('the starting record of a dev task launcher', () => {
     // The CLI (pid 700, run from a shell, pid 600) claimed the port before it started tsx watch.
-    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
-    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev' : 'bash') };
+    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
+    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev' : 'bash') };
 
     it('is replaced in place by the dev server that CLI started, which keeps its leftover frontend group', () => {
       const fs = memoryFs({ [path]: JSON.stringify(cli) });

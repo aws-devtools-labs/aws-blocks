@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": minor
+"@aws-cdk-blocks/core": minor
 ---
 
 The OpenRPC spec generator describes a TypeScript tuple as a JSON array of positional elements, and a rest parameter typed as a tuple as one parameter per element.

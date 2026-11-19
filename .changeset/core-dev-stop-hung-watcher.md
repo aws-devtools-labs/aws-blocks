@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/core": patch
+"@aws-cdk-blocks/core": patch
 ---
 
 fix(core): `npm run dev:stop` makes sure the session ended when its runner was killed

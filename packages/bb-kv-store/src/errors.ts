@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { ApiError, brandBlocksError, blocksError as coreBlocksError } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { ApiError, brandBlocksError, blocksError as coreBlocksError } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { createDefu } from 'defu';
 import type { ReadValidationMode } from './types.js';
@@ -15,8 +15,8 @@ import type { ReadValidationMode } from './types.js';
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
+ * import { isBlocksError } from '@aws-cdk-blocks/core';
+ * import { KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
  *
  * try {
  *   await store.put('key', value, { ifNotExists: true });

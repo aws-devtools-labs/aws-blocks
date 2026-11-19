@@ -8,7 +8,7 @@
  * - each redirect source reaches the asset proxy, which answers it with the
  *   CloudFront door's semantics (`asset_proxy.test.ts` runs that behavior);
  * - the proxies carry the app's rules and error pages;
- * - synth warns (`@aws-blocks/hosting:DoorRulesNotApplied`) naming exactly
+ * - synth warns (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`) naming exactly
  *   what the proxies can't reach: responses routed straight to the server, the
  *   image function or (on API Gateway) the backend.
  */
@@ -22,8 +22,8 @@ import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { DeployManifest } from '../manifest/types.js';
 import { doorCapabilitiesFor, HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
-const WARNING = '@aws-blocks/hosting:DoorRulesNotApplied';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
+const WARNING = '@aws-cdk-blocks/hosting:DoorRulesNotApplied';
 
 describe("regional doors apply the app's redirects, header rules and error pages", () => {
   let tmpDir: string;

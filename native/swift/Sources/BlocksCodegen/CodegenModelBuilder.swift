@@ -388,7 +388,7 @@ public struct CodegenModelBuilder {
             .map { APINamespace(name: $0.key, operations: $0.value) }
 
         let servers = rpcModel.servers.isEmpty
-            ? [ServerDefinition(name: "local", url: "http://localhost:3001/aws-blocks/api")]
+            ? [ServerDefinition(name: "local", url: "http://localhost:3001/cdk-blocks/api")]
             : rpcModel.servers
 
         return CodegenModel(

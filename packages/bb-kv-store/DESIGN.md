@@ -2,7 +2,7 @@
 
 Design document for KVStore. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-kv-store`
+**Package:** `@aws-cdk-blocks/bb-kv-store`
 **Type:** Primitive (new infrastructure)
 **AWS Service:** DynamoDB (one table per store: a partition key, an optional sort key, optional global secondary indexes)
 
@@ -173,7 +173,7 @@ A store fixes its key when the table is created. A changed `key` option on a dep
 
 ### Durability and encryption
 
-Point-in-Time Recovery comes from the option of the block first, and then from the stack-wide `defaults.pointInTimeRecovery`. `BlocksPresets` turns it on under `production` and off under `sandbox`. Server-side encryption does **not** come from a preset. `BlocksDefaults` has no encryption field, so SSE defaults to the AWS-managed `aws/dynamodb` key under every preset, and only the `encryption` option of a store changes it. `resolveDynamoDbProtection` in `@aws-blocks/core/cdk/internal` resolves both, for every DynamoDB table that AWS Blocks provisions.
+Point-in-Time Recovery comes from the option of the block first, and then from the stack-wide `defaults.pointInTimeRecovery`. `BlocksPresets` turns it on under `production` and off under `sandbox`. Server-side encryption does **not** come from a preset. `BlocksDefaults` has no encryption field, so SSE defaults to the AWS-managed `aws/dynamodb` key under every preset, and only the `encryption` option of a store changes it. `resolveDynamoDbProtection` in `@aws-cdk-blocks/core/cdk/internal` resolves both, for every DynamoDB table that AWS Blocks provisions.
 
 - **`pointInTimeRecovery?: boolean | { retentionDays: number }`:** `true` turns on continuous backups with the default 35-day window of DynamoDB. `{ retentionDays: n }` turns on PITR and sets the window to `n` days, from 1 to 35. A value outside that range gives a warning at synth, and the default window applies. `false` turns PITR off. When the option is omitted, `defaults.pointInTimeRecovery` applies. The template has a `PointInTimeRecoverySpecification` only when PITR is on.
 - **`encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`:** `'aws-managed'`, the default, uses the `aws/dynamodb` key. `'customer-managed'` provisions a dedicated CMK for each table. `KVStore.fromKmsKey(arn)` uses a CMK that you own, so several tables can share one key. An unrecognized value fails the synth with an error that lists the valid values. It never falls back to `'aws-managed'`, so a request for a customer-managed key cannot be downgraded with no error.
@@ -300,7 +300,7 @@ The default choice (`'coerce'` over `'off'`) is recorded as a cross-cutting deci
 
 ### D-KV-11: Secure-by-default durability and encryption, from the stack `BlocksDefaults`, with one `protection` option
 
-The durability settings come from the stack-wide `BlocksDefaults` (`BlocksPresets` in `@aws-blocks/core/cdk`): `defaults.removalPolicy`, `defaults.deletionProtection`, and `defaults.pointInTimeRecovery`. Under `BlocksPresets.production` a table defaults to PITR **on**, deletion protection **on**, and `RemovalPolicy.RETAIN`. Under `BlocksPresets.sandbox` PITR and deletion protection are off and the removal policy is `DESTROY`, so a short-lived stack stays cheap and `sandbox:destroy` removes it with one command. SSE defaults to the AWS-managed KMS key. A store overrides each default with `protection`, `pointInTimeRecovery`, or `encryption`, and the option of a store always wins.
+The durability settings come from the stack-wide `BlocksDefaults` (`BlocksPresets` in `@aws-cdk-blocks/core/cdk`): `defaults.removalPolicy`, `defaults.deletionProtection`, and `defaults.pointInTimeRecovery`. Under `BlocksPresets.production` a table defaults to PITR **on**, deletion protection **on**, and `RemovalPolicy.RETAIN`. Under `BlocksPresets.sandbox` PITR and deletion protection are off and the removal policy is `DESTROY`, so a short-lived stack stays cheap and `sandbox:destroy` removes it with one command. SSE defaults to the AWS-managed KMS key. A store overrides each default with `protection`, `pointInTimeRecovery`, or `encryption`, and the option of a store always wins.
 
 **Why one `protection` option and not separate `deletionProtection` and `removalPolicy` options.** Deletion protection and the removal policy answer one question: can this table be destroyed? Two options can contradict each other. `deletionProtection: true` with `removalPolicy: 'destroy'` tells CloudFormation to call `DeleteTable` on stack delete while DynamoDB refuses the delete, and the stack stops in `DELETE_FAILED`. One option with three values cannot express that combination:
 
@@ -370,7 +370,7 @@ The checks live in `src/item.ts` and the messages in `src/errors.ts`, shared by 
 
 **Decision:** Each public method that reads options passes them through one function, `presentOptions` in `src/item.ts`, which takes out every option whose value is `null`. The rule holds for every option of every method, in both runtimes. The option types do not include `null`. The exceptions are the two value checks: `ifValueEquals: null` compares with a stored `null`, and `ifFieldEquals: null` is `InvalidQueryException`.
 
-**Rationale:** JSON has no `undefined`. An API method that forwards its arguments into the options of a store (`store.scan({ limit, cursor })`) can get `null` for an argument that the client left out. The RPC client of `@aws-blocks/core` leaves trailing `undefined` arguments out of a request, which covers the usual case. This rule covers an `undefined` before a later argument, and a caller that is not that client. Before, `cursor`, `limit` and `index` each had their own check and the other options had none: `expiresAt: null` was an error. One function gives one rule.
+**Rationale:** JSON has no `undefined`. An API method that forwards its arguments into the options of a store (`store.scan({ limit, cursor })`) can get `null` for an argument that the client left out. The RPC client of `@aws-cdk-blocks/core` leaves trailing `undefined` arguments out of a request, which covers the usual case. This rule covers an `undefined` before a later argument, and a caller that is not that client. Before, `cursor`, `limit` and `index` each had their own check and the other options had none: `expiresAt: null` was an error. One function gives one rule.
 
 The value checks are excluded because they guard a write. `get` returns `null` for a missing key, so `put(key, next, { ifValueEquals: await store.get(key) })` must be a conflict for a missing key. If `null` counted as absent there, the write would run with no condition.
 

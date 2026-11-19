@@ -64,7 +64,7 @@ const CONFIGS = {
 	cognitoOidcOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: ${SECRET} } } })`,
 	// Email + password and social in `auth`; the directly federated okta can no longer share it, so it gets its
 	// own `store: 'builtin'` block, built first (the comma expression keeps `auth` the block under test).
-	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] }, redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' } }), new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } }, users: { groups: ['admins'] } }))`,
+	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] }, redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' } }), new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } }, users: { groups: ['admins'] } }))`,
 } as const;
 
 const cache: Record<string, SynthesizedAuth> = {};
@@ -111,7 +111,7 @@ function sessionsTableOf(template: CfnTemplateJson): CfnResourceJson {
 }
 
 const removalWarnings = (s: SynthesizedAuth) =>
-	s.warnings.filter((w) => w.message.includes('@aws-blocks/bb-auth:RemovalPolicyUnset'));
+	s.warnings.filter((w) => w.message.includes('@aws-cdk-blocks/bb-auth:RemovalPolicyUnset'));
 
 describe('Auth — conditional provisioning', () => {
 	test('default: pool, client and session-secret keep the AuthCognito identity; the session store is the new table', () => {
@@ -146,7 +146,7 @@ describe('Auth — conditional provisioning', () => {
 
 		test('with an OAuth 2.0 provider (github()) too: still only the session store and `session-secret`', () => {
 			const s = synthIdentity(CONFIGS.directAndOauth2, undefined, [
-				"import { github } from '@aws-blocks/bb-auth';",
+				"import { github } from '@aws-cdk-blocks/bb-auth';",
 			]);
 			assert.deepStrictEqual(cognitoResources(s.template), []);
 			assert.deepStrictEqual(

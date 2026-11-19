@@ -1,5 +1,5 @@
 ---
-'@aws-blocks/bb-auth': patch
+'@aws-cdk-blocks/bb-auth': patch
 ---
 
 `bb-auth migrate` keeps two old defaults that `Auth` changed, so a migrated app behaves as before:

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Generates the gitignored, shipped `docs/` artifact for @aws-blocks/blocks. Runs
+ * Generates the gitignored, shipped `docs/` artifact for aws-cdk-blocks. Runs
  * as the packages/blocks `prebuild` AND `prepack` hooks so the published package
  * always carries fresh docs — even when packing without a preceding build —
  * without dirtying any tracked file.

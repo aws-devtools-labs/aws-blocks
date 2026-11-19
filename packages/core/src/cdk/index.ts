@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { pathToFileURL } from 'node:url';
-import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
+import { __PIPELINE_STAGE_SCOPE__ } from '@aws-cdk-blocks/pipeline';
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
@@ -91,7 +91,7 @@ export type { BlocksVpcOptions, SubnetRole, VpcContext, VpcRequirements } from '
 
 /**
  * Core's `create()` props: the public {@link BlocksStackProps} plus the required
- * `defaultComputeFactory`. The umbrella (`@aws-blocks/blocks`) supplies the
+ * `defaultComputeFactory`. The umbrella (`aws-cdk-blocks`) supplies the
  * factory (which builds a `LambdaCompute`) by spreading it onto the customer's
  * props; customers use {@link BlocksStackProps} and never set the factory.
  *
@@ -101,7 +101,7 @@ export type { BlocksVpcOptions, SubnetRole, VpcContext, VpcRequirements } from '
  * @internal
  */
 export interface CoreBlocksStackProps extends BlocksStackProps {
-	/** Builds the stack's default compute. Injected by `@aws-blocks/blocks`. */
+	/** Builds the stack's default compute. Injected by `aws-cdk-blocks`. */
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
@@ -182,7 +182,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	}
 	/**
 	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
-	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * `/cdk-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
 	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
 	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
 	 * deploy-time value works. The stack's `ApiUrl` output is this value.
@@ -262,7 +262,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Lambda function (the shared gateway's target), and a block reading
 		// `this.compute` in its constructor (during that import) must resolve to
 		// it. The factory is supplied by the umbrella
-		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+		// aws-cdk-blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		stack._defaultCompute = props.defaultComputeFactory(stack);
 		// file:// URL (not a raw path) so the cache-busting query works on Windows,

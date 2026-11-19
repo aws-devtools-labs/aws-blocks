@@ -689,7 +689,7 @@ describe('create-blocks-app telemetry/first-run notice', () => {
     );
   });
 
-  it('states the same retention as the @aws-blocks/blocks README', () => {
+  it('states the same retention as the aws-cdk-blocks README', () => {
     // The README telemetry paragraph repeats the retention lines of the notice word for word.
     const readme = readFileSync(new URL('../../blocks/README.md', import.meta.url), 'utf-8');
     for (const sentence of [

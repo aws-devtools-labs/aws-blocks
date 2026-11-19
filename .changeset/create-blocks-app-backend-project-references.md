@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/create-blocks-app": minor
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/create-blocks-app": minor
+"aws-cdk-blocks": patch
 ---
 
 feat(create-blocks-app): typecheck the backend with Node types and the browser code without them
@@ -10,6 +10,6 @@ The frontend imports the backend (`import { api } from 'cdk-blocks'`), so its `t
 - The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) now check the browser and the backend as separate TypeScript projects, the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` without Node types and reads the backend through a project reference to `cdk-blocks/tsconfig.json`, which checks every backend file with Node types. `npm run typecheck` is `tsc -b --force`, and `npm run build` is `tsc -b --force && vite build`. A Node global in `src/` is now a type error.
 - `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types: `next build` ignores project references, and backend-only apps run all their code on Node.
 - Adding AWS Blocks to an existing project writes `cdk-blocks/tsconfig.json` (except in a Next.js project) and prints how to reference it. It never edits the project's `tsconfig`.
-- Apps scaffolded before this change keep working as they are. To move one to the new layout, see [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend). `TROUBLESHOOTING.md` in `@aws-blocks/blocks` lists the TypeScript errors of the layout and their fixes.
+- Apps scaffolded before this change keep working as they are. To move one to the new layout, see [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend). `TROUBLESHOOTING.md` in `aws-cdk-blocks` lists the TypeScript errors of the layout and their fixes.
 
 The decision and the alternatives considered are recorded as D-028 in `docs/DECISIONS.md`.

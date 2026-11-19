@@ -16,9 +16,9 @@
     "test:e2e": "tsx --test test/e2e.test.ts"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/bb-kv-store": "*",
-    "@aws-blocks/core": "*",
+    "aws-cdk-blocks": "*",
+    "@aws-cdk-blocks/bb-kv-store": "*",
+    "@aws-cdk-blocks/core": "*",
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-sqs": "^3.1156.0",
     "@guide/bb-queue": "*",

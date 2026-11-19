@@ -4,7 +4,7 @@
 /**
  * The process that the generate-client task helper (`generate-client-cli.ts`) starts
  * to generate the client: it runs the client-generation worker of
- * `@aws-blocks/core`, which reads the same arguments
+ * `@aws-cdk-blocks/core`, which reads the same arguments
  * (`<foundationPath> <outputPath>`) and imports the backend.
  *
  * At `BLOCKS_LOG_LEVEL=quiet` (`npm run generate-client -- -q`) the warnings that importing the
@@ -24,7 +24,7 @@ if (process.env.BLOCKS_LOG_LEVEL?.toLowerCase() === 'quiet') console.warn = () =
 
 try {
 	// Dynamic: a static import would evaluate the worker, and import the backend, before the line above runs.
-	await import(pathToFileURL(require.resolve('@aws-blocks/core/scripts/generate-client-worker')).href);
+	await import(pathToFileURL(require.resolve('@aws-cdk-blocks/core/scripts/generate-client-worker')).href);
 } catch (error) {
 	// One line, as `npm run spec` prints; the stack only at debug (`--debug`).
 	console.error('❌ Client generation failed:', error instanceof Error ? error.message : String(error));

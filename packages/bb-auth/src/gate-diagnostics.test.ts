@@ -33,7 +33,7 @@ const compilerOptions: ts.CompilerOptions = {
 };
 
 const preamble = `
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 import { Auth } from './dist/index.mock.js';
 declare const scope: ScopeParent;
 declare const context: BlocksContext;

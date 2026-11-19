@@ -57,7 +57,7 @@ class OidcClientRestoreTest {
 
         user shouldBe OidcUser(userId = "google:123", username = "alice")
         client.authState.value shouldBe OidcAuthState.SignedIn(user!!)
-        requests shouldBe listOf("GET /aws-blocks/auth/session")
+        requests shouldBe listOf("GET /cdk-blocks/auth/session")
     }
 
     @Test
@@ -133,7 +133,7 @@ class OidcClientRestoreTest {
 
         val restore = async { client.restore() }
         sessionCalled.await()
-        val user = client.exchange("c", "v", "s", "", "google", "http://localhost:3001/aws-blocks/auth/callback")
+        val user = client.exchange("c", "v", "s", "", "google", "http://localhost:3001/cdk-blocks/auth/callback")
         releaseSession.complete(Unit)
 
         restore.await() shouldBe null
@@ -180,11 +180,11 @@ class OidcClientRestoreTest {
 
     @Test
     fun `restore reads the session beside a moved callback`() = runTest {
-        val client = authBlockClient(backend(HttpStatusCode.Unauthorized), listOf("corp"), base = "/aws-blocks/auth/sso")
+        val client = authBlockClient(backend(HttpStatusCode.Unauthorized), listOf("corp"), base = "/cdk-blocks/auth/sso")
 
         client.restore()
 
-        requests shouldBe listOf("GET /aws-blocks/auth/sso/session")
+        requests shouldBe listOf("GET /cdk-blocks/auth/sso/session")
     }
 
     @Test
@@ -197,18 +197,18 @@ class OidcClientRestoreTest {
 
         client.config.sessionPath shouldBe null
         client.restore()
-        requests shouldBe listOf("GET /aws-blocks/auth/session")
+        requests shouldBe listOf("GET /cdk-blocks/auth/session")
     }
 
     @Test
     fun `restore reads the session where the descriptor says`() = runTest {
         val client = authBlockClient(
-            backend(HttpStatusCode.Unauthorized), listOf("google"), sessionPath = "/aws-blocks/auth/me",
+            backend(HttpStatusCode.Unauthorized), listOf("google"), sessionPath = "/cdk-blocks/auth/me",
         )
 
         client.restore()
 
-        requests shouldBe listOf("GET /aws-blocks/auth/me")
+        requests shouldBe listOf("GET /cdk-blocks/auth/me")
     }
 
     @Test
@@ -223,7 +223,7 @@ class OidcClientRestoreTest {
 
         client.restore()?.username shouldBe "alice"
         client.authState.value shouldBe OidcAuthState.SignedIn(OidcUser("google:1", "alice"))
-        requests shouldBe listOf("GET /aws-blocks/auth/session")
+        requests shouldBe listOf("GET /cdk-blocks/auth/session")
     }
 
     @Test

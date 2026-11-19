@@ -1,8 +1,8 @@
 # Blocks Backend Application
 
-Backend-only TypeScript API with AWS Blocks — no frontend included.
+Backend-only TypeScript API with AWS CDK Blocks — no frontend included.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template backend`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template backend`
 
 ## For Coding Agents
 
@@ -45,7 +45,7 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 
 | Command | Backend | API URL |
 |---------|---------|---------|
-| `npm run dev` | Local RPC dev server on http://localhost:3001 | `http://localhost:3001/aws-blocks/api` |
+| `npm run dev` | Local RPC dev server on http://localhost:3001 | `http://localhost:3001/cdk-blocks/api` |
 | `npm run sandbox` | Deployed to AWS, `cdk watch --hotswap` keeps it in sync | Deployed API Gateway URL |
 | `npm run sandbox:deploy` | Deployed to AWS once, then exits (no watch); for scripts and CI | Deployed API Gateway URL |
 | `npm run deploy` | Deployed to AWS | Deployed API Gateway URL |
@@ -53,8 +53,8 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 ### RPC endpoint (local dev)
 
 ```bash
-# The dev server's RPC endpoint is JSON-RPC 2.0 at POST /aws-blocks/api:
-curl -X POST http://localhost:3001/aws-blocks/api \
+# The dev server's RPC endpoint is JSON-RPC 2.0 at POST /cdk-blocks/api:
+curl -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
 # method = "<namespace>.<methodName>" (namespace = the exported variable name in cdk-blocks/index.ts: `export const api = …` → api); params = positional array.
@@ -112,7 +112,7 @@ This template is backend-only. To add a frontend:
 
 3. **Add Hosting to `cdk-blocks/index.cdk.ts`:**
    ```ts
-   import { Hosting } from '@aws-blocks/blocks/cdk';
+   import { Hosting } from 'aws-cdk-blocks/cdk';
 
    if (!sandboxMode) {
      new Hosting(blocksStack, 'Hosting', {

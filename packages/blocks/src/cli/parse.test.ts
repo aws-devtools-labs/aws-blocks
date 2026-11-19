@@ -175,7 +175,7 @@ describe('parseArgv', () => {
 			[['db', 'migrate', './migrations', '-h'], 'migrate'],
 			[['config', 'remove', 'KEY', '--help'], 'remove'],
 			[['secret', '--stage', 'prod', 'remove', 'KEY', '--force', '--yes', '--help'], 'remove'],
-			[['vendorize', '@aws-blocks/bb-kv-store', '--help'], undefined],
+			[['vendorize', '@aws-cdk-blocks/bb-kv-store', '--help'], undefined],
 			[['config', 'drop', 'x', '--help'], undefined],
 		] as const) {
 			const parsed = parseArgv(argv);

@@ -4,7 +4,7 @@
 /**
  * Keyword guard used in CI.
  *
- *   verify-discovery-tag  Exit non-zero if any publishable `@aws-blocks/*`
+ *   verify-discovery-tag  Exit non-zero if any publishable `@aws-cdk-blocks/*`
  *                   package omits the `aws-blocks` keyword from its
  *                   package.json. That keyword is the documented discovery
  *                   path — `npm search keywords:aws-blocks`
@@ -17,7 +17,7 @@
  *                   rather than left to reviewers.
  *
  * A package counts as publishable when it lives in packages/, is not
- * `private: true`, and its name is under the `@aws-blocks/` scope — the same
+ * `private: true`, and its name is under the `@aws-cdk-blocks/` scope — the same
  * rule the changeset coverage guard applies. Everything else (the private
  * `foundations` workspace, test-apps, create-blocks-app templates, native
  * clients, scripts) is never published to npm and so is not checked.
@@ -36,7 +36,10 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGES_DIR = join(ROOT, "packages");
-const SCOPE = "@aws-blocks/";
+const SCOPE = "@aws-cdk-blocks/";
+// The umbrella publishes unscoped, so a scope test alone would exempt it from the guard.
+const UMBRELLA_PKG = "aws-cdk-blocks";
+const isReleasedPackage = (name: string): boolean => name.startsWith(SCOPE) || name === UMBRELLA_PKG;
 const DISCOVERY_KEYWORD = "aws-blocks";
 
 /**
@@ -67,7 +70,7 @@ interface PublishablePackage {
 }
 
 /**
- * Every publishable `@aws-blocks/*` package under packages/, with its declared
+ * Every publishable `@aws-cdk-blocks/*` package under packages/, with its declared
  * keywords. A `keywords` that is absent or not an array yields an empty list, so
  * the package is reported as missing the tag rather than silently skipped.
  *
@@ -91,7 +94,7 @@ function getPublishablePackages(): PublishablePackage[] {
 		if (!existsSync(pkgJsonPath)) continue;
 
 		const pkgJson = readJson(pkgJsonPath, `packages/${entry}/package.json`);
-		if (typeof pkgJson.name !== "string" || !pkgJson.name.startsWith(SCOPE)) continue;
+		if (typeof pkgJson.name !== "string" || !isReleasedPackage(pkgJson.name)) continue;
 		if (pkgJson.private === true) continue;
 
 		packages.push({

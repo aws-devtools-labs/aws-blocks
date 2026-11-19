@@ -18,7 +18,7 @@ const SANDBOX = { sandboxMode: 'true' };
 
 function synth(construct: string, apiUrl?: string | null, context: Record<string, unknown> | undefined = SANDBOX) {
 	return synthUnderCdkConditions({
-		imports: "import { Auth, stubIdp } from '@aws-blocks/bb-auth';",
+		imports: "import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';",
 		build: `const auth = ${construct};\nreport.fullId = auth.fullId;`,
 		apiUrl,
 		context,
@@ -31,7 +31,7 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 			`new Auth(stack, 'auth', { store: 'builtin', providers: { corp: stubIdp({ users: [${ALICE}] }) } })`,
 		);
 		const fullId = String(report.fullId);
-		const stubWarnings = warnings.filter((w) => w.message.includes('@aws-blocks/bb-auth:StubIdpDeployed'));
+		const stubWarnings = warnings.filter((w) => w.message.includes('@aws-cdk-blocks/bb-auth:StubIdpDeployed'));
 		assert.strictEqual(stubWarnings.length, 1, JSON.stringify(warnings));
 		const [warning] = stubWarnings;
 		assert.strictEqual(warning?.path, '/TestStack/auth');
@@ -64,7 +64,7 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 		assert.throws(
 			() =>
 				synthUnderCdkConditions({
-					imports: "import { Auth, stubIdp } from '@aws-blocks/bb-auth';",
+					imports: "import { Auth, stubIdp } from '@aws-cdk-blocks/bb-auth';",
 					build: `stack._defaultCompute = {};\n${construct};`,
 					apiUrl: null,
 					context: SANDBOX,
@@ -92,42 +92,42 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 
 describe('stubIdp() at synth: one stub per provider key on a backend', () => {
 	test("a signOutPath on a stub IdP's route fails synth: in its own block, and in another block, in either order", () => {
-		const logout = "signOutPath: '/aws-blocks/auth/idp/google/logout'";
+		const logout = "signOutPath: '/cdk-blocks/auth/idp/google/logout'";
 		assert.throws(
 			() =>
 				synth(
 					`new Auth(stack, 'one', { store: 'builtin', providers: { google: stubIdp() }, redirects: { ${logout} } })`,
 				),
-			/Auth '[^']*one': it would mount (GET|POST) \/aws-blocks\/auth\/idp\/google\/logout twice/,
+			/Auth '[^']*one': it would mount (GET|POST) \/cdk-blocks\/auth\/idp\/google\/logout twice/,
 		);
 		assert.throws(
 			() =>
 				synth(
 					`(new Auth(stack, 'one', { store: 'builtin', providers: { google: stubIdp() } }), ` +
-						`new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, redirects: { callbackPath: '/aws-blocks/auth/two/callback', ${logout} } }))`,
+						`new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, redirects: { callbackPath: '/cdk-blocks/auth/two/callback', ${logout} } }))`,
 				),
-			/Auth '[^']*two': its sign-out route \(\/aws-blocks\/auth\/idp\/google\/logout\) is already mounted by Auth '[^']*one'/,
+			/Auth '[^']*two': its sign-out route \(\/cdk-blocks\/auth\/idp\/google\/logout\) is already mounted by Auth '[^']*one'/,
 		);
 		assert.throws(
 			() =>
 				synth(
-					`(new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, redirects: { callbackPath: '/aws-blocks/auth/two/callback', ${logout} } }), ` +
+					`(new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, redirects: { callbackPath: '/cdk-blocks/auth/two/callback', ${logout} } }), ` +
 						`new Auth(stack, 'one', { store: 'builtin', providers: { google: stubIdp() } }))`,
 				),
-			/Auth '[^']*one': the stub IdP routes of providers\.google \(\/aws-blocks\/auth\/idp\/google\/…\) are already mounted by Auth '[^']*two' as its redirects\.callbackPath or redirects\.signOutPath/,
+			/Auth '[^']*one': the stub IdP routes of providers\.google \(\/cdk-blocks\/auth\/idp\/google\/…\) are already mounted by Auth '[^']*two' as its redirects\.callbackPath or redirects\.signOutPath/,
 		);
 	});
 
 	test('two blocks with a stub under the same key fail synth, even with their own redirects (the stub routes ignore them)', () => {
 		const own = (id: string) =>
-			`redirects: { callbackPath: '/aws-blocks/auth/${id}/callback', signOutPath: '/aws-blocks/auth/${id}/signout' }`;
+			`redirects: { callbackPath: '/cdk-blocks/auth/${id}/callback', signOutPath: '/cdk-blocks/auth/${id}/signout' }`;
 		assert.throws(
 			() =>
 				synth(
 					`(new Auth(stack, 'one', { store: 'builtin', providers: { corp: stubIdp() }, ${own('one')} }), ` +
 						`new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, ${own('two')} }))`,
 				),
-			/Auth '[^']*two': providers\.corp is a stubIdp\(\) provider, but Auth '[^']*one' already serves a stub IdP under that key \(\/aws-blocks\/auth\/idp\/corp\/…\)\. .*give each block's stub a different key/,
+			/Auth '[^']*two': providers\.corp is a stubIdp\(\) provider, but Auth '[^']*one' already serves a stub IdP under that key \(\/cdk-blocks\/auth\/idp\/corp\/…\)\. .*give each block's stub a different key/,
 		);
 		// Different keys synthesize.
 		synth(
@@ -167,7 +167,7 @@ describe('stubIdp() at synth outside a sandbox', () => {
 			undefined,
 			{ sandboxMode: true },
 		);
-		assert.ok(warnings.some((w) => w.message.includes('@aws-blocks/bb-auth:StubIdpDeployed')));
+		assert.ok(warnings.some((w) => w.message.includes('@aws-cdk-blocks/bb-auth:StubIdpDeployed')));
 	});
 
 	test('every stub provider is named, next to a real one', () => {

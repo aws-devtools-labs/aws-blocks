@@ -51,7 +51,7 @@ class BlocksClient internal constructor(
     }
 
     /**
-     * POSTs [request] to `{server.url}/{namespace}` (e.g. `…/aws-blocks/api/reports` for
+     * POSTs [request] to `{server.url}/{namespace}` (e.g. `…/cdk-blocks/api/reports` for
      * `reports.build`), so a namespace that runs on its own compute is served by it.
      */
     suspend fun execute(request: BlocksRequest): JsonElement {

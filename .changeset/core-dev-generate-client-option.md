@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/core": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(core): let an app keep its own `cdk-blocks/client.js` under the dev server

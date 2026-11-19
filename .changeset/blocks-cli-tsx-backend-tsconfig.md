@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/blocks": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(blocks): run the backend under `npm run dev`, `sandbox`, `deploy` and `generate client` with `cdk-blocks/tsconfig.json` when the app has one

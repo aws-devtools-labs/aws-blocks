@@ -28,7 +28,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
-import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry, BlocksPresets, type BlocksDefaults } from '@aws-cdk-blocks/core/cdk';
 import { KnowledgeBase } from './index.cdk.js';
 
 // Real local-folder source so BucketDeployment + sidecar generation synth.

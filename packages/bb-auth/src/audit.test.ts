@@ -9,7 +9,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';
 import type { SessionStore } from './sessions.js';

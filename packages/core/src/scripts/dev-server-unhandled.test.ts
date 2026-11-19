@@ -103,7 +103,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
 		let lastError: unknown;
 		while (Date.now() < deadline) {
 			try {
-				const response = await fetch(`http://127.0.0.1:${port}/aws-blocks/api`, {
+				const response = await fetch(`http://127.0.0.1:${port}/cdk-blocks/api`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ jsonrpc: '2.0', method, params: [], id: 1 }),

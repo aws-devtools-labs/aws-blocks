@@ -14,7 +14,7 @@ import 'package:test/test.dart';
 /// [status], and returns what the call returned.
 Future<Object?> _call(Object body, {int status = 200}) {
   final client = BlocksClient(
-    baseUrl: 'http://test/aws-blocks/api',
+    baseUrl: 'http://test/cdk-blocks/api',
     client: MockClient(
       (_) async =>
           http.Response(body is String ? body : jsonEncode(body), status),
@@ -291,7 +291,7 @@ void main() {
     test('connection refused', () async {
       final refused = http.ClientException('Connection refused');
       final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async => throw refused),
       );
       await expectLater(
@@ -308,7 +308,7 @@ void main() {
     test('a timeout is a TransportException with its cause', () async {
       final timeout = TimeoutException('Request stalled');
       final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async => throw timeout),
       );
       await expectLater(
@@ -328,7 +328,7 @@ void main() {
       final cancelled = OidcCancelledException();
       var sent = false;
       final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async {
           sent = true;
           return http.Response('{}', 200);
@@ -342,7 +342,7 @@ void main() {
     test('a Blocks error from the HTTP client is not wrapped', () async {
       final cancelled = OidcCancelledException();
       final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async => throw cancelled),
       );
       await expectLater(client.call('ns.method', []), throwsA(same(cancelled)));
@@ -352,7 +352,7 @@ void main() {
       // Aborting a request is the caller's own cancellation.
       final aborted = http.RequestAbortedException();
       final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async => throw aborted),
       );
       await expectLater(client.call('ns.method', []), throwsA(same(aborted)));
@@ -360,7 +360,7 @@ void main() {
 
     test('an Error from the HTTP client is not wrapped', () async {
       final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async => throw StateError('bug')),
       );
       await expectLater(
@@ -372,7 +372,7 @@ void main() {
     test('request after close()', () async {
       var sent = 0;
       final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async {
           sent++;
           return http.Response(
@@ -397,7 +397,7 @@ void main() {
       var sent = 0;
       late final BlocksClient client;
       client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: MockClient((_) async {
           sent++;
           return http.Response('{}', 401);

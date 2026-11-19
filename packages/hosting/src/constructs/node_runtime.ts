@@ -17,7 +17,7 @@ import { Runtime } from 'aws-cdk-lib/aws-lambda';
  * because framework compute is a fixed, separately-versioned choice: nothing
  * detects the Node version a framework compiled its bundle against.
  *
- * Mirrors `@aws-blocks/core`'s `DEFAULT_NODE_RUNTIME`; kept local because
+ * Mirrors `@aws-cdk-blocks/core`'s `DEFAULT_NODE_RUNTIME`; kept local because
  * hosting does not depend on core. Bump both together. This controls only the
  * AWS-managed runtime that executes deployed handlers — independent of the Node
  * version the CLI / CDK synth runs on.

@@ -38,11 +38,11 @@
  * set, the Lambda computes run in it too.
  */
 
-import { ApiNamespace, type BlocksContext, Scope } from '@aws-blocks/core';
-import { Compute, CronJob } from '@aws-blocks/blocks';
-import { AsyncJob } from '@aws-blocks/bb-async-job';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { FileBucket } from '@aws-blocks/bb-file-bucket';
+import { ApiNamespace, type BlocksContext, Scope } from '@aws-cdk-blocks/core';
+import { Compute, CronJob } from 'aws-cdk-blocks';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
 
 // A short scope id: every resource name derives from it (see the stack name in index.cdk.ts).
 const scope = new Scope('compute');

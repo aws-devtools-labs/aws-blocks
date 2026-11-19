@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, synthGuard } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { __BB_CLASS__Options } from './types.js';
 import { BB_NAME } from './version.js';
 

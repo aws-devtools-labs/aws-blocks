@@ -4,7 +4,7 @@
 /**
  * Lightweight, self-contained telemetry for create-blocks-app.
  *
- * This avoids depending on @aws-blocks/core (whose postinstall scripts
+ * This avoids depending on @aws-cdk-blocks/core (whose postinstall scripts
  * require devDependencies that aren't available when installed from the registry).
  */
 

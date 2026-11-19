@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // secret()/config() declare markers (CDK-free subpath). The runtime getters
-// getSecret()/getConfig() are imported from '@aws-blocks/hosting' directly —
+// getSecret()/getConfig() are imported from '@aws-cdk-blocks/hosting' directly —
 // core already exports a backend `getConfig` (config loader) under this name.
 export {
 	type ConfigValue,
@@ -14,7 +14,7 @@ export {
 	type SecretValue,
 	secret,
 	type ValueKind,
-} from '@aws-blocks/hosting';
+} from '@aws-cdk-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type ApiNamespaceConstructor, type ApiNamespaceOptions, type AsyncAPI, type BlocksContext } from './api.js';
 export {
 	type ComputeOptions,
@@ -50,7 +50,7 @@ export {
 	getSdkIdentifiers,
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
-export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX, canonicalBlocksPath } from './constants.js';
 export {
 	type ContainerPollerHandle,
 	type ContainerPollerStarter,

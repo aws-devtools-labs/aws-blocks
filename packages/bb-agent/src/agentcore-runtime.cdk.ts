@@ -28,9 +28,9 @@ import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { AgentCoreRuntime as AgentCoreRuntimeVersion, AgentRuntimeArtifact, Runtime } from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { getBlocksRoot, getConfigLocation, registerConfig, Scope } from '@aws-blocks/core/cdk';
-import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
-import type { ScopeParent } from '@aws-blocks/core';
+import { getBlocksRoot, getConfigLocation, registerConfig, Scope } from '@aws-cdk-blocks/core/cdk';
+import { sourceScopedConditions } from '@aws-cdk-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { bundleAgentCoreAsset } from './agentcore-bundle.js';
 
 /** References the agent loop needs, handed in by the Agent CDK constructor. */

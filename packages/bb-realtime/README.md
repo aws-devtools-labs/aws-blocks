@@ -1,4 +1,4 @@
-# @aws-blocks/bb-realtime
+# @aws-cdk-blocks/bb-realtime
 
 Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.
 
@@ -13,7 +13,7 @@ Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.
 ## Quick Start
 
 ```typescript
-import { Realtime } from '@aws-blocks/bb-realtime';
+import { Realtime } from '@aws-cdk-blocks/bb-realtime';
 import { z } from 'zod';
 
 const rt = new Realtime(scope, 'collab', {
@@ -234,8 +234,8 @@ issued the original channel.
 Every `publish()` validates against the schema at runtime:
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { RealtimeErrors } from '@aws-blocks/bb-realtime';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 
 try {
   await rt.publish('chat', 'room-1', { sender: 123 }); // wrong type
@@ -249,7 +249,7 @@ try {
 ## Error Constants
 
 ```typescript
-import { RealtimeErrors } from '@aws-blocks/bb-realtime';
+import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 
 RealtimeErrors.ValidationFailed  // data failed schema validation on publish, or an invalid channel name / getChannel() scope
 RealtimeErrors.PublishFailed     // Publish fan-out failed (AWS only)

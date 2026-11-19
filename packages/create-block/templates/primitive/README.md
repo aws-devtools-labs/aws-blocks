@@ -1,7 +1,7 @@
 # __BB_CLASS__
 
 TODO: one-sentence summary of what this Building Block does. (The first sentence
-becomes the block's blurb in the `@aws-blocks/blocks` catalog table.)
+becomes the block's blurb in the `aws-cdk-blocks` catalog table.)
 
 **Keywords:** TODO, comma, separated
 
@@ -25,7 +25,7 @@ worked key/value example, `bb-file-bucket` for object storage.
 ## Examples
 
 ```ts
-import { Scope, ApiNamespace } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace } from 'aws-cdk-blocks';
 import { __BB_CLASS__ } from '__BB_PKG_NAME__';
 
 const scope = new Scope('my-app');

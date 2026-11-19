@@ -1,12 +1,12 @@
-# AWS Blocks Dart
+# AWS CDK Blocks Dart
 
-The Dart SDK for AWS Blocks.
+The Dart SDK for AWS CDK Blocks.
 
-AWS Blocks lets you define a backend in TypeScript — APIs, auth, databases, realtime channels, file storage — and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
+AWS CDK Blocks lets you define a backend in TypeScript — APIs, auth, databases, realtime channels, file storage — and deploy it to AWS. This SDK gives your Flutter app a typed client that talks to that backend with zero boilerplate.
 
 ## How it works
 
-You write your backend. AWS Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions — ready to drop into your Flutter app.
+You write your backend. AWS CDK Blocks generates a spec file describing your API. This SDK reads that spec and produces a Dart client with typed methods, models, and realtime subscriptions — ready to drop into your Flutter app.
 
 ```
 Your backend (TypeScript)  →  blocks.spec.json  →  blocks_codegen  →  Typed Dart client
@@ -91,7 +91,7 @@ This produces a typed Dart client from your spec.
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'blocks.blocks.dart';
 
-final blocks = Blocks(baseUrl: 'http://localhost:3001/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'http://localhost:3001/cdk-blocks/api');
 final greeting = await blocks.hello.greet(name: 'World');
 print(greeting.message); // "Hello, World!"
 ```
@@ -114,7 +114,7 @@ import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'blocks.blocks.dart'; // the generated client
 
-const rpcUrl = 'https://api.example.com/aws-blocks/api';
+const rpcUrl = 'https://api.example.com/cdk-blocks/api';
 
 // blocks_runtime_flutter keeps the session in secure storage by default
 // (see Sessions), so a restarted app is still signed in.
@@ -269,7 +269,7 @@ dependencies:
 and build the client as usual, before or after `runApp`. The app does not have to call `WidgetsFlutterBinding.ensureInitialized()` first:
 
 ```dart
-final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
 // Signed in if the user was signed in before the app restarted.
 final state = await blocks.authApi.getAuthState();
 ```
@@ -284,7 +284,7 @@ To keep the session in memory only, so that it ends when the process does, pass 
 
 ```dart
 final blocks = Blocks(
-  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  baseUrl: 'https://your-api.example.com/cdk-blocks/api',
   sessionStore: InMemorySessionStore(),
 );
 ```
@@ -302,7 +302,7 @@ Future<void> main() async {
     onPersistError: (error, _) => stderr.writeln('session not saved: $error'),
   );
   registerDefaultSessionStore(() => session);
-  final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final blocks = Blocks(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   // ... sign in ...
 
   // The session is written in the background; wait for it before exit().
@@ -376,7 +376,7 @@ native/dart/
 
 - Dart 3.3+
 - Flutter (for the demo app — the SDK itself is pure Dart)
-- Node.js 22+ (for running the AWS Blocks backend locally)
+- Node.js 22+ (for running the AWS CDK Blocks backend locally)
 
 ## How the codegen works
 

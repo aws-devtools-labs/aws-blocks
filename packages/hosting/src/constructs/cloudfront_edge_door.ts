@@ -93,7 +93,7 @@ export type CloudFrontEdgeDoorInput = DoorInput & {
    * required headers (its origin-verify secret) over a plain-HTTP hop to an
    * internet-facing router instead of failing synth
    * (`OriginSecretOverPlainHttpError`), with the
-   * `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning. Only for a
+   * `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` warning. Only for a
    * trusted network path. @default false
    */
   allowPlainHttp?: boolean;
@@ -118,13 +118,13 @@ export type CloudFrontEdgeDoorResult = FrontDoorResult & {
  *
  * A production deploy fails synth, so the secret is never sent. A sandbox
  * deploy (`sandboxMode` context) synthesizes with a warning
- * (`@aws-blocks/hosting:OriginSecretOverPlainHttp`): it is disposable, and the
+ * (`@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp`): it is disposable, and the
  * router rejects every request without the header, so dropping it would
  * leave the sandbox unreachable.
  *
  * With the stacked door's `allowPlainHttp: true`, a production deploy sends
  * the headers anyway and warns
- * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledgeable): the
+ * (`@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`, acknowledgeable): the
  * explicit opt-out for a trusted network path between the edge and the router.
  *
  * @throws HostingError('OriginSecretOverPlainHttpError') for that hop outside a sandbox, without `allowPlainHttp`.
@@ -160,7 +160,7 @@ const assertSecretHopEncrypted = (scope: Construct, handle: DoorUpstream['origin
     });
   }
   Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:OriginSecretOverPlainHttp',
+    '@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp',
     `${message} This is allowed in a sandbox only; a production deploy fails synth. ${resolution}`,
   );
 };
@@ -282,12 +282,12 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     };
     if (plan.truncated) {
       Annotations.of(scope).addWarningV2(
-        '@aws-blocks/hosting:StackedEdgeBehaviorLimit',
+        '@aws-cdk-blocks/hosting:StackedEdgeBehaviorLimit',
         `The stacked door's edge needs ${plan.wanted} cache behaviors to serve every static route from S3; ` +
           `a CloudFront distribution allows ${MAX_EDGE_BEHAVIORS} besides its default by default. The edge keeps ` +
           `${plan.behaviors.length}; the remaining static routes are served through the ALB router (correct, but not ` +
           'edge-direct, and subject to its 1 MB response limit). Group static routes under fewer prefixes, or move ' +
-          'raw backend routes under `/aws-blocks/`.',
+          'raw backend routes under `/cdk-blocks/`.',
       );
     }
     // What reaches the router's asset proxy (the ALB's 1 MB Lambda response

@@ -3,7 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BlocksStack, BlocksPresets, Hosting } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, Hosting } from 'aws-cdk-blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -46,7 +46,7 @@ if (!FRONT_DOORS.includes(apiFrontDoor)) {
 // `pr-1234-12` (56).
 // A second axis, set per leg in the same matrix: COMPUTE_STRICT_NAMESPACE_PLACEMENT
 // ('true' or 'false', default 'false') turns on `defaults.strictNamespacePlacement`,
-// so the bare /aws-blocks/api endpoint refuses the namespaces placed on their own
+// so the bare /cdk-blocks/api endpoint refuses the namespaces placed on their own
 // compute (test/api-namespace-compute.test.ts and container-api-namespace.test.ts
 // assert either behaviour). It doesn't change the stack name: one leg sets it.
 const strictPlacementFlag = process.env.COMPUTE_STRICT_NAMESPACE_PLACEMENT ?? 'false';

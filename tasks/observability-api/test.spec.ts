@@ -79,7 +79,7 @@ test.describe('observability-api', () => {
 	test('api.ping returns a clean { status: "ok" } over JSON-RPC', async ({ request }) => {
 		// Call the instrumented operation directly — independent of the page — and
 		// require the documented JSON-RPC shape with no error envelope.
-		const res = await request.post(`${BASE}/aws-blocks/api`, {
+		const res = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.ping', params: [], id: 1 },
 		});
@@ -114,7 +114,7 @@ test.describe('observability-api', () => {
 	});
 
 	test('api.ping returns exactly { status: "ok" } with no extra fields', async ({ request }) => {
-		const res = await request.post(`${BASE}/aws-blocks/api`, {
+		const res = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.ping', params: [], id: 1 },
 		});
@@ -128,7 +128,7 @@ test.describe('observability-api', () => {
 
 	test('api.ping response is JSON-RPC 2.0 compliant (echoes id, includes jsonrpc)', async ({ request }) => {
 		const reqId = 87654;
-		const res = await request.post(`${BASE}/aws-blocks/api`, {
+		const res = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.ping', params: [], id: reqId },
 		});
@@ -140,7 +140,7 @@ test.describe('observability-api', () => {
 	});
 
 	test('the JSON-RPC endpoint responds with application/json', async ({ request }) => {
-		const res = await request.post(`${BASE}/aws-blocks/api`, {
+		const res = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.ping', params: [], id: 1 },
 		});
@@ -149,7 +149,7 @@ test.describe('observability-api', () => {
 	});
 
 	test('an unknown api method returns a JSON-RPC error envelope, not a 5xx or a success', async ({ request }) => {
-		const res = await request.post(`${BASE}/aws-blocks/api`, {
+		const res = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.nope', params: [], id: 7 },
 		});
@@ -166,7 +166,7 @@ test.describe('observability-api', () => {
 		// and must succeed independently — a shared mutable "current segment" or
 		// other cross-call state would surface as an error or a non-ok result here.
 		const calls = Array.from({ length: 8 }, (_, i) =>
-			request.post(`${BASE}/aws-blocks/api`, {
+			request.post(`${BASE}/cdk-blocks/api`, {
 				headers: { 'Content-Type': 'application/json' },
 				data: { jsonrpc: '2.0', method: 'api.ping', params: [], id: 1000 + i },
 			}),
@@ -184,7 +184,7 @@ test.describe('observability-api', () => {
 		// "Structured data, not just status": api.info must surface the app name
 		// (read from the AppSetting — exact) plus a numeric uptime, and NOTHING
 		// else. Extra fields are a contract violation.
-		const res = await request.post(`${BASE}/aws-blocks/api`, {
+		const res = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.info', params: [], id: 501 },
 		});
@@ -200,7 +200,7 @@ test.describe('observability-api', () => {
 
 	test('api.echo round-trips its argument exactly (type-preserving) and adds no extra fields', async ({ request }) => {
 		const msg = uniq('echo');
-		const r1 = await request.post(`${BASE}/aws-blocks/api`, {
+		const r1 = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.echo', params: [msg], id: 511 },
 		});
@@ -211,7 +211,7 @@ test.describe('observability-api', () => {
 		expect(Object.keys(b1.result).sort()).toEqual(['echo']);
 
 		// Type-preserving: a numeric argument must come back as a number, not "424242".
-		const r2 = await request.post(`${BASE}/aws-blocks/api`, {
+		const r2 = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.echo', params: [424242], id: 512 },
 		});
@@ -223,7 +223,7 @@ test.describe('observability-api', () => {
 
 	test('api.echo rejects a missing argument with a JSON-RPC error envelope (no degenerate success)', async ({ request }) => {
 		// No params field at all.
-		const r1 = await request.post(`${BASE}/aws-blocks/api`, {
+		const r1 = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.echo', id: 521 },
 		});
@@ -233,7 +233,7 @@ test.describe('observability-api', () => {
 		expect(b1.result ?? null).toBeNull();
 
 		// Empty params list — same contract: validate, do not echo `undefined`.
-		const r2 = await request.post(`${BASE}/aws-blocks/api`, {
+		const r2 = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: { jsonrpc: '2.0', method: 'api.echo', params: [], id: 522 },
 		});
@@ -246,7 +246,7 @@ test.describe('observability-api', () => {
 	test('a malformed (array/batch) request returns an InvalidRequest error envelope, not a 5xx', async ({ request }) => {
 		// The framework does not support batch; an array body is an Invalid
 		// Request. The contract is a clean JSON-RPC error envelope, never a crash.
-		const res = await request.post(`${BASE}/aws-blocks/api`, {
+		const res = await request.post(`${BASE}/cdk-blocks/api`, {
 			headers: { 'Content-Type': 'application/json' },
 			data: [{ jsonrpc: '2.0', method: 'api.ping', params: [], id: 1 }],
 		});

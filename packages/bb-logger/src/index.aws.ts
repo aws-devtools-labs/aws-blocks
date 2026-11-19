@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { LogLevel, LoggingOptions, ChildLogger } from './types.js';
 import { ChildLoggerImpl, writeLog } from './emitter.js';
 import { BB_NAME, BB_VERSION } from './version.js';

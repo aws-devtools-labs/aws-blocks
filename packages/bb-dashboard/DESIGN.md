@@ -2,7 +2,7 @@
 
 Design document for Dashboard. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-dashboard`
+**Package:** `@aws-cdk-blocks/bb-dashboard`
 **Type:** Primitive (creates new infrastructure)
 **AWS Service:** Amazon CloudWatch Dashboards
 
@@ -41,7 +41,7 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 
 ### D-DB-4: Redirect route vs direct URL embedding
 
-**Decision:** Dashboard registers a `GET /aws-blocks/dashboard` RawRoute that 302-redirects to the CloudWatch console URL, rather than embedding or serving the dashboard directly.
+**Decision:** Dashboard registers a `GET /cdk-blocks/dashboard` RawRoute that 302-redirects to the CloudWatch console URL, rather than embedding or serving the dashboard directly.
 
 **Rationale:**
 - **API compatibility** — Lets HTTP clients discover the dashboard URL programmatically
@@ -245,7 +245,7 @@ The Dashboard always registers a `GET` RawRoute that 302-redirects to the CloudW
    ```typescript
    // Internally equivalent to:
    new RawRoute(scope, 'dashboard-redirect', {
-     path: options.routePath ?? '/aws-blocks/dashboard',
+     path: options.routePath ?? '/cdk-blocks/dashboard',
      method: 'GET',
      handler: async (ctx) => {
        const url = process.env.BB_DASHBOARD_URL;
@@ -387,7 +387,7 @@ Dashboard intentionally does **not** walk the scope tree to auto-discover BBs be
 - **Zero additional security surface** — Dashboard is a CloudWatch Console page protected by AWS IAM
 - **Access requires:** AWS Console login with `cloudwatch:GetDashboard` permission
 - **No data exposure:** Dashboard displays data the viewer already has access to via IAM
-- **Redirect route:** The `/aws-blocks/dashboard` route exposes only the console link (no data); AWS Console login is still required
+- **Redirect route:** The `/cdk-blocks/dashboard` route exposes only the console link (no data); AWS Console login is still required
 
 ### Threat Model
 

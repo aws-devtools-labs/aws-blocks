@@ -6,7 +6,7 @@
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import type pg from 'pg';
 import { linesToPaste } from '../cli/commands.js';
 import { externalPoolConfig, PgEngine, type PgPool, type PgPoolClient } from '../engines/pg-engine.js';

@@ -28,7 +28,7 @@ export const api = new ApiNamespace(new Scope('app', { parent: root }), 'api', (
 	},
 }));
 
-// Constructed as 'orders', exported as 'shop' — routed as /aws-blocks/api/shop.
+// Constructed as 'orders', exported as 'shop' — routed as /cdk-blocks/api/shop.
 export const shop = new ApiNamespace(ordersScope, 'orders', () => ({
 	async list() {
 		return [];

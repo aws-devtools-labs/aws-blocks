@@ -6,7 +6,7 @@
  * fails locally also fails when deployed (and the other way round). Internal to
  * the package — not re-exported from the entry points.
  */
-import { blocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-cdk-blocks/core';
 import { EmailErrors } from './errors.js';
 import type { EmailMessage } from './types.js';
 

@@ -18,7 +18,7 @@
  * response headers (asset proxy and API forwarder), and error pages (a missing
  * static file → the 404 page, an S3 failure → the 500 page). Responses the ALB
  * sends straight to the server or image function bypass them; synth names what
- * is not applied (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * is not applied (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  *
  * Its settings arrive through an internal extra, `alb` — the {@link AlbConstruct}
  * props `HostingConstruct` assembled from the app.
@@ -48,7 +48,7 @@ export const albDoor = defineFrontDoor<AlbDoorInput, AlbDoorResult>({
   serverResponse: 'buffered',
 
   build(scope, input) {
-    // Route every API path the app has (`/aws-blocks/*` + the raw routes).
+    // Route every API path the app has (`/cdk-blocks/*` + the raw routes).
     const alb = new AlbConstruct(scope, 'Alb', {
       ...input.alb,
       apiPaths: input.alb.apiPaths ?? input.origins.api?.paths,

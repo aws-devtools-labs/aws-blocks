@@ -14,7 +14,7 @@
  *
  * ```ts
  * import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
- * import { cf, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+ * import { cf, defineFrontDoor } from '@aws-cdk-blocks/hosting/constructs';
  *
  * export const myDoor = defineFrontDoor({
  *   service: 'my-cdn',
@@ -44,7 +44,7 @@
  * {@link DoorInput}.
  *
  * These are CDK types by design: this module ships from the CDK entry
- * (`@aws-blocks/hosting/constructs`), where door authors are writing CDK.
+ * (`@aws-cdk-blocks/hosting/constructs`), where door authors are writing CDK.
  *
  * @module
  */
@@ -106,20 +106,20 @@ export type ImageOrigin = {
 /**
  * The backend API, present when `Hosting` was given one (`api`). Every path
  * that must reach the backend is listed, so a door cannot silently drop a raw
- * route by proxying only `/aws-blocks/*`.
+ * route by proxying only `/cdk-blocks/*`.
  */
 export type ApiOrigin = {
   /** Discriminant. */
   readonly kind: 'api';
-  /** The backend's full API URL (a CDK token), e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks/api`. */
+  /** The backend's full API URL (a CDK token), e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/cdk-blocks/api`. */
   readonly url: string;
   /** The API host (no scheme, no path), derived from {@link url} in-template. */
   readonly host: string;
   /** The stage path to set as the origin path, e.g. `/prod`, derived from {@link url} in-template. */
   readonly stagePath: string;
   /**
-   * Every path pattern to proxy to the API: `/aws-blocks/*` (RPC and sign-in)
-   * plus each raw route the backend registered.
+   * Every path pattern to proxy to the API: `/cdk-blocks/*` (RPC and sign-in),
+   * its legacy `/aws-blocks/*` alias, and each raw route the backend registered.
    */
   readonly paths: readonly string[];
 };
@@ -304,7 +304,7 @@ export type FrontDoorResult = {
    *
    * Declare them under the door's `scope` (or a construct inside it): those
    * also wait for the uploads AWS Blocks declares later (the
-   * `@aws-blocks/core` `Hosting` uploads the resolved runtime config after
+   * `@aws-cdk-blocks/core` `Hosting` uploads the resolved runtime config after
    * the door). A resource created directly under the stack is not ordered
    * after that later upload.
    */

@@ -14,8 +14,8 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthAction, AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import { type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
+import type { AuthAction, AuthActionInput, AuthState, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { type BlocksContext, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { federationConfigKeys } from './cdk/contract.js';
 import { type Auth, AuthErrors } from './index.aws.js';
 import {

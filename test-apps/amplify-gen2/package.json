@@ -32,11 +32,11 @@
   },
   "dependencies": {
     "aws-amplify": "^6.22.2",
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/core": "*",
-    "@aws-blocks/bb-kv-store": "*",
-    "@aws-blocks/bb-database": "*",
-    "@aws-blocks/bb-auth": "*"
+    "aws-cdk-blocks": "*",
+    "@aws-cdk-blocks/core": "*",
+    "@aws-cdk-blocks/bb-kv-store": "*",
+    "@aws-cdk-blocks/bb-database": "*",
+    "@aws-cdk-blocks/bb-auth": "*"
   },
   "workspaces": [
     "cdk-blocks"

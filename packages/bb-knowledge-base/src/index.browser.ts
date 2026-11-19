@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, WaitUntilSyncedOptions, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
 import { KnowledgeBaseErrors, blocksError } from './errors.js';
 

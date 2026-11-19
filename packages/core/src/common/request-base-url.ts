@@ -24,7 +24,7 @@ function sharedRequestBaseUrlStore(): AsyncLocalStorage<string> {
  * supply with its request.
  *
  * One store per process, held on `globalThis`: the first copy of
- * `@aws-blocks/core` to load creates it and every later copy reuses it. With a
+ * `@aws-cdk-blocks/core` to load creates it and every later copy reuses it. With a
  * store per copy, a request dispatched by one copy would be invisible to
  * `getRequestBaseUrl()` in another, and the stage would be lost.
  */
@@ -50,7 +50,7 @@ export const requestBaseUrl: AsyncLocalStorage<string> = sharedRequestBaseUrlSto
  *   `ctx.request.url.origin`. Every transport sets the store for every request
  *   it dispatches, so a handler never reaches this fallback.
  *
- * Resolves across duplicate copies of `@aws-blocks/core` (see {@link requestBaseUrl}).
+ * Resolves across duplicate copies of `@aws-cdk-blocks/core` (see {@link requestBaseUrl}).
  */
 export function getRequestBaseUrl(ctx: { request: { url: URL } }): string {
 	return requestBaseUrl.getStore() ?? ctx.request.url.origin;

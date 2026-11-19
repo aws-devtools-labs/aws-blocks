@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-dashboard": patch
-"@aws-blocks/bb-logger": patch
+"@aws-cdk-blocks/bb-dashboard": patch
+"@aws-cdk-blocks/bb-logger": patch
 ---
 
 docs: the Dashboard and Logger docs describe the installed version

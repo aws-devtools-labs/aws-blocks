@@ -52,7 +52,7 @@ export interface DashboardServer {
  * Boots the Admin UI: a Next.js request handler wrapped in a plain
  * node:http server that (1) binds to 127.0.0.1 only and (2) rejects any
  * /api request without the session token — even if a route handler forgets
- * to check. Called by @aws-blocks/core's dashboard.ts via dynamic import.
+ * to check. Called by @aws-cdk-blocks/core's dashboard.ts via dynamic import.
  */
 export async function startDashboardServer(options: DashboardServerOptions): Promise<DashboardServer> {
 	const port = options.port ?? 4400;

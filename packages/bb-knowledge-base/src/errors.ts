@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { blocksError as coreBlocksError } from '@aws-blocks/core';
+import { blocksError as coreBlocksError } from '@aws-cdk-blocks/core';
 
 /**
  * Typed error constants for KnowledgeBase. Use with `isBlocksError()` in catch blocks.

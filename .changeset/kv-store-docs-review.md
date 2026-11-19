@@ -1,6 +1,6 @@
 ---
-'@aws-blocks/bb-kv-store': patch
-'@aws-blocks/blocks': patch
+'@aws-cdk-blocks/bb-kv-store': patch
+'aws-cdk-blocks': patch
 ---
 
 docs(bb-kv-store): correct the `encryption` and `LegacyKVStore` docs, and give every `KVStore` method an example

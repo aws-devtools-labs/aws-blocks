@@ -49,7 +49,7 @@ async function resolveApiUrl(): Promise<string> {
   function isInvalidUrl(url: string): boolean {
     if (!url || typeof url !== 'string' || !url.trim()) return true;
     if (url === 'undefined' || url.startsWith('undefined')) return true;
-    // Relative URLs (e.g. '/aws-blocks/api') are valid for browser fetch
+    // Relative URLs (e.g. '/cdk-blocks/api') are valid for browser fetch
     if (url.startsWith('/')) return false;
     try {
       const parsed = new URL(url);
@@ -281,7 +281,7 @@ export interface ApiNamespaceClientOptions {
    * This replaces only the *discovery* of the base URL, not the request path: the
    * client still appends `/{namespace}` to it, exactly as it does for a base URL
    * resolved from config.json. Pass the same value config.json would carry
-   * (for example `https://d123.cloudfront.net/aws-blocks/api`), not a
+   * (for example `https://d123.cloudfront.net/cdk-blocks/api`), not a
    * namespace-qualified URL. A trailing slash is tolerated.
    */
   url?: string;
@@ -313,10 +313,10 @@ export interface ApiNamespaceClientOptions {
  * compute that hosts it — a single-compute backend serves every namespace path
  * from the same origin, so this is safe there too. The namespace also stays in
  * the JSON-RPC body, which is what the server dispatches on — the path must name
- * the same namespace — so raw HTTP callers posting to the bare `/aws-blocks/api`
+ * the same namespace — so raw HTTP callers posting to the bare `/cdk-blocks/api`
  * endpoint keep working.
  *
- * `baseUrl` may be relative (Hosting publishes `/aws-blocks/api` for same-origin
+ * `baseUrl` may be relative (Hosting publishes `/cdk-blocks/api` for same-origin
  * browser calls), so this does deliberate string concatenation rather than going
  * through `new URL()`.
  */
@@ -345,7 +345,7 @@ const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
  *
  * ```typescript
  * // Generated client.js
- * import { ApiNamespaceClient } from '@aws-blocks/core/client';
+ * import { ApiNamespaceClient } from '@aws-cdk-blocks/core/client';
  * export const api = ApiNamespaceClient('api');
  *
  * // Frontend usage — fully typed via the 'cdk-blocks' types export
@@ -379,7 +379,7 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
     options?.retryStaleConnection === false
       ? (url, init) => (contextFetch() ?? fetch)(url, init)
       : (url, init) => fetchWithStaleConnectionRetry(url, init, contextFetch());
-  // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
+  // The namespace this client calls, the same in every tab: `@aws-cdk-blocks/auth-common` tags its
   // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
   const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;
   return new Proxy({} as any, {

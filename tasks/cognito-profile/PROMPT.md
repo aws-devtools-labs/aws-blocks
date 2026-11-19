@@ -22,11 +22,11 @@ The workspace has already been scaffolded. Begin by reading README.md (and any A
 
 ## The `api` namespace (required)
 
-Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /aws-blocks/api`) with:
+Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /cdk-blocks/api`) with:
 
 1. **`api.getLastCode()`** — test harness hook (the grader has no mailbox): returns the most recently delivered verification code as `{ username, code }` (or `null`), where `username` is the email the code was sent to. **This is a test-only backdoor and MUST NOT be a production attack surface:** annotate it `@blocksSkipCodegen` (keep it out of the generated client/types) and gate its body so it returns `null` unless `process.env.BLOCKS_MOCK === 'true'`. Under real Cognito the code is emailed and never retained, so outside mock/test mode this method must reveal nothing. The bench harness runs the dev server with `BLOCKS_MOCK=true`, so the grader can still read the code. Retrieved via:
    ```
-   POST /aws-blocks/api
+   POST /cdk-blocks/api
    { "jsonrpc": "2.0", "method": "api.getLastCode", "params": [], "id": 1 }
    ```
 2. **`api.whoami()`** — returns the **currently signed-in** user's identity as `{ username }` (their email), derived on the server from the **auth session cookie** — not from a client-supplied argument. Called with **no session** (a request carrying no sign-in cookie), it returns a JSON-RPC **error** envelope (unauthenticated) — never a `result` and never a stale/other identity. After sign-out the session is gone, so `whoami` is again unauthenticated.

@@ -27,7 +27,7 @@ export const SERVER_ORIGIN_LOG_RETENTION = RetentionDays.ONE_MONTH;
 /**
  * Header CloudFront adds to every server-origin request it forwards, so the
  * stage web ACL's per-IP rate rule (when there is one) skips them (they come
- * from CloudFront edge IPs). Same name as `@aws-blocks/core`'s API marker.
+ * from CloudFront edge IPs). Same name as `@aws-cdk-blocks/core`'s API marker.
  */
 export const SERVER_ORIGIN_MARKER_HEADER = 'x-blocks-front-door';
 
@@ -107,14 +107,14 @@ export const originVerifyPolicy = (accepted: readonly string[]): iam.PolicyDocum
 
 /**
  * Global registry key for the per-stack API Gateway CloudWatch Logs account
- * resource. The same `Symbol.for` key `@aws-blocks/core` uses, so a stack gets
+ * resource. The same `Symbol.for` key `@aws-cdk-blocks/core` uses, so a stack gets
  * one `AWS::ApiGateway::Account` whichever package asks first.
  */
 const ACCOUNT_KEY = Symbol.for('BLOCKS_APIGATEWAY_ACCOUNT');
 
 /**
  * Ensure the account-level API Gateway CloudWatch Logs role exists on `stack`,
- * creating it at most once per stack (shared with `@aws-blocks/core`, which
+ * creating it at most once per stack (shared with `@aws-cdk-blocks/core`, which
  * creates the same resources under the same ids). REST API access logging
  * needs it; a stage that logs must depend on the returned account so a
  * clean-account first deploy applies the setting before creating the stage.
@@ -127,7 +127,7 @@ export const ensureApiGatewayAccount = (stack: Stack): CfnAccount => {
   const registry = stack as unknown as Record<symbol, CfnAccount | undefined>;
   const existing = registry[ACCOUNT_KEY];
   if (existing) return existing;
-  // Same trust as `@aws-blocks/core`'s role under this id. No
+  // Same trust as `@aws-cdk-blocks/core`'s role under this id. No
   // aws:SourceAccount/aws:SourceArn condition: API Gateway does not send either
   // key when it delivers logs with this role, so a condition stops log delivery.
   const role = new iam.Role(stack, 'BlocksApiGatewayCloudWatchRole', {

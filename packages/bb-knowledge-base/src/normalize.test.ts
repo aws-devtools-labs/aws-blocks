@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { KnowledgeBaseErrors } from './errors.js';
 import { normalizeMaxResults } from './normalize.js';
 

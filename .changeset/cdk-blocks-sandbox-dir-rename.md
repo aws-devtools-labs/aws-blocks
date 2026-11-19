@@ -1,10 +1,10 @@
 ---
-'@aws-blocks/core': minor
-'@aws-blocks/blocks': minor
-'@aws-blocks/hosting': minor
-'@aws-blocks/create-blocks-app': minor
-'@aws-blocks/bb-auth': minor
-'@aws-blocks/admin-ui': minor
+'@aws-cdk-blocks/core': minor
+'aws-cdk-blocks': minor
+'@aws-cdk-blocks/hosting': minor
+'@aws-cdk-blocks/create-blocks-app': minor
+'@aws-cdk-blocks/bb-auth': minor
+'@aws-cdk-blocks/admin-ui': minor
 ---
 
 The per-deploy state directory is now `.cdk-blocks-sandbox/`

@@ -31,7 +31,7 @@ import {
 } from './service-principal-trust.js';
 
 // Same inline default-compute stub as blocks-stack.test.ts: core's tests can't
-// depend on @aws-blocks/bb-lambda-compute.
+// depend on @aws-cdk-blocks/bb-lambda-compute.
 class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 

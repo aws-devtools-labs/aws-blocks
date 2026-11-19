@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @aws-blocks/bb-realtime — Canonical types.
+ * @aws-cdk-blocks/bb-realtime — Canonical types.
  *
  * Single source of truth for all Realtime types. Re-exported by each
  * implementation file (mock, AWS, CDK) and consumed by middleware.
  */
 
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 // ── Namespace Types ─────────────────────────────────────────────────────────
 
