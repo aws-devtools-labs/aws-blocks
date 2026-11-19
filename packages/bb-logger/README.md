@@ -98,6 +98,11 @@ dbLog.warn('Slow query', { table: 'users', durationMs: 500 });
 Set the level per `Logger` via the `level` option. There is no `LOG_LEVEL` env
 var — log level is a runtime construction-time choice.
 
+If you pass a level that comes from config (an env var, a JSON file), it is
+matched case-insensitively (`'WARN'` works). An unknown value such as
+`'verbose'` falls back to `'info'` and the logger writes one `warn` line naming
+the value it got (`configuredLevel`), so a typo never silences the logger.
+
 ## Error Object Handling
 
 Error instances passed in context are automatically extracted:

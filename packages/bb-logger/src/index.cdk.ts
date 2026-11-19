@@ -3,7 +3,7 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { Scope } from '@aws-blocks/core/cdk';
-import { ChildLoggerImpl, writeLog } from './emitter.js';
+import { ChildLoggerImpl, resolveLevel, writeLog } from './emitter.js';
 import type { ChildLogger, LoggingOptions, LogLevel } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -36,7 +36,7 @@ export class Logger extends Scope implements ChildLogger {
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
 		super(id, { parent: scope, bbName: BB_NAME });
 		this.loggerName = id;
-		this.level = options?.level ?? 'info';
+		this.level = resolveLevel(options?.level, id);
 		this.defaultContext = options?.defaultContext ?? {};
 	}
 

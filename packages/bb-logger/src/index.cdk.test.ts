@@ -22,7 +22,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { Logger } from './index.cdk.js';
-import type { LogEntry } from './types.js';
+import type { LogEntry, LoggingOptions } from './types.js';
 
 /** A spy compute that fails the test if the Logger ever pokes it. The new model
  * forbids the Logger from touching the compute — logging is always on. */
@@ -133,6 +133,21 @@ describe('Logger CDK logging during synth', () => {
 			log.warn('shown');
 		});
 		assert.deepStrictEqual(stdout.map((e) => e.message), ['shown']);
+	});
+
+	test('an unknown level (e.g. from config) falls back to info instead of dropping everything', () => {
+		const { parent } = setup();
+		// Simulates a level read from an env var / JSON, which the LogLevel type can't check.
+		const level: LoggingOptions['level'] = JSON.parse('"verbose"');
+		const { stdout, stderr } = captureOutput(() => {
+			const log = new Logger(parent, 'app', { level });
+			log.debug('hidden');
+			log.info('shown');
+			log.error('boom');
+		});
+		assert.deepStrictEqual(stdout.map((e) => e.level), ['warn', 'info']);
+		assert.strictEqual(stdout[0].configuredLevel, 'verbose');
+		assert.strictEqual(stderr.length, 1);
 	});
 
 	test('child() merges context', () => {

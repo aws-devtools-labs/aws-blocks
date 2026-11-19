@@ -11,7 +11,11 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /** Configuration for the Logger building block. */
 export interface LoggingOptions {
-	/** Minimum log level. Messages below this are silently dropped. Default: 'info'. */
+	/**
+	 * Minimum log level. Messages below this are silently dropped. Default: 'info'.
+	 * Matched case-insensitively at runtime; an unknown value (e.g. from config)
+	 * falls back to 'info' and the logger writes one warning.
+	 */
 	level?: LogLevel;
 	/**
 	 * Fields included in every log entry from this logger.

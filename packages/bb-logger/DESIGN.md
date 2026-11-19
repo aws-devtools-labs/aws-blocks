@@ -82,6 +82,14 @@ Priority order (highest wins):
 1. Constructor `options.level`
 2. Default: `'info'`
 
+The constructor resolves `options.level` once (`resolveLevel` in `emitter.ts`).
+The `LogLevel` type only checks literals, so a value read from config can be
+anything at runtime. It is trimmed and lower-cased. `undefined`, `null` and an
+empty string mean "not set" and use `'info'` silently. Any other value that is
+not a known level also gets `'info'`, and that Logger writes one `warn` line with
+`configuredLevel` / `effectiveLevel`. It does not throw: a bad logging setting
+should not stop the app from starting. Child loggers inherit the resolved level.
+
 ## Mock Implementation
 
 The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts`) directly. Both environments use the same code: write structured JSON to `process.stdout` / `process.stderr`. There is no mock-specific behavior because the logging mechanism (stdout/stderr → CloudWatch) is provided by the Lambda runtime, not by the BB.

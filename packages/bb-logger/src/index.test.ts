@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Scope } from '@aws-blocks/core';
 import { Logger, LoggingErrors } from './index.mock.js';
 import { Logger as AwsLogger } from './index.aws.js';
-import type { LogEntry, ChildLogger } from './types.js';
+import type { LogEntry, ChildLogger, LoggingOptions } from './types.js';
 import { shouldLog, buildEntry, processValue, safeStringify } from './serializer.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -155,6 +155,73 @@ describe('level filtering', () => {
 		log.error('yes');
 		assert.strictEqual(stdoutLines.length, 3);
 		assert.strictEqual(stderrLines.length, 1);
+	});
+
+	// A level read from an env var or JSON config bypasses the LogLevel type.
+	// Simulate that with a value the type checker can't see.
+	function untypedLevel(value: string): LoggingOptions['level'] {
+		return JSON.parse(JSON.stringify(value));
+	}
+
+	test('upper-case level is accepted', () => {
+		const log = new Logger(fakeScope, 'app', { level: untypedLevel('WARN') });
+		log.info('no');
+		log.warn('yes');
+		log.error('yes');
+		assert.strictEqual(stdoutLines.length, 1);
+		assert.strictEqual(getStdoutEntry().message, 'yes');
+		assert.strictEqual(stderrLines.length, 1);
+	});
+
+	test('unknown level falls back to info and warns once', () => {
+		const log = new Logger(fakeScope, 'app', { level: untypedLevel('verbose') });
+		assert.strictEqual(stdoutLines.length, 1);
+		const warning = getStdoutEntry();
+		assert.strictEqual(warning.level, 'warn');
+		assert.strictEqual(warning.logger, 'app');
+		assert.strictEqual(warning.configuredLevel, 'verbose');
+		assert.strictEqual(warning.effectiveLevel, 'info');
+
+		log.debug('no');
+		log.info('yes');
+		log.error('yes');
+		assert.strictEqual(stdoutLines.length, 2);
+		assert.strictEqual(getStdoutEntry(1).message, 'yes');
+		assert.strictEqual(stderrLines.length, 1);
+	});
+
+	test('child of a logger with an unknown level still logs', () => {
+		const log = new AwsLogger(fakeScope, 'app', { level: untypedLevel('verbose') });
+		log.child({ reqId: '1' }).error('boom');
+		assert.strictEqual(stderrLines.length, 1);
+	});
+
+	test('surrounding whitespace is ignored', () => {
+		const log = new Logger(fakeScope, 'app', { level: untypedLevel(' error ') });
+		log.warn('no');
+		log.error('yes');
+		assert.strictEqual(stdoutLines.length, 0);
+		assert.strictEqual(stderrLines.length, 1);
+	});
+
+	test('prototype keys and non-strings are unknown levels', () => {
+		for (const level of [untypedLevel('constructor'), untypedLevel('__proto__'), JSON.parse('3')]) {
+			stdoutLines = [];
+			new Logger(fakeScope, 'app', { level });
+			assert.strictEqual(stdoutLines.length, 1);
+			assert.deepStrictEqual(getStdoutEntry().configuredLevel, level);
+		}
+	});
+
+	test('null and empty string use the default without a warning', () => {
+		for (const level of [JSON.parse('null'), untypedLevel(''), untypedLevel('  ')]) {
+			stdoutLines = [];
+			const log = new Logger(fakeScope, 'app', { level });
+			assert.strictEqual(stdoutLines.length, 0);
+			log.debug('no');
+			log.info('yes');
+			assert.strictEqual(stdoutLines.length, 1);
+		}
 	});
 });
 

@@ -4,7 +4,7 @@
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { LogLevel, LoggingOptions, ChildLogger } from './types.js';
-import { ChildLoggerImpl, writeLog } from './emitter.js';
+import { ChildLoggerImpl, resolveLevel, writeLog } from './emitter.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ export class Logger extends Scope implements ChildLogger {
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.loggerName = id;
-		this.level = options?.level ?? 'info';
+		this.level = resolveLevel(options?.level, id);
 		this.defaultContext = options?.defaultContext ?? {};
 		const logGroupName = `/aws/lambda/${process.env.AWS_LAMBDA_FUNCTION_NAME ?? this.fullId}`;
 		registerSdkIdentifiers(this.fullId, { logGroupName });
