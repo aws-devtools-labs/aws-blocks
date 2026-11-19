@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Fixture of `upgrade-distributed-database.ts`: the app on the last release of `DistributedDatabase`.
+// Fixture of `upgrade-sql-blocks.ts`: the app on the last release of `DistributedDatabase`.
 
 import { ApiNamespace, DistributedDatabase, Scope, sql } from '@aws-blocks/blocks';
 

@@ -2,31 +2,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * UPGRADE E2E, DistributedDatabase to Database — proves that an app with a
- * `DistributedDatabase` of the last release of `@aws-blocks/bb-distributed-data`
- * (0.3.0) keeps its Aurora DSQL cluster and its rows when the block becomes a
- * `Database` with the same id on this checkout. Two deploys on one stack:
+ * UPGRADE E2E, the SQL blocks of earlier releases — proves that an app keeps
+ * its database when its SQL block of the last release becomes a `Database` on
+ * this checkout. Two deploys on one stack: the fixture app on the release, with
+ * one migration file, then the same app on this checkout, with that file and a
+ * second one. `--scenario` chooses the block:
  *
- * 1. the fixture app on the release (`app/backend.dsql-release.ts.txt`), with
- *    one migration file;
- * 2. the same app on this checkout (`app/backend.dsql-database.ts.txt`), with
- *    that file and a second one.
+ * - `dsql` (default): a `DistributedDatabase` of `@aws-blocks/bb-distributed-data`
+ *   0.3.0 becomes a `Database` with the same id, which keeps its Aurora DSQL
+ *   cluster (`app/backend.dsql-*.ts.txt`).
+ * - `aurora`: a `Database` of `@aws-blocks/bb-data` 0.5.0 becomes a
+ *   `LegacyDatabaseCluster` with the same id and a `Database` on it, which
+ *   keeps the Aurora cluster, its secret and its VPC
+ *   (`app/backend.aurora-*.ts.txt`).
  *
  * ## How to run
  *
  * From `test-apps/comprehensive`, after `npm run build` at the repo root and
- * in a built checkout of the release
- * (`git worktree add <dir> @aws-blocks/bb-distributed-data@0.3.0`):
+ * in a built checkout of the release (both blocks were released from one
+ * commit: `git worktree add <dir> @aws-blocks/bb-data@0.5.0`):
  *
- *     npm run test:upgrade-distributed-database -- --mode diff --base-dir <release checkout> --evidence <dir>
+ *     npm run test:upgrade-sql-blocks -- --scenario dsql --mode diff --base-dir <release checkout> --evidence <dir>
  *     BLOCKS_UPGRADE_E2E=1 AWS_PROFILE=<sandbox> AWS_REGION=<region> \
- *         npm run test:upgrade-distributed-database -- --mode upgrade --base-dir <release checkout> --evidence <dir>
+ *         npm run test:upgrade-sql-blocks -- --scenario dsql --mode upgrade --base-dir <release checkout> --evidence <dir>
  *
- * - `--mode diff` (offline): under both presets, the cluster has the same
- *   logical id in the two templates, and `cdk diff` does not add, remove or
- *   replace it.
- * - `--mode upgrade`: after deploy 2 the stack has the same cluster (the same
- *   identifier), the rows of the release read back equal through `Database`,
+ * - `--mode diff` (offline): under both presets, each resource that holds the
+ *   database has the same logical id in the two templates, and `cdk diff` does
+ *   not add, remove or replace it.
+ * - `--mode upgrade`: after deploy 2 the stack has the same resources (the same
+ *   physical ids), the rows of the release read back equal through `Database`,
  *   the first migration file did not run again, the second one did, and the
  *   app writes to the old table and to the new one.
  *
@@ -34,10 +38,11 @@
  * the run checks that an unsigned call is refused.
  *
  * The AWS mode refuses to start unless `BLOCKS_UPGRADE_E2E=1`, `AWS_REGION` and
- * an explicit credential source are set. It takes about 10 minutes. It is
- * long-running: start it in the background and read the log for the final
- * `UPGRADE_DISTRIBUTED_DATABASE_RESULT=` line. **Cleanup:** the stack is
- * destroyed in a `finally`. It never deploys into a stack that exists.
+ * an explicit credential source are set. It takes about 10 minutes for `dsql`
+ * and about 30 for `aurora`. It is long-running: start it in the background and
+ * read the log for the final `UPGRADE_SQL_BLOCKS_RESULT=` line. **Cleanup:**
+ * the stack is destroyed in a `finally`. It never deploys into a stack that
+ * exists.
  *
  * A run writes its report files in `--evidence`. It writes the fixture apps
  * under `test-apps/.upgrade-in-place/` in both checkouts, and removes them at
@@ -52,6 +57,7 @@ import {
 	type CfnTemplate,
 	decodeRpcResponse,
 	encodeRpcRequest,
+	findDiffViolations,
 	offlineEnv,
 	parseCdkDiff,
 	realModeRefusal,
@@ -63,11 +69,43 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PR_ROOT = resolve(HERE, '../../..');
 const APP = join(HERE, 'upgrade-in-place', 'app');
-const CLUSTER_TYPE = 'AWS::DSQL::Cluster';
-const RELEASE = { backend: 'backend.dsql-release.ts.txt', migrations: ['001_create_accounts.sql'] };
-const UPGRADED = {
-	backend: 'backend.dsql-database.ts.txt',
-	migrations: ['001_create_accounts.sql', '002_create_notes.sql'],
+interface Scenario {
+	/** The backend file of each revision, under `upgrade-in-place/app`. */
+	release: string;
+	upgraded: string;
+	/** What each revision calls its block, for the report. */
+	labels: [string, string];
+	/** The resource types that hold the database; a deploy must keep every resource of them. */
+	keptTypes: string[];
+	/** Whether a kept resource may change without a replacement (the DSQL cluster gets tags). */
+	mayUpdate: boolean;
+}
+// The release has the first migration file; the upgraded app has both.
+const RELEASE_FILES = ['001_create_accounts.sql'];
+const UPGRADED_FILES = [...RELEASE_FILES, '002_create_notes.sql'];
+const SCENARIOS: Record<string, Scenario> = {
+	dsql: {
+		release: 'backend.dsql-release.ts.txt',
+		upgraded: 'backend.dsql-database.ts.txt',
+		labels: ['DistributedDatabase', 'Database'],
+		keptTypes: ['AWS::DSQL::Cluster'],
+		mayUpdate: true,
+	},
+	aurora: {
+		release: 'backend.aurora-release.ts.txt',
+		upgraded: 'backend.aurora-legacy.ts.txt',
+		labels: ['Database of bb-data', 'LegacyDatabaseCluster and Database'],
+		keptTypes: [
+			'AWS::RDS::DBCluster',
+			'AWS::RDS::DBInstance',
+			'AWS::RDS::DBSubnetGroup',
+			'AWS::SecretsManager::Secret',
+			'AWS::EC2::VPC',
+			'AWS::EC2::Subnet',
+			'AWS::EC2::SecurityGroup',
+		],
+		mayUpdate: false,
+	},
 };
 // Appended to the CDK entry of both revisions: the API reads and writes real rows.
 const IAM_ONLY = `
@@ -83,14 +121,16 @@ function arg(name: string): string | undefined {
 	return i === -1 ? undefined : process.argv[i + 1];
 }
 const mode = arg('--mode') ?? 'diff';
+const scenarioName = arg('--scenario') ?? 'dsql';
+const scenario = SCENARIOS[scenarioName];
 const baseDir = arg('--base-dir');
 const evidenceDir = arg('--evidence');
 // Two runs that start in the same millisecond must not share a stack: the process id is in the name.
-const suffix = arg('--suffix') ?? `upgrade-dd${Date.now().toString(36)}p${process.pid.toString(36)}`;
+const suffix = arg('--suffix') ?? `upgrade-sb${Date.now().toString(36)}p${process.pid.toString(36)}`;
 const MODES = ['diff', 'upgrade'];
-if (!MODES.includes(mode) || !baseDir || !evidenceDir || !SUFFIX_PATTERN.test(suffix)) {
+if (!MODES.includes(mode) || !scenario || !baseDir || !evidenceDir || !SUFFIX_PATTERN.test(suffix)) {
 	console.error(
-		`usage: upgrade-distributed-database.ts --mode ${MODES.join('|')} --base-dir <dir> --evidence <dir> [--suffix upgrade-…]`,
+		`usage: upgrade-sql-blocks.ts --scenario ${Object.keys(SCENARIOS).join('|')} --mode ${MODES.join('|')} --base-dir <dir> --evidence <dir> [--suffix upgrade-…]`,
 	);
 	process.exit(2);
 }
@@ -158,7 +198,7 @@ function removeFixtureApps(): void {
 function materialize(
 	treeRoot: string,
 	variant: string,
-	app: typeof RELEASE,
+	revision: 'release' | 'upgraded',
 	preset: 'sandbox' | 'production' = 'sandbox',
 ): string {
 	const dir = join(treeRoot, 'test-apps', '.upgrade-in-place', `${suffix}-${variant}`);
@@ -170,8 +210,8 @@ function materialize(
 		`BlocksPresets.${preset}`,
 	);
 	writeFileSync(join(dir, 'aws-blocks', 'index.cdk.ts'), cdkEntry + IAM_ONLY);
-	copyFileSync(join(APP, app.backend), join(dir, 'aws-blocks', 'index.ts'));
-	for (const file of app.migrations) {
+	copyFileSync(join(APP, scenario[revision]), join(dir, 'aws-blocks', 'index.ts'));
+	for (const file of revision === 'release' ? RELEASE_FILES : UPGRADED_FILES) {
 		copyFileSync(join(APP, 'dsql-migrations', file), join(dir, 'aws-blocks', 'migrations', file));
 	}
 	writeFileSync(
@@ -230,10 +270,20 @@ function cdkDiff(appDir: string, env: Env, templatePath?: string): Promise<strin
 const resourcesOfType = (template: CfnTemplate, type: string) =>
 	Object.entries(template.Resources ?? {}).filter(([, resource]) => resource.Type === type);
 
-/** The `cdk diff` line of the cluster, when the deploy touches it. A changed tag is not a replacement. */
-function clusterChange(diffText: string, logicalId: string) {
-	const change = parseCdkDiff(diffText).find((c) => c.type === CLUSTER_TYPE || c.logicalId === logicalId);
-	return { change, kept: change === undefined || (change.action === 'update' && change.impact === 'none') };
+/** Logical id → declaration of every resource that holds the database. */
+const keptResources = (template: CfnTemplate) =>
+	Object.fromEntries(
+		Object.entries(template.Resources ?? {}).filter(([, resource]) => scenario.keptTypes.includes(resource.Type)),
+	);
+
+/** The `cdk diff` lines that touch a resource that holds the database, and whether the deploy keeps each one. */
+function keptChanges(diffText: string, logicalIds: readonly string[]) {
+	const protection = { types: scenario.keptTypes, logicalIds };
+	const all = parseCdkDiff(diffText);
+	const lines = all.filter((c) => protection.types.includes(c.type) || logicalIds.includes(c.logicalId)).map((c) => c.line);
+	// A changed tag is an update without a replacement; only the DSQL cluster may have one.
+	const kept = findDiffViolations(all, protection).length === 0 && (scenario.mayUpdate || lines.length === 0);
+	return { kept, lines: lines.join('\n') || '(no change)' };
 }
 
 const unsignedMethods = (template: CfnTemplate) =>
@@ -241,43 +291,39 @@ const unsignedMethods = (template: CfnTemplate) =>
 		.filter(([, method]) => (method.Properties as { AuthorizationType?: string }).AuthorizationType !== 'AWS_IAM')
 		.map(([logicalId]) => logicalId);
 
-// ── Mode diff: the cluster in the two templates, offline ─────────────────────
+// ── Mode diff: the database's resources in the two templates, offline ─────────────────────
 
 async function runDiff(): Promise<number> {
 	const result: Record<string, unknown> = {};
 	for (const preset of ['sandbox', 'production'] as const) {
 		heading(`Templates, ${preset} preset`);
 		const env = cdkEnv(offlineEnv(process.env));
-		const release = await synth(materialize(BASE_ROOT, `d-release-${preset}`, RELEASE, preset), BASE_ROOT, env);
-		const upgradedApp = materialize(PR_ROOT, `d-database-${preset}`, UPGRADED, preset);
+		const release = await synth(materialize(BASE_ROOT, `d-release-${preset}`, 'release', preset), BASE_ROOT, env);
+		const upgradedApp = materialize(PR_ROOT, `d-database-${preset}`, 'upgraded', preset);
 		const upgraded = await synth(upgradedApp, PR_ROOT, env);
 		const diffText = await cdkDiff(upgradedApp, env, release.path);
 		save(`diff-${preset}.txt`, diffText);
 
-		const before = resourcesOfType(release.template, CLUSTER_TYPE);
-		const after = resourcesOfType(upgraded.template, CLUSTER_TYPE);
-		must(`${preset}: each template declares one cluster`, before.length === 1 && after.length === 1);
-		const [[idBefore, clusterBefore]] = before;
-		const [[idAfter, clusterAfter]] = after;
-		record(`${preset}: the cluster has the same logical id`, idBefore === idAfter, `${idBefore} → ${idAfter}`);
+		const before = keptResources(release.template);
+		const after = keptResources(upgraded.template);
+		must(`${preset}: the release declares the resources that hold the database`, Object.keys(before).length > 0);
 		record(
-			`${preset}: the cluster keeps its deletion policy and its deletion protection`,
-			clusterBefore.DeletionPolicy === clusterAfter.DeletionPolicy &&
-				same(
-					(clusterBefore.Properties as { DeletionProtectionEnabled?: boolean }).DeletionProtectionEnabled,
-					(clusterAfter.Properties as { DeletionProtectionEnabled?: boolean }).DeletionProtectionEnabled,
-				),
-			`DeletionPolicy ${String(clusterBefore.DeletionPolicy)} → ${String(clusterAfter.DeletionPolicy)}`,
+			`${preset}: each of them has the same logical id in both templates`,
+			same(Object.keys(before).sort(), Object.keys(after).sort()),
+			`${Object.keys(before).length} before, ${Object.keys(after).length} after`,
 		);
-		const { change, kept } = clusterChange(diffText, idBefore);
-		record(`${preset}: cdk diff does not add, remove or replace the cluster`, kept, change?.line ?? '(no change)');
+		const policies = (resources: Record<string, { DeletionPolicy?: unknown }>) =>
+			Object.fromEntries(Object.entries(resources).map(([id, r]) => [id, r.DeletionPolicy ?? null]));
+		record(`${preset}: each of them keeps its deletion policy`, same(policies(before), policies(after)));
+		const { kept, lines } = keptChanges(diffText, Object.keys(before));
+		record(`${preset}: cdk diff does not add, remove or replace any of them`, kept, lines);
 		record(
 			`${preset}: every API method of both revisions needs a signed caller`,
 			unsignedMethods(release.template).length === 0 && unsignedMethods(upgraded.template).length === 0,
 		);
-		const other = parseCdkDiff(diffText).filter((c) => c.logicalId !== idBefore);
+		const other = parseCdkDiff(diffText).filter((c) => !(c.logicalId in before));
 		note(`other resources in the diff: ${other.length} (${other.filter((c) => c.action === 'remove').length} removed)`);
-		result[preset] = { logicalId: { before: idBefore, after: idAfter }, clusterChange: change?.line ?? null };
+		result[preset] = { kept: Object.keys(before), changes: lines };
 	}
 	save('diff.json', result);
 	return checks.some((c) => !c.ok) ? 1 : 0;
@@ -323,12 +369,12 @@ async function createAws(region: string) {
 				await sleep(10_000);
 			}
 		},
-		/** Logical id → cluster identifier of every cluster in the stack. */
-		async clusters(): Promise<Record<string, string>> {
+		/** Logical id → physical id of every resource in the stack that holds the database. */
+		async kept(): Promise<Record<string, string>> {
 			const ids: Record<string, string> = {};
 			for await (const page of cfn.paginateListStackResources({ client: cfnClient }, { StackName: stackName })) {
 				for (const r of page.StackResourceSummaries ?? []) {
-					if (r.ResourceType === CLUSTER_TYPE && r.LogicalResourceId && r.PhysicalResourceId) {
+					if (scenario.keptTypes.includes(r.ResourceType ?? '') && r.LogicalResourceId && r.PhysicalResourceId) {
 						ids[r.LogicalResourceId] = r.PhysicalResourceId;
 					}
 				}
@@ -430,9 +476,9 @@ const failedResources = (events: { status: string; id: string; reason?: string }
 
 async function runUpgrade(aws: Aws, baseEnv: Env, upgradedApp: string): Promise<void> {
 	const deployEnv = driverEnv(baseEnv);
-	const releaseApp = materialize(BASE_ROOT, 'release', RELEASE);
+	const releaseApp = materialize(BASE_ROOT, 'release', 'release');
 
-	heading('Deploy 1: the app on the release, with DistributedDatabase');
+	heading(`Deploy 1: the app on the release, with ${scenario.labels[0]}`);
 	await run('deploy release', bin(BASE_ROOT, 'tsx'), [join(releaseApp, 'scripts', 'deploy.ts')], {
 		cwd: releaseApp,
 		env: deployEnv,
@@ -448,16 +494,15 @@ async function runUpgrade(aws: Aws, baseEnv: Env, upgradedApp: string): Promise<
 	const dumpBefore = await rpc(aws, apiUrl, 'dump');
 	save('dump-before.json', dumpBefore);
 	must('the release reads three rows', Array.isArray(dumpBefore) && dumpBefore.length === 3);
-	const clustersBefore = await aws.clusters();
-	save('clusters-before.json', clustersBefore);
-	must('the release stack has one cluster', Object.keys(clustersBefore).length === 1);
-	const [[logicalId, clusterId]] = Object.entries(clustersBefore);
+	const keptBefore = await aws.kept();
+	save('kept-before.json', keptBefore);
+	must('the release stack has the resources that hold the database', Object.keys(keptBefore).length > 0);
 
-	heading('Deploy 2: the same app on this checkout, with Database');
+	heading(`Deploy 2: the same app on this checkout, with ${scenario.labels[1]}`);
 	const diffText = await cdkDiff(upgradedApp, cdkEnv(baseEnv));
 	save('upgrade-cdk-diff.txt', diffText);
-	const { change, kept } = clusterChange(diffText, logicalId);
-	record('cdk diff against the stack does not add, remove or replace the cluster', kept, change?.line ?? '(no change)');
+	const diff = keptChanges(diffText, Object.keys(keptBefore));
+	record('cdk diff against the stack does not add, remove or replace any of them', diff.kept, diff.lines);
 	const started = Date.now();
 	// A deploy that fails is read from the stack status and the events below.
 	await run('deploy upgrade', bin(PR_ROOT, 'tsx'), [join(upgradedApp, 'scripts', 'deploy.ts')], {
@@ -472,18 +517,22 @@ async function runUpgrade(aws: Aws, baseEnv: Env, upgradedApp: string): Promise<
 		updated === 'UPDATE_COMPLETE',
 		`status: ${updated}\n${failedResources(events).join('\n')}`,
 	);
-	const clusterEvents = events.filter((e) => e.type === CLUSTER_TYPE).map((e) => `${e.id} ${e.status}`);
+	const keptEvents = events
+		.filter((e) => scenario.keptTypes.includes(e.type))
+		.map((e) => `${e.type.split('::').pop()} ${e.status}`);
 	record(
-		'CloudFormation did not create or delete a cluster',
-		!clusterEvents.some((e) => /CREATE|DELETE/.test(e)),
-		clusterEvents.join(', ') || '(no cluster event)',
+		'CloudFormation did not create or delete any of them',
+		!keptEvents.some((e) => /CREATE|DELETE/.test(e)),
+		[...new Set(keptEvents)].join(', ') || '(no event)',
 	);
-	const clustersAfter = await aws.clusters();
-	save('clusters-after.json', clustersAfter);
+	const keptAfter = await aws.kept();
+	save('kept-after.json', keptAfter);
 	record(
-		'the stack has the same cluster under the same logical id',
-		same(clustersBefore, clustersAfter),
-		`${logicalId}: ${clusterId} → ${clustersAfter[logicalId] ?? '(absent)'}`,
+		'the stack has the same resources under the same logical ids',
+		same(keptBefore, keptAfter),
+		Object.entries(keptBefore)
+			.map(([id, physical]) => `${physical} → ${keptAfter[id] ?? '(absent)'}`)
+			.join('\n'),
 	);
 
 	heading('The rows through Database');
@@ -494,6 +543,14 @@ async function runUpgrade(aws: Aws, baseEnv: Env, upgradedApp: string): Promise<
 	const balance = await rpc(aws, upgradedUrl, 'deposit', ['u2', 'checking', 25]);
 	// DSQL prints a NUMERIC with its scale: 25.000000.
 	record('a transaction updates a row of the release', Number(balance) === 25, `balance: ${String(balance)}`);
+	if (scenarioName === 'aurora') {
+		const probe = await rpc(aws, upgradedUrl, 'probe');
+		record(
+			'through the Data API, RETURNING counts the rows it changed, and a `$2` in a string stays text',
+			same(probe, { rowCount: 2, label: 'Only $2 today', n: 7 }),
+			JSON.stringify(probe),
+		);
+	}
 	const notes = await rpc(aws, upgradedUrl, 'addNote', ['n1', 'written after the upgrade']);
 	record(
 		'the second migration file ran: the app writes to and reads from its table',
@@ -550,7 +607,7 @@ async function runReal(): Promise<number> {
 	};
 	process.on('SIGINT', onSignal);
 	process.on('SIGTERM', onSignal);
-	const upgradedApp = materialize(PR_ROOT, 'database', UPGRADED);
+	const upgradedApp = materialize(PR_ROOT, 'database', 'upgraded');
 	let failed = false;
 	let gone = false;
 	try {
@@ -565,7 +622,7 @@ async function runReal(): Promise<number> {
 	save('checks.json', checks);
 	failed ||= checks.some((c) => !c.ok);
 	console.log(
-		`\nUPGRADE_DISTRIBUTED_DATABASE_RESULT=${failed ? 'FAILED' : 'PASSED'} mode=${mode} checks=${checks.filter((c) => c.ok).length}/${checks.length} stack=${stackName}${gone ? '' : ' orphaned=true'}`,
+		`\nUPGRADE_SQL_BLOCKS_RESULT=${failed ? 'FAILED' : 'PASSED'} scenario=${scenarioName} mode=${mode} checks=${checks.filter((c) => c.ok).length}/${checks.length} stack=${stackName}${gone ? '' : ' orphaned=true'}`,
 	);
 	return gone ? (failed ? 1 : 0) : 3;
 }
@@ -579,7 +636,7 @@ if (mode === 'diff') {
 		.finally(removeFixtureApps);
 	save('checks.json', checks);
 	console.log(
-		`\nUPGRADE_DISTRIBUTED_DATABASE_RESULT=${code === 0 ? 'PASSED' : 'FAILED'} mode=diff checks=${checks.filter((c) => c.ok).length}/${checks.length}`,
+		`\nUPGRADE_SQL_BLOCKS_RESULT=${code === 0 ? 'PASSED' : 'FAILED'} scenario=${scenarioName} mode=diff checks=${checks.filter((c) => c.ok).length}/${checks.length}`,
 	);
 	process.exitCode = code;
 } else process.exit(await runReal());

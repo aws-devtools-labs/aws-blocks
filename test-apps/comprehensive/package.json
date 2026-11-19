@@ -23,7 +23,7 @@
     "test:upgrade-in-place": "tsx test/upgrade-in-place.ts",
     "test:upgrade-in-place:dry-run": "tsx test/upgrade-in-place.ts --dry-run",
     "test:upgrade-legacy-kv-store": "tsx test/upgrade-legacy-kv-store.ts",
-    "test:upgrade-distributed-database": "tsx test/upgrade-distributed-database.ts",
+    "test:upgrade-sql-blocks": "tsx test/upgrade-sql-blocks.ts",
     "db": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- db",
     "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
   },
