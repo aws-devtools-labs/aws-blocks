@@ -212,9 +212,13 @@ calling SES:
   (`Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`). The address is checked as
   given: surrounding whitespace and control characters are rejected;
 - at most 50 recipients per message (To + CC + BCC combined);
+- the subject must be a single line: CR, LF and other control characters (C0, DEL, C1, U+2028
+  and U+2029) are rejected, not stripped. Remove line breaks from a subject built from user
+  input before sending;
 - at most 40 MB per message.
 
-A malformed address or too many recipients throws `InvalidInputException`; an oversized message
+A malformed address, too many recipients or a control character in the subject throws
+`InvalidInputException`; an oversized message
 throws `EmailSendFailedException`. In `sendBatch()` the message is marked `failed` instead.
 
 ## Error Handling
