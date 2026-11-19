@@ -38,6 +38,7 @@ npx @aws-cdk-blocks/create-blocks-app my-app --template react
 npx @aws-cdk-blocks/create-blocks-app .
 ```
 
+- It lists the changes and asks `Proceed? (y/N)`. Pass `--yes` (or `-y`) to skip the question; without a terminal (CI, a script) the CLI can't ask it, so it exits with status 1 and changes nothing unless you pass `--yes`. The same applies to the Amplify Gen 2 integration below.
 - The CLI writes `cdk-blocks/tsconfig.json`, a TypeScript project that checks the backend with Node types, and never edits your own `tsconfig`.
 - To keep Node types out of your frontend, reference that project from the `tsconfig` that compiles the code importing `cdk-blocks`, and typecheck with `tsc -b --force`. The CLI prints the steps, and [Keep Node types out of the frontend](https://github.com/aws/cdk-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has them in full.
 - In a Next.js project, it writes no `cdk-blocks/tsconfig.json`: `next build` ignores project references, so the app's `tsconfig.json` keeps checking `cdk-blocks/`.

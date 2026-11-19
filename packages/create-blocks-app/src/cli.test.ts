@@ -506,6 +506,27 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  for (const amplify of [false, true]) {
+    it(`without a terminal and without --yes, fails instead of reading end of input as "no" (${amplify ? 'Amplify' : 'existing project'})`, () => {
+      const tmpDir = join(__dirname, `../.test-autodetect-no-tty-${amplify ? 'amplify' : 'existing'}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'no-tty-project', version: '1.0.0' }));
+      if (amplify) {
+        mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
+        writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export {};\n');
+      }
+      try {
+        // execFileSync gives the CLI a pipe, not a terminal, as CI and scripts do.
+        const result = run(['.', '--skip-install'], tmpDir);
+        assert.notStrictEqual(result.exitCode, 0, 'a confirmation nobody can answer is a failure');
+        assert.match(result.stderr, /--yes/);
+        assert.ok(!existsSync(join(tmpDir, 'aws-blocks')), 'nothing is written');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
   it('deployable templates declare a floating CDK CLI dependency', () => {
     const templatesDir = join(__dirname, '..', 'templates');
     const missingOrPinned: string[] = [];

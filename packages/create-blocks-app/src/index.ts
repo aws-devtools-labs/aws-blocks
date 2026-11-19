@@ -180,7 +180,17 @@ async function isLocalMonorepo(): Promise<boolean> {
   return exists(join(MONOREPO_PACKAGES_DIR, 'core', 'package.json'));
 }
 
+/**
+ * Ask `message` as a yes/no question. Without a terminal on stdin (CI, a script, an
+ * agent) nobody can answer it: exit with status 1 and name `--yes`, rather than read
+ * the end of input as "no" and exit 0 as if the project had been changed.
+ */
 async function confirm(message: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    console.error(`\n✗ ${message} needs an answer, and stdin is not a terminal. Nothing was changed.`);
+    console.error('  Re-run with --yes (or -y) to proceed without the prompt.');
+    process.exit(1);
+  }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     rl.question(`${message} (y/N) `, (answer) => {
