@@ -624,6 +624,15 @@ const blocksStack = await BlocksStack.create(app, stackName, {
   `us-east-1` support stack included.
 - `npm run destroy` passes no stack selection, so the CDK CLI refuses to
   destroy an app with more than one top-level stack.
+- A deploy that changes a Lambda@Edge function (middleware or an Edge route)
+  publishes a new function version and keeps the previous one. CloudFront
+  removes the old version's replicas only hours after the distribution stops
+  using it, and Lambda can't delete a version until then, so Hosting retains
+  replaced versions instead of having the deploy wait on a delete that fails.
+  A retained version doesn't run and costs nothing. To remove old versions
+  later, delete them in the Lambda console or with
+  `aws lambda delete-function --function-name <name> --qualifier <version>`
+  in `us-east-1`.
 
 ## SSR compute: Lambda or Lambda Web Functions
 

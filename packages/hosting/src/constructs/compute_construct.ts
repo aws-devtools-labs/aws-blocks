@@ -313,6 +313,14 @@ export class ComputeConstruct extends Construct {
           memorySize,
           timeout: Duration.seconds(Math.min(requestedTimeout, edgeMaxTimeout)),
           logGroup,
+          // Keep a replaced version instead of deleting it. CloudFront still
+          // holds replicas of the previous Lambda@Edge version for hours
+          // after a deploy moves the distribution to the new one, and Lambda
+          // refuses to delete a version that has replicas: the delete fails,
+          // CloudFormation retries it for minutes and then skips it with a
+          // "clean them up manually" warning. Retained versions don't run,
+          // and cost nothing.
+          currentVersionOptions: { removalPolicy: RemovalPolicy.RETAIN },
           ...(props.edgeStackId ? { stackId: props.edgeStackId } : {}),
         },
       );
