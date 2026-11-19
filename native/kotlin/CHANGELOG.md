@@ -2,7 +2,7 @@
 
 ## 1.0.0
 
-First stable release of CDK Blocks for Kotlin.
+First stable release of AWS CDK Blocks for Kotlin.
 
 ### Breaking
 
