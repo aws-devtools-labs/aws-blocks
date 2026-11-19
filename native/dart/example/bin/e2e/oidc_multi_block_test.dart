@@ -41,9 +41,17 @@ class _RecordingLauncher implements BrowserLauncher {
   final List<Uri> authorizeUrls = [];
 
   @override
-  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) {
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+    Future<void>? cancel,
+  }) {
     authorizeUrls.add(authorizeUrl);
-    return _inner.launch(authorizeUrl, callbackScheme: callbackScheme);
+    return _inner.launch(
+      authorizeUrl,
+      callbackScheme: callbackScheme,
+      cancel: cancel,
+    );
   }
 }
 
