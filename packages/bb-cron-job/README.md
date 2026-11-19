@@ -63,7 +63,7 @@ import { CronJobErrors } from '@aws-cdk-blocks/bb-cron-job';
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `CronJobErrors.InvalidSchedule` | `InvalidScheduleExpression` | Construction (local) or synth time: `schedule` is not a valid cron or rate expression. |
+| `CronJobErrors.InvalidSchedule` | `InvalidScheduleExpression` | Construction (local) or synth: an invalid rate expression, unrecognized expression, or cron with the wrong field count. With six cron fields, synth leaves field values to EventBridge; the local parser also checks the fields it simulates. |
 | `CronJobErrors.InvalidTimezone` | `InvalidTimezoneExpression` | Construction (local) or synth time: `timezone` is not a valid IANA timezone. |
 | `CronJobErrors.ScheduleNotSupported` | `ScheduleNotSupportedInMock` | Local mock only, at construction: a valid cron expression uses `L`, `W` or `#` in a day field. The schedule deploys and runs on AWS; the mock cannot simulate it. |
 | `CronJobErrors.UnsupportedCompute` | `UnsupportedComputeException` | Synth time: the resolved compute is not a serverless or container compute, or belongs to another backend. |

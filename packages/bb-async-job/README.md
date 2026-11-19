@@ -202,7 +202,7 @@ To tell them apart:
 
 - Check the job's own effect: the row it writes, the file it uploads, the message it sends.
 - A `status.updatedAt` that stopped advancing well past the handler's expected duration means cause 2 or 3. Check the dead-letter queue, and the handler's CloudWatch logs for a `Task timed out` or out-of-memory line.
-- To have a handler that runs close to its limit record `failed`, check the remaining wall clock in the handler and throw before the Lambda deadline.
+- Throwing before the Lambda deadline lets AsyncJob handle the error. Earlier deliveries are retried; only a throw on the final delivery records `failed`.
 
 ### Cost of trackStatus
 
@@ -213,7 +213,7 @@ To tell them apart:
 
 ## What it provisions (AWS)
 
-- One SQS queue and one dead-letter queue, named `{fullId}-dlq`.
+- One SQS queue named after the job's `fullId` (first 80 characters), and one dead-letter queue named with the first 76 characters of `fullId` plus `-dlq`.
 - On a Lambda compute, an SQS event source on the compute's function. On a container compute, no event source: the container's runtime polls the queue.
 - With `trackStatus: true`, one DynamoDB table.
 

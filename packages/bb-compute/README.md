@@ -67,7 +67,7 @@ type is a compile error.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `memory` | `number` | `2048` | Function memory in MB. CPU scales with it. |
-| `maxTimeoutSeconds` | `number` | `900` | The function's timeout in seconds (1–900). A job's own `timeoutSeconds` must fit under it. It bounds async work (`AsyncJob`, queues); an API call is cut off by the [time limits](#time-limits) regardless. |
+| `maxTimeoutSeconds` | `number` | `900` | Function timeout in seconds (1–900). A job's `timeoutSeconds` must fit within it. A short function timeout also shortens [API calls](#time-limits); increasing it does not extend the gateway timeout. |
 | `logRetention` | `RetentionDays` | the stack's `defaults.logRetention` | How long the compute's log group keeps logs. |
 
 #### `container`
@@ -271,8 +271,7 @@ on the stack or backend returned by `create()`.
 
 ### Time limits
 
-- An API call is capped at ~29 seconds whatever the compute's
-  `maxTimeoutSeconds`. Run longer work in an `AsyncJob`.
+- API Gateway allows about 29 seconds. On Lambda, the handler returns a timeout after 28 seconds or one second before the function deadline, whichever comes first. Run longer work in an `AsyncJob`.
 - A call to a `container` namespace on the `apiFrontDoor: 'cloudfront'` tier
   can run up to 60 seconds: the CloudFront distribution that fronts the API
   (the managed one, or `Hosting`'s default CloudFront door) routes the

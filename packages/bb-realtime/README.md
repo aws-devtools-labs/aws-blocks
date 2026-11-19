@@ -32,7 +32,7 @@ const rt = new Realtime(scope, 'collab', {
 |--------|---------|-------------|
 | `rt.publish(namespace, channel, data)` | `Promise<void>` | Broadcast data to all subscribers (best-effort). Validates against schema. |
 | `rt.getChannel(namespace, channel, { scope?, principal? })` | `Promise<RealtimeChannel<T>>` | Returns a subscribe-only channel handle to return from an API method. `scope` is `'subtree'` (default) or `'exact'`: see [Sub-channels and access](#sub-channels-and-access). `principal` is the user id the handle belongs to: see [Binding a handle to a user](#binding-a-handle-to-a-user). |
-| `rt.revokeAccess(principal)` | `Promise<void>` | End a user's access: handles minted for `principal` before this call stop working, and open subscriptions end on the connection's next keep-alive ping. See [Binding a handle to a user](#binding-a-handle-to-a-user). |
+| `rt.revokeAccess(principal)` | `Promise<void>` | Revokes the principal's existing handles. For delivery and notification timing, see [Binding a handle to a user](#binding-a-handle-to-a-user). |
 | `rt.subscribe(namespace, channel, handler)` | `() => void` | Server-side subscribe. Returns unsubscribe function. |
 
 **Runtime only.** Call `publish`, `subscribe`, `getChannel` and `revokeAccess` inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `cdk-blocks/index.ts`.
@@ -45,7 +45,7 @@ const rt = new Realtime(scope, 'collab', {
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `namespaces` | `Record<string, NamespaceConfig>` | (required) | Namespace name to `Realtime.namespace(schema)`. The schema (any StandardSchemaV1: Zod, Valibot, etc.) gives the message type and validates `data` on every `publish()`. |
-| `logger` | `ChildLogger` | — | Optional logger for internal operations; defaults to a Logger at error level |
+| `logger` | `ChildLogger` | — | Accepted, but does not redirect delivery warnings. The AWS runtime writes those warnings to the console. |
 
 ### Channel handle
 
@@ -125,8 +125,8 @@ What `principal` does:
 
 When access ends:
 
-- Expiry and revocation are enforced when a message is published: a subscription whose channel token has expired, or whose access was revoked, receives nothing more, whether or not the client keeps sending pings.
-- Open subscriptions are also re-checked on every keep-alive ping (about every 9 minutes). An ended subscription reports `onDisconnect('error')`, except an expired one on a channel subscribed with `refresh`, which renews in place (see [Outliving the token TTLs with `refresh`](#outliving-the-token-ttls-with-refresh)).
+- On AWS, publish checks channel-token expiry before delivery. The local WebSocket server checks expiry on a keep-alive ping, not on publish.
+- The deployed client sends a keep-alive ping about every 9 minutes. The server re-checks open subscriptions on each ping. An ended subscription reports `onDisconnect('error')`, except an expired one on a channel subscribed with `refresh`, which renews in place (see [Outliving the token TTLs with `refresh`](#outliving-the-token-ttls-with-refresh)).
 - During an in-place renewal, messages published between the server ending the subscription and the renewal completing (one API round trip, about once an hour per channel) are not delivered to that channel.
 - Pass `refresh` for subscriptions that should outlive the 1-hour channel token.
 
@@ -134,7 +134,7 @@ When access ends:
 
 - `await rt.revokeAccess(user.userSub)` ends a user's access, for example on sign-out, a role change or a removed account.
 - Handles minted for that user before the call are refused on connect and subscribe right away. A handle minted in the same second as the call counts as older.
-- Messages published after the call no longer reach subscriptions that are already open. The client learns the subscription ended on the connection's next ping, within about 9 minutes.
+- On AWS, publish checks revocation using an eventually consistent read. An already-open subscription can still receive a message just after revocation; the client learns that access ended when a keep-alive ping observes it. The local dev server ends affected subscriptions immediately.
 - A handle minted after the call works, so also make your `refresh` endpoint refuse that user.
 
 ### Rate limits
@@ -159,7 +159,7 @@ try {
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
 | `RealtimeErrors.ValidationFailed` | `ValidationFailedException` | `publish()`: `data` fails the namespace schema, or the message exceeds 128 KiB. `publish()`, `subscribe()`, `getChannel()`: an invalid channel name or a channel path over 1024 bytes. `getChannel()`: a `scope` other than `'exact'` or `'subtree'`, or an invalid `principal`. `revokeAccess()`: a missing or invalid `principal`. |
-| `RealtimeErrors.ConnectionFailed` | `ConnectionFailedException` | `sub.established` rejects with it when the WebSocket connection fails or the server refuses the subscribe. `getChannel()` throws it on AWS when the token signing secret is unavailable. |
+| `RealtimeErrors.ConnectionFailed` | `ConnectionFailedException` | The server refuses a subscribe, or the deployed client exhausts its connection retries while `sub.established` is pending. `getChannel()` also throws it on AWS when the token signing secret is unavailable. |
 | `RealtimeErrors.PublishFailed` | `PublishFailedException` | AWS only: the WebSocket callback URL or the connections table is not available to the running code. A failed delivery to one connection is logged, not thrown. |
 | `RealtimeErrors.UnsupportedCompute` | `UnsupportedComputeException` | Synth time: the backend's default compute is not Lambda. |
 
@@ -197,8 +197,7 @@ const sub = channel.subscribe({
 });
 ```
 
-If a resubscribe is rejected (a stored token that has passed its ~1h/~2h TTL, or a
-revoked channel) or retries are exhausted, the client gets `onDisconnect('error')`.
+If a resubscribe is rejected (for example, the stored token expired or the channel was revoked), the client gets `onDisconnect('error')`.
 Without a `refresh` callback, re-fetch the channel from your API and subscribe again.
 
 ### Outliving the token TTLs with `refresh`
@@ -218,7 +217,7 @@ const sub = channel.subscribe({
 ```
 
 - `refresh: () => Promise<RealtimeChannelDescriptor>` runs before the socket is reopened on each reconnect, once for each channel on the connection.
-- A `refresh` that rejects or takes longer than 15 seconds falls back to the stored token. When every channel's `refresh` fails, the reconnect attempt fails: `onDisconnect('error')` fires and the client retries with backoff. It fires once per failed attempt (up to 5) and once more when the client gives up.
+- A `refresh` that rejects or takes longer than 15 seconds falls back to the stored token if another channel refreshed successfully. If none did, the client retries with backoff and fires `onDisconnect('error')` for each failed attempt (up to five). Only the deployed client fires a final `'error'` when it gives up.
 - The server method behind `refresh` re-issues a channel token, so it must apply the same authorization as the method that issued the original channel.
 - `refresh` also renews a live subscription in place. The server re-checks open subscriptions on every keep-alive ping and ends one whose channel token has expired; a channel with `refresh` then calls it and subscribes again on the same socket, with no `onDisconnect` and no `onReconnect`.
 - A channel without `refresh`, or whose `refresh` fails, gets `onDisconnect('error')`.
@@ -232,7 +231,8 @@ const sub = channel.subscribe({
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async sendMessage(roomId: string, text: string) {
     const user = await auth.requireAuth(context);
-    await rt.publish('chat', roomId, { sender: user.id, text });
+    if (!await canWriteRoom(user, roomId)) throw new Error('Forbidden');
+    await rt.publish('chat', roomId, { sender: user.userSub, text });
     return { sent: true };
   },
 }));
@@ -246,8 +246,8 @@ Authorization happens in your API method — the channel handle is only returned
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async joinRoom(roomId: string) {
     const user = await auth.requireAuth(context);
-    if (!canAccessRoom(user, roomId)) throw new Error('Forbidden');
-    return rt.getChannel('chat', roomId, { principal: user.userSub });
+    if (!await canAccessRoom(user, roomId)) throw new Error('Forbidden');
+    return rt.getChannel('chat', roomId, { scope: 'exact', principal: user.userSub });
   },
 }));
 ```
@@ -263,19 +263,19 @@ await sub.established; // wait for server confirmation
 
 ### Server-side subscribe
 
-The server can subscribe to channels too — useful for aggregation, logging, or triggering side effects:
+In a trusted server-side worker, subscribe for the duration of the work and close the subscription before the worker exits:
 
 ```typescript
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async monitorRoom(roomId: string) {
-    const ch = await rt.getChannel('chat', roomId);
-    const sub = ch.subscribe((msg) => {
-      console.log(`[${roomId}] ${msg.sender}: ${msg.text}`);
-    });
+async function monitorRoom(roomId: string) {
+  const ch = await rt.getChannel('chat', roomId);
+  const sub = ch.subscribe((msg) => console.log(`[${roomId}] ${msg.sender}: ${msg.text}`));
+  try {
     await sub.established;
-    return { monitoring: true };
-  },
-}));
+    await runRoomWorker(roomId);
+  } finally {
+    sub.unsubscribe();
+  }
+}
 ```
 
 On AWS, server-side subscribe uses a real WebSocket connection, so it receives messages regardless of which Lambda invocation published them. Locally, it uses an in-process EventEmitter.
@@ -346,6 +346,8 @@ The AWS SDK retries throttled requests automatically (3 retries with exponential
 ## Local development
 
 In local dev (`npm run dev`), Realtime uses an in-process EventEmitter with a WebSocket bridge to browser clients. Schema validation runs identically to AWS, and a subscribe with an invalid token is rejected.
+
+The local client does not send periodic keep-alive pings, so a live subscription does not automatically renew when its token expires. If the local server is unreachable, `established` can remain pending after the retry limit.
 
 Messages are ephemeral — no persistence across restarts.
 

@@ -97,10 +97,10 @@ A call takes at most `maxBatchSize` messages (default 100). A larger batch throw
 sent. To send more, split the messages across calls, or raise `maxBatchSize` for a trusted
 server-side job; keep the default on anything reachable from the internet.
 
-Apart from that, never throws on send failures. Both partial and total failures are reported per-entry in the
-`results` array (with `status: 'failed'`). A failed entry's `error` is a stable message naming
-the error code or the SES entry status (e.g. `EmailSendFailedException: Email send failed (MESSAGE_REJECTED).`);
-the raw SES error text is logged server-side, not returned.
+Send failures, including failures of the whole SES request, are reported per entry in
+`results` (with `status: 'failed'`). SES failures use a block-authored `error` string
+(e.g. `EmailSendFailedException: Email send failed (MESSAGE_REJECTED).`), not the raw SES error.
+Validation failures can include the rejected address.
 
 A message without `html` is sent as plain text only, as with `send()`: its `body` is never used
 as an HTML part. Messages that fail validation (see below) are marked `failed` and not sent.
@@ -140,7 +140,7 @@ Match with `isBlocksError(e, EmailErrors.<Constant>)`. `isBlocksError` is export
 
 The local mock throws only `InvalidInput` and `SendFailed`, from input validation.
 
-Each error's message is a stable, Building Block-authored string, so it is safe to forward to a client. The raw SES error (which can name identities, regions, configuration sets and account state) is logged through the block's logger and kept on the error's non-enumerable `cause` for server-side diagnostics.
+Raw SES errors can name identities, regions, configuration sets and account state. The block logs them server-side and keeps the original error on the non-enumerable `cause` of a mapped error. Validation messages can include an address from server configuration or a private recipient list. Return an application-safe message instead of forwarding validation errors or failed batch entries verbatim.
 
 ## Security: don't expose sending as an open relay
 

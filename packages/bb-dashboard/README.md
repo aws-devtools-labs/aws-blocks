@@ -72,7 +72,7 @@ new Dashboard(scope: ScopeParent, id: string, options?: DashboardOptions)
 |--------|------|---------|-------------|
 | `title` | `string` | `id` | Dashboard display title |
 | `logs` | `boolean` | `true` | Show the logs section for each compute. `false` hides the section; logs are still captured |
-| `traces` | `boolean` | `true` | Show the traces section for each compute. The section exists only when the app has an enabled `Tracer` (one enabled `Tracer` turns on X-Ray for every compute) |
+| `traces` | `boolean` | `true` | Show each compute's traces section when the app has an enabled `Tracer`. Lambda computes support X-Ray; container computes do not. |
 | `metrics` | `MetricsSource \| MetricsSource[]` | none | Metrics source(s); each renders one app-wide section for its namespace. See [`MetricsSource`](#metricssource) |
 | `dashboardName` | `string` | the block's own `fullId` | CloudWatch Dashboard name (max 255 characters, auto-truncated) |
 | `defaultTimeRange` | `string` | `'-PT3H'` | Default time range (ISO 8601 duration) |
@@ -139,7 +139,7 @@ Grouped per compute, then an app-wide metrics section:
 | Lambda Errors | AWS/Lambda | Per compute, always |
 | Lambda Duration (Avg + p99) | AWS/Lambda | Per compute, always |
 | Concurrent Executions | AWS/Lambda | Per compute, always |
-| X-Ray Trace Table | X-Ray | Per compute, when the app has an enabled `Tracer` (unless `traces: false`) |
+| Traces | X-Ray on Lambda | With an enabled `Tracer`, unless `traces: false`. A container gets a placeholder widget, not X-Ray trace data. |
 | Recent Errors (Log Insights) | The compute's own handler log group | Per compute, always (unless `logs: false`) |
 | Log Volume | AWS/Logs | Per compute, always (unless `logs: false`) |
 | Individual Metric Graph (per metric) | User namespace | App-wide, per `metrics` source + `metricConfigs` |

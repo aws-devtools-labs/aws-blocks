@@ -24,8 +24,8 @@ Corrections:
 - `bb-metrics`: `namespace` defaults to the block's own `fullId`. `InvalidNamespace` is thrown by `new Metrics(...)` at runtime and in local dev, not during CDK synthesis.
 - `bb-logger`: the retention example is a valid statement that keeps the sandbox preset for sandbox stacks. The level is set only through the `level` option.
 - `bb-logger`, `bb-metrics`, `bb-tracer`: cross-references name the `Logger` and `Tracer` classes instead of `Logging` and `Tracing`.
-- `bb-async-job`: the dead-letter queue is named `{fullId}-dlq`. Locally a failed delivery is retried immediately and an exhausted job is logged, not queued. On AWS the retry wait is `900 + maxBatchingWindowSeconds` seconds on a Lambda compute and about 2 minutes on a container compute.
-- `bb-realtime`: `PublishFailed` is thrown when the callback URL or the connections table is unavailable, not when a delivery to one connection fails. `onDisconnect('error')` fires once per failed reconnect attempt (up to 5) and once more when the client gives up; a `refresh` times out after 15 seconds. `revokeAccess` is listed among the runtime-only methods. The reference to an `npm run test:e2e:sandbox` script is removed.
+- `bb-async-job`: documents queue name truncation and when a handler error records a terminal status. Locally a failed delivery is retried immediately and an exhausted job is logged, not queued. On AWS the retry wait is `900 + maxBatchingWindowSeconds` seconds on a Lambda compute and about 2 minutes on a container compute.
+- `bb-realtime`: distinguishes publish-time checks, revocation, and reconnect exhaustion on AWS from the local WebSocket behavior. Shows room-level authorization for publishing and cleanup for a server-side subscription. `revokeAccess` is listed among the runtime-only methods.
 - `bb-email-client`: the "Package Export Conditions" section, which did not match the package manifest, is removed.
 - `bb-lambda-compute`: the link to the `Compute` README is relative instead of pointing at the `main` branch.
 

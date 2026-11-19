@@ -2,10 +2,9 @@
 
 Distributed tracing backed by AWS X-Ray.
 
-> **Fleet-wide + cost:** tracing is presence-gated — constructing **any** `Tracer`
-> in the app enables X-Ray Active mode on **every** compute (X-Ray is billed per
-> trace recorded/retrieved). `enabled: false` on a `Tracer` only removes *that*
-> Tracer's opt-in; if any other `Tracer` exists, X-Ray still turns on fleet-wide.
+> An enabled `Tracer` turns on X-Ray Active tracing for every Lambda compute in the app.
+> Setting `enabled: false` opts out only that instance. Container computes do not provision
+> an X-Ray collector. X-Ray is billed per trace recorded or retrieved.
 
 **When to use:** You need to trace request flow across services, debug latency issues, or visualize service dependencies.
 
@@ -69,7 +68,7 @@ The `segment` object passed to `startSegment`'s callback:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | `boolean` | `true` | `false` removes this Tracer's opt-in and makes its methods no-ops: `startSegment` still executes the wrapped function and `getTraceId()` returns `null`. X-Ray stays on for every compute while any other `Tracer` is enabled. |
+| `enabled` | `boolean` | `true` | When `false`, `startSegment` still executes the wrapped function, but records nothing, and `getTraceId()` returns `null`. Other enabled Tracers are unaffected. |
 | `samplingRate` | `number` | `1.0` | Fraction of traces the local mock records, between 0 and 1 (`0.1` records roughly 10%); the mock throws `RangeError` for a value outside that range. Ignored on AWS, where X-Ray sampling rules (configured in the AWS console or via CDK) decide. |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
@@ -88,7 +87,7 @@ Mock data persists to disk at `.cdk-blocks/local/data/{fullId}/traces.json` acro
 - **Lambda daemon:** No additional charge — the X-Ray daemon is built into the Lambda runtime
 - **Cost drivers:** Number of traced invocations × sampling rate
 - **Cost optimization:** Configure X-Ray sampling rules to keep recorded-trace volume (and cost) low for high-throughput functions
-- **No X-Ray cost:** only when no `Tracer` in the app is enabled
+- With no enabled `Tracer`, Blocks does not turn on Lambda Active tracing.
 
 ## See also
 
