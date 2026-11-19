@@ -556,7 +556,7 @@ To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which 
 Registration rules:
 
 - Routes must be constructed while the backend module is loading (top level of `cdk-blocks/index.ts`, or from a block's constructor). Registering after the handler is created throws.
-- `/cdk-blocks` itself and `/cdk-blocks/api` (plus anything under it) are reserved for RPC dispatch, and `/` is not routable, so use a sub-path.
+- `/cdk-blocks`, `/cdk-blocks/api` and everything under `/cdk-blocks/api/` are reserved for RPC dispatch. The same restrictions apply under the legacy `/aws-blocks` alias. `/` is not routable; use a sub-path.
 - The same `method` + `path` twice throws `RawRouteErrors.DuplicateRoute`; catch it with `isBlocksError(e, RawRouteErrors.DuplicateRoute)`.
 
 ## withAuth (SSR cookie forwarding)

@@ -486,7 +486,7 @@ function isKnownExemption(actions: string[], name: string, arn = ''): boolean {
 	}
 	// SES sending authorizes against account-level identities and configuration sets
 	// that no app's name or tag scopes; EmailClient grants sending only. An accepted
-	// exception the core README lists under the limits (one app can send as an
+	// exception listed under Limits in SHARED-ACCOUNT.md (one app can send as an
 	// identity another app verified).
 	if (
 		(arn === '*' || /^arn:[^:]*:ses:[^:]*:[^:]*:(identity|configuration-set)\/\*$/.test(arn)) &&

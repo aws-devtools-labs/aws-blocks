@@ -467,7 +467,7 @@ Every app's CDK bootstrap execution role (the role CloudFormation deploys the ap
 | `AWS::SNS::Topic`, `TopicPolicy`, `Subscription` | `sns:*` on `arn:aws:sns:*:ACCOUNT:<id>-*` |
 | `AWS::CloudWatch::Alarm` | `PutMetricAlarm`, `DescribeAlarms`, `DeleteAlarms` and the tag actions on `alarm:<id>-*` |
 | `AWS::CloudWatch::Dashboard` | `PutDashboard`, `GetDashboard`, `DeleteDashboards`, `TagResource`, `UntagResource`, `ListTagsForResource` on `dashboard/<id>-*`. Without the tag actions the deploy still succeeds: CloudFormation retries the create without tags (its events say "Retrying request without including tags") and the dashboard has no `app` tag |
-| `AWS::IAM::ManagedPolicy` (AWS CDK Blocks' `BlocksRoleOverflowPolicy*`) | the policy and policy-version actions on `arn:aws:iam::ACCOUNT:policy/<id>-*` (attachable only to the app's roles, through the fence) |
+| `AWS::IAM::ManagedPolicy` (logical ID `BlocksOverflowPolicy<hash>`) | the policy and policy-version actions on `arn:aws:iam::ACCOUNT:policy/<id>-*` (attachable only to the app's roles, through the fence) |
 | `AWS::ResourceGroups::Group` | `resource-groups:*` on `group/<id>-*`; `cloudformation:DescribeStacks`, `ListStackResources`, `tag:GetResources` on `*` |
 | `AWS::S3Vectors::VectorBucket`, `Index`, `VectorBucketPolicy` | by name, not tag: `s3vectors:*` on `bucket/<id>-*` and `bucket/<id>-*/index/*`, and a deny on every other bucket (`VectorBuckets` and `VectorBucketsOnlyOwn`, below) |
 | `AWS::RDS::DBCluster`, `DBInstance`, `DBSubnetGroup`, `DBClusterParameterGroup`, `DBParameterGroup`, `OptionGroup` | `rds:*` on `cluster:`, `db:`, `subgrp:`, `cluster-pg:`, `pg:`, `og:`, `cluster-snapshot:` and `snapshot:<id>-*`; create and modify against RDS's `default…` parameter and option groups; `ec2:Describe*` on `*` |
@@ -679,7 +679,7 @@ Check every tag-scoped service you add for the same case:
 
 **AgentCore runtimes are scoped by tag; their workload identities aren't.**
 
-- A runtime's name can't carry `<id>-` (no hyphens allowed), so scope `AWS::BedrockAgentCore::Runtime` by tag. Require the caller's `app` tag on creation and require an existing matching resource tag for standalone tagging and management. A request tag alone does not establish ownership of an existing runtime. If create-time tagging cannot be restricted separately from standalone tagging, have the platform provision and tag the runtime before delegating management.
+- A runtime's name can't carry `<id>-` (no hyphens allowed), so scope `AWS::BedrockAgentCore::Runtime` by tag. Require the caller's `app` tag on creation and an existing matching resource tag for standalone tagging and management. Deny changing or removing the `app` tag. A request tag alone does not establish ownership of an existing runtime. If create-time tagging cannot be restricted separately from standalone tagging, have the platform provision and tag the runtime before delegating management.
 - CloudFormation also creates each runtime's workload identity in the account-wide `default` directory, which carries no app tag. `CreateWorkloadIdentity`, `GetWorkloadIdentity`, `UpdateWorkloadIdentity` and `DeleteWorkloadIdentity` on `workload-identity-directory/default` and `workload-identity-directory/default/workload-identity/*` are an accepted exception: App A's deploy could change or delete one of App B's workload identities.
 - The service-linked role (above) is still needed.
 
