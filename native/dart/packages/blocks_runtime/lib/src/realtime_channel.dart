@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'realtime_exception.dart';
+import 'transferable_descriptor.dart';
 import 'web_socket_pool.dart';
 
 /// A live WebSocket subscription that produces a typed [Stream] of messages.
@@ -50,15 +52,24 @@ class RealtimeChannel<T> {
   ///   (payload) => (payload as List<dynamic>).cast<String>(),
   /// );
   /// ```
+  ///
+  /// Throws an `InvalidDescriptorException` when [descriptor] has no string
+  /// `channel`, `wsUrl` or `token`.
   static RealtimeChannel<T> fromJsonValue<T>(
     Map<String, dynamic> descriptor,
     T Function(Object? payload) decode,
   ) {
+    String field(String name) => requireDescriptorField<String>(
+      descriptor,
+      name,
+      tag: 'realtime/channel',
+      subject: 'RealtimeChannel',
+    );
     return RealtimeChannel._(
-      channel: descriptor['channel'] as String,
-      wsUrl: descriptor['wsUrl'] as String,
+      channel: field('channel'),
+      wsUrl: field('wsUrl'),
       connectToken: descriptor['connectToken'] as String?,
-      token: descriptor['token'] as String,
+      token: field('token'),
       decode: decode,
     );
   }
@@ -73,8 +84,13 @@ class RealtimeChannel<T> {
   }
 
   /// Opens the WebSocket, subscribes, and returns a typed Stream.
+  ///
+  /// Throws a [RealtimeChannelClosedException] when the channel is closed.
+  /// When the WebSocket connection fails, the stream emits a
+  /// [RealtimeConnectionException] whose `cause` is the WebSocket client's
+  /// error.
   Stream<T> subscribe() {
-    if (_closed) throw StateError('Channel is closed');
+    if (_closed) throw const RealtimeChannelClosedException();
 
     final url = _connectionUrl;
     final ws = _pool.acquire(url);
@@ -100,7 +116,12 @@ class RealtimeChannel<T> {
           controller.addError(e, st);
         }
       },
-      onError: controller.addError,
+      onError: (Object error, StackTrace stackTrace) => controller.addError(
+        error is RealtimeException
+            ? error
+            : RealtimeConnectionException('Realtime connection failed', error),
+        stackTrace,
+      ),
       onDone: () => controller.close(),
     );
 
