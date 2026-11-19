@@ -56,8 +56,13 @@ function installedCoreVersion(): string | undefined {
  * or no core at all. `undefined` for any other error.
  */
 export function coreMismatchError(error: unknown): CliError | undefined {
+	if (!(error instanceof Error)) return undefined;
+	// Only the module that did not load counts, not the module that imported it: in
+	// "Cannot find package 'typescript' imported from …/@aws-cdk-blocks/core/dist/…" core is
+	// installed and a package it imports is missing, which is no version mismatch.
+	const [failed = ''] = error.message.split(' imported from ');
 	// Node names the package by its path, which on Windows is `node_modules\@aws-cdk-blocks\core\package.json`.
-	if (!(error instanceof Error) || !error.message.replaceAll('\\', '/').includes(CORE)) return undefined;
+	if (!failed.replaceAll('\\', '/').includes(CORE)) return undefined;
 	const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 	const missingExport = error instanceof SyntaxError && error.message.includes('does not provide an export named');
 	if (!missingExport && !(code !== undefined && RESOLVE_ERROR_CODES[code])) return undefined;

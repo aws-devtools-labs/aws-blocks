@@ -359,14 +359,16 @@ export interface JsonSchema {
 	[key: string]: unknown;
 }
 
+import { DECLARATION_MARKER } from './schema-markers.js';
+
 /**
  * Set on a named object schema to the declaration it comes from
  * (`<file>#<name>`, the file relative to the working directory), so
  * `generate-spec` can tell instantiations of one generic type from two types
  * that share a name, and name both in its warning. Internal: stripped before
- * the spec is written.
+ * the spec is written. Defined in `schema-markers.ts`.
  */
-export const DECLARATION_MARKER = 'x-blocks-declaration';
+export { DECLARATION_MARKER };
 
 /**
  * Set on an inline union schema (`oneOf`) to the name of the type alias it is

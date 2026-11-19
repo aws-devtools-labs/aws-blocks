@@ -21,13 +21,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { pathToFileURL } from 'url';
 import { API_NAMESPACE_DISCOVER, API_NAMESPACE_MARKER } from '../api.js';
-import {
-	CodegenTagError,
-	extractMethodTypes,
-	extractSkipCodegenMethods,
-	DECLARATION_MARKER,
-	type MethodTypeInfo,
-} from './extract-ts-types.js';
+import type { MethodTypeInfo } from './extract-ts-types.js';
+import { DECLARATION_MARKER } from './schema-markers.js';
 import {
 	buildNativeCatalogs,
 	NATIVE_BINDINGS_EXTENSION,
@@ -259,6 +254,28 @@ function extractParamNames(fn: Function): string[] {
  * loader when the entry point ends in `.ts` / `.tsx`, so customers can point the
  * spec emitter at their TypeScript source without an extra build step.
  */
+/** `extract-ts-types.js`, or why it could not be loaded (most often: no `typescript` package installed). */
+type TsTypeExtractor =
+	| { ok: true; module: typeof import('./extract-ts-types.js') }
+	| { ok: false; error: Error };
+
+/** Load `extract-ts-types.js`, which needs the app's `typescript` package. Never throws. */
+async function loadTsTypeExtractor(): Promise<TsTypeExtractor> {
+	try {
+		return { ok: true, module: await import('./extract-ts-types.js') };
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		return {
+			ok: false,
+			error: new Error(
+				/'typescript'/.test(message)
+					? 'the "typescript" package is not installed; install it with `npm install --save-dev typescript`'
+					: message,
+			),
+		};
+	}
+}
+
 export type FoundationLoader = (fileUrl: string) => Promise<Record<string, unknown>>;
 
 const defaultLoader: FoundationLoader = (url) => import(url);
@@ -308,12 +325,17 @@ export async function generateSpec(
 	// Extract TypeScript type info from the source file (AST-based).
 	// Used as fallback for methods without Zod schemas — gives base types
 	// (string, number, boolean, object shapes) instead of "unknown".
+	// Loaded here, not imported at the top: it imports the `typescript` package, which
+	// an app may not have installed (`typescript` is a peer dependency of core). Every
+	// other script in `@aws-blocks/core/scripts` loads without it.
+	const tsExtractor = await loadTsTypeExtractor();
 	let tsTypes = new Map<string, MethodTypeInfo>();
 	try {
-		tsTypes = extractMethodTypes(foundationPath);
+		if (!tsExtractor.ok) throw tsExtractor.error;
+		tsTypes = tsExtractor.module.extractMethodTypes(foundationPath);
 	} catch (e) {
 		// A misused codegen tag is the author's to fix, not a reason to emit `unknown`.
-		if (e instanceof CodegenTagError) throw e;
+		if (tsExtractor.ok && e instanceof tsExtractor.module.CodegenTagError) throw e;
 		// The program itself could not be read: every method falls back to `unknown`. Say so.
 		console.warn(
 			`[blocks] Could not read the TypeScript types of ${foundationPath} (${e instanceof Error ? e.message : String(e)}); the OpenRPC spec describes every method as unknown.`,
@@ -325,7 +347,7 @@ export async function generateSpec(
 	// scenario: missing tsconfig paths, third-party `.d.ts` mismatches).
 	let skipCodegenNames = new Set<string>();
 	try {
-		skipCodegenNames = extractSkipCodegenMethods(foundationPath);
+		if (tsExtractor.ok) skipCodegenNames = tsExtractor.module.extractSkipCodegenMethods(foundationPath);
 	} catch {
 		// AST parse failed — nothing to skip.
 	}

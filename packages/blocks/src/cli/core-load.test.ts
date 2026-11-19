@@ -101,7 +101,27 @@ describe('an installed @aws-cdk-blocks/core that does not match the CLI', () => 
 		const other = Object.assign(new Error("Cannot find package 'left-pad' imported from /app/x.js"), {
 			code: 'ERR_MODULE_NOT_FOUND',
 		});
-		for (const error of [other, new SyntaxError('Unexpected token'), new TypeError('@aws-cdk-blocks/core broke'), 'x']) {
+		// A package that core imports is missing: core itself loaded, so it is no version mismatch.
+		const missingFromCore = Object.assign(
+			new Error(
+				"Cannot find package 'typescript' imported from /app/node_modules/@aws-cdk-blocks/core/dist/scripts/extract-ts-types.js",
+			),
+			{ code: 'ERR_MODULE_NOT_FOUND' },
+		);
+		const missingFromCoreOnWindows = Object.assign(
+			new Error(
+				"Cannot find package 'typescript' imported from C:\\app\\node_modules\\@aws-cdk-blocks\\core\\dist\\scripts\\extract-ts-types.js",
+			),
+			{ code: 'ERR_MODULE_NOT_FOUND' },
+		);
+		for (const error of [
+			other,
+			missingFromCore,
+			missingFromCoreOnWindows,
+			new SyntaxError('Unexpected token'),
+			new TypeError('@aws-cdk-blocks/core broke'),
+			'x',
+		]) {
 			assert.strictEqual(coreMismatchError(error), undefined);
 		}
 	});
