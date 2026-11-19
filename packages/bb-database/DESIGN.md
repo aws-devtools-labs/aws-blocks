@@ -341,7 +341,7 @@ The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table i
 - The Data API takes one statement in a call. The engine says so (`oneStatementPerCall`), and the migration runner then sends its settings one by one.
 - An error of the service gets the SQLSTATE that the block's translation reads. The server's own code is at the end of the message. A cluster that resumes, or a service that cannot answer, is `57P03`, which a migration run tries again. A credential that the server refused is `28P01`.
 - A statement outside a transaction is sent again after an answer that says it did not run and that passes: a paused cluster that resumes (up to 24 seconds of waits, inside the deadline of a request), and a credential that the server refused, which a rotation of the secret causes. A statement in a transaction is not sent again.
-- A placeholder `$n` in a string, a quoted identifier, a comment or a dollar-quoted body is not a parameter, as on a PostgreSQL connection. The Data API itself does not bind a name inside a string.
+- The engine leaves `$n` unchanged inside identifiers (quoted or unquoted), strings, comments and dollar-quoted bodies, as on a PostgreSQL connection. The Data API itself does not bind a name inside a string.
 - The service reports no changed rows for a statement with `RETURNING`. The engine counts the rows that such a statement returned.
 - A commit that fails is followed by a rollback. A commit that did not reach the server would otherwise leave the transaction open, with its locks, until the service ends it.
 - The service ends a statement after 45 seconds. The migration runner has no way around that limit, so a statement that needs longer is not for a migration file here.
