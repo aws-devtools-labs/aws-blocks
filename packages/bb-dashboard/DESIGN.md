@@ -169,7 +169,7 @@ finalize pass (see D-DB-11). It does expose `logs` / `traces` display toggles.
 
 ### D-DB-11: Build the widget body at finalize, not in the constructor
 
-**Decision:** The Dashboard does **not** assemble its widgets in its constructor. It creates the `CwDashboard` resource eagerly (so the `url`, redirect route, and config registration never point at a resource that does not exist) and registers a deferred body-build (`registerDashboardFinalizer` from core) that enumerates the app's computes via `getComputes()`, calls `compute.dashboardSection(region)` on each, and adds the widgets via `dashboard.addWidgets(...)`; that runs via `finalizeDashboards()` at the end of `BlocksStack`/`BlocksBackend.create()`, after the backend module has fully imported. Only the widget *body* is deferred; the resource, `dashboardName`, `url`, the redirect route, and the config registration stay in the constructor (they need nothing from other blocks). There is no `options.computes` yet — the finalizer covers every compute in the app (see D-DB-10).
+**Decision:** The Dashboard does **not** assemble its widgets in its constructor. It creates the `CwDashboard` resource eagerly (so the `url` and redirect route never point at a resource that does not exist) and registers a deferred body-build (`registerDashboardFinalizer` from core) that enumerates the app's computes via `getComputes()`, calls `compute.dashboardSection(region)` on each, and adds the widgets via `dashboard.addWidgets(...)`; that runs via `finalizeDashboards()` at the end of `BlocksStack`/`BlocksBackend.create()`, after the backend module has fully imported. Only the widget *body* is deferred; the resource, `dashboardName`, `url`, and the redirect route stay in the constructor (they need nothing from other blocks). There is no `options.computes` yet — the finalizer covers every compute in the app (see D-DB-10).
 
 **Rationale:**
 - **Order-independence.** `dashboardSection` gates the traces section on each compute's `tracerEnabled`, which the framework flips at `finalizeTracing()` (when the app contains a `Tracer`) — and the default compute list is `getComputes()`. Building in the Dashboard constructor would miss any compute or Tracer constructed after it, and would run before tracing is finalized. Deferring to finalize means the Dashboard observes the complete app, so `new Dashboard(...)` can appear anywhere in the backend module. (`finalizeTracing` runs before `finalizeDashboards`, so trace flags are set when the dashboard reads them.)
@@ -240,15 +240,24 @@ Row 3 (y=18): [Log Volume (24w, 6h)]
 
 The Dashboard always registers a `GET` RawRoute that 302-redirects to the CloudWatch Dashboard URL:
 
-1. **CDK layer:** Sets a `BB_DASHBOARD_URL` environment variable on the Lambda handler containing the dashboard console URL token. Registers the RawRoute for route validation.
-2. **Runtime layer:** Registers a `RawRoute` with a handler that reads the env var and redirects:
+1. **CDK layer:** Builds the console URL from the `AWS::Region` token and the dashboard name, outputs it as a CfnOutput, and registers the RawRoute (on the Dashboard) for route validation. It passes **no** config to the runtime: an app may have several dashboards, and a single app-wide key would hold only the last one's URL.
+2. **Runtime layer:** Derives the same URL itself — the dashboard name exactly as the CDK layer derives it (`dashboardName` option, else `fullId`; shared helpers in `src/naming.ts`) and the compute's `AWS_REGION`, which is the stack's region — and registers a `RawRoute` on the Dashboard with a handler that redirects to that dashboard's own URL:
    ```typescript
    // Internally equivalent to:
-   new RawRoute(scope, 'dashboard-redirect', {
+   const region = process.env.AWS_REGION;
+   this.url = region ? dashboardConsoleUrl(region, this.dashboardName) : null;
+   const url = this.url;
+   new RawRoute(this, 'dashboard-redirect', {
      path: options.routePath ?? '/aws-blocks/dashboard',
      method: 'GET',
      handler: async (ctx) => {
-       const url = process.env.BB_DASHBOARD_URL;
+       if (!url) {
+         // No AWS_REGION, so no URL: answer 503 with the mock layer's body (below).
+         ctx.response.status = 503;
+         ctx.response.headers.set('Content-Type', 'application/json');
+         ctx.response.send({ message, hint, localObservability });
+         return;
+       }
        ctx.response.status = 302;
        ctx.response.headers.set('Location', url);
        ctx.response.send('');

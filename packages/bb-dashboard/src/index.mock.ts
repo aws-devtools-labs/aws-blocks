@@ -10,6 +10,7 @@
  */
 import type { ScopeParent } from '@aws-blocks/core';
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { deriveDashboardName } from './naming.js';
 import { mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -63,13 +64,14 @@ export class Dashboard extends Scope {
 					? `${scope.id}-${id}`
 					: id;
 		const title = options?.title ?? id;
-		this.dashboardName = (options?.dashboardName ?? this.fullId).replace(/[^A-Za-z0-9\-_]/g, '-').substring(0, 255);
+		this.dashboardName = deriveDashboardName(id, options?.dashboardName, this.fullId);
 		registerSdkIdentifiers(this.fullId, { dashboardName: this.dashboardName });
 
 		const routePath = options?.routePath;
 		if (routePath !== false) {
 			const path = routePath ?? '/aws-blocks/dashboard';
-			mountDashboardRoute(scope, path, null);
+			// Mounted on this block, as in the CDK and AWS layers.
+			mountDashboardRoute(this, path, null);
 		}
 
 		console.log(
