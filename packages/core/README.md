@@ -87,7 +87,7 @@ const result = await api.greet('World');
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `compute` | `{ resolve(): { readonly type: 'serverless' \| 'container' } }` (a `Compute` block) | the app's default compute | The compute the namespace's methods run on. See [API front door](#api-front-door) for the paths and time limits, and the `@aws-cdk-blocks/bb-compute` README for what it changes. |
+| `compute` | `{ resolve(): { readonly type: 'serverless' \| 'container' } }` (a `Compute` block) | the app's default compute | Routes calls to the namespace-specific path to this compute. To prevent the bare RPC endpoint from running these methods on the default compute, enable [`defaults.strictNamespacePlacement`](#blockspresets-and-defaults). See [API front door](#api-front-door) for paths and time limits. |
 | `httpErrorStatus` | `boolean` | `false` | Answer a call that throws an `ApiError` with a `4xx` status with that HTTP status instead of `200`. See [`httpErrorStatus`](#httperrorstatus). |
 
 ### Authentication — every method is a public endpoint
@@ -308,17 +308,17 @@ Start `defaults` from `BlocksPresets.sandbox` or `BlocksPresets.production` and 
 | Option | Type | `sandbox` | `production` | Description |
 |---|---|---|---|---|
 | `removalPolicy` | `RemovalPolicy` | `RemovalPolicy.DESTROY` | `RemovalPolicy.RETAIN` | What CloudFormation does with a stateful resource (table, bucket, user pool) when the stack is deleted. |
-| `deletionProtection` | `boolean` | `false` | `true` | Blocks deletion of a stateful resource through any path (CloudFormation, CLI, API, console). |
+| `deletionProtection` | `boolean` | `false` | `true` | Enables service-side deletion protection on resources that support it. This is separate from CloudFormation retention and does not protect S3 buckets from direct deletion. |
 | `allowedOrigins` | `string[]` | `['^https?://(localhost\|127\\.0\\.0\\.1)(:\\d+)?$']` | `[]` | CORS origins the API accepts. See [CORS Configuration](#cors-configuration). |
 | `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | `false` | `true` | Continuous backups on stateful resources that support them (DynamoDB point-in-time recovery: 1–35 days). |
 | `logRetention` | `RetentionDays` | `RetentionDays.ONE_WEEK` | `RetentionDays.ONE_YEAR` | Retention of the CloudWatch log groups AWS CDK Blocks manages. |
 | `throttling` | `BlocksThrottling` (`{ rateLimit: number; burstLimit: number }`) | `{ rateLimit: 200, burstLimit: 400 }` | `{ rateLimit: 1000, burstLimit: 2000 }` | Requests per second and burst on the shared REST API stage; messages per second on the `Realtime` WebSocket stage. |
-| `accessLogging` | `boolean` | `false` | `false` | Structured JSON access logs from every API Gateway stage AWS CDK Blocks manages; also `FileBucket`'s S3 server access logs while `storageAccessLogging` is unset. It sets the account-level API Gateway CloudWatch Logs role, so turn it on in one Blocks stack per account and region. While it is off and `removalPolicy` is not `DESTROY`, synth warns `blocks:apigateway:access-logging-disabled`. |
-| `storageAccessLogging` | `boolean` | unset | unset | S3 server access logs for every `FileBucket`. Unset falls back to `accessLogging`. |
+| `accessLogging` | `boolean` | `false` | `false` | JSON access logs on the shared REST API and Realtime WebSocket stages. Hosting's CloudFront SSR origin uses `frontDoor.features.serverOrigin.accessLogging` instead. This is also the fallback for `storageAccessLogging`. The API Gateway CloudWatch Logs role is account- and region-wide; enable it in one Blocks stack per account and region. While it is off and `removalPolicy` is not `DESTROY`, synth warns `blocks:apigateway:access-logging-disabled`. |
+| `storageAccessLogging` | `boolean` | unset | unset | S3 server access logs for Blocks-provisioned FileBucket buckets. Unset falls back to `accessLogging`. Configure logging on imported buckets separately. |
 | `secretsStore` | `BlocksSecretsStore` (`'ssm' \| 'secrets-manager'`) | `'ssm'` | `'secrets-manager'` | Where AWS CDK Blocks stores the secrets it generates (the `Auth` session secret, the `Realtime` connection token key). Changing it on a deployed stack creates new keys, which signs every `Auth` user out once. |
 | `vpc` | `BlocksVpcOptions` | unset | unset | A VPC for the app's compute and VPC-resident resources. |
 | `permissionsBoundary` | `string \| IManagedPolicy` | unset | unset | See [Cap every role](#cap-every-role-defaultspermissionsboundary). |
-| `strictNamespacePlacement` | `boolean` | `false` | `false` | Each deployed compute serves only the namespaces placed on it, on any RPC path. The dev server serves every namespace on every RPC path. While it is off and a namespace has its own compute, synth warns `blocks:apigateway:bare-endpoint-serves-placed-namespaces`. |
+| `strictNamespacePlacement` | `boolean` | `false` | `false` | When enabled, each deployed compute serves only the namespaces placed on it. The dev server does not enforce placement. While it is off and a namespace has its own compute, synth warns `blocks:apigateway:bare-endpoint-serves-placed-namespaces`. |
 | `appIdentity` | `BlocksAppIdentity` (`{ id: string; reportOnly?: boolean }`) | unset | unset | See [Running many apps in one AWS account](#running-many-apps-in-one-aws-account-a-shared-platform). |
 
 `storageAccessLogging`, `vpc`, `permissionsBoundary`, `strictNamespacePlacement` and `appIdentity` are optional in `BlocksDefaults`; the other options are required, and both presets set them.
@@ -340,11 +340,11 @@ WAF is off by default. Turn it on with `apiWaf` on `BlocksStack` / `BlocksBacken
 | `apiWaf` | Effect |
 |---|---|
 | `{ enabled: true, rateLimit? }` | Creates a web ACL with the AWS managed Common rule set and Known Bad Inputs rule set, plus a per-IP rate limit of `rateLimit` requests per 5 minutes (default 1000, minimum 100). The Common rule set's body rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`) only count, so normal RPC payloads, including user-written HTML or Markdown, pass. |
-| `{ webAclArn }` | Attaches a web ACL you already have, as-is; its scope and region are checked at synth. Behind a `Hosting` door its IP rate rules count CloudFront edge or proxy IPs for browser traffic. |
+| `{ webAclArn }` | Attaches your existing web ACL as-is. Synth checks scope and region when the ARN and relevant region are known; unresolved values are checked at deploy. Behind a `Hosting` door its IP rate rules count CloudFront edge or proxy IPs for browser traffic. |
 
 The web ACL goes on whichever front door clients use:
 
-- `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. Browser requests that arrive through a `Hosting` door aren't rate-limited by `apiWaf`; turn on the door's own WAF (`frontDoor: { features: { waf: { enabled: true } } }`) to rate-limit them:
+- `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. For the Blocks-managed ACL, rate-limit proxied browser requests at the door. Use the door's WAF if it supports one (see the [Hosting settings matrix](../hosting/README.md)); otherwise provide your own rate limiting:
   - a CloudFront `Hosting` that claims the API sends a marker header the rate rule exempts;
   - behind any other door (ALB, API Gateway, your own, or a CloudFront edge over a router) the rate rule is left off and synth warns (`blocks:api-waf:no-rate-limit-behind-door`).
 - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution, which also covers the container namespaces it routes straight to their load balancer. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth). Without one, synth warns that those container namespaces have no rate limit (`blocks:api:direct-routes-without-waf`).

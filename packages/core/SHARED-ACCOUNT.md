@@ -292,7 +292,7 @@ What each group of statements is for:
   - `AgentCoreRuntimeLogsWriteOnly`: AgentCore runtimes log to AWS-named groups, write only.
   - `AgentCoreDefaultDirectory`: workload access tokens from the account's `default` directory; the workload identity itself stays tag-scoped.
   - `AwsOwnedModelsRead`: metadata of AWS-owned foundation models and system-defined inference profiles, not application inference profiles, which are tag-scoped.
-  - `ManagedKeysViaService`: AWS-managed keys, only through SSM, Secrets Manager, DynamoDB, S3 and SQS.
+  - `ManagedKeysViaService`: listed KMS operations through SSM, Secrets Manager, DynamoDB, S3 and SQS. The statement does not distinguish AWS-managed keys from customer-managed keys; the key policy and other applicable permissions still govern access.
   - `ResourcelessActions`: actions that take only `*`: X-Ray, `PutMetricData`, `DescribeLogGroups`, VPC network interfaces, model invocation and listing, SES.
 - **API calls, account-wide** (`ApisAccountWide`): `execute-api:Invoke` (calling an IAM-authorized API) and `execute-api:ManageConnections` (posting to and disconnecting WebSocket clients, which Realtime publish/subscribe and every Agent's streaming use) on every API in the account. An API is named by its id, and these actions support no tag condition, so no statement can scope them to one app (see Limits, under [The pipeline](#the-pipeline)).
 
@@ -679,7 +679,7 @@ Check every tag-scoped service you add for the same case:
 
 **AgentCore runtimes are scoped by tag; their workload identities aren't.**
 
-- A runtime's name can't carry `<id>-` (no hyphens allowed), so scope `AWS::BedrockAgentCore::Runtime` by tag, as for the other tag-matched services: allow `bedrock-agentcore:CreateAgentRuntime` and `TagResource` only with `aws:RequestTag/app` equal to the caller's, allow `bedrock-agentcore:*` on `runtime/*` only with `aws:ResourceTag/app` equal to the caller's, deny any resource tagged as another app, and deny changing or removing the `app` tag.
+- A runtime's name can't carry `<id>-` (no hyphens allowed), so scope `AWS::BedrockAgentCore::Runtime` by tag. Require the caller's `app` tag on creation and require an existing matching resource tag for standalone tagging and management. A request tag alone does not establish ownership of an existing runtime. If create-time tagging cannot be restricted separately from standalone tagging, have the platform provision and tag the runtime before delegating management.
 - CloudFormation also creates each runtime's workload identity in the account-wide `default` directory, which carries no app tag. `CreateWorkloadIdentity`, `GetWorkloadIdentity`, `UpdateWorkloadIdentity` and `DeleteWorkloadIdentity` on `workload-identity-directory/default` and `workload-identity-directory/default/workload-identity/*` are an accepted exception: App A's deploy could change or delete one of App B's workload identities.
 - The service-linked role (above) is still needed.
 
@@ -866,7 +866,7 @@ CDK's default bootstrap deploy role may change or delete *any* stack, and CloudF
   - The guard allows `UpdateTerminationProtection` on the app's own stacks, so the pipeline can turn it off for its own `ROLLBACK_COMPLETE` stack, or turn protection on only after the first successful deploy.
 - `StackTagAppIsThisApp` denies creating or changing a stack unless the request tags it `app=<id>`, and `NoStackRetagging` / `NoStackUntagging` deny setting a stack's `app` tag to another value or removing it. CloudFormation propagates stack tags to the resources it creates, including types a tag aspect can't reach.
 - `NoResourceImport` denies change sets that import existing resources: an import would adopt a resource the app didn't create (another app's) into the app's stack.
-- `NoPlatformResourceTypes` and `NoHookOrRegistryAdmin` keep the app's deploy from creating or changing CloudFormation hooks, registry types, macros and stack sets, which act on every stack in the account.
+- `NoHookOrRegistryAdmin` denies the listed direct administration actions by the deploy role. `NoPlatformResourceTypes` only matches types supplied in the request's `ResourceTypes` field; enforce the resource-type restriction separately through the execution role or a platform-owned template control.
 
 **Prefer attaching it in a custom bootstrap template**, so CloudFormation owns both the role and the attachment:
 
@@ -886,13 +886,14 @@ Run two commands, and fail the pipeline on a non-zero exit from either:
 2. Confirm that every report names the id the platform gave this app, wasn't written with `reportOnly` (which the app's own code sets) and has no violations.
 
 ```bash
-APP_ID=appa NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet   # fails on any violation
+export APP_ID=appa
+NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet   # fails on any violation
 jq -e -s --arg id "$APP_ID" 'length > 0 and all(.[]; .app.id == $id and .app.reportOnly != true and (.violations | length) == 0)' cdk.out/*.blocks-iam.json
 ```
 
 `APP_ID` comes from the platform, however it manages ids (a registry, picked by hand, generated): to AWS CDK Blocks it's just a string. It never comes from the app's own repository or code.
 
-This is feedback, not the guarantee. Synth runs the app's own code, so a determined app can write any report it likes. What keeps apps apart is IAM: the boundary on every role, the execution role that only creates bounded roles tagged as the app, and the deploy guard. Run synth in a job that has no AWS credentials and no `id-token` permission, and deploy the synthesized assembly (`cdk deploy --app cdk.out`) from a job that has the credentials and doesn't run the app's code.
+This is feedback, not the guarantee. Synth runs the app's own code, so it can write any report it likes. Run synth in a job with no AWS credentials and no `id-token` permission. Before a credentialed job deploys an assembly, validate the assembly and publish assets through a trusted process: CDK asset manifests can request executable asset sources or image builds. An assembly produced by untrusted code is not safe to deploy as-is.
 
 **Optionally, check the templates themselves too.** The report comes from the app's own synth; the CloudFormation templates in `cdk.out` are what will be deployed. Before deploying, check that every `AWS::IAM::Role` carries the `apps-boundary` boundary and the tag `app=<id>`, and that every stack is named `<id>` or `<id>-…`:
 
@@ -959,8 +960,8 @@ const app = new cdk.App({ context: { '@aws-cdk/core:bootstrapQualifier': appId }
 const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
 const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
-// Every derived name starts with the stack name, so name it `<id>`, or `<id>-…` for a sandbox.
-const stackName = sandboxMode ? `${appId}-${getStackName({ sandbox: true, projectRoot })}` : appId;
+// Keep stack names aligned with the CLI's deploy and destroy commands.
+const stackName = getStackName({ sandbox: sandboxMode, projectRoot });
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -973,7 +974,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 ```
 
-A sandbox stack is named `<id>-<stackId>-<sandbox id>` (`getStackName({ sandbox: true })` returns `<stackId>-<sandbox id>`).
+With `stackId` set to the app id below, production is named `<id>-prod` and a sandbox is named `<id>-<sandbox id>`.
 
 **`cdk.json`.** AWS CDK Blocks' `npm run deploy` and `npm run sandbox` check the bootstrap with the qualifier in `cdk.json`, and the CDK CLI looks up the app's own toolkit stack. Add both to the starter's `cdk.json`, with the app's id:
 

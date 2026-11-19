@@ -271,7 +271,7 @@ export interface BlocksDefaults {
 	 * across every app in an account by writing it with policy variables, e.g.
 	 * `arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}-*`, and tagging each
 	 * app's stack with its `app` name — {@link app} does the tagging, and
-	 * `SHARED-ACCOUNT.md` in `@aws-blocks/core` (linked from the core README
+	 * `SHARED-ACCOUNT.md` in `@aws-cdk-blocks/core` (linked from the core README
 	 * section "Running many apps in one AWS account") documents such a
 	 * policy for the platform to write and own. The policy (by name, ARN or
 	 * `IManagedPolicy`) is referenced as-is; Blocks never rewrites its document.
@@ -378,7 +378,7 @@ export interface BlocksDefaults {
 	 * tagged as this app, and a deploy guard that keeps the app's deploy role on
 	 * its own stacks. Each app has its own CDK bootstrap, with the app id as its
 	 * qualifier. The platform writes and owns the three policies; `SHARED-ACCOUNT.md`
-	 * in `@aws-blocks/core` (linked from the core README section "Running many
+	 * in `@aws-cdk-blocks/core` (linked from the core README section "Running many
 	 * apps in one AWS account") documents each of them, and
 	 * how a pipeline runs synth, which fails on any violation, and confirms the report's
 	 * `app.id`.
