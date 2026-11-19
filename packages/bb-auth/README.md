@@ -124,7 +124,7 @@ Two blocks that both have `providers` (say Google on the default store and Okta 
 
 | Option | Configure with | What it's for | Cognito pricing | Works offline in `npm run dev` | Cognito groups / `auth.admin` | MFA | PKCE-only IdPs |
 |---|---|---|---|---|---|---|---|
-| **Email + password** | `emailPassword` (on by default; default store) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes: a local user pool in `.bb-data/` | Yes | Yes: Cognito MFA through `mfa` (TOTP or SMS; email MFA once `email` sends through SES) | Not applicable |
+| **Email + password** | `emailPassword` (on by default; default store) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes: a local user pool in `.cdk-blocks/local/data/` | Yes | Yes: Cognito MFA through `mfa` (TOTP or SMS; email MFA once `email` sends through SES) | Not applicable |
 | **Social** | `providers` entry with `type: 'google'`, `'apple'`, `'facebook'` or `'amazon'` (default store) | Consumer "Sign in with Google / Apple / Facebook / Amazon" | Same free tier and rate as email + password | No: sign-in answers an actionable `501` locally; deploy a sandbox to test it | Yes: the user becomes a user-pool user | Handled by the provider; Cognito never challenges a federated user | Not applicable |
 | **Generic OIDC, verified by your backend** | `store: 'builtin'` with `type: 'oidc'` entries (plus `github()`, `customOauth2()`, `stubIdp()`) | Okta, Entra ID, Auth0, GitHub or any other OIDC / OAuth 2.0 provider, verified by your own backend | No Cognito charge: these users never touch Cognito | Yes: with `stubIdp()`, a real OIDC provider served by the dev server | No pool record: `requireRole()` reads groups from the provider's `groupsClaim`; `auth.admin` does not apply | The provider's | Yes: omit `clientSecret` |
 | **Generic OIDC, through Cognito** | `type: 'oidc'` entry on the default store | The same providers, when you need their users in your Cognito user pool | Separate federated meter: 50 free MAUs, then $0.015 per MAU on every feature plan | No: `501` locally, like social | Yes: the user becomes a user-pool user | Handled by the provider; Cognito never challenges a federated user | No: Cognito requires a client secret |
@@ -399,7 +399,7 @@ users: {
 `requireRole(context, 'admin')` needs someone in `admin` already. Make the first one with the `users` command, once: sign up as yourself, then add your account to the group. It works the same on the local pool and on a deployed one:
 
 ```sh
-# Local pool (.bb-data/): stop the dev server first (npm run dev:stop), start it again afterwards.
+# Local pool (.cdk-blocks/local/data/): stop the dev server first (npm run dev:stop), start it again afterwards.
 npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin
 
 # The pool a deployed stage owns, with your AWS credentials (--profile / --region, or AWS_PROFILE / AWS_REGION).
@@ -408,7 +408,7 @@ npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin --stage pro
 ```
 
 - `<user>` is the username, or the user's **verified** email or phone number. An unverified one is refused. So is a value that is one user's username and another user's verified email. Name the account outright with `--username <name>` or `--email <address>` (verified only) in place of `<user>`.
-- The group must be one the block declares in `users.groups`; the command refuses any other, and a user the pool does not have. On a deployed stage the groups are read from the stack. Locally they are the groups the local pool holds, which keeps a group dropped from `users.groups` until `.bb-data/` is reset.
+- The group must be one the block declares in `users.groups`; the command refuses any other, and a user the pool does not have. On a deployed stage the groups are read from the stack. Locally they are the groups the local pool holds, which keeps a group dropped from `users.groups` until `.cdk-blocks/local/data/` is reset.
 - On a deployed stage the command first prints the pool with the AWS account and Region your credentials point at, so a wrong `--profile` shows before you add `--yes`.
 - `--stage sandbox` is this checkout's sandbox and `--stage prod` the production stack (the names `npm run sandbox` and `npm run deploy` give them); `--stack <name>` names any other stack.
 - A block with `userPool: Auth.fromExisting(…)` is refused: manage that pool's groups where it is managed.
@@ -924,11 +924,11 @@ Records come from this block, so they don't include failed attempts on Cognito's
 
 ## Local development
 
-`npm run dev` and tests run email + password against a local user pool in `.bb-data/<fullId>/state.json`, with no AWS account. Local passwords are stored there in plain text (`.bb-data/` is git-ignored): **never use real credentials locally.**
+`npm run dev` and tests run email + password against a local user pool in `.cdk-blocks/local/data/<fullId>/state.json`, with no AWS account. Local passwords are stored there in plain text (`.cdk-blocks/local/data/` is git-ignored): **never use real credentials locally.**
 
 | | Locally | On AWS |
 |---|---|---|
-| Verification codes (sign-up, password reset, MFA, attribute verification) | Not sent. Each is written to `.bb-data/<fullId>/last-code.json` as `{ username, code, purpose }` and passed to the `codeDelivery` hook. | Cognito emails or texts them. `codeDelivery` is ignored. |
+| Verification codes (sign-up, password reset, MFA, attribute verification) | Not sent. Each is written to `.cdk-blocks/local/data/<fullId>/last-code.json` as `{ username, code, purpose }` and passed to the `codeDelivery` hook. | Cognito emails or texts them. `codeDelivery` is ignored. |
 | `email` (SES sender) | No effect. | Cognito sends through your SES identity. |
 | Authenticator-app (TOTP) codes | Any 6 digits pass, unless `totpVerification: 'rfc6238'`. | Cognito verifies every code. |
 | Passkeys | The signature is not verified. | Verified. |
