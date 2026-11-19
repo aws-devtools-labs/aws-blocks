@@ -120,31 +120,8 @@ class OidcDsl {
      */
     var relayTo: String? = null
 
-    @Deprecated(
-        message = "Renamed to relayTo, matching the backend's allowedRelayOrigins and the wire field.",
-        replaceWith = ReplaceWith("relayTo"),
-        level = DeprecationLevel.WARNING,
-    )
-    var redirectUrl: String? = null
-
-    /**
-     * Returns the configured relay target, accepting either property name.
-     *
-     * Both names write separate fields so that setting them to conflicting values is
-     * detectable rather than resolved by assignment order.
-     */
-    internal fun resolve(): String? {
-        @Suppress("DEPRECATION")
-        val legacy = redirectUrl
-        val current = relayTo
-        if (legacy != null && current != null && legacy != current) {
-            throw GradleException(
-                "cdkBlocks.oidc: relayTo (\"$current\") and the deprecated redirectUrl " +
-                    "(\"$legacy\") are set to different values. Remove redirectUrl.",
-            )
-        }
-        return (current ?: legacy)?.also { validate(it) }
-    }
+    /** Returns the configured relay target, or null when none is set. */
+    internal fun resolve(): String? = relayTo?.also { validate(it) }
 
     private fun validate(value: String) {
         if (value.any { it.isWhitespace() }) {
