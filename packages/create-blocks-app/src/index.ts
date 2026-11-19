@@ -1158,6 +1158,10 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'aws-cdk': tplDevDeps['aws-cdk'] || '^2.1147.0',
       'constructs': tplDevDeps['constructs'] || '^10.6.0',
       'tsx': tplDevDeps['tsx'] || '^4.7.0',
+      // `@aws-blocks/core` reads the API's types with it for the OpenRPC spec, and the
+      // steps printed below typecheck with `tsc -b`. A peer of core, but listed here too
+      // for installs that skip peers (Yarn Berry, `--legacy-peer-deps`).
+      'typescript': tplDevDeps['typescript'] || '^5.9.3',
       'esbuild': tplDevDeps['esbuild'] || '^0.27.1',
       '@types/node': tplDevDeps['@types/node'] || '^22.12.0',
     },
