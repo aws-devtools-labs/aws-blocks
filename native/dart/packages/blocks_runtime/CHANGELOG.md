@@ -151,6 +151,31 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   the launcher keeps waiting. It used to apply only to the loopback sign-in.
   `OidcClient.signInDirect` and `TypedOidcClient.signInDirect` take a `cancel`
   parameter that works the same way.
+- A realtime subscription never ends silently. Its stream closes normally
+  only when the app cancels it or calls `RealtimeChannel.close()`; every other
+  end emits one `RealtimeException`, then closes the stream:
+  - Add `RealtimeSubscriptionEndedException`, a third kind of the sealed
+    `RealtimeException`, with `channel`, `code`, `message` and `cause`. The
+    stream emits it when the server ends or refuses this channel's
+    subscription. `code` is the server's string as sent: `token_expired` (the
+    channel token lasts about an hour; call the API method that returned the
+    channel again and subscribe to the new handle), `access_revoked` or
+    `principal_mismatch` (don't retry as the same user), or null for a
+    refused subscribe. An exhaustive `switch` over `RealtimeException` needs a
+    case for it.
+  - When the server or gateway closes the socket, the stream emits a
+    `RealtimeConnectionException`. It used to close with no error. So does an
+    error frame from the server that names no channel. The SDK doesn't
+    reconnect or renew the token by itself.
+  - A message whose payload fails to decode now ends the stream after the
+    decode error, as in Kotlin and Swift. The stream used to stay open.
+  - `RealtimeChannel.close()` closes every active stream of the channel.
+  - `subscribe()` still returns at once, without waiting for the server to
+    confirm the subscription.
+- `RealtimeChannel` is `final`, as in Kotlin and Swift, so a class can no
+  longer extend or implement it.
+- `WebSocketPool` is no longer exported. It was an internal of
+  `RealtimeChannel`.
 
 ### Other changes
 
@@ -159,6 +184,23 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   response. Callers that join a refresh already in flight now get its error
   when it fails; they used to see it succeed and go on with the expired
   token.
+- A socket with a realtime subscription sends `{"action":"ping"}` every 9
+  minutes, as the web client does. The ping keeps API Gateway from closing an
+  idle socket after 10 minutes, and it is when the server re-checks each
+  subscription's token and reports the ones that ended.
+- Frames are routed by channel, so subscriptions to several channels on one
+  WebSocket URL, or two `subscribe()` calls on one handle, each get only their
+  own messages. Two subscriptions on one URL used to throw a `StateError`. A
+  socket that fails or closes leaves the pool, so the next `subscribe()` opens
+  a new one.
+- When a channel's last subscription on a socket ends and the socket stays
+  open for other channels, the client sends `{"action":"unsubscribe"}` for
+  that channel, so the server stops delivering it.
+- A new realtime socket that hasn't finished the WebSocket handshake after 30
+  seconds is closed, and its subscriptions end with a
+  `RealtimeConnectionException`. A server that accepted the connection and
+  never answered the upgrade used to leave the subscription waiting forever.
+  An open socket still has no idle timeout.
 - A `restore()` still in flight when a sign-in or sign-out finishes ignores
   its response and returns the current user, or null. A late 401 used to sign
   out, and clear the tokens of, a sign-in that had just finished, and a late

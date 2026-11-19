@@ -45,7 +45,7 @@ class DartCodeGenerator {
     final transferableTags = _collectTransferableTags(model);
     if (transferableTags.isNotEmpty) {
       buf.writeln(
-        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, TransferableException, InvalidDescriptorException;",
+        "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, RealtimeSubscriptionEndedException, TransferableException, InvalidDescriptorException;",
       );
     }
 
