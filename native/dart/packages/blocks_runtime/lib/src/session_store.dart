@@ -367,12 +367,10 @@ final class InMemorySessionStore implements SessionStore {
 /// once a read succeeds. [clear] is the exception: it deletes the stored
 /// session at once. A failed write is retried on the next change.
 ///
-/// Flutter apps reuse the existing secure storage with zero new code:
-/// ```dart
-/// final session = PersistentSessionStore(store: FlutterSecureStore());
-/// await session.load();
-/// ```
-/// Pure-Dart / tests inject an [InMemoryTokenStore].
+/// A Flutter app that depends on `blocks_runtime_flutter` doesn't build one:
+/// the plugin registers a store over `FlutterSecureStore` as the default
+/// before `main` runs (see `registerDefaultSessionStore`). Pure-Dart code and
+/// tests can build one over an [InMemoryTokenStore].
 ///
 /// Use one instance per [storageKey] and [TokenStore]: each instance writes
 /// its whole cookie set, so two of them over the same storage overwrite each
