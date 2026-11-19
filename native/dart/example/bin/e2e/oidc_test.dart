@@ -236,8 +236,7 @@ void main() async {
       launcher: launcher,
       relayTo: _relayTo,
     );
-    final cookieCaptured =
-        session.cookies.isNotEmpty && session.cookieHeader != null;
+    final cookieCaptured = session.cookies.isNotEmpty;
     check(
       user.userId.isNotEmpty && cookieCaptured,
       'signIn returned user ${user.userId} and set the session cookie',

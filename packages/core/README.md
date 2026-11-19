@@ -242,7 +242,16 @@ cat .cdk-blocks-sandbox/config.production.json
 # → { "apiUrl": "https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api", "environment": "production" }
 #   (under apiFrontDoor:'cloudfront' this is the CloudFront domain + /aws-blocks/api instead)
 curl https://<your-cloudfront-domain>/.cdk-blocks-sandbox/config.json
+# → {"apiUrl":"/aws-blocks/api","__blocksBuildId":"<build id>"}
 ```
+
+The deployed file is public on purpose, in every stage, production included: a browser has no other way to learn the API URL, and `cdk-blocks deploy --wait-live` polls it for `__blocksBuildId` to know the new build is live. Keep serving it; removing the `/.cdk-blocks-sandbox/*` route breaks every deployed page. The name says `sandbox` for historical reasons, not because only a sandbox serves it. Hosting writes only values the browser receives anyway:
+
+- `apiUrl`, only when Hosting has an `api`: the same-origin `/aws-blocks/api` behind every door except `frontDoor: 'none'`. With `'none'` the page calls the API cross-origin, so it is the absolute URL every RPC goes to: the API's public URL (`publicApiUrl`) when it has one, otherwise its `execute-api` URL.
+- `__blocksBuildId`: an opaque id for the deploy (a timestamp plus random characters, or a hash of the build's content with `buildId: 'fixed'`).
+- Your `backendConfig`, if you set one. Everything in it is published as is (except `apiUrl` and `__blocksBuildId`, which Hosting sets over any key of the same name), so never put a secret or an internal identifier there. The same object is also set as the `BLOCKS_CONFIG` environment variable on SSR functions.
+
+Hosting adds nothing else: no account, stack name or ARN. A region shows up only inside an `execute-api` URL that a `frontDoor: 'none'` page calls directly, which is visible in its network requests anyway. The `config.<stage>.json` files a deploy records locally (`.cdk-blocks-sandbox/config.production.json` above) are separate: they stay on your machine and are never uploaded.
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
 
@@ -371,7 +380,7 @@ A failed RPC call (a method that throws, or a call to an unknown API namespace o
 
 | | |
 |---|---|
-| Namespace | `AWSBlocks` |
+| Namespace | `CDKBlocks` |
 | Metric | `RpcErrors` (Count) |
 | Dimensions | `FunctionName`, `StatusClass` (`4xx` for a client error such as an `ApiError` with status 403, `5xx` for anything else, including an unexpected error and the handler's 504 timeout) |
 | Also in the log line | `Status`, `ApiNamespace` and `Method`, searchable with CloudWatch Logs Insights |

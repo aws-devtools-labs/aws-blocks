@@ -25,17 +25,14 @@ export const oidcApi = auth.createOidcApi();
 ```dart
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
-import 'package:flutter/widgets.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'blocks.blocks.dart'; // the generated client
 
 const rpcUrl = 'https://api.example.com/aws-blocks/api';
 
-// FlutterSecureStore uses a platform channel: in main(), before it.
-WidgetsFlutterBinding.ensureInitialized();
-final session = PersistentSessionStore(store: FlutterSecureStore());
-await session.load();
-final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
+// blocks_runtime_flutter keeps the session in secure storage by default
+// (see Sessions), so a restarted app is still signed in.
+final blocks = Blocks(baseUrl: rpcUrl);
 // Listed in the block's redirects.allowedRelayOrigins.
 const relayTo = 'com.example.app://auth';
 
@@ -182,6 +179,48 @@ await oidc.signIn(
 ```
 
 It costs nothing at runtime: it is the same object as the `OidcClient` it wraps, so it can be passed wherever an `OidcClient` is expected, and its other members are the client's own. Typed as an `OidcClient`, it takes provider names again. Because it is a compile-time view, `is TypedOidcClient` can't tell it from a plain `OidcClient` at runtime.
+
+## Sessions
+
+A `BlocksClient` keeps the session cookies the backend sets in its `sessionStore`, and sends them back on later calls. A client built without one (as the generated `Blocks` builds it when you pass no `sessionStore:`) uses the default store:
+
+- With `blocks_runtime_flutter` in a Flutter app, a `PersistentSessionStore` over the platform's secure storage, registered automatically and shared by every client. The session survives an app restart.
+- Otherwise, a new `InMemorySessionStore` for each client. On the web that is all there is to it: the browser keeps the session cookies (for a backend on the app's own origin) and never shows them to Dart.
+
+A pure Dart program keeps its session across runs by registering a store before it builds any client. Registering a different store once a client has the default throws a `StateError`, because two stores over the same storage would overwrite each other's cookies; registering the same function again does nothing, and `registerDefaultSessionStore(null)` (for tests) is always allowed:
+
+```dart
+import 'package:blocks_runtime/blocks_runtime.dart';
+
+void main() {
+  registerDefaultSessionStore(
+    () => PersistentSessionStore(
+      store: FileTokenStore(applicationId: 'com.example.notes_cli'),
+    ),
+  );
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  print(client.sessionStore is PersistentSessionStore); // true
+}
+```
+
+`applicationId` keeps this program's session apart from every other program run by the same OS user, so pick a value unique to your program and keep it. `FileTokenStore` writes to `~/.blocks/<applicationId>/dart/` without encryption, in an owner-only directory and owner-only files on Linux and macOS.
+
+Pass `sessionStore: InMemorySessionStore()` to keep one client's session in memory only, or call `registerDefaultSessionStore(null)` to go back to the in-memory default for every client.
+
+A `PersistentSessionStore` reads its storage before it returns the first Cookie header from `cookieHeaderFor`, so you don't call `load()` yourself. It writes to its `TokenStore` in the background, only when a cookie actually changes. A program that calls `exit` right after signing in awaits `flush()` first, or the new cookie may not be written:
+
+```dart
+final session = PersistentSessionStore(
+  store: FileTokenStore(applicationId: 'com.example.notes_cli'),
+);
+registerDefaultSessionStore(() => session);
+// ... sign in ...
+await session.flush();
+```
+
+A read or write that fails never throws into your app: the session keeps working from memory. The error goes to the store's `onPersistError` callback; without one it is logged with `dart:developer`'s `log` (name `blocks_runtime.session`) and written once to standard error. Only the first failure is reported until storage works again, and a store that could not be read is read again when a cookie changes, or on a call at least 30 seconds after the last failed read, not on every call.
+
+`InMemorySessionStore`, `PersistentSessionStore` and `FileTokenStore` are `final` classes. For a store of your own, implement `SessionStore` or `TokenStore`; in tests, use a `PersistentSessionStore` over an `InMemoryTokenStore` rather than a mock.
 
 ## User-agent attribution
 
