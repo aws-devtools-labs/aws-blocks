@@ -51,7 +51,7 @@ import { resolveAppIdentity, tagAppResources } from './cdk/app-identity.js';
 import { isSandboxContext } from './cdk/stack-metadata.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
 import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
-import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
+import { BLOCKS_SANDBOX_SERVED_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX, LEGACY_BLOCKS_NAMESPACE } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
@@ -222,7 +222,7 @@ export interface BlocksStackApi {
  * Wraps the L3 {@link HostingConstruct} with Blocks conventions:
  *   • Runs the build command during CDK synth (optional)
  *   • Auto-detects the framework (Next.js / SPA / static)
- *   • Deploys `.cdk-blocks-sandbox/config.json` for client-side config loading
+ *   • Deploys `.blocks-sandbox/config.json` for client-side config loading
  *     (public in every stage, production included: it holds only `apiUrl`,
  *     the build id and `backendConfig`; see "Runtime config" in the
  *     `@aws-blocks/core` README)
@@ -300,7 +300,7 @@ export interface HostingProps {
    * Additional backend configuration to include in config.json.
    * Merged with apiUrl to produce the final config.
    *
-   * ⚠️ WARNING: These values will be publicly accessible at /.cdk-blocks-sandbox/config.json
+   * ⚠️ WARNING: These values will be publicly accessible at /.blocks-sandbox/config.json
    * and in the BLOCKS_CONFIG Lambda environment variable. Do NOT include secrets,
    * API keys, or sensitive configuration here.
    */
@@ -1331,11 +1331,11 @@ export class Hosting extends Construct {
 
     // ── 5. Write placeholder config.json into static assets ─────────
     //    A placeholder is needed so the L3 construct sees
-    //    .cdk-blocks-sandbox/ in the static directory during bundling.
+    //    .blocks-sandbox/ in the static directory during bundling.
     //    The real config with resolved CDK tokens is deployed in
     //    step 8 via BucketDeployment + Source.jsonData().
     const staticDir = manifest.staticAssets.directory;
-    const blocksSandboxDir = join(staticDir, BLOCKS_SANDBOX_DIR);
+    const blocksSandboxDir = join(staticDir, BLOCKS_SANDBOX_SERVED_DIR);
     mkdirSync(blocksSandboxDir, { recursive: true });
     writeFileSync(join(blocksSandboxDir, 'config.json'), JSON.stringify({ _placeholder: true }));
 
@@ -1346,17 +1346,17 @@ export class Hosting extends Construct {
     //    as a no-cache path uploads the build-time placeholder with
     //    `no-cache, no-store, must-revalidate` so an edge never caches it
     //    long-term; the real config is deployed in step 8 with `max-age=60`.
-    const configNoCachePath = `${BLOCKS_SANDBOX_DIR}/config.json`;
+    const configNoCachePath = `${BLOCKS_SANDBOX_SERVED_DIR}/config.json`;
     const existingNoCachePaths = manifest.staticAssets.noCachePaths ?? [];
     manifest.staticAssets.noCachePaths = existingNoCachePaths.includes(configNoCachePath)
       ? existingNoCachePaths
       : [...existingNoCachePaths, configNoCachePath];
 
-    // ── 5b. Inject static route for .cdk-blocks-sandbox config ──────────
-    //    Insert a static route for /.cdk-blocks-sandbox/* so CloudFront
+    // ── 5b. Inject static route for .blocks-sandbox config ──────────
+    //    Insert a static route for /.blocks-sandbox/* so CloudFront
     //    serves config.json from S3 instead of routing to compute.
     const blocksConfigRoute: RouteBehavior = {
-      pattern: `/${BLOCKS_SANDBOX_DIR}/*`,
+      pattern: `/${BLOCKS_SANDBOX_SERVED_DIR}/*`,
       target: 'static',
     };
     // Insert before any catch-all route
@@ -1576,11 +1576,11 @@ export class Hosting extends Construct {
     if (buildId) {
       // The S3-website door serves from its OWN public bucket at ROOT (no
       // `builds/<id>/` prefix, and NOT the private assets bucket). Publish
-      // config.json there, at the root `.cdk-blocks-sandbox/` path the SPA fetches,
+      // config.json there, at the root `.blocks-sandbox/` path the SPA fetches,
       // so the cross-origin client can read its absolute API URL. Every other
       // door serves the private assets bucket under `builds/<id>/`.
       const configBucket = hosting.websiteBucket ?? hosting.bucket;
-      const configKeyPrefix = hosting.websiteBucket ? BLOCKS_SANDBOX_DIR : `builds/${buildId}/${BLOCKS_SANDBOX_DIR}`;
+      const configKeyPrefix = hosting.websiteBucket ? BLOCKS_SANDBOX_SERVED_DIR : `builds/${buildId}/${BLOCKS_SANDBOX_SERVED_DIR}`;
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
         sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props, buildId))],
         destinationBucket: configBucket,
@@ -1595,15 +1595,15 @@ export class Hosting extends Construct {
           ? {
               distribution: publicDistribution,
               // The skew-protection viewer-request CloudFront function rewrites
-              // the URI to `/builds/<buildId>/.cdk-blocks-sandbox/config.json`
+              // the URI to `/builds/<buildId>/.blocks-sandbox/config.json`
               // BEFORE the cache lookup, so the real edge cache key lives under
-              // `/builds/<id>/`. Invalidating only `/.cdk-blocks-sandbox/*` never
+              // `/builds/<id>/`. Invalidating only `/.blocks-sandbox/*` never
               // matches that key and is a no-op for config.json. Invalidate the
               // post-rewrite key too. (The primary guard against staleness is
               // step 5a's no-cache placeholder; this is defense-in-depth so a
               // post-deploy invalidation actually clears any edge entry at its
               // real key.)
-              distributionPaths: [`/builds/${buildId}/${BLOCKS_SANDBOX_DIR}/*`, `/${BLOCKS_SANDBOX_DIR}/*`],
+              distributionPaths: [`/builds/${buildId}/${BLOCKS_SANDBOX_SERVED_DIR}/*`, `/${BLOCKS_SANDBOX_SERVED_DIR}/*`],
             }
           : {}),
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
@@ -1611,9 +1611,9 @@ export class Hosting extends Construct {
 
       // Ensure the config deployment runs AFTER the hosting construct's
       // asset deployments. Those deployments upload the whole static dir —
-      // which includes the *placeholder* `.cdk-blocks-sandbox/config.json`
+      // which includes the *placeholder* `.blocks-sandbox/config.json`
       // (`{_placeholder:true}`) written during synth — to the same
-      // `builds/<id>/.cdk-blocks-sandbox/config.json` key this deployment writes
+      // `builds/<id>/.blocks-sandbox/config.json` key this deployment writes
       // the resolved config to. Without an ordering dependency the
       // placeholder can land last and clobber the real config.
       //
@@ -1732,7 +1732,7 @@ export class Hosting extends Construct {
 
     // Surface this deploy's build id so a post-deploy liveness poll can confirm
     // the new build is served (matched against the config at
-    // `/.cdk-blocks-sandbox/config.json`). Gated on a build id existing, like the
+    // `/.blocks-sandbox/config.json`). Gated on a build id existing, like the
     // config deployment above.
     if (manifest.buildId) {
       new cdk.CfnOutput(this, 'HostingBuildId', {
@@ -2314,7 +2314,7 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
  * this deploy's config from a previously-served one during the CloudFront
  * cutover (see `scripts/wait-live.ts`); the rest of the body is deploy-invariant.
  *
- * Every visitor can read this body at `/.cdk-blocks-sandbox/config.json`, in every
+ * Every visitor can read this body at `/.blocks-sandbox/config.json`, in every
  * stage. Keep it to values the browser receives anyway: never add the account,
  * the stack name, an ARN, or any other deploy-time value the page does not
  * already see in its own requests.

@@ -431,7 +431,7 @@ earlier planning decisions and removed a released behavior:
 
 **Date**: 2026-06-19
 **Authors:** wirej
-**Status:** Amended by [D-030](#d-030-the-per-deploy-state-directory-is-renamed-and-its-served-url-path-renames-with-it) (2026-11-18, varshpam) — the sandbox identifier now lives in `.cdk-blocks-sandbox/sandbox-id.txt`. The stack-name scheme is unchanged, and `getSandboxId` copies an upgrading app's id forward from the old directory before its get-or-create path could mint a new one. The decision below is preserved as originally written.
+**Status:** Amended by [D-031](#d-031-the-per-deploy-state-directory-is-renamed-the-url-it-is-served-at-is-not) (2026-11-18, varshpam) — the sandbox identifier now lives in `.cdk-blocks-sandbox/sandbox-id.txt`. The stack-name scheme is unchanged, and `getSandboxId` copies an upgrading app's id forward from the old directory before its get-or-create path could mint a new one. The decision below is preserved as originally written.
 
 ### Decision
 
@@ -916,7 +916,7 @@ What the bound needs is an ordering rather than a margin: 64 characters sits bel
 
 **Date**: 2026-11-05
 **Authors:** phandpau
-**Status:** Amended by [D-030](#d-030-the-per-deploy-state-directory-is-renamed-and-its-served-url-path-renames-with-it) (2026-11-18, varshpam) — both outputs documents now live in `.cdk-blocks-sandbox/`. The closing note that renaming the directory would be "a separate, breaking change" is no longer pending: D-030 is that change. The per-stage split, the file names and the reasoning are unchanged. The decision below is preserved as originally written.
+**Status:** Amended by [D-031](#d-031-the-per-deploy-state-directory-is-renamed-the-url-it-is-served-at-is-not) (2026-11-18, varshpam) — both outputs documents now live in `.cdk-blocks-sandbox/`. The closing note that renaming the directory would be "a separate, breaking change" is no longer pending: D-031 made the rename, and found the breaking half avoidable — the public URL the construct serves stays as it was, so only the private directory moved. The per-stage split, the file names and the reasoning are unchanged. The decision below is preserved as originally written.
 
 ### Context
 `npm run deploy` and `npm run sandbox` both passed `--outputs-file .blocks-sandbox/outputs.json`, so one file held whichever stage deployed last.
@@ -1517,10 +1517,11 @@ The bounds today:
 - `scripts/harbor-bench/task/task.toml`
 - `scripts/ci/harbor-approval-gate.test.mjs`, `scripts/ci/harbor-credentials.test.mjs`, `scripts/ci/harbor-packages-isolation.test.mjs`
 
-## D-030: The per-deploy state directory is renamed, and its served URL path renames with it
+## D-031: The per-deploy state directory is renamed; the URL it is served at is not
 
 **Date**: 2026-11-18
 **Authors:** varshpam
+**Status:** Amended 2026-11-19 (varshpam) — the served path does NOT rename. The directory rename stands; the clauses that moved the public URL with it are superseded below, and the accepted breakage they carried no longer applies. Numbered D-031 because another record claimed D-030 concurrently. The Decision, Rationale and Alternatives below are rewritten where the reversal changed them; the Context is preserved as originally written.
 
 ### Context
 `.blocks-sandbox/` held an app's per-deploy state. The name was a wart — it holds state for every stage, not only the sandbox — and D-022 left renaming it open as "a separate, breaking change: the Hosting construct serves it as a public URL path."
@@ -1532,33 +1533,33 @@ The name was also not centralized enough for the compiler to help. `BLOCKS_SANDB
 A second hazard is `sandbox-id.txt`. `getSandboxId` is get-or-create, so an upgraded app that no longer finds that file mints a new id, deploys to a different CloudFormation stack, and leaves the customer's existing sandbox standing in their account — with `npm run sandbox:destroy` reporting nothing to delete, because it keys off the same missing file.
 
 ### Decision
-The directory is `.cdk-blocks-sandbox/`, and the served path renames with it to `/.cdk-blocks-sandbox/config.json`. No compatibility shim and no dual publishing: the old path is not served.
+The directory on disk is `.cdk-blocks-sandbox/`. The path it is published at stays `/.blocks-sandbox/config.json`, unchanged, so no deployed frontend has to be redeployed. The two are separate constants with separate names: `BLOCKS_SANDBOX_DIR` for the developer's private directory, `BLOCKS_SANDBOX_SERVED_DIR` for the public path, and `BLOCKS_SANDBOX_PREFIX` built from the latter so the served path cannot be spelled twice and drift.
 
 It is a **sibling** of `.cdk-blocks/`, not folded into it. Folding was the original proposal, and it is rejected here for a reason that only surfaced on inspection: both directories contain a file named `config.json`, and they are opposites. `.cdk-blocks/config.json` is committed and carries the app's stable `stackId` (D-012); the sandbox `config.json` is gitignored, account-specific, and rewritten by every dev server run. One directory cannot hold both under one name. Beyond the collision, D-022 had already rejected putting per-deploy state in the committed directory: it "would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record." With `sandbox-id.txt` among those files, a single missed ignore makes two developers share one sandbox stack — the orphaned-stack failure the copy-forward below exists to prevent. A sibling directory keeps one gitignore entry and no collision.
 
-Every coupled site moves as one unit, and the ones that publish the path now read `BLOCKS_SANDBOX_DIR` rather than repeating the literal: the CloudFront static behaviour, the S3 key prefix, the invalidation paths, and the build-output site that writes the placeholder into the static directory (a path on disk that becomes the S3 key, so both roles at once). The browser client fetches `BLOCKS_SANDBOX_PREFIX`, which a test pins to `BLOCKS_SANDBOX_DIR` served at the root, so the client and the edge cannot drift.
+Every site that publishes a path reads the served constant, and every site that touches the developer's disk reads the disk constant: the CloudFront static behaviour, the S3 key the resolved config is uploaded to, the invalidation paths, the no-cache path registered for that key, and the liveness probe are published; the pidfile, the dev server's own config write, the sandbox id and the copy-forward are disk. One site is both — the hosting construct writes a placeholder into the static-asset directory on disk and that path becomes the S3 key — and it follows the served name. The committed Next.js route directory keeps the published name too, because the directory name under `src/app` IS the URL, while the literal inside the file reads the renamed disk directory; the two strings in that one file are the split in miniature.
 
 State is copied forward, not abandoned. On the first `dev`, `deploy`, `sandbox` or `destroy` after upgrading — and inside `getSandboxId`, before its get-or-create path can run — each state file is copied from the old directory into the new one: `sandbox-id.txt`, `config.json`, `config.sandbox.json`, `config.production.json`, `outputs.json`, `outputs.production.json`, `last-deploy.json`, and the per-port `dev-server.<port>.pid` files. Copy, never move, so an older toolchain in the same checkout keeps working. The new location wins: a file already there is never overwritten. Per file, never per directory, because the directory also holds the CDK cloud assembly (`cdk.out/`, `sandbox-destroy.out/`), which is large and regenerable. And it fails loudly, naming the file and the orphaned stack, when the project directory is not writable — a copy that fails silently is exactly what mints a new sandbox id.
 
-The accepted cost: a frontend bundle deployed by an earlier version keeps requesting `/.blocks-sandbox/config.json` and cannot resolve its API URL until it is redeployed, and a browser or CloudFront cache can hold that request past the deploy. Preview customers are being asked to migrate, and the rename gives them other work in the same pass.
+There is no accepted breakage. An earlier version of this record moved the published path too and accepted that a frontend bundle deployed before the rebrand could not resolve its API URL until the customer redeployed, with a browser or CloudFront cache able to hold the stale request past the deploy. That cost is withdrawn: a prototype confirmed in review that the URL can stay fixed while only the directory moves, on the dev server and in production, SPA and SSR. Since the rename's only real cost was that breakage, and it is avoidable, it is avoided.
 
 ### Rationale
-Renaming only the disk paths and leaving the URL would have been expressible — the two constants are already separate — but it would have left the published path permanently naming the old brand, and the four publishing sites were literals that no type would have kept honest.
+Renaming only the disk paths leaves the published path naming the old brand, which is a cosmetic cost in a string no customer reads deliberately. Moving it costs a working page. A public URL is an interface, so the brand follows the interface rather than the interface following the brand.
 
-A source-scanning guard carries the invariant instead, because nothing at the type level goes red for a missed literal. It checks both directions: no live reference to the old name survives outside named historical records, and every coupled site carries the current name, pinned by content so a deleted edit fails as loudly as a stale one. It was written and watched fail across all its cases before the rename was made.
+Source-scanning guards carry the invariant instead, because nothing at the type level goes red for a missed literal. One pins every publishing site to the served constant, checks that the two names differ, and refuses a URL-shaped path written on the disk name. The other checks that no filesystem path in shipped source still names the old directory. Both are scoped to shipped source: a test spells both names, because it asserts on each, so a scan over tests could not tell a missed rename from a deliberate published path.
 
 ### Alternatives Considered
-**Keep publishing the old URL while the directory moves on disk.** Rejected: expressible, but it makes the two constants permanently disagree, keeps the old brand in a public path indefinitely, and leaves a second path to support with no date for removing it.
+**Keep publishing the old URL while the directory moves on disk.** ADOPTED (2026-11-19), having first been rejected here. The objection was that the two constants would permanently disagree and the old brand would sit in a public path indefinitely. Both hold and are accepted: the disagreement is the point and is now enforced by a guard, and a brand name in a path no customer reads deliberately is worth less than a page that keeps working.
 
-**Move both and ship a redirect or dual publishing.** Rejected: the static behaviour, the S3 key and the invalidation paths would each need two entries for a window nobody could close, and the preview customers affected are already being asked to migrate.
+**Move both and ship a redirect or dual publishing.** Rejected: the static behaviour, the S3 key and the invalidation paths would each need two entries for a window nobody could close — and keeping the published path fixed costs nothing, so there is nothing to bridge.
 
 **Consolidate only the non-served state and leave `config.json` where it is.** Rejected: it splits one directory's contents across two names by whether they happen to be served, which is invisible to anyone reading the app, and it does not achieve the rename.
 
 **Fold the state into `.cdk-blocks/`.** Rejected: the `config.json` collision above, and D-022's standing objection to per-deploy state in the committed directory.
 
 ### References
-- `packages/core/src/common/constants.ts` (`BLOCKS_SANDBOX_DIR`, `LEGACY_SANDBOX_DIR`), `packages/core/src/constants.ts` (`BLOCKS_SANDBOX_PREFIX`)
+- `packages/core/src/common/constants.ts` (`BLOCKS_SANDBOX_DIR`, `BLOCKS_SANDBOX_SERVED_DIR`, `LEGACY_SANDBOX_DIR`), `packages/core/src/constants.ts` (`BLOCKS_SANDBOX_PREFIX`)
 - `packages/core/src/scripts/migrate-sandbox-dir.ts`, `packages/core/src/scripts/migrate-sandbox-dir.test.ts`
-- `packages/blocks/src/sandbox-dir-coverage.test.ts` (the coupled-site guard)
+- `packages/blocks/src/sandbox-url-decoupling.test.ts` (published path vs disk path), `packages/blocks/src/sandbox-dir-coverage.test.ts` (the rename's own sites)
 - `packages/core/src/hosting.ts` (static behaviour, S3 key prefix, invalidation paths, placeholder write)
 - D-012 (sandbox id and stack naming), D-022 (per-stage outputs, and the clause this change closes)

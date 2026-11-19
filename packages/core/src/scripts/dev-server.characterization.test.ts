@@ -290,7 +290,7 @@ const CASES: Record<string, Case> = {
   'raw route out-of-range status': { method: 'GET', path: '/bad-status' },
   'raw route with the wrong method falls through to the frontend': { method: 'DELETE', path: '/users/1' },
   'unknown path falls through to the frontend': { method: 'GET', path: '/not-a-route' },
-  'runtime config endpoint': { method: 'GET', path: '/.cdk-blocks-sandbox/config.json' },
+  'runtime config endpoint': { method: 'GET', path: '/.blocks-sandbox/config.json' },
 };
 
 // The dev server answers RawRoute and JSON-RPC requests through the same

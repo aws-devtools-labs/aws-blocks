@@ -221,7 +221,7 @@ describe('Hosting', () => {
 
       // The static file should be a placeholder (not the real config) since CDK tokens
       // are only resolved at deploy time, not synth time.
-      const configPath = path.join(tmpDir, '.hosting', 'static', '.cdk-blocks-sandbox', 'config.json');
+      const configPath = path.join(tmpDir, '.hosting', 'static', '.blocks-sandbox', 'config.json');
       assert.ok(fs.existsSync(configPath), 'placeholder config.json should exist in static assets');
 
       const placeholder = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -233,7 +233,7 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
 
       // BucketDeployment creates a Custom::CDKBucketDeployment resource.
-      // Verify the destination key prefix ends with .cdk-blocks-sandbox.
+      // Verify the destination key prefix ends with .blocks-sandbox.
       const customResources = template.findResources('Custom::CDKBucketDeployment');
       const crKeys = Object.keys(customResources);
       assert.ok(crKeys.length >= 1, 'Should have at least one BucketDeployment custom resource');
@@ -243,9 +243,9 @@ describe('Hosting', () => {
           | Record<string, unknown>
           | undefined;
         const prefix = props?.DestinationBucketKeyPrefix as string | undefined;
-        return typeof prefix === 'string' && prefix.endsWith('.cdk-blocks-sandbox');
+        return typeof prefix === 'string' && prefix.endsWith('.blocks-sandbox');
       });
-      assert.ok(hasBlocksSandboxPrefix, 'BucketDeployment should target .cdk-blocks-sandbox prefix');
+      assert.ok(hasBlocksSandboxPrefix, 'BucketDeployment should target .blocks-sandbox prefix');
     });
 
     it('throws when build output directory does not exist', () => {
@@ -2290,7 +2290,7 @@ describe('Hosting', () => {
   describe('config.json deploy ordering (P0.4)', () => {
     it('BlocksConfigDeployment depends on the asset deployments', () => {
       // The asset deployments upload the whole static dir — including the
-      // placeholder `.cdk-blocks-sandbox/config.json` — to the same key the
+      // placeholder `.blocks-sandbox/config.json` — to the same key the
       // resolved config writes to. Without an ordering dependency the
       // placeholder can clobber the real config. The previous
       // `tryFindChild('AssetDeployment')` never matched the real child ids
@@ -2332,7 +2332,7 @@ describe('Hosting', () => {
     });
   });
 
-  // ── What a deployed origin serves at /.cdk-blocks-sandbox/config.json ──
+  // ── What a deployed origin serves at /.blocks-sandbox/config.json ──
   describe('the runtime config.json a deployed origin serves', () => {
     const ACCOUNT = '111111111111';
     const REGION = 'eu-west-3';
@@ -2340,7 +2340,7 @@ describe('Hosting', () => {
     /**
      * The exact JSON the `BlocksConfigDeployment` uploads: the staged asset its
      * `SourceObjectKeys` names, read from the cloud assembly. This is the body
-     * every visitor gets from `GET /.cdk-blocks-sandbox/config.json`.
+     * every visitor gets from `GET /.blocks-sandbox/config.json`.
      */
     const servedConfig = (app: App, stack: Stack): { config: Record<string, unknown>; raw: string } => {
       const assembly = app.synth();
@@ -2649,16 +2649,16 @@ describe('Hosting', () => {
       const includes = (p: Record<string, unknown>) => (p.Include as string[] | undefined) ?? [];
       const excludes = (p: Record<string, unknown>) => (p.Exclude as string[] | undefined) ?? [];
 
-      // A deployment must upload `.cdk-blocks-sandbox/config.json` with the
+      // A deployment must upload `.blocks-sandbox/config.json` with the
       // no-cache directive (this is the placeholder upload).
       const noCacheDeploy = deployments.find(
 				(p) =>
-					includes(p).includes('.cdk-blocks-sandbox/config.json') &&
+					includes(p).includes('.blocks-sandbox/config.json') &&
 					cc(p) === 'no-cache, no-store, must-revalidate',
       );
       assert.ok(
         noCacheDeploy,
-				'placeholder .cdk-blocks-sandbox/config.json must be uploaded with ' +
+				'placeholder .blocks-sandbox/config.json must be uploaded with ' +
 					'"no-cache, no-store, must-revalidate"',
       );
 
@@ -2669,13 +2669,13 @@ describe('Hosting', () => {
         return (
           typeof directive === 'string' &&
           directive.includes('s-maxage=31536000') &&
-          !excludes(p).includes('.cdk-blocks-sandbox/config.json')
+          !excludes(p).includes('.blocks-sandbox/config.json')
         );
       });
       assert.strictEqual(
         leaks.length,
         0,
-        'no mutable-tier deployment may apply s-maxage=31536000 to ' + '.cdk-blocks-sandbox/config.json',
+        'no mutable-tier deployment may apply s-maxage=31536000 to ' + '.blocks-sandbox/config.json',
       );
     });
 
@@ -2693,7 +2693,7 @@ describe('Hosting', () => {
       Template.fromStack(stack).hasResourceProperties(
         'Custom::CDKBucketDeployment',
         Match.objectLike({
-          Include: Match.arrayWith(['.cdk-blocks-sandbox/config.json']),
+          Include: Match.arrayWith(['.blocks-sandbox/config.json']),
           SystemMetadata: Match.objectLike({
             'cache-control': 'no-cache, no-store, must-revalidate',
           }),
@@ -2701,11 +2701,11 @@ describe('Hosting', () => {
       );
     });
 
-    it('invalidates the post-rewrite cache key (/builds/<id>/.cdk-blocks-sandbox/*)', () => {
+    it('invalidates the post-rewrite cache key (/builds/<id>/.blocks-sandbox/*)', () => {
       // The viewer-request skew-protection function rewrites the URI to
-      // `/builds/<buildId>/.cdk-blocks-sandbox/config.json` BEFORE the cache
+      // `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the cache
       // lookup, so the real edge cache key lives under `/builds/<id>/`.
-      // Invalidating only `/.cdk-blocks-sandbox/*` never matches it.
+      // Invalidating only `/.blocks-sandbox/*` never matches it.
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'InvalidationPathStack');
@@ -2716,7 +2716,7 @@ describe('Hosting', () => {
       Template.fromStack(stack).hasResourceProperties(
         'Custom::CDKBucketDeployment',
         Match.objectLike({
-          DistributionPaths: Match.arrayWith([Match.stringLikeRegexp('^/builds/.+/\\.cdk-blocks-sandbox/\\*$')]),
+          DistributionPaths: Match.arrayWith([Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$')]),
         }),
       );
     });
@@ -2930,7 +2930,7 @@ describe('Hosting', () => {
       });
     });
 
-    it('publishes the resolved config.json to the website bucket root (.cdk-blocks-sandbox), and the build only there', () => {
+    it('publishes the resolved config.json to the website bucket root (.blocks-sandbox), and the build only there', () => {
       createSpaBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'NoneConfigStack', { env: { account: '111111111111', region: 'us-east-1' } });
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: 'none' });
@@ -2942,7 +2942,7 @@ describe('Hosting', () => {
       const config = deployments.find(([id]) => id.includes('BlocksConfigDeployment'));
       assert.ok(config);
       assert.deepStrictEqual(config[1].Properties.DestinationBucketName, { Ref: website });
-      assert.strictEqual(config[1].Properties.DestinationBucketKeyPrefix, '.cdk-blocks-sandbox');
+      assert.strictEqual(config[1].Properties.DestinationBucketKeyPrefix, '.blocks-sandbox');
       // The build is uploaded to the website bucket only: nothing reads a private copy.
       for (const [id, d] of deployments) {
         assert.deepStrictEqual(d.Properties.DestinationBucketName, { Ref: website }, `${id} writes to the website bucket`);
@@ -3745,7 +3745,7 @@ describe('Hosting', () => {
       // The budget goes to S3: the API paths no static route can shadow are left
       // to the router default (which reaches them), not given behaviors.
       assert.ok(!edge.behaviors.some(([p]) => p === '/cdk-blocks/*'));
-      assert.strictEqual(edge.behaviors[0][0], '/.cdk-blocks-sandbox/*');
+      assert.strictEqual(edge.behaviors[0][0], '/.blocks-sandbox/*');
       const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedEdgeBehaviorLimit'));
       assert.strictEqual(warnings.length, 1);
       assert.doesNotMatch(String(warnings[0]?.entry.data), /raise the quota/);

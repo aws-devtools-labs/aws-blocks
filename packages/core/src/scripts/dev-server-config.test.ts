@@ -47,19 +47,19 @@ describe('buildServedBlocksConfig — the config.json the dev server answers', (
 });
 
 describe('isBlocksConfigRequest — reserved runtime-config path', () => {
-  it('matches GET /.cdk-blocks-sandbox/config.json', () => {
-    assert.strictEqual(isBlocksConfigRequest('GET', '/.cdk-blocks-sandbox/config.json'), true);
+  it('matches GET /.blocks-sandbox/config.json', () => {
+    assert.strictEqual(isBlocksConfigRequest('GET', '/.blocks-sandbox/config.json'), true);
   });
 
   it('ignores non-GET methods (only the static-style read is reserved)', () => {
-    assert.strictEqual(isBlocksConfigRequest('POST', '/.cdk-blocks-sandbox/config.json'), false);
-    assert.strictEqual(isBlocksConfigRequest('HEAD', '/.cdk-blocks-sandbox/config.json'), false);
+    assert.strictEqual(isBlocksConfigRequest('POST', '/.blocks-sandbox/config.json'), false);
+    assert.strictEqual(isBlocksConfigRequest('HEAD', '/.blocks-sandbox/config.json'), false);
   });
 
   it('does not match other paths (frontend/app routes pass through to the proxy)', () => {
     assert.strictEqual(isBlocksConfigRequest('GET', '/'), false);
     assert.strictEqual(isBlocksConfigRequest('GET', '/api/chat'), false);
-    assert.strictEqual(isBlocksConfigRequest('GET', '/.cdk-blocks-sandbox/other.json'), false);
+    assert.strictEqual(isBlocksConfigRequest('GET', '/.blocks-sandbox/other.json'), false);
     assert.strictEqual(isBlocksConfigRequest('GET', '/cdk-blocks/api'), false);
   });
 });

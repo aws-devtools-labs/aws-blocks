@@ -100,7 +100,7 @@ export async function checkDevLifecycle(app, env, logDir) {
 		throw new Error(`dev lifecycle: ${message}${output}`);
 	};
 	const ready = async (session) => {
-		if (!(await waitFor(async () => (await status(`http://localhost:${PORT}/.cdk-blocks-sandbox/config.json`)) === 200, 120_000)))
+		if (!(await waitFor(async () => (await status(`http://localhost:${PORT}/.blocks-sandbox/config.json`)) === 200, 120_000)))
 			fail('dev task did not answer HTTP 200 within 120 s', session);
 		if (!(await waitFor(async () => (await status(`http://localhost:${PORT}/`)) === 200, 60_000)))
 			fail('the frontend did not answer through the dev server within 60 s', session);
@@ -132,7 +132,7 @@ export async function checkDevLifecycle(app, env, logDir) {
 		// A save after the stop must not start the dev server again.
 		appendFileSync(join(app, 'cdk-blocks', 'index.ts'), '\n// edited after dev stop\n');
 		await sleep(5000);
-		if ((await status(`http://localhost:${PORT}/.cdk-blocks-sandbox/config.json`)) !== 0)
+		if ((await status(`http://localhost:${PORT}/.blocks-sandbox/config.json`)) !== 0)
 			fail('a backend save after dev:stop task started the dev server again', session);
 	};
 

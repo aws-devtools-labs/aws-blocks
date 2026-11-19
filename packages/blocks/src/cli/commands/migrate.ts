@@ -358,7 +358,7 @@ function findWrappers(root: string): Wrapper[] {
 }
 
 /**
- * The state directory's name before the `cdk-blocks` rename (D-030). An app this
+ * The state directory's name before the `cdk-blocks` rename (D-031). An app this
  * command is migrating predates the rename, so it still holds its state — and a CDK
  * cloud assembly — under this name. Mirrors `LEGACY_SANDBOX_DIR` in
  * `@aws-blocks/core`, which is internal to that package.

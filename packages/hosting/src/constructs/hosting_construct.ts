@@ -825,7 +825,7 @@ export class HostingConstruct extends Construct {
 
     // A bare REST API URL carries its stage (`https://{id}.execute-api…/prod/`),
     // but an app links from the root (`/assets/…`, `/cdk-blocks/api`,
-    // `/.cdk-blocks-sandbox/config.json`), and those miss the stage (403). A
+    // `/.blocks-sandbox/config.json`), and those miss the stage (403). A
     // custom domain's base-path mapping serves the stage at the domain root.
     // The door's effective settings: `frontDoor.features` plus the deprecated
     // top-level aliases (`domain`, `waf`, `cdn.*`, `logging`, `monitoring`,
@@ -3183,7 +3183,7 @@ const assertEdgeRoutesReachableByDoor = (
  * Fail synth for an API Gateway REST door with no custom domain (see the call
  * site). Making the stage the app's base path automatically is not possible:
  * each framework bakes its base path into the build from its own config, and
- * the AWS Blocks client fetches `/.cdk-blocks-sandbox/config.json` from the root.
+ * the AWS Blocks client fetches `/.blocks-sandbox/config.json` from the root.
  */
 const assertRestDoorAddressable = (
   frontDoor: HostingConstructProps['frontDoor'],
@@ -3194,7 +3194,7 @@ const assertRestDoorAddressable = (
   throw new HostingError('RestFrontDoorNeedsDomainError', {
     message:
       "frontDoor { kind: 'apiGateway', api: 'rest' } has no custom domain. A REST API's own URL carries the `/prod` " +
-      "stage path, so the app's root-relative links (its assets, `/cdk-blocks/api`, `/.cdk-blocks-sandbox/config.json`) " +
+      "stage path, so the app's root-relative links (its assets, `/cdk-blocks/api`, `/.blocks-sandbox/config.json`) " +
       'resolve outside the stage and get 403.',
     resolution:
       "Add `domain` (its base-path mapping serves the stage at the domain root), or use `api: 'http'` (the HTTP " +

@@ -28,7 +28,7 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 // API is under (the deployed API URL without /cdk-blocks/api). The client resolves BLOCKS_API_URL first, so
 // a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
-const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // The canned-provider assertions below only hold in the local mock runtime; a
 // deployed sandbox runs a real Bedrock model whose text is non-deterministic.
