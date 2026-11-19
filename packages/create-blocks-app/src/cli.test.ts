@@ -1261,7 +1261,7 @@ describe('create-blocks-app auto-detection', () => {
       writeRoot(['apps/*', 'apps/web/aws-blocks']);
       const listed = run(['apps/web', '-y', '--skip-install'], mono);
       assert.strictEqual(listed.exitCode, 0, listed.stderr);
-      assert.ok(listed.stdout.includes(`\n  (cd ${mono} && npm install)\n`), listed.stdout);
+      assert.ok(listed.stdout.includes(`\n  (cd ${realpathSync(mono)} && npm install)\n`), listed.stdout);
       if (process.platform !== 'win32') {
         // An `npm` stand-in that records the directory it installs in.
         const bin = join(mono, '.bin');
