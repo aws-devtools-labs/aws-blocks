@@ -85,10 +85,18 @@ Priority order (highest wins):
 The constructor resolves `options.level` once (`resolveLevel` in `emitter.ts`).
 The `LogLevel` type only checks literals, so a value read from config can be
 anything at runtime. It is trimmed and lower-cased. `undefined`, `null` and an
-empty string mean "not set" and use `'info'` silently. Any other value that is
-not a known level also gets `'info'`, and that Logger writes one `warn` line with
-`configuredLevel` / `effectiveLevel`. It does not throw: a bad logging setting
-should not stop the app from starting. Child loggers inherit the resolved level.
+empty string mean "not set" and use `'info'` silently. The aliases `'warning'`,
+`'trace'` and `'fatal'` then map to `'warn'`, `'debug'` and `'error'`, also
+silently. Any other value also gets `'info'`, and that Logger writes one `warn`
+line with `configuredLevel` / `effectiveLevel` (plus its `defaultContext`). It
+does not throw: a bad logging setting should not stop the app from starting.
+Child loggers inherit the resolved level.
+
+`resolveLevel` returns `{ level, unknown }`. The CDK `Logger` uses `unknown` to
+also add a synth warning (`@aws-blocks/bb-logger:unknownLevel`) via
+`Annotations.of(this).addWarningV2`, so the problem is listed with the other
+`cdk synth` warnings. `cdk synth --strict` turns that warning into an error;
+acknowledge it by its id to opt out.
 
 ## Mock Implementation
 

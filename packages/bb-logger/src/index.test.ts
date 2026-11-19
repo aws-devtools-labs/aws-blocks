@@ -190,6 +190,56 @@ describe('level filtering', () => {
 		assert.strictEqual(stderrLines.length, 1);
 	});
 
+	test('the unknown-level warning carries defaultContext', () => {
+		new Logger(fakeScope, 'app', {
+			level: untypedLevel('verbose'),
+			// `level` here must not override the warning's real severity.
+			defaultContext: { service: 'auth', level: 'debug' },
+		});
+		assert.strictEqual(stdoutLines.length, 1);
+		const warning = getStdoutEntry();
+		assert.strictEqual(warning.level, 'warn');
+		assert.strictEqual(warning.service, 'auth');
+		assert.strictEqual(warning.configuredLevel, 'verbose');
+	});
+
+	test('the unknown-level warning keeps its level fields over defaultContext', () => {
+		new Logger(fakeScope, 'app', {
+			level: untypedLevel('verbose'),
+			defaultContext: { configuredLevel: 'x', effectiveLevel: 'y' },
+		});
+		const warning = getStdoutEntry();
+		assert.strictEqual(warning.configuredLevel, 'verbose');
+		assert.strictEqual(warning.effectiveLevel, 'info');
+	});
+
+	test("alias 'WARNING' means warn, without a warning", () => {
+		const log = new Logger(fakeScope, 'app', { level: untypedLevel('WARNING') });
+		assert.strictEqual(stdoutLines.length, 0);
+		log.info('no');
+		log.warn('yes');
+		assert.strictEqual(stdoutLines.length, 1);
+		assert.strictEqual(getStdoutEntry().message, 'yes');
+	});
+
+	test("alias 'trace' means debug, without a warning", () => {
+		const log = new Logger(fakeScope, 'app', { level: untypedLevel('trace') });
+		assert.strictEqual(stdoutLines.length, 0);
+		log.debug('yes');
+		assert.strictEqual(stdoutLines.length, 1);
+		assert.strictEqual(getStdoutEntry().level, 'debug');
+	});
+
+	test("alias 'FATAL' means error, without a warning", () => {
+		const log = new Logger(fakeScope, 'app', { level: untypedLevel(' FATAL ') });
+		log.debug('no');
+		log.info('no');
+		log.warn('no');
+		log.error('yes');
+		assert.strictEqual(stdoutLines.length, 0);
+		assert.strictEqual(stderrLines.length, 1);
+	});
+
 	test('child of a logger with an unknown level still logs', () => {
 		const log = new AwsLogger(fakeScope, 'app', { level: untypedLevel('verbose') });
 		log.child({ reqId: '1' }).error('boom');

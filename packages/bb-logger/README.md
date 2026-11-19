@@ -102,6 +102,13 @@ If you pass a level that comes from config (an env var, a JSON file), it is
 matched case-insensitively (`'WARN'` works). An unknown value such as
 `'verbose'` falls back to `'info'` and the logger writes one `warn` line naming
 the value it got (`configuredLevel`), so a typo never silences the logger.
+That line also carries the logger's `defaultContext`. Under `cdk synth`, an
+unknown value is also reported as a CDK warning
+(`@aws-blocks/bb-logger:unknownLevel`), which fails `cdk synth --strict`.
+Acknowledge the warning by that id if you want `--strict` to pass anyway.
+
+The aliases `'warning'`, `'trace'` and `'fatal'` are accepted as `'warn'`,
+`'debug'` and `'error'`, with no warning.
 
 ## Error Object Handling
 

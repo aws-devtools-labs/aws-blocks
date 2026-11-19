@@ -15,6 +15,9 @@ export interface LoggingOptions {
 	 * Minimum log level. Messages below this are silently dropped. Default: 'info'.
 	 * Matched case-insensitively at runtime; an unknown value (e.g. from config)
 	 * falls back to 'info' and the logger writes one warning.
+	 * The aliases 'warning', 'trace' and 'fatal' are accepted as 'warn', 'debug'
+	 * and 'error', without a warning. Under `cdk synth`, an unknown value also
+	 * adds a CDK warning (`@aws-blocks/bb-logger:unknownLevel`).
 	 */
 	level?: LogLevel;
 	/**

@@ -49,7 +49,7 @@ export class Logger extends Scope implements ChildLogger {
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.loggerName = id;
-		this.level = resolveLevel(options?.level, id);
+		this.level = resolveLevel(options?.level, id, options?.defaultContext).level;
 		this.defaultContext = options?.defaultContext ?? {};
 		const logGroupName = `/aws/lambda/${process.env.AWS_LAMBDA_FUNCTION_NAME ?? this.fullId}`;
 		registerSdkIdentifiers(this.fullId, { logGroupName });
