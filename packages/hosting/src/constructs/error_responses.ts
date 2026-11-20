@@ -55,8 +55,8 @@ export function customErrorResponses(
     });
   }
   if (pages?.serverError) {
-    // For compute (SSR) stacks, the default 502/503/504 error pages are
-    // already wired by the door; only add 500 with the custom page.
+    // For compute (SSR) stacks, only add 500 with the custom page: the
+    // built-in door wires its own 502/504 page, and a 503 is the server's.
     // For static/SPA stacks, add all server error statuses.
     const serverErrorStatuses = options.hasCompute ? [500] : [500, 502, 503, 504];
     for (const status of serverErrorStatuses) {

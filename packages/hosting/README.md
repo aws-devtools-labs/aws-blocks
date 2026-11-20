@@ -229,6 +229,20 @@ both (`HttpErrorStatusErrorPagesError`, naming the namespaces and the mapped
 codes). Remove the 4xx error pages (`errorPages.notFound`, a build's own 404
 page), or leave `httpErrorStatus` off for those namespaces.
 
+For an app with a server, the CloudFront door replaces 5xx bodies only where
+CloudFront generates them. Per status:
+
+| Status | Response |
+|---|---|
+| 500 | The server's own response (an API route's JSON error, the framework's error page). With `errorPages.serverError`, that page instead, on every path, the API included |
+| 501, 503 | The server's own response |
+| 502, 504 | The built-in "Service Temporarily Unavailable" page. CloudFront answers these when the server function fails, returns an invalid response or times out, so there is no body of the app's to keep |
+
+None of these responses are cached (see the error caching note under
+[SSR caching & cache-key credentials](#ssr-caching--cache-key-credentials)).
+An app without a server maps 500, 502, 503 and 504 to `errorPages.serverError`
+when it sets one.
+
 ### Settings per door kind
 
 Each door kind takes its settings as `features`, typed for that kind: a
