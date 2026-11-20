@@ -3,6 +3,7 @@
 
 import { CloudFormationClient, DescribeStacksCommand, GetTemplateCommand } from '@aws-sdk/client-cloudformation';
 import {
+	type AttributeValue,
 	BatchWriteItemCommand,
 	BillingMode,
 	CreateTableCommand,
@@ -23,6 +24,7 @@ import {
 	UpdateContinuousBackupsCommand,
 	UpdateTableCommand,
 	UpdateTimeToLiveCommand,
+	type WriteRequest,
 } from '@aws-sdk/client-dynamodb';
 
 const dynamodb = new DynamoDBClient({});
@@ -52,7 +54,29 @@ interface CfnEvent {
 		 * AWS-managed `aws/dynamodb` key.
 		 */
 		EncryptionKeyArn?: string;
+		/**
+		 * The settings that the CDK layer declares on the table, set only in
+		 * sandbox mode. The fast path gives them to a table that lacks them: one
+		 * that an earlier version recreated without them. The CDK layer always
+		 * encrypts the table with a KMS key, so a table with no KMS encryption gets
+		 * the key of `EncryptionKeyArn`, or the AWS-managed key.
+		 */
+		DeclaredSettings?: DeclaredSettings;
 	};
+}
+
+/** Custom resource properties are strings: CloudFormation turns a boolean or a number into one. */
+interface DeclaredSettings {
+	TimeToLiveAttribute?: string;
+	/** `'true'` when point-in-time recovery is on. */
+	PointInTimeRecovery?: string;
+	RecoveryPeriodInDays?: string;
+}
+
+// CloudFormation's presigned response URL lets its holder answer for the
+// custom resource, so the event is logged without it.
+function loggable(event: unknown): string {
+	return JSON.stringify(event, (key, value) => (key === 'ResponseURL' ? '<redacted>' : value), 2);
 }
 
 // Set by onEvent on a Delete that must leave the table's indexes alone. The
@@ -219,7 +243,14 @@ function isTableBusy(table: any): boolean {
 
 // ── Sandbox fast path ───────────────────────────────────────────────────────
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let sleep = (ms: number): Promise<unknown> => new Promise((r) => setTimeout(r, ms));
+
+/** @internal Replaces the wait between retries and status polls of the fast path, for a test; returns the previous one. */
+export function _setSleepForTest(replacement: typeof sleep): typeof sleep {
+	const previous = sleep;
+	sleep = replacement;
+	return previous;
+}
 
 // Tag keys with this prefix belong to AWS (for example the
 // `aws:cloudformation:*` tags) and TagResource rejects them.
@@ -229,6 +260,13 @@ const AWS_TAG_PREFIX = 'aws:';
 // table is created, until DynamoDB can turn backups on for it.
 const CONTINUOUS_BACKUPS_UNAVAILABLE = 'ContinuousBackupsUnavailableException';
 const PITR_RETRY_ATTEMPTS = 40;
+
+// BatchWriteItem takes 25 items. Waits of 0.1 s doubling to 5 s: about half a
+// minute for a batch before it counts as not written.
+const RESTORE_BATCH_SIZE = 25;
+const RESTORE_ATTEMPTS = 12;
+const RESTORE_FIRST_DELAY_MS = 100;
+const RESTORE_MAX_DELAY_MS = 5000;
 const RETRY_DELAY_MS = 3000;
 
 /**
@@ -248,7 +286,14 @@ interface TableSettings {
 	ttlAttribute?: string;
 	/** Set when point-in-time recovery is on. */
 	pitr?: { recoveryPeriodInDays?: number };
+	/** The settings that the live table lacked and that come from the stack's declaration. */
+	added: string[];
 }
+
+const kmsEncryption = (customerKeyArn?: string): SSESpecification =>
+	customerKeyArn
+		? { Enabled: true, SSEType: 'KMS', KMSMasterKeyId: customerKeyArn }
+		: { Enabled: true, SSEType: 'KMS' };
 
 /**
  * Read every setting that the recreate must keep. Any failure throws before
@@ -256,18 +301,19 @@ interface TableSettings {
  *
  * @param customerKeyArn - the `EncryptionKeyArn` property. DescribeTable reports
  *   an ARN for the AWS-managed key too, so only this property tells the two apart.
+ * @param declared - the `DeclaredSettings` property. A setting it names that the
+ *   live table lacks is taken from it and listed in `added`.
  */
 async function readTableSettings(
 	tableName: string,
 	table: TableDescription,
 	customerKeyArn: string | undefined,
+	declared: DeclaredSettings | undefined,
 ): Promise<TableSettings> {
-	const settings: TableSettings = { tags: [] };
+	const settings: TableSettings = { tags: [], added: [] };
 
 	if (table.SSEDescription?.SSEType === 'KMS') {
-		settings.sse = customerKeyArn
-			? { Enabled: true, SSEType: 'KMS', KMSMasterKeyId: table.SSEDescription.KMSMasterKeyArn ?? customerKeyArn }
-			: { Enabled: true, SSEType: 'KMS' };
+		settings.sse = kmsEncryption(customerKeyArn && (table.SSEDescription.KMSMasterKeyArn ?? customerKeyArn));
 	}
 	if (table.StreamSpecification?.StreamEnabled) {
 		settings.stream = { StreamEnabled: true, StreamViewType: table.StreamSpecification.StreamViewType };
@@ -297,6 +343,22 @@ async function readTableSettings(
 	if (pitr?.PointInTimeRecoveryStatus === 'ENABLED') {
 		settings.pitr = { recoveryPeriodInDays: pitr.RecoveryPeriodInDays };
 	}
+
+	if (declared) {
+		if (!settings.sse) {
+			settings.sse = kmsEncryption(customerKeyArn);
+			settings.added.push('encryption');
+		}
+		if (!settings.ttlAttribute && declared.TimeToLiveAttribute) {
+			settings.ttlAttribute = declared.TimeToLiveAttribute;
+			settings.added.push('TTL');
+		}
+		if (!settings.pitr && declared.PointInTimeRecovery === 'true') {
+			const days = Number(declared.RecoveryPeriodInDays);
+			settings.pitr = { recoveryPeriodInDays: Number.isInteger(days) && days > 0 ? days : undefined };
+			settings.added.push('point-in-time recovery');
+		}
+	}
 	return settings;
 }
 
@@ -311,7 +373,6 @@ async function applySettingsAfterCreate(tableName: string, settings: TableSettin
 		);
 	}
 	if (settings.pitr) {
-		const { recoveryPeriodInDays } = settings.pitr;
 		for (let attempt = 1; ; attempt++) {
 			try {
 				await dynamodb.send(
@@ -319,9 +380,7 @@ async function applySettingsAfterCreate(tableName: string, settings: TableSettin
 						TableName: tableName,
 						PointInTimeRecoverySpecification: {
 							PointInTimeRecoveryEnabled: true,
-							...(recoveryPeriodInDays !== undefined
-								? { RecoveryPeriodInDays: recoveryPeriodInDays }
-								: {}),
+							RecoveryPeriodInDays: settings.pitr.recoveryPeriodInDays,
 						},
 					}),
 				);
@@ -344,22 +403,25 @@ async function applySettingsAfterCreate(tableName: string, settings: TableSettin
  * customer key named by `customerKeyArn`), TTL, point-in-time recovery, user
  * tags, streams and the table class. They are read before the delete; TTL and
  * point-in-time recovery are set again once the new table is ACTIVE, before the
- * items are written back. A table with deletion protection never comes here
+ * items are written back; a failure there is thrown after the items are back.
+ * A setting that the stack declares (`declared`) and the old table lacked is
+ * given to the new one. A table with deletion protection never comes here
  * (see `handler`).
  */
 async function recreateTableWithIndexes(
 	tableName: string,
 	desired: Record<string, IndexConfig>,
 	customerKeyArn: string | undefined,
+	declared: DeclaredSettings | undefined,
 ) {
 	console.log('⚠️  SANDBOX MODE: Recreating table with all GSIs (fast path)');
 
 	const table = await describeTable(tableName);
-	const settings = await readTableSettings(tableName, table, customerKeyArn);
+	const settings = await readTableSettings(tableName, table, customerKeyArn, declared);
 	console.log(`Keeping table settings: ${JSON.stringify({ ...settings, tags: settings.tags.map((t) => t.Key) })}`);
 
 	// Backup data
-	const items: any[] = [];
+	const items: Record<string, AttributeValue>[] = [];
 	let lastKey: any;
 	do {
 		const result = await dynamodb.send(new ScanCommand({ TableName: tableName, ExclusiveStartKey: lastKey }));
@@ -418,9 +480,9 @@ async function recreateTableWithIndexes(
 				],
 				Projection: { ProjectionType: 'ALL' as const },
 			})),
-			...(settings.sse ? { SSESpecification: settings.sse } : {}),
-			...(settings.stream ? { StreamSpecification: settings.stream } : {}),
-			...(settings.tableClass ? { TableClass: settings.tableClass } : {}),
+			SSESpecification: settings.sse,
+			StreamSpecification: settings.stream,
+			TableClass: settings.tableClass,
 			...(settings.tags.length > 0 ? { Tags: settings.tags } : {}),
 		}),
 	);
@@ -432,17 +494,67 @@ async function recreateTableWithIndexes(
 		await sleep(RETRY_DELAY_MS);
 	}
 
-	await applySettingsAfterCreate(tableName, settings);
+	// Until they are written back, the items are only in this invocation's
+	// memory. A failure to set TTL or point-in-time recovery again therefore
+	// does not stop the restore: it is thrown once the items are back.
+	let settingsFailure: { error: unknown } | undefined;
+	try {
+		await applySettingsAfterCreate(tableName, settings);
+	} catch (error) {
+		settingsFailure = { error };
+	}
 
-	// Restore data
-	for (let i = 0; i < items.length; i += 25) {
-		await dynamodb.send(
-			new BatchWriteItemCommand({
-				RequestItems: { [tableName]: items.slice(i, i + 25).map((item) => ({ PutRequest: { Item: item } })) },
-			}),
+	await restoreItems(tableName, items);
+	if (settingsFailure) throw settingsFailure.error;
+	console.log(`✅ Sandbox: table recreated with ${Object.keys(desired).length} GSIs, ${items.length} items restored`);
+}
+
+/**
+ * Write the items back, 25 at a time. A new on-demand table throttles a fast
+ * restore of large items, and BatchWriteItem then succeeds and returns the
+ * items it did not write: they are sent again, after a wait that doubles each
+ * time. A batch that still has unprocessed items after the last attempt does
+ * not stop the other batches; the function throws at the end with the count.
+ */
+async function restoreItems(tableName: string, items: Record<string, AttributeValue>[]) {
+	let notWritten = 0;
+	for (let i = 0; i < items.length; i += RESTORE_BATCH_SIZE) {
+		let requests: WriteRequest[] = items
+			.slice(i, i + RESTORE_BATCH_SIZE)
+			.map((item) => ({ PutRequest: { Item: item } }));
+		for (let attempt = 1; requests.length > 0 && attempt <= RESTORE_ATTEMPTS; attempt++) {
+			if (attempt > 1) await sleep(Math.min(RESTORE_FIRST_DELAY_MS * 2 ** (attempt - 2), RESTORE_MAX_DELAY_MS));
+			const result = await dynamodb.send(new BatchWriteItemCommand({ RequestItems: { [tableName]: requests } }));
+			requests = result.UnprocessedItems?.[tableName] ?? [];
+		}
+		notWritten += requests.length;
+	}
+	if (notWritten > 0) {
+		throw new Error(
+			`${notWritten} of ${items.length} items of ${tableName} were not written back: ` +
+				`DynamoDB left them unprocessed in ${RESTORE_ATTEMPTS} attempts`,
 		);
 	}
-	console.log(`✅ Sandbox: table recreated with ${Object.keys(desired).length} GSIs, ${items.length} items restored`);
+}
+
+/**
+ * The declared settings that the live table lacks. This runs when nothing else
+ * about the table would change, so a failed read is not an error: the table is
+ * left as it is.
+ */
+async function lackingSettings(
+	tableName: string,
+	table: TableDescription,
+	customerKeyArn: string | undefined,
+	declared: DeclaredSettings | undefined,
+): Promise<string[]> {
+	if (!declared) return [];
+	try {
+		return (await readTableSettings(tableName, table, customerKeyArn, declared)).added;
+	} catch (e) {
+		console.warn('Could not read the table settings; leaving the table as it is:', e);
+		return [];
+	}
 }
 
 // ── onEvent handler ─────────────────────────────────────────────────────────
@@ -450,9 +562,9 @@ async function recreateTableWithIndexes(
 // the sandbox fast path). Returns immediately — isComplete polls for progress.
 
 export async function handler(event: CfnEvent) {
-	console.log('onEvent:', JSON.stringify(event, null, 2));
+	console.log('onEvent:', loggable(event));
 
-	const { TableName, Indexes, SandboxMode, EncryptionKeyArn } = event.ResourceProperties;
+	const { TableName, Indexes, SandboxMode, EncryptionKeyArn, DeclaredSettings } = event.ResourceProperties;
 	const desired = event.RequestType === 'Delete' ? {} : (Indexes ?? {});
 	const isSandbox = SandboxMode === 'true';
 
@@ -469,17 +581,27 @@ export async function handler(event: CfnEvent) {
 	// Check if already done
 	const table = await describeForRequest(event.RequestType, TableName);
 	if (!table) return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
+	const sandboxWithIndexes = isSandbox && Object.keys(desired).length > 0;
 	if (gsiMatchesDesired(table, desired) && !isTableBusy(table)) {
-		console.log('Already in desired state');
-		return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
+		// In sandbox, a table whose indexes match can still lack what its stack
+		// declares (see `DeclaredSettings`). The fast path then runs for that.
+		const lacking =
+			sandboxWithIndexes && !table.DeletionProtectionEnabled
+				? await lackingSettings(TableName, table, EncryptionKeyArn, DeclaredSettings)
+				: [];
+		if (lacking.length === 0) {
+			console.log('Already in desired state');
+			return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
+		}
+		console.log(`Table lacks ${lacking.join(', ')}, which its stack declares`);
 	}
 
 	// Sandbox fast path: drop and recreate with all GSIs at once. A table with
 	// deletion protection (`protection: 'locked'`) is never deleted: it takes
 	// the one-change-at-a-time path below, which only needs UpdateTable.
-	if (isSandbox && Object.keys(desired).length > 0) {
+	if (sandboxWithIndexes) {
 		if (!table.DeletionProtectionEnabled) {
-			await recreateTableWithIndexes(TableName, desired, EncryptionKeyArn);
+			await recreateTableWithIndexes(TableName, desired, EncryptionKeyArn, DeclaredSettings);
 			return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
 		}
 		console.log('Table has deletion protection; changing its GSIs one at a time instead of recreating it');
@@ -501,7 +623,7 @@ export async function handler(event: CfnEvent) {
 // Creations are performed before deletions when possible.
 
 export async function isCompleteHandler(event: any) {
-	console.log('isComplete:', JSON.stringify(event, null, 2));
+	console.log('isComplete:', loggable(event));
 
 	const { TableName, Indexes, SandboxMode } = event.ResourceProperties;
 	const desired = event.RequestType === 'Delete' ? {} : (Indexes ?? {});

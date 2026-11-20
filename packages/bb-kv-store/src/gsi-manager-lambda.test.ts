@@ -15,10 +15,11 @@ import assert from 'node:assert';
  * the surviving table lost all its indexes. A Delete also failed outright when
  * the table no longer existed.
  */
-import { afterEach, beforeEach, mock, test } from 'node:test';
+import { afterEach, beforeEach, mock, type TestContext, test } from 'node:test';
 import { CloudFormationClient, DescribeStacksCommand, GetTemplateCommand } from '@aws-sdk/client-cloudformation';
 import { DescribeTableCommand, DynamoDBClient, UpdateTableCommand } from '@aws-sdk/client-dynamodb';
-import { handler, isCompleteHandler } from './gsi-manager-lambda.js';
+import { _setSleepForTest, handler, isCompleteHandler } from './gsi-manager-lambda.js';
+import { GSI_MANAGER_ACTIONS, GSI_MANAGER_SANDBOX_ACTIONS } from './gsi-manager-permissions.js';
 
 const TABLE = 'app-items';
 const STACK_ID = 'arn:aws:cloudformation:us-east-1:111111111111:stack/TestStack/00000000-0000-0000-0000-000000000000';
@@ -161,7 +162,9 @@ interface TestEvent {
 		SandboxMode: string;
 		Version: string;
 		EncryptionKeyArn?: string;
+		DeclaredSettings?: { TimeToLiveAttribute: string; PointInTimeRecovery?: string; RecoveryPeriodInDays?: string };
 	};
+	ResponseURL?: string;
 }
 
 function deleteEvent(): TestEvent {
@@ -466,6 +469,8 @@ interface SandboxFake {
 	backupsUnavailable: { remaining: number };
 	/** Fail the named command, to check that nothing is deleted. */
 	failing: Set<string>;
+	/** The next N BatchWriteItem calls write nothing and return every item as unprocessed, as a throttled table does. */
+	throttledWrites: { remaining: number };
 }
 
 function fakeSandboxTable(initial: LiveTable): SandboxFake {
@@ -474,6 +479,7 @@ function fakeSandboxTable(initial: LiveTable): SandboxFake {
 	const calls: string[] = [];
 	const backupsUnavailable = { remaining: 0 };
 	const failing = new Set<string>();
+	const throttledWrites = { remaining: 0 };
 
 	mock.method(DynamoDBClient.prototype, 'send', async (command: { constructor: { name: string }; input: any }) => {
 		const name = command.constructor.name.replace(/Command$/, '');
@@ -568,6 +574,10 @@ function fakeSandboxTable(initial: LiveTable): SandboxFake {
 				live = undefined;
 				return {};
 			case 'BatchWriteItem':
+				if (throttledWrites.remaining > 0) {
+					throttledWrites.remaining--;
+					return { UnprocessedItems: input.RequestItems };
+				}
 				live.items.push(
 					...input.RequestItems[TABLE].map(
 						(r: { PutRequest: { Item: Record<string, unknown> } }) => r.PutRequest.Item,
@@ -584,7 +594,7 @@ function fakeSandboxTable(initial: LiveTable): SandboxFake {
 		throw new Error(`unexpected DynamoDB command ${name}`);
 	});
 
-	return { live: () => live, calls, createInput: () => createInput, backupsUnavailable, failing };
+	return { live: () => live, calls, createInput: () => createInput, backupsUnavailable, failing, throttledWrites };
 }
 
 /** A store with `indexes`, as the CDK layer deploys it with the defaults: AWS-managed key, TTL on, stack tags. */
@@ -638,6 +648,13 @@ test('GSI manager (sandbox): the recreated table keeps its encryption, TTL, tags
 		fake.calls.indexOf('UpdateTimeToLive') < fake.calls.indexOf('BatchWriteItem'),
 		'TTL is on again before the items are written back',
 	);
+	// A call without its action would fail after the delete, with the items not yet restored.
+	const granted: readonly string[] = [...GSI_MANAGER_ACTIONS, ...GSI_MANAGER_SANDBOX_ACTIONS];
+	assert.deepStrictEqual(
+		fake.calls.filter((c) => !granted.includes(`dynamodb:${c}`)),
+		[],
+		'the CDK layer grants every call the fast path makes',
+	);
 });
 
 test('GSI manager (sandbox): a table with a customer key is recreated with the same key', async () => {
@@ -674,10 +691,17 @@ test('GSI manager (sandbox): streams, table class and a custom TTL field are kep
 	assert.ok(!fake.calls.includes('UpdateContinuousBackups'), 'point-in-time recovery is not turned on');
 });
 
-test('GSI manager (sandbox): point-in-time recovery is retried while the new table cannot take backups yet', async () => {
+// No real wait between retries, and no timer at all: a stubbed setTimeout or
+// a wait of 0 ms breaks the messages that the test runner's child process
+// sends to its parent.
+function withoutWaits(t: TestContext) {
+	const sleep = _setSleepForTest(async () => {});
+	t.after(() => _setSleepForTest(sleep));
+}
+
+test('GSI manager (sandbox): point-in-time recovery is retried while the new table cannot take backups yet', async (t) => {
 	const fake = fakeSandboxTable(deployedTable({ pitr: { RecoveryPeriodInDays: 7 } }));
-	// One retry, so one real 3 s wait: stubbing setTimeout here breaks the
-	// messages that the test runner's child process sends to its parent.
+	withoutWaits(t);
 	fake.backupsUnavailable.remaining = 1;
 	await runLifecycle(sandboxUpdate());
 	assert.strictEqual(fake.calls.filter((c) => c === 'UpdateContinuousBackups').length, 2);
@@ -702,4 +726,115 @@ test('GSI manager (sandbox): a table with deletion protection is not recreated; 
 	assert.ok(!fake.calls.includes('CreateTable'));
 	assert.deepStrictEqual(fake.live()?.gsis.sort(), ['byOwner', 'byStatus']);
 	assert.strictEqual(fake.live()?.deletionProtection, true);
+});
+
+// History: the settings were set again before the items were written back, and
+// a failure there threw with the items only in the function's memory. The
+// items go back first now, and the failure is reported after.
+for (const failing of ['UpdateTimeToLive', 'UpdateContinuousBackups']) {
+	test(`GSI manager (sandbox): if ${failing} fails on the new table, the items are still written back`, async () => {
+		const fake = fakeSandboxTable(deployedTable());
+		fake.failing.add(failing);
+		await assert.rejects(() => handler(sandboxUpdate()), { name: 'AccessDenied' });
+		assert.ok(fake.calls.includes('DeleteTable'), 'the fast path ran');
+		assert.strictEqual(fake.live()?.items.length, 2, 'the items are back before the failure is reported');
+	});
+}
+
+// History: the restore sent each batch once and ignored UnprocessedItems. A
+// sandbox run with 1,600 items of about 12 KB lost 418 of them on the new
+// on-demand table, and the handler logged that all were restored.
+test('GSI manager (sandbox): items that DynamoDB leaves unprocessed are sent again until all are written', async (t) => {
+	const fake = fakeSandboxTable(deployedTable());
+	withoutWaits(t);
+	fake.throttledWrites.remaining = 3;
+	await runLifecycle(sandboxUpdate());
+	assert.strictEqual(fake.live()?.items.length, 2);
+	assert.strictEqual(fake.calls.filter((c) => c === 'BatchWriteItem').length, 4, 'three throttled calls, then one');
+});
+
+test('GSI manager (sandbox): the handler fails when items stay unprocessed, and says how many', async (t) => {
+	const fake = fakeSandboxTable(deployedTable());
+	withoutWaits(t);
+	fake.throttledWrites.remaining = Number.POSITIVE_INFINITY;
+	await assert.rejects(() => handler(sandboxUpdate()), /2 of 2 items of app-items were not written back/);
+});
+
+// --- Sandbox: a table that lacks what its stack declares is recreated with it ---
+//
+// History: 1.0.0-rc.0 recreated a sandbox table with `indexes` without its
+// encryption, TTL and point-in-time recovery. The fast path copies the live
+// table's settings, so on its own it would carry that state forward. The CDK
+// layer now passes what it declares, in sandbox, and the handler gives a
+// table what it lacks, also when its indexes did not change.
+
+const DECLARED = { TimeToLiveAttribute: '_bkv_ttl', PointInTimeRecovery: 'true', RecoveryPeriodInDays: '7' };
+const STRIPPED = { gsis: ALL_INDEXES, kmsKeyArn: undefined, ttlAttribute: undefined, pitr: undefined };
+
+test('GSI manager (sandbox): a table without the declared encryption, TTL and point-in-time recovery gets them, with its indexes unchanged', async () => {
+	const fake = fakeSandboxTable(deployedTable(STRIPPED));
+	await runLifecycle(sandboxUpdate({ DeclaredSettings: DECLARED }));
+	assert.ok(fake.calls.includes('DeleteTable'), 'recreated although the indexes match');
+	const live = fake.live();
+	assert.ok(live);
+	assert.strictEqual(live.kmsKeyArn, AWS_MANAGED_KEY_ARN);
+	assert.strictEqual(live.ttlAttribute, '_bkv_ttl');
+	assert.deepStrictEqual(live.pitr, { RecoveryPeriodInDays: 7 });
+	assert.deepStrictEqual(live.gsis.sort(), ['byOwner', 'byStatus']);
+	assert.strictEqual(live.items.length, 2);
+});
+
+test('GSI manager (sandbox): a table without encryption gets the declared customer key; point-in-time recovery stays off when not declared', async () => {
+	const fake = fakeSandboxTable(deployedTable(STRIPPED));
+	await runLifecycle(
+		sandboxUpdate({ DeclaredSettings: { TimeToLiveAttribute: 'expiresAt' }, EncryptionKeyArn: CUSTOMER_KEY_ARN }),
+	);
+	assert.strictEqual(fake.live()?.kmsKeyArn, CUSTOMER_KEY_ARN);
+	assert.strictEqual(fake.live()?.ttlAttribute, 'expiresAt');
+	assert.strictEqual(fake.live()?.pitr, undefined);
+});
+
+test('GSI manager (sandbox): an index change also gives the table what it lacks', async () => {
+	const fake = fakeSandboxTable(deployedTable({ ...STRIPPED, gsis: ['byStatus'] }));
+	await runLifecycle(sandboxUpdate({ DeclaredSettings: DECLARED }));
+	assert.strictEqual(fake.live()?.kmsKeyArn, AWS_MANAGED_KEY_ARN);
+	assert.strictEqual(fake.live()?.ttlAttribute, '_bkv_ttl');
+	assert.deepStrictEqual(fake.live()?.pitr, { RecoveryPeriodInDays: 7 });
+});
+
+test('GSI manager (sandbox): a table that has what its stack declares is not recreated', async () => {
+	const fake = fakeSandboxTable(deployedTable({ gsis: ALL_INDEXES }));
+	await runLifecycle(sandboxUpdate({ DeclaredSettings: { ...DECLARED, RecoveryPeriodInDays: undefined } }));
+	assert.ok(!fake.calls.includes('DeleteTable'));
+	assert.ok(!fake.calls.includes('Scan'));
+});
+
+test('GSI manager (sandbox): a table whose settings cannot be read is left as it is', async () => {
+	const fake = fakeSandboxTable(deployedTable(STRIPPED));
+	fake.failing.add('DescribeTimeToLive');
+	await runLifecycle(sandboxUpdate({ DeclaredSettings: DECLARED }));
+	assert.ok(!fake.calls.includes('DeleteTable'));
+});
+
+test('GSI manager (sandbox): a table with deletion protection is not recreated to get its settings back', async () => {
+	const fake = fakeSandboxTable(deployedTable({ ...STRIPPED, deletionProtection: true }));
+	await runLifecycle(sandboxUpdate({ DeclaredSettings: DECLARED }));
+	assert.ok(!fake.calls.includes('DeleteTable'));
+});
+
+// CloudFormation's presigned response URL lets its holder answer for the
+// custom resource, so it must not reach the log group.
+test("GSI manager: the logged events leave out CloudFormation's response URL", async (t) => {
+	const logged: string[] = [];
+	t.mock.method(console, 'log', (...args: unknown[]) => logged.push(args.join(' ')));
+	const event: TestEvent = {
+		...deleteEvent(),
+		RequestType: 'Update',
+		ResponseURL: 'https://cloudformation-custom-resource-response.example/req-1?X-Amz-Signature=abc123',
+	};
+	await runLifecycle(event);
+	const text = logged.join('\n');
+	assert.match(text, /onEvent: [\s\S]*"RequestType": "Update"/, 'the rest of the event is logged');
+	assert.match(text, /isComplete: /);
+	assert.doesNotMatch(text, /X-Amz-Signature|abc123/);
 });

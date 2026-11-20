@@ -153,18 +153,20 @@ A sandbox deployment drops the table and creates it again. This fast path avoids
 4. Wait until the deletion is complete.
 5. Create a new table with all desired GSIs, with the same encryption, tags, stream and table class. DynamoDB accepts several GSIs when it creates a table.
 6. Wait until the table and all GSIs are ACTIVE.
-7. Turn TTL (on the same attribute) and point-in-time recovery (with the same recovery period) back on, if they were on. DynamoDB sets both only on an ACTIVE table, and refuses point-in-time recovery for a short time after the table is created, so the handler retries it.
-8. Write all items back with `BatchWriteItem`.
+7. Turn TTL (on the same attribute) and point-in-time recovery (with the same recovery period) back on, if they were on. DynamoDB sets both only on an ACTIVE table, and refuses point-in-time recovery for a short time after the table is created, so the handler retries it. A failure in this step is reported after step 8, so it does not cost the items.
+8. Write all items back with `BatchWriteItem`, 25 at a time. A new on-demand table throttles a fast restore of large items; `BatchWriteItem` then succeeds and returns the items it did not write. The handler sends those again, with a wait that doubles from 0.1 s to 5 s, up to 12 attempts for a batch.
 
 So the new table has the settings that the CDK layer gave the old one: the AWS-managed key or the customer key of `encryption`, TTL on `_bkv_ttl` or the `ttl` field, the stack tags, and point-in-time recovery when it is on. DescribeTable reports a key ARN for the AWS-managed key too, so the CDK layer passes the ARN of a customer key in the `EncryptionKeyArn` property of the custom resource (sandbox only). Tags whose key starts with `aws:`, such as `aws:cloudformation:stack-name`, cannot be set by a caller, so the new table does not have them. A new table also has a new stream ARN, so a consumer of the old stream must subscribe again.
 
-The GSI manager role uses a customer key through DynamoDB to create the table and to copy its items. A key from `KVStore.fromKmsKey()` must allow that role in its key policy, either by name or by a statement that delegates to account IAM. Otherwise CreateTable fails after the delete.
+The handler copies the settings of the live table, so a table that has lost them would stay without them. `1.0.0-rc.0` recreated tables with only their keys and indexes, and left such tables behind. In sandbox the CDK layer therefore also passes what it declares in the `DeclaredSettings` property: the TTL attribute, and point-in-time recovery with its recovery period. A live table that lacks one of them, or has no KMS encryption (the CDK layer always sets the AWS-managed key or a customer key), gets it on the new table. The handler checks this also when the indexes already match, and then runs the fast path for the settings alone. If it cannot read the settings in that case, it leaves the table as it is.
+
+The GSI manager role uses a customer key through DynamoDB to create the table and to copy its items. A key from `KVStore.fromKmsKey()` must allow that role in its key policy, either by name or by a statement that delegates to account IAM. With a key policy that does not allow the role at all, the scan of step 2 is denied: nothing is deleted, and the index change does not deploy.
 
 A table with deletion protection (`protection: 'locked'`) is never deleted. Its GSIs change one at a time through `UpdateTable`, as in production.
 
 The fast path takes seconds where one change at a time takes minutes to hours, but it **destroys the table and creates it again**. The handler uses it only when `SandboxMode` is `true`. The CDK layer sets `SandboxMode` from the `sandboxMode` context variable, which it reads with `isSandboxContext()` from core. The IAM policy of a production deployment does not grant the permissions that the fast path needs. So the fast path cannot run in production, even with `SandboxMode` set by mistake.
 
-**Data loss risk in sandbox:** Data can be lost in three cases. The Lambda function times out during the scan of step 2 on a very large table, CreateTable in step 5 fails, or the restore of step 8 fails partway. A sandbox is a short-lived development environment, so the risk is acceptable there. It is the reason that production never uses the fast path.
+**Data loss risk in sandbox:** Data can be lost in three cases. The Lambda function times out after the delete of step 3 on a very large table, CreateTable in step 5 fails, or the restore of step 8 fails partway: a write is refused, or a batch still has unprocessed items after its last attempt, in which case the handler fails and reports how many items were not written back. A sandbox is a short-lived development environment, so the risk is acceptable there. It is the reason that production never uses the fast path.
 
 ## Infrastructure (CDK)
 

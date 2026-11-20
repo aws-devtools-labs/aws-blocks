@@ -17,6 +17,7 @@ import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
+import { GSI_MANAGER_ACTIONS, GSI_MANAGER_SANDBOX_ACTIONS } from './gsi-manager-permissions.js';
 import { looseOptions, probeKeyType, resolveKeyModel } from './item.js';
 import type { ExternalKmsKeyRef, ExternalTableRef, IndexConfig, KeyConfig, KVStoreOptions } from './types.js';
 import { BB_NAME } from './version.js';
@@ -228,6 +229,7 @@ export class KVStore<
 			// A customer-managed key (provisioned or `fromKmsKey`). The sandbox fast
 			// path recreates the table with this key and needs to use it.
 			const customerKeyArn = this.table.encryptionKey?.keyArn;
+			const pitr = protection.pointInTimeRecoverySpecification;
 			gsiProvider.addTableArn(this.table.tableArn, isSandbox, customerKeyArn);
 
 			const indexesWithTypes: Record<string, unknown> = {};
@@ -250,6 +252,20 @@ export class KVStore<
 					// Sandbox only: tells the fast path that the table's KMS key is a
 					// customer key to recreate it with, not the AWS-managed key.
 					...(isSandbox && customerKeyArn ? { EncryptionKeyArn: customerKeyArn } : {}),
+					// Sandbox only: what the table above declares, so that the fast path
+					// can give it to a table that lacks it. The values are strings, as
+					// CloudFormation delivers them.
+					...(isSandbox
+						? {
+								DeclaredSettings: {
+									TimeToLiveAttribute: model.ttlAttribute,
+									...(pitr ? { PointInTimeRecovery: 'true' } : {}),
+									...(pitr?.recoveryPeriodInDays !== undefined
+										? { RecoveryPeriodInDays: String(pitr.recoveryPeriodInDays) }
+										: {}),
+								},
+							}
+						: {}),
 				},
 			});
 
@@ -352,7 +368,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	// Production permissions — lazily resolved so ARNs accumulate as tables register
 	gsiManagerLambda.addToRolePolicy(
 		new PolicyStatement({
-			actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
+			actions: [...GSI_MANAGER_ACTIONS],
 			resources: cdk.Lazy.list({ produce: () => tableArns }),
 		}),
 	);
@@ -373,14 +389,13 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 
 	gsiIsCompleteLambda.addToRolePolicy(
 		new PolicyStatement({
-			actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
+			actions: [...GSI_MANAGER_ACTIONS],
 			resources: cdk.Lazy.list({ produce: () => tableArns }),
 		}),
 	);
 
 	// Sandbox permissions — only added if any table requests sandbox mode
 	let sandboxPolicyAdded = false;
-	let sandboxKeyPolicyAdded = false;
 
 	const provider = new Provider(stack, 'BlocksGsiProvider', {
 		onEventHandler: gsiManagerLambda,
@@ -394,57 +409,41 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 		serviceToken: provider.serviceToken,
 		addTableArn: (tableArn: string, isSandbox: boolean, customerKeyArn?: string) => {
 			tableArns.push(tableArn);
-			if (isSandbox) {
-				sandboxTableArns.push(tableArn);
-				if (!sandboxPolicyAdded) {
-					sandboxPolicyAdded = true;
-					gsiManagerLambda.addToRolePolicy(
-						new PolicyStatement({
-							actions: [
-								'dynamodb:DeleteTable',
-								'dynamodb:CreateTable',
-								'dynamodb:Scan',
-								'dynamodb:BatchWriteItem',
-								// Read the table's settings before the delete and set
-								// them again on the new table (tags at CreateTable).
-								'dynamodb:ListTagsOfResource',
-								'dynamodb:TagResource',
-								'dynamodb:DescribeTimeToLive',
-								'dynamodb:UpdateTimeToLive',
-								'dynamodb:DescribeContinuousBackups',
-								'dynamodb:UpdateContinuousBackups',
-							],
-							resources: cdk.Lazy.list({ produce: () => sandboxTableArns }),
-						}),
-					);
-				}
-				if (customerKeyArn) {
-					// Several stores can share one `fromKmsKey` key.
-					if (!sandboxKeyArns.includes(customerKeyArn)) sandboxKeyArns.push(customerKeyArn);
-					if (!sandboxKeyPolicyAdded) {
-						sandboxKeyPolicyAdded = true;
-						// CreateTable with a customer key needs DescribeKey and
-						// CreateGrant; the scan and the restore read and write
-						// through the key. Only these tables' keys, only via DynamoDB.
-						gsiManagerLambda.addToRolePolicy(
-							new PolicyStatement({
-								actions: [
-									'kms:DescribeKey',
-									'kms:CreateGrant',
-									'kms:Decrypt',
-									'kms:Encrypt',
-									'kms:ReEncrypt*',
-									'kms:GenerateDataKey*',
-								],
-								resources: cdk.Lazy.list({ produce: () => sandboxKeyArns }),
-								conditions: {
-									StringEquals: { 'kms:ViaService': `dynamodb.${stack.region}.amazonaws.com` },
-								},
-							}),
-						);
-					}
-				}
+			if (!isSandbox) return;
+			sandboxTableArns.push(tableArn);
+			if (!sandboxPolicyAdded) {
+				sandboxPolicyAdded = true;
+				gsiManagerLambda.addToRolePolicy(
+					new PolicyStatement({
+						actions: [...GSI_MANAGER_SANDBOX_ACTIONS],
+						resources: cdk.Lazy.list({ produce: () => sandboxTableArns }),
+					}),
+				);
 			}
+			// Several stores can share one `fromKmsKey` key.
+			if (!customerKeyArn || sandboxKeyArns.includes(customerKeyArn)) return;
+			sandboxKeyArns.push(customerKeyArn);
+			// One statement, added with the first key; its resource list grows with the others.
+			if (sandboxKeyArns.length > 1) return;
+			// CreateTable with a customer key needs DescribeKey and
+			// CreateGrant; the scan and the restore read and write
+			// through the key. Only these tables' keys, only via DynamoDB.
+			gsiManagerLambda.addToRolePolicy(
+				new PolicyStatement({
+					actions: [
+						'kms:DescribeKey',
+						'kms:CreateGrant',
+						'kms:Decrypt',
+						'kms:Encrypt',
+						'kms:ReEncrypt*',
+						'kms:GenerateDataKey*',
+					],
+					resources: cdk.Lazy.list({ produce: () => sandboxKeyArns }),
+					conditions: {
+						StringEquals: { 'kms:ViaService': `dynamodb.${stack.region}.amazonaws.com` },
+					},
+				}),
+			);
 		},
 	};
 

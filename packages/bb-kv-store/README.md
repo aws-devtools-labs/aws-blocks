@@ -578,7 +578,7 @@ const audit = new KVStore(scope, 'audit', {
 
 - `protection: 'disposable'` deletes the table with the stack. `'retained'` keeps the table. `'locked'` keeps the table and turns on deletion protection.
 - A table that stays after a stack delete keeps its name. A new deploy of the same app fails with `Table already exists` until you delete or import that table.
-- `encryption: 'customer-managed'` creates one KMS key for each table. To share one key, pass `KVStore.fromKmsKey(keyArn)`. The key policy must allow the execution role of the stack.
+- `encryption: 'customer-managed'` creates one KMS key for each table. To share one key, pass `KVStore.fromKmsKey(keyArn)`. The key policy must allow the execution role of the stack. In a sandbox, a store with `indexes` is recreated when its indexes change, by the role of the stack's index manager function, so the key policy must allow that role too. A key policy that delegates to account IAM allows both.
 - Point-in-Time Recovery bills for backup storage. Turn it off for data that you can rebuild.
 
 ## Local development
