@@ -1601,15 +1601,30 @@ const warnIfNextOutsideOpenNextPeerRange = (
   );
 };
 
+/** Marks a bundle whose `content-encoding` assignment already drops `content-length`. */
+const DROP_CONTENT_LENGTH_MARKER = '/*hosting:drop-content-length*/';
+
 /**
  * Patch OpenNext's bundled `aws-lambda-streaming` wrapper for API Gateway
- * STREAM framing. Two changes to <projectDir>/.open-next/server-functions/
+ * STREAM framing. Three changes to <projectDir>/.open-next/server-functions/
  * default/index.mjs:
  *   1. Drop the `setContentType("application/vnd.awslambda.http-integration-
  *      response")` call — that's the Function URL streaming marker; API
  *      Gateway leaks it into the wire response and breaks HTTP/2 framing.
- *   2. Force the wrapper's identity branch (skip brotli/gzip/deflate);
- *      CloudFront handles compression downstream.
+ *   2. Neuter the wrapper's brotli and deflate branches, so it compresses
+ *      the stream with gzip when the request accepts gzip and sends it
+ *      uncompressed otherwise. The server has to compress: the streamed
+ *      response has no `Content-Length`, and CloudFront only compresses
+ *      responses that carry one (and none that carry a `Content-Encoding`,
+ *      which the wrapper always sets). CloudFront forwards a normalized
+ *      `Accept-Encoding` (`br,gzip`, `gzip` or none) and keys its cache on
+ *      it, so a compressed copy is only ever served to viewers that accept
+ *      it. Brotli stays off because OpenNext 3.10.x runs it at quality 11,
+ *      which delays every streamed chunk; gzip (level 6, sync-flushed) keeps
+ *      streaming responsive on every verified OpenNext version. Deflate is
+ *      never forwarded by CloudFront.
+ *   3. Drop the app's `content-length` from a compressed response's headers
+ *      (a prerendered or cached page carries the uncompressed length).
  * Idempotent.
  * @internal
  */
@@ -1654,11 +1669,55 @@ export const patchStreamingWrapperForApiGateway = (
     //   else if (acceptEncoding.includes("gzip")) { ... gzip ... }
     //   else if (acceptEncoding.includes("deflate")) { ... deflate ... }
     //   else { identity }
-    // Force the identity branch by neutering all three checks.
-    for (const algo of ['br', 'gzip', 'deflate']) {
+    // Neuter the br and deflate checks so a request that accepts gzip takes
+    // the gzip branch and anything else takes the identity branch. The gzip
+    // check is left alone: the server must compress (see the doc comment).
+    for (const algo of ['br', 'deflate']) {
       const re = new RegExp(`\\.includes\\("${algo}"\\)`, 'g');
       if (re.test(src)) {
         src = src.replace(re, `.includes("__hosting_no_${algo}__")`);
+        patches++;
+      }
+    }
+
+    // The wrapper copies the app's headers into the prelude and only sets
+    // `content-encoding` on them. A prerendered or cached page (an ISR hit, a
+    // static 404) carries Next's `content-length` of the UNCOMPRESSED body, so
+    // a gzipped response would announce more bytes than it sends and the
+    // viewer's connection fails (a truncated transfer). Drop `content-length`
+    // whenever the wrapper compresses:
+    //   _prelude.headers["content-encoding"] = contentEncoding;
+    // becomes
+    //   (contentEncoding !== "identity" && (delete …["content-length"], …),
+    //    _prelude.headers["content-encoding"] = contentEncoding);
+    // Only in a file that is the wrapper (one of the edits above applied).
+    if (patches > 0 && !src.includes(DROP_CONTENT_LENGTH_MARKER)) {
+      const encodingHeaderRe =
+        /([A-Za-z_$][\w$]*)\.headers\["content-encoding"\]\s*=\s*([A-Za-z_$][\w$]*)(?=\s*[;,}])/g;
+      if (encodingHeaderRe.test(src)) {
+        src = src.replace(
+          encodingHeaderRe,
+          (_m, prelude: string, encoding: string) =>
+            `(${DROP_CONTENT_LENGTH_MARKER}${encoding}!=="identity"&&(delete ${prelude}.headers["content-length"],delete ${prelude}.headers["Content-Length"]),${prelude}.headers["content-encoding"]=${encoding})`,
+        );
+        patches++;
+      } else if (/\.includes\("gzip"\)/.test(src)) {
+        // Can't make gzip safe: keep the wrapper uncompressed instead.
+        src = src.replace(/\.includes\("gzip"\)/g, '.includes("__hosting_no_gzip__")');
+        if (process.env.HOSTING_LENIENT_PATCHES !== '1') {
+          throw new HostingError('UpstreamPatchPatternChangedError', {
+            message:
+              `Streaming-wrapper patch could not find the content-encoding header assignment in ${bundle}. ` +
+              'OpenNext likely changed its bundled aws-lambda-streaming wrapper.',
+            resolution:
+              'File an issue with the OpenNext version and the regex name (`patchStreamingWrapperForApiGateway`). ' +
+              'To bypass while investigating, set HOSTING_LENIENT_PATCHES=1 — server responses are then sent uncompressed.',
+          });
+        }
+        process.stderr.write(
+          `⚠️  Streaming-wrapper patch could not find the content-encoding header assignment in ${bundle}; ` +
+            'server responses are sent uncompressed. Continuing because HOSTING_LENIENT_PATCHES=1 is set.\n',
+        );
         patches++;
       }
     }
