@@ -1,5 +1,9 @@
 # @aws-cdk-blocks/create-blocks-app
 
+## 1.0.1
+
+No changes in this release.
+
 ## 1.0.0
 
 The first stable release. The changes since 1.0.0-rc.2 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.

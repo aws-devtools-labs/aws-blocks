@@ -2,6 +2,12 @@
 
 <!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthBasic and AuthOIDC blocks -->
 
+## 1.0.1
+
+### Patch Changes
+
+- bf9f0f0: The changelogs that ship in `docs/` are shorter. Each entry says what changed and what you have to do.
+
 ## 1.0.0
 
 The first stable release. The changes since 1.0.0-rc.2 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.

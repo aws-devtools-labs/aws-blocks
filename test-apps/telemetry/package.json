@@ -14,7 +14,7 @@
     "test:telemetry": "tsx test/telemetry-e2e.test.ts"
   },
   "dependencies": {
-    "aws-cdk-blocks": "1.0.0"
+    "aws-cdk-blocks": "1.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
