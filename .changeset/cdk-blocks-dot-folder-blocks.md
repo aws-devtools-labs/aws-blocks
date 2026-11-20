@@ -15,4 +15,4 @@
 '@aws-cdk-blocks/create-block': patch
 ---
 
-Local Building Block data now lives under `.cdk-blocks/local/data/{fullId}/`. It was `.bb-data/{fullId}/`. Data already on disk is copied across the first time a block opens its store, and nothing in the new location is overwritten. This is part of the hidden folder rename in this release. The `@aws-cdk-blocks/core` changelog has the full migration steps.
+Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
