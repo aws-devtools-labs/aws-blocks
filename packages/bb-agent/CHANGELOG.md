@@ -1,8 +1,8 @@
-# @aws-blocks/bb-agent
+# @aws-cdk-blocks/bb-agent
 
 ## 1.0.0
 
-The first stable release. The changes since 1.0.0-rc.2 are listed below. The full notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
+The first stable release. The changes since 1.0.0-rc.2 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
 
 ### Changes since `@aws-blocks/bb-agent` 0.x
 
@@ -18,1259 +18,229 @@ The first stable release. The changes since 1.0.0-rc.2 are listed below. The ful
 
 ### Patch Changes
 
-- cad7bb8: Fix the Agent on AgentCore Runtime failing every turn with `BLOCKS_RT_CALLBACK_URL not set` after a first deploy. The Runtime could start before the deployment uploaded the app config file, and then kept the empty config. The Runtime now loads the config again on each invocation until the file is readable, and imports the backend only after that. A turn that arrives earlier is rejected, so `stream()` throws instead of saving an error message.
-- Updated dependencies [cad7bb8]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-  - @aws-cdk-blocks/core@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-file-bucket@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-realtime@1.0.0-rc.2
+- cad7bb8: The Agent on AgentCore Runtime no longer fails every turn with `BLOCKS_RT_CALLBACK_URL not set` after a first deploy. A turn that arrives before the app config file is readable is rejected, so `stream()` throws.
 
 ## 1.0.0-rc.1
 
 ### Patch Changes
 
-- d380931: fix(bb-agent): don't show the previous answer when the chat reconnects at the start of a turn
-
-  If the chat reconnected before a turn had streamed any text, `createChat` and `useChat` could read a history that did not yet include the new message and show the previous turn's answer as the new one, then ignore the real reply.
-
-  On reconnect, when nothing has streamed and the history is missing the new message, a saved answer that repeats the previous turn's answer is no longer taken as the new turn's answer. The client keeps waiting for the turn's own chunks instead. A history that includes the new message is still adopted, even when its answer repeats the previous one.
-
-- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
-- 6b1086b: docs: corrected and reorganized the `Agent` and `KnowledgeBase` READMEs.
-
-  - `Agent`: the `createChat` example now shows the backend that it calls. The errors section lists every error case. Model presets and Bedrock access moved to `MODELS.md`, which ships in the package.
-  - `KnowledgeBase`: `chunkOverlap` is 1 to 99 on AWS, and the mock also accepts 0. A `maxResults` value outside 1 to 100 is clamped, and a non-integer throws `ValidationError`.
-
-- Updated dependencies [e529b00]
-- Updated dependencies [fbe48c5]
-- Updated dependencies [c42ba42]
-- Updated dependencies [3081521]
-- Updated dependencies [e529b00]
-- Updated dependencies [c9d73a8]
-- Updated dependencies [23692f1]
-  - @aws-cdk-blocks/core@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-file-bucket@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-realtime@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.1
+- d380931: `createChat` and `useChat` no longer show the previous turn's answer as the new one when the chat reconnects before a turn has streamed any text. The client keeps waiting for the turn's own chunks.
+- e529b00: The README error examples import the error constants and `isBlocksError` from `aws-cdk-blocks`, which works in backend and client code.
+- 6b1086b: The `Agent` and `KnowledgeBase` READMEs are corrected and reorganized. Model presets and Bedrock access for `Agent` moved to `MODELS.md`, which ships in the package.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Minor Changes
 
-- be8864c: fix(bb-agent): check conversation ownership in `stream()`, `resume()`, `getConversation()` and `getPendingInterrupts()`, and scope `getChannel()` to the caller
+- be8864c: **Breaking: `getConversation()`, `getPendingInterrupts()`, and `getChannel()` require the caller's `userId`, and `stream()` and `resume()` reject a conversation that user does not own.**
 
-  `stream()` and `resume()` accepted any `conversationId` alongside a `userId` and never checked that the conversation belonged to that user. A caller who knew another user's conversation ID could add turns to it, or approve (and `trust`) that user's pending tool call, which then ran with the agent's IAM role. The same ID also let a caller read the conversation's history, and listen to or push chunks onto its live Realtime channel (the default `channelId` is the conversation ID).
+  To upgrade:
 
-  - **`stream()` and `resume()`** now throw `AgentErrors.ConversationNotFound` unless `options.conversationId` was created by `createConversationId(userId)` for the same `options.userId`. The check runs before anything is persisted or dispatched, and reads the conversation record with a strongly consistent read, so a `stream()` right after `createConversationId()` is not rejected on AWS.
-  - **A turn without a `conversationId`** no longer runs in a conversation's session on AWS. Its AgentCore session id was the caller-chosen `channelId`, and the AgentCore entry used that as the conversation, so `stream({ channelId: <another user's conversation id> })` skipped the ownership check. It now gets its own session and, as in the local mock, no persisted conversation. **Breaking (AWS only):** a deployed agent that relied on reusing a `channelId` without a `conversationId` to keep memory across turns loses it; pass a `conversationId` instead (`createConversationId()` for persistence agents, a server-chosen key for `inferenceOnly` agents).
-  - **`getPendingInterrupts(conversationId, { userId })`** now requires an options object with the caller's `userId` and returns `[]` for a conversation that user doesn't own. **Breaking:** `getPendingInterrupts(id)` becomes `getPendingInterrupts(id, { userId })`.
-  - **`getConversation(id, { userId, limit? })`** now requires the caller's `userId` in its existing options object and returns `[]` for a conversation that user doesn't own. **Breaking:** `getConversation(id)` / `getConversation(id, { limit })` become `getConversation(id, { userId })` / `getConversation(id, { userId, limit })`.
-  - **`getChannel(channelId, { userId })`** now requires an options object with the caller's `userId`. With persistence enabled, a turn's chunks are published on a channel scoped to the user who started it, so a caller can't listen to, or push chunks onto, another user's channel, whatever `channelId` they pass. **Breaking:** `getChannel(channelId)` becomes `getChannel(channelId, { userId })`, with the same `userId` you pass to `stream()`/`resume()`. `inferenceOnly` agents ignore the value but still take `{ userId }`: pass the session's `userId` as for persistence agents, not a placeholder, so the call stays correct if persistence is turned on later; their channels are not user-scoped.
-  - There is no backward-compatible form: the old calls carry no `userId`, so they could only keep returning another user's data or change behaviour. With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` naming the new signature when the options object or its `userId` is missing, instead of returning data. Build the options from the session's `userId`; don't spread a caller-supplied object into them.
+  1. Change `getPendingInterrupts(id)` to `getPendingInterrupts(id, { userId })`.
+  2. Change `getConversation(id)` to `getConversation(id, { userId })`.
+  3. Change `getChannel(channelId)` to `getChannel(channelId, { userId })`.
+  4. Create each conversation with `createConversationId()` before you pass its `conversationId` to `stream()`.
+  5. On AWS, pass a `conversationId` instead of reusing a `channelId` to keep memory across turns.
+  6. Reload chat sessions that were open across the upgrade.
 
-  Agents with `inferenceOnly: true` keep no conversation records, so these checks don't apply to them: a `conversationId` passed to one is a shared session key, so don't let callers choose it.
+  Take the `userId` from the authenticated session, never from a request parameter.
 
-  The channel key changes with persistence enabled, so reload chat sessions that were open across the upgrade (including turns that were running while the deploy rolled out); a subscription made before it no longer receives chunks.
+- c4e4e67: **Breaking: an `inferenceOnly` agent keys each session by the `userId` together with the `conversationId`, and requires `options.userId`.**
 
-  If you pass a `conversationId` that was never created with `createConversationId()`, `stream()` now rejects it; create the conversation first. Pass a `userId` taken from the authenticated session, never from a request parameter. The README's Authorization section and End-to-End example (which now includes the `getPendingInterrupts` and `resume` handlers) show this.
+  To upgrade:
 
-- c4e4e67: fix(bb-agent): scope `inferenceOnly` sessions to the user by default
+  1. Pass the authenticated user's id as `options.userId` to `stream()`, `resume()`, and `getChannel()`, which throw `AgentErrors.InvalidUsage` without one.
+  2. To key sessions by the `conversationId` alone, as before, set `sessionScope: 'shared'`, but only if callers can't choose the `conversationId` or `channelId`.
 
-  An `inferenceOnly` agent keeps no conversation records, so it can't check that a `conversationId` belongs to the caller. It now keys each session by the `userId` together with the `conversationId` and scopes its Realtime channel to the `userId`, so a caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. On AWS, the two users also run in different AgentCore runtime sessions. The new `sessionScope` option controls this: `'user'` is the default, and `'shared'` is an explicit opt-out. The option is ignored when persistence is enabled; those agents already check conversation ownership.
-
-  **Breaking for `inferenceOnly` agents:**
-
-  - `stream()`, `resume()` and `getChannel()` on an `inferenceOnly` agent now require a non-empty string `options.userId` and throw `AgentErrors.InvalidUsage` without one. Pass the authenticated user's id, as for a persistent agent. A runtime invocation that arrives without a `userId` is refused rather than run as `'anonymous'`.
-  - Sessions previously keyed by the bare `conversationId` are no longer resumed.
-
-  To key sessions by the `conversationId` alone, as before, set `sessionScope: 'shared'` on the agent, but only if callers can't choose the `conversationId` or `channelId` (for example, the server generates them and keeps them to itself). With `'shared'`, anyone who passes the same `conversationId` continues that session, and anyone who passes the same `channelId` receives its chunks. Because such a session has no owner who could approve a pending tool call:
-
-  - `resume()` throws `AgentErrors.InvalidUsage`.
-  - The constructor throws `AgentErrors.InvalidModelConfig` when a tool sets `needsApproval` or `interrupt`. An agent with approval steps needs the default `'user'` scope (or persistence).
-
-  Also:
-
-  - The channel handles the agent returns (`getChannel()`, `stream()`'s `channel`) now carry a token that authorizes only that channel (Realtime's `scope: 'exact'`), not the sub-channels under it.
-  - The error `resume()` throws without a `conversationId` on an `inferenceOnly` agent no longer says such agents can't be resumed. It says to pass the same `conversationId` to `stream()` and `resume()`.
+  Sessions previously keyed by the bare `conversationId` are no longer resumed, and with `'shared'` an agent cannot use `resume()` or tools that set `needsApproval` or `interrupt`.
 
 ### Patch Changes
 
-- 3d7479a: fix(bb-agent): report a turn that failed while the chat was disconnected
+- 3d7479a: On reconnect, `createChat` and `useChat` end a turn that failed while the chat was disconnected and pass the recorded error to `onError`. They no longer keep loading for about 11 minutes and then report a timeout.
+- 36f3720: The stream no longer sends a `tool-call` chunk, or the `tool-result` chunk that follows, for a tool call that the user denied or that `maxToolIterations` stopped. Conversation history is unchanged.
+- 3994884: The docs explain why `needsApproval` defaults to `false` and when a tool should set it to `true`.
+- d51b8ee: An error thrown by an `untrustedOutput` tool reaches the model inside the same `<untrusted-data>` block as a successful result. Delimiter-shaped text is detected on an NFKC-normalized copy stripped of invisible characters, so lookalike delimiters can't close the block early.
+- d01c34c: Adds exports for the types `AgentBase`, `ConversationManagerConfig`, `MessageMetadata`, `GuardrailsConfig`, and `InferenceConfig` in `@aws-cdk-blocks/bb-agent`, `InferMessage` in `@aws-cdk-blocks/bb-realtime`, and `ApiNamespaceConstructor` and `AsyncAPI` in `@aws-cdk-blocks/core`.
+- 5f55dac: The user-agent tests name their parent auth block `Auth` instead of `AuthBasic`. No runtime change.
+- 6eaa40c: Bedrock's Anthropic use case details refusal is reported as `AgentErrors.ModelUnavailable` when it arrives as `ResourceNotFoundException`, as it does from `ConverseStream` on a new account. It reached clients as `StreamFailed` before.
 
-  If the chat's connection dropped and the turn failed before it reconnected, the `error` chunk was lost. `createChat` and `useChat` then kept loading for about 11 minutes and reported "Timed out waiting for the agent to respond after reconnect." instead of the real error.
+- 703238f: **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.**
 
-  On reconnect, both clients now recognize the row the backend saves for a failed turn, including a turn a `maxLlmCalls` or `maxToolIterations` cap stopped, whose partial text they keep. They end the turn right away and pass the recorded error to `onError`, typed the same way as a live `error` chunk (for example `AgentErrors.ModelUnavailable`). When the previous turn also failed, the saved row could be that turn's, so the client keeps waiting for the turn as before.
+  To upgrade:
 
-- 36f3720: Don't publish a `tool-call` chunk for a tool call that never runs. When the user denies a tool that needs approval, or `maxToolIterations` stops a call, the stream no longer sends a `tool-call` chunk, nor the `tool-result` chunk for the cancellation that follows. Approved and unguarded tools still publish one `tool-call` and one `tool-result`. Conversation history is unchanged: a denied call keeps its paired `tool-call`/`tool-result` rows, and the `tool-result` row records the denial.
-- 3994884: docs(bb-agent): explain why `needsApproval` defaults to `false`, and when a tool should set it to `true`.
-- d51b8ee: Harden `untrustedOutput` tools: an error thrown by the tool now reaches the model inside the same `<untrusted-data>` block as a successful result, and delimiter-shaped text is detected on an NFKC-normalized copy stripped of invisible characters (zero-width, bidirectional controls, variation selectors, fillers), so lookalike delimiters can't close the block early. Only a string that contains such text is rewritten; other content reaches the model unchanged apart from Unicode tag characters, which are always removed, and structured results stay valid JSON. The original error of a throwing untrusted tool is logged at `warn` (its name and any AWS status and request id, not its message).
-- d01c34c: Export types that public signatures already use
+  1. Rename the `aws-blocks/` directory to `cdk-blocks/`.
+  2. Change the `"workspaces"` entry that names it.
+  3. Change the `"name"` in its `cdk-blocks/package.json` to `cdk-blocks`.
+  4. Change every `from 'aws-blocks'` import to import `cdk-blocks`.
+  5. Rename an `aws-blocks/migrations` directory or set an explicit migrations path, because `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`.
 
-  - **Exported types (type-only, additive).** `@aws-cdk-blocks/bb-agent` now exports `AgentBase` (the base class of `Agent`, as a type), `ConversationManagerConfig`, `MessageMetadata`, `GuardrailsConfig` and `InferenceConfig`; `@aws-blocks/bb-data` exports `WhereClause` (the type of `QueryOpts.where`) and `Operator` (its per-field operators); `@aws-cdk-blocks/bb-realtime` exports `InferMessage`; `@aws-cdk-blocks/core` exports `ApiNamespaceConstructor` (the type of `ApiNamespace`) and `AsyncAPI` (the type of an `ApiNamespace` instance). These already appeared in the packages' public signatures but could not be named by apps.
-  - **No type changes.** `registerSdkIdentifiers` and `getAllSdkIdentifiers` in `@aws-cdk-blocks/core` spell their identifier record as `Record<string, string>` instead of a private alias of the same type.
+  The reserved URL namespace, such as `/aws-blocks/api` and `/aws-blocks/auth/*`, keeps its path, so deployed routes and OAuth callback URLs keep working.
 
-- 5f55dac: Internal: the user-agent tests name their parent auth block `Auth` instead of `AuthBasic`, which this release removes. No runtime change.
-- 6eaa40c: Report Bedrock's Anthropic use case details refusal as `AgentErrors.ModelUnavailable` when Bedrock returns it as `ResourceNotFoundException` (HTTP 404), which is how it arrives from `ConverseStream` on a new account. Previously only `AccessDeniedException` (HTTP 403) refusals were recognised, so this refusal reached clients as `StreamFailed` with the raw provider text. A not-found error without that refusal's wording is still not classified.
-- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
-
-  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
-
-  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
-
-  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
-
-  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
-
-- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
-
-  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
-
-- 0ff1e1f: docs: the Agent docs describe the installed version
-
-  The `useChat` deprecation is stated in the present tense without a PR reference, and sentences written for "the older signatures" describe the current calls instead.
-
-- 6d3077e: refactor: move the conversation, message, job-status and connection tables to `KVStore` with a declared key
-
-  `Agent`, `AsyncJob` and `Realtime` now compose `KVStore` from `@aws-cdk-blocks/bb-kv-store` instead of `DistributedTable`. The tables keep their names, key schemas, TTL attributes and items, so a deployed stack updates in place. No public API of these blocks changes. Expired job-status records and connection records are now hidden from every read in both runtimes.
-
-  The connections store of `Realtime` now has one schema for synth and for run time, and it states the type of each field. The stores of `Agent` and `Realtime` take their options from one place for both entry points, as `AsyncJob` does, so the table that the CDK entry provisions is the table that the runtime reads. The key types of the provisioned tables do not change.
-
-- 42b84b2: feat(bb-realtime): add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names
-
-  A channel handle's token authorizes its channel and every `/`-separated sub-channel under it, so a handle for `tenants/acme` also opens `tenants/acme/billing`. This was not documented, so a naming scheme that nests one principal's channels under another's could hand out more access than intended.
-
-  - **`getChannel()` takes an optional `{ scope }`.** `'subtree'` is the default and keeps today's behaviour. `{ scope: 'exact' }` mints a token that authorizes the channel only; a subscribe to any sub-channel with it is rejected. `GetChannelOptions` is exported from `@aws-cdk-blocks/bb-realtime` and `aws-cdk-blocks`.
-  - **Tokens stay compatible.** The default token is byte-for-byte the format issued before, so tokens from an older deployment keep validating with the same scope. An exact token carries its channel under a new `exact` key instead of `channel`, so a deployment from before this release refuses it (the handle stops working) rather than granting it sub-channel access, for example on a warm container during an update or after a rollback. Native clients pass tokens through unchanged.
-  - **Channel names are validated.** `publish()`, `subscribe()` and `getChannel()` now throw `RealtimeErrors.ValidationFailed` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a channel that isn't a string or a number (`undefined`, `null`, an object). `/` between non-empty segments is still allowed, and a number is validated as its string form. If your app builds channel names from user input, check that the result can't be empty or contain these segments.
-  - **bb-agent `stream()` and `resume()`** throw `AgentErrors.InvalidUsage` before dispatching a turn when the `channelId` and `userId` don't form a valid channel name (for example a `channelId` of `a//b` or a `userId` of `..`), instead of returning a stream whose chunks all fail to publish.
-  - **The `default` and `react` create-blocks-app templates** pass `encodeURIComponent(user.username)` as the channel name, so a username can't add `/` segments.
-  - **Server-side `subscribe()`** now uses an exact token for its own WebSocket subscription; it only ever subscribes to that one channel, so nothing changes for callers.
-
-  The README's new "Sub-channels and access" section explains how a channel name maps to access, with the per-tenant pitfall as the example. Use `{ scope: 'exact' }` whenever a sub-channel of a handle's channel can belong to someone else.
-
-- 8e96367: fix: stop sending raw backend error text to clients
-
-  Several Building Blocks passed the raw text of an unexpected error (an AWS SDK, database, storage or hook error, which can name account ids, role and resource ARNs, and request details) to the client. They now follow the same rule as the RPC serializer: the message of an `ApiError` or a branded Building Block error (`blocksError()` / `brandBlocksError()`) still reaches the client unchanged, and any other error is logged server-side and reported as `Internal error`.
-
-  - **bb-agent:** when a turn fails, the `error` chunk, the persisted `metadata.error`, and the `StreamFailed` error from `complete()` carry `Internal error` unless the failure is a branded Building Block error. A malformed or invalid canned-responses dictionary (the local `canned` provider) now fails with a branded `InvalidModelConfigException` on the server, so its fixed message, e.g. `InvalidModelConfigException: Malformed canned responses JSON in 'responses.json'.`, reaches the client; it names the file by basename only and never quotes its contents, and the parser's detail is logged server-side. `complete()` still rejects with `StreamFailed` for it. Conversations persisted before this change keep the `metadata.error` text they were saved with, and `getConversation()` still returns it.
-  - **bb-email-client:** `send()` errors have stable messages per `EmailErrors` code, and a failed `sendBatch()` entry reports the error code or SES entry status instead of the raw SES text. The SES error is logged and kept on the error's non-enumerable `cause`.
-
-- 58817b0: fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal trust policies; add synth-time check
-
-  The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
-
-  - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
-  - The waiter state machine roles of the `KVStore` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
-  - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
-  - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
-  - The `@aws-cdk-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.
-
-  Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`, such as `BlocksApiGatewayCloudWatchRole` (created by `@aws-cdk-blocks/core` and `@aws-cdk-blocks/hosting` when access logging is on) or the default `cloudWatchRole` of a CDK `RestApi` the app adds. That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
-
-  - A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
-  - A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
-
-  Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
-
-  To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-cdk-blocks/core` README.
-
-- Updated dependencies [d01c34c]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [c67048e]
-- Updated dependencies [a5a5dd3]
-- Updated dependencies [e8e3262]
-- Updated dependencies [eacc87e]
-- Updated dependencies [7c23ab9]
-- Updated dependencies [b2eb306]
-- Updated dependencies [bfaddeb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [94d5900]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [99638ca]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [9d69412]
-- Updated dependencies [d01c34c]
-- Updated dependencies [d01c34c]
-- Updated dependencies [d01c34c]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [d01c34c]
-- Updated dependencies [e8673cd]
-- Updated dependencies [8fb67ec]
-- Updated dependencies [11877b6]
-- Updated dependencies [77c2c75]
-- Updated dependencies [f643a76]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [c672712]
-- Updated dependencies [d1a473f]
-- Updated dependencies [92798e1]
-- Updated dependencies [92798e1]
-- Updated dependencies [c607deb]
-- Updated dependencies [836af43]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [6d3077e]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [2095f31]
-- Updated dependencies [42b84b2]
-- Updated dependencies [10eb382]
-- Updated dependencies [eb60b04]
-- Updated dependencies [6bac1c9]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [d354055]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/bb-realtime@1.0.0-rc.0
-  - @aws-cdk-blocks/core@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-file-bucket@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.0
+- 9d69412: The docs state that session cookies default to `SameSite=Lax`, that an `inferenceOnly` agent still creates its S3 session bucket, and that `objectLock` can be added to a deployed `FileBucket` as an in-place update.
+- 0ff1e1f: The Agent docs describe the installed version. The `useChat` deprecation is stated in the present tense.
+- 6d3077e: `Agent`, `AsyncJob`, and `Realtime` compose `KVStore` instead of `DistributedTable`, and a deployed stack updates in place. Every read hides expired job-status records and connection records.
+- 42b84b2: Adds `getChannel(namespace, channel, { scope: 'exact' })`, whose token authorizes the channel only and none of its sub-channels. `publish()`, `subscribe()`, and `getChannel()` throw `RealtimeErrors.ValidationFailed` for a channel name that is empty or has an empty, `.`, or `..` segment.
+- 8e96367: `bb-agent` reports an unexpected error to the client as `Internal error` instead of the raw backend text, and `bb-email-client` `send()` errors have stable messages per `EmailErrors` code. The message of an `ApiError` or a branded Building Block error still reaches the client unchanged.
+- 58817b0: The IAM roles AWS Blocks creates scope every service-principal trust to the stack's account with `aws:SourceAccount` and `aws:SourceArn`. Synth warns about a role your app creates without them, and "Service-principal trust" in the `@aws-cdk-blocks/core` README shows how to resolve it.
 
 ## 0.7.0
 
 ### Minor Changes
 
-- d1d129f: feat(bb-agent): mark tool output as untrusted, attach a Bedrock guardrail, and stop silently ignoring `guardrails`
-
-  Tools that return content you don't control (knowledge-base chunks, fetched web pages, user uploads) put that text in the model's context next to real instructions, where it can try to steer the agent into misusing its other tools (indirect prompt injection). Three opt-in controls:
-
-  - **`untrustedOutput: true` on a tool.** The tool's result is wrapped in an `<untrusted-data>` block whose delimiter carries a random per-session id, and the agent's system prompt tells the model that content inside it is data, never instructions. Content can't close the block early: any occurrence of the session id inside it is neutralized. Tools without the flag are unchanged.
-  - **`guardrail: { identifier, version, trace? }` on a Bedrock `ModelConfig`.** Attaches an existing Amazon Bedrock guardrail to every model call. The deployed agent is granted `bedrock:ApplyGuardrail` on that guardrail only (an id is expanded to the stack's guardrail ARN; an ARN is used as-is). Setting it on a non-Bedrock provider throws `InvalidModelConfig` instead of being ignored.
-  - **`ModelConfig.guardrails` is deprecated.** No provider ever applied it, so it gave no protection. It still type-checks, and the agent now logs a warning when it is set.
-
-  The Agent and KnowledgeBase READMEs now document the trust boundary: mark retrieval tools `untrustedOutput`, put `needsApproval` on side-effecting tools, and set knowledge-base filters from the authenticated caller rather than from request or tool input, since a filter is a query scope, not an access control.
-
-- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
-
-  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
-  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
-  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
-  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
-  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
-  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
-
-  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
-
-- 1d58d60: Report Bedrock invoke-time model-access refusals as `AgentErrors.ModelUnavailable` with an actionable message. When Bedrock refuses a model because the account has not submitted Anthropic's one-time use case details, has not activated the model's one-time AWS Marketplace subscription, or is not entitled to the model, the `error` chunk now carries a message explaining what to do plus an optional `errorName` field, and the `onError` callbacks of `createChat` and `useChat` receive the branded error as an optional `cause` argument. Error chunks without `errorName` behave as before. `complete()` now rejects with `ModelUnavailableException` (instead of `StreamFailedException`) for these failures and for health-check failures, and the persisted error row's `metadata` records the same `errorName`. The README now explains that the Bedrock presets are Anthropic models that need the one-time use case details form and AWS Marketplace subscription, replacing the outdated "enable model access" guidance.
+- d1d129f: Adds `untrustedOutput: true` for a tool, so the model treats the result as data, and a `guardrail` option on a Bedrock `ModelConfig` that attaches an Amazon Bedrock guardrail. `ModelConfig.guardrails` is deprecated because no provider ever applied it, and the agent logs a warning when it is set.
+- 88747f5: A Building Block's mock entry throws when it is loaded in a deployed environment, so bundle your backend with the `aws-runtime` export condition. `@aws-blocks/core/bb-utils` exports the check as `assertNotMockInDeployedEnv(bbName)`.
+- 1d58d60: Bedrock model-access refusals are reported as `AgentErrors.ModelUnavailable` with a message that explains what to do. `complete()` rejects with `ModelUnavailableException` instead of `StreamFailedException` for these failures and for health-check failures.
 - 23fc09f: Add optional inline or live JSON-file canned response dictionaries, with literal phrase matching and verbatim response text while preserving default responses and tool precedence.
 
 ### Patch Changes
 
-- 5dc1d98: fix(bb-agent): authenticate the openai-api provider to Bedrock Mantle with the agent's AWS credentials
-
-  An `openai-api` model whose `endpoint` is a Bedrock Mantle URL (`https://bedrock-mantle.<region>.api.aws/...`) and has no `apiKey` now authenticates with short-term Bedrock API keys minted from the AWS credentials the agent runs with, refreshed automatically. The deployed runtime role is granted the `bedrock-mantle` permissions it needs. `OPENAI_API_KEY` is not used for Mantle endpoints, and an explicit `apiKey` still takes precedence.
-
-- 48c35f6: `Agent` reads and writes its session state under the session bucket's real name, which `FileBucket` now shortens when the `fullId` is over 63 characters. Agents whose bucket name already fits are unchanged.
-- dbe7df6: fix(bb-agent): call the Realtime subscription's `unsubscribe` on its own receiver
-
-  `realtimeTransport` stored the subscription's `unsubscribe` method detached from its object and later called it unbound. A `subscribe` adapter that returns a class instance (or any object whose `unsubscribe` uses `this`) threw on cancel, so the subscription stayed attached and the chunk stream never closed. The method is now invoked on the subscription object.
-
-- 943d405: fix: export types missing from the `cdk` entry point
-
-  Some types exported by the default entry point of `@aws-blocks/bb-agent` were missing from its `cdk` entry, so backend
-  code importing them failed to type-check under that condition — for example,
-  `import type { AgentConfig } from '@aws-blocks/bb-agent'`.
-
-  The `cdk` entry now exports `AgentTurnPayload`, `AgentConfig`, `AgentResult`, `AgentStreamChunk`, `AgentStreamResult`,
-  `ToolDefinition`, `AgentTool`, `ToolFactory`, `ToolsConfig`, `ToolHandlerArgs`, `DefaultToolContext`,
-  `InterruptResponse`, `ToolCallRecord`, `ModelConfig`, `BedrockGuardrail`, `StreamOptions`, `Message`, `Conversation`,
-  `JSONValue`, `TokenUsage`.
-
-- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
-
-  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
-  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
-  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
-  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
-
-- 48c35f6: fix: export the same names from every conditional entry point
-
-  Some Building Blocks were missing named exports from their `cdk` or `browser`
-  entry points, even though the TypeScript types said they were there. Importing
-  one of these names from code evaluated during `cdk synth`, or from a browser
-  bundle, failed at import time. Added:
-
-  - `cdk` entry: `InterruptError` (`@aws-blocks/bb-agent`), `BatchSubmitFailedError`
-    (`@aws-blocks/bb-async-job`), and `RLSEnabledDatabase` and `PgClientEngine`
-    (`@aws-blocks/bb-data`).
-  - `browser` entry: the error constants `AgentErrors`, `AppSettingErrors`,
-    `EmailErrors`, `FileBucketErrors` and `LoggingErrors` (for `isBlocksError` checks
-    in frontend code), plus `InterruptError`, `BedrockModels` and `OllamaModels`
-    (`@aws-blocks/bb-agent`) and `fromExisting` (`@aws-blocks/bb-data`).
-
-  The conditional-exports regression test now compares every Building Block's
-  `aws-runtime`, `cdk` and `browser` entries against its default entry in both
-  directions, so these gaps can't come back unnoticed.
-
-- d366907: chore: manual dependency bump (2026-10-19)
-- 27c35e5: Correct documentation: `Secret` reads pick up rotated values after the cache TTL (`cacheTtlSeconds`), not only on cold start, and the `put()` error-handling example now declares a writable secret; `EmailClient` validates recipient and size limits locally on AWS too; fix the `useChat` anchor in the `bb-agent` README; use 12-digit account IDs in `Pipeline` connection ARN examples; describe the `KnowledgeBase` mock's `'fixed'` and `'none'` chunking.
+- 5dc1d98: An `openai-api` model whose `endpoint` is a Bedrock Mantle URL and has no `apiKey` authenticates with the AWS credentials the agent runs with. `OPENAI_API_KEY` is not used for Mantle endpoints.
+- 48c35f6: `Agent` reads and writes its session state under the session bucket's real name, which `FileBucket` shortens when the `fullId` is over 63 characters.
+- dbe7df6: `realtimeTransport` calls the subscription's `unsubscribe` method on the subscription object. A `subscribe` adapter that returns a class instance no longer throws on cancel.
+- 943d405: The `cdk` entry of `@aws-blocks/bb-agent` exports the types that were missing from it, such as `AgentConfig`, `Message`, and `Conversation`, so backend code that imports them type-checks.
+- a3969b5: A Building Block runtime method called at the top level of a backend module throws `<Class>.<method>() cannot be called during CDK synth` instead of `TypeError: x is not a function`.
+- 48c35f6: The `cdk` and `browser` entry points export the names they were missing, so importing them during `cdk synth` or in a browser bundle no longer fails. The `browser` entries add the error constants `AgentErrors`, `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors`.
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- 27c35e5: The docs state that `Secret` reads pick up rotated values after `cacheTtlSeconds`, not only on cold start, and that `EmailClient` validates recipient and size limits on AWS too. Other fixes cover the `useChat` anchor, `Pipeline` connection ARN examples, and the `KnowledgeBase` mock's chunking.
 - 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
-- Updated dependencies [0765f84]
-- Updated dependencies [5572341]
-- Updated dependencies [88747f5]
-- Updated dependencies [1076ccc]
-- Updated dependencies [928c48a]
-- Updated dependencies [4d5ea86]
-- Updated dependencies [90c1b12]
-- Updated dependencies [ee69cd7]
-- Updated dependencies [8cff0bb]
-- Updated dependencies [943d405]
-- Updated dependencies [50b8c94]
-- Updated dependencies [a3969b5]
-- Updated dependencies [943d405]
-- Updated dependencies [943d405]
-- Updated dependencies [943d405]
-- Updated dependencies [a3969b5]
-- Updated dependencies [48c35f6]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [9a32674]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8c73a24]
-- Updated dependencies [48c35f6]
-- Updated dependencies [4553866]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [54e9443]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d366907]
-- Updated dependencies [91ed1fc]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d062eeb]
-- Updated dependencies [c22eeee]
-- Updated dependencies [1546160]
-- Updated dependencies [e68e653]
-- Updated dependencies [92c4b20]
-- Updated dependencies [1d8ed6c]
-- Updated dependencies [9c96135]
-- Updated dependencies [0ee86e1]
-- Updated dependencies [48c35f6]
-- Updated dependencies [ea57feb]
-- Updated dependencies [63b154f]
-- Updated dependencies [8565ef7]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [515089c]
-- Updated dependencies [dde6340]
-- Updated dependencies [7477b6e]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [6a53068]
-- Updated dependencies [dd5e807]
-- Updated dependencies [db15b5e]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [72e3259]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8565ef7]
-- Updated dependencies [48c35f6]
-- Updated dependencies [0d4ede3]
-- Updated dependencies [63b154f]
-- Updated dependencies [b6b8ade]
-- Updated dependencies [82ea78a]
-- Updated dependencies [e44ac0c]
-- Updated dependencies [33e8d73]
-- Updated dependencies [b003705]
-- Updated dependencies [48c35f6]
-  - @aws-blocks/core@0.8.0
-  - @aws-blocks/bb-distributed-table@0.3.0
-  - @aws-blocks/bb-file-bucket@0.4.0
-  - @aws-blocks/bb-logger@0.3.0
-  - @aws-blocks/bb-realtime@0.5.0
 
 ## 0.6.0
 
 ### Minor Changes
 
-- da6d4c7: Scope shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay independent.
-
-  - **Registries** (config, compute, dashboard, tracer, VPC requirements) now key on the backend root, resolved by walking the construct tree (`getBlocksRoot`), not on `cdk.Stack.of(scope)`.
-  - **Shared-infra Building Blocks** now provision and dedup their per-backend resources under the backend root: the realtime WebSocket API, the cron scheduler role, and the agent AgentCore runtime grants. Previously a second backend in the same stack could attach to the first's shared infra — most seriously, the agent's Bedrock grants could land on the wrong backend's execution role.
-  - **RawRoute** registrations are tagged with their owning backend root; `Hosting` now adds CloudFront behaviors only for routes owned by the backend its distribution fronts, instead of every route in the process-global registry. The per-owner tag also scopes duplicate-route detection, so two backends may register the same method+path.
-  - **`Hosting` now registers its origin config against the backend it fronts.** `BLOCKS_PUBLIC_ORIGIN` and `CORS_HOSTING_ORIGINS` are written to the backend named by `props.api`, matching the route-behavior owner — not to `this`, which (when two backends share a stack) resolved via the ambient pointer to the last-created backend and left the fronted backend without its origin config.
-  - The config bucket is parented under the resolved backend root rather than read from an ambient process-global, removing a construction-order hazard.
-  - **Stack-scoped exceptions — these deliberately keep a stable logical ID.** The app-setting secret bulk-init (`BlocksSecretsBulk`) and the distributed-table GSI manager provider (`BlocksGsiProvider`) stay direct stack children. Both are referenced by existing resources through immutable fields (a SecureString's physical name; a custom resource's `ServiceToken`), so a logical-ID change would force a replacement that CloudFormation either rejects (`ServiceToken` is immutable → failed upgrade) or that silently deletes the SecureString. Keeping them stack-scoped preserves the logical ID; their deploy-time IAM is still scoped (lazily) to only the parameters/tables that register. (Joins the API Gateway account resource as a documented stack-scoped exception.)
-
-  **Compatibility.** Single-`BlocksStack` apps (the common case) are byte-identical — no resource replacement. Apps that embed a `BlocksBackend` inside a customer `cdk.Stack` and use **realtime** or **cron** will see those resources re-parent from the stack to the backend construct, which CloudFormation treats as a replacement on upgrade; neither carries persistent data. For realtime specifically, the WebSocket API URL changes and its stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>` — scripts that read that output by name must update. Secret AppSettings and GSI-backed tables are **not** affected (their shared resources stay stack-scoped).
+- da6d4c7: **Breaking: shared Blocks resources are scoped to the `BlocksStack` or `BlocksBackend` instead of the enclosing `cdk.Stack`.** An app that embeds a `BlocksBackend` inside a customer `cdk.Stack` and uses realtime or cron sees those resources replaced on upgrade. For realtime, the WebSocket API URL changes and the stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>`, so update scripts that read that output by name. Single-`BlocksStack` apps see no resource replacement.
 
 ### Patch Changes
 
-- f8fbc6e: fix(bb-agent): capture the concrete S3 error shape when a deployed Agent's session snapshot cannot be read
-
-  A brand-new conversation has no session snapshot; `S3Storage` already returns
-  `NoSuchKey`/`NoSuchBucket` as `null` (and a missing manifest as empty), which
-  Strands' `SessionManager` treats as "start fresh", so a genuine first turn is
-  not affected. When a snapshot read fails for some OTHER reason — `AccessDenied`,
-  a 5xx, a corrupt object — the error now carries actionable diagnostics: the
-  deepest cause's `name`, `httpStatusCode` and `requestId` are flattened out of
-  the non-enumerable `.cause` (which `bb-logger` otherwise never serializes) and
-  logged at `error` level by `runAgent`, so the concrete production error shape is
-  recorded for the first time instead of only the opaque `S3 error reading <key>`
-  message.
-
-  The read paths deliberately still RETHROW a non-missing fault rather than
-  starting fresh: `SessionManager` overwrites `snapshot_latest.json` after a fresh
-  start, so swallowing a transient read fault would silently overwrite an
-  established conversation's saved history with a blank one. Surfacing the error
-  (and now capturing its shape) is the correct behaviour. No public API change —
-  `createDeployedSnapshotStorage` is internal and gains a `log: ChildLogger`
-  parameter `(bucket, log, S3StorageImpl?)` so the logger is threaded to the
-  storage seam.
-
-- c20cbfd: docs(bb-agent,bb-auth-basic): document conversation naming and same-origin cookies under Hosting
-
-  Two documentation gaps a builder had to infer from source:
-
-  - **bb-agent — conversation records and naming.** The README now documents the
-    `Conversation` shape returned by `listConversations()` and states that
-    `createConversationId()` sets `name` to the conversation's UUID, that the
-    agent does not derive a human-readable title (the first user message does not
-    become one), and that there is no public API to set or rename `name`. Builders
-    who want a readable title should keep that mapping in their own data layer and
-    treat `conversationId` as the stable key.
-
-  - **bb-auth-basic — same-origin cookies under the Hosting block.** The "Cookies
-    and sessions" section now states plainly that serving the frontend through the
-    Hosting block puts the static site and the API behind one CloudFront origin,
-    so the deployed app is same-origin and the `SameSite=Lax` default works with
-    `crossDomain` left at `false` — `crossDomain: true` is only for genuinely
-    different registrable domains in production.
-
-  Documentation only — no runtime or API change.
-
-- 8f9510a: docs(bb-agent): document conversation ordering, persisted message shape, HITL row sequence, and Bedrock model access
-
-  Document four previously-implicit contracts in the bb-agent README that
-  developers otherwise had to infer from source or by inspecting persisted rows:
-
-  - `getConversation()` returns oldest-first, and `{ limit }` returns the most
-    recent N (still oldest-first).
-  - the persisted `Message.metadata` shape: the whole object is stored as one
-    JSON string in DynamoDB, but `getConversation()` JSON.parses it before
-    returning, so `toolInput` is the parsed arguments object and `toolOutput`
-    is the parsed return value (Strands content array), not strings.
-  - the row sequence a tool-approval (human-in-the-loop) turn persists, including
-    that a denied tool still writes paired tool-call/tool-result rows.
-  - Bedrock model access is an account-level grant, separate from the IAM the
-    runtime role already provides, and global vs regional inference profiles are
-    separately enabled.
-
-- fbef372: Tag the Agent's inference traffic with the Blocks user-agent chain. The two Bedrock clients this package constructs itself already carried it, but `Converse`/`ConverseStream` goes through a `BedrockRuntimeClient` that `@strands-agents/sdk` builds internally, so inference went out unattributed. `createStrandsModel` now takes the chain, the same way `checkModelHealth` already does, and passes it to `BedrockModel` through `clientConfig`.
-
-  Rendered to a string rather than the `[string, string][]` chain, because Strands interpolates the value into a template literal. Strands appends its own identifier to that value and hands the result to the client as one section, so the outgoing `x-amz-user-agent` reads `aws-blocks/0.6.0-bb/AuthBasic-1.0.1-bb/Agent-0.5.0-strands-agents-ts-sdk`, where a block passing the chain as tuples emits `aws-blocks/0.6.0 bb/AuthBasic-1.0.1 bb/KVStore-0.2.4`. The SDK substitutes a hyphen for each space because `/` is not a `tchar`, so the section does not match the User Agent 2.0 `metadata` grammar; the identifier Strands already set on this client does not match it either. Each `aws-blocks/<version>` and `bb/<Name>-<version>` token is still present as a substring, which the API Metrics `fact_daily_requests` schema supports filtering on with `like`. The per-request native client token is not forwarded here — it is stored by `lambda-handler`, and the Agent loop runs in the AgentCore Runtime, where no such request scope exists.
-
-- 3a7eb9e: fix: export runtime values missing from the `cdk` entry points
-
-  Some values exported by a Building Block's default and `aws-runtime` entry points were missing from its `cdk` entry,
-  so a backend file importing them crashed `cdk synth` at load time — for example, the `InterruptError` import shown in
-  the `bb-agent` README failed with `does not provide an export named 'InterruptError'`. The `cdk` entries now also
-  export:
-
-  - `@aws-blocks/bb-agent`: `InterruptError`
-  - `@aws-blocks/bb-async-job`: `BatchSubmitFailedError`
-  - `@aws-blocks/bb-auth-cognito`: `SessionStore`; standalone session tables also enable DynamoDB TTL when a positive
-    session lifetime is configured.
-  - `@aws-blocks/bb-data`: `RLSEnabledDatabase`, `PgClientEngine`
-
-  `@aws-blocks/blocks`: picks up the fixed `cdk` entries of the Building Blocks above. The conditional-export parity
-  test now also checks every Building Block's `cdk` entry.
-
-- 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
-- Updated dependencies [ec7eebe]
-- Updated dependencies [e682ba7]
-- Updated dependencies [e7e96e6]
-- Updated dependencies [9ebda66]
-- Updated dependencies [78f4396]
-- Updated dependencies [440ecce]
-- Updated dependencies [92fa27b]
-- Updated dependencies [1a5c18e]
-- Updated dependencies [4ae500e]
-- Updated dependencies [6d764f7]
-- Updated dependencies [4fe7be4]
-- Updated dependencies [023f02c]
-- Updated dependencies [5d6656a]
-- Updated dependencies [60616b1]
-- Updated dependencies [a50fb46]
-- Updated dependencies [8a1a4a9]
-- Updated dependencies [38ce80c]
-- Updated dependencies [94a914a]
-- Updated dependencies [cb0ec01]
-- Updated dependencies [005c095]
-- Updated dependencies [b8649dc]
-- Updated dependencies [2da2fd4]
-- Updated dependencies [66f4be2]
-- Updated dependencies [32a4b73]
-- Updated dependencies [da6d4c7]
-- Updated dependencies [e3e5e22]
-- Updated dependencies [e9241b5]
-- Updated dependencies [f1eb149]
-- Updated dependencies [122c49c]
-- Updated dependencies [7c19c4f]
-  - @aws-blocks/core@0.7.0
-  - @aws-blocks/bb-file-bucket@0.3.1
-  - @aws-blocks/bb-distributed-table@0.2.2
-  - @aws-blocks/bb-realtime@0.4.0
-  - @aws-blocks/bb-logger@0.2.2
+- f8fbc6e: When a deployed `Agent`'s session snapshot cannot be read for a reason other than a missing object, `runAgent` logs the cause's `name`, `httpStatusCode`, and `requestId` at `error` level. The read still fails instead of starting a fresh conversation.
+- c20cbfd: The README documents the `Conversation` shape that `listConversations()` returns, and says that `createConversationId()` sets `name` to the conversation's UUID. For bb-auth-basic, the docs say that an app served through the Hosting block is same-origin, so `crossDomain` stays `false`.
+- 8f9510a: The README documents the order `getConversation()` returns, the persisted `Message.metadata` shape, the row sequence of a tool-approval turn, and Bedrock model access.
+- fbef372: The `Converse`/`ConverseStream` inference requests of the Agent carry the Blocks user-agent chain in `x-amz-user-agent`. Strands joins the chain into one section, so each `aws-blocks/<version>` and `bb/<Name>-<version>` token appears as a substring.
+- 3a7eb9e: The `cdk` entry points export the runtime values they were missing, such as `InterruptError` in `@aws-blocks/bb-agent` and `BatchSubmitFailedError` in `@aws-blocks/bb-async-job`. Importing them in a backend file no longer crashes `cdk synth`.
+- 023f02c: An internal refactor routes the remaining per-package errors through core's `blocksError`. Two realtime timeout rejections that were unbranded are now wire-safe.
 
 ## 0.5.0
 
 ### Minor Changes
 
-- 8da1d1f: feat(bb-agent): compute-agnostic client streaming API — `createChat` + `realtimeTransport`
-
-  Adds a redesigned client streaming surface that hides the runtime behind a single
-  transport seam, so the same frontend code works across runtimes:
-
-  - `createChat({ transport, api })` — the client API. The common case is one call
-    (`chat.sendMessage('Hello')`); subscribe and run are fused so the
-    subscribe-before-send race can't surface. The flexible primitives `run()`
-    (produce) and `subscribe()` (consume) are exposed for fan-out, observer-only
-    attach, and decoupled produce/consume.
-  - `realtimeTransport(...)` — the Lambda + Realtime implementation of the
-    `ChatTransport` seam. Configure it once; call sites never name the runtime. A
-    future runtime supplies a different transport; nothing else on the client changes.
-
-  Additive and non-breaking. The `stream()` / `getChannel()` / `resume()` server
-  methods are unchanged (the new transport is built on them). Only the `useChat`
-  client hook is now marked `@deprecated`, superseded by `createChat`.
-
-- 7c24547: fix(bb-agent): `/client` now exports the discriminated-union `ChatMessage` (BREAKING shape change — flagged for maintainer review)
-
-  `@aws-blocks/bb-agent/client` previously shipped its own **flat** `ChatMessage`
-  (`metadata?: Record<string, any>`), which shadowed the discriminated union
-  `createChat` uses. `/client` now re-exports that union (and `ApprovalMetadata`)
-  from the canonical definition, so the two surfaces agree and the behaviour the
-  README documents is real at the `/client` entry point.
-
-  **Breaking (type-level) for `/client` consumers of `ChatMessage`:**
-
-  - `metadata` is no longer `Record<string, any>`. On a `user`/`assistant`
-    message it is `Record<string, JSONValue> | undefined`; on an `approval`
-    message, narrowing on `role === 'approval'` types it as `ApprovalMetadata`.
-  - Code that only reads `id` / `role` / `content` is unaffected. Code that read
-    an arbitrary `metadata.<key>` as `any` on an approval message must now narrow
-    by `role` first (`if (m.role === 'approval') m.metadata?.approved`). This is
-    the no-cast DX the union was introduced for.
-
-  **Runtime behaviour change on the deprecated `useChat` hook:**
-
-  - `useChat.loadConversation` now projects history through the same metadata
-    narrow `createChat.loadConversation` uses: non-object metadata (null, a
-    string, an array) on a `user`/`assistant` row now projects to `undefined`
-    rather than passing straight through, and an `approval` row's metadata is
-    projected into the typed `ApprovalMetadata`. A consumer that relied on a
-    non-object `metadata` value surviving on a user/assistant message should read
-    the new behaviour here.
-
-  Also tightens `UseChatOptions.api.getConversation`'s return `metadata` to
-  `unknown` (from `Record<string, any>`), aligning the deprecated hook's adapter
-  shape with `createChat`'s `ChatConversationApi`. This widens what an adapter may
-  return, so it is not breaking for existing adapters.
-
-- de3c17c: useChat now forwards an optional consumer-supplied `refresh` callback to the Realtime subscription so reconnects mint fresh tokens and survive past the channel/connect token TTLs on long turns. The callback is channel-aware — `refresh?: (channelId: string) => Promise<ChatChannelDescriptor>` — so it re-mints for the channel actually in use rather than one captured at construction.
-
-  useChat only holds the channelId plus the consumer's `subscribe` adapter; the channel descriptor is minted inside that adapter, which useChat cannot reach — so it cannot self-mint. `UseChatOptions` accepts the optional `refresh` that useChat binds to the current channelId and forwards to the subscription (as `refresh` on the `ChatSubscribeOptions` object). The transport calls it before each reconnect (never on the initial subscribe) to obtain a freshly-minted connect + channel token, so a subscription can outlive the channel (~1h) and connect (~2h) token TTLs.
-
-  The same callback is available on the compute-agnostic surfaces: `CreateChatOptions.refresh` lets `createChat` bind the resolved channelId at the subscribe call site and forward it through the transport to the Realtime channel. `realtimeTransport` exposes it as `ChatTransport.subscribe`'s `opts.refresh`, a pure pass-through that the transport forwards into the Realtime channel's subscribe options while holding no refresh state.
-
-  `refresh` must resolve to the RAW channel descriptor (the wire object with `__blocks`/token fields), not a hydrated channel client. Fully backward compatible: when omitted, a reconnect replays the original tokens exactly as before.
-
-- 9608dce: `createChat`/`realtimeTransport` (and `useChat`) now survive a mid-turn Realtime WebSocket disconnect/reconnect and send-path failures.
-
-  Long-running agent turns (up to 8h on AgentCore) can outlive API Gateway's WebSocket limits (2h max connection, 10-min idle). Previously the client subscribed once and assumed the socket stayed healthy for the whole turn, so a reconnect gap could swallow the `done` chunk and leave `loading` stuck true, and a rejected/timed-out send (e.g. a 504 cold dispatch) left the spinner hanging with an orphaned empty assistant bubble. `createChat` is the preferred client API; `realtimeTransport` forwards the reconnect callbacks to the channel automatically, so the standard wiring is reconnect-safe with no extra app code. `useChat` (deprecated) retains the same behavior.
-
-  - On reconnect, the client re-syncs authoritative state from the database (`getConversation` to recover the final assistant text if the turn completed during the gap; `getPendingInterrupts` to recover a missed interrupt). If the turn is still running, loading is preserved and streaming resumes on the resubscribed channel.
-  - `sendMessage` / `respondToInterrupt` (and the `run`/`resume` send path) now reset `loading` and surface `onError` when the underlying RPC rejects, dropping any empty placeholder.
-  - A bounded failsafe clears `loading` if no terminal chunk arrives within a window after a reconnect, so the spinner can never hang indefinitely.
-  - The `subscribe` seam accepts an options object (`{ onMessage, onDisconnect?, onReconnect? }`) in addition to a bare handler — backward compatible.
+- 8da1d1f: Adds `createChat({ transport, api })` and `realtimeTransport(...)`, a client streaming API that keeps the same frontend code across runtimes. The `useChat` client hook is marked `@deprecated`, superseded by `createChat`.
+- 7c24547: **Breaking: `ChatMessage` from `@aws-blocks/bb-agent/client` is the discriminated union that `createChat` uses, and its `metadata` is no longer `Record<string, any>`.** Narrow by `role` before you read approval metadata, as in `if (m.role === 'approval') m.metadata?.approved`. `useChat.loadConversation` returns `undefined` for non-object metadata on a `user` or `assistant` message.
+- de3c17c: Adds an optional `refresh` callback to `UseChatOptions` and `CreateChatOptions`, which the transport calls before each reconnect to get fresh tokens, so a subscription can outlive the token TTLs. `refresh` must resolve to the raw channel descriptor, not a hydrated channel client.
+- 9608dce: `createChat`, `realtimeTransport`, and `useChat` survive a mid-turn Realtime WebSocket disconnect and reconnect. `sendMessage` and `respondToInterrupt` reset `loading` and call `onError` when the underlying RPC rejects.
 
 ### Patch Changes
 
-- 3fac52c: Tag the Agent's Bedrock SDK clients (`BedrockAgentCoreClient` for AgentCore Runtime invocation and `BedrockClient` for the model health check) with the Blocks user-agent chain, matching the other Building Blocks.
-- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-
-  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
-  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
-  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
-  and exports `installClientUserAgent`, an SDK middleware that appends the validated
-  token to the outgoing user agent. The 12 participating Building Blocks install it,
-  so native attribution rides the SDK user-agent chain AWS service telemetry already
-  counts. The Kotlin runtime already sends the header, so Kotlin
-  callers are attributed as soon as this ships; Swift and Dart follow.
-
-- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-
-  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-
-  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-
-  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-
-  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-
-  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-
-  ## Breaking change (why `@aws-blocks/core` is a minor)
-
-  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-
-  ```ts
-  // before — message collapses to "Internal error" on the client
-  throw new Error("Todo not found");
-
-  // after — status, message, and name all reach the client
-  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
-  ```
-
-  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
-
-- Updated dependencies [5501cb6]
-- Updated dependencies [b58f248]
-- Updated dependencies [39628cb]
-- Updated dependencies [d4b32f2]
-- Updated dependencies [a649895]
-- Updated dependencies [27646ac]
-- Updated dependencies [1f8a412]
-- Updated dependencies [fa0406b]
-- Updated dependencies [251aed2]
-- Updated dependencies [5515483]
-- Updated dependencies [757d4a9]
-- Updated dependencies [cbedb3c]
-- Updated dependencies [f1d2cd5]
-- Updated dependencies [de3c17c]
-- Updated dependencies [a23b8d8]
-- Updated dependencies [9e02b82]
-- Updated dependencies [465a002]
-  - @aws-blocks/core@0.6.0
-  - @aws-blocks/bb-file-bucket@0.3.0
-  - @aws-blocks/bb-distributed-table@0.2.1
-  - @aws-blocks/bb-realtime@0.3.0
-  - @aws-blocks/bb-logger@0.2.1
+- 3fac52c: The Agent's Bedrock SDK clients, `BedrockAgentCoreClient` and `BedrockClient`, send the Blocks user-agent chain like the other Building Blocks.
+- 757d4a9: `@aws-blocks/core` forwards the `x-blocks-user-agent` header that native clients send into the AWS SDK user agent, and exports the `installClientUserAgent` SDK middleware. Kotlin callers are attributed first, and Swift and Dart follow.
+- a23b8d8: **Breaking: a plain `Error` thrown from an API method reaches the client as a generic `500` with `"Internal error"` instead of its raw message.** To send a specific status, name, and message to the client, throw an `ApiError`, for example `new ApiError("Todo not found", 404, { name: "TodoNotFoundException" })`. Building Block errors keep their name and message on the wire.
 
 ## 0.4.1
 
 ### Patch Changes
 
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
-
-- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
-- 0385f7e: `useChat`: widen `UseChatOptions.api.sendMessage` and `resume` return types from `Promise<void>` to `Promise<unknown>`.
-
-  The natural backend methods return objects (`agent.stream()` → `{ channelId }`, `resume` wrappers → `{ ok: true }`), but `Promise<{ channelId }>` is not assignable to `Promise<void>` (TS2322), which forced customers into an await-and-discard wrapper. `useChat` awaits both calls only for completion and discards the resolved value, so `Promise<unknown>` — assignable-from both object results and `void` — lets natural-shape backends wire up directly while existing `void`-returning backends keep compiling. Type-only change; no runtime behavior change.
-
-- daf523a: docs(bb-agent): add a concrete React `useChat` example
-
-  The `useChat` docs only showed the framework-agnostic callback form and warned
-  that it is "a factory function, not a React hook — call it once, not on every
-  render," without demonstrating the fix. Added a primary React example that holds
-  the instance in a `useRef` (created lazily so it survives re-renders), bridges
-  `onMessagesChange` / `onLoadingChange` into `useState`, cleans up with
-  `chat.destroy()` on unmount, and renders messages plus a send handler — directly
-  resolving the "call once" footgun. Included a one-line Next.js note (same
-  component, keep the `'use client'` directive) and kept the existing
-  framework-agnostic example as the baseline.
-
-- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-
-  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-
-  **Building Blocks declare VPC requirements via the constructor, not a method.**
-  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
-  requirements (a value, or a callback for values that depend on `fullId`) and
-  registers them in a central per-stack registry. This keeps the compile-time
-  forcing the previous `abstract getVpcRequirements()` provided — a block can't
-  silently omit its requirements — without a standing method on every subclass, and
-  gives the framework one place to read, deduplicate, and answer "does anything here
-  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-
-  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
-  function without a VPC declares `requiresVpc: true`; when one is needed and the
-  customer didn't bring their own, Blocks lazily creates a single shared VPC
-  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
-  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
-  bring-your-own override.
-
-  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
-  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
-  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
-  compliance requirement to use specific subnets. Omit it to keep the default
-  (prefer isolated, fall back to `private-with-egress`).
-
-- Updated dependencies [2806ae2]
-- Updated dependencies [f552ebe]
-- Updated dependencies [9aa0814]
-- Updated dependencies [012cd89]
-- Updated dependencies [5eee114]
-- Updated dependencies [d7312f9]
-- Updated dependencies [21443ba]
-- Updated dependencies [acd1628]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [302090a]
-  - @aws-blocks/core@0.5.0
-  - @aws-blocks/bb-distributed-table@0.2.0
-  - @aws-blocks/bb-file-bucket@0.2.1
-  - @aws-blocks/bb-logger@0.2.0
-  - @aws-blocks/bb-realtime@0.2.1
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
+- 6496713: Replaces `registerVpcEndpoint` with `registerVpcGatewayEndpoint` and `registerVpcInterfaceEndpoint`, and reduces `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`.
+- 0385f7e: `UseChatOptions.api.sendMessage` and `resume` are typed to return `Promise<unknown>` instead of `Promise<void>`, so you can pass a backend method that returns an object without a wrapper.
+- daf523a: The `useChat` docs have a React example that holds the instance in a `useRef` and cleans up with `chat.destroy()` on unmount.
+- 6496713: A Building Block passes its VPC requirements to the `BuildingBlockScope` constructor, and Blocks creates one shared VPC when a block declares `requiresVpc: true` and you bring none. `Database` accepts an optional `subnets` placement for its Aurora cluster.
 
 ## 0.4.0
 
 ### Minor Changes
 
-- 9111c0c: feat(bb-agent): cap model and tool calls per turn to bound runaway cost
-
-  Adds two per-turn safety caps to `AgentConfig`, both defaulting to `20`:
-
-  - `maxLlmCalls` — the maximum number of model (Bedrock) invocations in a single
-    turn. Model calls are the unit Bedrock bills for, so this is the most direct
-    guard against an agent that loops its reason→act cycle indefinitely; because
-    every tool round needs a model call, it transitively bounds tool loops too.
-  - `maxToolIterations` — the maximum number of tool calls in a single turn
-    (parallel tool batches count each call).
-
-  When either cap is exceeded the turn is cancelled and the client receives an
-  `error` chunk (so `complete()` rejects) instead of `done`. Both caps are
-  enforced with in-loop Strands hooks, so they work identically on every compute
-  target with no cross-process signaling.
-
-  Behavior change: turns are now capped at 20 model calls and 20 tool calls by
-  default. This is generous for a single turn, but agents that legitimately reason
-  over many steps or chain many tools must raise `maxLlmCalls` /
-  `maxToolIterations`, or set a cap to `false` to disable it. The caps bound call
-  _count_, not tokens or wall-clock — pair them with a billing or CloudWatch alarm
-  on Bedrock spend for real cost protection.
-
-  This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
-  repo's signal for a change that can alter existing behavior. The two options are
-  new and optional and there's an opt-out (raise the cap, or set it to `false`),
-  but the new default changes the runtime behavior of every existing agent — a
-  turn that legitimately exceeds 20 model or tool calls is now cut off unless the
-  customer opts out — so it ships as `minor` rather than `patch` to surface that
-  clearly. The counts cover a whole logical turn: they live in the agent's
-  persisted session state, and the per-turn reset is keyed on a turn id applied
-  lazily (the session snapshot is restored inside `stream()`, so an up-front reset
-  would be overwritten and the budget would leak into the next turn), so a turn
-  paused on a human-in-the-loop interrupt keeps its budget across `resume()` while
-  a new message always starts a fresh one. A cap value must be a positive integer
-  or `false`; anything else throws `InvalidModelConfigException`. The umbrella
-  `@aws-blocks/blocks` gets the same bump because it re-exports `AgentConfig`.
-
-- fe0f04a: feat(bb-agent): run the streaming loop on AgentCore Runtime (keeping Realtime)
-
-  The Strands agent loop now runs on a **Bedrock AgentCore Runtime** (sessions up to 8h, warm,
-  managed) instead of an AsyncJob-triggered Lambda — lifting the 15-minute per-turn ceiling — while
-  **keeping the Realtime BB** as the streaming transport, so chunks reach the browser exactly as
-  before. `stream()`/`resume()` call `InvokeAgentRuntime`, which starts the turn as a background
-  async task and returns immediately (the microVM stays alive via `HealthyBusy` while the loop runs
-  and publishes chunks to Realtime as the shared Blocks execution role). Locally the loop still runs
-  in-process against the mock Realtime.
-
-  - **No client-facing API change:** `stream()`/`resume()`/`getChannel()`, the `chunks` Realtime
-    channel, and the `useChat` subscribe contract are unchanged.
-  - AgentCore provisioning is self-contained in `AgentCoreRuntime` (co-bundle + `Runtime` via
-    `fromCodeAsset`, plus the handler's `InvokeAgentRuntime` permission) so it can later fold into a
-    per-BB compute abstraction. The loop runs **as the shared Blocks execution role** (the same role
-    the Lambda handler runs as), so it inherits every Building Block's grants (including Realtime
-    publish and other BBs an agent's tools touch). `AgentCoreRuntime` adds to that shared role only
-    what's AgentCore-specific: the `bedrock-agentcore` assume-role trust (scoped by
-    `aws:SourceAccount`/`aws:SourceArn`), Bedrock model access, and the handler's `InvokeAgentRuntime`
-    permission — so core stays BB-agnostic and a Realtime-only app never trusts AgentCore.
-  - **Removed** the internal AsyncJob (and the `@aws-blocks/bb-async-job` dependency); bumped
-    `@strands-agents/sdk` to `^1.7.0` and added `bedrock-agentcore` + `@aws-sdk/client-bedrock-agentcore`.
-
-  Deployment note: this changes the deployed infra shape (adds an AgentCore Runtime, removes the
-  agent's SQS queue). The runtime is injected the config location (`BLOCKS_CONFIG_BUCKET`/
-  `BLOCKS_CONFIG_KEY`, via core's `getConfigLocation()`) so its `loadConfigToProcessEnv()` loads the same
-  full app config as the handler — this delivers the Realtime callback URL and any other config-backed BB
-  value a tool touches.
-
-- 2cb9d74: refactor(bb-agent): remove inert `structuredOutput` field from `AgentConfig`
-
-  `AgentConfig` declared `structuredOutput?: z.ZodType`, but the field was never
-  implemented, read, or consumed anywhere — no JSDoc, no consumer, no docs, no
-  tests. It advertised a capability that does not exist, so setting it was a silent
-  no-op. The declaration is removed (along with its line in the generated
-  `API.md` report); no runtime behavior changes, because nothing ever read it.
-
-  Structured output remains a planned future LLM-BB feature, tracked separately.
-  This change only deletes the dead placeholder surface — it does not add or design
-  any real structured-output support.
-
-  This is a `minor` bump. Removing a property from an exported interface is a
-  breaking change to the public type surface, but every package here is pre-1.0,
-  where this repo's convention is that `minor` — not `major` — is the signal for a
-  breaking or behavior-altering change (see the `maxLlmCalls`/`maxToolIterations`
-  caps, which shipped as `minor` for exactly that reason). Practically the blast
-  radius is a compile error only: code that set `structuredOutput` was already
-  getting no-op behavior, so the error points at configuration that never did
-  anything and the fix is to delete it. The umbrella `@aws-blocks/blocks` gets the
-  same bump because it re-exports `AgentConfig`.
+- 9111c0c: Adds `maxLlmCalls` and `maxToolIterations` to `AgentConfig`, which cap model and tool calls per turn and both default to `20`. A turn over a cap is cancelled with an `error` chunk, so raise the cap or set it to `false` for agents that need more.
+- fe0f04a: The Agent's streaming loop runs on a Bedrock AgentCore Runtime instead of an AsyncJob-triggered Lambda, which lifts the 15-minute per-turn ceiling with no client-facing API change. Deploying adds an AgentCore Runtime and removes the agent's SQS queue.
+- 2cb9d74: **Breaking: `structuredOutput` is removed from `AgentConfig`.** The field never did anything, so delete it from your configuration.
 
 ### Patch Changes
 
-- d8a3901: Improve the local-dev `canned` provider's tool support with two optional tool hints (ignored by real providers) and schema-default awareness:
-
-  - `cannedExamples` — realistic tool input, shallow-merged over generated placeholders instead of the generic `sample` values.
-  - `cannedTriggers` — extra keyword phrases that trigger a tool beyond its name (single- and multi-word phrases match on word boundaries, so `'log in'` won't fire on `"backlog in"`; internal whitespace is flexible).
-  - Generated placeholder input now respects schema `default` values (from Zod `.default()`).
-
-  Also fixes three pre-existing rough edges in the same provider:
-
-  - Generated input now resolves `const`, `enum`, and `anyOf`/`oneOf` (Zod union) properties. Previously a property that was a union, a const, or untyped and carried no `default` matched no branch and was dropped — and a _required_ field of that shape made the emitted call fail schema validation before the tool ran. A required field of an otherwise unrecognized shape now falls back to a string; optional ones stay omitted, since absence is valid there.
-  - The canned _text_ responses (`weather`/`order`/`help`) now match on word boundaries like tool matching does, so `"reorder"` no longer returns the order response and `"helper"` no longer returns the help response.
-  - A `cannedExamples` key that isn't a field of the tool's schema now logs a one-time warning naming the tool and field, since it is almost always a typo. It never throws and the value is still sent — a bad hint must not break local dev.
-
-  Patch (not minor) per the pre-1.0 caret convention — the change is additive and backward-compatible.
-
-- 4a830a6: feat: route event-block resources to their resolved compute
-
-  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
-  compute resolved at synth rather than the stack's shared handler:
-
-  - AsyncJob attaches its SQS event source to the resolved compute's function;
-  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
-  - Realtime binds its shared WebSocket API integrations to the stack's **default**
-    compute (its routes are a stack-level singleton) and grants `postToConnection`
-    to the shared execution role, so `publish()` works from any compute.
-
-  Each block requires a Lambda compute today and fails at synth with a typed
-  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
-  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
-  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
-  when two copies of `bb-lambda-compute` resolve in one dependency tree.
-
-  On the default single-Lambda setup the resolved/default compute is the stack's
-  default, whose function is the shared handler — so this is non-breaking with no
-  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
-  execution role rather than the handler directly.
-
-  New public surface (hence `minor`):
-
-  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
-    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
-    (the single env-var-key sanitizer both config writers and runtime readers use).
-  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
-    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
-  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
-    error member.
-
-  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
-  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
-  Test-only change — no runtime behavior change to the Agent.
-
-- Updated dependencies [1b66571]
-- Updated dependencies [df667c5]
-- Updated dependencies [df667c5]
-- Updated dependencies [64ddd74]
-- Updated dependencies [df667c5]
-- Updated dependencies [646614b]
-- Updated dependencies [c45eb92]
-- Updated dependencies [8de4a56]
-- Updated dependencies [4a830a6]
-- Updated dependencies [f2f186c]
-- Updated dependencies [46b7c89]
-- Updated dependencies [1da58fd]
-  - @aws-blocks/bb-file-bucket@0.2.0
-  - @aws-blocks/core@0.4.0
-  - @aws-blocks/bb-logger@0.1.6
-  - @aws-blocks/bb-realtime@0.2.0
-  - @aws-blocks/bb-distributed-table@0.1.7
+- d8a3901: Adds two optional tool hints for the local-dev `canned` provider, `cannedExamples` and `cannedTriggers`, and generated placeholder input respects schema `default` values. The canned text responses match on word boundaries, so `"reorder"` no longer returns the order response.
+- 4a830a6: AsyncJob, CronJob, and Realtime attach their resources to a compute resolved at synth, and fail synth with an `UnsupportedCompute` error on anything but a Lambda compute. `@aws-blocks/core` exports `blocksError(name, message)` and `sanitizeConfigKey(id)`.
 
 ## 0.3.5
 
 ### Patch Changes
 
-- 5798492: feat(bb-async-job): batch SQS messages by default, with a configurable batching window
-
-  `AsyncJob` triggered its Lambda with `batchSize: 1`, so every queued job cost a
-  full invocation. The default is now `batchSize: 10` with a new
-  `maxBatchingWindowSeconds` option (0–300, default 5) that trades latency for
-  fuller batches. SQS partial batch failure reporting is always enabled, so only
-  the failed records of a batch are redelivered.
-
-  Both options are now range-checked in the `AsyncJob` constructor, so an
-  out-of-range value fails fast at synth time with `InvalidOptionException` naming
-  the option instead of surfacing as an opaque CloudFormation error mid-deploy:
-  `batchSize` must be 1–10 without a batching window (1–10000 with one), and
-  `maxBatchingWindowSeconds` must be 0–300.
-
-  Retry semantics are unchanged. SQS tracks `ApproximateReceiveCount` per message
-  and partial batch responses redeliver only failed records, so `maxRetries` still
-  means "attempts for this message" and the DLQ `maxReceiveCount` keeps its
-  meaning at any batch size.
-
-  This is a `patch` bump. Every package here is pre-1.0, where a `minor` bump is
-  this repo's signal for a breaking change; this change is not breaking — the new
-  default is a behavior change with an opt-out (`batchSize: 1` /
-  `maxBatchingWindowSeconds: 0`), and both options are new and optional. The
-  umbrella `@aws-blocks/blocks` gets the same bump because it re-exports
-  `AsyncJob` and `AsyncJobOptions`.
-
-  `@aws-blocks/core/cdk` now exports `SHARED_HANDLER_TIMEOUT_SECONDS`, the shared
-  handler Lambda's timeout, so resources that must size their own timeouts against
-  it stop re-hardcoding `900`.
-
-  The main queue's visibility timeout is now `SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds`
-  seconds instead of a flat `900`. A message becomes invisible when the poller
-  receives it, before the batching window elapses and before the handler runs, so
-  a flat 900s let SQS redeliver a message whose invocation was still running.
-
-  `bb-agent` opts out of the new defaults with `batchSize: 1` and
-  `maxBatchingWindowSeconds: 0`. It submits an internal job per interactive agent
-  turn (plus a second on HITL resume) and the caller is blocked on that job
-  starting, so a batching window would add up to 5s of latency to a human-facing
-  path; `batchSize: 1` also keeps one failing turn from sharing a batch with
-  others, which matters because the handler is not idempotent. Both the runtime
-  and CDK construction sites set the same options so they synthesize an identical
-  event source mapping.
-
-- 309a236: refactor(bb): attach IAM grants to the shared execution role
-
-  Data and auth blocks now grant permissions to the shared Blocks execution role
-  (`this.executionRole`) instead of the handler function directly. Grants land on
-  the same role the handler assumes, so the effective runtime permissions are
-  identical — this decouples IAM wiring from the concrete Lambda function ahead of
-  the multi-compute model.
-
-  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
-  config registry (loaded into `process.env` at cold start, like every other
-  block) rather than being set as direct handler environment variables, and the
-  migration Lambda maps the shared execution role's ARN.
-
-- Updated dependencies [5798492]
-- Updated dependencies [ca8cfb6]
-- Updated dependencies [08ab129]
-- Updated dependencies [f00adb0]
-- Updated dependencies [f00adb0]
-- Updated dependencies [309a236]
-- Updated dependencies [08ab129]
-- Updated dependencies [9d4ccea]
-- Updated dependencies [5bfae0a]
-- Updated dependencies [0ac3879]
-- Updated dependencies [e4dac4a]
-  - @aws-blocks/core@0.3.0
-  - @aws-blocks/bb-async-job@0.1.5
-  - @aws-blocks/bb-distributed-table@0.1.6
-  - @aws-blocks/bb-file-bucket@0.1.5
-  - @aws-blocks/bb-realtime@0.1.5
-  - @aws-blocks/bb-logger@0.1.5
+- 5798492: `AsyncJob` batches SQS messages with a default `batchSize: 10`, up from `batchSize: 1`, and a new `maxBatchingWindowSeconds` option with a default of 5. Set `batchSize: 1` and `maxBatchingWindowSeconds: 0` to opt out.
+- 309a236: Data and auth blocks grant permissions to the shared Blocks execution role instead of the handler function. The effective runtime permissions are identical.
 
 ## 0.3.4
 
-### Patch Changes
-
-- Updated dependencies [7b4c62d]
-- Updated dependencies [5262062]
-- Updated dependencies [3614a09]
-- Updated dependencies [5262062]
-- Updated dependencies [406ba89]
-- Updated dependencies [5071079]
-- Updated dependencies [8966cfb]
-- Updated dependencies [b11a75b]
-  - @aws-blocks/core@0.2.0
-  - @aws-blocks/bb-distributed-table@0.1.5
-  - @aws-blocks/bb-realtime@0.1.4
-  - @aws-blocks/bb-async-job@0.1.4
-  - @aws-blocks/bb-file-bucket@0.1.4
-  - @aws-blocks/bb-logger@0.1.4
+Dependency updates only.
 
 ## 0.3.3
 
 ### Patch Changes
 
-- feb5be4: Regenerate the API report to match the current `BedrockModels` source (the committed `API.md` had drifted from the model-id constants). No source or runtime change.
-- Updated dependencies [5b2aede]
-- Updated dependencies [b48aaec]
-- Updated dependencies [ac0966a]
-- Updated dependencies [9de27dd]
-- Updated dependencies [8e96d87]
-- Updated dependencies [58f77dd]
-- Updated dependencies [bd59e60]
-- Updated dependencies [f583c75]
-- Updated dependencies [2d3dfdc]
-- Updated dependencies [3c56267]
-  - @aws-blocks/bb-distributed-table@0.1.4
-  - @aws-blocks/core@0.1.17
-  - @aws-blocks/bb-file-bucket@0.1.3
-  - @aws-blocks/bb-async-job@0.1.3
-  - @aws-blocks/bb-logger@0.1.3
+- feb5be4: Regenerates the `API.md` report to match the current `BedrockModels` source, with no source or runtime change.
 
 ## 0.3.2
 
 ### Patch Changes
 
-- c4313cd: Fix `ERR_MODULE_NOT_FOUND` on a fresh `create-blocks-app` scaffold by making required runtime packages real dependencies of the block that actually loads them. npm does not install peer dependencies of transitive dependencies, so these never landed in `node_modules`.
-
-  - `kysely` → dependency of `@aws-blocks/data-common`. `data-common` is the only package that imports and instantiates `kysely` (in its Kysely adapter); `bb-data` and `bb-distributed-data` merely re-export `createKyselyAdapter` and keep `kysely` as a peer, which is now satisfied transitively via `data-common`. Promoting it on `data-common` alone guarantees a single hoisted instance and installs it for any app that pulls a data block.
-  - `@opentelemetry/api` → dependency of `@aws-blocks/bb-agent`. It is a non-optional peer of `@strands-agents/sdk`, which the Agent block loads at runtime, so it must be installed whenever `bb-agent` is present.
-
-  Both packages have zero runtime dependencies and no install scripts, so this adds no transitive tree.
-
-- 997c736: Lazy-load the Strands SDK in the Agent block so that importing `@aws-blocks/blocks` no longer eagerly loads `@strands-agents/sdk` and its non-optional `@modelcontextprotocol/sdk` / `@opentelemetry/api` peers.
-
-  The `@aws-blocks/blocks` umbrella re-exports `Agent` statically, so a fresh scaffold that never instantiates an agent previously failed on the first `npm run dev` with `ERR_MODULE_NOT_FOUND` for those packages. The Strands runtime is now imported on first agent execution (via a cached dynamic `import()`), so it stays off the module **load path** of apps that don't use an agent — those apps run without the packages installed.
-
-  Scope / follow-up: this removes the packages from the _load path_, not from the _install set_. Apps that actually use an Agent block still need `@strands-agents/sdk`'s non-optional peers (`@modelcontextprotocol/sdk`, `@opentelemetry/api`) installed, because Strands imports them when it loads on first agent execution and npm does not auto-install peers of transitive dependencies. Those are supplied to agent-using apps by the Agent scaffold template (and documented for manual installs) rather than promoted to `dependencies` here, which would pull Strands' ~10 MB transitive tree into every app. No public API change.
+- c4313cd: A fresh `create-blocks-app` scaffold no longer fails with `ERR_MODULE_NOT_FOUND`. `kysely` is a dependency of `@aws-blocks/data-common`, and `@opentelemetry/api` is a dependency of `@aws-blocks/bb-agent`.
+- 997c736: Importing `@aws-blocks/blocks` no longer loads `@strands-agents/sdk`, so an app that doesn't use an agent runs without it installed. Apps that use an Agent block still need `@modelcontextprotocol/sdk` and `@opentelemetry/api` installed.
 
 ## 0.3.1
 
 ### Patch Changes
 
-- cfe6cb0: fix(bb-agent): use the Lambda execution region for S3Storage (#120)
-
-  The deployed Agent constructed Strands' `S3Storage` without a `region`, so it defaulted to `us-east-1` and hard-pinned the snapshot S3 client there. Because the session bucket is created in the deploy region, any deployment outside `us-east-1` failed snapshot reads/writes with a cross-region 301 `PermanentRedirect`. `S3Storage` is now constructed with `region: process.env.AWS_REGION` — which the Lambda runtime always sets to the function's region — so snapshots resolve against the correct regional endpoint. `region` and `s3Client` are mutually exclusive in `S3StorageConfig`, so only `region` is passed.
+- cfe6cb0: The deployed Agent reads and writes snapshots in the function's region. Before, any deployment outside `us-east-1` failed with a cross-region 301 `PermanentRedirect`.
 
 ## 0.3.0
 
 ### Minor Changes
 
-- 179817f: feat(bb-agent): make model config optional, default to BedrockModels.BALANCED
-
-  The `model` field in AgentConfig is now optional. When omitted, the agent
-  defaults to `BedrockModels.BALANCED` for deployment and the canned provider
-  for local development.
-
-### Patch Changes
-
-- Updated dependencies [e839301]
-  - @aws-blocks/core@0.1.10
+- 179817f: The `model` field in AgentConfig is optional. When omitted, the agent uses `BedrockModels.BALANCED` for deployment and the canned provider for local development.
 
 ## 0.2.1
 
 ### Patch Changes
 
-- c6ba244: fix(bb-agent): add toJSON() to AgentStreamResult
-
-  `AgentStreamResult` now serializes to `{ channelId, channel: null }` when returned from API methods. Previously `channel` serialized to an empty object `{}`; it is now explicitly `null` to signal it is server-side only.
+- c6ba244: `AgentStreamResult` serializes to `{ channelId, channel: null }` when returned from API methods. Previously `channel` serialized to an empty object `{}`.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- ce61bb7: refactor(bb-agent): capability-based model presets with global inference profiles
-
-  New presets:
-
-  - `BALANCED` (Claude Sonnet 4.6): recommended default for most workloads
-  - `SMART` (Claude Opus 4.8): highest capability for hardest tasks
-  - `FAST` (Claude Haiku 4.5): lowest latency
-
-  All presets use `global.` inference profiles for region-agnostic deployment.
-
-  Deprecated (non-removing): `DEFAULT` resolves to `BALANCED`, `BUDGET` and `MICRO` resolve to `FAST`. Note this changes the underlying model for existing callers — `DEFAULT` moves from Opus to Sonnet, and `BUDGET`/`MICRO` move from Amazon Nova Pro/Lite to Claude Haiku, so cost and latency profiles differ. The symbols still resolve (no type break), but migrate to `BALANCED`/`FAST` (or a region-scoped profile) explicitly to pin the model you want.
+- ce61bb7: Adds the model presets `BALANCED`, `SMART`, and `FAST`, and deprecates `DEFAULT`, `BUDGET`, and `MICRO`. `DEFAULT` resolves to `BALANCED`, moving from Opus to Sonnet, and `BUDGET` and `MICRO` resolve to `FAST`, moving from Amazon Nova to Claude Haiku, so use the new names.
 
 ### Patch Changes
 
-- f946736: fix(bb-agent): treat empty channelId as unset in stream()
-
-  An empty `channelId` now falls back to `conversationId` or a random UUID, preventing all streams from sharing the same channel. Empty strings are treated as unset rather than used literally.
+- f946736: `stream()` treats an empty `channelId` as unset and falls back to `conversationId` or a random UUID, so streams no longer share one channel.
 
 ## 0.1.3
 
 ### Patch Changes
 
-- ba3bf7b: docs: add per-package DESIGN.md documents
-
-  Adds a `DESIGN.md` to each building-block package describing its architecture, API surface, mock implementation, and key design decisions.
-
-  - Each document is cross-checked against the current source so identifiers, environment variables, error names, and described behavior match the implementation.
-  - Each `DESIGN.md` is listed in its package's `files` array so it ships on npm alongside `README.md`.
-  - For consistency, `bb-auth-cognito`'s document lives at the package root like every other package.
-  - Bumps the umbrella `@aws-blocks/blocks` package so its bundled `docs/` — assembled from these block READMEs at build time — republishes with a fresh version. Its packed content changes whenever the READMEs change, but the version was previously left untouched, which tripped the publish integrity guard.
-
-- Updated dependencies [ba3bf7b]
-  - @aws-blocks/bb-async-job@0.1.2
-  - @aws-blocks/bb-distributed-table@0.1.3
-  - @aws-blocks/bb-file-bucket@0.1.2
-  - @aws-blocks/bb-logger@0.1.2
-  - @aws-blocks/bb-realtime@0.1.2
+- ba3bf7b: Adds a `DESIGN.md` to each building-block package that describes its architecture, API surface, mock implementation, and key design decisions. It ships on npm alongside `README.md`.
 
 ## 0.1.2
 
 ### Patch Changes
 
-- 835c425: docs(bb-agent): document AgentStreamChunk types and Message roles
-- dd07335: fix(bb-agent): simplify Bedrock health check to support all inference profile formats
-
-  Removed the prefix regex that determined whether to call `GetInferenceProfile`
-  or `GetFoundationModel`. The health check now tries both APIs sequentially —
-  any model ID format (cross-region, global, or foundation model) works without
-  maintaining a prefix allowlist.
+- 835c425: Documents the `AgentStreamChunk` types and `Message` roles.
+- dd07335: The Bedrock health check works with any model ID format, cross-region, global, or foundation model. It tries `GetInferenceProfile` and `GetFoundationModel` in sequence.
 
 ## 0.1.1
 
 ### Patch Changes
 
 - c0558f3: Minor improvements
-- Updated dependencies [270c049]
-- Updated dependencies [c0558f3]
-  - @aws-blocks/core@0.1.1
-  - @aws-blocks/bb-distributed-table@0.1.1
-  - @aws-blocks/bb-file-bucket@0.1.1
-  - @aws-blocks/bb-realtime@0.1.1
-  - @aws-blocks/bb-async-job@0.1.1
-  - @aws-blocks/bb-logger@0.1.1
 
 ## 0.1.0
 

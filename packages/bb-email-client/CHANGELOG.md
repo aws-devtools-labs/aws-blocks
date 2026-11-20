@@ -1,8 +1,8 @@
-# @aws-blocks/bb-email-client
+# @aws-cdk-blocks/bb-email-client
 
 ## 1.0.0
 
-The first stable release. The changes since 1.0.0-rc.2 are listed below. The full notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
+The first stable release. The changes since 1.0.0-rc.2 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
 
 ### Changes since `@aws-blocks/bb-email-client` 0.x
 
@@ -17,592 +17,120 @@ The first stable release. The changes since 1.0.0-rc.2 are listed below. The ful
 
 ### Patch Changes
 
-- 0b422ee: docs: the "Package Export Conditions" section, which did not match the package manifest, is removed.
-- Updated dependencies [cad7bb8]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-  - @aws-cdk-blocks/core@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+- 0b422ee: The docs no longer have the "Package Export Conditions" section, which did not match the package manifest.
 
 ## 1.0.0-rc.1
 
 ### Patch Changes
 
-- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
-- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
-- Updated dependencies [e529b00]
-- Updated dependencies [fbe48c5]
-- Updated dependencies [c42ba42]
-- Updated dependencies [3081521]
-- Updated dependencies [23692f1]
-  - @aws-cdk-blocks/core@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+- e529b00: The README error examples import the error constants and `isBlocksError` from `aws-cdk-blocks`, which works in backend and client code.
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`, and existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Minor Changes
 
-- 64f7247: `EmailClient.sendBatch()` now takes at most 100 messages per call by default. A larger batch throws `InvalidInputException` (`Batch size 101 exceeds the maximum of 100 messages.`) and nothing is sent, locally and when deployed. Before, a single call could send any number of messages, so one request to an exposed method could fan out into an unbounded number of SES sends.
-
-  **Behavior change:** a `sendBatch()` call with more than 100 messages that worked before now throws. Split the messages across calls, or set the new `maxBatchSize` option (a positive integer) to raise the cap for a trusted server-side job. An invalid `maxBatchSize` throws `InvalidInputException` from the constructor, and fails at synth.
-
-  The SES send permission granted to the app's execution role is now scoped to the stack's own region and partition, instead of every region. The runtime only ever calls SES in the Lambda's own region, so this does not change what an app can send.
-
-  The README has a new security section: an `ApiNamespace` method that passes caller input to `send()` or `sendBatch()` without a gate is an open relay. It shows gating with `auth.requireAuth(context)` and building the message on the server. The umbrella `aws-cdk-blocks` gets a minor bump because it re-exports `EmailClient`, so the `sendBatch()` behavior change reaches umbrella users too, and because the `bb-email-client` README/DESIGN docs it bundles have changed.
+- 64f7247: `EmailClient.sendBatch()` takes at most 100 messages per call by default and throws `InvalidInputException` for a larger batch, where it took any number before. Split the messages across calls, or set the new `maxBatchSize` option to raise the cap.
 
 ### Patch Changes
 
-- 382b4fa: docs(bb-email-client): explain why the block doesn't rate-limit callers, and what happens to the app's SES account if an app that sends on a caller's behalf doesn't add its own limit. The README also shows one way to add a per-user limit with a `KVStore` counter.
-- 450e25f: `EmailClient` now warns at synth when `fromAddress` is on a reserved domain that SES can never verify (`example.com`, `example.net`, `example.org` and their subdomains, or anything under `.test`, `.example`, `.invalid` or `.localhost`), since every send from such an address fails once deployed. The warning id is `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, raised in sandbox and production, and can be acknowledged. A `replyTo` address on a reserved domain gets `@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`. For a reserved sender, this warning replaces the generic "must be verified in SES" console notice, so synth prints one message. The demo template no longer sends from `noreply@example.com`: its sender is an `EMAIL_SENDER` constant with a `.invalid` placeholder to replace with a verified SES identity before deploying to production.
-- da1e2a5: `send()` and `sendBatch()` now reject a subject that contains CR, LF or another control character (C0, DEL, C1, U+2028, U+2029) with `InvalidInputException`, locally and when deployed. Previously the local mock sent such a message while SES rejected it. In `sendBatch()` the entry is marked `failed` and not sent.
-- 8e96367: fix: stop sending raw backend error text to clients
-
-  Several Building Blocks passed the raw text of an unexpected error (an AWS SDK, database, storage or hook error, which can name account ids, role and resource ARNs, and request details) to the client. They now follow the same rule as the RPC serializer: the message of an `ApiError` or a branded Building Block error (`blocksError()` / `brandBlocksError()`) still reaches the client unchanged, and any other error is logged server-side and reported as `Internal error`.
-
-  - **bb-agent:** when a turn fails, the `error` chunk, the persisted `metadata.error`, and the `StreamFailed` error from `complete()` carry `Internal error` unless the failure is a branded Building Block error. A malformed or invalid canned-responses dictionary (the local `canned` provider) now fails with a branded `InvalidModelConfigException` on the server, so its fixed message, e.g. `InvalidModelConfigException: Malformed canned responses JSON in 'responses.json'.`, reaches the client; it names the file by basename only and never quotes its contents, and the parser's detail is logged server-side. `complete()` still rejects with `StreamFailed` for it. Conversations persisted before this change keep the `metadata.error` text they were saved with, and `getConversation()` still returns it.
-  - **bb-email-client:** `send()` errors have stable messages per `EmailErrors` code, and a failed `sendBatch()` entry reports the error code or SES entry status instead of the raw SES text. The SES error is logged and kept on the error's non-enumerable `cause`.
-
-- Updated dependencies [d01c34c]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [c67048e]
-- Updated dependencies [b2eb306]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [d01c34c]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [d01c34c]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [c607deb]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [2095f31]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/core@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.0
+- 382b4fa: The README explains why the block doesn't rate-limit callers and what happens to the app's SES account when an app that sends on a caller's behalf adds no limit. It also shows one way to add a per-user limit with a `KVStore` counter.
+- 450e25f: `EmailClient` warns at synth when `fromAddress` is on a reserved domain that SES can never verify, such as `example.com` or anything under `.test`. The demo template's sender is an `EMAIL_SENDER` constant, which you replace with a verified SES identity before deploying to production.
+- da1e2a5: `send()` and `sendBatch()` reject a subject that contains CR, LF, or another control character with `InvalidInputException`, locally and when deployed. In `sendBatch()` the entry is marked `failed` and not sent.
+- 8e96367: `bb-agent` reports an unexpected error to the client as `Internal error` instead of the raw backend text, and `bb-email-client` `send()` errors have stable messages per `EmailErrors` code. The message of an `ApiError` or a branded Building Block error still reaches the client unchanged.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
+- 88747f5: A Building Block's mock entry throws when it is loaded in a deployed environment, so bundle your backend with the `aws-runtime` export condition. `@aws-blocks/core/bb-utils` exports the check as `assertNotMockInDeployedEnv(bbName)`.
 
-  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
-  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
-  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
-  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
-  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
-  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
+- 3142985: **Breaking: the deployed `EmailClient` validates addresses before calling SES, and the shared execution role is granted only `ses:SendEmail` and `ses:SendBulkEmail`.**
 
-  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
+  To upgrade:
 
-- 3142985: **Breaking (behavior):** two changes reach apps that are already deployed:
+  1. Handle `InvalidInputException` from `send()`, and `failed` results from `sendBatch()`, for addresses that SES accepted but the validator rejects, such as quoted local parts or non-ASCII domains.
+  2. If your app calls the SES SDK directly and relied on this block's grant of `ses:SendRawEmail`, `ses:SendTemplatedEmail`, or `ses:SendBulkTemplatedEmail`, grant those actions yourself.
 
-  - The deployed `EmailClient` now validates addresses before calling SES, so `send()` throws `InvalidInputException` (and `sendBatch()` marks the message `failed`) for addresses the validator rejects but SES accepted, for example quoted local parts (`"john.doe"@example.com`) or non-ASCII domains.
-  - The shared execution role is granted only `ses:SendEmail` and `ses:SendBulkEmail`. An app that calls the SES SDK directly (for example `SendRawEmail` for attachments) and relied on this block's grant of `ses:SendRawEmail`, `ses:SendTemplatedEmail` or `ses:SendBulkTemplatedEmail` must grant those actions itself.
-
-  `EmailClient` changes:
-
-  - `sendBatch()` sends a message without `html` as plain text only, as `send()` already does. It previously reused the plain-text `body` as the HTML part, where a mail client would render any markup in it. Messages with `html` are sent in separate calls, before the text-only ones; `results` stays in input order.
-  - The deployed client validates every message the same way the local one does, before calling SES: every address (To, CC, BCC, `fromAddress` and `replyTo`), at most 50 recipients, and at most 40 MB. Invalid input throws `InvalidInputException` (or `EmailSendFailedException` for size) from `send()`, and is marked `failed` in `sendBatch()` results. Addresses may carry a display name made of plain words or one quoted string (`Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`), which SES accepts. Surrounding whitespace and control characters are rejected.
+  `sendBatch()` sends a message without `html` as plain text only, as `send()` already does.
 
 ### Patch Changes
 
-- 943d405: fix: error constants can be imported in frontend code
-
-  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
-  package's `browser` entry. Some of those imports failed the frontend build:
-
-  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
-    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
-    `@aws-blocks/bb-logger`. They are now exported.
-  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
-    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
-    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
-  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
-    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
-    server's constants instead of keeping their own copies.
-  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
-    server build and failed to bundle. It now has one.
-
-  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
-  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
-
-- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
-
-  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
-  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
-  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
-  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
-
-- 48c35f6: fix: export the same names from every conditional entry point
-
-  Some Building Blocks were missing named exports from their `cdk` or `browser`
-  entry points, even though the TypeScript types said they were there. Importing
-  one of these names from code evaluated during `cdk synth`, or from a browser
-  bundle, failed at import time. Added:
-
-  - `cdk` entry: `InterruptError` (`@aws-blocks/bb-agent`), `BatchSubmitFailedError`
-    (`@aws-blocks/bb-async-job`), and `RLSEnabledDatabase` and `PgClientEngine`
-    (`@aws-blocks/bb-data`).
-  - `browser` entry: the error constants `AgentErrors`, `AppSettingErrors`,
-    `EmailErrors`, `FileBucketErrors` and `LoggingErrors` (for `isBlocksError` checks
-    in frontend code), plus `InterruptError`, `BedrockModels` and `OllamaModels`
-    (`@aws-blocks/bb-agent`) and `fromExisting` (`@aws-blocks/bb-data`).
-
-  The conditional-exports regression test now compares every Building Block's
-  `aws-runtime`, `cdk` and `browser` entries against its default entry in both
-  directions, so these gaps can't come back unnoticed.
-
-- d366907: chore: manual dependency bump (2026-10-19)
-- 27c35e5: Correct documentation: `Secret` reads pick up rotated values after the cache TTL (`cacheTtlSeconds`), not only on cold start, and the `put()` error-handling example now declares a writable secret; `EmailClient` validates recipient and size limits locally on AWS too; fix the `useChat` anchor in the `bb-agent` README; use 12-digit account IDs in `Pipeline` connection ARN examples; describe the `KnowledgeBase` mock's `'fixed'` and `'none'` chunking.
-- 2f59ce5: docs(bb-email-client): `DESIGN.md` now describes the infrastructure the block actually creates
-
-  The "Infrastructure (CDK)" section no longer lists an SES configuration set or SES email identity: the block creates neither. It now describes what the CDK layer does (the `ses:SendEmail` / `ses:SendBulkEmail` grants, the SES VPC endpoint requirement, the synth prerequisite warning) and the out-of-band prerequisites: create and verify the sender identity in SES, and request production access to leave the SES sandbox.
-
-- ea57feb: Correct JSDoc: the `EmailErrors` example now calls `send()` with a single message object, `Secret` examples that call `put()` now pass `allowRuntimeWrite: true`, and the `FileBucket` `removalPolicy` docs now say an omitted policy inherits the stack's `BlocksDefaults.removalPolicy`.
+- 943d405: Frontend code can import Building Block error constants, such as `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, `LoggingErrors`, and `RealtimeErrors`, to match errors with `isBlocksError`. `CronJobErrors.ScheduleNotSupported` is no longer `undefined` in the browser.
+- a3969b5: A Building Block runtime method called at the top level of a backend module throws `<Class>.<method>() cannot be called during CDK synth` instead of `TypeError: x is not a function`.
+- 48c35f6: The `cdk` and `browser` entry points export the names they were missing, so importing them during `cdk synth` or in a browser bundle no longer fails. The `browser` entries add the error constants `AgentErrors`, `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors`.
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- 27c35e5: The docs state that `Secret` reads pick up rotated values after `cacheTtlSeconds`, not only on cold start, and that `EmailClient` validates recipient and size limits on AWS too. Other fixes cover the `useChat` anchor, `Pipeline` connection ARN examples, and the `KnowledgeBase` mock's chunking.
+- 2f59ce5: `DESIGN.md` describes the infrastructure the block creates. It no longer lists an SES configuration set or SES email identity, and it states the prerequisites of a verified sender identity and SES production access.
+- ea57feb: Corrects three JSDoc comments. The `EmailErrors` example passes `send()` a single message object, `Secret` examples that call `put()` pass `allowRuntimeWrite: true`, and an omitted `FileBucket` `removalPolicy` inherits the stack's `BlocksDefaults.removalPolicy`.
 - 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
-- Updated dependencies [0765f84]
-- Updated dependencies [5572341]
-- Updated dependencies [88747f5]
-- Updated dependencies [1076ccc]
-- Updated dependencies [928c48a]
-- Updated dependencies [4d5ea86]
-- Updated dependencies [90c1b12]
-- Updated dependencies [943d405]
-- Updated dependencies [50b8c94]
-- Updated dependencies [a3969b5]
-- Updated dependencies [48c35f6]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [9a32674]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8c73a24]
-- Updated dependencies [48c35f6]
-- Updated dependencies [4553866]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [54e9443]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d366907]
-- Updated dependencies [91ed1fc]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d062eeb]
-- Updated dependencies [c22eeee]
-- Updated dependencies [1546160]
-- Updated dependencies [9c96135]
-- Updated dependencies [63b154f]
-- Updated dependencies [8565ef7]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [515089c]
-- Updated dependencies [dde6340]
-- Updated dependencies [7477b6e]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [6a53068]
-- Updated dependencies [dd5e807]
-- Updated dependencies [db15b5e]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [72e3259]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8565ef7]
-- Updated dependencies [48c35f6]
-- Updated dependencies [0d4ede3]
-- Updated dependencies [63b154f]
-- Updated dependencies [b6b8ade]
-- Updated dependencies [82ea78a]
-- Updated dependencies [e44ac0c]
-- Updated dependencies [33e8d73]
-- Updated dependencies [b003705]
-- Updated dependencies [48c35f6]
-  - @aws-blocks/core@0.8.0
-  - @aws-blocks/bb-logger@0.3.0
 
 ## 0.1.9
 
 ### Patch Changes
 
-- 92fa27b: Internal: route named-error minting through `@aws-blocks/core`'s `blocksError`. No behavior change.
-- Updated dependencies [ec7eebe]
-- Updated dependencies [e682ba7]
-- Updated dependencies [e7e96e6]
-- Updated dependencies [9ebda66]
-- Updated dependencies [78f4396]
-- Updated dependencies [440ecce]
-- Updated dependencies [1a5c18e]
-- Updated dependencies [4ae500e]
-- Updated dependencies [6d764f7]
-- Updated dependencies [5d6656a]
-- Updated dependencies [60616b1]
-- Updated dependencies [a50fb46]
-- Updated dependencies [8a1a4a9]
-- Updated dependencies [38ce80c]
-- Updated dependencies [94a914a]
-- Updated dependencies [cb0ec01]
-- Updated dependencies [005c095]
-- Updated dependencies [b8649dc]
-- Updated dependencies [2da2fd4]
-- Updated dependencies [66f4be2]
-- Updated dependencies [32a4b73]
-- Updated dependencies [da6d4c7]
-- Updated dependencies [e3e5e22]
-- Updated dependencies [e9241b5]
-- Updated dependencies [f1eb149]
-- Updated dependencies [122c49c]
-- Updated dependencies [7c19c4f]
-  - @aws-blocks/core@0.7.0
-  - @aws-blocks/bb-logger@0.2.2
+- 92fa27b: Internal refactor that creates named errors through `@aws-blocks/core`'s `blocksError`. No behavior change.
 
 ## 0.1.8
 
 ### Patch Changes
 
-- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-
-  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
-  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
-  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
-  and exports `installClientUserAgent`, an SDK middleware that appends the validated
-  token to the outgoing user agent. The 12 participating Building Blocks install it,
-  so native attribution rides the SDK user-agent chain AWS service telemetry already
-  counts. The Kotlin runtime already sends the header, so Kotlin
-  callers are attributed as soon as this ships; Swift and Dart follow.
-
-- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-
-  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-
-  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-
-  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-
-  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-
-  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-
-  ## Breaking change (why `@aws-blocks/core` is a minor)
-
-  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-
-  ```ts
-  // before — message collapses to "Internal error" on the client
-  throw new Error("Todo not found");
-
-  // after — status, message, and name all reach the client
-  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
-  ```
-
-  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
-
-- Updated dependencies [5501cb6]
-- Updated dependencies [b58f248]
-- Updated dependencies [39628cb]
-- Updated dependencies [d4b32f2]
-- Updated dependencies [a649895]
-- Updated dependencies [27646ac]
-- Updated dependencies [5515483]
-- Updated dependencies [757d4a9]
-- Updated dependencies [a23b8d8]
-- Updated dependencies [9e02b82]
-- Updated dependencies [465a002]
-  - @aws-blocks/core@0.6.0
-  - @aws-blocks/bb-logger@0.2.1
+- 757d4a9: `@aws-blocks/core` forwards the `x-blocks-user-agent` header that native clients send into the AWS SDK user agent, and exports the `installClientUserAgent` SDK middleware. Kotlin callers are attributed first, and Swift and Dart follow.
+- a23b8d8: **Breaking: a plain `Error` thrown from an API method reaches the client as a generic `500` with `"Internal error"` instead of its raw message.** To send a specific status, name, and message to the client, throw an `ApiError`, for example `new ApiError("Todo not found", 404, { name: "TodoNotFoundException" })`. Building Block errors keep their name and message on the wire.
 
 ## 0.1.7
 
 ### Patch Changes
 
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
-
-- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
-- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-
-  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-
-  **Building Blocks declare VPC requirements via the constructor, not a method.**
-  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
-  requirements (a value, or a callback for values that depend on `fullId`) and
-  registers them in a central per-stack registry. This keeps the compile-time
-  forcing the previous `abstract getVpcRequirements()` provided — a block can't
-  silently omit its requirements — without a standing method on every subclass, and
-  gives the framework one place to read, deduplicate, and answer "does anything here
-  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-
-  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
-  function without a VPC declares `requiresVpc: true`; when one is needed and the
-  customer didn't bring their own, Blocks lazily creates a single shared VPC
-  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
-  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
-  bring-your-own override.
-
-  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
-  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
-  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
-  compliance requirement to use specific subnets. Omit it to keep the default
-  (prefer isolated, fall back to `private-with-egress`).
-
-- Updated dependencies [2806ae2]
-- Updated dependencies [f552ebe]
-- Updated dependencies [9aa0814]
-- Updated dependencies [012cd89]
-- Updated dependencies [5eee114]
-- Updated dependencies [d7312f9]
-- Updated dependencies [21443ba]
-- Updated dependencies [acd1628]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [302090a]
-  - @aws-blocks/core@0.5.0
-  - @aws-blocks/bb-logger@0.2.0
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
+- 6496713: Replaces `registerVpcEndpoint` with `registerVpcGatewayEndpoint` and `registerVpcInterfaceEndpoint`, and reduces `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`.
+- 6496713: A Building Block passes its VPC requirements to the `BuildingBlockScope` constructor, and Blocks creates one shared VPC when a block declares `requiresVpc: true` and you bring none. `Database` accepts an optional `subnets` placement for its Aurora cluster.
 
 ## 0.1.6
 
-### Patch Changes
-
-- Updated dependencies [df667c5]
-- Updated dependencies [df667c5]
-- Updated dependencies [64ddd74]
-- Updated dependencies [df667c5]
-- Updated dependencies [646614b]
-- Updated dependencies [c45eb92]
-- Updated dependencies [4a830a6]
-- Updated dependencies [f2f186c]
-- Updated dependencies [46b7c89]
-- Updated dependencies [1da58fd]
-  - @aws-blocks/core@0.4.0
-  - @aws-blocks/bb-logger@0.1.6
+Dependency updates only.
 
 ## 0.1.5
 
 ### Patch Changes
 
-- 309a236: refactor(bb): attach IAM grants to the shared execution role
-
-  Data and auth blocks now grant permissions to the shared Blocks execution role
-  (`this.executionRole`) instead of the handler function directly. Grants land on
-  the same role the handler assumes, so the effective runtime permissions are
-  identical — this decouples IAM wiring from the concrete Lambda function ahead of
-  the multi-compute model.
-
-  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
-  config registry (loaded into `process.env` at cold start, like every other
-  block) rather than being set as direct handler environment variables, and the
-  migration Lambda maps the shared execution role's ARN.
-
-- Updated dependencies [5798492]
-- Updated dependencies [f00adb0]
-- Updated dependencies [f00adb0]
-- Updated dependencies [08ab129]
-- Updated dependencies [9d4ccea]
-- Updated dependencies [5bfae0a]
-- Updated dependencies [0ac3879]
-- Updated dependencies [e4dac4a]
-  - @aws-blocks/core@0.3.0
-  - @aws-blocks/bb-logger@0.1.5
+- 309a236: Data and auth blocks grant permissions to the shared Blocks execution role instead of the handler function. The effective runtime permissions are identical.
 
 ## 0.1.4
 
-### Patch Changes
-
-- Updated dependencies [7b4c62d]
-- Updated dependencies [5262062]
-- Updated dependencies [3614a09]
-- Updated dependencies [5262062]
-- Updated dependencies [5071079]
-- Updated dependencies [8966cfb]
-- Updated dependencies [b11a75b]
-  - @aws-blocks/core@0.2.0
-  - @aws-blocks/bb-logger@0.1.4
+Dependency updates only.
 
 ## 0.1.3
 
 ### Patch Changes
 
-- ba3bf7b: docs: add per-package DESIGN.md documents
-
-  Adds a `DESIGN.md` to each building-block package describing its architecture, API surface, mock implementation, and key design decisions.
-
-  - Each document is cross-checked against the current source so identifiers, environment variables, error names, and described behavior match the implementation.
-  - Each `DESIGN.md` is listed in its package's `files` array so it ships on npm alongside `README.md`.
-  - For consistency, `bb-auth-cognito`'s document lives at the package root like every other package.
-  - Bumps the umbrella `@aws-blocks/blocks` package so its bundled `docs/` — assembled from these block READMEs at build time — republishes with a fresh version. Its packed content changes whenever the READMEs change, but the version was previously left untouched, which tripped the publish integrity guard.
-
-- Updated dependencies [ba3bf7b]
-  - @aws-blocks/bb-logger@0.1.2
+- ba3bf7b: Adds a `DESIGN.md` to each building-block package that describes its architecture, API surface, mock implementation, and key design decisions. It ships on npm alongside `README.md`.
 
 ## 0.1.2
 
 ### Patch Changes
 
 - 18880ff: Minor test improvements
-- Updated dependencies [18880ff]
-  - @aws-blocks/core@0.1.2
 
 ## 0.1.1
 
 ### Patch Changes
 
 - c0558f3: Minor improvements
-- Updated dependencies [270c049]
-- Updated dependencies [c0558f3]
-  - @aws-blocks/core@0.1.1
-  - @aws-blocks/bb-logger@0.1.1
 
 ## 0.1.0
 

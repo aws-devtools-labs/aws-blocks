@@ -1,8 +1,8 @@
-# @aws-blocks/bb-cron-job
+# @aws-cdk-blocks/bb-cron-job
 
 ## 1.0.0
 
-The first stable release, with no changes since 1.0.0-rc.2. The full notes for every change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
+The first stable release, with no changes since 1.0.0-rc.2. The notes for every change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
 
 ### Changes since `@aws-blocks/bb-cron-job` 0.x
 
@@ -13,744 +13,116 @@ The first stable release, with no changes since 1.0.0-rc.2. The full notes for e
 
 ### Patch Changes
 
-- 0b422ee: docs: a job with `enabled: false` is deployed in the `DISABLED` state and cannot be triggered by hand. `InvalidSchedule` and `InvalidTimezone` are thrown at construction locally and at synth on deploy. The local mock does not retry a failed handler and ignores the year field of a cron expression.
-- Updated dependencies [cad7bb8]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-  - @aws-cdk-blocks/core@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-async-job@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-container-compute@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+- 0b422ee: The docs state that a job with `enabled: false` is deployed in the `DISABLED` state and cannot be triggered by hand. `InvalidSchedule` and `InvalidTimezone` are thrown at construction locally and at synth on deploy.
 
 ## 1.0.0-rc.1
 
 ### Patch Changes
 
-- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
-- Updated dependencies [e529b00]
-- Updated dependencies [fbe48c5]
-- Updated dependencies [c42ba42]
-- Updated dependencies [3081521]
-- Updated dependencies [23692f1]
-  - @aws-cdk-blocks/core@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-async-job@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+- e529b00: The README error examples import the error constants and `isBlocksError` from `aws-cdk-blocks`, which works in backend and client code.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Minor Changes
 
-- 3ae8592: feat(bb-cron-job): run a CronJob on a container compute for long-running jobs
-
-  `CronJob` takes the same `compute` and `timeoutSeconds` options as `AsyncJob`.
-  Assign a container `Compute` to run a scheduled job longer than a serverless
-  compute's 15-minute limit:
-
-  ```ts
-  import { Compute, CronJob } from "aws-cdk-blocks";
-
-  const worker = new Compute(scope, "worker", {
-    type: "container",
-    size: { vcpu: 1, memory: 2048 },
-  });
-
-  new CronJob(scope, "nightly-rebuild", {
-    schedule: "cron(0 3 * * ? *)",
-    compute: worker,
-    timeoutSeconds: 2 * 60 * 60,
-    handler: async () => {
-      // ...
-    },
-  });
-  ```
-
-  On a container compute each tick is delivered like a container `AsyncJob`: the
-  handler runs in its own worker thread, `timeoutSeconds` is enforced, and a
-  failed tick is retried up to 3 attempts in total before moving to a dead-letter
-  queue. A CronJob under a container scope (`new Scope(id, { parent, compute })`)
-  now runs on that container instead of failing synth. Jobs on a serverless
-  compute deploy as before.
+- 3ae8592: `CronJob` takes the same `compute` and `timeoutSeconds` options as `AsyncJob`. Assign a container `Compute` to run a scheduled job longer than a serverless compute's 15-minute limit.
 
 ### Patch Changes
 
-- 777c5a4: In local development, a `CronJob` whose `rate(...)` is longer than about 24.8 days (for example `rate(30 days)`) no longer fires its handler every millisecond. Node clamps a timer delay above 2^31-1 ms to 1 ms; the mock now waits for such schedules in steps, as it already does for far-away cron expressions, and fires once per interval.
-- 0ff1e1f: docs: the AsyncJob and CronJob design docs describe the installed version
-
-  Batch limits, status tracking and per-job grants are stated as current behaviour instead of how they changed.
-
-- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
-- 8a5726c: test: check `defaults.permissionsBoundary` coverage for Auth, Compute, ContainerCompute, CronJob and Dashboard
-
-  Each of these blocks now has a synth test that sets `defaults.permissionsBoundary`
-  and fails if any IAM role in any synthesized template, including custom-resource
-  provider roles, the CronJob scheduler role and the container task execution
-  role, lacks the boundary or is missing from the `<stack>.blocks-iam.json`
-  report. No runtime or synth behavior changes.
-
-- 58817b0: fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal trust policies; add synth-time check
-
-  The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
-
-  - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
-  - The waiter state machine roles of the `KVStore` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
-  - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
-  - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
-  - The `@aws-cdk-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.
-
-  Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`, such as `BlocksApiGatewayCloudWatchRole` (created by `@aws-cdk-blocks/core` and `@aws-cdk-blocks/hosting` when access logging is on) or the default `cloudWatchRole` of a CDK `RestApi` the app adds. That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
-
-  - A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
-  - A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
-
-  Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
-
-  To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-cdk-blocks/core` README.
-
-- Updated dependencies [d01c34c]
-- Updated dependencies [6423964]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [6236bf9]
-- Updated dependencies [c67048e]
-- Updated dependencies [b2eb306]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [2b250f8]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [d01c34c]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [d01c34c]
-- Updated dependencies [e8673cd]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [d8a86ee]
-- Updated dependencies [c607deb]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [8a5726c]
-- Updated dependencies [2095f31]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/core@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-async-job@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-container-compute@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.0
+- 777c5a4: In local development, a `CronJob` whose `rate(...)` is longer than about 24.8 days, such as `rate(30 days)`, fires once per interval instead of every millisecond.
+- 0ff1e1f: The AsyncJob and CronJob design docs describe the installed version. Batch limits, status tracking, and per-job grants are stated as current behaviour.
+- e8673cd: The docs and `UnsupportedCompute` errors state that `AsyncJob` and `CronJob` support Lambda and container delivery, while `Realtime` requires default Lambda compute. Omitting container concurrency allows five in-flight deliveries per job per instance, not one per vCPU, and the docs now say so.
+- 8a5726c: Test-only change that checks `defaults.permissionsBoundary` coverage for Auth, Compute, ContainerCompute, CronJob, and Dashboard. No runtime or synth behavior changes.
+- 58817b0: The IAM roles AWS Blocks creates scope every service-principal trust to the stack's account with `aws:SourceAccount` and `aws:SourceArn`. Synth warns about a role your app creates without them, and "Service-principal trust" in the `@aws-cdk-blocks/core` README shows how to resolve it.
 
 ## 0.4.0
 
 ### Minor Changes
 
-- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
-
-  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
-  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
-  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
-  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
-  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
-  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
-
-  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
-
-- 8565ef7: feat: place a whole scope, or a CronJob, on its own compute
-
-  A `Scope` takes `compute`, which places everything created under it, including in
-  its child scopes, on one `Compute`:
-
-  ```ts
-  const reportsCompute = new Compute(scope, "reports-compute", {
-    type: "serverless",
-    memory: 4096,
-  });
-  const reports = new Scope("reports", {
-    parent: scope,
-    compute: reportsCompute,
-  });
-
-  export const reportsApi = new ApiNamespace(reports, "reports", (context) => ({
-    /* methods */
-  }));
-  new CronJob(reports, "nightly", {
-    schedule: "cron(0 2 * * ? *)",
-    handler: async () => {},
-  });
-  ```
-
-  - The nearest setting wins: a block's own `compute`, then the nearest scope's,
-    then the app's default compute.
-  - `AsyncJob` follows a serverless or container scope. `ApiNamespace` and
-    `CronJob` run only on a serverless compute for now; under a container scope
-    they fail synth with an error that names the compute.
-  - `Realtime` and `RawRoute` always run on the default compute, inside such a
-    scope too. `Realtime.publish()` works from any compute.
-
-  `CronJob` also takes its own `compute` (serverless only; a container compute is a
-  type error). Each job's schedule now gets permission to invoke the function it
-  targets: before, the shared scheduler role could only invoke the first job's
-  function, so a job on a different function would have been refused at run time.
-
-  A `CronJob` or `AsyncJob` whose compute (its own, or its scope's) belongs to a
-  different backend now fails synth with an error naming the compute. This happens
-  when several backends are built from one backend module and the `Compute` comes
-  from a sub-module, which stays bound to the first backend that imported it.
-  Before, the job was wired to that backend's function: a scheduled run failed
-  every time, or synth stopped with a dependency cycle.
-
-  In local dev every block still runs in the dev server.
+- 88747f5: A Building Block's mock entry throws when it is loaded in a deployed environment, so bundle your backend with the `aws-runtime` export condition. `@aws-blocks/core/bb-utils` exports the check as `assertNotMockInDeployedEnv(bbName)`.
+- 8565ef7: Adds a `compute` option to `Scope`, which places everything created under it on one `Compute`, and to `CronJob`, serverless only. A `CronJob` or `AsyncJob` whose compute belongs to a different backend fails synth with an error naming the compute.
 
 ### Patch Changes
 
-- 72b5fe0: Accept month names (`JAN`–`DEC`, case-insensitive) in the local mock's cron month field, so schedules like `cron(0 9 1 JAN ? *)` and `cron(0 9 ? JAN-MAR MON *)` fire locally instead of throwing `InvalidScheduleExpression`. Cron field values must now be whole integers: values with trailing characters such as `9am`, `30m`, `1st` or `0/15x` throw `InvalidScheduleExpression` instead of being silently truncated and scheduled.
-- 943d405: fix: error constants can be imported in frontend code
-
-  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
-  package's `browser` entry. Some of those imports failed the frontend build:
-
-  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
-    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
-    `@aws-blocks/bb-logger`. They are now exported.
-  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
-    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
-    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
-  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
-    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
-    server's constants instead of keeping their own copies.
-  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
-    server build and failed to bundle. It now has one.
-
-  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
-  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
-
-- 48c35f6: Two Building Blocks that would handle the same Lambda event now fail `cdk synth`, instead of deploying and then failing every request on cold start. This covers two `AsyncJob`s whose queue names collide, and two `CronJob`s or `Realtime` blocks that end up with the same scope-qualified id (for example `x-y`/`z` and `x`/`y-z`). The error names the event key and both blocks.
-
-  `registerConfig()` now also fails synth when another construct has already registered the same config key for the same backend with a different value, naming the key and both constructs; before, the second value silently replaced the first and both blocks read the same resource at runtime. Config keys built from a block id fold case and map every non-alphanumeric character to `_`, so ids such as `orders-a` and `orders_a` (or `Orders` and `orders`) collided this way: rename one of the blocks. Registering a key again from the same construct, or with the same value, is unaffected. Keys shared by design keep their last-one-wins behaviour: `Hosting`'s `BLOCKS_PUBLIC_ORIGIN` / `CORS_HOSTING_ORIGINS`, the dashboard URL, and `AppSetting`'s `BLOCKS_SSM_PARAM_*` key.
-
-- 492d744: The local CronJob mock no longer runs a cron job on a date its schedule doesn't match. A schedule with no match within a year (such as `cron(0 0 29 2 ? *)`) used to fire an hour later; a fire time more than about 24.8 days away (such as a yearly schedule) used to fire right away because it overflowed `setTimeout`. Both now wait for the real fire time.
-- d366907: chore: manual dependency bump (2026-10-19)
-- 9aa8ae2: Correct API docs: `AsyncJob`'s `maxRetries` counts total delivery attempts including the first; the `DashboardErrors` example now compiles and catches `InvalidMetricConfig` where it is thrown (when dashboards are finalized, not in the constructor), and an omitted `metricConfigs` renders no metrics section; `CronJobEvent.jobName` is the CronJob's fully-qualified id, not the bare constructor id.
-- ce5dfa9: feat(compute): the `Compute` block and container-backed AsyncJobs
-
-  Adds a single `Compute` Building Block for choosing where a workload runs, and
-  lets an `AsyncJob` run on a container (AWS Fargate) instead of the default
-  serverless compute — for long-running or high-memory work. All net-new,
-  unreleased surface.
-
-  **`Compute`.** `new Compute(scope, id, { type, ...options })` states the compute
-  type explicitly (`serverless` | `container`); Blocks maps the type to the AWS
-  service. Options are per-type (a discriminated union), so an attribute that
-  doesn't apply to the chosen type is a compile error, and the service name never
-  appears in the API. The concrete backing computes stay internal and extend
-  `Scope` like every other block.
-
-  - `serverless`: `memory`, `maxTimeoutSeconds` (the function's runtime ceiling).
-  - `container`: `size` (a valid `{ vcpu, memory }` combination — invalid pairs are
-    unrepresentable), `scaling` (real Application Auto Scaling —
-    `min/maxInstances` + `cpu`/`memory` target-tracking and `queue-depth`
-    step-scaling policies;
-    queue-depth sums the messages across the queues the compute drains), and a
-    custom `image`.
-
-  **`AsyncJob({ compute })`.** A job runs on the app default (serverless) unless
-  given a `Compute`. On a container, delivery is an owner-matched SQS poller the
-  container self-starts, and each delivery runs in its own worker thread so the
-  job's `timeoutSeconds` is hard-enforced (the worker is terminated at the
-  deadline). `maxConcurrencyPerCPU` sets in-flight deliveries per vCPU — the
-  per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`, and it is a
-  compile error (and a synth-time error) on a serverless job. Both are properties
-  of the work and live on the job; `size`/`scaling` live on the compute. In local
-  dev, compute assignment is transparent. `AsyncJobOptions` has no compute-kind
-  type parameter — the kind is inferred from the `compute` argument — so
-  `new AsyncJob<Payload>(…)` with a container compute compiles without spelling a
-  second generic.
-
-  **One shared VPC per backend, and stateful blocks stay put.** A container needs
-  a VPC, so Blocks provisions **one** shared VPC (and one ECS cluster) per backend
-  root at a fixed id — N container configs do **not** create N VPCs, and placement
-  is independent of declaration order. The shared VPC is tagged by origin:
-  `provided` (customer passed `defaults.vpc.network`) or `derived` (Blocks created
-  it). Stateless compute (Lambda, the container) uses whichever exists. A
-  **stateful** block — today `Database` — joins only a customer-`provided` VPC; it
-  never auto-joins a Blocks-`derived` one. This is a safety guarantee: without it,
-  adding a container (or upgrading to a version that derives a VPC) could move an
-  existing Aurora cluster into the new VPC, which CloudFormation applies as a
-  _replacement_ — destroying the database. A Database with no customer VPC keeps
-  building its own, exactly as before. (Moving a Database into a shared VPC remains
-  a deliberate, out-of-band migration.)
-
+- 72b5fe0: The local mock accepts month names from `JAN` to `DEC` in the cron month field, so schedules like `cron(0 9 1 JAN ? *)` fire locally. Cron field values must be whole integers, so values such as `9am` or `0/15x` throw `InvalidScheduleExpression` instead of being truncated.
+- 943d405: Frontend code can import Building Block error constants, such as `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, `LoggingErrors`, and `RealtimeErrors`, to match errors with `isBlocksError`. `CronJobErrors.ScheduleNotSupported` is no longer `undefined` in the browser.
+- 48c35f6: Two Building Blocks that would handle the same Lambda event, or that register the same config key with different values, fail `cdk synth`. Ids such as `orders-a` and `orders_a` collide on the config key, so rename one of the blocks.
+- 492d744: The local CronJob mock no longer runs a cron job on a date its schedule doesn't match. A schedule with no match within a year, or with a fire time more than about 24.8 days away, waits for the real fire time.
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- 9aa8ae2: The API docs state that `AsyncJob`'s `maxRetries` counts total delivery attempts including the first, and that `CronJobEvent.jobName` is the CronJob's fully-qualified id. The `DashboardErrors` example compiles and catches `InvalidMetricConfig` where it is thrown.
+- ce5dfa9: Adds the `Compute` Building Block, `new Compute(scope, id, { type, ...options })`, where the type is `serverless` or `container`. `AsyncJob({ compute })` runs a job on a container on AWS Fargate, and Blocks provisions one shared VPC per backend for containers.
 - 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
-- Updated dependencies [0765f84]
-- Updated dependencies [5572341]
-- Updated dependencies [88747f5]
-- Updated dependencies [1076ccc]
-- Updated dependencies [928c48a]
-- Updated dependencies [4d5ea86]
-- Updated dependencies [90c1b12]
-- Updated dependencies [943d405]
-- Updated dependencies [50b8c94]
-- Updated dependencies [a3969b5]
-- Updated dependencies [48c35f6]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [9a32674]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8c73a24]
-- Updated dependencies [48c35f6]
-- Updated dependencies [4553866]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [54e9443]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d366907]
-- Updated dependencies [91ed1fc]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d062eeb]
-- Updated dependencies [c22eeee]
-- Updated dependencies [1546160]
-- Updated dependencies [9c96135]
-- Updated dependencies [63b154f]
-- Updated dependencies [8565ef7]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [515089c]
-- Updated dependencies [dde6340]
-- Updated dependencies [7477b6e]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [6a53068]
-- Updated dependencies [dd5e807]
-- Updated dependencies [db15b5e]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [72e3259]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8565ef7]
-- Updated dependencies [48c35f6]
-- Updated dependencies [0d4ede3]
-- Updated dependencies [63b154f]
-- Updated dependencies [b6b8ade]
-- Updated dependencies [82ea78a]
-- Updated dependencies [e44ac0c]
-- Updated dependencies [33e8d73]
-- Updated dependencies [b003705]
-- Updated dependencies [48c35f6]
-  - @aws-blocks/core@0.8.0
-  - @aws-blocks/bb-lambda-compute@0.7.0
-  - @aws-blocks/bb-logger@0.3.0
 
 ## 0.3.0
 
 ### Minor Changes
 
-- da6d4c7: Scope shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay independent.
-
-  - **Registries** (config, compute, dashboard, tracer, VPC requirements) now key on the backend root, resolved by walking the construct tree (`getBlocksRoot`), not on `cdk.Stack.of(scope)`.
-  - **Shared-infra Building Blocks** now provision and dedup their per-backend resources under the backend root: the realtime WebSocket API, the cron scheduler role, and the agent AgentCore runtime grants. Previously a second backend in the same stack could attach to the first's shared infra — most seriously, the agent's Bedrock grants could land on the wrong backend's execution role.
-  - **RawRoute** registrations are tagged with their owning backend root; `Hosting` now adds CloudFront behaviors only for routes owned by the backend its distribution fronts, instead of every route in the process-global registry. The per-owner tag also scopes duplicate-route detection, so two backends may register the same method+path.
-  - **`Hosting` now registers its origin config against the backend it fronts.** `BLOCKS_PUBLIC_ORIGIN` and `CORS_HOSTING_ORIGINS` are written to the backend named by `props.api`, matching the route-behavior owner — not to `this`, which (when two backends share a stack) resolved via the ambient pointer to the last-created backend and left the fronted backend without its origin config.
-  - The config bucket is parented under the resolved backend root rather than read from an ambient process-global, removing a construction-order hazard.
-  - **Stack-scoped exceptions — these deliberately keep a stable logical ID.** The app-setting secret bulk-init (`BlocksSecretsBulk`) and the distributed-table GSI manager provider (`BlocksGsiProvider`) stay direct stack children. Both are referenced by existing resources through immutable fields (a SecureString's physical name; a custom resource's `ServiceToken`), so a logical-ID change would force a replacement that CloudFormation either rejects (`ServiceToken` is immutable → failed upgrade) or that silently deletes the SecureString. Keeping them stack-scoped preserves the logical ID; their deploy-time IAM is still scoped (lazily) to only the parameters/tables that register. (Joins the API Gateway account resource as a documented stack-scoped exception.)
-
-  **Compatibility.** Single-`BlocksStack` apps (the common case) are byte-identical — no resource replacement. Apps that embed a `BlocksBackend` inside a customer `cdk.Stack` and use **realtime** or **cron** will see those resources re-parent from the stack to the backend construct, which CloudFormation treats as a replacement on upgrade; neither carries persistent data. For realtime specifically, the WebSocket API URL changes and its stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>` — scripts that read that output by name must update. Secret AppSettings and GSI-backed tables are **not** affected (their shared resources stay stack-scoped).
+- da6d4c7: **Breaking: shared Blocks resources are scoped to the `BlocksStack` or `BlocksBackend` instead of the enclosing `cdk.Stack`.** An app that embeds a `BlocksBackend` inside a customer `cdk.Stack` and uses realtime or cron sees those resources replaced on upgrade. For realtime, the WebSocket API URL changes and the stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>`, so update scripts that read that output by name. Single-`BlocksStack` apps see no resource replacement.
 
 ### Patch Changes
 
-- 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
-- Updated dependencies [ec7eebe]
-- Updated dependencies [e682ba7]
-- Updated dependencies [e7e96e6]
-- Updated dependencies [9ebda66]
-- Updated dependencies [78f4396]
-- Updated dependencies [440ecce]
-- Updated dependencies [1a5c18e]
-- Updated dependencies [4ae500e]
-- Updated dependencies [6d764f7]
-- Updated dependencies [5d6656a]
-- Updated dependencies [60616b1]
-- Updated dependencies [a50fb46]
-- Updated dependencies [8a1a4a9]
-- Updated dependencies [38ce80c]
-- Updated dependencies [94a914a]
-- Updated dependencies [cb0ec01]
-- Updated dependencies [005c095]
-- Updated dependencies [b8649dc]
-- Updated dependencies [2da2fd4]
-- Updated dependencies [66f4be2]
-- Updated dependencies [32a4b73]
-- Updated dependencies [da6d4c7]
-- Updated dependencies [e3e5e22]
-- Updated dependencies [e9241b5]
-- Updated dependencies [f1eb149]
-- Updated dependencies [122c49c]
-- Updated dependencies [7c19c4f]
-  - @aws-blocks/core@0.7.0
-  - @aws-blocks/bb-lambda-compute@0.6.0
-  - @aws-blocks/bb-logger@0.2.2
+- 023f02c: An internal refactor routes the remaining per-package errors through core's `blocksError`. Two realtime timeout rejections that were unbranded are now wire-safe.
 
 ## 0.2.2
 
 ### Patch Changes
 
-- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-
-  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-
-  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-
-  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-
-  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-
-  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-
-  ## Breaking change (why `@aws-blocks/core` is a minor)
-
-  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-
-  ```ts
-  // before — message collapses to "Internal error" on the client
-  throw new Error("Todo not found");
-
-  // after — status, message, and name all reach the client
-  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
-  ```
-
-  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
-
-- 7b7a59f: fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
-
-  - **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
-    schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
-    schedule-group pattern).
-  - **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
-    policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
-    conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.
-
-- Updated dependencies [5501cb6]
-- Updated dependencies [b58f248]
-- Updated dependencies [39628cb]
-- Updated dependencies [d4b32f2]
-- Updated dependencies [a649895]
-- Updated dependencies [27646ac]
-- Updated dependencies [5515483]
-- Updated dependencies [757d4a9]
-- Updated dependencies [a23b8d8]
-- Updated dependencies [9e02b82]
-- Updated dependencies [465a002]
-  - @aws-blocks/core@0.6.0
-  - @aws-blocks/bb-lambda-compute@0.5.1
-  - @aws-blocks/bb-logger@0.2.1
+- a23b8d8: **Breaking: a plain `Error` thrown from an API method reaches the client as a generic `500` with `"Internal error"` instead of its raw message.** To send a specific status, name, and message to the client, throw an `ApiError`, for example `new ApiError("Todo not found", 404, { name: "TodoNotFoundException" })`. Building Block errors keep their name and message on the wire.
+- 7b7a59f: The EventBridge Scheduler role's trust policy is limited to schedules in the stack's account and region. Hosting removes a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key policy.
 
 ## 0.2.1
 
 ### Patch Changes
 
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
-
-- d7312f9: test: adapt CDK test doubles to the compute-driven observability contract
-
-  Test-only change: both packages' CDK tests use a stub `Compute` that must satisfy
-  the `Compute` base class. The compute-driven observability work adds abstract
-  observability hooks to `Compute` (`healthWidgets` / `loggingWidgets` /
-  `tracingWidgets`, and `applyTracing`), so the stubs now implement them (as no-ops
-  that fail the test if the block ever pokes the compute). No runtime or public API
-  change.
-
-- Updated dependencies [2806ae2]
-- Updated dependencies [f552ebe]
-- Updated dependencies [9aa0814]
-- Updated dependencies [012cd89]
-- Updated dependencies [5eee114]
-- Updated dependencies [d7312f9]
-- Updated dependencies [21443ba]
-- Updated dependencies [acd1628]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [302090a]
-  - @aws-blocks/core@0.5.0
-  - @aws-blocks/bb-lambda-compute@0.5.0
-  - @aws-blocks/bb-logger@0.2.0
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
+- d7312f9: The CDK tests' stub `Compute` implements the new observability hooks of the `Compute` base class, with no runtime or public API change.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 165093b: `CronJob`: validate the schedule (and timezone) at synth so an invalid expression fails fast instead of after minutes of deploy.
-
-  The CDK layer passed `schedule`/`timezone` straight into the EventBridge `CfnSchedule` with no validation, so an invalid expression — e.g. `rate(10 seconds)` (EventBridge's minimum is 1 minute) or a malformed `cron(...)` — passed `cdk synth` and was only rejected by EventBridge minutes into provisioning. The mock already validated these, so local dev and deploy diverged.
-
-  The schedule parser and timezone check are now a shared `schedule` module used by both the mock and the CDK construct. `CronJob`'s constructor validates up front and throws `CronJobErrors.InvalidSchedule` / `CronJobErrors.InvalidTimezone` at synth, before any infrastructure is created.
-
-  The synth gate is deliberately lenient for `cron(...)` — it checks the 6-field shape and defers field-level semantics (`L`/`W`/`#`, year fields, named days) to EventBridge — so it never rejects an advanced-but-valid schedule. The local mock, which must actually simulate the schedule, still can't model those forms; it now throws the new `CronJobErrors.ScheduleNotSupported` (rather than `InvalidSchedule`) for them, so local dev doesn't call a deployable schedule "invalid". No behavior change for valid, mock-supported schedules.
-
-- 4a830a6: feat: route event-block resources to their resolved compute
-
-  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
-  compute resolved at synth rather than the stack's shared handler:
-
-  - AsyncJob attaches its SQS event source to the resolved compute's function;
-  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
-  - Realtime binds its shared WebSocket API integrations to the stack's **default**
-    compute (its routes are a stack-level singleton) and grants `postToConnection`
-    to the shared execution role, so `publish()` works from any compute.
-
-  Each block requires a Lambda compute today and fails at synth with a typed
-  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
-  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
-  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
-  when two copies of `bb-lambda-compute` resolve in one dependency tree.
-
-  On the default single-Lambda setup the resolved/default compute is the stack's
-  default, whose function is the shared handler — so this is non-breaking with no
-  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
-  execution role rather than the handler directly.
-
-  New public surface (hence `minor`):
-
-  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
-    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
-    (the single env-var-key sanitizer both config writers and runtime readers use).
-  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
-    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
-  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
-    error member.
-
-  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
-  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
-  Test-only change — no runtime behavior change to the Agent.
-
-### Patch Changes
-
-- Updated dependencies [df667c5]
-- Updated dependencies [df667c5]
-- Updated dependencies [64ddd74]
-- Updated dependencies [df667c5]
-- Updated dependencies [646614b]
-- Updated dependencies [c45eb92]
-- Updated dependencies [4a830a6]
-- Updated dependencies [f2f186c]
-- Updated dependencies [46b7c89]
-- Updated dependencies [1da58fd]
-  - @aws-blocks/core@0.4.0
-  - @aws-blocks/bb-logger@0.1.6
-  - @aws-blocks/bb-lambda-compute@0.4.0
+- 165093b: `CronJob` validates the schedule and timezone at synth and throws `CronJobErrors.InvalidSchedule` or `CronJobErrors.InvalidTimezone` before any infrastructure is created. The local mock throws the new `CronJobErrors.ScheduleNotSupported` for valid `cron(...)` forms it cannot simulate.
+- 4a830a6: AsyncJob, CronJob, and Realtime attach their resources to a compute resolved at synth, and fail synth with an `UnsupportedCompute` error on anything but a Lambda compute. `@aws-blocks/core` exports `blocksError(name, message)` and `sanitizeConfigKey(id)`.
 
 ## 0.1.5
 
-### Patch Changes
-
-- Updated dependencies [5798492]
-- Updated dependencies [f00adb0]
-- Updated dependencies [f00adb0]
-- Updated dependencies [08ab129]
-- Updated dependencies [9d4ccea]
-- Updated dependencies [5bfae0a]
-- Updated dependencies [0ac3879]
-- Updated dependencies [e4dac4a]
-  - @aws-blocks/core@0.3.0
-  - @aws-blocks/bb-logger@0.1.5
+Dependency updates only.
 
 ## 0.1.4
 
-### Patch Changes
-
-- Updated dependencies [7b4c62d]
-- Updated dependencies [5262062]
-- Updated dependencies [3614a09]
-- Updated dependencies [5262062]
-- Updated dependencies [5071079]
-- Updated dependencies [8966cfb]
-- Updated dependencies [b11a75b]
-  - @aws-blocks/core@0.2.0
-  - @aws-blocks/bb-logger@0.1.4
+Dependency updates only.
 
 ## 0.1.3
 
 ### Patch Changes
 
-- ba3bf7b: docs: add per-package DESIGN.md documents
-
-  Adds a `DESIGN.md` to each building-block package describing its architecture, API surface, mock implementation, and key design decisions.
-
-  - Each document is cross-checked against the current source so identifiers, environment variables, error names, and described behavior match the implementation.
-  - Each `DESIGN.md` is listed in its package's `files` array so it ships on npm alongside `README.md`.
-  - For consistency, `bb-auth-cognito`'s document lives at the package root like every other package.
-  - Bumps the umbrella `@aws-blocks/blocks` package so its bundled `docs/` — assembled from these block READMEs at build time — republishes with a fresh version. Its packed content changes whenever the READMEs change, but the version was previously left untouched, which tripped the publish integrity guard.
-
-- Updated dependencies [ba3bf7b]
-  - @aws-blocks/bb-logger@0.1.2
+- ba3bf7b: Adds a `DESIGN.md` to each building-block package that describes its architecture, API surface, mock implementation, and key design decisions. It ships on npm alongside `README.md`.
 
 ## 0.1.2
 
 ### Patch Changes
 
-- 4758fd3: fix(bb-cron-job): respect the upper bound of stepped cron ranges (e.g. `0-30/10`) instead of stepping past it, and reject inverted (`30-10`) or out-of-bounds (`100`, `0-100/5`) field values instead of silently producing empty or invalid schedules
+- 4758fd3: Stepped cron ranges such as `0-30/10` stop at their upper bound. Inverted values such as `30-10` and out-of-bounds values such as `100` or `0-100/5` are rejected.
 
 ## 0.1.1
 
 ### Patch Changes
 
 - c0558f3: Minor improvements
-- Updated dependencies [270c049]
-- Updated dependencies [c0558f3]
-  - @aws-blocks/core@0.1.1
-  - @aws-blocks/bb-logger@0.1.1
 
 ## 0.1.0
 

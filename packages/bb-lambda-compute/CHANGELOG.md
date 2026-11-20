@@ -1,8 +1,8 @@
-# @aws-blocks/bb-lambda-compute
+# @aws-cdk-blocks/bb-lambda-compute
 
 ## 1.0.0
 
-The first stable release. The changes since 1.0.0-rc.1 are listed below. The full notes for every other change since 0.x are under 1.0.0-rc.0 and 1.0.0-rc.1.
+The first stable release. The changes since 1.0.0-rc.1 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0 and 1.0.0-rc.1.
 
 ### Changes since `@aws-blocks/bb-lambda-compute` 0.x
 
@@ -16,692 +16,143 @@ The first stable release. The changes since 1.0.0-rc.1 are listed below. The ful
 
 ### Patch Changes
 
-- 0b422ee: docs: the options, defaults and scaling rules are in the `bb-compute` README.
-- Updated dependencies [cad7bb8]
-- Updated dependencies [0b422ee]
-  - @aws-cdk-blocks/core@1.0.0-rc.2
+- 0b422ee: The options, defaults, and scaling rules are documented in the `bb-compute` README.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Patch Changes
 
-- 1de6ea4: The framework's reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/cdk-blocks/auth/*`, `/cdk-blocks/settings`, `/cdk-blocks/dashboard`, ...). The old `/aws-blocks/` prefix stays served as an alias with the same handlers: the runtime (Lambda, container and dev server) treats `/aws-blocks/...` as `/cdk-blocks/...`, the shared API gateway and the Hosting front doors route both, so already-deployed clients, mobile apps and registered auth callbacks keep working. Clients, generated config and defaults use `/cdk-blocks/`.
+- 1de6ea4: **Breaking: the framework's reserved URL prefix is now `/cdk-blocks/`, and the old `/aws-blocks/` prefix stays served as an alias.**
 
-  `BLOCKS_RPC_PREFIX` and `BLOCKS_AUTH_PREFIX` now hold the new prefix, and `canonicalBlocksPath()` maps a legacy path to its canonical one.
+  To upgrade:
 
-  **Upgrade:**
+  1. If an external identity provider only allows the `/aws-blocks/auth/callback` redirect URI, register `/cdk-blocks/auth/callback` or set `redirects.callbackPath: '/aws-blocks/auth/callback'`.
+  2. If a custom front door or an explicit `apiPaths` routes `/aws-blocks/*` by hand, also route `/cdk-blocks/*` or use `cf.apiBehaviors(origins.api)`.
+  3. If the app is at the CloudFront cache-behavior quota, 25 by default, free a behavior or raise the quota, because the built-in front door adds one for `/aws-blocks/*`.
 
-  - The default `redirects.callbackPath` of an `Auth` with `providers` becomes `/cdk-blocks/auth/callback`. An external identity provider (OIDC, Google, ...) that only allows the old `/aws-blocks/auth/callback` redirect URI must have the new one registered, or set `redirects.callbackPath: '/aws-blocks/auth/callback'` to keep the old one.
-  - A custom front door or an explicit `apiPaths` that routes `/aws-blocks/*` by hand must also route `/cdk-blocks/*` (or use `cf.apiBehaviors(origins.api)`), or the upgraded frontend's API calls won't reach the backend. A custom front door that records only `/aws-blocks/*` as wired now fails synth with `ProxySameOriginApi`; one that wires only `/cdk-blocks/*` gets a warning that legacy `/aws-blocks/*` clients are not routed.
-  - The built-in CloudFront front door adds one cache behavior (`/aws-blocks/*`). An app already at the distribution's cache-behavior quota (25 by default) needs to free a behavior or raise the quota, or the upgrade fails (at synth when container namespaces add direct behaviors, else at deploy).
+  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`.
 
-  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`. Native clients move tokens stored under a block's old `/aws-blocks/` keys to its new keys, so an upgrade keeps their session.
-
-  The Admin UI calls `/cdk-blocks/api` and retries at `/aws-blocks/api` only when an older dev server answers 404 without a JSON-RPC envelope, so it still works with that server and never runs a method twice.
-
-  A `ContainerCompute` keeps the logical ID and priority of each API listener rule it deployed under `/aws-blocks/api/<name>`, so the upgrade updates the rule's path to `/cdk-blocks/api/<name>` in place rather than replacing it.
-
-- afad513: `defaults.allowedOrigins`: plain origins such as `https://app.example.com` now match exactly (case-insensitive), so their dots are literal. `http`/`https` plain origins are compared in the form the browser sends (default port dropped, internationalized hosts in punycode), and entries with user info, a path, a query or a fragment are rejected. Entries with regex syntax are still anchored regexes, but must compile on their own and escape `.` (unless followed by a quantifier, as in `.*`); glob-style entries such as `https://*.example.com` and patterns with nested quantifiers such as `(a+)+` are rejected, and brace quantifiers are limited to `{n}`. Invalid entries now fail `cdk synth` from `BlocksStack.create()` / `BlocksBackend.create()` with a message naming the entry, and are ignored (and logged) at runtime. The README examples now use plain origins, and suggest `https://[a-z0-9-]+\\.example\\.com` for subdomains.
-- d8a86ee: Update the `LambdaCompute` README and design doc to describe how the compute reaches an app (as the default compute and through `Compute` with `type: 'serverless'`), its options, and its VPC, CORS, tracing, and dashboard behavior. Add tests for the memory, timeout, and VPC placement settings.
-- Updated dependencies [d01c34c]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [c67048e]
-- Updated dependencies [b2eb306]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [d01c34c]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [d01c34c]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [c607deb]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [2095f31]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/core@1.0.0-rc.0
+- afad513: Plain origins in `defaults.allowedOrigins`, such as `https://app.example.com`, match exactly, and regex entries must escape `.`. Glob-style entries such as `https://*.example.com` are rejected and fail `cdk synth`, so use `https://[a-z0-9-]+\\.example\\.com` for subdomains.
+- d8a86ee: The `LambdaCompute` README and design doc describe how the compute reaches an app, its options, and its VPC, CORS, tracing, and dashboard behavior.
 
 ## 0.7.0
 
 ### Minor Changes
 
-- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
-
-  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
-  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
-  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
-  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
-  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
-  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
-
-  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
-
-- ce5dfa9: feat(compute): the `Compute` block and container-backed AsyncJobs
-
-  Adds a single `Compute` Building Block for choosing where a workload runs, and
-  lets an `AsyncJob` run on a container (AWS Fargate) instead of the default
-  serverless compute — for long-running or high-memory work. All net-new,
-  unreleased surface.
-
-  **`Compute`.** `new Compute(scope, id, { type, ...options })` states the compute
-  type explicitly (`serverless` | `container`); Blocks maps the type to the AWS
-  service. Options are per-type (a discriminated union), so an attribute that
-  doesn't apply to the chosen type is a compile error, and the service name never
-  appears in the API. The concrete backing computes stay internal and extend
-  `Scope` like every other block.
-
-  - `serverless`: `memory`, `maxTimeoutSeconds` (the function's runtime ceiling).
-  - `container`: `size` (a valid `{ vcpu, memory }` combination — invalid pairs are
-    unrepresentable), `scaling` (real Application Auto Scaling —
-    `min/maxInstances` + `cpu`/`memory` target-tracking and `queue-depth`
-    step-scaling policies;
-    queue-depth sums the messages across the queues the compute drains), and a
-    custom `image`.
-
-  **`AsyncJob({ compute })`.** A job runs on the app default (serverless) unless
-  given a `Compute`. On a container, delivery is an owner-matched SQS poller the
-  container self-starts, and each delivery runs in its own worker thread so the
-  job's `timeoutSeconds` is hard-enforced (the worker is terminated at the
-  deadline). `maxConcurrencyPerCPU` sets in-flight deliveries per vCPU — the
-  per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`, and it is a
-  compile error (and a synth-time error) on a serverless job. Both are properties
-  of the work and live on the job; `size`/`scaling` live on the compute. In local
-  dev, compute assignment is transparent. `AsyncJobOptions` has no compute-kind
-  type parameter — the kind is inferred from the `compute` argument — so
-  `new AsyncJob<Payload>(…)` with a container compute compiles without spelling a
-  second generic.
-
-  **One shared VPC per backend, and stateful blocks stay put.** A container needs
-  a VPC, so Blocks provisions **one** shared VPC (and one ECS cluster) per backend
-  root at a fixed id — N container configs do **not** create N VPCs, and placement
-  is independent of declaration order. The shared VPC is tagged by origin:
-  `provided` (customer passed `defaults.vpc.network`) or `derived` (Blocks created
-  it). Stateless compute (Lambda, the container) uses whichever exists. A
-  **stateful** block — today `Database` — joins only a customer-`provided` VPC; it
-  never auto-joins a Blocks-`derived` one. This is a safety guarantee: without it,
-  adding a container (or upgrading to a version that derives a VPC) could move an
-  existing Aurora cluster into the new VPC, which CloudFormation applies as a
-  _replacement_ — destroying the database. A Database with no customer VPC keeps
-  building its own, exactly as before. (Moving a Database into a shared VPC remains
-  a deliberate, out-of-band migration.)
+- 88747f5: A Building Block's mock entry throws when it is loaded in a deployed environment, so bundle your backend with the `aws-runtime` export condition. `@aws-blocks/core/bb-utils` exports the check as `assertNotMockInDeployedEnv(bbName)`.
+- ce5dfa9: Adds the `Compute` Building Block, `new Compute(scope, id, { type, ...options })`, where the type is `serverless` or `container`. `AsyncJob({ compute })` runs a job on a container on AWS Fargate, and Blocks provisions one shared VPC per backend for containers.
 
 ### Patch Changes
 
-- d366907: chore: manual dependency bump (2026-10-19)
-- db15b5e: fix(core): make the API Gateway 29s integration default explicit and warn on an undeliverable alarm topic
-
-  Two right-sizing fixes to the production defaults a deployed Blocks app ships with.
-
-  - **API Gateway integration timeout is set explicitly to 29s.** `LambdaIntegration` already defaults to 29s, so this is no runtime change — it writes the boundary into the synthesized template (an explicit `TimeoutInMillis: 29000` on each Lambda method) so it is visible at review and aligned with the handler's own 28s deadline guard (`APIGW_TIMEOUT_MS`), which already emits a structured 504 just before the cut-off. A request still in flight at 29s is cut off by API Gateway regardless of how long the Lambda may run; the shared handler's function timeout (up to 900s) is the async-work ceiling and is unreachable on the synchronous HTTP path. The `bb-lambda-compute` `memory`/`maxTimeoutSeconds` docs now explain that the generous defaults are sized for the shared async path and how to right-size an API-only compute.
-  - **Hosting monitoring warns at synth when an alarm topic has no subscriber.** When monitoring is enabled and an alarm topic ends up with no subscriber, it can enter ALARM but deliver to no one. A shared validation now emits a loud synth warning, applied to both the regional alarm topic and the off-region us-east-1 support-stack topic that carries the CloudFront 5xx alarm, so each topic is judged on its own alarms and subscribers. The check is deferred to synth so it accounts for subscriptions added after construction — a direct `topic.addSubscription`, or a `LambdaSubscription`/`SqsSubscription` whose subscription resource lands in another stack — and it stays quiet when no alarm is wired or when every alarm already routes to a delivery action other than the topic. The message names the `acknowledgeWarning` escape hatch for callers who accept the gap knowingly.
-
-- 63b154f: Document the shared API gateway. The `@aws-blocks/core` README gains a "Shared API gateway" section covering how every path reaches the backend, per-namespace paths, default throttling, opt-in access logs, the 29-second / 10 MB limits, and attaching WAF to the gateway stage or to Hosting's CloudFront distribution. The `bb-lambda-compute` design notes now describe the multi-compute routing: catch-all resources go to the default compute, and per-namespace resources go to the others.
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- db15b5e: The API Gateway integration timeout is written to the template as an explicit `TimeoutInMillis: 29000`, with no runtime change. Hosting monitoring warns at synth when an alarm topic has no subscriber.
+- 63b154f: The `@aws-blocks/core` README has a new "Shared API gateway" section, and the `bb-lambda-compute` design notes describe the multi-compute routing.
 - 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
-- Updated dependencies [0765f84]
-- Updated dependencies [5572341]
-- Updated dependencies [88747f5]
-- Updated dependencies [1076ccc]
-- Updated dependencies [928c48a]
-- Updated dependencies [4d5ea86]
-- Updated dependencies [90c1b12]
-- Updated dependencies [50b8c94]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [9a32674]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8c73a24]
-- Updated dependencies [48c35f6]
-- Updated dependencies [4553866]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [54e9443]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d366907]
-- Updated dependencies [91ed1fc]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d062eeb]
-- Updated dependencies [c22eeee]
-- Updated dependencies [1546160]
-- Updated dependencies [9c96135]
-- Updated dependencies [63b154f]
-- Updated dependencies [8565ef7]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [515089c]
-- Updated dependencies [dde6340]
-- Updated dependencies [7477b6e]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [6a53068]
-- Updated dependencies [dd5e807]
-- Updated dependencies [db15b5e]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [72e3259]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8565ef7]
-- Updated dependencies [48c35f6]
-- Updated dependencies [0d4ede3]
-- Updated dependencies [63b154f]
-- Updated dependencies [b6b8ade]
-- Updated dependencies [82ea78a]
-- Updated dependencies [e44ac0c]
-- Updated dependencies [33e8d73]
-- Updated dependencies [b003705]
-- Updated dependencies [48c35f6]
-  - @aws-blocks/core@0.8.0
 
 ## 0.6.0
 
 ### Minor Changes
 
-- e9241b5: Move the backend's API Gateway REST API out of the compute and into a single stack-level shared gateway.
-
-  `BlocksStack` / `BlocksBackend` now build one shared REST API at finalize time and integrate the default compute's function through the new `Compute.apiHandler()` contract, instead of each `LambdaCompute` creating its own gateway. This is the seam multi-compute routing builds on: one gateway can front every compute in the app. The gateway is built in the default compute's construct scope with the same construct ids as before, so a deployed app's REST API, stage, and `execute-api` URL are unchanged on upgrade. `BlocksStack.gateway` / `apiUrl` (and `BlocksBackend`'s) keep their types and values, but are now available only once `create()` resolves: the gateway is built after the backend module is imported, so reading them during that import (including in the backend module's default export) throws a "not fully initialized" error. Throttling and access logging behave as before.
-
-  `LambdaCompute` no longer exposes `apiGateway` / `apiUrl` (the package is internal and not customer-facing); read them from the stack's `gateway` / `apiUrl`.
+- e9241b5: `BlocksStack` and `BlocksBackend` build one shared REST API for the stack, and `gateway` and `apiUrl` are available only once `create()` resolves. `LambdaCompute` no longer exposes `apiGateway` or `apiUrl`, so read the stack's `gateway` and `apiUrl` instead.
 
 ### Patch Changes
 
-- e682ba7: `LambdaCompute` now reports `bbName`/`bbVersion` to `Scope`, so it appears in telemetry like every other Building Block.
+- e682ba7: `LambdaCompute` reports `bbName`/`bbVersion` to `Scope`, so the default compute appears in telemetry like every other Building Block.
 
-  `LambdaCompute` passed no `bbName` to `Scope`, and `Scope` records a block in its registry only when `bbName` is set, so `Scope.getRegisteredBlocks()` could never name the default compute and `product.buildingBlocks` omitted it. The package already carried the standard `prebuild` (`generate-version.mjs LambdaCompute`), which generates the `BB_NAME`/`BB_VERSION` its constructor now passes through — the same wiring the other blocks use.
+- 66f4be2: **Breaking: `BlocksStack.handler`, `BlocksBackend.handler`, and `Scope.handler` are removed.**
 
-  `LambdaCompute` has no customer-facing export, so it is deliberately absent from the umbrella's `aws-blocks.vendorize` map that `scripts/generate-bb-names.mjs` reads. The generator now also emits a `NON_VENDORIZED_BB_NAMES` list, adding it to `OFFICIAL_BB_NAMES` so it is reported as an official block rather than filtered as an unnamed custom one. `@aws-blocks/core` is bumped because that generated file changes; the `cdk` entry point is left alone, as telemetry is reported by the runtime class, not the synth-time construct.
+  To upgrade:
 
-  The default compute is built only at CDK synth, in a child process whose registry no telemetry path reads, so nothing constructs one where telemetry is emitted. Importing `@aws-blocks/blocks` through its default (Node) entry now declares it instead: `Scope._setDefaultBlockForTelemetry` records its name and version, and `getRegisteredBlocks()` folds that in only when telemetry actually reads the registry.
+  1. Replace `blocksStack.handler.addEnvironment('KEY', value)` with `registerConfig(blocksStack, 'KEY', value)`.
+  2. Replace `resource.grantRead(blocksStack.handler)` with `resource.grantRead(blocksStack.executionRole)`.
+  3. Replace `blocksStack.handler.addToRolePolicy(statement)` with `blocksStack.executionRole.addToPrincipalPolicy(statement)`.
+  4. In a custom Building Block, replace `this.handler` with `this.executionRole` or `registerConfig(this, …)`.
+  5. Replace `handler.addEnvironment('CORS_ALLOWED_ORIGINS', …)` with `defaults: { ...BlocksPresets.production, allowedOrigins: [...] }`.
 
-  Declaring rather than constructing keeps the import inert — a process that imports the umbrella and emits no telemetry leaves `totalCount` untouched — and the entry is appended after the blocks the app constructed, so it never displaces them in `product.buildingBlocks`. An app-constructed `LambdaCompute` takes precedence over the declaration, so it is never counted twice. `getRegisteredBlocks()` still exposes only names already on the official list, and customer-chosen block names remain counted-but-unnamed.
-
-- 66f4be2: BREAKING: remove `BlocksStack.handler`, `BlocksBackend.handler`, and `Scope.handler`.
-
-  These returned the default compute's Lambda function, so anything wired through them reached only that one function — not every compute an app runs on. Use the stack-wide equivalents instead, which reach every compute:
-
-  | Before                                              | After                                                                                                                                         |
-  | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `blocksStack.handler.addEnvironment('KEY', value)`  | `registerConfig(blocksStack, 'KEY', value)` — loaded into `process.env` on every compute at cold start, before the backend module is imported |
-  | `resource.grantRead(blocksStack.handler)`           | `resource.grantRead(blocksStack.executionRole)`                                                                                               |
-  | `blocksStack.handler.addToRolePolicy(statement)`    | `blocksStack.executionRole.addToPrincipalPolicy(statement)`                                                                                   |
-  | `this.handler` inside a custom Building Block       | `this.executionRole` / `registerConfig(this, …)`                                                                                              |
-  | `handler.addEnvironment('CORS_ALLOWED_ORIGINS', …)` | `defaults: { ...BlocksPresets.production, allowedOrigins: [...] }`                                                                            |
-
-  `registerConfig` and `executionRole` are exported from `@aws-blocks/blocks/cdk` (and `@aws-blocks/core/cdk`).
-
-  **Precedence differs from `addEnvironment`.** `addEnvironment` wrote a real Lambda environment variable, so the last call won. `registerConfig` entries are loaded at cold start only into keys that aren't already set, so a real environment variable of the same name always wins — for example one the framework sets itself (`NODE_ENV`, `BLOCKS_STACK_NAME`) or one set on the function outside CDK. When that happens with a different value, the compute now logs a warning at cold start naming the ignored keys (names only, never values).
-
-  `registerConfig` can be called from app code after `BlocksStack.create()` / `BlocksBackend.create()` resolves. This already worked for every stack, because the framework always registers config of its own; finalize now creates the config deployment unconditionally, so it no longer depends on that.
-
-- Updated dependencies [ec7eebe]
-- Updated dependencies [e682ba7]
-- Updated dependencies [e7e96e6]
-- Updated dependencies [9ebda66]
-- Updated dependencies [78f4396]
-- Updated dependencies [440ecce]
-- Updated dependencies [1a5c18e]
-- Updated dependencies [4ae500e]
-- Updated dependencies [6d764f7]
-- Updated dependencies [5d6656a]
-- Updated dependencies [60616b1]
-- Updated dependencies [a50fb46]
-- Updated dependencies [8a1a4a9]
-- Updated dependencies [38ce80c]
-- Updated dependencies [94a914a]
-- Updated dependencies [cb0ec01]
-- Updated dependencies [005c095]
-- Updated dependencies [b8649dc]
-- Updated dependencies [2da2fd4]
-- Updated dependencies [66f4be2]
-- Updated dependencies [32a4b73]
-- Updated dependencies [da6d4c7]
-- Updated dependencies [e3e5e22]
-- Updated dependencies [e9241b5]
-- Updated dependencies [f1eb149]
-- Updated dependencies [122c49c]
-- Updated dependencies [7c19c4f]
-  - @aws-blocks/core@0.7.0
+  A real environment variable of the same name wins over a `registerConfig` entry, where the last `addEnvironment` call won before.
 
 ## 0.5.1
 
-### Patch Changes
-
-- Updated dependencies [5501cb6]
-- Updated dependencies [b58f248]
-- Updated dependencies [39628cb]
-- Updated dependencies [d4b32f2]
-- Updated dependencies [a649895]
-- Updated dependencies [27646ac]
-- Updated dependencies [5515483]
-- Updated dependencies [757d4a9]
-- Updated dependencies [a23b8d8]
-- Updated dependencies [9e02b82]
-- Updated dependencies [465a002]
-  - @aws-blocks/core@0.6.0
+Dependency updates only.
 
 ## 0.5.0
 
 ### Minor Changes
 
-- d7312f9: Make observability **compute-driven** so it composes correctly once an app has more than one compute. Logging, tracing, and the dashboard now key off compute state rather than off the Logger / Tracer / Dashboard blocks poking a single implicit compute.
+- d7312f9: **Breaking: logging, tracing, and the dashboard are driven by each compute, and `Logger` drops its `retention` option and the `LOG_LEVEL` environment variable.**
 
-  **Logging is always on; retention is a compute-level setting.** Every compute captures stdout to its own log group unconditionally — there is no "enable logging" step. The retention of that group is set per compute via a new `logRetention` prop on `LambdaCompute` (`@aws-blocks/bb-lambda-compute`), falling back to `defaults.logRetention`. Log **level** is purely per-instance runtime behavior: set it via a `Logger`'s `level` option (default `'info'`). There is no app-wide log-level default and no `LOG_LEVEL` env var.
+  To upgrade:
 
-  **Tracing is presence-gated.** Creating any `Tracer` in the app now enables X-Ray on **every** compute (X-Ray provisions real, costed infrastructure, so it stays off until the app opts in by constructing a Tracer). This replaces the previous model where a Tracer turned on tracing for one implicit compute. `@aws-blocks/core/cdk` adds `registerTracer()` (records Tracer presence) and `finalizeTracing()` (enables tracing on all computes at finalize); `create()` runs it before finalizing dashboards. `Compute.enableTracing()` is now idempotent.
+  1. Replace the `retention` option of `LoggingOptions` with the `logRetention` prop on `LambdaCompute`, which falls back to `defaults.logRetention`.
+  2. Set the log level with the `level` option of each `Logger`, which defaults to `'info'`, instead of the `LOG_LEVEL` environment variable.
+  3. Remove uses of the `LoggerBBRef` and `TracerBBRef` dashboard types.
 
-  **The dashboard is organized by compute, with display toggles.** `DashboardOptions` gains `logs?: boolean` (default `true`) and `traces?: boolean` (default `true`) — app-wide display toggles applied uniformly to every compute section. `logs:false` hides the (always-captured) logs section; `traces:false` hides traces even when tracing is enabled.
-
-  The dashboard covers **every** compute in the app (resolved at finalize, so construction order never matters). Each compute renders a health section always, a logs section (unless `logs:false`), and a traces section only when tracing is enabled on it (unless `traces:false`). Metrics remain app-scoped and are passed explicitly. No `computes` selector is exposed yet — it would leak the internal `Compute` type before customers can construct a compute; it arrives with the multi-compute surface.
-
-  **⚠️ Behavior / API changes:**
-
-  - **`Logger` no longer reconfigures log retention.** The CDK `Logger` is now a no-op placeholder (logging is always on and retention moved to the compute). The `retention` option was removed from `LoggingOptions`; set `logRetention` on the compute instead.
-  - **A `Tracer` now enables X-Ray on all computes, not one.** Any Tracer in the app turns on tracing fleet-wide.
-  - **`Logger` no longer reads the `LOG_LEVEL` environment variable.** Log level is set solely via the per-`Logger` `level` option (default `'info'`); the previously supported `LOG_LEVEL` env-var override has been removed, and Blocks stamps no app-wide log-level config. `BlocksDefaults` has no `logLevel` field.
-  - **Removed the deprecated `LoggerBBRef` / `TracerBBRef` dashboard types.** They were no longer consumed — the dashboard reads compute state directly. Loggers and Tracers were never passed to the Dashboard in this model.
+  Creating any `Tracer` in the app enables X-Ray on every compute, and `DashboardOptions` gains the `logs` and `traces` display toggles.
 
 ### Patch Changes
 
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
-
-- 6496713: fix(core): VPC review follow-ups — egress capability, endpoint trim, S3 gateway
-
-  Refines VPC support based on review feedback (all changes to the net-new,
-  unreleased VPC feature).
-
-  **`VpcRequirements.runtimeSubnet` becomes `requiresEgress?: boolean`.** A BB's
-  runtime need is a capability ("my code must reach the internet"), not a specific
-  subnet tier. Modeling it as a single role wrongly rejected a valid placement
-  (e.g. a BB needing egress placed in a `public` subnet). `finalizeVpc` now resolves
-  whether the runtime's placement actually provides egress — from the selected
-  subnets, not a guessed role — and validates `requiresEgress` against that. When
-  egress can't be determined (e.g. an imported VPC whose subnets aren't known at
-  synth) it warns rather than fabricating a pass/fail. `bb-distributed-data` (DSQL)
-  now declares `requiresEgress: true`.
-
-  **SSM interface endpoint is no longer always provisioned.** Only `AppSetting` and
-  the auth blocks (which compose `AppSetting`) use SSM, so it now flows from Building
-  Block requirements. An app that uses neither no longer pays for an unused interface
-  endpoint. CloudWatch Logs stays always-on (every in-VPC Lambda needs it for log
-  delivery).
-
-  **The S3 gateway endpoint is now always provisioned.** The runtime pulls config,
-  secrets, and migrations from S3 at cold start. Gateway endpoints are free
-  (route-table entries, no ENI), so this closes a real cold-start access gap at no
-  cost.
-
-- Updated dependencies [2806ae2]
-- Updated dependencies [f552ebe]
-- Updated dependencies [9aa0814]
-- Updated dependencies [012cd89]
-- Updated dependencies [5eee114]
-- Updated dependencies [d7312f9]
-- Updated dependencies [21443ba]
-- Updated dependencies [acd1628]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [302090a]
-  - @aws-blocks/core@0.5.0
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
+- 6496713: Replaces `VpcRequirements.runtimeSubnet` with `requiresEgress?: boolean`. The SSM interface endpoint is provisioned only when a Building Block needs it, and the S3 gateway endpoint is always provisioned.
 
 ## 0.4.0
 
 ### Minor Changes
 
-- 4a830a6: feat: route event-block resources to their resolved compute
-
-  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
-  compute resolved at synth rather than the stack's shared handler:
-
-  - AsyncJob attaches its SQS event source to the resolved compute's function;
-  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
-  - Realtime binds its shared WebSocket API integrations to the stack's **default**
-    compute (its routes are a stack-level singleton) and grants `postToConnection`
-    to the shared execution role, so `publish()` works from any compute.
-
-  Each block requires a Lambda compute today and fails at synth with a typed
-  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
-  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
-  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
-  when two copies of `bb-lambda-compute` resolve in one dependency tree.
-
-  On the default single-Lambda setup the resolved/default compute is the stack's
-  default, whose function is the shared handler — so this is non-breaking with no
-  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
-  execution role rather than the handler directly.
-
-  New public surface (hence `minor`):
-
-  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
-    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
-    (the single env-var-key sanitizer both config writers and runtime readers use).
-  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
-    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
-  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
-    error member.
-
-  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
-  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
-  Test-only change — no runtime behavior change to the Agent.
+- 4a830a6: AsyncJob, CronJob, and Realtime attach their resources to a compute resolved at synth, and fail synth with an `UnsupportedCompute` error on anything but a Lambda compute. `@aws-blocks/core` exports `blocksError(name, message)` and `sanitizeConfigKey(id)`.
 
 ### Patch Changes
 
-- c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
+- c45eb92: **Breaking: `BlocksDefaults` gains three required fields, `logRetention`, `throttling`, and `accessLogging`, and the presets now throttle the API stages and replace the shared handler Lambda log group.**
 
-  `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
+  To upgrade:
 
-  - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
-  - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
-  - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
+  1. Add the three fields to any hand-written literal `BlocksDefaults` object, which is not needed when you spread a `BlocksPresets` preset.
+  2. If your app serves above 1000 rps / 2000 burst in production, raise the limit with `defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`.
+  3. Delete the old `/aws/lambda/<fn>` log group manually if you want its history gone.
 
-  Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
-
-  **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
-
-  **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
-
-  **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
-
-  **⚠️ Behavior changes on upgrade:**
-  - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
-  - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
-  - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
-  - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
-
-  `bb-dashboard` now points its log widgets at the framework-owned handler log
-  group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
-  `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
-  CDK-generated name, so the old convention would leave the "Recent Errors" /
-  "Log Volume" widgets querying an empty group.
-
-  Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
-
-- Updated dependencies [df667c5]
-- Updated dependencies [df667c5]
-- Updated dependencies [64ddd74]
-- Updated dependencies [df667c5]
-- Updated dependencies [646614b]
-- Updated dependencies [c45eb92]
-- Updated dependencies [4a830a6]
-- Updated dependencies [f2f186c]
-- Updated dependencies [46b7c89]
-- Updated dependencies [1da58fd]
-  - @aws-blocks/core@0.4.0
+  Sandbox is capped at 200 rps / 400 burst, and Blocks-managed log groups keep events for `ONE_WEEK` in sandbox and `ONE_YEAR` in production.
 
 ## 0.3.0
 
 ### Minor Changes
 
-- f00adb0: `LambdaCompute`: default the function to **arm64 (AWS Graviton)**.
-
-  The compute's Lambda now defaults to `Architecture.ARM_64` instead of CDK's `x86_64` default. arm64 Lambda is ~20% cheaper per GB-second than x86_64 at equivalent performance. Because `LambdaCompute` is the default compute for every `@aws-blocks/blocks` app, the shared handler runs on Graviton out of the box.
-
-  The framework's own Building Blocks are pure-JavaScript esbuild bundles with no architecture-specific native code, so the switch is transparent for them. A backend `entry` bundle is the customer's own handler plus whatever they import, though — so an app that bundles an **x86-only native dependency** into its backend should be aware of the default. There is no per-app override yet; a customer-facing way to pin the architecture (`architecture` on `LambdaComputeProps` is present but internal for now) will be exposed alongside the public compute-configuration surface.
-
-  > **Behavior change on next deploy:** the handler function's architecture is `arm64` (an in-place update on an existing function).
+- f00adb0: `LambdaCompute` defaults the function to `arm64` instead of `x86_64`, so the next deploy updates the handler function's architecture in place. There is no per-app override yet, so check any x86-only native dependency that your backend bundles.
 
 ### Patch Changes
 
-- f00adb0: feat(core): resolve `Scope.compute`; the default compute owns the handler + gateway
+- f00adb0: **Breaking: the Lambda function and API Gateway move under the default compute, so a redeploy replaces them and the API URL changes.**
 
-  Add a `Scope.compute` getter that resolves the compute a block runs on: the
-  nearest `_compute` assigned on the block or an ancestor scope, else the owning
-  stack/backend's default compute.
+  To upgrade:
 
-  The default is a `LambdaCompute` that now **owns** the Lambda function + API
-  Gateway. `setupBlocksInfra` no longer creates them; `BlocksStack` /
-  `BlocksBackend` expose `handler` / `gateway` / `apiUrl` as getters that delegate
-  to the default compute. The compute is created in `create()` before the backend
-  module is imported, so a block reading `this.compute` in its constructor
-  resolves to it. `_compute` is internal (no public option yet).
+  1. Before you upgrade, confirm that anything wired to the current API Gateway URL, such as an Amplify Gen2 frontend, can absorb a URL change.
+  2. If you call `BlocksStack.create()` or `BlocksBackend.create()` from `@aws-blocks/core` directly, import `BlocksStack` from `@aws-blocks/blocks/cdk` instead, or pass a `defaultComputeFactory` on the props.
 
-  Core no longer imports a concrete compute: `create()` requires a
-  `defaultComputeFactory` on its props (`CoreBlocksStackProps` /
-  `CoreBlocksBackendProps` — the public `BlocksStackProps` / `BlocksBackendProps`
-  plus that factory) and calls it to build the default. The umbrella
-  `@aws-blocks/blocks` supplies `LambdaCompute` by spreading the factory onto the
-  props in a thin `create()` wrapper, so apps built on `@aws-blocks/blocks` are
-  unaffected — their call site is unchanged.
+  Apps built on `@aws-blocks/blocks` need no code change, and the new `Scope.compute` getter resolves the compute a block runs on.
 
-  **Breaking (direct `@aws-blocks/core` consumers only):** core no longer provides
-  a built-in default compute. `BlocksStack.create()` / `BlocksBackend.create()`
-  now require a `defaultComputeFactory` field on the props (typed
-  `CoreBlocksStackProps` / `CoreBlocksBackendProps`); props without it no longer
-  type-check (and it throws at synth if forced). This break is inherent to moving
-  the Lambda + API Gateway out of core — it is not specific to how the factory is
-  passed. Migrate by either:
-
-  - using `@aws-blocks/blocks` (`import { BlocksStack } from '@aws-blocks/blocks/cdk'`),
-    which injects a Lambda default for you — the recommended path; or
-  - supplying your own factory on the props:
-    `BlocksStack.create(scope, id, { ...props, defaultComputeFactory: (root) => new LambdaCompute(root, 'DefaultCompute') })`,
-    which requires depending on `@aws-blocks/bb-lambda-compute` and the internal
-    `@aws-blocks/core/cdk/internal` types.
-
-  **Resource replacement on redeploy:** because the Lambda function and API
-  Gateway now live under the default compute's construct path
-  (`.../DefaultCompute/...`), their CloudFormation logical IDs change, so a
-  redeploy **replaces** the function + API Gateway and the API URL changes. These
-  are internal resources, not a customer-facing contract. Any consumer with an
-  already-deployed stack — in particular an Amplify Gen2 frontend wired to the
-  current API Gateway URL (this repo carries a Gen2 nested-stack regression test,
-  so Gen2 integration is real) — should confirm they can absorb a URL change
-  before upgrading.
-
-- f00adb0: feat(core): add `allowedOrigins` to `BlocksDefaults`
-
-  `BlocksDefaults` gains an `allowedOrigins` field — CORS origin patterns (matched
-  against the request `Origin` header) the compute's API accepts. `LambdaCompute`
-  now reads `this.defaults.allowedOrigins` to populate `CORS_ALLOWED_ORIGINS`
-  (comma-joined, as the runtime parses it) instead of reading the `sandboxMode`
-  CDK context. The `sandbox` preset allows localhost (so a local dev frontend can
-  reach a deployed API); `production` allows none.
-
-  **Breaking (direct `BlocksDefaults` literal authors only):** `allowedOrigins` is
-  required. Building the object from `BlocksPresets.sandbox` / `BlocksPresets.production`
-  (or a spread of one) is unaffected — the presets supply it. Only a hand-written
-  `BlocksDefaults` literal must add the field.
-
-- Updated dependencies [5798492]
-- Updated dependencies [f00adb0]
-- Updated dependencies [f00adb0]
-- Updated dependencies [08ab129]
-- Updated dependencies [9d4ccea]
-- Updated dependencies [5bfae0a]
-- Updated dependencies [0ac3879]
-- Updated dependencies [e4dac4a]
-  - @aws-blocks/core@0.3.0
+- f00adb0: **Breaking: `BlocksDefaults` has a new required field, `allowedOrigins`, the CORS origin patterns the compute's API accepts.** Add it to any hand-written `BlocksDefaults` literal. The `sandbox` preset allows localhost and `production` allows none, so an object built from `BlocksPresets.sandbox` or `BlocksPresets.production` needs no change.
 
 ## 0.2.1
 
 ### Patch Changes
 
-- 448a47c: fix(bb-lambda-compute): add package metadata, prebuild, and pin dependency ranges
-
-  Bring `@aws-blocks/bb-lambda-compute`'s package.json in line with its siblings:
-
-  - add the `repository` / `homepage` / `bugs` blocks. Without `repository.url`,
-    provenance publishing fails with `E422 … "repository.url" is ""` because npm
-    cannot match the package against the sigstore attestation's source repo;
-  - add the `prebuild` version-generation script (`generate-version.mjs`);
-  - pin `@aws-blocks/core` to `^0.2.0` instead of `*`, matching every other
-    package.
-
-  Also pin the umbrella `@aws-blocks/blocks`'s dependency on
-  `@aws-blocks/bb-lambda-compute` to `^0.2.0` instead of `*`, now that the package
-  publishes a real version.
+- 448a47c: `@aws-blocks/bb-lambda-compute` gains package metadata and a `prebuild` version script, and depends on `@aws-blocks/core` `^0.2.0` instead of `*`. `@aws-blocks/blocks` depends on `@aws-blocks/bb-lambda-compute` `^0.2.0` instead of `*`.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 5262062: feat: extract `LambdaCompute` into `@aws-blocks/bb-lambda-compute`
-
-  The abstract `Compute` base stays in core as a framework primitive; the concrete
-  `LambdaCompute` (a `NodejsFunction` fronted by its own API Gateway, assuming the
-  shared execution role) moves into a new package, `@aws-blocks/bb-lambda-compute`.
-
-  The package is CDK-only and its sole export is internal — customers cannot
-  instantiate a compute yet. Nothing in the default path constructs it, so this is
-  additive and non-breaking.
-
-### Patch Changes
-
-- Updated dependencies [7b4c62d]
-- Updated dependencies [5262062]
-- Updated dependencies [3614a09]
-- Updated dependencies [5262062]
-- Updated dependencies [5071079]
-- Updated dependencies [8966cfb]
-- Updated dependencies [b11a75b]
-  - @aws-blocks/core@0.2.0
+- 5262062: `LambdaCompute` moves into a new package, `@aws-blocks/bb-lambda-compute`. The package is CDK-only and its sole export is internal, so customers cannot instantiate a compute yet.

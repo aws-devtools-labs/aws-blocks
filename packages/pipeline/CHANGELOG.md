@@ -1,8 +1,8 @@
-# @aws-blocks/pipeline
+# @aws-cdk-blocks/pipeline
 
 ## 1.0.0
 
-The first stable release. The changes since 1.0.0-rc.1 are listed below. The full notes for every other change since 0.x are under 1.0.0-rc.0 and 1.0.0-rc.1.
+The first stable release. The changes since 1.0.0-rc.1 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0 and 1.0.0-rc.1.
 
 ### Changes since `@aws-blocks/pipeline` 0.x
 
@@ -16,246 +16,65 @@ The first stable release. The changes since 1.0.0-rc.1 are listed below. The ful
 
 ### Patch Changes
 
-- 8fbbeca: Document hosting front-door compatibility, including how to build a buffered Next.js server for an API Gateway HTTP API. Add hosting options and synth-error references, and ship the custom front-door guide with the package.
-
-  Update the pipeline quick start to use `Pipeline.create()` with the AWS CDK Blocks store prefixes and a separate pipeline entry point. Document the pipeline options and their defaults.
-
-- Updated dependencies [c42ba42]
-- Updated dependencies [8fbbeca]
-- Updated dependencies [23692f1]
-  - @aws-cdk-blocks/hosting@1.0.0-rc.1
+- 8fbbeca: The hosting docs cover front-door compatibility, hosting options, and synth errors, and the package ships the custom front-door guide. The pipeline quick start uses `Pipeline.create()` and documents the pipeline options and their defaults.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Patch Changes
 
-- d01c34c: Add API Extractor reports (`API.md`) for `@aws-cdk-blocks/hosting`, `@aws-cdk-blocks/pipeline` and `@aws-cdk-blocks/bb-compute`, so changes to their public surface show up in review like the other packages' (`npm run update:api`, checked by `npm run check:api`). The block docs folder of `aws-cdk-blocks` ships them next to each package's README.
-- d01c34c: docs: check the code samples of every shipped doc against the packages
-
-  A new test in `aws-cdk-blocks` reads every doc shipped in `docs/`, changelogs included, and fails when a code sample imports a name its `@aws-cdk-blocks/*` entry doesn't export, uses a missing member or constructor of a Blocks name, or uses an undeclared Blocks-looking name no entry exports (a removed block). Samples that are complete files (a first-line `// path/file.ts` comment and an import) are typechecked in full. Samples labelled as browser files (`// src/…`, `// test/…`, `// frontend/…`) also have their value imports resolved under the `browser` condition, where the root `aws-cdk-blocks` has none. Intentional exceptions are marked in the doc itself, with a reason: `<!-- doc-snippet: skip — reason -->` or `<!-- doc-snippet: fragment — reason -->` above a sample, or `<!-- doc-snippet: skip-file — reason -->` for a whole doc.
-
-  Fixed what it found: the bb-auth README's "Protect every method" frontend file imported `AuthErrors` / `isAuthError` from `aws-cdk-blocks`, which a browser build doesn't export; it now matches with `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client`.
-
-  The bb-data `USE_CASES.md` backend example built `new Database<DB>(…)` and called Kysely methods on it. It now reads through `createKyselyAdapter<DB>(…)`, as the bb-data README does, and inserts with ``queryOne(sql`INSERT … RETURNING …`)``, because the types `bb-data generate-types` emits list a `SERIAL` id as a required column. Its setup steps now agree with the code: the migration is applied with `bb-data migrate`, the types are generated where the API file imports them from, and the `Database` passes `migrationsPath`. The `AuthCognito` / `AuthOIDC` / `AuthBasic` "before" code in the bb-auth migration guide, a few samples that name the app's own classes, and the `aws-cdk-blocks` and `@aws-cdk-blocks/core` changelogs (whose release notes show the removed auth blocks) are marked.
-
-- Updated dependencies [d01c34c]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [668227b]
-- Updated dependencies [1f565bd]
-- Updated dependencies [52dd5e6]
-- Updated dependencies [5f55dac]
-- Updated dependencies [adb6077]
-- Updated dependencies [c6a59f4]
-- Updated dependencies [1e4d08d]
-- Updated dependencies [5f55dac]
-- Updated dependencies [e6c989d]
-- Updated dependencies [b2eb306]
-- Updated dependencies [b2eb306]
-- Updated dependencies [fb29c06]
-- Updated dependencies [60360c1]
-- Updated dependencies [40d25ec]
-- Updated dependencies [e3b5949]
-- Updated dependencies [184df0b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [b2eb306]
-- Updated dependencies [b2eb306]
-- Updated dependencies [b2eb306]
-- Updated dependencies [8ece10a]
-- Updated dependencies [e1e4844]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [58817b0]
-  - @aws-cdk-blocks/hosting@1.0.0-rc.0
+- d01c34c: Adds API Extractor reports, `API.md`, for `@aws-cdk-blocks/hosting`, `@aws-cdk-blocks/pipeline`, and `@aws-cdk-blocks/bb-compute`. The block docs folder of `aws-cdk-blocks` ships them next to each package's README.
+- d01c34c: A new test checks the code samples of every doc shipped in `docs/` against the packages. The bb-auth README's frontend sample matches with `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client` instead of importing `AuthErrors` from `aws-cdk-blocks`.
 
 ## 0.2.4
 
 ### Patch Changes
 
-- d366907: chore: manual dependency bump (2026-10-19)
-- 27c35e5: Correct documentation: `Secret` reads pick up rotated values after the cache TTL (`cacheTtlSeconds`), not only on cold start, and the `put()` error-handling example now declares a writable secret; `EmailClient` validates recipient and size limits locally on AWS too; fix the `useChat` anchor in the `bb-agent` README; use 12-digit account IDs in `Pipeline` connection ARN examples; describe the `KnowledgeBase` mock's `'fixed'` and `'none'` chunking.
-- Updated dependencies [88747f5]
-- Updated dependencies [d366907]
-- Updated dependencies [2c73654]
-- Updated dependencies [515089c]
-- Updated dependencies [a02549a]
-- Updated dependencies [dde6340]
-- Updated dependencies [f8bfab1]
-- Updated dependencies [7477b6e]
-- Updated dependencies [3ae22e6]
-- Updated dependencies [c8c26f7]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [6a53068]
-- Updated dependencies [3803f19]
-- Updated dependencies [3b5a419]
-- Updated dependencies [db15b5e]
-- Updated dependencies [48c35f6]
-- Updated dependencies [c0f6a83]
-  - @aws-blocks/hosting@0.5.0
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- 27c35e5: The docs state that `Secret` reads pick up rotated values after `cacheTtlSeconds`, not only on cold start, and that `EmailClient` validates recipient and size limits on AWS too. Other fixes cover the `useChat` anchor, `Pipeline` connection ARN examples, and the `KnowledgeBase` mock's chunking.
 
 ## 0.2.3
 
-### Patch Changes
-
-- Updated dependencies [773cef2]
-- Updated dependencies [5501cb6]
-- Updated dependencies [6b7fe4c]
-- Updated dependencies [5515483]
-- Updated dependencies [dae7a86]
-- Updated dependencies [7b7a59f]
-  - @aws-blocks/hosting@0.4.0
+Dependency updates only.
 
 ## 0.2.2
 
 ### Patch Changes
 
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
-
-- Updated dependencies [2806ae2]
-- Updated dependencies [5eee114]
-  - @aws-blocks/hosting@0.3.1
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
 
 ## 0.2.1
 
 ### Patch Changes
 
-- 4b74c7f: feat(hosting,pipeline): managed-value JSON codec + a public per-stage post-deploy hook
-
-  **`@aws-blocks/hosting` — managed-value JSON codec.** `secret()`/`config()` markers
-  are branded with a `Symbol` (and may carry a non-serializable `schema`), so they do
-  not survive `JSON.stringify`/`JSON.parse` — the brand is dropped and
-  `isManagedValue()` then returns false. Any consumer that carries a config object
-  containing markers across a JSON boundary (e.g. serializing per-stage config into a
-  build environment variable and reading it back in a later phase) now has a lossless
-  round-trip: `encodeManagedValue`/`decodeManagedValue`, the `managedValueReplacer` /
-  `managedValueReviver` for use with `JSON.stringify`/`JSON.parse`, plus
-  `isManagedValueJSON`, `ManagedValueJSON`, `MANAGED_VALUE_JSON_TAG`,
-  `MANAGED_VALUE_JSON_VERSION`, and the typed `ManagedValueCodecError`. The wire form
-  is a versioned, cross-build compatibility boundary: `decodeManagedValue` accepts
-  `unknown` and validates exhaustively — throwing `ManagedValueCodecError` on an
-  unsupported version, unknown kind, or malformed value — while the reviver leaves
-  anything that is not an exact wire value untouched (a tagged object carrying extra
-  fields is not mistaken for a marker, so no data is silently dropped). A marker's
-  `schema` object is not serializable and is not transported, but its operational bit
-  is, so a schema-bearing marker round-trips **without silently changing runtime
-  behavior** (the far side still JSON-parses the stored value); deep re-validation
-  still requires re-declaring the schema on the far side.
-
-  **`@aws-blocks/pipeline` — `postStage` hook.** New optional `postStage` prop on
-  `PipelineProps`. It is invoked once per stage with the stage, its config, and the
-  resolved pipeline source (`PostStageContext`), and its returned steps are attached
-  as that stage's post-deploy steps. When the stage also has a `bakeTime`, the bake
-  step is made to depend on the hook's steps, so baking begins only after they
-  complete rather than racing them in parallel. This lets a higher-level construct run
-  a second per-stage deploy phase (one that needs the first phase's outputs) without
-  matching internal construct names to rediscover the stage's source.
-
-  Both additions are backward compatible — new exports and one new optional prop.
-
-- 5960fa4: Pipeline: reject invalid stage names at synth instead of failing minutes into deploy.
-
-  A stage name becomes a prefix of the derived CloudFormation stack name (`<stageName>-<stackId>`), which CloudFormation requires to match `/^[A-Za-z][A-Za-z0-9-]*$/`. `validateStageName` previously allowed underscores (and leading digits), so a stage named e.g. `qa_east` passed validation but produced a stack name (`qa_east-App`) that CloudFormation rejects only after provisioning starts. It now enforces the stack-name contract up front and throws at synth with an actionable message and a suggested valid name (e.g. `qa-east`).
-
-- Updated dependencies [f2f186c]
-- Updated dependencies [1da58fd]
-- Updated dependencies [4b74c7f]
-  - @aws-blocks/hosting@0.3.0
+- 4b74c7f: Adds `encodeManagedValue`, `decodeManagedValue`, `managedValueReplacer`, and `managedValueReviver` to `@aws-blocks/hosting`, so `secret()` and `config()` markers survive a JSON round-trip. `PipelineProps` takes an optional `postStage` hook that returns each stage's post-deploy steps.
+- 5960fa4: Pipeline rejects an invalid stage name such as `qa_east` at synth, with a suggested valid name such as `qa-east`. A stage name must match `/^[A-Za-z][A-Za-z0-9-]*$/`.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 9d4ccea: Add `secret()` / `config()` support to hosting and pipeline for self-hosted deployments — externalized values that are never hardcoded in source, committed to git, or written into the CloudFormation template.
-
-  **Two intent functions; the store is implied by which you call.**
-
-  - **`secret('KEY')` → AWS Secrets Manager** — for sensitive values (API keys, tokens, credentials).
-  - **`config('KEY')` → SSM Parameter Store** (free tier) — for non-sensitive externalized values (feature flags, a custom domain, a connection ARN).
-
-  The developer never selects a store; it is derived from the function (`storeForKind`), so the CLI write, the IAM grant, the synth-time fetch, and the runtime read can never disagree.
-
-  **Runtime read — two getters, one per store.** `getSecret('KEY')` reads Secrets Manager; `getConfig('KEY')` reads SSM. Each reads its own injected locator env var (`HOSTING_SECRET_PARAM_<KEY>` vs `HOSTING_CONFIG_PARAM_<KEY>`), so the store is unambiguous. Both read `process.env.KEY` first, so **local dev needs no AWS** (put the value in a `.env` file). Values are fetched + decrypted on first use, cached (per-kind `cacheTtlSeconds` for rotation without a cold start; otherwise cached for the process lifetime), and never enter the template. The getters live on the **CDK-free `@aws-blocks/hosting` entry** — the value API (`secret`/`config`/`getSecret`/`getConfig`) is the package's `.`, and its module graph pulls in no CDK, no `fast-glob`, and no `node:fs`, so importing it into an SSR/runtime bundle (including the edge runtime) is safe. Build-time tooling lives off `.` so it never enters a runtime bundle: the CDK construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI + typegen engines on `@aws-blocks/hosting/scripts`. (`@aws-blocks/core` already exports a backend `getConfig`, so import the hosting getters from `@aws-blocks/hosting`.)
-
-  **CDK wiring.** In `Hosting` `environment` (and `domain`) a `secret()`/`config()` marker injects only the store _locator_ and grants the compute role least-privilege read (`secretsmanager:GetSecretValue` / `ssm:GetParameter`, scoped to the exact ARN) + `kms:Decrypt` (conditioned on `kms:ViaService`). When a `stage` is set the grant covers BOTH the stage locator `<prefix>/<stage>/<key>` and the shared fallback `<prefix>/<key>` (the fallback read is what lets a stage fall back to a shared value), so treat the shared entry as readable by every stage sharing that prefix. A **synth-time** position — `domain.domainName` — accepts only `config()` (or a plain string), never `secret()`: the value is resolved via an SDK read and **inlined as a literal into the template** (a domain must be a literal before CloudFront/ACM), so a secret there would defeat its own purpose; a domain is public anyway. Synth resolution is async, so use `await Hosting.create(...)`. (Runtime `environment` markers still accept both `secret()` and `config()` — those inject only the locator and never inline.) Per-kind namespace/cache config is set via the separate `secretStore` / `configStore` props (`{ prefix, stage, cacheTtlSeconds }`), defaulting to the neutral `/hosting/secrets` and `/hosting/config` prefixes.
-
-  **Namespacing (avoid cross-app collisions).** A **Blocks** app is scoped automatically: the `Hosting` / `Pipeline` blocks and the `npm run secret` / `config` CLIs default to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`, where `stackId` is the app's stable id from the committed `.blocks/config.json`. Both the CLI and the CDK synth read that same file, so two Blocks apps in one account/region never collide, and the write and the read can never diverge (when the file is absent — e.g. a bare test — both sides fall back to the unscoped `/blocks/*` identically). `stackId` is stage-independent (prod and sandbox share it; use the opt-in `stage` segment for per-stage values). A **standalone** hosting/pipeline app (the framework-neutral leaf) has no `.blocks/config.json`, so its defaults (`/hosting/secrets`, `/hosting/config`) stay account-global — give each app its own `secretStore.prefix` / `configStore.prefix` (and matching CLI `--prefix`) when more than one deploys to an account. Use `--region` (or `AWS_REGION`) to write the value in the same region the app deploys to.
-
-  **Bring-your-own (BYO).** `environment` (hosting) and `buildSecrets` (pipeline) also accept an existing CDK `ISecret` / `IParameter` handle alongside the managed markers: the construct grants read via the handle and injects its locator, so `getSecret`/`getConfig` resolve it identically — managed _provisions_, BYO _references_.
-
-  **Pipeline.** `source.connectionArn` accepts a `config()` marker (resolved to a literal at synth; a connection ARN is a reference inlined into the template, so `secret()` is a type error there — same rule as `domain`). `buildSecrets` accepts `secret()` markers or BYO `ISecret` handles and wires them as CodeBuild `SECRETS_MANAGER` env vars fetched at build time (masked in logs, never inlined) — build-time credentials are secrets, so this surface is Secrets-Manager-only. Namespace config via `secretStore` / `configStore`.
-
-  **CLI.** `secret set|list|remove` (Secrets Manager) and `config set|list|remove` (SSM), sharing one engine (`setValue`/`listValues`/`removeValue`/`runValueCli`). Blocks apps get `npm run secret` / `npm run config` (scoped per app to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`); standalone/pipeline apps get the `hosting-secret` and `hosting-config` bins. A **secret** value is never read from argv/shell history — `secret set` takes it from a hidden prompt or `--value-stdin` (a positional value is a hard error); a non-sensitive **config** value may be passed positionally. `list` prints names only, never values. All commands accept `--prefix`, `--stage`, and `--region` (write to the same region the app deploys to).
-
-  **Type-safe reads (zero code) — `getSecret` / `getConfig` autocomplete + typo errors.** The runtime getters are typed against two augmentable registries (`HostingSecretRegistry` / `HostingConfigRegistry`): empty by default they accept any `string` (unchanged, non-breaking), and once populated they narrow to your declared keys — editor autocomplete, and a typo (or reading a `config` key via `getSecret`, i.e. the wrong store) becomes a compile error. You populate them with **no code change** via the new `hosting-typegen` CLI (`npm run typegen`, `--watch` to regenerate on save, `--check` for CI): it statically scans your `secret('...')` / `config('...')` calls (TypeScript compiler API — no app execution, no AWS credentials) and generates a `.d.ts` (`.blocks/hosting-values.d.ts`) that augments the `@aws-blocks/hosting` entry (where the getters live), narrowing them to your declared keys. The generated file is derived from your `secret()`/`config()` calls, and `--check` fails CI when it's stale. Add `.blocks/**/*.d.ts` to your tsconfig `include`. In a Blocks app this is automatic: the dev server (`npm run dev`) auto-detects `secret()`/`config()` usage and runs the generate-and-watch step itself (a no-op when the app declares no secrets, and non-fatal), so keys update as you type with no second command; standalone hosting apps use `hosting-typegen --watch`.
-
-  **Typed, parsed values via a schema.** `secret('KEY', { schema })` / `config('KEY', { schema })` accept any Standard Schema (Zod, Valibot, ArkType — typed as `StandardSchemaV1`, library-neutral). `typegen` builds a TypeScript `Program`, infers the schema's output type, and inlines it into the generated `.d.ts`, so **`getSecret`/`getConfig` return the inferred type** (e.g. `const { beta } = await getConfig('FEATURE_FLAGS')`) instead of `string` — no `JSON.parse(...)` and no `any`. At runtime the value is JSON-parsed (a per-key flag is injected at synth); the schema itself isn't shipped to the runtime, so this is parse-to-type, not a deep re-validation across the bundle boundary.
-
-  **Templates.** `@aws-blocks/create-blocks-app` templates scaffold a `secret` script (`npm run secret`) wired to the Blocks CLI, and a `typegen` script (`npm run typegen` → `runTypegenCli` from `@aws-blocks/blocks/scripts`) with `.blocks/**/*.d.ts` added to the tsconfig `include`, so a newly-created app can manage secrets and get type-safe `getSecret`/`getConfig` out of the box.
+- 9d4ccea: Adds `secret('KEY')` and `config('KEY')` to hosting and pipeline, which keep values in AWS Secrets Manager and SSM Parameter Store for `getSecret('KEY')` and `getConfig('KEY')` to read at runtime. Set values with `npm run secret` and `npm run config`, and run `npm run typegen` for typed keys.
 
 ### Patch Changes
 
-- 947a1bd: Fix `Pipeline.create()` failing with "stage '<name>' contains no stacks" when the
-  consumer app resolves a different `aws-cdk-lib` copy than `@aws-blocks/pipeline`
-  (monorepo, linked-package, or `file:` installs — e.g. an Amplify self-hosting app).
-
-  `validateStageStacks` detected a stage's stacks with `instanceof cdk.Stack`, which
-  returns `false` across module copies — so a `stageFactory` that _did_ create a
-  `Stack` was misdetected as empty and synth aborted. It now uses
-  `cdk.Stack.isStack()`, which matches on a shared `Symbol.for` marker and is
-  cross-copy-safe.
-
-- Updated dependencies [9d4ccea]
-  - @aws-blocks/hosting@0.2.0
+- 947a1bd: `Pipeline.create()` no longer fails with "stage '<name>' contains no stacks" when the app resolves a different `aws-cdk-lib` copy than `@aws-blocks/pipeline`.
 
 ## 0.1.1
 
 ### Patch Changes
 
-- e98bab4: feat(pipeline): extract Pipeline construct into @aws-blocks/pipeline package, add partialBuildSpec for CodeBuild runtime control
-
-  `@aws-blocks/core` receives a minor bump (not patch): it gains a new runtime dependency on `@aws-blocks/pipeline` and adds new public re-exports from its CDK entrypoint (`__PIPELINE_STAGE_SCOPE__`, `Pipeline`, `DeployStage`, and the pipeline configuration types). New backwards-compatible public surface is a minor change per semver.
+- e98bab4: Moves the `Pipeline` construct into the `@aws-blocks/pipeline` package and adds `partialBuildSpec` for CodeBuild runtime control. The CDK entrypoint of `@aws-blocks/core` re-exports `Pipeline`, `DeployStage`, and the pipeline configuration types.
