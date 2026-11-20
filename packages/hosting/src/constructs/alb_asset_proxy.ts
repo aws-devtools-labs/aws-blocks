@@ -10,7 +10,8 @@ import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js'
  * directly (and the assets bucket is private — BLOCK_ALL, no public read). So
  * the ALB routes static paths to this tiny Lambda TARGET, which reads the
  * object from `builds/<buildId>/<path>` in the private bucket and returns it
- * whole (base64, gzipped when compressible). This is the
+ * whole (base64, gzipped when compressible), or the single byte range the
+ * request asks for (206, never gzipped). This is the
  * ALB analogue of CloudFront's S3+OAC origin.
  *
  * The handler speaks the ALB↔Lambda contract (NOT API Gateway): the event is
@@ -49,7 +50,7 @@ import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js'
  * @param opts.errorPages    the app's error pages (`404.html` / `500.html` keys under the build prefix)
  */
 export const generateAlbAssetProxyCode = (opts: AssetProxyOptions): string => `${assetProxyCoreJs(opts)}
-const STATUS_TEXT = { 200: 'OK', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect', 400: 'Bad Request', 404: 'Not Found', 500: 'Internal Server Error' };
+const STATUS_TEXT = { 200: 'OK', 206: 'Partial Content', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect', 400: 'Bad Request', 404: 'Not Found', 416: 'Range Not Satisfiable', 500: 'Internal Server Error' };
 
 exports.handler = async (event) => {
   const res = await blocksServe(event.path || '/', event.headers);

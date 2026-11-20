@@ -320,6 +320,11 @@ keeps the `Cache-Control` it was uploaded with. It also:
   client that accepts it (`Vary: accept-encoding`);
 - returns `ETag` and `Last-Modified`, and answers a matching `If-None-Match` /
   `If-Modified-Since` with a body-less 304;
+- answers a single byte range (`Range: bytes=0-9`, `bytes=500-`, `bytes=-500`)
+  with a 206 and `Content-Range`, read from S3 as that range and never gzipped,
+  so media seeking and resumable downloads work; a range past the end is a 416.
+  Several ranges, a malformed range, or an `If-Range` naming another version of
+  the file get the whole file (200). File responses carry `Accept-Ranges: bytes`;
 - adds `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`
   and `Referrer-Policy` to every response (an app header rule of the same name
   wins). Server and API responses don't pass the proxy and don't get them.
@@ -368,7 +373,9 @@ file is capped by that response's limit:
 | ALB (Lambda target) | 1 MB | 750 KB (a compressible file: 750 KB gzipped) |
 | API Gateway (Lambda proxy integration) | 6 MB (Lambda's response limit, below API Gateway's 10 MB payload limit) | 4.5 MB |
 
-Synth lists every build asset over the limit
+The limit applies to the bytes a response carries, so a byte range of a
+larger file is served when the range itself fits; a request for the whole
+file still fails. Synth lists every build asset over the limit
 (`@aws-cdk-blocks/hosting:AssetExceedsProxyLimit`). Serve large files from the
 CloudFront door or the stacked door (static files come straight from S3), or
 from a file bucket. The same limits bind everything else these doors carry:
