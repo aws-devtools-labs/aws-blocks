@@ -42,7 +42,7 @@ const ALLOWLIST = [
 		reason: 'allowedOrigins regex entries are intentionally regexes: validateCorsOriginEntry() runs first (bare dots, globs, nested quantifiers, standalone compile) and the entry is anchored as ^(?:…)$.',
 	},
 	{
-		at: 'packages/core/src/raw-route.ts:443',
+		at: 'packages/core/src/raw-route.ts:451',
 		reason: 'Built one character at a time: every character in REGEX_SPECIAL is escaped and `{` `}` `*` are parsed as params and the wildcard.',
 	},
 	{
