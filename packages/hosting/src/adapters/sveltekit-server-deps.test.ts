@@ -359,13 +359,100 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
     assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('#internal/util'));
   });
 
-  void it('accepts a require() of the AWS SDK v3 that the Lambda Node.js runtime provides, not an import of it', () => {
+  void it('accepts an import or require() of an AWS SDK package the Lambda runtime ships, not one it lacks', () => {
     scaffold(tmp);
-    // CommonJS require() searches NODE_PATH, which includes the runtime's SDK; an ESM import never does.
-    writeServerChunk(tmp, "const { S3Client } = require('@aws-sdk/client-s3');\nmodule.exports = S3Client;\n");
+    // The runtime's Node.js falls back to NODE_PATH (which includes /var/runtime/node_modules) for ESM too.
+    writeServerChunk(
+      tmp,
+      [
+        "import { S3Client } from '@aws-sdk/client-s3';",
+        "const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');",
+        "const { marshall } = require('@aws-sdk/util-dynamodb');",
+        'export { S3Client, DynamoDBClient, marshall };',
+        '',
+      ].join('\n'),
+    );
     assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
-    writeServerChunk(tmp, "import { S3Client } from '@aws-sdk/client-s3';\nconst v2 = require('aws-sdk');\nexport { S3Client, v2 };\n");
-    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('@aws-sdk/client-s3', 'aws-sdk'));
+    writeServerChunk(
+      tmp,
+      [
+        "const { LambdaWebClient } = require('@aws-sdk/client-lambda-web');",
+        "import { NotAClient } from '@aws-sdk/client-not-in-the-runtime';",
+        "const v2 = require('aws-sdk');",
+        'export { LambdaWebClient, NotAClient, v2 };',
+        '',
+      ].join('\n'),
+    );
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      rejects('@aws-sdk/client-lambda-web', '@aws-sdk/client-not-in-the-runtime', 'aws-sdk (imported from'),
+    );
+  });
+
+  void it('resolves the imports of a symlinked file from where build/ has it, as the ZIP stores it there', () => {
+    scaffold(tmp);
+    const server = path.join(tmp, 'build', 'server');
+    fs.mkdirSync(path.join(server, 'shared'));
+    fs.writeFileSync(path.join(server, 'shared', 'impl.js'), "import { h } from './helper.js';\nexport const impl = h;\n");
+    fs.writeFileSync(path.join(server, 'shared', 'helper.js'), 'export const h = 1;\n');
+    fs.symlinkSync(path.join(server, 'shared', 'impl.js'), path.join(server, 'chunks', 'alias.js'));
+    writeServerChunk(tmp, "import { impl } from './alias.js';\nexport { impl };\n");
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      rejects('./helper.js (imported from build/server/chunks/alias.js)'),
+    );
+    fs.writeFileSync(path.join(server, 'chunks', 'helper.js'), 'export const h = 2;\n');
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('does not scan scripts that a directory symlink in build/ reaches outside it', () => {
+    scaffold(tmp);
+    const outside = path.join(tmp, 'outside-tools');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'tool.js'), "import 'left-pad';\n");
+    fs.symlinkSync(outside, path.join(tmp, 'build', 'server', 'tools'));
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('lets an optional load fall back when the shipped file it loads has a missing dependency', () => {
+    scaffold(tmp);
+    const chunks = path.join(tmp, 'build', 'server', 'chunks');
+    fs.writeFileSync(path.join(chunks, 'tracing.js'), "import 'missing-otel';\nexport const trace = 1;\n");
+    fs.writeFileSync(path.join(chunks, 'tracing-cjs.js'), "module.exports = require('missing-cjs-otel');\n");
+    writeServerChunk(
+      tmp,
+      [
+        "let t; try { t = await import('./tracing.js'); } catch { t = null; }",
+        "let c; try { c = require('./tracing-cjs.js'); } catch { c = null; }",
+        'export { t, c };',
+        '',
+      ].join('\n'),
+    );
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+    // A required path to the same file makes its dependency required.
+    fs.writeFileSync(path.join(chunks, 'hooks.js'), "import { trace } from './tracing.js';\nexport { trace };\n");
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      rejects('missing-otel (imported from build/server/chunks/tracing.js)'),
+    );
+  });
+
+  void it('rejects a require() with a promise handler, as require() throws before the handler attaches', () => {
+    scaffold(tmp);
+    writeServerChunk(
+      tmp,
+      [
+        "const a = require('plugin-a').catch(() => null);",
+        "const b = require('plugin-b').then((m) => m, () => null);",
+        "const c = import('plugin-c').catch(() => null);",
+        'module.exports = { a, b, c };',
+        '',
+      ].join('\n'),
+    );
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      (err: Error) => rejects('plugin-a', 'plugin-b')(err) && !err.message.includes('plugin-c'),
+    );
   });
 
   void it('checks the require calls of a shipped CommonJS dependency, except a guarded optional one', () => {

@@ -19,21 +19,28 @@
  *
  * Checking ({@link unresolvedServerImports}): the server files of `build/` are
  * parsed (not pattern-matched, so text in a string or a comment is no import),
- * and every module they load is resolved the way Node.js does from the
- * importing file's real path, staying inside `build/`: relative paths, exact
- * built-ins only (`buffer/` is the npm package), a package's `exports` (with
- * the `import` or `require` condition) or `imports` for `#` specifiers, else
- * the ESM legacy `main` or the CommonJS file and directory lookup, and the
- * target file has to exist. A target whose real path is outside `build/` (a
- * relative path or a symlink leading out) counts as missing, as the function
- * doesn't ship it. A resolved file inside `build/` is checked in turn, so a
- * shipped package that imports a missing one is caught too. A `require()` of
- * the AWS SDK v3, which the Lambda runtime provides on `NODE_PATH`, is
- * accepted; an ESM `import` of it is not, as ESM never reads `NODE_PATH`. A
- * dynamic `import()` or a `require()` that the code handles failing (a
- * `require()` inside a `try` with a `catch`, an `import()` awaited there, or
- * either with a `.catch()`/rejection handler) is an optional load and never
- * fails the check.
+ * and every module they load is resolved the way Node.js does, staying inside
+ * `build/`: relative paths, exact built-ins only (`buffer/` is the npm
+ * package), a package's `exports` (with the `import` or `require` condition)
+ * or `imports` for `#` specifiers, else the ESM legacy `main` or the CommonJS
+ * file and directory lookup, and the target file has to exist. Imports
+ * resolve from the importing file's path inside `build/`, where the ZIP
+ * stores it (a symlinked file is stored as a copy there), and a target whose
+ * real path is outside `build/` (a relative path or a symlink leading out)
+ * counts as missing, as the function doesn't ship it; for the same reason the
+ * server files themselves are only those whose real path is inside `build/`.
+ * A resolved file inside `build/` is checked in turn, so a shipped package
+ * that imports a missing one is caught too. An `@aws-sdk/*` package that the
+ * Lambda runtime ships ({@link LAMBDA_RUNTIME_SDK_PACKAGES}) is accepted for
+ * an `import` and a `require()` alike: the runtime's Node.js falls back to
+ * `NODE_PATH`, which includes the runtime's `node_modules`, for ESM as well as
+ * CommonJS. A dynamic `import()` or a `require()` that the code handles
+ * failing is an optional load: a `require()` inside a `try` with a `catch`,
+ * or an `import()` awaited there or given a `.catch()`/rejection handler (a
+ * `require()` throws before any promise handler attaches). An optional load
+ * never fails the check, and neither does what only optional loads reach: a
+ * missing dependency of such a file makes the load fail, which the code
+ * handles.
  */
 
 import * as fs from 'node:fs';
@@ -42,7 +49,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parse, type Options as ParseOptions } from 'acorn';
-import fg from 'fast-glob';
+import { LAMBDA_RUNTIME_SDK_PACKAGES } from './lambda-runtime-sdk.js';
 
 /** Name of the build-only Vite plugin that bundles the server's dependencies. */
 export const SVELTEKIT_BUNDLE_PLUGIN_NAME = 'aws-blocks:sveltekit-bundle-server-dependencies';
@@ -240,7 +247,7 @@ export const withViteBundlePreload = <T>(baseEnv: NodeJS.ProcessEnv, fn: (env: N
 type ModuleRef = {
   specifier: string;
   kind: 'import' | 'require';
-  /** The code handles the load failing (a dynamic load in a `try`/`catch`, or with a rejection handler). */
+  /** The code handles the load failing (see {@link isHandledLoad}). */
   optional: boolean;
 };
 
@@ -265,31 +272,32 @@ const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'Ar
 
 /**
  * Whether the code handles a dynamic load (`node`, with its `ancestors`,
- * outermost first) failing: its promise gets a `.catch()` or a `.then()`
- * rejection handler (through any `.then()`/`.finally()` chain), or it sits in
- * the `try` block of a statement with a `catch` in the same function. A
- * `require()` throws there synchronously; an `import()` rejects later, so a
- * `try` only handles it when the promise (or its chain) is awaited right
- * there: `try { return import('x') } catch {}` lets the rejection escape.
+ * outermost first) failing. A `require()` throws synchronously, so only the
+ * `try` block of a statement with a `catch`, in the same function, handles
+ * it: `require('x').catch(fallback)` throws before `.catch()` is attached. An
+ * `import()` rejects later, so its promise has to get a `.catch()` or a
+ * `.then()` rejection handler (through any `.then()`/`.finally()` chain), or
+ * be awaited right inside such a `try` block: `try { return import('x') }
+ * catch {}` lets the rejection escape.
  */
 const isHandledLoad = (node: AstNode, ancestors: AstNode[]): boolean => {
-  let current: AstNode = node;
   let parentIndex = ancestors.length - 1;
-  while (parentIndex >= 1) {
-    const member = ancestors[parentIndex];
-    const call = ancestors[parentIndex - 1];
-    if (member?.type !== 'MemberExpression' || member.object !== current) break;
-    if (call?.type !== 'CallExpression' || call.callee !== member) break;
-    const property = member.property as AstNode;
-    const name = property.type === 'Identifier' ? (property.name as string) : undefined;
-    if (name === 'catch') return true;
-    if (name === 'then' && (call.arguments as unknown[]).length >= 2) return true;
-    if (name !== 'then' && name !== 'finally') break;
-    current = call;
-    parentIndex -= 2;
-  }
-  let child: AstNode = current;
+  let child: AstNode = node;
   if (node.type === 'ImportExpression') {
+    let current: AstNode = node;
+    while (parentIndex >= 1) {
+      const member = ancestors[parentIndex];
+      const call = ancestors[parentIndex - 1];
+      if (member?.type !== 'MemberExpression' || member.object !== current) break;
+      if (call?.type !== 'CallExpression' || call.callee !== member) break;
+      const property = member.property as AstNode;
+      const name = property.type === 'Identifier' ? (property.name as string) : undefined;
+      if (name === 'catch') return true;
+      if (name === 'then' && (call.arguments as unknown[]).length >= 2) return true;
+      if (name !== 'then' && name !== 'finally') break;
+      current = call;
+      parentIndex -= 2;
+    }
     const awaited = ancestors[parentIndex];
     if (awaited?.type !== 'AwaitExpression' || awaited.argument !== current) return false;
     child = awaited;
@@ -392,12 +400,16 @@ const isIgnoredSpecifier = (specifier: string): boolean =>
 
 /**
  * A module that the Lambda Node.js runtime provides, so `build/` doesn't have
- * to: the AWS SDK for JavaScript v3, which every runtime the framework compute
- * uses (`FRAMEWORK_COMPUTE_RUNTIME`, nodejs18.x and later) includes on
- * `NODE_PATH`. Only a CommonJS `require()` (`createRequire` included) searches
- * `NODE_PATH`; an ESM `import` never does, so it still needs a copy in `build/`.
+ * to: a package of the AWS SDK for JavaScript v3 that the runtime ships in
+ * `/var/runtime/node_modules` ({@link LAMBDA_RUNTIME_SDK_PACKAGES}; other
+ * `@aws-sdk/*` packages, such as `@aws-sdk/client-lambda-web`, are not there).
+ * The runtime's bootstrap puts that directory on `NODE_PATH` before it starts
+ * the server, and a `require()` searches `NODE_PATH`. So does an `import`: the
+ * runtime's Node.js retries a bare specifier it can't find from each
+ * `NODE_PATH` entry (unless `DISABLE_NODE_PATH_WITH_ESM=1`), which upstream
+ * Node.js doesn't do.
  */
-const isRuntimeProvided = (ref: ModuleRef): boolean => ref.kind === 'require' && ref.specifier.startsWith('@aws-sdk/');
+const isRuntimeProvided = (ref: ModuleRef): boolean => LAMBDA_RUNTIME_SDK_PACKAGES.has(packageOfSpecifier(ref.specifier));
 
 const isFile = (p: string): boolean => {
   try {
@@ -602,45 +614,124 @@ const realpath = (p: string): string | undefined => {
 };
 
 /**
+ * A module that a file loads: whether `build/` ships what it resolves to, and
+ * the script it resolves to (by its path inside `build/`), to check in turn.
+ */
+type Edge = { ref: ModuleRef; shipped: boolean; target: string | undefined };
+
+const SCRIPT = /\.[cm]?js$/;
+
+/**
+ * The server files of `build/`: every script outside `client/`, `prerendered/`
+ * and `node_modules/`, by its path inside `build/`. A symlink is followed only
+ * when its real path is inside `build/`, so nothing outside the artifact is
+ * listed or read.
+ */
+const serverFiles = (root: string): string[] => {
+  const files: string[] = [];
+  const visitedDirs = new Set<string>([root]);
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const p = path.join(dir, entry.name);
+      if (entry.name === 'node_modules') continue;
+      if (dir === root && (entry.name === 'client' || entry.name === 'prerendered')) continue;
+      let isDir = entry.isDirectory();
+      let isFileEntry = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        const real = realpath(p);
+        if (real === undefined || !isInside(root, real)) continue;
+        isDir = isDirectory(real);
+        isFileEntry = isFile(real);
+        if (isDir) {
+          if (visitedDirs.has(real)) continue;
+          visitedDirs.add(real);
+        }
+      }
+      if (isDir) walk(p);
+      else if (isFileEntry && SCRIPT.test(entry.name)) files.push(p);
+    }
+  };
+  walk(root);
+  return files;
+};
+
+/**
  * The modules that the server in `build/` needs but that `build/` can't
  * provide, each with the file (relative to `build/`) that loads it first. The
- * server files are every script outside `client/`, `prerendered/` and
- * `node_modules/`; files they reach inside `build/` (a shipped package
- * included) are checked in turn. A relative import counts like a package
- * one; an optional load (see the module header) never counts.
+ * server files (see {@link serverFiles}) and the files they reach inside
+ * `build/` (a shipped package included) are checked, each from its path
+ * inside `build/`. A relative import counts like a package one.
+ *
+ * An optional load (see the module header) never counts, and neither does a
+ * file that only optional loads reach: the server files that no checked file
+ * loads are taken as loaded by the server (adapter-node's `index.js`, say),
+ * and a file is required when one of them reaches it through loads that
+ * aren't optional. Server files that only load each other, with nothing else
+ * loading them, are taken as required too.
  * @internal exported for unit tests.
  */
 export const unresolvedServerImports = (buildDir: string): Map<string, string> => {
   const root = realpath(path.resolve(buildDir)) ?? path.resolve(buildDir);
-  const queue = fg.sync('**/*.{js,mjs,cjs}', {
-    cwd: root,
-    absolute: true,
-    ignore: ['client/**', 'prerendered/**', '**/node_modules/**'],
-  });
-  const seen = new Set<string>();
-  const unresolved = new Map<string, string>();
-  for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
-    // Node.js resolves a module's imports from its real path.
-    const real = realpath(file);
-    if (real === undefined || seen.has(real) || !/\.[cm]?js$/.test(real)) continue;
-    seen.add(real);
-    const refs = moduleRefs(fs.readFileSync(real, 'utf-8'));
+  const relativeName = (file: string): string => path.relative(root, file).replace(/\\/g, '/');
+  const edgeCache = new Map<string, Edge[]>();
+  const edgesOf = (file: string): Edge[] => {
+    const cached = edgeCache.get(file);
+    if (cached) return cached;
+    const edges: Edge[] = [];
+    edgeCache.set(file, edges);
+    const refs = moduleRefs(fs.readFileSync(file, 'utf-8'));
     if (!refs) {
-      process.stderr.write(`⚠️  Could not parse build/${path.relative(root, real)} to check its imports.\n`);
-      continue;
+      process.stderr.write(`⚠️  Could not parse build/${relativeName(file)} to check its imports.\n`);
+      return edges;
     }
     for (const ref of refs) {
       if (isIgnoredSpecifier(ref.specifier)) continue;
-      const target = resolveRef(root, real, ref);
+      // Resolved from the file's path inside build/, as the ZIP stores it there.
+      const target = resolveRef(root, file, ref);
       const realTarget = target === undefined ? undefined : realpath(target);
       // A target outside build/ (a relative path or a symlink leading out) isn't shipped.
-      if (realTarget !== undefined && isInside(root, realTarget)) {
-        queue.push(realTarget);
-        continue;
+      const shipped = target !== undefined && realTarget !== undefined && isInside(root, target) && isInside(root, realTarget);
+      edges.push({ ref, shipped, target: shipped && SCRIPT.test(realTarget) ? target : undefined });
+    }
+    return edges;
+  };
+
+  /** Every file reachable from `start`, through all loads or only the required ones. */
+  const reach = (start: string, into: Set<string>, requiredOnly: boolean): void => {
+    const stack = [start];
+    for (let file = stack.pop(); file !== undefined; file = stack.pop()) {
+      if (into.has(file)) continue;
+      into.add(file);
+      for (const { ref, target } of edgesOf(file)) {
+        if (target !== undefined && !(requiredOnly && ref.optional)) stack.push(target);
       }
-      if (realTarget === undefined && isRuntimeProvided(ref)) continue;
-      if (ref.optional || unresolved.has(ref.specifier)) continue;
-      unresolved.set(ref.specifier, path.relative(root, real).replace(/\\/g, '/'));
+    }
+  };
+
+  const servers = serverFiles(root);
+  const loaded = new Set<string>();
+  for (const file of servers) for (const { target } of edgesOf(file)) if (target !== undefined && target !== file) loaded.add(target);
+  const reached = new Set<string>();
+  const required = new Set<string>();
+  const start = (file: string): void => {
+    reach(file, reached, false);
+    reach(file, required, true);
+  };
+  for (const file of servers) if (!loaded.has(file)) start(file);
+  for (const file of servers) if (!reached.has(file)) start(file);
+
+  const unresolved = new Map<string, string>();
+  for (const file of required) {
+    for (const { ref, shipped } of edgesOf(file)) {
+      if (shipped || ref.optional || unresolved.has(ref.specifier)) continue;
+      if (isRuntimeProvided(ref)) continue;
+      unresolved.set(ref.specifier, relativeName(file));
     }
   }
   return unresolved;
