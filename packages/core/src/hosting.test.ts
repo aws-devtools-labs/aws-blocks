@@ -4473,6 +4473,57 @@ describe('Hosting — skipping the frontend build', () => {
   });
 });
 
+// An unsupported framework version is refused before `buildCommand` runs, so
+// the user doesn't wait for a full build that the adapter then rejects.
+describe('Hosting — unsupported framework version', () => {
+  let tmpDir: string;
+  // Records that it ran, then writes the adapter-node output a real build would.
+  const BUILD = `node -e "const f=require('fs');f.writeFileSync('built.txt','1');f.mkdirSync('build',{recursive:true})"`;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-kit3-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'kit3', devDependencies: { '@sveltejs/kit': '^3.2.0' } }),
+    );
+    const kitDir = path.join(tmpDir, 'node_modules', '@sveltejs', 'kit');
+    fs.mkdirSync(kitDir, { recursive: true });
+    fs.writeFileSync(path.join(kitDir, 'package.json'), JSON.stringify({ name: '@sveltejs/kit', version: '3.3.1' }));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('refuses SvelteKit 3 before running buildCommand', () => {
+    const stack = new Stack(new App(), 'Kit3Stack');
+    assert.throws(
+      () =>
+        new Hosting(stack, 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          framework: 'sveltekit',
+          buildCommand: BUILD,
+          buildOutputDir: 'build',
+        }),
+      (err: Error) => {
+        assert.ok(err instanceof HostingError, 'expected a HostingError');
+        assert.strictEqual(err.code, 'UnsupportedSvelteKitVersionError');
+        return true;
+      },
+    );
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'built.txt')), 'buildCommand should not run');
+  });
+
+  it('refuses a detected SvelteKit 3 project the same way', () => {
+    const stack = new Stack(new App(), 'Kit3DetectStack');
+    assert.throws(
+      () => new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: BUILD }),
+      /UnsupportedSvelteKitVersionError|SvelteKit 3\.3\.1/,
+    );
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'built.txt')), 'buildCommand should not run');
+  });
+});
+
 // A deploy synthesizes with `NODE_OPTIONS=--conditions=cdk`. `buildCommand`
 // must run without that condition, so a build that loads `@aws-cdk-blocks/*`
 // doesn't get their CDK constructs, but with the user's other NODE_OPTIONS.

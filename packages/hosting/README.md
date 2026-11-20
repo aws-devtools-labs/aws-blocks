@@ -39,7 +39,7 @@ new HostingConstruct(stack, 'Hosting', { manifest });
 | `nextjsAdapter` | `{ projectDir, configPath?, skipBuild? }` | A Next.js app, built with OpenNext. `configPath` is a custom `open-next.config.ts`, relative to `projectDir`. |
 | `nuxtAdapter`, `nitroAdapter` | `{ projectDir, preset?, buildCommand?, skipBuild? }` | A Nuxt app, or another Nitro app. `preset` overrides the Nitro preset. |
 | `astroAdapter` | `{ projectDir, buildCommand?, skipBuild?, bodySizeLimit? }` | An Astro app. `bodySizeLimit` is the largest request body in bytes (default 20 MB). |
-| `sveltekitAdapter` | `{ projectDir, buildCommand?, skipBuild?, bodySizeLimit? }` | A SvelteKit app. `bodySizeLimit` as for Astro. |
+| `sveltekitAdapter` | `{ projectDir, buildCommand?, skipBuild?, bodySizeLimit? }` | A SvelteKit 2 app (see [SvelteKit: the supported version](#sveltekit-the-supported-version)). `bodySizeLimit` as for Astro. |
 | `spaAdapter` | `projectDir, { buildOutputDir?, spaFallback? }` | An already built single-page app in `dist/`, `build/` or `out/`. `spaFallback: false` declares a multi-page static site. |
 
 `skipBuild: true` reuses an existing build output.
@@ -624,6 +624,23 @@ const blocksStack = await BlocksStack.create(app, stackName, {
   `us-east-1` support stack included.
 - `npm run destroy` passes no stack selection, so the CDK CLI refuses to
   destroy an app with more than one top-level stack.
+
+## SvelteKit: the supported version
+
+The SvelteKit adapter supports **SvelteKit 2 only**: `@sveltejs/kit`
+`>=2.0.0 <3.0.0`, built with `@sveltejs/adapter-node` 5, with the SvelteKit
+config in `svelte.config.js`.
+
+- SvelteKit 3, which `npx sv create` scaffolds today, is not supported yet.
+  Synth refuses it with `UnsupportedSvelteKitVersionError` before it runs the
+  app's build. Support is tracked in
+  [#984](https://github.com/aws/cdk-blocks/issues/984).
+- To deploy a project scaffolded with SvelteKit 3, pin the SvelteKit 2
+  toolchain and move the SvelteKit config back to `svelte.config.js`:
+
+  ```bash
+  npm install -D @sveltejs/kit@^2 @sveltejs/adapter-node@^5 @sveltejs/vite-plugin-svelte@^5 vite@^6
+  ```
 
 ## SSR compute: Lambda or Lambda Web Functions
 
@@ -1332,6 +1349,7 @@ synth. `error.name` and `error.code` hold the name in the table, and
 | `UnsupportedComputeFrontDoorError` | `compute.type: 'web-function'` behind a door other than CloudFront. |
 | `UnsupportedFrontDoorError` | `frontDoor` is not a front door, `'none'` is set for an app with a server, or a custom door fails the wiring check. |
 | `UnsupportedFrontDoorSettingError` | The door kind doesn't implement a setting. |
+| `UnsupportedSvelteKitVersionError` | The installed `@sveltejs/kit` is not SvelteKit 2 (`>=2.0.0 <3.0.0`). Thrown before the app's build runs. |
 | `UnsupportedRoutePatternError` | ALB: one pattern has more than six wildcards. API Gateway: a backend route has a wildcard other than one trailing `/*`. |
 | `WafRegionError` | A CloudFront-scoped WAF is enabled in a known region outside us-east-1 and region validation isn't skipped. |
 | `WebFunctionPolicyAlreadySetError` | `allowCloudFrontInvoke()` was called twice on the same Web Function. |

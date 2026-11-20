@@ -235,7 +235,19 @@ export const sveltekitAdapter = (
 
 // ---- version guard ----
 
-const assertSvelteKitVersion = (projectDir: string): void => {
+/** Public issue tracking SvelteKit 3 support; named in the refusal so users can follow it. */
+const SVELTEKIT_3_ISSUE_URL = 'https://github.com/aws/cdk-blocks/issues/984';
+
+/**
+ * Throw `UnsupportedSvelteKitVersionError` unless the installed `@sveltejs/kit`
+ * is within {@link VERIFIED_SVELTEKIT_RANGE}. Reads the installed version (not
+ * the `package.json` range) and writes nothing, so it is safe to call before
+ * any build: core `Hosting` calls it (through `assertFrameworkSupported`)
+ * before it runs the app's `buildCommand`, and the adapter calls it again
+ * before its own build.
+ * @param projectDir - absolute path to the SvelteKit project root
+ */
+export const assertSvelteKitVersion = (projectDir: string): void => {
   const info = getProjectPackageInfo('@sveltejs/kit', projectDir);
   const version = info?.version;
   // Enforce the FULL verified range — both the floor (< 2.0 rejected) and the
@@ -243,6 +255,19 @@ const assertSvelteKitVersion = (projectDir: string): void => {
   // `build/` layout the manifest builder depends on, so we refuse it until the
   // range is deliberately bumped after re-verification. `satisfies` honors the
   // `<` bound the version_pins.test.ts asserts on.
+  if (version && semver.valid(version) && semver.major(version) >= 3) {
+    // SvelteKit 3 (what `npx sv create` scaffolds) moved its config into the
+    // `sveltekit()` Vite plugin and needs Vite 8; the bridge and the build
+    // layout are only verified on SvelteKit 2. Say exactly what to pin.
+    throw new HostingError('UnsupportedSvelteKitVersionError', {
+      message: `SvelteKit ${version} is not supported yet: Hosting supports SvelteKit 2 (${VERIFIED_SVELTEKIT_RANGE}).`,
+      resolution:
+        'Pin the SvelteKit 2 toolchain and keep the SvelteKit config in svelte.config.js: ' +
+        '`npm install -D @sveltejs/kit@^2 @sveltejs/adapter-node@^5 @sveltejs/vite-plugin-svelte@^5 vite@^6` ' +
+        '(or your package manager equivalent). SvelteKit 3 support is tracked in ' +
+        `${SVELTEKIT_3_ISSUE_URL}.`,
+    });
+  }
   if (!version || !semver.satisfies(version, VERIFIED_SVELTEKIT_RANGE)) {
     throw new HostingError('UnsupportedSvelteKitVersionError', {
       message: `SvelteKit version ${
