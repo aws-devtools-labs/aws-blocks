@@ -101,6 +101,7 @@ import { s3WebsiteDoor } from './s3_website_door.js';
 import type { AccessLogFormat, AccessLogPartitioning } from './access_logging.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
+import { CdnInvalidationConstruct } from './cdn_invalidation.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
 import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
@@ -1720,6 +1721,25 @@ export class HostingConstruct extends Construct {
       this.invalidationId = cdn.invalidationId;
       this._distribution = cdn.distribution;
       this.distributionUrl = cdn.distributionUrl;
+
+      // ---- 9d. On-demand revalidation → CloudFront invalidation ----
+      // ISR pages reach the edge with `s-maxage=<remaining revalidate>`, so a
+      // `revalidateTag` / `revalidatePath` is only visible there once the
+      // server invalidates the distribution. The adapter sets
+      // `cache.cdnInvalidation` when the server bundle carries the handler.
+      if (manifest.cache?.cdnInvalidation && manifest.cache.driver !== 'nitro-s3') {
+        const server =
+          this.computeFunctions.get(manifest.cache.computeResource) ??
+          this.computeWebFunctions.get(manifest.cache.computeResource);
+        // A Lambda@Edge server has no environment to carry the parameter name.
+        if (server instanceof LambdaFunction || server instanceof WebFunctionConstruct) {
+          new CdnInvalidationConstruct(this, 'CdnInvalidation', {
+            distribution: cdn.distribution,
+            server,
+            basePath: manifest.basePath,
+          });
+        }
+      }
 
       // Output the CloudFront distribution domain when custom domain is configured.
       // BYO domain users need this to set up their external DNS CNAME.

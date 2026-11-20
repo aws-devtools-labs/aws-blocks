@@ -331,6 +331,16 @@ export type CacheConfig = {
   tagRevalidation?: boolean;
 
   /**
+   * Whether the compute resource invalidates the CDN itself after an
+   * on-demand revalidation (`revalidateTag` / `revalidatePath`). When true and
+   * the deploy uses the CloudFront front door, the L3 gives that compute the
+   * distribution id (through an SSM parameter) and
+   * `cloudfront:CreateInvalidation` on that distribution only. Other doors
+   * ignore it. Only honoured when `driver === 'opennext'`.
+   */
+  cdnInvalidation?: boolean;
+
+  /**
    * Whether async revalidation queue is needed (provisions SQS).
    * Only honoured when `driver === 'opennext'`.
    */

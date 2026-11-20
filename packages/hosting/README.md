@@ -981,6 +981,43 @@ Static and image routes are not keyed on `cacheKeyCookies` /
 `cacheKeyHeaders`, and those cookies and headers are not forwarded to the
 origin on those routes (an auth-gated image source does not receive them).
 
+### On-demand revalidation (Next.js)
+
+OpenNext serves an ISR page with `s-maxage` set to the time left in its
+`revalidate` window, and CloudFront keeps it for that long. So that
+`revalidateTag()`, `revalidatePath()` and `res.revalidate()` show up at the
+edge straight away, the Next.js server behind the CloudFront door invalidates
+the distribution after each on-demand revalidation:
+
+- `revalidateTag('posts')` invalidates every cached page that used data tagged
+  `posts` (through `fetch` or `unstable_cache`), as listed in the tag cache.
+- `revalidatePath('/blog/hello')` invalidates `/blog/hello`. A layout or
+  dynamic-segment form (`revalidatePath('/blog/[slug]', 'page')`) invalidates
+  the cached pages under it.
+- One invalidation path covers both the HTML and the RSC payload of a page.
+  With a `basePath` the paths are prefixed with it. A revalidation that touches
+  more than 50 pages issues a single `/*` instead.
+
+Each revalidation issues one CloudFront invalidation request. CloudFront allows
+1,000 invalidation paths a month at no charge and bills each path after that
+(a `/*` counts as one). The construct gives the server
+`cloudfront:CreateInvalidation` on its own distribution only, and the
+distribution id through an SSM parameter (`ssm:GetParameter` on that parameter
+only). An invalidation usually completes within seconds and can take a few
+minutes. A revalidation still succeeds if the invalidation fails: the
+error is logged in the server function's log group, and the edge keeps the old
+page until its `s-maxage` runs out.
+
+This is set up when the adapter generates `open-next.config.ts` (the default).
+It is not set up for a project with its own `open-next.config.ts`, a build
+with `runtime: 'edge'` routes (OpenNext also compiles the config for the edge
+runtime, where the handler can't run), a preview deploy without the tag cache,
+or front doors other than CloudFront (they don't cache SSR responses). There,
+an on-demand revalidation reaches the edge once the page's `s-maxage` runs out
+(at most 1 day). To make it visible sooner, lower the page's `revalidate` (a
+shorter `s-maxage`), or invalidate the paths yourself after revalidating them
+(`aws cloudfront create-invalidation`).
+
 ## Custom domains (CloudFront door)
 
 Configure a custom domain through `frontDoor.features.domain`

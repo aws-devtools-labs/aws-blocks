@@ -40,6 +40,14 @@ const handlers = [
     entry: join(pkgRoot, 'src', 'constructs', 'web_function_policy_handler.ts'),
     outfile: join(pkgRoot, 'dist', 'constructs', 'web_function_policy_handler_bundle.mjs'),
   },
+  {
+    // Not a Lambda handler: the Next.js server's `cdnInvalidation` override. The
+    // Next.js adapter copies it into the OpenNext server bundle, which loads it
+    // at run time with no `node_modules` of its own (OpenNext keeps every import
+    // of `open-next.config.ts` external), so its AWS SDK clients ship inside.
+    entry: join(pkgRoot, 'src', 'adapters', 'nextjs_cdn_invalidation.ts'),
+    outfile: join(pkgRoot, 'dist', 'adapters', 'nextjs_cdn_invalidation_bundle.mjs'),
+  },
 ];
 
 const results = await Promise.all(
