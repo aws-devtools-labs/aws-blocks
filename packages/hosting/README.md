@@ -44,6 +44,17 @@ new HostingConstruct(stack, 'Hosting', { manifest });
 
 `skipBuild: true` reuses an existing build output.
 
+`astroAdapter` applies the `redirects:` table of `astro.config` at the front
+door. A source that ends in a rest parameter becomes a wildcard redirect, with
+the matched tail spliced into the destination: `'/blog/[...slug]':
+'/posts/[...slug]'` sends `/blog/a/b` to `/posts/a/b` and `/blog` to `/posts`.
+Every other redirect with a route parameter (a single `[id]`, a parameter
+before the last segment or inside one, several parameters) is left to Astro's
+router: the server answers it in `output: 'server'`, and Astro's generated
+redirect pages in `output: 'static'`. A rest-parameter redirect whose prefix
+also has pages or `public/` files of its own (`src/pages/blog/index.astro`) is
+left to Astro as well, since Astro serves those pages before the redirect.
+
 ### Entry points
 
 | Import from | Exports |

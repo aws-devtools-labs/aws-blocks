@@ -20,7 +20,10 @@ import {
   patchAstroRemoteImageRedirects,
   ASTRO_REDIRECT_PATCH_MARKER,
   ensureSsrBuildOutput,
+  liftAstroRedirects,
+  translateAstroRedirect,
 } from './astro.js';
+import { globToProxyPath } from '../constructs/apigw_routes.js';
 
 void describe('astroUsesSharpService — decide whether to ship sharp (issue #3)', () => {
   it('returns true when no image.service is configured (Astro default = sharp)', () => {
@@ -422,5 +425,146 @@ void describe('astroAdapter — app build environment', () => {
     astroAdapter({ projectDir: tmp });
     assert.equal(buildEnv?.NODE_OPTIONS, '--max-old-space-size=4096');
     assert.equal(buildEnv?.PATH, process.env.PATH);
+  });
+});
+
+// Astro's dynamic redirects (`'/blog/[...slug]': '/posts/[...slug]'`) must reach
+// the doors as patterns they can express: the ALB rejects `[` in a path
+// condition and an HTTP API rejects it in a route path, failing the deploy.
+void describe('astroAdapter — dynamic redirects', () => {
+  let tmp: string;
+  const writeConfig = (redirects: Record<string, unknown>): void => {
+    fs.writeFileSync(
+      path.join(tmp, 'astro.config.mjs'),
+      `export default { output: 'server', redirects: ${JSON.stringify(redirects)} };\n`,
+    );
+  };
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-adapter-redirects-'));
+    fs.mkdirSync(path.join(tmp, 'node_modules', 'astro'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'node_modules', 'astro', 'package.json'), JSON.stringify({ name: 'astro', version: '5.0.0' }));
+    const serverDir = path.join(tmp, 'dist', 'server');
+    fs.mkdirSync(serverDir, { recursive: true });
+    fs.writeFileSync(path.join(serverDir, 'entry.mjs'), 'export const handler = () => {};');
+    fs.mkdirSync(path.join(tmp, 'dist', 'client'), { recursive: true });
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('lifts a trailing rest param as the doors\' `/*` wildcard with the tail spliced', () => {
+    writeConfig({ '/blog/[...slug]': '/posts/[...slug]', '/old': '/new' });
+    const manifest = astroAdapter({ projectDir: tmp, skipBuild: true });
+    assert.deepStrictEqual(manifest.redirects, [
+      { source: '/blog', destination: '/posts', statusCode: 301 },
+      { source: '/old', destination: '/new', statusCode: 301 },
+      { source: '/blog/*', destination: '/posts/*', statusCode: 301 },
+    ]);
+  });
+
+  it('gives every door only sources it can route (no `[` reaches an ALB condition or an HTTP API path)', () => {
+    writeConfig({
+      '/blog/[...slug]': { destination: '/posts/[...slug]', status: 308 },
+      '/item/[id]': '/items/[id]',
+      '/[lang]/legacy': '/legacy',
+      '/docs/[...path]': 'https://example.org/docs',
+    });
+    const manifest = astroAdapter({ projectDir: tmp, skipBuild: true });
+    for (const r of manifest.redirects ?? []) {
+      assert.match(r.source, /^\/[A-Za-z0-9._~/-]*\*?$/, `routable source: ${r.source}`);
+      assert.doesNotMatch(globToProxyPath(r.source) ?? '', /[[\]]/);
+    }
+    assert.deepStrictEqual(manifest.redirects, [
+      { source: '/blog', destination: '/posts', statusCode: 308 },
+      { source: '/docs', destination: 'https://example.org/docs', statusCode: 301 },
+      { source: '/blog/*', destination: '/posts/*', statusCode: 308 },
+      { source: '/docs/*', destination: 'https://example.org/docs', statusCode: 301 },
+    ]);
+  });
+
+  it('leaves a rest-param redirect to Astro when the app has pages under its prefix', () => {
+    fs.mkdirSync(path.join(tmp, 'src', 'pages', 'blog'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'src', 'pages', 'blog', 'index.astro'), '---\n---\n');
+    writeConfig({ '/blog/[...slug]': '/posts/[...slug]' });
+    const manifest = astroAdapter({ projectDir: tmp, skipBuild: true });
+    assert.strictEqual(manifest.redirects, undefined);
+  });
+});
+
+void describe('translateAstroRedirect', () => {
+  it('passes a static redirect through', () => {
+    assert.deepStrictEqual(translateAstroRedirect('/a', '/b'), [{ source: '/a', destination: '/b' }]);
+  });
+
+  it('splices a trailing rest param and adds the bare prefix', () => {
+    assert.deepStrictEqual(translateAstroRedirect('/a/b/[...rest]', '/c/[...rest]'), [
+      { source: '/a/b/*', destination: '/c/*' },
+      { source: '/a/b', destination: '/c' },
+    ]);
+    assert.deepStrictEqual(translateAstroRedirect('/a/[...rest]', '/[...rest]'), [
+      { source: '/a/*', destination: '/*' },
+      { source: '/a', destination: '/' },
+    ]);
+  });
+
+  it('sends every match to a destination with no params', () => {
+    assert.deepStrictEqual(translateAstroRedirect('/a/[...rest]', '/b'), [
+      { source: '/a/*', destination: '/b' },
+      { source: '/a', destination: '/b' },
+    ]);
+  });
+
+  it('returns null for patterns the doors cannot express', () => {
+    for (const [source, destination] of [
+      ['/a/[id]', '/b/[id]'], // one segment only; `*` would also match `/a/x/y`
+      ['/[lang]/a', '/a'], // param before the last segment
+      ['/a/[id].html', '/b'], // param inside a segment
+      ['/a/[x]/[...rest]', '/b/[...rest]'], // two params
+      ['/a/[...rest]', '/b/[...other]'], // a different param
+      ['/a/[...rest]', '/b/[...rest]/c'], // rest not in the last segment
+      ['/a/[...rest]', 'https://example.org/[...rest]'], // Astro doesn't substitute absolute targets
+      ['/a', '/b/[id]'], // nothing fills the destination param
+    ]) {
+      assert.strictEqual(translateAstroRedirect(source, destination), null, `${source} → ${destination}`);
+    }
+  });
+});
+
+void describe('liftAstroRedirects', () => {
+  it('keeps exact sources (declared order) before wildcards, longest wildcard prefix first', () => {
+    const lifted = liftAstroRedirects({
+      redirects: {
+        '/a/[...r]': '/x/[...r]',
+        '/a/b/[...r]': '/y/[...r]',
+        '/a/b/c': '/z',
+      },
+    });
+    assert.deepStrictEqual(
+      lifted.map((r) => r.source),
+      ['/a', '/a/b', '/a/b/c', '/a/b/*', '/a/*'],
+    );
+  });
+
+  it('leaves a root rest param to Astro (it would shadow every page and asset)', () => {
+    assert.deepStrictEqual(liftAstroRedirects({ redirects: { '/[...all]': '/new/[...all]' } }), []);
+  });
+
+  it('leaves a rest param to Astro when a dynamic page sits on its path', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-redirect-pages-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'app', 'pages', '[lang]'), { recursive: true });
+      const config = { srcDir: './app', redirects: { '/blog/[...s]': '/posts/[...s]' } };
+      assert.deepStrictEqual(liftAstroRedirects(config, dir), []);
+      fs.rmSync(path.join(dir, 'app', 'pages', '[lang]'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'app', 'pages', 'index.astro'), '');
+      assert.deepStrictEqual(
+        liftAstroRedirects(config, dir).map((r) => r.source),
+        ['/blog', '/blog/*'],
+      );
+      fs.mkdirSync(path.join(dir, 'public', 'blog'), { recursive: true });
+      assert.deepStrictEqual(liftAstroRedirects(config, dir), []);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
