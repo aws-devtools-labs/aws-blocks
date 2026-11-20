@@ -315,6 +315,48 @@ void describe('HostingConstruct — SSR mode', () => {
     assert.match(guardFor({ kind: 'alb' }), /^const ALL_COOKIES_KEYED = false;$/m);
   });
 
+  void it('derives the headers the SSR cache guard compares with Vary from the door cache key', () => {
+    const guardFor = (frontDoor: ConstructorParameters<typeof HostingConstruct>[2]['frontDoor']) => {
+      const staticDir = createStaticDir();
+      const bundleDir = createBundleDir();
+      const manifest = ssrManifest(staticDir, bundleDir);
+      manifest.compute.default = { ...manifest.compute.default, streaming: false };
+      const stack = createStack();
+      new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, skipRegionValidation: true });
+      const source = fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_FILE), 'utf-8');
+      const line = /^const VARY_KEYED = (.*);$/m.exec(source)?.[1];
+      assert.ok(line, 'VARY_KEYED is in the guard module');
+      const keyed = line === 'null' ? null : (JSON.parse(/^new Set\((.*)\)$/.exec(line)?.[1] ?? '[]') as string[]);
+      return { keyed, template: Template.fromStack(stack) };
+    };
+
+    // CloudFront door: every header the SSR cache policy keys on, plus Accept-Encoding.
+    const cf = guardFor({ features: { cacheKeyHeaders: ['X-Tenant'] } });
+    const policies = Object.values(cf.template.findResources('AWS::CloudFront::CachePolicy'));
+    const ssrPolicy = policies.find((p) => /^SSR\/ISR\/SWR/.test(p.Properties.CachePolicyConfig.Comment ?? ''));
+    assert.ok(ssrPolicy, 'the SSR cache policy is synthesized');
+    const policyHeaders: string[] =
+      ssrPolicy.Properties.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.HeadersConfig.Headers;
+    assert.ok(cf.keyed);
+    assert.deepEqual([...cf.keyed].sort(), ['accept-encoding', ...policyHeaders].sort());
+    assert.ok(cf.keyed.includes('x-tenant'));
+
+    // CloudFront-over-ALB door: the router headers, which the keyed query string carries as `_rsc`.
+    const stacked = guardFor({ kind: 'stackedRouter' });
+    assert.deepEqual(stacked.keyed, [
+      'accept-encoding',
+      'rsc',
+      'next-router-prefetch',
+      'next-router-state-tree',
+      'next-router-segment-prefetch',
+      'next-action',
+      'next-url',
+    ]);
+
+    // No CloudFront cache in front of the server: Vary is not read.
+    assert.equal(guardFor({ kind: 'alb' }).keyed, null);
+  });
+
   void it('bakes cdn.cacheGuardIgnoredCookies into the SSR cache guard, and keeps them out of the cache key', () => {
     const staticDir = createStaticDir();
     const bundleDir = createBundleDir();

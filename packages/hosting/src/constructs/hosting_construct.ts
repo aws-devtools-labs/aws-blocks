@@ -76,6 +76,7 @@ import {
 import {
   assertCacheGuardIgnoredCookies,
   isDefaultTtlPositive,
+  SSR_CACHE_GUARD_ROUTER_HEADERS,
   type SsrCacheGuardConfig,
   withSsrCacheGuard,
   withSsrCacheGuardNodeOption,
@@ -928,13 +929,32 @@ export class HostingConstruct extends Construct {
     // names the selected door's server-route cache policy keys on, and
     // whether a response with no Cache-Control is edge-cached. The
     // CloudFront-over-ALB door's server-route policy keys on every cookie.
+    // CloudFront ignores `Vary`, so the guard also needs the request headers
+    // that policy keys on: the CloudFront door's SSR policy keys on the
+    // Next.js router headers and `cacheKeyHeaders`; the CloudFront-over-ALB
+    // door's keys on no header but on the whole query string, which holds
+    // Next.js's `_rsc` (derived from the router headers, `Next-Url` included).
+    // The other doors put no CloudFront cache in front of the server.
     assertCacheGuardIgnoredCookies(f.cacheKeyCookies, f.cacheGuardIgnoredCookies);
+    const varyKeyedHeaders = stackedRouter
+      ? [...SSR_CACHE_GUARD_ROUTER_HEADERS, 'next-url']
+      : resolved.kind === 'cloudfront'
+        ? [...SSR_CACHE_GUARD_ROUTER_HEADERS, ...(f.cacheKeyHeaders ?? [])]
+        : undefined;
     const ssrCacheGuardConfig: SsrCacheGuardConfig = {
       cacheKeyCookies: f.cacheKeyCookies,
       ignoredCookies: f.cacheGuardIgnoredCookies,
       cacheKeyHeaders: f.cacheKeyHeaders,
       defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
       allCookiesKeyed: stackedRouter,
+      varyKeyedHeaders,
+      ...(resolved.kind === 'cloudfront' && !stackedRouter
+        ? {
+            varyHint:
+              'To cache one copy per value, add the header to frontDoor.features.cacheKeyHeaders; ' +
+              'otherwise send `Cache-Control: private` for that response.',
+          }
+        : {}),
     };
     // The computes the manifest routes requests to, other than the image
     // function: they render server responses (e.g. a Next.js split function
