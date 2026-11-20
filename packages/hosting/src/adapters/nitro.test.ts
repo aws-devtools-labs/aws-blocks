@@ -15,6 +15,7 @@ import {
   generateKvsRouterRequestCode,
   ORIGIN_ID,
 } from '../constructs/kvs_router.js';
+import { proxyRulesJs } from '../constructs/proxy_rules.js';
 
 /**
  * Build a minimal `.output/` layout that nitroAdapter accepts. Caller
@@ -1319,5 +1320,125 @@ void describe('nitroAdapter — reuseBuild from the build profile', () => {
   void it("skips the build under reuseBuild: 'required'", () => {
     withBuildProfile({ reuseBuild: 'required' }, () => nitroAdapter({ projectDir: tmpDir }));
     assert.strictEqual(builds, 0, 'expected no build');
+  });
+});
+
+/**
+ * Answer a request with the real CloudFront router function (KVS entries built
+ * from `manifest`) and return the redirect it sends, or `null` when it routes.
+ */
+const routerRedirectFor = async (
+  manifest: ReturnType<typeof nitroAdapter>,
+  uri: string,
+): Promise<{ statusCode: number; location: string } | null> => {
+  const entries = buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: false });
+  const cf = {
+    kvs: () => ({
+      get: async (key: string) => {
+        if (!(key in entries)) throw new Error('NoSuchKey');
+        return entries[key];
+      },
+    }),
+    selectRequestOriginById: () => undefined,
+  };
+  // The source is the repo's own generated router function, not external input.
+  const body = generateKvsRouterRequestCode().replace(/^import cf from 'cloudfront';\n?/, '');
+  const handler = new Function('cf', `${body}\nreturn handler;`)(cf);
+  const res = await handler({
+    request: { uri, method: 'GET', headers: { host: { value: 'example.com' } }, cookies: {}, querystring: {} },
+  });
+  if (!res || typeof res.statusCode !== 'number') return null;
+  return { statusCode: res.statusCode, location: res.headers.location.value };
+};
+
+/**
+ * Answer a request with the regional doors' asset-proxy redirect code (ALB,
+ * HTTP API) built from `manifest`, and return the redirect it sends.
+ */
+const proxyRedirectFor = (
+  manifest: ReturnType<typeof nitroAdapter>,
+  uri: string,
+): { statusCode: number; location: string } | null => {
+  // The source is the repo's own generated proxy code, not external input.
+  const code = proxyRulesJs({ redirects: manifest.redirects ?? [] });
+  return new Function(`${code}\nreturn blocksRedirect;`)()(uri);
+};
+
+// Nitro's `redirect` route rule: a destination ending in `/**` gets the path
+// after the source's `/**` base appended (`/blog/a/b` → `/posts/a/b`); any
+// other destination is sent as written. The default status is 307.
+void describe('nitroAdapter — routeRules redirect lift', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nitro-redirects-'));
+    mock.method(spawn, 'sync', () => undefined);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+  });
+
+  const build = (bundledRouteRules: Record<string, unknown>) => {
+    writeMinimalNitroOutput(tmpDir, { bundledRouteRules });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    return nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+  };
+
+  void it('turns a /** destination into the wildcard the doors splice the tail into', () => {
+    const manifest = build({ '/blog/**': { redirect: '/posts/**' } });
+    assert.deepStrictEqual(manifest.redirects, [{ source: '/blog/*', destination: '/posts/*', statusCode: 307 }]);
+  });
+
+  void it('handles the { to, statusCode } form, as Nitro bakes it into the server bundle', () => {
+    const manifest = build({
+      '/blog/**': { redirect: { to: '/posts/**', statusCode: 301, _redirectStripBase: '/blog' } },
+      '/r-temp': { redirect: { to: '/', statusCode: 307 } },
+      '/docs/**': { redirect: { to: 'https://docs.example.com/**' } },
+    });
+    assert.deepStrictEqual(manifest.redirects, [
+      { source: '/blog/*', destination: '/posts/*', statusCode: 301 },
+      { source: '/r-temp', destination: '/', statusCode: 307 },
+      { source: '/docs/*', destination: 'https://docs.example.com/*', statusCode: 307 },
+    ]);
+  });
+
+  void it('keeps a destination without a wildcard a plain redirect', () => {
+    const manifest = build({ '/blog/**': { redirect: '/posts' } });
+    assert.deepStrictEqual(manifest.redirects, [{ source: '/blog/*', destination: '/posts', statusCode: 307 }]);
+  });
+
+  void it('appends the whole path to a /** destination when the source has no /** base', () => {
+    const manifest = build({ '/old': { redirect: '/new/**' } });
+    assert.deepStrictEqual(manifest.redirects, [{ source: '/old', destination: '/new/old', statusCode: 307 }]);
+  });
+
+  void it('leaves a redirect the edge table cannot express to the Nitro server', () => {
+    // `/posts/*` is a literal destination in Nitro, but the doors would splice
+    // into a trailing `*`; a `/**` destination under a non-`/**` wildcard
+    // source needs the full request path. Nitro answers both itself.
+    const manifest = build({
+      '/a/**': { redirect: '/posts/*' },
+      '/b/*': { redirect: '/posts/**' },
+    });
+    assert.strictEqual(manifest.redirects, undefined);
+  });
+
+  void it('sends the Location Nitro sends, on the CloudFront router and the asset proxy', async () => {
+    const manifest = build({
+      '/blog/**': { redirect: '/posts/**' },
+      '/news/**': { redirect: '/articles' },
+    });
+    const cases: [string, string][] = [
+      ['/blog/a/b', '/posts/a/b'],
+      ['/blog/x', '/posts/x'],
+      ['/blog/', '/posts/'],
+      ['/news/x', '/articles'],
+    ];
+    for (const [uri, location] of cases) {
+      assert.deepStrictEqual(await routerRedirectFor(manifest, uri), { statusCode: 307, location }, `router ${uri}`);
+      assert.deepStrictEqual(proxyRedirectFor(manifest, uri), { statusCode: 307, location }, `proxy ${uri}`);
+    }
   });
 });

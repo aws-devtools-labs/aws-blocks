@@ -1783,6 +1783,21 @@ const buildRewrites = (
 
 /**
  * Translate `redirect` route rules into manifest Redirects.
+ *
+ * The doors match a redirect at the edge and splice the request's tail (the
+ * part after the source's trailing `*`) into a destination that ends in `*`.
+ * Nitro's own semantics, which the edge row must reproduce:
+ *   - A destination ending in `/**` gets the request path appended. Under a
+ *     source ending in `/**`, that's the path after the source's base, so
+ *     `'/blog/**': { redirect: '/posts/**' }` sends `/blog/a/b` to
+ *     `/posts/a/b`: the row is `/blog/*` → `/posts/*`. Under an exact source
+ *     it's the whole path (`'/old'` → `'/new/**'` sends `/new/old`).
+ *   - Any other destination is sent as written (`'/blog/**'` → `'/posts'`
+ *     redirects every post to `/posts`).
+ *   - The status defaults to 307.
+ * A rule the edge can't reproduce (a destination ending in a single `*`,
+ * which Nitro sends literally; a `/**` destination under a source with a
+ * wildcard elsewhere) gets no row and is answered by the Nitro server.
  */
 const buildRedirects = (
   routeRules: Record<string, NitroRouteRule>,
@@ -1790,19 +1805,45 @@ const buildRedirects = (
   const out: NonNullable<DeployManifest['redirects']> = [];
   for (const [source, rule] of Object.entries(routeRules)) {
     if (!rule.redirect) continue;
-    const dest =
+    const to =
       typeof rule.redirect === 'string' ? rule.redirect : rule.redirect.to;
     const statusCode =
       typeof rule.redirect === 'object' && rule.redirect.statusCode
         ? rule.redirect.statusCode
-        : 302;
+        : 307;
+    const destination = edgeRedirectDestination(source, to);
+    if (destination === undefined) continue;
     out.push({
       source: normalizeRulePattern(source),
-      destination: dest,
+      destination,
       statusCode,
     });
   }
   return out;
+};
+
+/**
+ * The destination of a Nitro redirect rule in the form the doors' redirect
+ * matchers expect (see {@link buildRedirects}), or `undefined` when the edge
+ * can't reproduce what Nitro sends.
+ */
+const edgeRedirectDestination = (
+  source: string,
+  to: string,
+): string | undefined => {
+  if (to.endsWith('/**')) {
+    const base = to.slice(0, -3);
+    // Path after the source's `/**` base: splice the edge tail into `base/*`.
+    if (source.endsWith('/**') && !source.slice(0, -3).includes('*')) {
+      return `${base}/*`;
+    }
+    // Exact source: Nitro appends the whole (known) path.
+    if (!source.includes('*')) return `${base}${source}`;
+    return undefined;
+  }
+  // Nitro sends a single trailing `*` literally; the doors would splice into it.
+  if (to.endsWith('*')) return undefined;
+  return to;
 };
 
 /**
