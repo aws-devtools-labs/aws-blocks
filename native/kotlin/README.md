@@ -1,7 +1,6 @@
 # AWS CDK Blocks Kotlin
 
 [![Maven Central](https://img.shields.io/maven-central/v/com.aws.blocks.kotlin/runtime)](https://central.sonatype.com/search?namespace=com.aws.blocks.kotlin)
-[![Kotlin](https://img.shields.io/badge/kotlin-2.2.10-blue.svg?logo=kotlin)](https://kotlinlang.org)
 ![Android](http://img.shields.io/badge/platform-android-6EDB8D.svg?style=flat)
 ![iOS](http://img.shields.io/badge/platform-ios-CDCDCD.svg?style=flat)
 ![Desktop](http://img.shields.io/badge/platform-desktop-DB413D.svg?style=flat)
@@ -42,7 +41,7 @@ See the [Gradle plugin reference](docs/gradle-plugin.md) for full configuration 
 
 ### 4. Call your backend
 
-Codegen runs as part of compilation, so building the module is all it takes to get the client.
+Codegen runs as part of compilation: build the module to get the client.
 
 ```kotlin
 val blocks = Blocks()
@@ -102,11 +101,10 @@ OidcAuthApi.GetClient.Provider.entries
 state = blocks.authApi.setAuthState(AuthApi.SetAuthState.Input.SignIn(username, password))
 ```
 
-- **Federated sign-in** buttons come from the client's providers, one per provider, each calling
-  `oidc.signIn(provider)` and then `getAuthState()`. Don't render the state machine's `signIn:<id>`
-  actions as buttons.
+- **Federated sign-in:** don't render the state machine's `signIn:<id>` actions as buttons. The
+  buttons come from the OIDC client, as above.
 - **Plain actions** (no `url`) go through `setAuthState`, with the action's `fields` as input. The
-  response is the next state. `username` and `password` above are the values the user entered.
+  response is the next state.
 - **`signOut` with a `url`** belongs to a federated session. Run `oidc.signOut()`, then call
   `getAuthState()`. It returns the identity provider's logout URL, or `null`; the SDK does not open
   it, so open it yourself if the provider's own session should end too. Never submit this action
@@ -119,17 +117,13 @@ state = blocks.authApi.setAuthState(AuthApi.SetAuthState.Input.SignIn(username, 
 - **New actions are additive.** A backend can add actions to `setAuthState` over time, so treat an
   action name you don't recognize as one to skip, not as an error.
 
-Call `getAuthState()` on launch to learn whether a session from an earlier launch is still signed
-in. It works for every `Auth` block. `oidc.restore()` returns the same user and settles
-`oidc.authState`, but only a block with federated providers serves it; any other answers 404.
+`oidc.restore()` returns the same user as `getAuthState()` and settles `oidc.authState`. Only a
+block with federated providers serves it; any other answers 404.
 
-On Android and iOS, `relayTo` is a custom scheme, which any installed app can also register, so
-another app may receive the sign-in callback. PKCE is what keeps that from becoming a takeover: the
-callback carries only the authorization code, and the backend exchanges it only together with the
-code verifier, which never leaves your app. A verified link (an Android App Link or an iOS universal
-link) would stop other apps from receiving the callback at all, and is the better choice once the
-SDK supports it; the Gradle plugin registers a scheme only today, so don't set `relayTo` to an
-`https` URL.
+On Android and iOS, `relayTo` must be a custom scheme (`com.yourcompany.yourapp://auth/callback`).
+An `https` URL (an Android App Link or an iOS universal link) is not supported. Any installed app
+can register the same scheme and receive the sign-in callback; PKCE keeps that app from exchanging
+the authorization code, because the code verifier never leaves your app.
 
 Every API reached through `blocks` shares one cookie jar, so methods the backend gates with
 `requireAuth` work after either path signs in. See [OIDC](docs/oidc.md) for the relay scheme,
@@ -137,11 +131,64 @@ JVM landing pages and typed providers.
 
 ## Generated types
 
-A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class whose known properties are typed and whose `attributes: Map<String, V>` holds every other key. Those keys are flat on the wire, next to the properties, in both directions. For example, the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way; with `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`. An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins. If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
+### Open records
 
-A union (`anyOf` / `oneOf`) generates a sealed class with one subclass per arm, read and written in the spec's wire format. When every arm is an object with a string discriminator property, the subclasses are written with that property (`{"type":"email",…}`). Otherwise each value is its arm's bare JSON value: a string, number, boolean, array, map, date-time or transferable arm is a subclass holding it as `value` (`Search.Query.Variant1("abc")` is sent as `"abc"`), a `const` arm is a `data object` written as its literal, and an object arm is its object, with no extra key. A value decodes to the first arm, in spec order, whose JSON shape it has (its JSON type, its required keys, or its exact literal), and one that matches no arm throws a `SerializationException` naming the union. A boolean or numeric discriminator is written and matched with that JSON type (`"isUpdated": true`). An arm with its own properties plus a nested `oneOf` (the `confirmSignIn` action of an `Auth` block's `createApi()`) is one flat object: `ConfirmSignIn(session, challenge = Challenge.Code(code))` sends `{"action":"confirmSignIn","session":…,"challenge":"code","code":…}`.
+A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class.
 
-Generated names follow the spec, and the wire keeps the spec's names. A property, parameter or operation keeps its spec name, escaped with backticks where Kotlin needs it (`` `class` ``, `` `content-type` ``). A name Kotlin can't declare even in backticks (one holding `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:`, `\`, a backtick or a control character such as a line break) becomes its words in camelCase: a key `back\slash` is the property `backSlash` with `@SerialName("back\\slash")`, and the method `a.b.ping` is `A.bPing()`, which still calls `a.b.ping`. Types, enum constants and union subclasses are PascalCase. When two names land on one Kotlin name in the same scope (properties `user_name` and `userName` with inline object types, discriminator values `in-progress` and `in_progress`), the first keeps it and the next gets `_2`, then `_3`, and so on; so does a nested type named like a property of its class (`Meta: Meta_2`). Enum constants that meet are numbered without the underscore (`InProgress`, `InProgress2`). Generated names step aside for yours: an operation with a parameter named `client`, `request`, `args`, `result` or `json` keeps that parameter name, and the generated code around it adapts.
+- The known properties are typed. `attributes: Map<String, V>` holds every other key.
+- Those keys are flat on the wire, next to the properties, in both directions.
+- Example: the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way. With `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`.
+- An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins.
+- If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
+
+### Unions
+
+A union (`anyOf` / `oneOf`) generates a sealed class with one subclass per arm, read and written in the spec's wire format. When every arm is an object with a string discriminator property, the subclasses are written with that property (`{"type":"email",…}`). Otherwise each value is its arm's bare JSON value:
+
+| Arm | Kotlin | Wire |
+|---|---|---|
+| string, number, boolean, array, map, date-time or transferable | a subclass holding it as `value` (`Search.Query.Variant1("abc")`) | the value (`"abc"`) |
+| `const` | a `data object` | its literal |
+| object | a subclass with the object's properties | the object, with no extra key |
+
+- A value decodes to the first arm, in spec order, whose JSON shape it has (its JSON type, its required keys, or its exact literal).
+- A value that matches no arm throws a `SerializationException` naming the union.
+- A boolean or numeric discriminator is written and matched with that JSON type (`"isUpdated": true`).
+- An arm with its own properties plus a nested `oneOf` (the `confirmSignIn` action of an `Auth` block's `createApi()`) is one flat object: `ConfirmSignIn(session, challenge = Challenge.Code(code))` sends `{"action":"confirmSignIn","session":…,"challenge":"code","code":…}`.
+
+### Names
+
+Generated names follow the spec, and the wire keeps the spec's names.
+
+| Spec name | Kotlin name | Example |
+|---|---|---|
+| A property, parameter or operation | the spec name, in backticks where Kotlin needs them | `` `class` ``, `` `content-type` `` |
+| A name Kotlin can't declare even in backticks: one holding `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:`, `\`, a backtick or a control character such as a line break | its words in camelCase | the key `back\slash` is the property `backSlash` with `@SerialName("back\\slash")`; the method `a.b.ping` is `A.bPing()`, which still calls `a.b.ping` |
+| A type, enum constant or union subclass | PascalCase | `InProgress` |
+
+- When two names land on one Kotlin name in the same scope (properties `user_name` and `userName` with inline object types, discriminator values `in-progress` and `in_progress`), the first keeps it and the next gets `_2`, then `_3`, and so on.
+- A nested type named like a property of its class is numbered the same way (`Meta: Meta_2`).
+- Enum constants that meet are numbered without the underscore (`InProgress`, `InProgress2`).
+- An operation's parameter named `client`, `request`, `args`, `result` or `json` keeps that name; the generated code around it adapts.
+
+## Errors
+
+Every exception in this table extends `BlocksException`.
+
+| Exception | Thrown when |
+|---|---|
+| `ApiException` | The server answers with a JSON-RPC error, even on HTTP 200. `status` comes from the positive RPC error code, or is 500 for a reserved code. Match the error's `name` with `e.isBlocksError("<name>")`. |
+| `TransportException` | The request produced no usable JSON-RPC result: the connection failed, the response was not a JSON-RPC envelope (for example a gateway's own error), or a method with a non-null return type got no `result`. `statusCode` is `null` when no response arrived. |
+| `ClientClosedException` | The request goes through a `Blocks` instance that is closed. |
+| `OidcUnknownProviderException` | `signIn` or `exchange` gets a provider the backend has not configured. `provider` is its name. |
+| `OidcCallbackException` | In `signIn`: the authorize-params request fails, the identity provider reports an error, or the redirect lacks `state` or `code` or carries a state or CSRF value that does not match. On iOS, also when the system can't start the sign-in session or the session fails. |
+| `OidcExchangeException` | The backend rejects the authorization code, or the exchange request fails or its response can't be read. |
+| `OidcCancelledException` | The user leaves the sign-in without finishing (closes the Custom Tab on Android, cancels the sheet on iOS), or on the JVM no redirect arrives before the timeout. |
+| `FileTransferException` | An upload or download through a file handle fails. `statusCode` is the HTTP status the presigned URL answered with, or `null` when the request got no response. |
+
+- The four `Oidc…` exceptions extend the sealed `OidcException`.
+- When a request failed, the `cause` of an `OidcCallbackException` or `OidcExchangeException` is an `ApiException` if the backend said why, otherwise a `TransportException`.
+- [Transferables](docs/transferables.md) covers `TransferableException`, `RealtimeSubscriptionEndedException` and `RealtimeConnectionException`. `RealtimeChannelClosedException` is thrown by `subscribe()` on a channel that is already closed.
 
 ## Documentation
 
@@ -166,14 +213,7 @@ iOS and desktop.
 | iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
 | JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#what-desktop-storage-protects), with the key held by the OS — in memory if no id is set |
 
-## Support by Target
-
-| Block       | Android | iOS | JVM |
-|-------------|---------|-----|-----|
-| General/RPC | ✅ | ✅ | ✅ |
-| Realtime    | ✅ | ✅ | ✅ |
-| File Bucket | ✅ | ✅ | ✅ |
-| OIDC        | ✅ | ✅ | ✅ |
+RPC, realtime, file bucket and OIDC work on all three targets.
 
 ## Requirements
 

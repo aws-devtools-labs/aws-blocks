@@ -181,7 +181,7 @@ Run `npm run docs` in the app to list the Building Blocks shipped with its insta
 | bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
 | bb-secret | A single application secret backed by AWS Secrets Manager. | — |
 | bb-tracer | Distributed tracing backed by AWS X-Ray. | — |
-| core | Core primitives for building full-stack applications with the AWS CDK Blocks. | — |
+| core | Core primitives for building full-stack applications with AWS CDK Blocks. | — |
 | hosting | Low-level CDK L3 constructs for deploying web applications on AWS | — |
 | pipeline | CDK Pipelines-based CI/CD construct for AWS CDK Blocks applications. | — |
 <!-- END:block-catalog -->
@@ -252,7 +252,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 ```
 
-Every synth writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth. See `npm run docs core` for permissions boundary scope and shared-account guidance.
+Every synth writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth. See `npm run docs core` for permissions boundary scope and shared-account guidance. For shared-account policies, pipeline setup, and adoption steps, run `npm run docs core/SHARED-ACCOUNT.md` (`docs/core/SHARED-ACCOUNT.md` in the installed package).
 
 ## VPC Support
 
