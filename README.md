@@ -14,7 +14,7 @@ Select the CDK Blocks your app needs and compose them. Your app runs locally wit
 
 Platform teams can package their own standards as custom CDK Blocks and share them through npm. To create a custom CDK Block, see [`create-block`](./packages/create-block/README.md).
 
-> **Documentation:** [Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html)
+For an overview, see the [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html). For the Block catalog and APIs at this revision, see the [Blocks README](./packages/blocks/README.md).
 
 ## Getting started
 
@@ -31,7 +31,7 @@ The first command creates the app and installs its dependencies. `npm run dev` s
 Define your backend in `cdk-blocks/index.ts` and your frontend in `src/`. Your frontend imports your backend and gets its types directly from the TypeScript source. You do not run a code generation step.
 
 - **Documentation in your app:** `npm run docs` lists the Blocks. `npm run docs KVStore` shows the guide for one Block. `npm run help` lists the tasks.
-- **Templates:** To start from a different template, add `-- --template <name>` to the `npm create` command. To see the templates, run `npx @aws-cdk-blocks/create-blocks-app --help`.
+- **Templates:** To start from a different template, add `-- --template <name>` to the `npm create` command. To see the templates, run `npx @aws-cdk-blocks/create-blocks-app --help`. The `auth` template was formerly named `auth-cognito`, and the old name still works.
 - **Existing projects:** To add a `cdk-blocks/` backend to an existing project, run the `npm create` command in the project directory. Omit the directory name, or use `.`. If the project is an AWS Amplify Gen 2 project, the CLI finds it and integrates with it.
 
 For the full procedure, see the [Getting started guide](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).
@@ -60,8 +60,6 @@ Each CDK Block is an npm package. The umbrella package [`aws-cdk-blocks`](https:
 | Configuration | `AppSetting`, `Secret` |
 | Observability | `Logger`, `Metrics`, `Tracer`, `Dashboard` |
 | Hosting | `Hosting` |
-
-For the full catalog and the API reference of each Block, see the [Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html).
 
 ## Supported platforms
 
@@ -92,7 +90,7 @@ cdk-blocks/
 
 ## Building from source
 
-You must have Node.js 22 or later.
+You must have Node.js 22 or later and npm 10 or later.
 
 ```bash
 npm install

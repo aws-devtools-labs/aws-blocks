@@ -11,7 +11,7 @@ import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-cdk-blocks/bb-realtime';
 import type { AgentStreamChunk, ModelConfig } from './types.js';
-import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, walkCauseChain } from './errors.js';
+import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, rowContinuesTurn, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
 import { AgentBase } from './agent.js';
@@ -213,6 +213,49 @@ describe('persistedTurnError', () => {
 		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: '{"error":"x"}' }), undefined);
 		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '' }), undefined);
 		assert.strictEqual(persistedTurnError(undefined), undefined);
+	});
+});
+
+describe('rowContinuesTurn', () => {
+	const user = (content: string) => ({ role: 'user', content });
+	const answer = (content: string) => ({ role: 'assistant', content });
+	// The client's view: earlier turns, then the in-flight user bubble and its empty bubble.
+	const shown = (...turns: [string, string][]) => [
+		...turns.flatMap(([q, a], i) => [{ id: `u${i}`, ...user(q) }, { id: `a${i}`, ...answer(a) }]),
+		{ id: 'u-now', ...user('now') },
+		{ id: 'a-now', ...answer('') },
+	];
+
+	test('with text streamed, the row must continue it', () => {
+		const messages = shown(['Q1', 'A1']);
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1'), user('now'), answer('Hello there')], messages, 'a-now', 'Hello'), true);
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1')], messages, 'a-now', 'Hello'), false);
+	});
+
+	test('a read behind the client ending at the previous answer is that turn\'s row', () => {
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1')], shown(['Q1', 'A1']), 'a-now', ''), false);
+	});
+
+	test('a current read ending at an answer equal to the previous one is adopted', () => {
+		const messages = shown(['hi', 'Hello!']);
+		assert.strictEqual(rowContinuesTurn([user('hi'), answer('Hello!'), user('now'), answer('Hello!')], messages, 'a-now', ''), true);
+	});
+
+	test('the previous answer is the latest one before the in-flight bubble', () => {
+		const messages = shown(['Q1', 'A1'], ['Q2', 'A2']);
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1'), user('Q2'), answer('A2')], messages, 'a-now', ''), false);
+	});
+
+	test('with no earlier answer, a new answer is adopted', () => {
+		assert.strictEqual(rowContinuesTurn([user('now'), answer('First')], shown(), 'a-now', ''), true);
+	});
+
+	test('when the counts drift, the content check still applies', () => {
+		// A send that failed before its row was written leaves an extra user bubble.
+		const messages = [{ id: 'u-failed', ...user('lost') }, ...shown(['Q1', 'A1'])];
+		const current = [user('Q1'), answer('A1'), user('now')];
+		assert.strictEqual(rowContinuesTurn([...current, answer('New')], messages, 'a-now', ''), true);
+		assert.strictEqual(rowContinuesTurn([...current, answer('A1')], messages, 'a-now', ''), false);
 	});
 });
 
@@ -3231,6 +3274,137 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test("reconnect does not adopt the previous turn's answer when nothing has streamed", async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The second turn's user row is written inside the turn, after sendMessage returns,
+				// so this read still ends at the first turn's answer.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'Q1' },
+					{ role: 'assistant', content: 'Answer to Q1' },
+				] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('Q1');
+		cap.handler!({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.handler!({ type: 'done' });
+		await chat.sendMessage('Q2');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the second turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the first turn's answer is not copied into the second turn");
+		cap.handler!({ type: 'text-delta', text: 'Answer to Q2' });
+		cap.handler!({ type: 'done' });
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's answer is shown");
+		chat.destroy();
+	});
+
+	test('reconnect adopts a new answer when nothing has streamed and the done chunk was missed', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'Q1' },
+					{ role: 'assistant', content: 'Answer to Q1' },
+					{ role: 'user', content: 'Q2' },
+					{ role: 'assistant', content: 'Answer to Q2' },
+				] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('Q1');
+		cap.handler!({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.handler!({ type: 'done' });
+		await chat.sendMessage('Q2');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's saved answer is adopted");
+		chat.destroy();
+	});
+
+	test('reconnect adopts a new answer identical to the previous one when the done chunk was missed', async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The read includes the second turn's rows, so its answer is the second turn's.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hi' },
+					{ role: 'assistant', content: 'Hello!' },
+					{ role: 'user', content: 'hi' },
+					{ role: 'assistant', content: 'Hello!' },
+				] }),
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hi');
+		cap.handler!({ type: 'text-delta', text: 'Hello!' });
+		cap.handler!({ type: 'done' });
+		await chat.sendMessage('hi');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Hello!', "the second turn's saved answer is adopted");
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+	});
+
+	test('reconnect does not adopt the latest earlier answer when the read is a turn behind', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The third turn's user row is not in the read yet, so it ends at the second answer.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'Q1' },
+					{ role: 'assistant', content: 'Answer to Q1' },
+					{ role: 'user', content: 'Q2' },
+					{ role: 'assistant', content: 'Answer to Q2' },
+				] }),
+			},
+			subscribe,
+		});
+
+		for (const n of [1, 2]) {
+			await chat.sendMessage(`Q${n}`);
+			cap.handler!({ type: 'text-delta', text: `Answer to Q${n}` });
+			cap.handler!({ type: 'done' });
+		}
+		await chat.sendMessage('Q3');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the third turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the second turn's answer is not copied into the third turn");
+		chat.destroy();
+	});
+
 	test('a loaded conversation ending in an error row makes the next reconnect wait for the chunk', async () => {
 		const errors: string[] = [];
 		const { cap, subscribe } = subscribeCapture();
@@ -4076,7 +4250,7 @@ describe('OllamaModels presets', () => {
 
 import { Agent as DeployedAgent } from './index.aws.js';
 import { createDeployedSnapshotStorage, Agent as AwsAgent } from './agent.aws.js';
-import { handleInvocation } from './agentcore-invocation.js';
+import { backendLoader, ConfigNotReadyError, handleInvocation } from './agentcore-invocation.js';
 import { errorCauseShape } from './agent.js';
 import { SessionManager } from '@strands-agents/sdk';
 import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
@@ -4955,6 +5129,158 @@ describe('createChat', () => {
 		await flush();
 		assert.strictEqual(chat.isLoading(), false);
 		assert.strictEqual(chat.getMessages().filter((m) => m.role === 'assistant').at(-1)?.content, 'Retry answer', "the retry's text is shown");
+		chat.destroy();
+		await flush();
+	});
+
+	test("reconnect does not adopt the previous turn's answer when nothing has streamed", async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The second turn's user row is written inside the turn, after sendMessage returns,
+				// so this read still ends at the first turn's answer.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'Q1' },
+						{ role: 'assistant', content: 'Answer to Q1' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('Q1');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		await chat.sendMessage('Q2');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the second turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the first turn's answer is not copied into the second turn");
+		cap.chunk({ type: 'text-delta', text: 'Answer to Q2' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's answer is shown");
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect adopts a new answer when nothing has streamed and the done chunk was missed', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'Q1' },
+						{ role: 'assistant', content: 'Answer to Q1' },
+						{ role: 'user', content: 'Q2' },
+						{ role: 'assistant', content: 'Answer to Q2' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('Q1');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		await chat.sendMessage('Q2');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's saved answer is adopted");
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect adopts a new answer identical to the previous one when the done chunk was missed', async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The read includes the second turn's rows, so its answer is the second turn's.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hi' },
+						{ role: 'assistant', content: 'Hello!' },
+						{ role: 'user', content: 'hi' },
+						{ role: 'assistant', content: 'Hello!' },
+					],
+				}),
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hi');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Hello!' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		await chat.sendMessage('hi');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Hello!', "the second turn's saved answer is adopted");
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect does not adopt the latest earlier answer when the read is a turn behind', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The third turn's user row is not in the read yet, so it ends at the second answer.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'Q1' },
+						{ role: 'assistant', content: 'Answer to Q1' },
+						{ role: 'user', content: 'Q2' },
+						{ role: 'assistant', content: 'Answer to Q2' },
+					],
+				}),
+			},
+		});
+
+		for (const n of [1, 2]) {
+			await chat.sendMessage(`Q${n}`);
+			await flush();
+			cap.chunk({ type: 'text-delta', text: `Answer to Q${n}` });
+			cap.chunk({ type: 'done' });
+			await flush();
+		}
+		await chat.sendMessage('Q3');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the third turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the second turn's answer is not copied into the third turn");
 		chat.destroy();
 		await flush();
 	});
@@ -5877,5 +6203,49 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		assert.deepStrictEqual(ack, { channelId: ownerConv, status: 'accepted' });
 		assert.strictEqual(turns[0].conversationId, undefined);
 		assert.strictEqual(turns[1].conversationId, 'conv-1');
+	});
+
+	// The Runtime process can start before the deployment has uploaded the config file.
+	test('the AgentCore entry runs no turn until the app config is readable, then loads the backend once', async () => {
+		const turns: string[] = [];
+		const agent = { invokeTurn: async (payload: { message: string }) => { turns.push(payload.message); } };
+		const tasks = { addAsyncTask: () => 1, completeAsyncTask: () => true };
+		let configReadable = false;
+		let configLoads = 0;
+		let backendImports = 0;
+		const loadAgent = backendLoader({
+			loadConfig: async () => { configLoads++; },
+			configMissing: () => !configReadable,
+			loadBackend: async () => { backendImports++; return agent; },
+		});
+		const invoke = async (prompt: string) => handleInvocation(await loadAgent(), tasks, { prompt, channelId: 'chan-1' }, {});
+
+		// Process start, and an invocation, before the config file exists.
+		await assert.rejects(loadAgent(), ConfigNotReadyError);
+		await assert.rejects(invoke('too early'), ConfigNotReadyError);
+		assert.strictEqual(backendImports, 0, 'the backend must not be imported against an empty config');
+		assert.deepStrictEqual(turns, []);
+
+		configReadable = true;
+		assert.deepStrictEqual(await invoke('first'), { channelId: 'chan-1', status: 'accepted' });
+		await invoke('second');
+		assert.deepStrictEqual(turns, ['first', 'second']);
+		assert.strictEqual(backendImports, 1);
+		assert.strictEqual(configLoads, 3, 'the config is loaded again only until it is readable');
+	});
+
+	test('the AgentCore entry loads the config again after a failed load, and does not import a failed backend twice', async () => {
+		let configFails = true;
+		let backendImports = 0;
+		const loadAgent = backendLoader({
+			loadConfig: async () => { if (configFails) throw new Error('S3 unavailable'); },
+			configMissing: () => false,
+			loadBackend: async () => { backendImports++; throw new Error('backend does not import'); },
+		});
+		await assert.rejects(loadAgent(), /S3 unavailable/);
+		configFails = false;
+		await assert.rejects(loadAgent(), /backend does not import/);
+		await assert.rejects(loadAgent(), /backend does not import/);
+		assert.strictEqual(backendImports, 1);
 	});
 });

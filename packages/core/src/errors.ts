@@ -216,15 +216,14 @@ export function blocksError(name: string, message: string): Error {
  * `authApi.setAuthState()` call notifies nothing on the page, so a UI that
  * renders from `onAuthChange` never sees the sign-in.
  *
- * To import `AuthErrors` in browser code, list `@aws-cdk-blocks/bb-auth` in your
- * app's own `dependencies`: the browser entry of `aws-cdk-blocks` does not
- * re-export it. The string name, `'NotAuthorizedException'`, works without it.
+ * In browser code, import `AuthErrors` and `hasAuthError` from `aws-cdk-blocks`:
+ * its browser entry exports both, so the import is the same as on the server.
+ * The string name, `'NotAuthorizedException'`, works as well.
  *
  * @example
  * ```typescript
- * import { hasAuthError } from 'aws-cdk-blocks/client';
+ * import { AuthErrors, hasAuthError } from 'aws-cdk-blocks';
  * import { submitAuthAction } from 'aws-cdk-blocks/ui';
- * import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
  *
  * const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
  * if (hasAuthError(next, AuthErrors.NotAuthorized)) {

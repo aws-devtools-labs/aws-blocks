@@ -1,5 +1,36 @@
 # @aws-blocks/bb-cron-job
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: a job with `enabled: false` is deployed in the `DISABLED` state and cannot be triggered by hand. `InvalidSchedule` and `InvalidTimezone` are thrown at construction locally and at synth on deploy. The local mock does not retry a failed handler and ignores the year field of a cron expression.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-async-job@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-container-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-async-job@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

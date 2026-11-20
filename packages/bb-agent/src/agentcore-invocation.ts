@@ -25,6 +25,17 @@ export const requestSchema = z.object({
 	context: z.unknown().optional(),
 });
 
+/** The part of an Agent the AgentCore entry drives. */
+export interface TurnRunner {
+	invokeTurn(payload: Omit<AgentTurnPayload<unknown>, 'userId'> & { userId?: string }): Promise<void>;
+}
+
+/** The response to an AgentCore invocation: the turn was started. */
+export interface InvocationAck {
+	channelId: string;
+	status: 'accepted';
+}
+
 /**
  * Handle one AgentCore invocation: start the turn as a background async task and ack.
  *
@@ -35,11 +46,11 @@ export const requestSchema = z.object({
  * stream()/resume() only covers turns that carry a conversationId.
  */
 export function handleInvocation(
-	agent: { invokeTurn(payload: Omit<AgentTurnPayload<unknown>, 'userId'> & { userId?: string }): Promise<void> },
+	agent: TurnRunner,
 	tasks: { addAsyncTask(name: string): number; completeAsyncTask(taskId: number): unknown },
 	request: z.infer<typeof requestSchema>,
 	_context: { sessionId?: string },
-): { channelId: string; status: 'accepted' } {
+): InvocationAck {
 	// Run the turn as a background async task so this invocation returns immediately.
 	// The harness reports `/ping` = HealthyBusy while the task is in flight, keeping
 	// the microVM alive (up to the 8h session lifetime) until the loop completes.
@@ -61,4 +72,44 @@ export function handleInvocation(
 	// The client already has channelId (from the RPC that invoked us) and subscribes
 	// to Realtime; it does not consume this response body.
 	return { channelId: request.channelId, status: 'accepted' };
+}
+
+/** An invocation arrived before the app config file was readable. The next one tries again. */
+export class ConfigNotReadyError extends Error {
+	constructor() {
+		super('The app config is not readable yet; the AgentCore Runtime loads it again on the next invocation.');
+		this.name = 'ConfigNotReadyError';
+	}
+}
+
+/**
+ * Load the app config, then the backend, once per process.
+ *
+ * The backend is imported only after the config is readable, because its Building Blocks read
+ * that config. While the config is missing each call fails with {@link ConfigNotReadyError} and
+ * the next call loads the config again. A failed config load is retried the same way. Once the
+ * backend import has started its result is final: a module is not imported twice.
+ */
+export function backendLoader<T>(steps: {
+	loadConfig(): Promise<void>;
+	/** After `loadConfig()`: true while the config file exists in the deployment but is not readable yet. */
+	configMissing(): boolean;
+	loadBackend(): Promise<T>;
+}): () => Promise<T> {
+	let loaded: Promise<T> | null = null;
+	return () => {
+		if (loaded) return loaded;
+		let importing = false;
+		const attempt = (async () => {
+			await steps.loadConfig();
+			if (steps.configMissing()) throw new ConfigNotReadyError();
+			importing = true;
+			return steps.loadBackend();
+		})();
+		loaded = attempt;
+		attempt.catch(() => {
+			if (!importing && loaded === attempt) loaded = null;
+		});
+		return attempt;
+	};
 }

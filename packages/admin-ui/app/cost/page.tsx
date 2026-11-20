@@ -28,10 +28,10 @@ const ATTRIBUTION_COPY: Record<
 		blurb: (r) => `Filtered by the aws:cloudformation:stack-name cost allocation tag — exactly ${r.stackName}.`,
 	},
 	'deployment-type-tag': {
-		label: `Blocks deployments`,
+		label: `CDK Blocks deployments`,
 		variant: 'warning',
 		blurb: (r) =>
-			`Filtered by blocks:deployment-type=${r.stage} — ALL Blocks ${r.stage} deployments in this account, not just this app. Activate the aws:cloudformation:stack-name cost allocation tag for exact per-stack attribution.`,
+			`Filtered by blocks:deployment-type=${r.stage} — ALL CDK Blocks ${r.stage} deployments in this account, not just this app. Activate the aws:cloudformation:stack-name cost allocation tag for exact per-stack attribution.`,
 	},
 	'account-unattributed': {
 		label: 'whole account',

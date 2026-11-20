@@ -1,5 +1,40 @@
 # @aws-blocks/bb-realtime
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the README separates the AWS behavior (publish-time checks, revocation, reconnect exhaustion) from the local WebSocket server, and lists `revokeAccess` among the runtime-only methods.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-secret@1.0.0-rc.2
+
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [e529b00]
+- Updated dependencies [c9d73a8]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-secret@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

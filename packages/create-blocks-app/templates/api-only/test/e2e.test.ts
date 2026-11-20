@@ -237,11 +237,9 @@ test('items: auth-gated CRUD round-trip', async () => {
 // one must be rejected with a ConditionalCheckFailed conflict.
 // When you replace the sample API, update or delete this test.
 test('items: optimistic-lock conflict rejects a stale write', async () => {
-  // isBlocksError is client-safe (the browser bundle re-exports it); the error
-  // name is asserted as a literal string because KVStoreErrors is a
-  // server-only value and is not present in the client bundle this test runs in.
-  const { isBlocksError } = await import('aws-cdk-blocks/client');
-  const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';
+  // isBlocksError and KVStoreErrors are client-safe: the browser entry of
+  // aws-cdk-blocks, which this test loads (tsx -C browser), re-exports them.
+  const { isBlocksError, KVStoreErrors } = await import('aws-cdk-blocks');
 
   const username = `e2e-lock-${Date.now().toString(36)}@example.com`;
   const password = 'TestPass123!';
@@ -261,7 +259,7 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
   // rejected with a ConditionalCheckFailed conflict (HTTP 409).
   await assert.rejects(
     api.setQuantity(item.itemId, 99, 1),
-    (e: unknown) => isBlocksError(e, CONDITIONAL_CHECK_FAILED),
+    (e: unknown) => isBlocksError(e, KVStoreErrors.ConditionalCheckFailed),
     'a stale-version write should raise ConditionalCheckFailed',
   );
 

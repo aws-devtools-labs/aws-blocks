@@ -34,7 +34,8 @@ export function prepareLocalSchema(
 		if (migrationsPath) {
 			const files = loadMigrationFiles(migrationsPath);
 			lintMigrationFiles(files, options.fileKind ?? kind);
-			const plan = buildMigrationPlan(files, kind);
+			// The block's statements run as the local app role on every kind of local cluster.
+			const plan = buildMigrationPlan(files, kind, quoteIdent(LOCAL_APP_ROLE));
 			({ applied } = await runMigrationPlan(engine, plan, { schemaName, log: options.log }).finally(() =>
 				// A file may have changed the session's search_path or role.
 				inner.cluster.forgetSession(),
