@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The local dev server proxies the whole Blocks API (mock auth applies no
+ * The local dev server proxies the whole CDK Blocks API (mock auth applies no
  * authentication) against the local mock datastore, so it must not be reachable
  * beyond the developer's machine by default. It used to `listen(port)` with no
  * host, which binds every interface.

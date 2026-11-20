@@ -8,14 +8,14 @@
  * a malformed door before an app synthesizes it. It builds the door once
  * against a sample {@link DoorInput} — in a throwaway stack, with a real assets
  * bucket and, by default, an API — and checks three things, the same three
- * AWS Blocks enforces at synth:
+ * CDK Blocks enforces at synth:
  *   1. Shape — `service` is a non-empty string and `build` is a function.
  *   2. `build` returns a non-empty public `url`.
  *   3. Wiring — the static assets are reachable and, when the input has an
  *      API, its paths reach it (as recorded by the `cf.*` helpers or
  *      `cf.recordWired`).
  *
- * It does not check features: AWS Blocks never verifies that a door applies
+ * It does not check features: CDK Blocks never verifies that a door applies
  * what `input.features` asks for.
  *
  * @throws HostingError (not tied to any test runner) on the first failed check.

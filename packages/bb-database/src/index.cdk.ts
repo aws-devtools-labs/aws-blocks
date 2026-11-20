@@ -74,7 +74,7 @@ export class DatabaseCluster extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		super(id, { parent: scope, vpc: VPC_REQUIREMENTS });
 		// Part of the `Database` block but not a block: it passes no `bbName`, so mark it for the
-		// service-principal trust check, which then treats its roles as AWS Blocks roles.
+		// service-principal trust check, which then treats its roles as CDK Blocks roles.
 		markBlocksOwned(this);
 		const resolved = resolveClusterOptions(options, this.fullId);
 		this.type = resolved.type;

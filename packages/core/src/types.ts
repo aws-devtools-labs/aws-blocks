@@ -14,7 +14,7 @@ export type MaterializeFn<TOptions = any> = (
 ) => void | Record<string, any>;
 
 /**
- * Building Block metadata discovered by Blocks.
+ * Building Block metadata discovered by CDK Blocks.
  */
 export interface BuildingBlockMetadata {
   name: string;

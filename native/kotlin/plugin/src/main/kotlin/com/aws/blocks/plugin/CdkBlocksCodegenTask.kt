@@ -74,7 +74,7 @@ abstract class CdkBlocksCodegenTask : DefaultTask() {
     fun generate() {
         val file = openRpcFile.get().asFile
         if (!file.exists()) {
-            throw GradleException("Blocks Spec file not found: ${file.absolutePath}")
+            throw GradleException("AWS CDK Blocks Spec file not found: ${file.absolutePath}")
         }
 
         val model = OpenRpcParser.parse(file.readText())
@@ -173,7 +173,7 @@ abstract class CdkBlocksCodegenTask : DefaultTask() {
         val segments = uri.normalize().path.split('/').filter { it.isNotEmpty() && it != "." && it != ".." }
         if (segments.isNotEmpty()) return
         throw GradleException(
-            "cdkBlocks.servers: \"$name\" is \"$url\", which has no RPC path. A Blocks backend serves RPC " +
+            "cdkBlocks.servers: \"$name\" is \"$url\", which has no RPC path. An AWS CDK Blocks backend serves RPC " +
                 "under /cdk-blocks/api, not at the origin, so every call through this server fails. " +
                 "Use the full RPC URL, for example \"${uri.scheme}://${uri.rawAuthority}/cdk-blocks/api\" ($fix).",
         )

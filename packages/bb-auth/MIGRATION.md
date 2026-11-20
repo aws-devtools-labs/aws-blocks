@@ -227,7 +227,7 @@ export const authApi = auth.createApi(); // the sign-in state machine: getAuthSt
 export const oidcAuthApi = auth.createOidcApi(); // getClient(): the native SDKs' OIDC client for federated sign-in
 ```
 
-- **The OIDC client comes from `getClient()`.** It returns the `oidc/client` descriptor `AuthOIDC` returned, with this block's own routes (a block that moves them with `redirects.callbackPath` / `redirects.signOutPath` hands out the moved paths) and the providers that can sign in in this runtime. The generated client turns it into the SDK's OIDC client on the app's Blocks client, so it shares that client's HTTP client and cookie store, and types `signIn` by the block's provider ids (a generated enum on Swift, Kotlin and Dart):
+- **The OIDC client comes from `getClient()`.** It returns the `oidc/client` descriptor `AuthOIDC` returned, with this block's own routes (a block that moves them with `redirects.callbackPath` / `redirects.signOutPath` hands out the moved paths) and the providers that can sign in in this runtime. The generated client turns it into the SDK's OIDC client on the app's AWS CDK Blocks client, so it shares that client's HTTP client and cookie store, and types `signIn` by the block's provider ids (a generated enum on Swift, Kotlin and Dart):
 
   ```kotlin
   val oidc = blocks.oidcAuthApi.getClient()

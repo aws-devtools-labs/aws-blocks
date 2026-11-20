@@ -439,7 +439,7 @@ describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 			() => Template.fromStack(stack),
 			(err: Error) => {
 				assert.match(err.message, /PackingStack\/Role needs \d+ managed policies, more than the 20 allowed/);
-				assert.match(err.message, /separate Blocks backend \(another BlocksStack or BlocksBackend\)/);
+				assert.match(err.message, /separate CDK Blocks backend \(another BlocksStack or BlocksBackend\)/);
 				assert.ok(err.message.includes(MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY), err.message);
 				assert.doesNotMatch(err.message, /blocks-iam\.json/);
 				assert.match(err.message, /even after merging statements and packing them into managed policies/);

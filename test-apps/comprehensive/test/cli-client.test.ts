@@ -68,7 +68,7 @@ export function cliClientTests(getApi: () => typeof apiType) {
 
       assertCompleted(result);
       assert.notStrictEqual(result.exitCode, 0, 'Should have failed');
-      assert.match(result.stderr, /Blocks API URL not configured/);
+      assert.match(result.stderr, /AWS CDK Blocks API URL not configured/);
     });
 
     test('generateClient with incorrect URL fails', { timeout: 15_000 }, async () => {

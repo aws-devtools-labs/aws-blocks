@@ -60,7 +60,7 @@ replay_pid*
 # Node (changeset tooling)
 node_modules/
 
-# Blocks local caches
+# CDK Blocks local caches
 **/.cdk-blocks/local/data
 **/.cdk-blocks-sandbox
 **/cdk-blocks/client.js

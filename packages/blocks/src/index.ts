@@ -23,7 +23,7 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
 //
 
 /**
- * **Shared auth interfaces and UI components for all Blocks auth Building Blocks.**
+ * **Shared auth interfaces and UI components for all CDK Blocks auth Building Blocks.**
  *
  * Provides the `BlocksAuth` interface (implemented by every auth BB), auth state
  * types, and framework-agnostic UI components (`Authenticator`, `AuthenticatedContent`,
@@ -132,7 +132,7 @@ export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubI
  * **`Compute` — choose where a workload runs by stating its type.**
  *
  * Construct a `Compute` with an explicit `type` (`'serverless'` | `'container'`)
- * and that type's options; Blocks maps the type to the AWS service that backs it
+ * and that type's options; CDK Blocks maps the type to the AWS service that backs it
  * (`serverless` → Lambda, `container` → Fargate) — the service name never appears
  * in your code. Options are a discriminated union on `type`, so an attribute that
  * doesn't apply to the chosen type is a compile error. Hand the result to a

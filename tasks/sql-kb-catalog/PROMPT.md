@@ -1,6 +1,6 @@
 # Task: Product Catalog + FAQ Search
 
-Build a product catalog with an FAQ search panel in this AWS Blocks app. Products live in a real SQL table (add + list). A separate panel answers questions by searching over a small folder of FAQ documents.
+Build a product catalog with an FAQ search panel in this CDK Blocks app. Products live in a real SQL table (add + list). A separate panel answers questions by searching over a small folder of FAQ documents.
 
 The core of this task is **using the framework**: products are added and listed through an **`api` namespace** backed by the **relational database block**, and FAQ answers come from the **knowledge-base block**. The page is a thin client over that API.
 

@@ -34,7 +34,7 @@ bool isLocalEndpoint() {
       host == '::1';
 }
 
-/// Creates a Blocks client pointing at test-apps/native-bindings.
+/// Creates a CDK Blocks client pointing at test-apps/native-bindings.
 /// Default: http://localhost:3001/cdk-blocks/api (the native-bindings dev server,
 /// `npm run dev:server`).
 /// Override with BLOCKS_URL env var for sandbox/production testing.

@@ -10,7 +10,7 @@ async function main() {
   
   render(html`
     <div>
-      <h1>Blocks App</h1>
+      <h1>CDK Blocks App</h1>
       <p>${result.message}</p>
       <p>Timestamp: ${new Date(result.timestamp).toLocaleString()}</p>
     </div>

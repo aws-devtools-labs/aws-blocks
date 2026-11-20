@@ -120,6 +120,6 @@ export function claimScopeFullId(
 		`Scope ${mine} resolves to the fullId '${fullId}', which Scope ${theirs} already uses. ` +
 		"Scope ids are joined with '-', so the two name the same resources (a table, bucket or queue, and " +
 		"the local .cdk-blocks/local/data directory) and read and overwrite each other's data. Rename one of the scopes " +
-		'so their joined ids differ: a future release of AWS Blocks will reject this.'
+		'so their joined ids differ: a future release will reject this.'
 	);
 }

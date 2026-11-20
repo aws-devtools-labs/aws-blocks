@@ -4,7 +4,7 @@
 /**
  * The generic **`Compute`** Building Block — the one compute surface customers
  * use. The customer states the compute `type` explicitly and configures it with
- * that type's options; Blocks maps the type to the AWS service that backs it. The
+ * that type's options; CDK Blocks maps the type to the AWS service that backs it. The
  * service name never appears in the API.
  *
  * @example

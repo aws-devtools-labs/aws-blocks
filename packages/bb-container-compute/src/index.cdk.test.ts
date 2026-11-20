@@ -334,7 +334,7 @@ describe('ContainerCompute — default image is pinned by digest', () => {
 		assert.match(DEFAULT_CONTAINER_IMAGE, DIGEST_PINNED_DEFAULT);
 	});
 
-	test('a custom digest-pinned image is used verbatim, not re-pinned by Blocks', async () => {
+	test('a custom digest-pinned image is used verbatim, not re-pinned by CDK Blocks', async () => {
 		// The tagged case is covered by 'a custom image is used verbatim' above.
 		const pinned = `public.ecr.aws/example/custom-node@sha256:${'a'.repeat(64)}`;
 		assert.deepStrictEqual(await synthImages('ContainerCustomDigestStack', pinned), [pinned]);
@@ -390,8 +390,8 @@ describe('ContainerCompute — the default image runs as a non-root user', () =>
 
 	test('a custom image keeps its own user, working directory and the /app boot directory', async () => {
 		const container = await synthContainer('ContainerNonRootCustomStack', 'public.ecr.aws/example/custom-node:24');
-		assert.strictEqual(container.User, undefined, 'Blocks must not override the user of a custom image');
-		assert.strictEqual(container.WorkingDirectory, undefined, 'Blocks must not override the WORKDIR of a custom image');
+		assert.strictEqual(container.User, undefined, 'AWS CDK Blocks must not override the user of a custom image');
+		assert.strictEqual(container.WorkingDirectory, undefined, 'AWS CDK Blocks must not override the WORKDIR of a custom image');
 		assert.strictEqual(envOf(container, 'BLOCKS_APP_DIR'), '/app');
 		assert.match(container.Command?.[0] ?? '', /"\/app\/bootstrap\.mjs"/);
 	});

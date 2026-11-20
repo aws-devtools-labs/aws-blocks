@@ -6,7 +6,7 @@ import type { Construct } from 'constructs';
 import { markBlocksOwned } from './blocks-roles.js';
 
 /**
- * Brand identifying a Blocks **backend root** — a `BlocksStack` or an embedded
+ * Brand identifying a CDK Blocks **backend root** — a `BlocksStack` or an embedded
  * `BlocksBackend`. Set as an own-property on each root in its constructor.
  *
  * A `Symbol.for(...)` (process-global) brand rather than `instanceof`, for two
@@ -19,7 +19,7 @@ import { markBlocksOwned } from './blocks-roles.js';
  */
 export const BLOCKS_BACKEND_ROOT = Symbol.for('blocks:BackendRoot');
 
-/** Whether `x` is a branded Blocks backend root (`BlocksStack`/`BlocksBackend`). */
+/** Whether `x` is a branded CDK Blocks backend root (`BlocksStack`/`BlocksBackend`). */
 export function isBlocksBackendRoot(x: unknown): x is Construct {
 	return typeof x === 'object' && x !== null && (x as Record<symbol, unknown>)[BLOCKS_BACKEND_ROOT] === true;
 }
@@ -42,19 +42,19 @@ export function findBackendRoot(scope: Construct): Construct | undefined {
 }
 
 /**
- * Resolve the **backend root** that owns `scope` — the single unit that owns a
- * Blocks application's shared state. Every registry and shared-infra helper keys
+ * Resolve the **backend root** that owns `scope` — the single unit that owns an
+ * CDK Blocks application's shared state. Every registry and shared-infra helper keys
  * on this (never on `cdk.Stack.of(scope)`), so that two `BlocksBackend`s sharing
  * one `cdk.Stack` stay fully independent.
  *
  * Resolution order: (1) the nearest branded root up the construct tree; (2) the
  * ambient `globalThis.CURRENT_BLOCKS_STACK` (set while a root's `create()` runs);
  * (3) `cdk.Stack.of(scope)` as a last resort for isolated unit tests that build a
- * construct outside any Blocks backend. For the common single-`BlocksStack` app,
+ * construct outside any CDK Blocks backend. For the common single-`BlocksStack` app,
  * all three coincide — so keying on the root is byte-identical to keying on the
  * stack there.
  *
- * @param scope - Any construct in (or under) a Blocks backend.
+ * @param scope - Any construct in (or under) a CDK Blocks backend.
  */
 export function getBlocksRoot(scope: Construct): Construct {
 	const found = findBackendRoot(scope);
@@ -70,7 +70,7 @@ export function getBlocksRoot(scope: Construct): Construct {
  * `StackName/BackendId`). Used to tag a RawRoute with its owner at synth so
  * `Hosting` can build CloudFront behaviors from only its own backend's routes.
  *
- * @param scope - Any construct in (or under) a Blocks backend.
+ * @param scope - Any construct in (or under) a CDK Blocks backend.
  */
 export function getBlocksRootId(scope: Construct): string {
 	return getBlocksRoot(scope).node.path;
@@ -81,7 +81,7 @@ export function getBlocksRootId(scope: Construct): string {
  * `scope`. The factory runs once per root; later callers (in any construction
  * order) get the same value. Use for shared, per-backend synth infrastructure.
  *
- * @param scope - Any construct in (or under) a Blocks backend.
+ * @param scope - Any construct in (or under) a CDK Blocks backend.
  * @param key - The `Symbol` slot to memoize under.
  * @param factory - Builds the value, given the resolved root as its parent.
  */
@@ -93,7 +93,7 @@ export function getOrCreateOnRoot<T>(scope: Construct, key: symbol, factory: (ro
 		store[key] = factory(root);
 		// Shared per-backend infrastructure is the framework's, not the app's:
 		// mark what the factory added on the root so the service-principal trust
-		// check treats its roles as AWS Blocks roles (see isAppOwnedRole).
+		// check treats its roles as CDK Blocks roles (see isAppOwnedRole).
 		for (const child of root.node.children) if (!before.has(child)) markBlocksOwned(child);
 	}
 	return store[key] as T;

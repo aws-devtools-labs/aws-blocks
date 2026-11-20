@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Command names tracked by the Blocks CLI telemetry system.
+ * Command names tracked by the CDK Blocks CLI telemetry system.
  */
 export type CommandName =
   | 'create-blocks-app'

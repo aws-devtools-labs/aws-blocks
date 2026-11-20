@@ -4,14 +4,14 @@
 /**
  * Service-principal trust ownership across every Building Block.
  *
- * The synth-time trust check fails synth for a role AWS Blocks creates and only
+ * The synth-time trust check fails synth for a role CDK Blocks creates and only
  * warns for one the app creates. A block role it mistook for the app's would
  * silently lose the hard error, so this synthesizes this app (which
  * instantiates every BB) with every trust condition removed
  * (test/service-role-ownership-app.ts) and asserts that every role trusting a
  * non-Lambda service principal fails synth — none of them only warns. A new
  * block, or a stack-level helper, that creates such a role without marking it
- * as AWS Blocks' own fails here.
+ * as CDK Blocks' own fails here.
  *
  * Lambda execution roles are left out: the check accepts them unconditioned,
  * so their ownership doesn't change its outcome.
@@ -34,7 +34,7 @@ const APP_ROOT = join(__dirname, '..');
 /** The account-level API Gateway CloudWatch Logs role's trust is allowed unconditioned. */
 const ALLOWED_UNCONDITIONED = /\/BlocksApiGatewayCloudWatchRole\/Resource$/;
 
-describe('the service-principal trust check classifies every Building Block role as AWS Blocks-owned', () => {
+describe('the service-principal trust check classifies every Building Block role as CDK Blocks-owned', () => {
   test('every role with a non-Lambda service principal fails synth when its conditions are removed', () => {
     // AGENTS.md Core rule 1: synth needs `--conditions=cdk`; `-C cdk` sets it for tsx.
     const out = execFileSync('npx', ['tsx', '-C', 'cdk', 'test/service-role-ownership-app.ts'], {

@@ -108,7 +108,7 @@ public final class BlocksClient: Sendable {
         config.httpCookieAcceptPolicy = .never
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
-        // The Blocks server reads x-blocks-user-agent.
+        // The CDK Blocks server reads x-blocks-user-agent.
         config.httpAdditionalHeaders = ["x-blocks-user-agent": blocksUserAgentToken]
         return URLSession(configuration: config)
     }
@@ -345,9 +345,9 @@ public final class BlocksClient: Sendable {
             // An error response is the server refusing the request, not a malformed success:
             // surface its status and error name instead of handing the error body to the caller.
             if !(200 ..< 300).contains(httpResponse.statusCode) {
-                // Blocks routes answer `{ error: <message>, name }`; a plain OAuth body is
+                // CDK Blocks routes answer `{ error: <message>, name }`; a plain OAuth body is
                 // `{ error: <code>, error_description }`.
-                // A Blocks body without a `name` (`{ error: 'Missing required fields' }`) holds a
+                // A CDK Blocks body without a `name` (`{ error: 'Missing required fields' }`) holds a
                 // message, so `error` is a name only beside `error_description` or when it reads
                 // like a code (no spaces). Known approximation: a nameless one-word message
                 // (`{ error: 'Unauthorized' }`) reads as a code and becomes the error name.

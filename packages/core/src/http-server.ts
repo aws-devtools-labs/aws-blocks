@@ -151,23 +151,23 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
   const healthPort =
     options.healthPort === undefined ? DEFAULT_HEALTH_PORT : validPortOption('healthPort', options.healthPort);
   if (port !== 0 && port === healthPort) {
-    throw new Error(`[Blocks] The request port and healthPort must differ, both are ${port}`);
+    throw new Error(`[AWS CDK Blocks] The request port and healthPort must differ, both are ${port}`);
   }
   const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
   if (!Number.isFinite(drainTimeoutMs) || drainTimeoutMs < 0 || drainTimeoutMs > MAX_TIMER_DELAY_MS) {
     throw new Error(
-      `[Blocks] drainTimeoutMs must be a number from 0 to ${MAX_TIMER_DELAY_MS}, got ${String(drainTimeoutMs)}`,
+      `[AWS CDK Blocks] drainTimeoutMs must be a number from 0 to ${MAX_TIMER_DELAY_MS}, got ${String(drainTimeoutMs)}`,
     );
   }
   const maxBodyBytes = options.maxBodyBytes ?? MAX_RPC_BODY_BYTES;
   // A non-integer limit (NaN in particular) would fail every size comparison and
   // so disable the limit altogether.
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
-    throw new Error(`[Blocks] maxBodyBytes must be a non-negative integer, got ${String(maxBodyBytes)}`);
+    throw new Error(`[AWS CDK Blocks] maxBodyBytes must be a non-negative integer, got ${String(maxBodyBytes)}`);
   }
   const publicOrigin = options.publicOrigin ?? process.env.BLOCKS_PUBLIC_ORIGIN;
   if (publicOrigin && !URL.canParse(publicOrigin)) {
-    throw new Error(`[Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
+    throw new Error(`[AWS CDK Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
   }
   const env: RequestEnv = {
     // With `defaults.strictNamespacePlacement`, serve only the API namespaces placed on this compute.
@@ -305,7 +305,7 @@ function portFromEnv(): number {
   if (raw === undefined || raw === '') return DEFAULT_PORT;
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error(`[Blocks] PORT must be an integer from 1 to 65535, got "${raw}"`);
+    throw new Error(`[AWS CDK Blocks] PORT must be an integer from 1 to 65535, got "${raw}"`);
   }
   return port;
 }
@@ -313,7 +313,7 @@ function portFromEnv(): number {
 /** A port option: an integer from 0 (any free port) to 65535. An invalid value fails fast. */
 function validPortOption(name: 'port' | 'healthPort', value: number): number {
   if (!Number.isInteger(value) || value < 0 || value > 65_535) {
-    throw new Error(`[Blocks] ${name} must be an integer from 0 to 65535, got ${String(value)}`);
+    throw new Error(`[AWS CDK Blocks] ${name} must be an integer from 0 to 65535, got ${String(value)}`);
   }
   return value;
 }
@@ -594,7 +594,7 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
  * reachable at, and the origin the client called, which `ctx.request.url` reports.
  * A loopback forwarded host contributes only its host: its own query, fragment or
  * userinfo (`localhost:3000?a=b#c`) never rides along, as in the Lambda handler.
- * Behind a Blocks CloudFront front door the client called the door's host (a
+ * Behind a CDK Blocks CloudFront front door the client called the door's host (a
  * trusted `x-blocks-public-host`), while the base URL stays the one the door
  * stamped, as on Lambda.
  */
@@ -669,7 +669,7 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
  * The externally reachable base URL of a request (`getRequestBaseUrl()`): the
  * origin the front door stamped plus the stamped API Gateway stage
  * (`https://<host>/prod`), with no trailing slash, as the Lambda handler reports
- * it for the same request. Behind a Blocks CloudFront front door it stays that
+ * it for the same request. Behind a CDK Blocks CloudFront front door it stays that
  * stamped origin, while {@link buildRequestUrl} reports the host the client called.
  *
  * @internal Exported for testing only.

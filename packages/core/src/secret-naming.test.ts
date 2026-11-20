@@ -15,9 +15,9 @@ import {
 } from './secret-naming.js';
 
 // These run with no `.cdk-blocks/config.json` in cwd, so they exercise the
-// UNSCOPED fallback. A real Blocks app has the file, so it gets the
+// UNSCOPED fallback. A real CDK Blocks app has the file, so it gets the
 // `stackId`-scoped path (covered by the explicit-stackId cases below).
-void describe('Blocks value namespaces — fallback (no .cdk-blocks/config.json)', () => {
+void describe('CDK Blocks value namespaces — fallback (no .cdk-blocks/config.json)', () => {
 	void it('falls back to the unscoped /blocks/secrets and /blocks/config bases', () => {
 		assert.strictEqual(BLOCKS_SECRET_PARAMETER_PREFIX, '/blocks/secrets');
 		assert.strictEqual(BLOCKS_CONFIG_PARAMETER_PREFIX, '/blocks/config');
@@ -42,7 +42,7 @@ void describe('Blocks value namespaces — fallback (no .cdk-blocks/config.json)
 	});
 });
 
-void describe('Blocks value namespaces — stackId-scoped (B5)', () => {
+void describe('CDK Blocks value namespaces — stackId-scoped (B5)', () => {
 	void it('scopes the prefix by stackId so two apps in one account never collide', () => {
 		assert.strictEqual(blocksSecretPrefix('myapp'), '/blocks/myapp/secrets');
 		assert.strictEqual(blocksConfigPrefix('myapp'), '/blocks/myapp/config');

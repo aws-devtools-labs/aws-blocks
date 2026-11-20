@@ -1,6 +1,6 @@
 # Building Block Structure
 
-Building Blocks in AWS Blocks are composed of four independent exports, each in its own file. All four files are required, but can export no-ops when not needed.
+Building Blocks in AWS CDK Blocks are composed of four independent exports, each in its own file. All four files are required, but can export no-ops when not needed.
 
 ## File Structure
 
@@ -25,7 +25,7 @@ export class MyBuildingBlock {
   
   async doSomething(input: string): Promise<string> {
     // Access AWS resources using environment variables
-    // injected by AWS Blocks from the infrastructure layer
+    // injected by CDK Blocks from the infrastructure layer
     const resourceId = process.env[`BLOCKS_${this.name}_RESOURCE_ID`];
     
     // Use AWS SDK
@@ -39,7 +39,7 @@ export class MyBuildingBlock {
 
 ### Infrastructure Layer (`infra.ts`)
 
-The infrastructure layer exports a `materialize` function that defines CDK resources. AWS Blocks invokes this during deployment.
+The infrastructure layer exports a `materialize` function that defines CDK resources. CDK Blocks invokes this during deployment.
 
 ```typescript
 // my-building-block/infra.ts
@@ -76,7 +76,7 @@ export function materialize(scope: Construct, name: string, options: any) {
 
 ### Mock Layer (`mock.ts`)
 
-The mock layer exports the same interface as the runtime layer, but with local implementations. AWS Blocks uses this when running locally.
+The mock layer exports the same interface as the runtime layer, but with local implementations. CDK Blocks uses this when running locally.
 
 ```typescript
 // my-building-block/mock.ts
@@ -98,7 +98,7 @@ export * from './index.js';
 
 ### Client Hook (`client-hook.ts`)
 
-The client hook exports a class with lifecycle methods for client-side protocol handling. AWS Blocks bundles this into the browser.
+The client hook exports a class with lifecycle methods for client-side protocol handling. CDK Blocks bundles this into the browser.
 
 ```typescript
 // my-building-block/client-hook.ts
@@ -386,9 +386,9 @@ export class RealtimeClientHook {
 }
 ```
 
-## How AWS Blocks Uses These Exports
+## How CDK Blocks Uses These Exports
 
-AWS Blocks consumes different exports in different contexts:
+CDK Blocks consumes different exports in different contexts:
 
 | Context | Consumes | Output |
 |---------|----------|--------|
@@ -397,7 +397,7 @@ AWS Blocks consumes different exports in different contexts:
 | **Production Runtime** | `index.ts` | Lambda bundle with AWS SDK calls |
 | **Client Bundle** | `client-hook.ts` | Browser bundle with protocol extensions |
 
-AWS Blocks uses conditional exports and build-time analysis to ensure:
+CDK Blocks uses conditional exports and build-time analysis to ensure:
 - Browser bundles only include `client-hook.ts`
 - Lambda bundles only include `index.ts`
 - CDK apps only include `infra.ts`

@@ -5,7 +5,7 @@
  * Resolution glue between the dependency-free `secret()` / `config()` markers
  * (defined in `@aws-cdk-blocks/hosting`) and the `Hosting` CDK block.
  *
- * Delegates to the shared `@aws-cdk-blocks/hosting` engine, pinning only the Blocks
+ * Delegates to the shared `@aws-cdk-blocks/hosting` engine, pinning only the CDK Blocks
  * namespaces (`/blocks/secrets`, `/blocks/config`). The store is derived from the
  * marker's kind (`secret` → Secrets Manager, `config` → SSM), and BYO
  * `ISecret`/`IParameter` handles are wired identically.
@@ -31,8 +31,8 @@ import {
 import { blocksStoreConfig } from './secret-naming.js';
 
 /**
- * Layer a caller's per-kind store config over the pinned Blocks defaults. Shallow
- * and per-kind: the Blocks `/blocks/*` prefix stays the default, but any field the
+ * Layer a caller's per-kind store config over the pinned CDK Blocks defaults. Shallow
+ * and per-kind: the CDK Blocks `/blocks/*` prefix stays the default, but any field the
  * app sets (`prefix`, `stage`, `cacheTtlSeconds`) wins.
  */
 function mergeBlocksStoreConfig(override?: StoreConfig): StoreConfig {
@@ -65,9 +65,9 @@ export function collectSynthMarkers(domainName: DomainNameInput | undefined): Ma
 }
 
 /**
- * Resolve managed markers to plaintext at synth time under the Blocks namespaces.
+ * Resolve managed markers to plaintext at synth time under the CDK Blocks namespaces.
  * Throws a clear, actionable error if a referenced value was never set. An optional
- * `storeConfig` overrides the pinned Blocks prefix/stage per kind.
+ * `storeConfig` overrides the pinned CDK Blocks prefix/stage per kind.
  */
 export async function resolveSecretsAtSynth(
 	markers: ManagedValue[],
@@ -84,7 +84,7 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
 
 /**
  * Fail synth (deploy) when a referenced `environment` marker has no value set —
- * existence only, never fetching the value. Uses the Blocks namespaces (with an
+ * existence only, never fetching the value. Uses the CDK Blocks namespaces (with an
  * optional per-kind `storeConfig` override), matching how the values are wired.
  */
 export async function assertMarkersExistAtSynth(markers: ManagedValue[], storeConfig?: StoreConfig): Promise<void> {
@@ -95,7 +95,7 @@ export async function assertMarkersExistAtSynth(markers: ManagedValue[], storeCo
 type EnvGrantTarget = Parameters<typeof leafWireManagedValue>[0];
 
 /**
- * Wire a runtime managed marker under the Blocks namespace (store from kind). An
+ * Wire a runtime managed marker under the CDK Blocks namespace (store from kind). An
  * optional `storeConfig` overrides the pinned prefix/stage/cacheTtlSeconds per kind.
  */
 export function wireManagedValue(fn: EnvGrantTarget, marker: ManagedValue, storeConfig?: StoreConfig): void {

@@ -39,7 +39,7 @@ export function writeFiles(dir: string, files: Record<string, string>): string[]
 }
 
 /**
- * Typecheck `rootFiles` the way an AWS Blocks app is compiled (strict, ESM,
+ * Typecheck `rootFiles` the way a CDK Blocks app is compiled (strict, ESM,
  * bundler resolution, default conditions → the mock entry's types). Returns
  * the formatted diagnostics; empty means it compiles.
  */

@@ -157,7 +157,7 @@ export type ComputeConfig = {
 export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtectionConfig };
 
 /**
- * Custom-domain config for the Blocks {@link Hosting} block — the leaf
+ * Custom-domain config for the CDK Blocks {@link Hosting} block — the leaf
  * {@link HostingDomainConfig} with `domainName` widened to also accept a
  * `config()` marker (resolved to a literal at synth). Only `config()` or a plain
  * string is accepted here, never `secret()` (a synth-inlined value would leak into
@@ -170,7 +170,7 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
 }
 
 /**
- * Structural interface for the Blocks backend stack.
+ * Structural interface for the CDK Blocks backend stack.
  *
  * Accepts any object that exposes an `apiUrl` — typically a {@link BlocksStack}
  * instance but kept structural so Hosting doesn't depend on the concrete class.
@@ -195,7 +195,7 @@ export interface BlocksStackApi {
   /**
    * The header (name → value) a claiming CloudFront distribution adds to its API
    * origin so the backend's `apiWaf` rate rule can exempt its edge-IP requests;
-   * `undefined` when the backend has no Blocks-managed web ACL.
+   * `undefined` when the backend has no CDK Blocks-managed web ACL.
    * `BlocksStack`/`BlocksBackend` implement it.
    * @internal Framework-only.
    */
@@ -217,9 +217,9 @@ export interface BlocksStackApi {
 }
 
 /**
- * Blocks-specific configuration for the {@link Hosting} construct.
+ * CDK Blocks-specific configuration for the {@link Hosting} construct.
  *
- * Wraps the L3 {@link HostingConstruct} with Blocks conventions:
+ * Wraps the L3 {@link HostingConstruct} with CDK Blocks conventions:
  *   • Runs the build command during CDK synth (optional)
  *   • Auto-detects the framework (Next.js / SPA / static)
  *   • Deploys `.blocks-sandbox/config.json` for client-side config loading
@@ -284,9 +284,9 @@ export interface HostingProps {
    */
   basePath?: string;
 
-  // ── Blocks backend integration ────────────────────────────────────
+  // ── CDK Blocks backend integration ────────────────────────────────────
   /**
-   * The Blocks backend stack (or any object with `apiUrl`).
+   * The CDK Blocks backend stack (or any object with `apiUrl`).
    *
    * When provided, Hosting creates CloudFront behaviors that proxy API
    * requests through the same domain as the frontend — enabling relative
@@ -347,16 +347,16 @@ export interface HostingProps {
 
   /**
    * Namespace/cache config for `secret()` values (AWS Secrets Manager). Defaults
-   * to the Blocks `/blocks/secrets` prefix; set `prefix` to namespace per app,
+   * to the CDK Blocks `/blocks/secrets` prefix; set `prefix` to namespace per app,
    * `stage` for per-stage values with a shared fallback, or `cacheTtlSeconds` to
    * refresh a rotated value on a warm compute without a cold start. Any field the
-   * app sets overrides the Blocks default.
+   * app sets overrides the CDK Blocks default.
    */
   secretStore?: KindStoreOptions;
 
   /**
    * Namespace/cache config for `config()` values (SSM Parameter Store). Defaults
-   * to the Blocks `/blocks/config` prefix; same override semantics as
+   * to the CDK Blocks `/blocks/config` prefix; same override semantics as
    * {@link HostingProps.secretStore}.
    */
   configStore?: KindStoreOptions;
@@ -1030,7 +1030,7 @@ const runAdapterNamingSkippedBuild = (
 // ─── Construct ───────────────────────────────────────────────────
 
 /**
- * Blocks hosting construct backed by the L3 {@link HostingConstruct}.
+ * CDK Blocks hosting construct backed by the L3 {@link HostingConstruct}.
  *
  * Supports SPA, static sites, and Next.js SSR out of the box.
  * When the `api` prop is provided, CloudFront behaviors are added to proxy
@@ -1536,7 +1536,7 @@ export class Hosting extends Construct {
       assertHttpErrorStatusNotShadowed(publicDistribution, props.api);
     }
 
-    // ── 7a. Inject Blocks env vars into compute functions ───────────
+    // ── 7a. Inject CDK Blocks env vars into compute functions ───────────
     // Lambda@Edge functions (edge-runtime routes) do NOT support environment
     // variables — they surface in computeFunctions as EdgeFunction/IVersion
     // without an `addEnvironment` method. Skip any function that can't take
@@ -1560,7 +1560,7 @@ export class Hosting extends Construct {
       // Runtime managed markers (secret|config): inject the store locator
       // (never the value) + grant read/decrypt; read via getSecret()/getConfig().
       // The app's secretStore/configStore (prefix, stage, cacheTtlSeconds) layer
-      // over the Blocks defaults.
+      // over the CDK Blocks defaults.
       const storeConfig = { secretStore: props.secretStore, configStore: props.configStore };
       for (const marker of managed) {
         wireManagedValue(fn, marker, storeConfig);
@@ -1727,7 +1727,7 @@ export class Hosting extends Construct {
     // ── 11. CfnOutput ────────────────────────────────────────────
     new cdk.CfnOutput(this, 'HostingUrl', {
       value: publicUrl,
-      description: 'Blocks Hosting URL',
+      description: 'AWS CDK Blocks Hosting URL',
     });
 
     // Surface this deploy's build id so a post-deploy liveness poll can confirm
@@ -1768,7 +1768,7 @@ export class Hosting extends Construct {
     }
 
     // ── 12. Role coverage ────────────────────────────────────────
-    // Count every role Hosting created as one of the fronted backend's Blocks
+    // Count every role Hosting created as one of the fronted backend's CDK Blocks
     // roles — including those in the separate us-east-1 stacks (Lambda@Edge,
     // CloudFront monitoring) and the cross-region reference providers, which no
     // aspect on this stack reaches — so the backend's permissions boundary and

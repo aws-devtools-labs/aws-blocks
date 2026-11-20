@@ -5,7 +5,7 @@ import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:test/test.dart';
 
-/// JSON-RPC params are positional on an AWS Blocks server: `parseRpcRequest`
+/// JSON-RPC params are positional on a CDK Blocks server: `parseRpcRequest`
 /// (`packages/core`) passes an array as the method's argument list, and reads
 /// an object's values in order (`Object.values()`), so a by-name key that is
 /// left out moves every later value up a slot. A generated client used to

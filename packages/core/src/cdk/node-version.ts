@@ -4,7 +4,7 @@
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 
 /**
- * The single source of truth for the Node.js Lambda runtime used by Blocks's
+ * The single source of truth for the Node.js Lambda runtime used by CDK Blocks'
  * own Lambda functions and every Building Block. Set every
  * `aws_lambda.Function` / `NodejsFunction` runtime to this constant rather
  * than hardcoding `Runtime.NODEJS_*_X`, so the whole framework moves in

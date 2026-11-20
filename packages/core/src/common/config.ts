@@ -83,19 +83,19 @@ async function loadConfigFromS3(): Promise<Record<string, string>> {
 			// lifetime. Returning without caching lets the next invocation re-fetch and pick up the
 			// real config once it's present. (Apps that truly have no config just re-check cheaply.)
 			console.warn(
-				`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config (will retry on next request)`,
+				`[AWS CDK Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config (will retry on next request)`,
 			);
 			return {};
 		}
 		const msg = error instanceof Error ? error.message : String(error);
-		throw new Error(`[Blocks] Failed to load config from S3 (${bucket}/${key}): ${msg}`);
+		throw new Error(`[AWS CDK Blocks] Failed to load config from S3 (${bucket}/${key}): ${msg}`);
 	}
 
 	if (typeof configCache !== 'object' || configCache === null || Array.isArray(configCache)) {
-		throw new Error('[Blocks] Config file must be a JSON object');
+		throw new Error('[AWS CDK Blocks] Config file must be a JSON object');
 	}
 
-	console.log(`[Blocks] Config loaded: ${Object.keys(configCache).length} keys`);
+	console.log(`[AWS CDK Blocks] Config loaded: ${Object.keys(configCache).length} keys`);
 	return configCache!;
 }
 
@@ -202,7 +202,7 @@ export async function loadConfigToProcessEnv(): Promise<void> {
 	}
 	if (shadowed.length > 0) {
 		console.warn(
-			`[Blocks config] Ignored ${shadowed.length} config entr${shadowed.length === 1 ? 'y' : 'ies'} because an environment variable of the same name is already set (environment variables take precedence over registerConfig): ${shadowed.join(', ')}`,
+			`[AWS CDK Blocks config] Ignored ${shadowed.length} config entr${shadowed.length === 1 ? 'y' : 'ies'} because an environment variable of the same name is already set (environment variables take precedence over registerConfig): ${shadowed.join(', ')}`,
 		);
 	}
 }
@@ -300,7 +300,7 @@ export function isConfigResolved(): boolean {
 }
 
 /**
- * Sanitize a Blocks identifier into a valid config/env-var key segment:
+ * Sanitize a CDK Blocks identifier into a valid config/env-var key segment:
  * uppercase, with every non-alphanumeric character replaced by `_`.
  *
  * Config entries are loaded into `process.env` at runtime (see

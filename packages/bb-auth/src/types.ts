@@ -2646,7 +2646,7 @@ export type ERROR_EMAIL_is_not_in_mfa_types = MfaSetting & { readonly __factorNo
  *
  * `'NOMFA'` on `preferred` is the sentinel returned when the user has
  * explicitly disabled MFA; Cognito itself doesn't surface this, but
- * Blocks uses it to distinguish "user chose no MFA" from "user has no
+ * CDK Blocks uses it to distinguish "user chose no MFA" from "user has no
  * preference yet."
  *
  * Native clients get the wide form (every factor) whatever the options.

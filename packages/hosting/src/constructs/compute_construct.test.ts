@@ -464,7 +464,7 @@ void describe('ComputeConstruct', () => {
     });
 
     void it('throws InvalidTimeoutError when timeout is not a Duration', () => {
-      // Regression: AWS Blocks bug-bash repro showed `timeout: 30` (a
+      // Regression: CDK Blocks bug-bash repro showed `timeout: 30` (a
       // plain number) flowing through a permissive JS-compiled wrapper
       // and crashing deep in aws-cdk-lib with `props.timeout.toSeconds
       // is not a function`. We now coerce at the L3 surface, but

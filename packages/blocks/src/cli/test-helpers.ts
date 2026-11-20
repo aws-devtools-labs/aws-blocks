@@ -124,7 +124,7 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 	return run;
 }
 
-/** A minimal AWS Blocks app in a temporary directory; returns its root. */
+/** A minimal CDK Blocks app in a temporary directory; returns its root. */
 export function fixtureApp(pkg: Record<string, unknown> = { dependencies: { vite: '*' } }): string {
 	const root = mkdtempSync(join(tmpdir(), 'blocks-cli-'));
 	writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', type: 'module', ...pkg }));

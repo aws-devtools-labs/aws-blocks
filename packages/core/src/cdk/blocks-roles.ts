@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The single internal answer to "which IAM roles did AWS Blocks create for this
+ * The single internal answer to "which IAM roles did CDK Blocks create for this
  * backend root?" — and a visitor registry over exactly that set.
  *
- * Every consumer that has to touch every Blocks role (the permissions boundary,
+ * Every consumer that has to touch every CDK Blocks role (the permissions boundary,
  * the synth-time IAM report, and a future tenant-tagging pass) registers a
  * visitor with {@link forEachBlocksRole} instead of walking the tree itself, so
  * the coverage rules below live in one place:
@@ -31,7 +31,7 @@
  * The covered set also holds roles the app creates itself (in a `BlocksStack`
  * the root's subtree is the whole stack; in either root the app's backend
  * module adds constructs). {@link isAppOwnedRole} tells those apart from the
- * roles AWS Blocks creates, by who created them, for checks that treat the two
+ * roles CDK Blocks creates, by who created them, for checks that treat the two
  * differently.
  *
  * @internal
@@ -41,7 +41,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as cxapi from 'aws-cdk-lib/cx-api';
 import { Construct, type IConstruct } from 'constructs';
 
-/** A function called once for every IAM role AWS Blocks created for a root. */
+/** A function called once for every IAM role CDK Blocks created for a root. */
 export type BlocksRoleVisitor = (role: cdk.CfnResource) => void;
 
 /** A function called once for every KMS key in the scopes covered for a root. */
@@ -152,7 +152,7 @@ export function coverBlocksRoot(root: Construct): void {
 }
 
 /**
- * Register `visitor` for every IAM role AWS Blocks creates for `root` — including
+ * Register `visitor` for every IAM role CDK Blocks creates for `root` — including
  * roles added after this call and the prepare-time ones. Visitors run at synth,
  * in registration order.
  */
@@ -189,7 +189,7 @@ const FRAMEWORK_CHILDREN = Symbol.for('blocks:FrameworkChildren');
 const APP_STACK_CHILDREN = Symbol.for('blocks:AppStackChildren');
 
 /**
- * Mark `construct` (and so every role under it) as created by AWS Blocks, not
+ * Mark `construct` (and so every role under it) as created by CDK Blocks, not
  * by the app. A Scope marks itself when its `bbName` is an official Building
  * Block's; computes, `RawRoute` and first-party blocks without an official
  * `bbName` mark themselves in their constructors; framework code that adds a
@@ -203,7 +203,7 @@ export function markBlocksOwned(construct: IConstruct): void {
 
 /**
  * Mark the children `scope` gained since `before` (a snapshot of
- * `scope.node.children`) as AWS Blocks' own — for framework code that adds
+ * `scope.node.children`) as CDK Blocks' own — for framework code that adds
  * shared constructs at stack scope on a block's behalf, outside
  * `getOrCreateOnRoot`.
  */
@@ -228,7 +228,7 @@ export function recordFrameworkChildren(root: Construct, children: ReadonlySet<I
 }
 
 /**
- * Whether `role` is one the app created rather than one AWS Blocks created —
+ * Whether `role` is one the app created rather than one CDK Blocks created —
  * classified by who created it, not by where it sits:
  *
  * - **framework-owned** when it, or a construct above it, is marked
@@ -285,7 +285,7 @@ function coverNewChildren(
  *
  * `addedByModule` holds the stack-level constructs added while the app's
  * backend module ran. They are covered too, but only the ones framework code
- * marked count as AWS Blocks'; the rest are recorded as the app's
+ * marked count as CDK Blocks'; the rest are recorded as the app's
  * ({@link isAppOwnedRole}). Everything else added is marked.
  */
 export function coverStackLevelAdditions(

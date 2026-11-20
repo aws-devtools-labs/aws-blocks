@@ -226,7 +226,7 @@ describe('config — S3 errors', () => {
 		await assert.rejects(
 			() => getConfig('ANY_KEY'),
 			(err: Error) => {
-				assert.ok(err.message.includes('[Blocks] Failed to load config from S3'));
+				assert.ok(err.message.includes('[AWS CDK Blocks] Failed to load config from S3'));
 				assert.ok(err.message.includes('test-bucket/blocks-config.json'));
 				assert.ok(err.message.includes('Network timeout'));
 				return true;
@@ -245,7 +245,7 @@ describe('config — S3 errors', () => {
 		await assert.rejects(
 			() => getConfig('ANY_KEY'),
 			(err: Error) => {
-				assert.ok(err.message.includes('[Blocks] Failed to load config from S3'));
+				assert.ok(err.message.includes('[AWS CDK Blocks] Failed to load config from S3'));
 				assert.ok(err.message.includes('Empty config file'));
 				return true;
 			},
@@ -261,7 +261,7 @@ describe('config — S3 errors', () => {
 		await assert.rejects(
 			() => getConfig('ANY_KEY'),
 			(err: Error) => {
-				assert.ok(err.message.includes('[Blocks] Failed to load config from S3'));
+				assert.ok(err.message.includes('[AWS CDK Blocks] Failed to load config from S3'));
 				return true;
 			},
 		);
@@ -276,7 +276,7 @@ describe('config — S3 errors', () => {
 		await assert.rejects(
 			() => getConfig('ANY_KEY'),
 			(err: Error) => {
-				assert.ok(err.message.includes('[Blocks] Config file must be a JSON object'));
+				assert.ok(err.message.includes('[AWS CDK Blocks] Config file must be a JSON object'));
 				return true;
 			},
 		);
@@ -291,7 +291,7 @@ describe('config — S3 errors', () => {
 		await assert.rejects(
 			() => getConfig('ANY_KEY'),
 			(err: Error) => {
-				assert.ok(err.message.includes('[Blocks] Config file must be a JSON object'));
+				assert.ok(err.message.includes('[AWS CDK Blocks] Config file must be a JSON object'));
 				return true;
 			},
 		);

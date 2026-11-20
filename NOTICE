@@ -1,6 +1,6 @@
-AWS Blocks
+AWS CDK Blocks
 Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-Some AWS Blocks npm packages include third-party software. The license notices
+Some CDK Blocks npm packages include third-party software. The license notices
 for the third-party software in the @aws-cdk-blocks/hosting package are in
 dist/constructs/THIRD-PARTY-LICENSES.txt in that package.

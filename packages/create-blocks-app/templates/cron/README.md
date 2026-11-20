@@ -1,6 +1,6 @@
-# Blocks Scheduled Jobs Application
+# AWS CDK Blocks Scheduled Jobs Application
 
-Backend-only AWS CDK Blocks app with scheduled **CronJobs**. A `heartbeat` job runs
+Backend-only CDK Blocks app with scheduled **CronJobs**. A `heartbeat` job runs
 every minute and records each run in a `KVStore`; a second job shows
 `enabled: false`. Deployed, the jobs run on EventBridge Scheduler; under
 `npm run dev` the local server fires them on the same schedule. No frontend

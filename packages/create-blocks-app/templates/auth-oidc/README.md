@@ -1,6 +1,6 @@
-# Blocks Auth (OIDC) App
+# AWS CDK Blocks Auth (OIDC) App
 
-A frontend on AWS CDK Blocks with **OpenID Connect (OIDC) / OAuth 2.0** sign-in end
+A frontend on CDK Blocks with **OpenID Connect (OIDC) / OAuth 2.0** sign-in end
 to end. Users sign in with an external identity provider (Google, GitHub, Okta,
 any OIDC provider); the Building Block turns the authorization-code flow into an
 authenticated session your API consumes. Vite + vanilla DOM frontend.

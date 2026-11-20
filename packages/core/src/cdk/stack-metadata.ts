@@ -53,7 +53,7 @@ export function isSandboxContext(scope: IConstruct): boolean {
 }
 
 /**
- * Adds AWS Blocks identification metadata and a deployment-type tag to a CloudFormation stack.
+ * Adds CDK Blocks identification metadata and a deployment-type tag to a CloudFormation stack.
  *
  * Writes `Metadata.AWSToolsMetrics.AWSBlocks` into the template of the top-level
  * (non-nested) stack containing `stack`, with the value

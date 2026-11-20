@@ -3,7 +3,7 @@
 
 /**
  * `HostingConstruct` with a bring-your-own front door (`frontDoor: { kind:
- * 'custom', door }`): what the door receives, what AWS Blocks does with what it
+ * 'custom', door }`): what the door receives, what CDK Blocks does with what it
  * hands back, and the routes/API wiring check.
  */
 import assert from 'node:assert/strict';

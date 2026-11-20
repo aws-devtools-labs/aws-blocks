@@ -392,7 +392,7 @@ describe('apiFrontDoor: cloudfront', () => {
 		assert.ok(value.includes('execute-api'), value);
 	});
 
-	// A Blocks distribution in front of an edge-optimized endpoint would be two
+	// A CDK Blocks distribution in front of an edge-optimized endpoint would be two
 	// CloudFront layers; the gateway becomes REGIONAL only under `cloudfront`, so
 	// existing `apigateway` apps synthesize exactly as before.
 	test('the gateway is a REGIONAL endpoint under cloudfront and unchanged under apigateway', async () => {

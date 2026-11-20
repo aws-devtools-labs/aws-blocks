@@ -25,8 +25,8 @@ let template: any;
  * CDK synthesizes its own helper Lambdas for custom resources — the S3
  * auto-delete provider and the BucketDeployment runtime, both pulled in by the
  * config registry's S3 bucket (`autoDeleteObjects` under the sandbox posture).
- * They are CDK-managed plumbing, not Blocks compute, so exclude them when
- * counting how many computes Blocks provisions. Their construct path carries a
+ * They are CDK-managed plumbing, not CDK Blocks compute, so exclude them when
+ * counting how many computes CDK Blocks provisions. Their construct path carries a
  * `Custom::` segment; a real compute's does not
  * (`.../BlocksApi/DefaultCompute/Handler/Resource`).
  */
@@ -46,12 +46,12 @@ describe('extending-blocks-guide-blocksbackend synth', () => {
     template = JSON.parse(readFileSync(join(SYNTH_DIR, files[0]), 'utf-8'));
   });
 
-  test('exactly one Blocks compute Lambda (the BlocksBackend handler)', () => {
+  test('exactly one CDK Blocks compute Lambda (the BlocksBackend handler)', () => {
     const lambdas = blocksComputeLambdas();
     assert.strictEqual(
       lambdas.length,
       1,
-      `expected 1 Blocks compute Lambda (BlocksBackend handler); got ${lambdas.length}: ` +
+      `expected 1 AWS CDK Blocks compute Lambda (BlocksBackend handler); got ${lambdas.length}: ` +
         `${lambdas.map((r: any) => r.Metadata?.['aws:cdk:path']).join(', ')}`
     );
   });
@@ -76,7 +76,7 @@ describe('extending-blocks-guide-blocksbackend synth', () => {
         r.Type === 'AWS::Lambda::Function' &&
         r.Properties?.Environment?.Variables?.NODE_ENV === 'production'
     );
-    assert.ok(handler, 'could not find Blocks handler Lambda');
+    assert.ok(handler, 'could not find AWS CDK Blocks handler Lambda');
     const envVars = handler.Properties.Environment.Variables;
     assert.ok('EXTERNAL_QUEUE_URL' in envVars, 'missing EXTERNAL_QUEUE_URL on BlocksBackend handler');
   });

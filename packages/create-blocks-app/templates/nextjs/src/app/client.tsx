@@ -33,7 +33,7 @@ export function ClientGreeting() {
     if (!name.trim()) return;
     setLoading(true);
     try {
-      // Blocks client auto-discovers the API URL from config.json
+      // CDK Blocks client auto-discovers the API URL from config.json
       const result = await api.greet(name);
       setGreeting(result);
       status.current?.set('idle');

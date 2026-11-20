@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/aws-cdk-blocks?color=brightgreen&label=npm%20package)](https://www.npmjs.com/package/aws-cdk-blocks)[![weekly downloads](https://img.shields.io/npm/dw/aws-cdk-blocks)](https://www.npmjs.com/package/aws-cdk-blocks)[![build status](https://img.shields.io/github/actions/workflow/status/aws/cdk-blocks/publish-packages.yml)](https://github.com/aws/cdk-blocks/blob/main/.github/workflows/publish-packages.yml)
 
-AWS CDK Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need and compose them; AWS CDK Blocks generates the AWS infrastructure (CDK constructs) for them. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
+CDK Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need and compose them; CDK Blocks generates the AWS infrastructure (CDK constructs) for them. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
 
 For an overview, see the [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html). For the Block catalog and APIs at this revision, see the [Blocks README](./packages/blocks/README.md).
 
@@ -28,10 +28,10 @@ For a full walkthrough, see [Getting started with AWS CDK Blocks](https://docs.a
 
 ## How it works
 
-AWS CDK Blocks uses Node.js conditional exports to load different code for each context:
+CDK Blocks uses Node.js conditional exports to load different code for each context:
 
 - **Local development** — Blocks use in-memory and filesystem storage; your app runs on your machine.
-- **CDK synthesis** — Blocks produce CDK constructs, and AWS CDK Blocks generates a CloudFormation template.
+- **CDK synthesis** — Blocks produce CDK constructs, and CDK Blocks generates a CloudFormation template.
 - **AWS Lambda runtime** — Blocks call AWS services through the SDK.
 
 The same `new KVStore(scope, 'todos')` line becomes a local store in development, an Amazon DynamoDB table at deploy time, and SDK calls in production.
@@ -55,11 +55,11 @@ Each Block is published as an npm package, and the umbrella package [`aws-cdk-bl
 
 Clients are typed from your backend: web frameworks (Next.js, Nuxt, Astro, React, Vue, Svelte, Angular), native mobile (Swift, Kotlin, Dart/Flutter), and desktop applications.
 
-Native clients are build-time code generators that produce type-safe client code from a Blocks spec (`blocks.spec.json`), paired with a runtime library that calls your backend over JSON-RPC:
+Native clients are build-time code generators that produce type-safe client code from your app’s specification (`blocks.spec.json`), paired with a runtime library that calls your backend over JSON-RPC:
 
 - **[kotlin](./native/kotlin/README.md)** — Kotlin Multiplatform (Android, iOS, JVM). Gradle plugin + KMP runtime.
 - **[swift](./native/swift/README.md)** — Swift Package (iOS, macOS). SwiftPM build plugin + Foundation-based runtime.
-- **[dart](./native/dart/README.md)** — Dart / Flutter client. Generates a typed Dart client from your Blocks spec.
+- **[dart](./native/dart/README.md)** — Dart / Flutter client. Generates a typed Dart client from that specification.
 
 ## Repository layout
 

@@ -1,7 +1,7 @@
-# Blocks Next.js App
+# AWS CDK Blocks Next.js App
 
-A Next.js 16 App Router frontend on AWS CDK Blocks. Shows both halves of the App
-Router calling the same Blocks backend: a **Server Component** that fetches on
+A Next.js 16 App Router frontend on CDK Blocks. Shows both halves of the App
+Router calling the same CDK Blocks backend: a **Server Component** that fetches on
 the server, and a **Client Component** that calls the API from the browser.
 
 ## Getting Started
@@ -24,12 +24,12 @@ Open http://localhost:3000 after `npm run dev`.
 | `src/app/layout.tsx` | Root layout |
 | `src/app/error.tsx` | Route-level error boundary (catches what a section boundary doesn't) |
 | `src/app/section-boundary.tsx` | Per-section error boundary, so one failing section doesn't take down the page |
-| `test/e2e.test.ts` | Boots the dev server and checks the home page, Blocks config, and sample API |
+| `test/e2e.test.ts` | Boots the dev server and checks the home page, CDK Blocks config, and sample API |
 
 ## What's Included
 
 - **App Router** — Server + Client Components in `src/app/`.
-- **Blocks API** — a public `api` namespace (`greet`, `getServerTime`); no auth
+- **CDK Blocks API** — a public `api` namespace (`greet`, `getServerTime`); no auth
   by default. To gate a method, add `Auth` and call
   `await auth.requireAuth(context)` first (`npm run docs Auth`).
 - **Standalone output** — `next.config.ts` sets `output: 'standalone'` so the
@@ -51,7 +51,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 ## Tests
 
-The home-page and Blocks config checks do not depend on the sample page title or API methods.
+The home-page and CDK Blocks config checks do not depend on the sample page title or API methods.
 A separate `greet` test validates the sample API.
 When you replace the sample API, update or delete that test to exercise your own methods.
 To test an already-running app, set `TEST_URL` to its base URL; it must serve

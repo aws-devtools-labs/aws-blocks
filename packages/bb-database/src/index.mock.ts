@@ -346,10 +346,10 @@ export class Database extends Scope {
 	 * number of retries.
 	 *
 	 * An `ApiError` thrown inside `fn` (a 404, or the 401 from `requireAuth`) and
-	 * any branded Blocks error reach the caller unchanged; the transaction still
+	 * any branded CDK Blocks error reach the caller unchanged; the transaction still
 	 * rolls back. Any other error becomes `TransactionFailed`.
 	 *
-	 * @throws {DatabaseErrors.TransactionFailed} If `fn` throws an error that is not an `ApiError`, a Blocks error or a database error, or the commit fails
+	 * @throws {DatabaseErrors.TransactionFailed} If `fn` throws an error that is not an `ApiError`, a CDK Blocks error or a database error, or the commit fails
 	 * @throws {DatabaseErrors.SerializationFailure} On an unretried conflict (HTTP 409, retriable)
 	 * @throws {DatabaseErrors.TransactionRowLimitExceeded} When the transaction changes more than 3,000 rows or 10 MiB on a `dsql` cluster
 	 * @example

@@ -6,7 +6,7 @@ import { isCdkTelemetryDisabled } from './cdk-consent.js';
 /**
  * Whether telemetry may be collected.
  *
- * AWS Blocks has no opt-out of its own, so consent is CDK's and this is the
+ * CDK Blocks has no opt-out of its own, so consent is CDK's and this is the
  * negation of {@link isCdkTelemetryDisabled} and nothing else:
  * https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out
  *

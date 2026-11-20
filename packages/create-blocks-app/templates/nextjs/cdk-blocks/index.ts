@@ -23,7 +23,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getServerTime() {
     return {
       time: new Date().toISOString(),
-      source: 'Blocks API',
+      source: 'CDK Blocks API',
     };
   },
 }));

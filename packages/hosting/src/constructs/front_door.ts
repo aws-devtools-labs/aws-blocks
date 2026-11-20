@@ -6,9 +6,9 @@
  *
  * A front door is the public entry point in front of an app: it exposes one
  * address and routes each request to the right provisioned origin (static
- * assets, server rendering, image optimization, the backend API). AWS Blocks
+ * assets, server rendering, image optimization, the backend API). CDK Blocks
  * builds the app and everything it runs on; the front door's author creates the
- * door and wires it to what AWS Blocks built.
+ * door and wires it to what CDK Blocks built.
  *
  * A door is one function. {@link defineFrontDoor} types it:
  *
@@ -32,7 +32,7 @@
  * });
  * ```
  *
- * AWS Blocks calls `build` ONCE, at synth, after it has created the assets
+ * CDK Blocks calls `build` ONCE, at synth, after it has created the assets
  * bucket, the compute and the API, and before it declares the asset uploads.
  * Everything it knows about the app arrives in the {@link DoorInput}; the door
  * hands back a {@link FrontDoorResult} whose `url` becomes the app's address.
@@ -59,7 +59,7 @@ import type { OriginHandle } from './layer.js';
 // ── Provisioned origins ─────────────────────────────────────────────────────
 
 /**
- * The app's static assets: the private bucket AWS Blocks created, and the
+ * The app's static assets: the private bucket CDK Blocks created, and the
  * immutable per-build prefix the current build is uploaded under.
  */
 export type AssetsOrigin = {
@@ -127,7 +127,7 @@ export type ApiOrigin = {
 /** An origin a route can point at. */
 export type DoorOrigin = AssetsOrigin | ServerOrigin | ImageOrigin;
 
-/** Where each kind of request lives — what AWS Blocks provisioned for the app. */
+/** Where each kind of request lives — what CDK Blocks provisioned for the app. */
 export type DoorOrigins = {
   /** The static assets (always present). */
   readonly assets: AssetsOrigin;
@@ -187,8 +187,8 @@ export type DoorApp = {
    * Custom error pages, as object keys relative to {@link AssetsOrigin.prefix}
    * (e.g. `404.html`): the app's `errorPages`, else the 404 and 500 pages the
    * framework build shipped (e.g. a SPA's `404.html`). A multi-page static
-   * site (no server, no SPA fallback) with no 404 page of its own gets AWS
-   * Blocks' default one as `notFound` (`_not_found.html`, uploaded with the
+   * site (no server, no SPA fallback) with no 404 page of its own gets
+   * CDK Blocks' default one as `notFound` (`_not_found.html`, uploaded with the
    * build), the page the CloudFront door serves for the same miss. Present
    * only when the app has one.
    */
@@ -210,7 +210,7 @@ export type DoorApp = {
  * - `geoRestriction`: when set;
  * - `skewProtection`: unless `enabled: false` (on by default), with `maxAge` resolved.
  *
- * AWS Blocks does not check that a door applies them: a free-form door reads
+ * CDK Blocks does not check that a door applies them: a free-form door reads
  * what is here and applies what it supports.
  */
 export type DoorFeatures = {
@@ -249,15 +249,15 @@ export type DoorUpstream = {
 };
 
 /**
- * Everything AWS Blocks hands a front door at synth: the author's entire view
- * of the app. None of it is written by the door author — AWS Blocks extracts
+ * Everything CDK Blocks hands a front door at synth: the author's entire view
+ * of the app. None of it is written by the door author — CDK Blocks extracts
  * the app facts from the build output and `Hosting` props, and provisions the
  * origins before the door is built.
  */
 export type DoorInput = {
   /** App facts: what this app needs served. */
   readonly app: DoorApp;
-  /** Provisioned origins: what AWS Blocks built, and where it lives. */
+  /** Provisioned origins: what CDK Blocks built, and where it lives. */
   readonly origins: DoorOrigins;
   /** The features this app asked for. A field is present only when asked for. */
   readonly features: DoorFeatures;
@@ -265,9 +265,9 @@ export type DoorInput = {
 
 // ── What the door hands back ────────────────────────────────────────────────
 
-/** What AWS Blocks passes to {@link FrontDoorResult.onUpload}. */
+/** What CDK Blocks passes to {@link FrontDoorResult.onUpload}. */
 export type UploadContext = {
-  /** Every asset upload AWS Blocks declared for this build. Depend on these to run after them. */
+  /** Every asset upload CDK Blocks declared for this build. Depend on these to run after them. */
   readonly uploads: readonly BucketDeployment[];
   /** The build these uploads belong to. */
   readonly buildId: string;
@@ -277,7 +277,7 @@ export type UploadContext = {
 export type FrontDoorResult = {
   /**
    * REQUIRED. The app's public address (e.g. `https://d123.cloudfront.net`, or
-   * the custom domain when the door serves one). AWS Blocks publishes it as the
+   * the custom domain when the door serves one). CDK Blocks publishes it as the
    * `HostingUrl` output and `Hosting.url`, hands it to the backend as the
    * trusted public origin (`BLOCKS_PUBLIC_ORIGIN`), and allows it for
    * cross-origin API calls (`CORS_HOSTING_ORIGINS`). A missing or empty `url`
@@ -291,19 +291,19 @@ export type FrontDoorResult = {
    */
   readonly originHandle?: OriginHandle;
   /**
-   * A public bucket the door serves the files from (e.g. an S3 website). AWS
-   * Blocks then publishes the app's runtime config there instead of the
+   * A public bucket the door serves the files from (e.g. an S3 website).
+   * CDK Blocks then publishes the app's runtime config there instead of the
    * private assets bucket.
    */
   readonly publicBucket?: IBucket;
   /**
-   * Called once at synth, after AWS Blocks has declared the asset uploads, so
+   * Called once at synth, after CDK Blocks has declared the asset uploads, so
    * the door can declare resources that must run after them (e.g. a cache
    * invalidation via `cf.invalidate`). Like the door itself, it only DECLARES
    * resources; CloudFormation runs them during the deploy.
    *
    * Declare them under the door's `scope` (or a construct inside it): those
-   * also wait for the uploads AWS Blocks declares later (the
+   * also wait for the uploads CDK Blocks declares later (the
    * `@aws-cdk-blocks/core` `Hosting` uploads the resolved runtime config after
    * the door). A resource created directly under the stack is not ordered
    * after that later upload.
@@ -312,7 +312,7 @@ export type FrontDoorResult = {
   /**
    * The constructs that switch traffic to the new build — whatever holds the
    * build id or prefix (e.g. a proxy Lambda whose environment names
-   * `builds/<buildId>`, a function that rewrites to it). AWS Blocks makes each
+   * `builds/<buildId>`, a function that rewrites to it). CDK Blocks makes each
    * one depend on every asset upload of the build, the later runtime-config
    * upload included, so CloudFormation updates it only once the new files are
    * in place and the previous build keeps serving until then.
@@ -335,7 +335,7 @@ export interface FrontDoor<TInput extends DoorInput = DoorInput, TResult extends
   /** Stable id used in error messages and diagnostics (e.g. `cloudfront`, `alb`, `my-cdn`). */
   readonly service: string;
   /**
-   * How the door invokes the server-rendering compute, so AWS Blocks builds
+   * How the door invokes the server-rendering compute, so CDK Blocks builds
    * the server to answer in a form the door can carry. Read before the compute
    * is built.
    *
@@ -356,12 +356,12 @@ export interface FrontDoor<TInput extends DoorInput = DoorInput, TResult extends
    */
   readonly serverResponse?: 'streaming' | 'buffered';
   /**
-   * Create the door and wire it to the app. Called ONCE at synth, after AWS
-   * Blocks has built the bucket, compute and API, and before it declares the
+   * Create the door and wire it to the app. Called ONCE at synth, after
+   * CDK Blocks has built the bucket, compute and API, and before it declares the
    * asset uploads.
    *
    * @param scope the construct scope to create the door's resources under.
-   * @param input everything AWS Blocks knows about the app (see {@link DoorInput}).
+   * @param input everything CDK Blocks knows about the app (see {@link DoorInput}).
    * @returns the door's public `url` (required) and optional extras (see {@link FrontDoorResult}).
    */
   build(scope: Construct, input: TInput): TResult;

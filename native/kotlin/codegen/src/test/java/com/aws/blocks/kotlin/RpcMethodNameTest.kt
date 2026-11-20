@@ -47,7 +47,7 @@ private fun sentMethods(source: String): List<String> =
  * server reads as the method `ping` of an export named `_default` (`parseRpcRequest` splits at
  * the first dot). Swift and Dart send `"ping"`. The server has no top-level method
  * (`parseRpcRequest` answers a name without a dot with `InvalidRequest`), so the call fails
- * either way against an AWS Blocks backend; but `"_default.ping"` would run another method of a
+ * either way against a CDK Blocks backend; but `"_default.ping"` would run another method of a
  * backend that exports `_default`, and a spec's method is the only name a client may send.
  */
 class RpcMethodNameTest : FunSpec({

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Shared constants used across the Blocks framework.
+ * Shared constants used across the CDK Blocks framework.
  *
  * Centralizes magic strings so directory names and conventions
  * can be updated in one place.
@@ -51,8 +51,8 @@ export const LEGACY_SANDBOX_DIR = '.blocks-sandbox';
  * unresolved id with unscoped names rather than failing. Never written.
  *
  * Telemetry's `getProjectId` also reads it, so an upgraded app keeps its project
- * id instead of being counted twice. Consent does not: #1606 removed the AWS
- * Blocks opt-out and consent now comes from CDK's own setting.
+ * id instead of being counted twice. Consent does not: #1606 removed the
+ * CDK Blocks opt-out and consent now comes from CDK's own setting.
  *
  * The `${''}` split keeps a rename pass over this file from rewriting the value
  * into the new name, which is the mistake `check:rename-traps` trap 2 exists for.

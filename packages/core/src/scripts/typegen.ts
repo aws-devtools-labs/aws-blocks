@@ -3,14 +3,14 @@
 
 /**
  * `npm run typegen` — generate the type-safe key augmentation for `getSecret` /
- * `getConfig` in a Blocks app. Statically scans the app's `secret('...')` /
+ * `getConfig` in a CDK Blocks app. Statically scans the app's `secret('...')` /
  * `config('...')` calls (no execution, no AWS credentials) and writes a `.d.ts`
  * that narrows the runtime getters to your declared keys (autocomplete + typo
  * errors) with no call-site change.
  *
  * Thin pass-through to the `@aws-cdk-blocks/hosting` engine — the getters live on
  * `@aws-cdk-blocks/hosting`, so the generated file augments that module by default;
- * a Blocks app needs no extra configuration.
+ * a CDK Blocks app needs no extra configuration.
  *
  * @module
  */

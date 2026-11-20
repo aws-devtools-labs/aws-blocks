@@ -477,7 +477,7 @@ export const IPX_LAMBDA_PACKAGE_JSON = JSON.stringify(
     dependencies: {
       // Pinned exactly: the no-redirect SSRF guard depends on ipx forwarding
       // `fetchOptions` to its fetch (verified on 3.1.1). A floating range would let
-      // the fetch semantics change at deploy time with no change to AWS Blocks.
+      // the fetch semantics change at deploy time with no change to CDK Blocks.
       // The SVG gate also relies on ipx calling the storage adapters' getData for
       // every source (svgGuard wraps it); its 415 does NOT depend on ipx's error
       // mapping (the handler returns it). Re-run the executable handler tests in

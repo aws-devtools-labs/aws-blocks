@@ -5,7 +5,7 @@
 /**
  * CLI wrapper for `writeSpec()`. Generates `cdk-blocks/blocks.spec.json` from a
  * backend entry point. Exposed as the `blocks-generate-spec` bin entry on
- * `@aws-cdk-blocks/core`, so any Blocks app can invoke it via
+ * `@aws-cdk-blocks/core`, so any CDK Blocks app can invoke it via
  * `npx blocks-generate-spec`.
  *
  * Usage:

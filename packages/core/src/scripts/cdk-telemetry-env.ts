@@ -8,15 +8,15 @@ import { CORE_VERSION } from '../version.js';
 /**
  * Build CDK CLI telemetry-related environment variables.
  *
- * When Blocks telemetry is enabled, sets `CDK_CLI_USERAGENT` so the CDK CLI
- * attributes usage back to Blocks. When telemetry is disabled (user opted out),
+ * When CDK Blocks telemetry is enabled, sets `CDK_CLI_USERAGENT` so the CDK CLI
+ * attributes usage back to CDK Blocks. When telemetry is disabled (user opted out),
  * sets `CDK_DISABLE_CLI_TELEMETRY=1` to suppress CDK's own telemetry collection
  * and omits the user-agent string.
  *
  * Any opt-out does this, not only the environment variable, so a context-file
  * opt-out cannot leave the child disagreeing with the parent.
  *
- * @param command - The Blocks command context (e.g. "sandbox", "production")
+ * @param command - The CDK Blocks command context (e.g. "sandbox", "production")
  * @param projectRoot - Where to look for the project's CDK config. Defaults to the
  * current directory, which is correct for the lifecycle commands: they run with the
  * project root as their working directory. Pass it explicitly from a caller that

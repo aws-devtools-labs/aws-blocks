@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Internal runtime seams for AWS Blocks' own Building Blocks.
+ * Internal runtime seams for CDK Blocks' own Building Blocks.
  *
  * Imported as `@aws-cdk-blocks/core/internal`. Not part of the public API: these
  * can change in any release. Runtime only (no CDK imports), so it is safe in a

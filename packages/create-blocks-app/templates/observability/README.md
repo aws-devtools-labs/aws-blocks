@@ -1,6 +1,6 @@
-# Blocks Observability Application
+# AWS CDK Blocks Observability Application
 
-Backend-only AWS CDK Blocks app showing the observability Building Blocks on one
+Backend-only CDK Blocks app showing the observability Building Blocks on one
 API call. `api.placeOrder(item)` writes a structured log line (**Logger**),
 emits an `OrdersPlaced` metric (**Metrics**) and runs inside a `placeOrder`
 trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.

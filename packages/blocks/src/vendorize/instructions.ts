@@ -22,7 +22,7 @@ registry version via npm workspace resolution.
 ## Making changes
 
 Edit files in \`vendor/${shortName}/src/\` directly. Changes take effect
-immediately when using \`tsx\` (the default Blocks dev server and CDK synth).
+immediately when using \`tsx\` (the default AWS CDK Blocks dev server and CDK synth).
 
 ## Updating from upstream
 

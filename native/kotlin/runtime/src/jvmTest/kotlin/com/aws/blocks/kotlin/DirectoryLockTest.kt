@@ -77,7 +77,7 @@ class DirectoryLockTest {
     @Test
     fun serialisesAcrossProcesses() {
         // The in-process test above can pass on a purely in-JVM lock. This one cannot: two JVMs
-        // contend for the same file, which is the case that matters, because two Blocks
+        // contend for the same file, which is the case that matters, because two CDK Blocks
         // applications minting a key are separate processes.
         val java = File(System.getProperty("java.home"), "bin/java").absolutePath
         val classpath = System.getProperty("java.class.path")

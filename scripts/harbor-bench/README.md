@@ -1,6 +1,6 @@
 # Harbor agent check
 
-An opt-in GitHub Actions check for AWS CDK Blocks PRs; it is not a required check. It packs the PR head and
+An opt-in GitHub Actions check for CDK Blocks PRs; it is not a required check. It packs the PR head and
 its merge-base, then asks Claude Code to create a todo app, add due dates and add labels in one
 resumed session per trial. The default is one trial per arm
 (see [Trials and statistics](#trials-and-statistics)). Nothing is
@@ -34,8 +34,8 @@ A new dispatch for the same PR cancels the running one.
    saves a [phase snapshot](#phase-snapshots), checks package provenance, runs `npm run build`,
    starts `npm run dev` as `node` and drives Chromium (`ui.mjs`) through every behavior added so
    far. Contract controls are located by accessible name among form fields only. It then checks
-   that the records it created appear under the app's Blocks mock data directory (`.cdk-blocks/local/data`), a
-   heuristic that catches storage outside Blocks but not a backend writing its own files there.
+   that the records it created appear under the app's CDK Blocks mock data directory (`.cdk-blocks/local/data`), a
+   heuristic that catches storage outside CDK Blocks but not a backend writing its own files there.
    Finally it restarts the server and checks the records again in a fresh browser context.
 6. Each trial uploads its allowlisted result as artifact `harbor-result-<arm>-<trial>` and, when
    configured, its redacted raw trace to a [private bucket](#private-traces).
@@ -68,9 +68,9 @@ triggered. It is reported, never required.
 
 Each arm has a loopback registry (`registry.mjs`) that serves that arm's `aws-cdk-blocks`
 and `@aws-cdk-blocks/*` tarballs and logs requests. Third-party packages come from public
-npm. `provenance.py` checks that the scaffolder was served and verifies installed Blocks
+npm. `provenance.py` checks that the scaffolder was served and verifies installed CDK Blocks
 packages against the arm's registry and packed bytes. The backend can import the umbrella
-or scoped Blocks packages and must expose an `ApiNamespace`.
+or scoped CDK Blocks packages and must expose an `ApiNamespace`.
 
 When both arms pack byte-identical packages the run compares the harness with itself (A/A):
 any difference between arms is noise.

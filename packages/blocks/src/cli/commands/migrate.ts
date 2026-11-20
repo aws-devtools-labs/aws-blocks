@@ -995,7 +995,7 @@ function describe(result: MigrateResult, dryRun: boolean): string {
 	}
 	const acted = rewritten.length > 0 || result.removed.length > 0 || devConfig !== null;
 	if (acted)
-		lines.push(dryRun ? 'Dry run; nothing was written. npm run migrate would:' : 'Migrated to CDK Blocks npm tasks:');
+		lines.push(dryRun ? 'Dry run; nothing was written. npm run migrate would:' : 'Migrated to AWS CDK Blocks npm tasks:');
 	else lines.push('Nothing could be migrated automatically.');
 	for (const [name, { from, to }] of rewritten) {
 		lines.push(from === null ? `  add script "${name}": ${to}` : `  rewrite script "${name}": ${from} -> ${to}`);

@@ -1,6 +1,6 @@
 # Task: File Gallery
 
-Build a file gallery in this AWS Blocks app. A user uploads a file, sees it listed by name with a working download link, and can delete it. The list survives a page reload.
+Build a file gallery in this CDK Blocks app. A user uploads a file, sees it listed by name with a working download link, and can delete it. The list survives a page reload.
 
 The core of this task is **using the framework**: files are stored, listed, served, and deleted through an **`api` namespace** backed by the app's **file-storage block**. The page is a thin client over that API.
 

@@ -1,8 +1,8 @@
-# Create a todo app with AWS Blocks
+# Create a todo app with CDK Blocks
 
-Build a working todo app in `/app/todo-app` with AWS Blocks. Create the project with the AWS Blocks app scaffolder using its `bare` template, then build the app in local mock mode. Later requests will extend this same app.
+Build a working todo app in `/app/todo-app` with CDK Blocks. Create the project with the CDK Blocks app scaffolder using its `bare` template, then build the app in local mock mode. Later requests will extend this same app.
 
-Store todos with AWS Blocks and expose them through a typed `ApiNamespace`; don't use browser storage, your own files or server, or in-memory state. No login is needed.
+Store todos with CDK Blocks and expose them through a typed `ApiNamespace`; don't use browser storage, your own files or server, or in-memory state. No login is needed.
 
 Don't deploy, call AWS, inspect credentials or print environment variables; the model credentials are only for your own Bedrock calls. Don't change npm configuration or edit installed packages. Don't inspect or modify `/tests`, `/logs`, `/opt/bench` or `/var/lib/harbor-verifier`.
 

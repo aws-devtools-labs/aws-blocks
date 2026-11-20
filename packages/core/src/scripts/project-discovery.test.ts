@@ -23,7 +23,7 @@ function makeDir(...segments: string[]): string {
 	return dir;
 }
 
-/** Plants the marker file, making `dir` a Blocks project. */
+/** Plants the marker file, making `dir` a CDK Blocks project. */
 function makeProject(dir: string): string {
 	mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
 	writeFileSync(join(dir, 'cdk-blocks', 'index.ts'), 'export const blocks = {};');
@@ -89,7 +89,7 @@ describe('resolveProject — explicitPath', () => {
 		assert.ok(!result.ok);
 		assert.strictEqual(result.reason, 'bad-explicit');
 		assert.deepStrictEqual(result.candidates, []);
-		assert.match(result.message, /is not an AWS Blocks project/);
+		assert.match(result.message, /is not an AWS CDK Blocks project/);
 		assert.match(result.message, /cdk-blocks\/index\.ts/);
 		assert.ok(result.message.includes(notAProject));
 	});
@@ -200,7 +200,7 @@ describe('resolveProject — descendant scan', () => {
 		assert.ok(!result.ok);
 		assert.strictEqual(result.reason, 'not-found');
 		assert.deepStrictEqual(result.candidates, []);
-		assert.match(result.message, /No AWS Blocks project found/);
+		assert.match(result.message, /No AWS CDK Blocks project found/);
 		assert.match(result.message, /cdk-blocks\/index\.ts/);
 		assert.match(result.message, /--project <path>/);
 		assert.ok(result.message.includes(root));

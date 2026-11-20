@@ -32,7 +32,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // ─── Examples (uncomment to use) ─────────────────────────────────────────────
 //
 // import { Auth, KVStore, Realtime } from 'aws-cdk-blocks';
-// import { z } from 'zod';  // zod ships with new bare apps; when adding AWS Blocks to an existing project, run npm install zod
+// import { z } from 'zod';  // zod ships with new bare apps; when adding CDK Blocks to an existing project, run npm install zod
 //
 // // Auth (full API: npm run docs Auth):
 // const auth = new Auth(scope, 'auth', {

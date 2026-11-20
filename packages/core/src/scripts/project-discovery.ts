@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 /**
- * The file whose presence marks a directory as an AWS Blocks project.
+ * The file whose presence marks a directory as a CDK Blocks project.
  * A project is identified structurally — no config file, no registry — so
  * discovery works on a fresh clone before anything has been built or deployed.
  */
@@ -56,7 +56,7 @@ export function isBlocksProject(dir: string): boolean {
 }
 
 /**
- * Find the Blocks project to inspect.
+ * Find the CDK Blocks project to inspect.
  *
  * Precedence: an explicit `--project` path, the start directory itself, an
  * ancestor of it, then a bounded scan of its descendants. An explicit path that
@@ -79,7 +79,7 @@ export function resolveProject(options: ResolveProjectOptions = {}): ProjectReso
 			reason: 'bad-explicit',
 			candidates: [],
 			message:
-				`${explicit} is not an AWS Blocks project (no ${PROJECT_MARKER} there). ` +
+				`${explicit} is not an AWS CDK Blocks project (no ${PROJECT_MARKER} there). ` +
 				`Point --project at a directory that contains ${PROJECT_MARKER}.`,
 		};
 	}
@@ -103,7 +103,7 @@ export function resolveProject(options: ResolveProjectOptions = {}): ProjectReso
 			reason: 'ambiguous',
 			candidates: children,
 			message:
-				`Found ${children.length} AWS Blocks projects under ${startDir}: ${children.join(', ')}. ` +
+				`Found ${children.length} AWS CDK Blocks projects under ${startDir}: ${children.join(', ')}. ` +
 				'Choose one with --project <path>.',
 		};
 	}
@@ -113,8 +113,8 @@ export function resolveProject(options: ResolveProjectOptions = {}): ProjectReso
 		reason: 'not-found',
 		candidates: [],
 		message:
-			`No AWS Blocks project found (looked for ${PROJECT_MARKER} in ${startDir}, its parents, ` +
-			'and its subdirectories). Run this from inside a Blocks project, or pass --project <path>.',
+			`No AWS CDK Blocks project found (looked for ${PROJECT_MARKER} in ${startDir}, its parents, ` +
+			'and its subdirectories). Run this from inside a CDK Blocks project, or pass --project <path>.',
 	};
 }
 
@@ -135,7 +135,7 @@ function findAncestorProject(startDir: string, maxWalkUp: number): string | unde
 }
 
 /**
- * Breadth-first scan of `root`'s descendants for other Blocks projects, bounded
+ * Breadth-first scan of `root`'s descendants for other CDK Blocks projects, bounded
  * by both depth and a total count of directories examined. Depth 2 is the
  * default because a monorepo puts its app one level deeper than the workspace
  * folder (`apps/web/cdk-blocks/index.ts`), which a depth-1 scan misses.

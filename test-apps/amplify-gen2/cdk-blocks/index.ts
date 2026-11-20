@@ -31,7 +31,7 @@ const auth = new Auth(scope, 'auth', {
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   // Public — no auth required
   async greet(name: string) {
-    return { message: `Hello from Blocks, ${name}!`, timestamp: Date.now() };
+    return { message: `Hello from CDK Blocks, ${name}!`, timestamp: Date.now() };
   },
 
   // Protected — requires signed-in user

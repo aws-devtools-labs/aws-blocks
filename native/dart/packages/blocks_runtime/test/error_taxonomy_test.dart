@@ -322,7 +322,7 @@ void main() {
       );
     });
 
-    test('a Blocks error from the auth provider is not wrapped', () async {
+    test('auth provider cancellation passes through unchanged', () async {
       // Cancellation and other errors the runtime already reports pass
       // through as they are.
       final cancelled = OidcCancelledException();
@@ -339,7 +339,7 @@ void main() {
       expect(sent, isFalse);
     });
 
-    test('a Blocks error from the HTTP client is not wrapped', () async {
+    test('HTTP client cancellation passes through unchanged', () async {
       final cancelled = OidcCancelledException();
       final client = BlocksClient(
         baseUrl: 'http://test/cdk-blocks/api',

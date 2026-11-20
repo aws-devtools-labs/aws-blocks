@@ -1,7 +1,7 @@
 /**
- * Blocks CDK entry point for Amplify Gen 2 integration.
+ * CDK Blocks CDK entry point for Amplify Gen 2 integration.
  *
- * This file is imported by amplify/blocks.ts to wire Blocks into the Amplify backend.
+ * This file is imported by amplify/blocks.ts to wire CDK Blocks into the Amplify backend.
  * It is NOT a standalone CDK app — Amplify's `ampx` CLI orchestrates synthesis.
  */
 import { BlocksBackend, BlocksPresets } from 'aws-cdk-blocks/cdk';
@@ -12,7 +12,7 @@ import type { Stack } from 'aws-cdk-lib';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Create the Blocks backend on the given CDK stack.
+ * Create the CDK Blocks backend on the given CDK stack.
  * Called from amplify/blocks.ts with the stack Amplify provides.
  */
 export async function createBlocksBackend(stack: Stack, sandboxMode: boolean) {

@@ -265,7 +265,7 @@ void main() async {
   final persistedBytes = await tokenStore.get('_session_cookies');
 
   // A3 — a follow-up authenticated RPC succeeds via the replayed cookie
-  // (the Blocks client shares the SAME SessionStore instance).
+  // (the CDK Blocks client shares the SAME SessionStore instance).
   group('OIDC: authenticated RPC via the replayed cookie');
   try {
     final me = await blocks.api.oidcRequireAuth();

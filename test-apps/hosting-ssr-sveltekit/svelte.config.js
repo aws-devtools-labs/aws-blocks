@@ -8,7 +8,7 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    // The Blocks SvelteKit adapter runs this Node server on Lambda via the
+    // The CDK Blocks SvelteKit adapter runs this Node server on Lambda via the
     // Lambda Web Adapter. `out: 'build'` is the default; declared explicitly so
     // the hosting adapter's `buildOutputDir: 'build'` matches.
     adapter: adapter({ out: 'build' }),

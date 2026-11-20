@@ -49,7 +49,7 @@ lists these checks alongside the namespace placement errors and warnings from co
 ## What it provisions (AWS)
 
 - A Fargate task definition and service (ARM64), sized from `size`, using the
-  shared Blocks execution role as its task role.
+  shared CDK Blocks execution role as its task role.
 - A CloudWatch log group for the container's stdout/stderr.
 - Application Auto Scaling from `scaling` (CPU, memory, or queue-depth policies).
 - On demand, when a namespace is routed to it: a target group on the backend's
@@ -67,7 +67,7 @@ lists these checks alongside the namespace placement errors and warnings from co
 - The image's default user is root. For the default image, the task
   definition's container `user` is `1000:1000`, the working directory is
   `/home/node` and the app boots from `/home/node/app`, which that user owns.
-- For a custom `image`, Blocks sets no container `user` or working directory,
+- For a custom `image`, CDK Blocks sets no container `user` or working directory,
   and the app boots from `/app`.
 - The API (8080) and readiness (8081) ports aren't privileged, so nothing
   needs root.

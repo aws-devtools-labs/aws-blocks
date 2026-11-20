@@ -4,7 +4,7 @@ node_modules
 amplify_outputs*
 amplifyconfiguration*
 
-# Blocks
+# CDK Blocks
 .cdk-blocks-sandbox
 # Auth immutability baselines (written at synth, keyed by stack id). This e2e
 # app deploys a fresh, per-run sandbox stack every time, so they are
