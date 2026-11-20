@@ -16,6 +16,8 @@
     }
   },
   "dependencies": {
+    "@opennextjs/aws": "^4.1.16",
+    "@playwright/test": "^1.65.1",
     "next": "^16.4.6"
   }
 }
