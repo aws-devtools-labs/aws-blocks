@@ -629,7 +629,7 @@ const blocksStack = await BlocksStack.create(app, stackName, {
 
 The SvelteKit adapter runs `@sveltejs/adapter-node`'s server, and the server
 function ships `build/` without your app's `node_modules`. adapter-node leaves
-each package in your `dependencies` (for example `@aws-blocks/blocks`, whose
+each package in your `dependencies` (for example `aws-cdk-blocks`, whose
 `/server` entry a `+page.server.ts` imports) as an import that it expects to
 find in `node_modules` at runtime. So the deploy builds the server with its
 dependencies bundled:

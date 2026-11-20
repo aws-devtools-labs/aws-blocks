@@ -25,7 +25,7 @@ const scaffold = (dir: string, opts: { adapterWired?: boolean; viteConfig?: stri
     JSON.stringify({
       name: 'sk-deps-fixture',
       type: 'module',
-      dependencies: { '@aws-blocks/blocks': '*' },
+      dependencies: { 'aws-cdk-blocks': '*' },
       devDependencies: { '@sveltejs/kit': '^2.15.0', '@sveltejs/adapter-node': '^5.2.0' },
       scripts: { build: 'vite build' },
     }),
@@ -72,12 +72,12 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
 
   void it('fails synth when the server imports a package build/ cannot resolve', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\nexport const load = withAuth;\n");
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\nexport const load = withAuth;\n");
     assert.throws(
       () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
       (err: Error) =>
         err.name === 'SvelteKitUnbundledDependencyError' &&
-        err.message.includes('@aws-blocks/blocks/server (imported from build/server/chunks/_page.server.ts.js)'),
+        err.message.includes('aws-cdk-blocks/server (imported from build/server/chunks/_page.server.ts.js)'),
     );
   });
 
@@ -132,16 +132,16 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
 
   void it('does not check a build reused for a destroy, so a stale build/ cannot block stack deletion', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\n");
     assert.doesNotThrow(() => withBuildProfile({ reuseBuild: 'if-present' }, () => sveltekitAdapter({ projectDir: tmp })));
   });
 
   void it('still checks a build reused for a deploy', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\n");
     assert.throws(
       () => withBuildProfile({ reuseBuild: 'required' }, () => sveltekitAdapter({ projectDir: tmp })),
-      rejects('@aws-blocks/blocks/server'),
+      rejects('aws-cdk-blocks/server'),
     );
   });
 
@@ -168,26 +168,26 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
 
   void it('rejects a dependency whose copy in build/node_modules has no module for the import', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
-    ship('', '@aws-blocks/blocks', { 'package.json': '{}' });
-    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('@aws-blocks/blocks/server'));
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\n");
+    ship('', 'aws-cdk-blocks', { 'package.json': '{}' });
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('aws-cdk-blocks/server'));
   });
 
   void it('rejects a subpath that the package exports do not provide', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
-    ship('', '@aws-blocks/blocks', {
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\n");
+    ship('', 'aws-cdk-blocks', {
       'package.json': JSON.stringify({ type: 'module', exports: { '.': './index.js' } }),
       'index.js': 'export {};\n',
       'server.js': 'export const withAuth = 1;\n',
     });
-    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('@aws-blocks/blocks/server'));
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('aws-cdk-blocks/server'));
   });
 
   void it('deploys a dependency resolved through its exports map', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
-    ship('', '@aws-blocks/blocks', {
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\n");
+    ship('', 'aws-cdk-blocks', {
       'package.json': JSON.stringify({
         type: 'module',
         exports: { './server': { types: './dist/server.d.ts', import: './dist/server.js', require: './dist/server.cjs' } },
@@ -200,8 +200,8 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
 
   void it('deploys a dependency shipped in a node_modules next to the importing chunk', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
-    ship('server', '@aws-blocks/blocks', {
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\n");
+    ship('server', 'aws-cdk-blocks', {
       'package.json': JSON.stringify({ type: 'module', exports: { './server': './server.js' } }),
       'server.js': 'export const withAuth = 1;\n',
     });
@@ -210,14 +210,14 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
 
   void it('rejects a shipped dependency that itself imports a package build/ does not have', () => {
     scaffold(tmp);
-    writeServerChunk(tmp, "import { withAuth } from '@aws-blocks/blocks/server';\n");
-    ship('', '@aws-blocks/blocks', {
+    writeServerChunk(tmp, "import { withAuth } from 'aws-cdk-blocks/server';\n");
+    ship('', 'aws-cdk-blocks', {
       'package.json': JSON.stringify({ type: 'module', exports: { './server': './server.js' } }),
       'server.js': "import { jwtVerify } from 'jose';\nexport const withAuth = jwtVerify;\n",
     });
     assert.throws(
       () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
-      rejects('jose (imported from build/node_modules/@aws-blocks/blocks/server.js)'),
+      rejects('jose (imported from build/node_modules/aws-cdk-blocks/server.js)'),
     );
   });
 

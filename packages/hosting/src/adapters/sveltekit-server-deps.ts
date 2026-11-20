@@ -51,7 +51,7 @@ export const SVELTEKIT_BUNDLE_PLUGIN_NAME = 'aws-blocks:sveltekit-bundle-server-
  * warning: the build then runs unchanged.
  * @internal exported for unit tests.
  */
-export const buildVitePreloadSource = (): string => `// Written by @aws-blocks/hosting for one SvelteKit build; removed when it ends.
+export const buildVitePreloadSource = (): string => `// Written by @aws-cdk-blocks/hosting for one SvelteKit build; removed when it ends.
 import { existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,7 +99,7 @@ try {
     }
   }
 } catch (err) {
-  process.stderr.write(\`@aws-blocks/hosting: could not bundle the SvelteKit server's dependencies (\${err}); building unchanged.\\n\`);
+  process.stderr.write(\`@aws-cdk-blocks/hosting: could not bundle the SvelteKit server's dependencies (\${err}); building unchanged.\\n\`);
 }
 `;
 
