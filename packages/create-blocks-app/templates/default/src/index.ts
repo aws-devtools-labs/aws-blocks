@@ -92,8 +92,13 @@ document.getElementById('app')!.appendChild(
       const select = container.querySelector('#new-priority') as HTMLSelectElement;
       const title = input.value.trim();
       if (!title) return;
-      if (!(await run(() => api.createTodo(title, parseInt(select.value)), 'Could not add todo'))) return;
+      // Clear the input when the request starts: text typed while it is in flight is the next todo.
       input.value = '';
+      if (!(await run(() => api.createTodo(title, parseInt(select.value)), 'Could not add todo'))) {
+        // Give the title back, unless the user already typed a new one.
+        if (!input.value) input.value = title;
+        return;
+      }
       await load();
     }
 

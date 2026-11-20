@@ -56,9 +56,15 @@ function TodoApp() {
   }, [load]);
 
   const addTodo = async () => {
-    if (!newTitle.trim()) return;
-    if (!(await run(() => api.createTodo(newTitle.trim(), newPriority), 'Could not add todo'))) return;
+    const title = newTitle.trim();
+    if (!title) return;
+    // Clear the input when the request starts: text typed while it is in flight is the next todo.
     setNewTitle('');
+    if (!(await run(() => api.createTodo(title, newPriority), 'Could not add todo'))) {
+      // Give the title back, unless the user already typed a new one.
+      setNewTitle(current => current || title);
+      return;
+    }
     await load();
   };
 
