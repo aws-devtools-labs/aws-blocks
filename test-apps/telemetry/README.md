@@ -67,7 +67,7 @@ never share a stack, and the destroy scripts run from this directory (the CI
 ## Pinned installation ID
 
 Matching the CI setup (the "Seed fixed e2e telemetry installation ID" step in
-`.github/workflows/pr-checks.yml`), the suite pins a fixed installation ID
+`.github/workflows/pr-e2e.yml`), the suite pins a fixed installation ID
 (`00000000-0000-0000-0000-000000000e2e`) by writing
 `$HOME/.cdk-blocks/telemetry/installation-id` **before** any CLI invocation. This
 keeps emitted `installationId` values deterministic and suppresses the

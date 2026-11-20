@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Unit tests for scripts/ci/e2e-teardown.mjs, run against a fake `aws` CLI,
-// plus a check that every pr-checks.yml job that deploys a stack tears it down
-// in an `if: always()` step (a cancelled job never reaches the suite's own
-// test.after destroy).
+// plus a check that every job of the PR workflows (_pr-workflows.mjs) that
+// deploys a stack tears it down in an `if: always()` step (a cancelled job
+// never reaches the suite's own test.after destroy).
 //
 // Run: node --test scripts/ci/e2e-teardown.test.mjs
 
@@ -15,9 +15,11 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse } from 'yaml';
+import { PR_WORKFLOWS } from './_pr-workflows.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./e2e-teardown.mjs', import.meta.url));
-const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
+const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
 const SUITE = new URL('../../test-apps/comprehensive/test/e2e.test.ts', import.meta.url);
 const ID = 'runner-k3x9q2';
 // The random half of the id: test-apps/comprehensive names its production
@@ -444,16 +446,22 @@ describe('e2e-teardown.mjs', () => {
 	});
 });
 
-describe('pr-checks.yml', () => {
-	const yml = readFileSync(WORKFLOW, 'utf8');
-	const jobsYml = yml.slice(yml.indexOf('\njobs:\n'));
-	// Each top-level job, from its `  id:` line to the next one.
-	const jobs = Object.fromEntries(
-		jobsYml
-			.split(/^(?= {2}[a-z][\w-]*:$)/m)
-			.slice(1)
-			.map((block) => [block.slice(2, block.indexOf(':')), block]),
-	);
+describe('PR workflows', () => {
+	const files = PR_WORKFLOWS.map((file) => {
+		const yml = readFileSync(join(WORKFLOWS, file), 'utf8');
+		const jobsYml = yml.slice(yml.indexOf('\njobs:\n'));
+		// Each top-level job, from its `  id:` line to the next one.
+		const jobs = Object.fromEntries(
+			jobsYml
+				.split(/^(?= {2}[a-z][\w-]*:$)/m)
+				.slice(1)
+				.map((block) => [block.slice(2, block.indexOf(':')), block]),
+		);
+		// The lines before `jobs:` (name, on, env, ...).
+		return { file, head: yml.slice(0, yml.indexOf('\njobs:\n')), jobs, parsed: parse(yml).jobs };
+	});
+	// Every job of every file, with its file: some jobs are in more than one.
+	const all = files.flatMap(({ file, jobs }) => Object.entries(jobs).map(([id, block]) => ({ file, id, block })));
 	const stepsOf = (job) =>
 		job
 			.slice(job.indexOf('\n    steps:\n'))
@@ -473,13 +481,20 @@ describe('pr-checks.yml', () => {
 
 	it('lists only real jobs as stack-free', () => {
 		for (const id of Object.keys(NO_STACK)) {
-			assert.ok(jobs[id]?.includes(CREDENTIALS), `${id} is not an AWS job any more`);
+			const copies = all.filter((job) => job.id === id);
+			assert.ok(copies.length > 0, `${id} is not an AWS job any more`);
+			for (const { file, block } of copies)
+				assert.ok(block.includes(CREDENTIALS), `${file} ${id} is not an AWS job any more`);
 		}
 	});
 
-	const deploying = Object.keys(jobs).filter((id) => jobs[id].includes(CREDENTIALS) && !(id in NO_STACK));
+	// The jobs that deploy, by id.
+	const deployers = all.filter(({ id, block }) => block.includes(CREDENTIALS) && !(id in NO_STACK));
+	const jobs = Object.fromEntries(deployers.map(({ id, block }) => [id, block]));
+	const deploying = Object.keys(jobs);
 
 	it('finds the deploying jobs', () => {
+		assert.equal(deploying.length, deployers.length, 'two PR workflows have a deploying job with the same id');
 		assert.ok(deploying.includes('e2e-sandbox'));
 		assert.ok(deploying.includes('e2e-production'));
 	});
@@ -551,7 +566,8 @@ describe('pr-checks.yml', () => {
 		// env, nor in the workflow env or the npm scripts the job runs.
 		const keep = /^[^#\n]*BLOCKS_SANDBOX_KEEP/m;
 		assert.doesNotMatch(jobs['e2e-sandbox'], keep, 'e2e-sandbox must not keep its stack');
-		assert.doesNotMatch(yml.slice(0, yml.indexOf('\njobs:\n')), keep, 'the workflow env must not keep stacks');
+		for (const { file, head } of files)
+			assert.doesNotMatch(head, keep, `${file}: the workflow env must not keep stacks`);
 		const scripts = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')).scripts;
 		assert.doesNotMatch(scripts('../../package.json')['test:e2e:sandbox'], /BLOCKS_SANDBOX_KEEP/);
 		const app = scripts('../../test-apps/comprehensive/package.json');
@@ -560,7 +576,8 @@ describe('pr-checks.yml', () => {
 		// A stack the destroy left after the tests passed fails the job; only here.
 		assert.match(teardownStep('e2e-sandbox'), /^ {10}E2E_TEARDOWN_STRICT: '1'$/m);
 		for (const id of deploying.filter((d) => d !== 'e2e-sandbox')) assert.doesNotMatch(jobs[id], /E2E_TEARDOWN_STRICT/, id);
-		assert.doesNotMatch(yml.slice(0, yml.indexOf('\njobs:\n')), /E2E_TEARDOWN_STRICT/, 'not for every job');
+		for (const { file, head } of files)
+			assert.doesNotMatch(head, /E2E_TEARDOWN_STRICT/, `${file}: not for every job`);
 		// The suite destroys in test.after unless KEEP is set; run directly, a
 		// throwing after() hook exits 0, so the suite sets the exit code itself.
 		const suite = readFileSync(SUITE, 'utf8');
@@ -570,41 +587,58 @@ describe('pr-checks.yml', () => {
 		assert.match(readFileSync(new URL('sandbox-destroy.ts', SUITE), 'utf8'), /await destroySandbox\(/);
 	});
 
-	describe('teardown-verify', () => {
-		const job = jobs['teardown-verify'];
-		const steps = stepsOf(job);
-
-		it('waits for the stacks of every job that leaves its delete to it', () => {
-			const needs = job.match(/^ {4}needs: \[(.*)\]$/m)[1].split(/,\s*/);
-			for (const id of ['detect-changes', ...ASYNC]) assert.ok(needs.includes(id), `needs ${id}`);
-			const wait = steps.at(-1);
-			assert.match(wait, /run: node scripts\/ci\/e2e-stack-wait\.mjs \$STACKS\n/);
-			for (const id of ASYNC) {
-				assert.ok(wait.includes(`\${{ needs.${id}.outputs.teardown-stacks }}`), `passes ${id}'s stacks`);
-				assert.ok(job.includes(`needs.${id}.outputs.teardown-stacks != ''`), `runs when ${id} left stacks`);
-			}
-		});
-
-		it('runs unless the run is cancelled, only for same-repo PRs, in the e2e environment', () => {
-			const cond = job.match(/^ {4}if: >-\n((?: {6}.*\n)+)/m)[1].replace(/\s+/g, ' ').trim();
-			assert.ok(cond.startsWith("!cancelled() && github.event.pull_request.head.repo.full_name == github.repository && ("), cond);
-			assert.match(job, /^ {4}environment: e2e$/m);
-			assert.match(job, /^ {4}permissions:\n {6}contents: read\n {6}id-token: write {2}# .*\n/m);
-			assert.ok(steps.some((st) => st.includes(CREDENTIALS)));
-		});
-
-		it('passes stack names through env, never into the shell text', () => {
-			for (const st of steps) {
-				const run = st.match(/^ {8}run: (.*)$/m)?.[1] ?? '';
-				assert.doesNotMatch(run, /\$\{\{/);
-			}
-		});
-
-		it('is not part of the Build and Test gate', () => {
-			const gate = jobs['build-and-test'].match(/^ {4}needs: \[(.*)\]$/m)[1];
-			assert.doesNotMatch(gate, /teardown-verify/);
-		});
+	// A job's `needs` reach only the jobs of its own workflow, so each workflow
+	// with a job in ASYNC has its own E2E Teardown Verify.
+	it('runs E2E Teardown Verify in the workflow of every job that leaves its delete to it', () => {
+		for (const id of ASYNC) {
+			const home = files.find(({ jobs: own }) => id in own);
+			assert.ok(home, `${id} is in no PR workflow`);
+			assert.ok('teardown-verify' in home.jobs, `${home.file} has ${id} but no teardown-verify`);
+		}
 	});
+
+	it('keeps E2E Teardown Verify off the merge path: no job needs it', () => {
+		for (const { file, parsed } of files) {
+			for (const [id, job] of Object.entries(parsed)) {
+				assert.ok(![job.needs ?? []].flat().includes('teardown-verify'), `${file} ${id} needs teardown-verify`);
+			}
+		}
+	});
+
+	for (const { file, jobs: own } of files.filter(({ jobs: own }) => 'teardown-verify' in own)) {
+		describe(`teardown-verify (${file})`, () => {
+			const job = own['teardown-verify'];
+			const steps = stepsOf(job);
+			const waitsFor = ASYNC.filter((id) => id in own);
+
+			it('waits for the stacks of every job in its workflow that leaves its delete to it', () => {
+				assert.ok(waitsFor.length > 0, `no job in ${file} leaves its delete to it`);
+				const needs = job.match(/^ {4}needs: \[(.*)\]$/m)[1].split(/,\s*/);
+				for (const id of ['detect-changes', ...waitsFor]) assert.ok(needs.includes(id), `needs ${id}`);
+				const wait = steps.at(-1);
+				assert.match(wait, /run: node scripts\/ci\/e2e-stack-wait\.mjs \$STACKS\n/);
+				for (const id of waitsFor) {
+					assert.ok(wait.includes(`\${{ needs.${id}.outputs.teardown-stacks }}`), `passes ${id}'s stacks`);
+					assert.ok(job.includes(`needs.${id}.outputs.teardown-stacks != ''`), `runs when ${id} left stacks`);
+				}
+			});
+
+			it('runs unless the run is cancelled, only for same-repo PRs, in the e2e environment', () => {
+				const cond = job.match(/^ {4}if: >-\n((?: {6}.*\n)+)/m)[1].replace(/\s+/g, ' ').trim();
+				assert.ok(cond.startsWith("!cancelled() && github.event.pull_request.head.repo.full_name == github.repository && ("), cond);
+				assert.match(job, /^ {4}environment: e2e$/m);
+				assert.match(job, /^ {4}permissions:\n {6}contents: read\n {6}id-token: write {2}# .*\n/m);
+				assert.ok(steps.some((st) => st.includes(CREDENTIALS)));
+			});
+
+			it('passes stack names through env, never into the shell text', () => {
+				for (const st of steps) {
+					const run = st.match(/^ {8}run: (.*)$/m)?.[1] ?? '';
+					assert.doesNotMatch(run, /\$\{\{/);
+				}
+			});
+		});
+	}
 
 	for (const id of ['e2e-sandbox', 'e2e-production']) {
 		it(`${id} refreshes credentials for the teardown, skips it when nothing was synthesized, and bounds it`, () => {

@@ -36,22 +36,29 @@ const E2E = [
 	'templates-windows',
 ];
 
+// The outputs of the PR workflows' Detect Changes job when it selects no job
+// and every job.
+const PR_DETECTION = {
+	nothing: { 'detect-changes': { 'e2e-index': '0', e2e: '[]', 'e2e-blocked': '[]', 'e2e-run': '[]' } },
+	everything: {
+		'detect-changes': {
+			'e2e-index': '0',
+			e2e: JSON.stringify(E2E),
+			'e2e-blocked': '[]',
+			'e2e-run': JSON.stringify(E2E),
+		},
+	},
+};
+
 // The required checks of the main branch ruleset, by workflow. `nothing` and
 // `everything` are the outputs of a successful detection job that selects no
 // job and every job.
 const REQUIRED = {
 	'pr-checks.yml': {
-		checks: ['Build, Unit Tests, E2E Local', 'E2E Production', 'E2E Sandbox'],
-		nothing: { 'detect-changes': { 'e2e-index': '0', e2e: '[]', 'e2e-blocked': '[]', 'e2e-run': '[]' } },
-		everything: {
-			'detect-changes': {
-				'e2e-index': '0',
-				e2e: JSON.stringify(E2E),
-				'e2e-blocked': '[]',
-				'e2e-run': JSON.stringify(E2E),
-			},
-		},
+		checks: ['Build, Unit Tests, E2E Local', 'E2E Templates', 'E2E Templates (Windows)'],
+		...PR_DETECTION,
 	},
+	'pr-e2e.yml': { checks: ['E2E Production', 'E2E Sandbox'], ...PR_DETECTION },
 	'e2e-amplify-interop.yml': {
 		checks: ['E2E Amplify Interop (Required)'],
 		nothing: { 'detect-changes': { 'e2e-index': '0', 'source-changed': 'false' } },

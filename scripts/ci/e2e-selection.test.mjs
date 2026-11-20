@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Unit tests for scripts/ci/e2e-selection.sh, run against throwaway git repos,
-// plus a check that every E2E job in pr-checks.yml is wired to its output.
+// plus a check that every E2E job in the PR workflows (_pr-workflows.mjs) is
+// wired to its output.
 //
 // Run: node --test scripts/ci/e2e-selection.test.mjs
 
@@ -14,10 +15,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
+import { PR_WORKFLOWS } from './_pr-workflows.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./e2e-selection.sh', import.meta.url));
 const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
-const WORKFLOW = join(WORKFLOWS, 'pr-checks.yml');
 const ALL = [
 	'compute-smoke',
 	'hosting',
@@ -31,7 +32,7 @@ const ALL = [
 ];
 
 // The E2E jobs that are required checks.
-const REQUIRED = ['production', 'sandbox'];
+const REQUIRED = ['production', 'sandbox', 'templates', 'templates-windows'];
 
 // Isolated from the user's git config (hooks, signing, default branch).
 const GIT_ENV = {
@@ -351,17 +352,46 @@ describe('e2e-selection.sh', () => {
 	});
 });
 
-describe('pr-checks.yml', () => {
-	const yml = readFileSync(WORKFLOW, 'utf8');
-	const parsed = parse(yml).jobs;
-	const jobs = jobsOf(yml);
+describe('PR workflows', () => {
+	const files = PR_WORKFLOWS.map((file) => {
+		const yml = readFileSync(join(WORKFLOWS, file), 'utf8');
+		return { file, parsed: parse(yml).jobs, jobs: jobsOf(yml) };
+	});
+	// Every job by id. An E2E job is in one file only (the first test checks);
+	// the jobs that several files repeat are not E2E jobs.
+	const parsed = Object.assign({}, ...files.map((f) => f.parsed));
+	const jobs = Object.assign({}, ...files.map((f) => f.jobs));
 
 	it('has one E2E job per name the script knows', () => {
-		const e2eJobs = Object.keys(jobs)
+		const e2eJobs = files
+			.flatMap((f) => Object.keys(f.jobs))
 			.filter((id) => id.startsWith('e2e-'))
 			.map((id) => id.slice('e2e-'.length))
 			.sort();
 		assert.deepEqual(e2eJobs, ALL);
+	});
+
+	// An E2E job reads Detect Changes through `needs`, which only reaches a job
+	// in its own workflow, so each PR workflow runs a copy. The copies must
+	// stay the same, or the workflows would select different jobs.
+	it('runs the same Detect Changes job in every PR workflow, and the selection nowhere else', () => {
+		const selecting = readdirSync(WORKFLOWS)
+			.filter((f) => /\.ya?ml$/.test(f))
+			.filter((f) =>
+				Object.values(parse(readFileSync(join(WORKFLOWS, f), 'utf8'))?.jobs ?? {}).some((job) =>
+					(job?.steps ?? []).some((step) => String(step?.run ?? '').includes('scripts/ci/e2e-selection.sh')),
+				),
+			);
+		assert.deepEqual(selecting.sort(), [...PR_WORKFLOWS].sort());
+		const [first, ...rest] = files;
+		assert.ok(first.parsed['detect-changes'], `${first.file} has no detect-changes job`);
+		for (const { file, parsed: own } of rest) {
+			assert.deepEqual(
+				own['detect-changes'],
+				first.parsed['detect-changes'],
+				`${file}: detect-changes differs from ${first.file}`,
+			);
+		}
 	});
 
 	// While test-apps/vpc-smoke's tests are off, e2e-selection.sh skips E2E VPC
@@ -399,7 +429,7 @@ describe('pr-checks.yml', () => {
 		assert.ok(
 			deployers.some(
 				(d) =>
-					d.job === 'pr-checks.yml e2e-sandbox-vpc' && d.group === 'blocks-test-vpc-${{ needs.*.outputs.e2e-index }}',
+					d.job === 'pr-e2e.yml e2e-sandbox-vpc' && d.group === 'blocks-test-vpc-${{ needs.*.outputs.e2e-index }}',
 			),
 			JSON.stringify(deployers),
 		);

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tests for .github/actions/e2e-slot (which E2E account a job uses) and for
-// how pr-checks.yml's E2E Hosting legs spread over the accounts with it.
+// how pr-e2e-hosting.yml's E2E Hosting legs spread over the accounts with it.
 //
 // Run: node --test scripts/ci/e2e-slot.test.mjs
 
@@ -19,7 +19,7 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const action = parse(readFileSync(join(ROOT, '.github/actions/e2e-slot/action.yml'), 'utf8'));
 const pick = action.runs.steps.find((s) => s.id === 'pick');
 const ACCOUNTS = Number(pick.env.E2E_ACCOUNTS);
-const workflow = parse(readFileSync(join(ROOT, '.github/workflows/pr-checks.yml'), 'utf8'));
+const workflow = parse(readFileSync(join(ROOT, '.github/workflows/pr-e2e-hosting.yml'), 'utf8'));
 const hosting = workflow.jobs['e2e-hosting'];
 
 const dir = mkdtempSync(join(tmpdir(), 'e2e-slot-'));
@@ -70,7 +70,7 @@ describe('e2e-slot', () => {
 	});
 });
 
-describe('pr-checks.yml E2E Hosting accounts', () => {
+describe('pr-e2e-hosting.yml E2E Hosting accounts', () => {
 	const legs = hosting.strategy.matrix.include;
 	const steps = hosting.steps;
 	const at = (pred) => steps.findIndex(pred);
