@@ -7,13 +7,13 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { type Generated, Kysely, sql as ksql } from 'kysely';
-import { CLAIMS_SETTING } from './constants.js';
+import { APP_ROLE_PLACEHOLDER, CLAIMS_SETTING } from './constants.js';
 import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
 import { DatabaseDialect } from './kysely.js';
 import { DatabaseCore } from './runtime/index.js';
 import { internalAccess, registerInternalAccess } from './runtime/internal.js';
 import { scopedDatabase } from './runtime/scoped.js';
-import { migrations } from './test-support/fixtures.js';
+import { migrations, ROLE_TODOS } from './test-support/fixtures.js';
 import { freshScope, installLocalTestHooks } from './test-support/lifecycle.js';
 import { RecordingEngine } from './test-support/recording-engine.js';
 import { simulateConflict } from './testing.js';
@@ -189,5 +189,52 @@ describe('Database.asUser()', () => {
 		);
 		const claims = engine.calls.filter((c) => c.sql === setClaims).map((c) => c.params[0]);
 		assert.deepStrictEqual(new Set(claims), new Set([JSON.stringify({ org: 'o', sub: 'u1' })]));
+	});
+});
+
+// Local mode runs a block's statements as `blocks_app_local`, where AWS runs them as `blocks_app_{cluster}`: the
+// one file that grants to the app role is the same in both places.
+describe('Database.asRole() on a cluster the block provisions', () => {
+	// The block's schema on a shared cluster is its id.
+	const ROLE_SCHEMA = `${ROLE_TODOS}\nGRANT USAGE ON SCHEMA app TO authenticated;`;
+	const titles = sql`SELECT title FROM todos ORDER BY id`;
+
+	function block(files: Record<string, string>) {
+		const scope = freshScope('bbuser');
+		const cluster = new DatabaseCluster(scope, 'main', { type: 'aurora' });
+		return new Database(scope, 'app', { cluster, migrationsPath: migrations(files) });
+	}
+
+	// A policy of the role that passes without claims. With a plain `GRANT authenticated TO ${app_role}` the app
+	// role inherits the role, and a statement that does not go through asRole() then reads these rows too.
+	const OPEN_POSTS = [
+		'CREATE TABLE posts (id SERIAL PRIMARY KEY, title TEXT NOT NULL);',
+		'ALTER TABLE posts ENABLE ROW LEVEL SECURITY;',
+		'GRANT SELECT ON posts TO authenticated;',
+		'CREATE POLICY posts_read ON posts FOR SELECT TO authenticated USING (true);',
+		"INSERT INTO posts (title) VALUES ('p1');",
+	].join('\n');
+	const posts = sql`SELECT title FROM posts`;
+
+	test(`a migration grants the right to switch to ${APP_ROLE_PLACEHOLDER}: asRole() switches, other statements do not get the role`, async () => {
+		const db = block({
+			'001.sql': `${ROLE_SCHEMA}\n${OPEN_POSTS}\nGRANT authenticated TO ${APP_ROLE_PLACEHOLDER} WITH INHERIT FALSE, SET TRUE;`,
+		});
+		assert.deepStrictEqual(await db.asRole('authenticated', { sub: 'alice' }).query(titles), [{ title: 'a1' }]);
+		assert.deepStrictEqual(await db.asRole('authenticated').query(posts), [{ title: 'p1' }]);
+		assert.deepStrictEqual(await db.query(posts), [], 'outside asRole() the policy of the role does not apply');
+	});
+
+	test('without the grant, the log names the migration to add', async (t) => {
+		const logged: string[] = [];
+		t.mock.method(console, 'error', (message: string) => logged.push(message));
+		const db = block({ '001.sql': ROLE_SCHEMA });
+		await assert.rejects(db.asRole('authenticated').query(titles), { name: 'DatabaseConfigurationError' });
+		assert.strictEqual(logged.length, 1);
+		assert.match(
+			logged[0],
+			/Add a migration file with GRANT "authenticated" TO \$\{app_role\} WITH INHERIT FALSE, SET TRUE; \(the migration runner replaces/,
+		);
+		assert.doesNotMatch(logged[0], /CURRENT_USER/);
 	});
 });

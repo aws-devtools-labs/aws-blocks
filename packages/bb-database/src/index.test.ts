@@ -10,7 +10,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { LOCAL_APP_ROLE } from './constants.js';
 import { _closeAllPgliteClusters } from './engines/pglite-cluster.js';
-import { DSQL_VALIDATION_ERROR_NAME, MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
+import { DSQL_VALIDATION_ERROR_NAME, MIGRATION_FAILED_ERROR_NAME, MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
 import { Database, DatabaseCluster, DatabaseErrors, sql, type Transaction } from './index.mock.js';
 import { resolveMigrationsPath } from './migrations/runner.js';
 import { _resetDatabaseRegistry } from './runtime/construction.js';
@@ -341,6 +341,13 @@ describe('Database (owned DSQL cluster)', () => {
 				}),
 			{ name: MIGRATION_VALIDATION_ERROR_NAME, message: /001_rls\.sql: at_unsupported_row_level_security/ },
 		);
+	});
+
+	test('CREATE EXTENSION fails at construction on a DSQL cluster, even for an extension PGlite ships', () => {
+		assert.throws(() => owned({ '001_ext.sql': 'CREATE EXTENSION IF NOT EXISTS citext;' }), {
+			name: MIGRATION_VALIDATION_ERROR_NAME,
+			message: /001_ext\.sql: unsupported_create_extension/,
+		});
 	});
 
 	test('a PostgreSQL spelling of a DSQL form fails at construction with dsql-lint’s rule and suggestion', () => {
@@ -725,6 +732,50 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 			assert.strictEqual((await tx.execute(sql`UPDATE t SET n = n + 1`)).rowCount, 3001);
 		});
 		assert.strictEqual((await db.queryOne<{ c: number }>(sql`SELECT count(*)::int AS c FROM t`))?.c, 3001);
+	});
+
+	test('a migration creates the extensions PGlite ships, and the block uses them', async () => {
+		const { scope, shared } = auroraCluster();
+		current = new Database(scope, 'ext', {
+			cluster: shared,
+			migrationsPath: migrations({
+				'001_ext.sql': [
+					'CREATE EXTENSION IF NOT EXISTS citext;',
+					'CREATE EXTENSION IF NOT EXISTS pgcrypto;',
+					'CREATE EXTENSION IF NOT EXISTS pg_trgm;',
+					'CREATE EXTENSION IF NOT EXISTS hstore;',
+					'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";',
+					'CREATE TABLE users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email CITEXT UNIQUE NOT NULL);',
+				].join('\n'),
+			}),
+		});
+		const db = current;
+		await db.execute(sql`INSERT INTO users (email) VALUES ('Ada@Example.com')`);
+		assert.deepStrictEqual(
+			await db.query(sql`SELECT email FROM users WHERE email = 'ada@example.COM'`),
+			[{ email: 'Ada@Example.com' }],
+			'a citext comparison ignores case',
+		);
+		const row = await db.queryOne<{ digest: string; similar: number; tag: string; v4: string }>(
+			sql`SELECT encode(digest('abc', 'sha256'), 'hex') AS digest, similarity('word', 'words') AS similar,
+				('a=>1'::hstore) -> 'a' AS tag, uuid_generate_v4()::text AS v4`,
+		);
+		assert.strictEqual(row?.digest, 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+		assert.ok((row?.similar ?? 0) > 0.5, 'pg_trgm similarity()');
+		assert.strictEqual(row?.tag, '1', 'hstore');
+		assert.match(row?.v4 ?? '', /^[0-9a-f-]{36}$/, 'uuid-ossp');
+	});
+
+	test('an extension PGlite does not ship fails the migration and names the extension', async () => {
+		const { scope, shared } = auroraCluster();
+		const db = new Database(scope, 'noext', {
+			cluster: shared,
+			migrationsPath: migrations({ '001_vector.sql': 'CREATE EXTENSION IF NOT EXISTS vector;' }),
+		});
+		await assert.rejects(db.query(sql`SELECT 1`), {
+			name: MIGRATION_FAILED_ERROR_NAME,
+			message: /001_vector\.sql[\s\S]*extension "vector" is not available[\s\S]*PGlite[\s\S]*citext/,
+		});
 	});
 
 	test('a pg_dump header that clears search_path does not redirect the migration ledger', async () => {

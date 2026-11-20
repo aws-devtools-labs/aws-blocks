@@ -109,8 +109,7 @@ Each chunk published to the Realtime channel has a `type` and type-specific fiel
 Match an error by name with `isBlocksError(e, AgentErrors.<Name>)`:
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { AgentErrors } from '@aws-cdk-blocks/bb-agent';
+import { AgentErrors, isBlocksError } from 'aws-cdk-blocks';
 ```
 
 | Constant | `error.name` | Thrown when |

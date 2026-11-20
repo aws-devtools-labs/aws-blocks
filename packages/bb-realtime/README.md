@@ -234,8 +234,7 @@ issued the original channel.
 Every `publish()` validates against the schema at runtime:
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
+import { isBlocksError, RealtimeErrors } from 'aws-cdk-blocks';
 
 try {
   await rt.publish('chat', 'room-1', { sender: 123 }); // wrong type
@@ -249,7 +248,7 @@ try {
 ## Error Constants
 
 ```typescript
-import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
+import { RealtimeErrors } from 'aws-cdk-blocks';
 
 RealtimeErrors.ValidationFailed  // data failed schema validation on publish, or an invalid channel name / getChannel() scope
 RealtimeErrors.PublishFailed     // Publish fan-out failed (AWS only)

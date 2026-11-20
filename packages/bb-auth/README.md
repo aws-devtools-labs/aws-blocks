@@ -779,8 +779,7 @@ The recipe [Tell the user what a password needs](#tell-the-user-what-a-password-
 `validateUser` is called before any user is created and before any session is issued, whatever the mechanism. Throw to reject; a thrown `ApiError` reaches the client by its `name` and message.
 
 ```typescript
-import { ApiError } from '@aws-cdk-blocks/core';
-import { Auth, AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { ApiError, Auth, AuthErrors } from 'aws-cdk-blocks';
 
 const auth = new Auth(scope, 'auth', {
   validateUser: async ({ email }) => {
@@ -803,7 +802,7 @@ const auth = new Auth(scope, 'auth', {
 
 `Auth` throws `ApiError`s. Each `name` is a value of `AuthErrors`, and `setAuthState` returns the same name as `errorName` on a failed `AuthState`. The names are listed in the [`auth-common` README](../auth-common/README.md#auth-error-names-autherrors).
 
-- In browser app code, match a thrown error with `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client`. The auth-specific guard `isAuthError(e, AuthErrors.NotAuthenticated)` matches the same name. Both `isAuthError` and `AuthErrors` are available from `aws-cdk-blocks` on the server or directly from `@aws-cdk-blocks/auth-common` in either environment.
+- In browser app code, match a thrown error with `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client`. The auth-specific guard `isAuthError(e, AuthErrors.NotAuthenticated)` matches the same name. Both `isAuthError` and `AuthErrors` are available from `aws-cdk-blocks` in either environment, or directly from `@aws-cdk-blocks/auth-common`.
 - Match a returned state with `hasAuthError(state, 'InvalidPasswordException')` from `aws-cdk-blocks/client`.
 - An error `Auth` does not recognise becomes `InternalErrorException`. An `ApiError` your own `validateUser` or `onSignIn` hook throws keeps its name and status.
 

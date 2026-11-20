@@ -360,9 +360,8 @@ function hasAuthError<T extends { errorName?: string }, N extends string>(
 In browser code, submit the action with `submitAuthAction` from `aws-cdk-blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct `authApi.setAuthState()` call notifies nothing on the page, so a UI that renders from `onAuthChange` never sees the sign-in.
 
 ```typescript
-import { hasAuthError } from 'aws-cdk-blocks/client';
+import { AuthErrors, hasAuthError } from 'aws-cdk-blocks';
 import { submitAuthAction } from 'aws-cdk-blocks/ui';
-import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
 
 const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
 if (hasAuthError(next, AuthErrors.NotAuthorized)) {
@@ -370,7 +369,7 @@ if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 }
 ```
 
-To import `AuthErrors` in browser code, list `@aws-cdk-blocks/bb-auth` in your app's own `dependencies`: the browser entry of `aws-cdk-blocks` does not re-export it. The string name, `'NotAuthorizedException'`, works without it.
+Browser code imports `AuthErrors` and `hasAuthError` from `aws-cdk-blocks`, like the backend: its browser entry re-exports every block's error constants and the error matchers. The string name, `'NotAuthorizedException'`, works too.
 
 Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
 

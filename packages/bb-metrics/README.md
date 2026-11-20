@@ -52,8 +52,7 @@ type MetricUnit =
 ### Error Handling
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { MetricsErrors } from '@aws-cdk-blocks/bb-metrics';
+import { isBlocksError, MetricsErrors } from 'aws-cdk-blocks';
 
 try {
   metrics.emit('', 1);

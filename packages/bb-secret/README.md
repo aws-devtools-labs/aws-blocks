@@ -59,8 +59,7 @@ This also applies to a secret wrapped via `fromExisting` — it is read-only unl
 ### Error handling
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { Secret, SecretErrors } from '@aws-cdk-blocks/bb-secret';
+import { isBlocksError, Secret, SecretErrors } from 'aws-cdk-blocks';
 
 const secret = new Secret(scope, 'api-key', { allowRuntimeWrite: true });
 
