@@ -2,21 +2,13 @@
 
 Structured logging with consistent JSON format, log levels, and contextual metadata.
 
+**When to use:** You need structured, queryable application logs, or request-scoped loggers with correlation IDs.
+
+**When NOT to use:** For numeric measurements over time, use `Metrics`. For distributed request tracing, use `Tracer`.
+
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
-## When to Use
-
-- You need structured, queryable application logs
-- You want consistent log format across your backend
-- You need request-scoped loggers with correlation IDs
-- You want log level filtering without code changes
-
-## When NOT to Use
-
-- For numeric measurements over time → use `Metrics`
-- For distributed request tracing → use `Tracing`
-
-## Quick Start
+## Quick start
 
 ```typescript
 import { Scope } from '@aws-cdk-blocks/core';
@@ -38,12 +30,6 @@ log.error('Request failed', { err: new Error('timeout') });
 new Logger(scope: ScopeParent, id: string, options?: LoggingOptions)
 ```
 
-**Options:**
-- `level` — Minimum log level (`'debug' | 'info' | 'warn' | 'error'`). Default: `'info'`.
-- `defaultContext` — Fields included in every log entry.
-
-Log retention is not a Logger option — it is a compute-level setting (see [Retention](#retention-production) below).
-
 ### Methods
 
 ```typescript
@@ -55,6 +41,15 @@ log.child(context: Record<string, unknown>): ChildLogger
 ```
 
 All log methods are **synchronous** (no await needed).
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `level` | `'debug' \| 'info' \| 'warn' \| 'error'` | `'info'` | Minimum log level; entries below it are dropped. Set only here: there is no `LOG_LEVEL` env var |
+| `defaultContext` | `Record<string, unknown>` | `{}` | Fields included in every log entry. The entry's own keys (`level`, `message`, `timestamp`, `logger`, `traceId`, `awsRequestId`) are reserved: a context value under one of them is ignored |
+
+Log retention is not a Logger option — it is a compute-level setting (see [Retention](#retention-production) below).
 
 ### Log Entry Format
 
@@ -71,7 +66,14 @@ Every log entry is a JSON object written to stdout (or stderr for errors):
 }
 ```
 
-On the Lambda functions AWS CDK Blocks runs through `createLambdaHandler` (the backend API and its event handlers), `awsRequestId` is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically, so you can find everything one request logged, for example with CloudWatch Logs Insights: `filter awsRequestId = "<id>"`. It is reserved: a context value under that key is ignored. Your own correlation fields, such as a `requestId` passed to `child()`, are separate keys and are kept as is. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
+`traceId` is the X-Ray trace id: the `Root=` part of the `_X_AMZN_TRACE_ID` environment variable, the same id `getTraceId()` of an enabled `Tracer` returns on AWS. An entry carries it when that variable is set; it is absent in local dev.
+
+`awsRequestId`:
+
+- On the Lambda functions AWS CDK Blocks runs through `createLambdaHandler` (the backend API and its event handlers), it is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically.
+- To find everything one request logged, query by it, for example with CloudWatch Logs Insights: `filter awsRequestId = "<id>"`.
+- Your own correlation fields, such as a `requestId` passed to `child()`, are separate keys and are kept as is.
+- Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
 
 ### Child Loggers
 
@@ -83,37 +85,11 @@ requestLog.info('Processing request');
 // Output includes requestId and userId automatically
 ```
 
-Children can be nested:
-
-```typescript
-const dbLog = requestLog.child({ component: 'database' });
-dbLog.warn('Slow query', { table: 'users', durationMs: 500 });
-```
-
-## Log Level Precedence
-
-1. Constructor `level` option
-2. Default: `'info'`
-
-Set the level per `Logger` via the `level` option. There is no `LOG_LEVEL` env
-var — log level is a runtime construction-time choice.
-
-## Error Object Handling
-
-Error instances passed in context are automatically extracted:
-
-```typescript
-try {
-  await doSomething();
-} catch (err) {
-  log.error('Operation failed', { err });
-  // err is serialized as { name, message, stack }
-}
-```
+A child's `child()` adds to the inherited context.
 
 ## Serialization Safety
 
-The logger handles edge cases gracefully:
+Context values that JSON cannot represent:
 - **Circular references** → replaced with `"[Circular]"`
 - **BigInt values** → converted to string
 - **Functions/Symbols** → replaced with `"[unserializable]"`
@@ -121,35 +97,34 @@ The logger handles edge cases gracefully:
 
 ## Retention (Production)
 
-**Logging is always on, and retention is a compute-level setting — not a Logger
-option.** Every compute captures its handler's stdout to its own CloudWatch log
+Logging is always on. Every compute captures its handler's stdout to its own CloudWatch log
 group, which carries the stack-wide default retention (`defaults.logRetention` —
 one week in sandbox, one year in production).
 
-To change retention, set `logRetention` on the stack-wide `defaults` (it applies
-to every compute's handler log group):
+In `cdk-blocks/index.cdk.ts`, add the `RetentionDays` import and replace the inline
+`defaults` value as shown in this API-only scaffold excerpt. Spreading the selected
+preset keeps its other settings; `logRetention` overrides retention for every compute's handler log group.
 
 ```typescript
-import { BlocksPresets } from '@aws-cdk-blocks/core/cdk';
+import { BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
-// In your cdk-blocks backend, override the preset's logRetention:
-defaults: { ...BlocksPresets.production, logRetention: RetentionDays.ONE_MONTH };
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: {
+    ...(sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production),
+    logRetention: RetentionDays.ONE_MONTH,
+  },
+});
 ```
+
+In the Amplify scaffold, make the same inline `defaults` change in
+`BlocksBackend.create(stack, 'blocks', …)` instead.
 
 A `Logger` does not configure retention — the compute owns the single,
 framework-owned handler log group. To override the default for one compute, set
 `logRetention` on that `Compute`.
-
-## Local Development
-
-In local dev (`npm run dev`), the Logger BB:
-- Writes structured JSON to stdout/stderr (same as production)
-- Does NOT persist logs to disk
-- Does NOT create any files in `.cdk-blocks/local/data/`
-- Retention has no local effect (it is a cloud-only, compute-level setting)
-- Log level comes from the `Logger`'s `level` option (default `'info'`)
-- Lines have no `awsRequestId` field: the dev server doesn't set a request id
 
 ## Errors
 
@@ -161,3 +136,12 @@ LoggingErrors.SerializationFailed // 'SerializationFailedException'
 
 This error is used as a marker in degraded log entries when context
 serialization fails (not thrown to consumers).
+
+## Local development
+
+In local dev (`npm run dev`), the Logger BB:
+- Writes structured JSON to stdout/stderr (same as production)
+- Writes nothing to disk (no `.cdk-blocks/local/data/` files)
+- Writes no `awsRequestId` field: the dev server doesn't set a request id
+
+Retention has no local effect.
