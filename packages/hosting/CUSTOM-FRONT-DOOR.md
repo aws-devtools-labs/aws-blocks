@@ -278,7 +278,7 @@ fits a door shared by many apps, such as one ALB with one listener rule per app.
 // aws-blocks/shared-alb-door.ts
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { LambdaTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
-import { defineFrontDoor } from '@aws-blocks/hosting/constructs';
+import { defineFrontDoor } from '@aws-cdk-blocks/hosting/constructs';
 
 /** One app on a shared ALB: one listener rule (its hostname) and one Lambda target group. */
 export const sharedAlbDoor = (listener: elbv2.IApplicationListener, host: string, priority: number) =>
@@ -314,9 +314,9 @@ new Hosting(stack, 'Hosting', {
 The app code doesn't change. The entry function:
 
 - is the app's server function when it has one: its handler is wrapped by the
-  router, and no function is added. Otherwise (a static site or SPA) AWS
+  router, and no function is added. Otherwise (a static site or SPA) AWS CDK
   Blocks creates one router function, the only new resource;
-- applies the app's redirects, forwards `/aws-blocks/*` and the raw routes to
+- applies the app's redirects, forwards `/cdk-blocks/*` (and its legacy `/aws-blocks/*` alias) and the raw routes to
   the backend (same origin), serves static routes from the assets bucket (SPA
   fallback, directory index, gzip, `304`s, error pages, security headers),
   calls the image function (or, without one, serves the source image), and
@@ -330,7 +330,7 @@ The app code doesn't change. The entry function:
 - is the build cutover: it switches to a new build only once the build's files
   are uploaded, so the door needs no `cutover` of its own for it.
 
-Per framework, behind `Hosting` from `@aws-blocks/core`:
+Per framework, behind `Hosting` from `@aws-cdk-blocks/core`:
 
 | Framework | Server | How the router reaches it |
 |---|---|---|
@@ -357,7 +357,7 @@ check doesn't apply. Synth fails, with the fix in the message, for:
 - Every response passes the door's Lambda response limit: 1 MB behind an ALB
   (text is sent as UTF-8 and compressible files gzipped, but a larger file
   fails), 6 MB otherwise. Synth warns about the files over 6 MB
-  (`@aws-blocks/hosting:AssetExceedsProxyLimit`).
+  (`@aws-cdk-blocks/hosting:AssetExceedsProxyLimit`).
 - An ALB has no edge cache: every request reaches the function. Put a
   CloudFront distribution in front of the door to cache at the edge.
 - Skew protection doesn't apply: a tab opened before a deploy that lazily

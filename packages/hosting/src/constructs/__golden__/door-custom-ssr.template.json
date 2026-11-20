@@ -577,6 +577,23 @@
               "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
               "Compress": true,
               "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+              "PathPattern": "/cdk-blocks/*",
+              "TargetOriginId": "GoldenDoorsHostingCdnOrigin35DF542B5",
+              "ViewerProtocolPolicy": "redirect-to-https"
+            },
+            {
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "PATCH",
+                "POST",
+                "DELETE"
+              ],
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "Compress": true,
+              "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac",
               "PathPattern": "/aws-blocks/*",
               "TargetOriginId": "GoldenDoorsHostingCdnOrigin35DF542B5",
               "ViewerProtocolPolicy": "redirect-to-https"

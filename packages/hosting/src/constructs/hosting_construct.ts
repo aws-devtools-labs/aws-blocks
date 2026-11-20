@@ -3199,7 +3199,7 @@ const isAppRoutingDoor = (frontDoor: HostingConstructProps['frontDoor']): boolea
  * - a door that declares `serverResponse: 'streaming'`: the entry answers buffered;
  * - a streaming server handler (Next.js built for the API Gateway REST door's
  *   streaming integration, Nitro with `awsLambda.streaming: true`): the router
- *   calls the handler and needs a complete response. `@aws-blocks/core`
+ *   calls the handler and needs a complete response. `@aws-cdk-blocks/core`
  *   `Hosting` builds Next.js buffered for such a door;
  * - a route the manifest sends to a compute other than the server and the
  *   image function (a regional edge route): the router has no path to it.
@@ -3224,7 +3224,7 @@ const assertAppRoutable = (manifest: DeployManifest, frontDoor: HostingConstruct
         "The app's server is a streaming Lambda handler, and a door that routes at the app (routing: 'app') calls it " +
         'through the app router, which needs a complete (buffered) response.',
       resolution:
-        "Deploy through `@aws-blocks/core` `Hosting`, which builds Next.js buffered (OpenNext's `aws-apigw-v2` converter " +
+        "Deploy through `@aws-cdk-blocks/core` `Hosting`, which builds Next.js buffered (OpenNext's `aws-apigw-v2` converter " +
         "and `aws-lambda` wrapper) for such a door; turn the framework's response streaming off (Nitro: " +
         '`awsLambda.streaming: false`); or use a door that routes at the door.',
     });

@@ -1,4 +1,4 @@
-# @aws-blocks/hosting: design notes
+# @aws-cdk-blocks/hosting: design notes
 
 This file covers internals that the README doesn't. For the API, see
 [README.md](./README.md).
@@ -42,7 +42,7 @@ Either way `appEntryFunction` then gives the entry:
 
 - `ASSET_BUCKET` and `ASSET_KEY_PREFIX` (`assetProxyEnvironment`, the build
   prefix `builds/<buildId>`), and read on the assets bucket;
-- `API_GW_BASE`, the backend base without the `/aws-blocks/api` suffix, when
+- `API_GW_BASE`, the backend base without the `/cdk-blocks/api` suffix, when
   the app has an API;
 - `BLOCKS_IMAGE_FUNCTION` and `lambda:InvokeFunction` on the image function,
   when there is one.
@@ -51,14 +51,14 @@ The router's settings (`appRouterOptions`) come from the same inputs as the
 `DoorInput`: the plan (route entries, redirects, header rules, basePath,
 assetPrefix), the error pages (the app's, else the framework build's, else the
 default 404 page of a multi-page static site), the API paths
-(`/aws-blocks/*` plus the raw routes) and the image endpoints. They are built
+(`/cdk-blocks/*`, its legacy `/aws-blocks/*` alias, plus the raw routes) and the image endpoints. They are built
 before the compute because of the bundle constraint above; the door's own
 plan is built later, from the same inputs.
 
 **Cutover.** The entry's environment names the build prefix, so it is the
 build's switch. It is appended to the door's `FrontDoorResult.cutover`, which
 makes it depend on every asset upload and, through `addBuildAssetDependency`,
-on the runtime-config upload `@aws-blocks/core` `Hosting` adds later. The
+on the runtime-config upload `@aws-cdk-blocks/core` `Hosting` adds later. The
 previous build keeps serving until the new one is whole. None of those uploads
 references the entry, so there is no dependency cycle, even for a door whose
 URL comes from the entry's own Function URL (a CloudFront distribution in
@@ -128,7 +128,7 @@ response, so mode `'app'` builds the server buffered.
 
 **Native Lambda handlers (Next.js through OpenNext, Nitro `aws-lambda`).**
 The router imports the handler's module (`index.mjs`) during init and calls
-it in-process with a payload 2.0 event. `@aws-blocks/core` `Hosting` sets the
+it in-process with a payload 2.0 event. `@aws-cdk-blocks/core` `Hosting` sets the
 build profile for such a door to `serverInvoke: 'http-api'` and
 `lambdaWebAdapter: false`:
 

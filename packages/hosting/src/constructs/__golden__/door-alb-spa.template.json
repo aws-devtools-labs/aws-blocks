@@ -748,6 +748,7 @@
             "Field": "path-pattern",
             "PathPatternConfig": {
               "Values": [
+                "/cdk-blocks/*",
                 "/aws-blocks/*",
                 "/hooks/golden"
               ]

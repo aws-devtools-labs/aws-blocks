@@ -32,7 +32,7 @@ import { HostingConstruct, type HostingConstructProps } from './hosting_construc
 // Tests run from `dist/constructs`; the goldens live in the committed source.
 const GOLDEN_DIR = path.join(import.meta.dirname, '..', '..', 'src', 'constructs', '__golden__');
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
 
 /** The whole template, with content hashes normalized. */
 const normalizedTemplate = (stack: Stack): string =>

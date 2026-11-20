@@ -609,7 +609,73 @@
         "StageName": "$default"
       }
     },
-    "HostingApiGatewayHttpApiANYawsblocksBackendRoute176EE1B5C": {
+    "HostingApiGatewayHttpApiANYcdkblocksBackendRoute19774A0C1": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "IntegrationMethod": "ANY",
+        "IntegrationType": "HTTP_PROXY",
+        "IntegrationUri": "https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks",
+        "PayloadFormatVersion": "1.0"
+      }
+    },
+    "HostingApiGatewayHttpApiANYcdkblocks40337244": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "ANY /cdk-blocks",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiANYcdkblocksBackendRoute19774A0C1"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiANYcdkblocksproxyBackendRpcB9564C27": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "IntegrationMethod": "ANY",
+        "IntegrationType": "HTTP_PROXY",
+        "IntegrationUri": "https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/{proxy}",
+        "PayloadFormatVersion": "1.0"
+      }
+    },
+    "HostingApiGatewayHttpApiANYcdkblocksproxyA647B133": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "ANY /cdk-blocks/{proxy+}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiANYcdkblocksproxyBackendRpcB9564C27"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiANYawsblocksBackendRoute2467563D5": {
       "Type": "AWS::ApiGatewayV2::Integration",
       "Properties": {
         "ApiId": {
@@ -635,14 +701,14 @@
             [
               "integrations/",
               {
-                "Ref": "HostingApiGatewayHttpApiANYawsblocksBackendRoute176EE1B5C"
+                "Ref": "HostingApiGatewayHttpApiANYawsblocksBackendRoute2467563D5"
               }
             ]
           ]
         }
       }
     },
-    "HostingApiGatewayHttpApiANYawsblocksproxyBackendRpcBE198426": {
+    "HostingApiGatewayHttpApiANYawsblocksproxyBackendRoute37508E3AB": {
       "Type": "AWS::ApiGatewayV2::Integration",
       "Properties": {
         "ApiId": {
@@ -668,14 +734,14 @@
             [
               "integrations/",
               {
-                "Ref": "HostingApiGatewayHttpApiANYawsblocksproxyBackendRpcBE198426"
+                "Ref": "HostingApiGatewayHttpApiANYawsblocksproxyBackendRoute37508E3AB"
               }
             ]
           ]
         }
       }
     },
-    "HostingApiGatewayHttpApiANYhooksgoldenBackendRoute20DCA4210": {
+    "HostingApiGatewayHttpApiANYhooksgoldenBackendRoute454EC30E1": {
       "Type": "AWS::ApiGatewayV2::Integration",
       "Properties": {
         "ApiId": {
@@ -701,7 +767,7 @@
             [
               "integrations/",
               {
-                "Ref": "HostingApiGatewayHttpApiANYhooksgoldenBackendRoute20DCA4210"
+                "Ref": "HostingApiGatewayHttpApiANYhooksgoldenBackendRoute454EC30E1"
               }
             ]
           ]
