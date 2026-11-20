@@ -1,5 +1,16 @@
 # @aws-blocks/bb-kv-store
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: there is no atomic increment; the conditional-writes section shows two ways to keep a concurrent counter. The transaction pointer names `transaction()` on `Database` instead of two packages that do not exist.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

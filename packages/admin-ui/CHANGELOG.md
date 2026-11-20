@@ -1,5 +1,12 @@
 # @aws-cdk-blocks/admin-ui
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 4d09d05: Use the CDK Blocks name throughout the dashboard and its README. Remove the unsupported Cost navigation entry.
+- 316fc49: Document how to launch the dashboard from a scaffolded app with `dashboard()` from `aws-cdk-blocks/scripts`. The README explains when the launcher offers to install the Admin UI and how it selects the port.
+
 ## 1.0.0-rc.1
 
 ### Minor Changes
