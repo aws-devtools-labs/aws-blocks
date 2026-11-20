@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/aws-cdk-blocks?color=brightgreen&label=npm%20package)](https://www.npmjs.com/package/aws-cdk-blocks)[![weekly downloads](https://img.shields.io/npm/dw/aws-cdk-blocks)](https://www.npmjs.com/package/aws-cdk-blocks)[![build status](https://img.shields.io/github/actions/workflow/status/aws/cdk-blocks/publish-packages.yml)](https://github.com/aws/cdk-blocks/blob/main/.github/workflows/publish-packages.yml)
 
-AWS CDK Blocks (formerly AWS Blocks) is an open-source expansion of the [AWS Cloud Development Kit (AWS CDK)](https://aws.amazon.com/cdk/). Use it to build apps that have a backend on AWS.
+AWS CDK Blocks is an open-source expansion of [AWS Cloud Development Kit (AWS CDK)](https://aws.amazon.com/cdk/). Each CDK Block packages a construct, an interface, and the interface's AWS and local implementations. AWS best practices are built in. More than 17 Blocks cover background jobs, realtime, SQL and NoSQL databases, authentication, file storage, and AI agents. Build and test your whole app locally, then deploy the same code to your own AWS account. Every resource is CDK that you can audit and change. AWS maintains each CDK Block's best practices through versioned releases. Platform teams can package their own standards as custom CDK Blocks.
 
 A CDK construct defines and provisions AWS infrastructure. A Block packages one application capability in three parts:
 
@@ -10,9 +10,9 @@ A CDK construct defines and provisions AWS infrastructure. A Block packages one 
 - The application code that connects your app to the infrastructure.
 - A local implementation.
 
-Select the Blocks that your app needs and compose them. Your app runs locally without an AWS account. When you are ready, deploy the same code to your own AWS account. The deployment provisions the AWS infrastructure, and each Block follows AWS best practices.
+Select the CDK Blocks your app needs and compose them. Your app runs locally without an AWS account. When you are ready, deploy the same code to your own AWS account. The deployment provisions the AWS infrastructure, and each Block follows AWS best practices.
 
-Platform teams can package their own standards as custom Blocks and share them through npm. To create a custom Block, see [`create-block`](./packages/create-block/README.md).
+Platform teams can package their own standards as custom CDK Blocks and share them through npm. To create a custom CDK Block, see [`create-block`](./packages/create-block/README.md).
 
 > **Documentation:** [Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html)
 
@@ -40,15 +40,15 @@ For the full procedure, see the [Getting started guide](https://docs.aws.amazon.
 
 AWS CDK Blocks uses Node.js conditional exports to load different code for each context:
 
-- **Local development:** Your app runs on your machine. Each Block runs its local implementation and keeps its data in memory or in local files.
-- **CDK synthesis:** Each Block produces CDK constructs. The AWS CDK synthesizes an AWS CloudFormation template from them.
+- **Local development:** Your app runs on your machine. Each CDK Block runs its local implementation and keeps its data in memory or in local files.
+- **CDK synthesis:** Each CDK Block packages CDK constructs. The AWS CDK synthesizes an AWS CloudFormation template from them.
 - **AWS runtime:** Your app runs on AWS. Each Block calls AWS services through the AWS SDK.
 
 For example, the line `new KVStore(scope, 'todos')` is a local store in development. At deployment, it becomes an Amazon DynamoDB table. In production, it makes SDK calls to that table. You do not change the code.
 
 ## Blocks
 
-Each Block is an npm package. The umbrella package [`aws-cdk-blocks`](https://www.npmjs.com/package/aws-cdk-blocks) re-exports every Block and the core runtime.
+Each CDK Block is an npm package. The umbrella package [`aws-cdk-blocks`](https://www.npmjs.com/package/aws-cdk-blocks) re-exports every CDK Block and the core runtime.
 
 | Category | Blocks |
 | --- | --- |
