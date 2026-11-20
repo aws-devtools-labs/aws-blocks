@@ -113,9 +113,9 @@ Keep the old table with `LegacyKVStore`, and migrate its items to a `KVStore` wi
    const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
    ```
 
-   Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete`, and `scan` of release 0.4.0, so code that still calls the old store keeps working.
+   Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete`, and `scan` of release 0.4.0. Its `scan` adds `limit`, `cursor`, and expiry metadata; its `get` defaults to a strongly consistent read at twice the read capacity. Pass `{ consistentRead: false }` to keep eventually consistent reads.
 
-2. Migrate the data however is appropriate for your app. `LegacyKVStore` does not copy the items. The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) lists the tools for a copy and steps that are suitable for some migrations.
+2. Migrate the data however is appropriate for your app. `LegacyKVStore` does not copy the items. The [`KVStore` README](../../packages/bb-kv-store/README.md#step-2-migrate-the-data) describes one way to migrate while the app stays live and explains its limits.
 
 3. When the data is in the new store, remove the `LegacyKVStore` line and any read of the old store, and deploy. The old table leaves the stack. A table with a removal policy of `destroy` is deleted. A retained table, which is the default of the production preset, stays in your account until you delete it.
 
