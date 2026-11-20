@@ -473,6 +473,11 @@ Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFront
 - **Static routes come from S3.** The edge serves the app's static routes
   from the private assets bucket (origin access control); only the API and
   the dynamic routes (server rendering, image optimization) go to the ALB.
+  The static routes include the files the framework copies from its public
+  folder (`robots.txt`, favicons, downloads), so they are cached at the edge
+  and a large one never meets the ALB's 1 MB response limit. (An Astro
+  `public/` folder that a page also renders under, such as `public/blog/`
+  next to `src/pages/blog/[slug].astro`, stays with the server.)
   The app's redirects, header rules and error pages apply at the edge to
   every response. A new build never hits the previous build's cached files,
   and the cutover waits for the build's uploads, the resolved runtime config
