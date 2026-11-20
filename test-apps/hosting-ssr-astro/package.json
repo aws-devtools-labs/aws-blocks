@@ -23,7 +23,7 @@
     "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "aws-cdk-blocks": "1.0.0"
+    "aws-cdk-blocks": "1.0.1"
   },
   "devDependencies": {
     "@astrojs/preact": "^4.1.3",
