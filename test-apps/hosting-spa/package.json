@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@aws-cdk-blocks/bb-auth": "1.0.0-rc.1",
-    "aws-cdk-blocks": "1.0.0-rc.1"
+    "aws-cdk-blocks": "1.0.0-rc.2"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

@@ -1,5 +1,22 @@
 # @aws-blocks/bb-realtime
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the README separates the AWS behavior (publish-time checks, revocation, reconnect exhaustion) from the local WebSocket server, and lists `revokeAccess` among the runtime-only methods.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-secret@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

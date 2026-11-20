@@ -1,5 +1,18 @@
 # @aws-blocks/bb-compute
 
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- 0b422ee: docs: `scaling.strategy` takes signal objects (`{ on: 'cpu', targetPercent }`, `{ on: 'memory', targetPercent }`, `{ on: 'queue-depth', backlogPerInstance }`), not names. The README now holds the options, defaults and scaling rules of every compute type.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-container-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes
