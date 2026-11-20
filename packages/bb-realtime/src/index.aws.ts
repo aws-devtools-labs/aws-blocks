@@ -11,7 +11,7 @@
  * endpoint for cross-invocation message delivery. getChannel() returns a
  * Transferable with connect token + channel token for client subscription.
  *
- * Registers a WebSocket event handler on the Blocks handler Lambda to process
+ * Registers a WebSocket event handler on the CDK Blocks handler Lambda to process
  * $connect, $disconnect, and $default (subscribe/unsubscribe/ping) events
  * inline — no separate Lambdas needed.
  */
@@ -264,7 +264,7 @@ async function notifySubscriptionEnded(callbackUrl: string, connectionId: string
 	}
 }
 
-// ── WebSocket event handler (runs inside Blocks handler Lambda) ────────────────
+// ── WebSocket event handler (runs inside CDK Blocks handler Lambda) ────────────────
 
 async function handleWebSocketEvent(event: any): Promise<any> {
 	const { requestContext, queryStringParameters, body } = event as WebSocketEvent;

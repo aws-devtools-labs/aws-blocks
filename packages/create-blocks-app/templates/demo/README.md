@@ -1,6 +1,6 @@
-# Blocks Demo App
+# AWS CDK Blocks Demo App
 
-An example app on AWS CDK Blocks that wires together `Auth`, `KVStore`,
+An example app on CDK Blocks that wires together `Auth`, `KVStore`,
 `FileBucket`, `AppSetting`, `Secret`, `EmailClient`, `AsyncJob`,
 `KnowledgeBase`, `Database` and cookies. Vite + vanilla DOM frontend, no framework.
 

@@ -1209,6 +1209,7 @@ const isEsmProject = (projectDir: string): boolean => {
  * @returns a function that restores the original config, or `undefined` when nothing was wrapped.
  */
 /** The first-line marker of the wrapper {@link pinNextBuildId} writes. */
+// These strings are an on-disk format read by other versions after an interrupted build.
 const PINNED_CONFIG_MARKER = '// AWS Blocks: deterministic build ID (restored after the build).';
 
 /** The wrapper's owner line: the pid of the build that wrote it. */
@@ -1369,7 +1370,7 @@ const installGeneratedOpenNextConfig = (
   // `npm install`.)
   const imageBlock = profile.skipImageOptimization ? `\n  imageOptimization: {\n    install: false,\n  },` : '';
   // `minify: true` shrinks the SSR Lambda bundle ~30-50% (esbuild flags
-  // unminified bundles >5MB with a scary "⚠️" — the AWS Blocks bug-bash
+  // unminified bundles >5MB with a scary "⚠️" — the CDK Blocks bug-bash
   // saw 34-35 MB and 19/20 testers thought the build was failing). The
   // semantically-equivalent fix would be externalizing `@aws-sdk/*`
   // (Lambda runtime ships AWS SDK v3), but OpenNext does not yet expose

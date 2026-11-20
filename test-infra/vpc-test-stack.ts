@@ -43,7 +43,7 @@ const env = {
  */
 function createTestVpcStack(stackId: string, purpose: string, consumer: string): void {
   const stack = new cdk.Stack(app, stackId, {
-    description: `Persistent test VPC for AWS Blocks ${consumer}. Do NOT delete between test runs.`,
+    description: `Persistent test VPC for CDK Blocks ${consumer}. Do NOT delete between test runs.`,
     env,
   });
 

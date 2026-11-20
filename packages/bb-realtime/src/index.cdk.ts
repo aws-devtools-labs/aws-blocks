@@ -6,7 +6,7 @@
  *
  * Provisions a shared API Gateway WebSocket API with a DynamoDB connections
  * table (via KVStore) for channel-based pub/sub. All WebSocket
- * routes ($connect, $disconnect, $default) are handled by the existing Blocks
+ * routes ($connect, $disconnect, $default) are handled by the existing CDK Blocks
  * handler Lambda — no separate Lambdas are created.
  *
  * First Realtime instance in a stack creates the shared infrastructure;
@@ -71,7 +71,7 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
 		// The options are the ones the runtime entry constructs its store with.
 		new KVStore(parent, 'connections', connectionsTableOptions);
 
-		// ── WebSocket API — all routes point at the Blocks handler Lambda ──────
+		// ── WebSocket API — all routes point at the CDK Blocks handler Lambda ──────
 		const wsApi = new WebSocketApi(root, 'BlocksRtWebSocket', {
 			connectRouteOptions: {
 				integration: new WebSocketLambdaIntegration('ConnectInteg', handler),
@@ -132,7 +132,7 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
 		// pattern (grant the role, not one handler).
 		wsApi.grantManageConnections(parent.executionRole);
 
-		// Env vars for the Blocks handler Lambda
+		// Env vars for the CDK Blocks handler Lambda
 		registerConfig(parent, 'BLOCKS_RT_WS_URL', stage.url);
 		registerConfig(parent, 'BLOCKS_RT_CALLBACK_URL', stage.callbackUrl);
 
@@ -149,7 +149,7 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
  * CDK construct for Realtime. Creates shared WebSocket API + DynamoDB
  * connections table infrastructure on first use, reuses on subsequent
  * instances within the same stack. All WebSocket events are handled by
- * the existing Blocks handler Lambda.
+ * the existing CDK Blocks handler Lambda.
  *
  * Same constructor signature as the mock — `new Realtime(scope, id, options)` —
  * so the user's backend code works unchanged under `--conditions=cdk`.

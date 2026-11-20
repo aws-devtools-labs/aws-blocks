@@ -4,7 +4,7 @@
 /**
  * JSON-RPC 2.0 wire format — single source of truth.
  *
- * All encoding/decoding of the Blocks RPC protocol lives here so that the
+ * All encoding/decoding of the CDK Blocks RPC protocol lives here so that the
  * client, Lambda handler, and dev server never deal with the spec directly.
  *
  * @see https://www.jsonrpc.org/specification

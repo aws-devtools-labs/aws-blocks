@@ -46,7 +46,7 @@ import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 // ================================================================
 // Hosting construct tests
 //
-// These validate that the Blocks wrapper around HostingConstruct
+// These validate that the CDK Blocks wrapper around HostingConstruct
 // produces the expected CloudFormation resources for SPA and SSR.
 // ================================================================
 
@@ -1002,7 +1002,7 @@ describe('Hosting', () => {
 			);
     });
 
-    // Regression: /api/* is the framework SSR namespace; Blocks must
+    // Regression: /api/* is the framework SSR namespace; CDK Blocks must
     // not synthesize a CloudFront behavior there.
     it('does NOT claim the framework-reserved /api or /api/* prefix', () => {
       createSpaBuildOutput(tmpDir);
@@ -1023,11 +1023,11 @@ describe('Hosting', () => {
       const apiExact = cacheBehaviors.find((b: any) => b.PathPattern === '/api');
       const apiWildcard = cacheBehaviors.find((b: any) => b.PathPattern === '/api/*');
 
-      assert.strictEqual(apiExact, undefined, '/api must not be claimed by Blocks (framework SSR API namespace)');
+      assert.strictEqual(apiExact, undefined, '/api must not be claimed by AWS CDK Blocks (framework SSR API namespace)');
 			assert.strictEqual(
 				apiWildcard,
 				undefined,
-				'/api/* must not be claimed by Blocks (framework SSR API namespace)',
+				'/api/* must not be claimed by AWS CDK Blocks (framework SSR API namespace)',
 			);
     });
 
@@ -2492,7 +2492,7 @@ describe('Hosting', () => {
 
       const template = Template.fromStack(stack);
 
-      // secret → Secrets Manager: slash-free locator under the Blocks /blocks/secrets namespace.
+      // secret → Secrets Manager: slash-free locator under the CDK Blocks /blocks/secrets namespace.
       template.hasResourceProperties('AWS::Lambda::Function', {
         Environment: {
           Variables: Match.objectLike({ HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY' }),
@@ -2853,7 +2853,7 @@ describe('Hosting', () => {
       const app = new App();
       const stack = new Stack(app, 'EdgeVisitorStack', { env: { account: '123456789012', region: 'eu-west-1' } });
       const backend = makeBackend(stack, 'Blocks');
-      // A test-only consumer of the shared role visitor: stamp a tag on every Blocks role.
+      // A test-only consumer of the shared role visitor: stamp a tag on every CDK Blocks role.
       const visited = new Set<string>();
       forEachBlocksRole(backend as unknown as Construct, (role) => {
         visited.add(`${Stack.of(role).node.id}/${Stack.of(role).resolve(role.logicalId)}`);
@@ -3001,7 +3001,7 @@ describe('Hosting', () => {
       const entries = configOf(stack)?.entries;
       assert.strictEqual(entries?.get('BLOCKS_PUBLIC_ORIGIN'), 'https://edge.example.com');
       assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), 'https://edge.example.com');
-      // A BYO door is not a built-in CloudFront door: Blocks adds no API behaviors
+      // A BYO door is not a built-in CloudFront door: CDK Blocks adds no API behaviors
       // of its own, and `distribution` (still typed as before) is not available.
       assert.throws(() => hosting.distribution, /only available for a CloudFront front door/);
     });
@@ -4367,7 +4367,7 @@ describe('Hosting — frontDoor.features', () => {
   });
 });
 
-// Compile-time contract on the Blocks `Hosting`: each kind accepts exactly the
+// Compile-time contract on the CDK Blocks `Hosting`: each kind accepts exactly the
 // settings its door implements (this file is typechecked by the build).
 const _blocksFrontDoorTypes: Array<HostingProps['frontDoor']> = [
   { features: { domain: { domainName: config('DOMAIN_PROD') }, priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },

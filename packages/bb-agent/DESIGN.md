@@ -10,7 +10,7 @@ Design document for the Agent Building Block. For usage, see [README.md](./READM
 ## Architecture
 
 The streaming agent loop runs on a **Bedrock AgentCore Runtime** (sessions up to 8h, warm,
-managed) — not the shared Blocks request handler — and streams chunks to the browser over the
+managed) — not the shared AWS CDK Blocks request handler — and streams chunks to the browser over the
 **Realtime** BB. The Agent BB composes these internal BBs plus the runtime:
 
 | Internal BB / resource | Purpose | Created when |
@@ -130,7 +130,7 @@ The CDK class provisions:
 - **KVStore:** `${id}-convos` / `${id}-messages` — conversation metadata + history (only when `inferenceOnly: false`)
 - **Realtime:** `${id}-rt` — streaming namespace `chunks`
 - **AgentCore Runtime** (`${id}-runtime`, via `AgentCoreRuntime`) — the co-bundled backend + `serve()`
-  harness. It runs **as the shared Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
+  harness. It runs **as the shared CDK Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
   the same role the Lambda handler runs as — so it **inherits every Building Block's grants**, including
   **Realtime publish** (`execute-api:ManageConnections` + the connections table, granted to the handler
   by the `${id}-rt` Realtime child), other BBs an agent's *tools* touch (KVStore, tables, etc.), and
@@ -163,7 +163,7 @@ is the same rule the Lambda handler follows for its cold start.
 
 ## Model Providers
 
-All providers are Strands model implementations, mapped from Blocks's `ModelConfig` via `model-factory.ts`:
+All providers are Strands model implementations, mapped from CDK Blocks' `ModelConfig` via `model-factory.ts`:
 
 | Provider | Strands Class | Use Case |
 |----------|--------------|----------|

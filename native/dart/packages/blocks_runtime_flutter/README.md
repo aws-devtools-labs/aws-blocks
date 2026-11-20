@@ -6,8 +6,8 @@ Flutter-specific implementations for `blocks_runtime`. Provides secure token sto
 
 ```yaml
 dependencies:
-  blocks_runtime: ^0.2.0
-  blocks_runtime_flutter: ^0.2.0
+  blocks_runtime: ^1.0.0
+  blocks_runtime_flutter: ^1.0.0
 ```
 
 ### Sessions survive app restarts

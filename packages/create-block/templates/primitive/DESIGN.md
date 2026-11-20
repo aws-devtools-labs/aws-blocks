@@ -6,7 +6,7 @@ AWS implementations. Delete the guidance below once filled in.
 ## Infrastructure (CDK)
 
 `index.cdk.ts` provisions this block's resources (named off `this.fullId` so the
-runtime can derive the same name) and grants the shared Blocks Lambda access.
+runtime can derive the same name) and grants the shared AWS CDK Blocks Lambda access.
 Every runtime method is stubbed with `synthGuard` so a top-level call during
 synth fails loudly.
 

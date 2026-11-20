@@ -14,7 +14,7 @@
  *   `events.amazonaws.com` with no condition and no prop to shape it;
  * - the same rule and state machine pair on the root.
  *
- * Roles AWS Blocks owns are opt-in, so one module serves both the "AWS Blocks
+ * Roles CDK Blocks owns are opt-in, so one module serves both the "CDK Blocks
  * role fails synth" and the "app roles warn" tests:
  *
  * - `TRUST_CHECK_BLOCK_ROLE` adds a role inside a block with an official

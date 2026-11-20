@@ -21,7 +21,7 @@ is no per-compute gateway.
 
 `LambdaCompute` is a `Compute` (the abstract base from `@aws-cdk-blocks/core`) that
 provisions and owns a `NodejsFunction` and its CloudWatch log group. The
-function assumes the shared Blocks execution role, so Building Block grants
+function assumes the shared CDK Blocks execution role, so Building Block grants
 reach it. Its handler entry and `BLOCKS_STACK_NAME` are derived from the owning
 `BlocksStack` / `BlocksBackend`, never caller-supplied.
 
@@ -49,7 +49,7 @@ exposed through the `Compute` block:
 - **VPC.** When the stack sets `defaults.vpc`, the function is placed in that
   VPC's compute subnets (`defaults.vpc.subnets`, private-with-egress by default)
   with the shared compute security group. With no VPC context it runs in the
-  AWS-managed network. A VPC that Blocks creates for a container compute does
+  AWS-managed network. A VPC that CDK Blocks creates for a container compute does
   not contain the default compute. A serverless `Compute` declared after the
   container compute is placed in it.
 - **CORS.** When the stack's `defaults.allowedOrigins` is non-empty (e.g. the

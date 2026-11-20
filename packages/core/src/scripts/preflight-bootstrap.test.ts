@@ -97,7 +97,7 @@ describe('CDK bootstrap check', () => {
 				],
 			]);
 			assert.match(message, /CDK is not bootstrapped in Region eu-south-2 of account 123456789012/);
-			// `--app=` keeps `cdk bootstrap` from synthesizing the Blocks app to find environments.
+			// `--app=` keeps `cdk bootstrap` from synthesizing the CDK Blocks app to find environments.
 			assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app= --profile starter$/m);
 			assert.match(message, new RegExp(`Then re-run \`npm run ${command}\`\\.$`));
 			// The deployment target is printed before the deploy stops, so the user sees where it was going.

@@ -18,13 +18,13 @@
 // skips the pool, never deletes it:
 //   1. The caller's account is one of the E2E accounts in AWS_ROLE_ARNS, so a
 //      run with any other credentials deletes nothing (the step fails).
-//   2. Its name has a CI shape: a Blocks E2E stack prefix (the pool is named
+//   2. Its name has a CI shape: a CDK Blocks E2E stack prefix (the pool is named
 //      after its stack), or the logical-id name an Amplify Gen 2 sandbox's
 //      defineAuth pool gets.
 //   3. It is older than COGNITO_SWEEP_MIN_AGE_HOURS (default 6, longer than any
 //      E2E job and its teardown), so an in-flight test's pool is never touched.
 //   4. Its tags mark it as CI's, as the stack sweep requires of a stack: a
-//      Blocks pool carries blocks:purpose e2e-* or *-e2e; an Amplify pool
+//      CDK Blocks pool carries blocks:purpose e2e-* or *-e2e; an Amplify pool
 //      carries amplify:deployment-type=sandbox (its name alone is the same in
 //      any Gen 2 app with auth).
 //   5. No live CloudFormation stack owns it. A pool a live stack owns is left

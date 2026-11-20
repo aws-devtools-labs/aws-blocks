@@ -9,7 +9,7 @@ it is a single stack-level shared gateway, provisioned by core — not owned per
 
 ## Why a compute is a Building Block
 
-A Blocks app runs its handler code on a *compute*. Modeling compute as a
+An AWS CDK Blocks app runs its handler code on a *compute*. Modeling compute as a
 first-class type — rather than inlining a Lambda in core — lets one app run on
 multiple compute targets (Lambda, containers, customer-owned) and target
 namespaces and handlers at specific ones.
@@ -28,7 +28,7 @@ supplies the implementation.
 
 - **A `NodejsFunction`** — 2048 MB memory, 15-minute timeout, `NODE_ENV=production`,
   bundled with `--conditions=aws-runtime` so blocks resolve their runtime (not
-  CDK/mock) entry points. It assumes the **shared Blocks execution role**
+  CDK/mock) entry points. It assumes the **shared CDK Blocks execution role**
   (`this.executionRole`) rather than an auto-generated per-function role, so
   Building Block grants — which target that shared role — reach it.
 - **A CloudWatch log group** for the function (`logGroup`), passed as the
@@ -127,7 +127,7 @@ from options:
 
   Only `defaults.vpc` is initialized before the default compute is built
   (`BlocksStack` / `BlocksBackend` construction), so it is the one VPC every
-  `LambdaCompute` honors. A VPC Blocks derives on its own — by a container
+  `LambdaCompute` honors. A VPC CDK Blocks derives on its own — by a container
   compute during the backend import, or at finalize because a block
   `requiresVpc` — arrives after the default compute exists and does not move it;
   only a `LambdaCompute` constructed after the derivation sees it. Creating and
@@ -170,7 +170,7 @@ that failure mode by construction.
 
 ## Conditional-export layers
 
-A Blocks app's backend module is imported in **two phases**: at CDK synth, and
+A CDK Blocks app's backend module is imported in **two phases**: at CDK synth, and
 again at request time inside the deployed runtime (the framework ships one
 bundle and selects behavior by config, not by shipping different code). A
 `new LambdaCompute(...)` line in that module therefore executes in both phases,

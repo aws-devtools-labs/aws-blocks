@@ -5,7 +5,7 @@
  * CDK-side tests for the Agent BB.
  *
  * Pin that the Agent provisions an AgentCore Runtime for the streaming loop that runs AS the shared
- * Blocks execution role (the same principal as the handler) — not a bespoke per-runtime role. That
+ * CDK Blocks execution role (the same principal as the handler) — not a bespoke per-runtime role. That
  * shared role already carries everything the loop touches (Realtime publish via the handler wiring,
  * Bedrock, the conversation/message tables, the session bucket); the Agent adds only the
  * AgentCore-specific bits — the scoped `bedrock-agentcore` assume-role trust, Bedrock model access,

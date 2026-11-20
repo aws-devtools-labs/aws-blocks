@@ -1,7 +1,7 @@
 # create-block — Design
 
 `@aws-cdk-blocks/create-block` scaffolds a new Building Block (`bb-*`) package and, in
-the AWS Blocks monorepo, wires it into every registration touchpoint. This
+the AWS CDK Blocks monorepo, wires it into every registration touchpoint. This
 documents the internals; see [`README.md`](./README.md) for usage.
 
 ## Goals
@@ -17,7 +17,7 @@ The CLI walks up from the working directory and picks a mode from what it finds:
 | Mode | Trigger | What it does |
 |---|---|---|
 | **contributor** | a `package.json` whose `workspaces` includes `packages/blocks` (i.e. this monorepo) | generates `packages/bb-<name>` and performs all six touchpoints below |
-| **customer** | a `package.json` that declares npm `workspaces` but is **not** the Blocks repo | generates `packages/bb-<name>`, registers it in the root `workspaces` (unless a `packages/*` glob already covers it), and `npm install`s so the app can import it — no publish, no app-code edits |
+| **customer** | a `package.json` that declares npm `workspaces` but is **not** the CDK Blocks repo | generates `packages/bb-<name>`, registers it in the root `workspaces` (unless a `packages/*` glob already covers it), and `npm install`s so the app can import it — no publish, no app-code edits |
 | **external** | anywhere else | generates a standalone `@<scope>/bb-<name>` package tagged `keywords: ["aws-blocks"]`, no workspace wiring |
 
 `findMonorepoRoot` / `findCustomerWorkspaceRoot` implement the detection;

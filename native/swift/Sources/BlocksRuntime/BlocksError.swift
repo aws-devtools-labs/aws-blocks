@@ -7,7 +7,7 @@
 
 import Foundation
 
-/// Protocol for all errors thrown by the Blocks runtime.
+/// Protocol for all errors thrown by the CDK Blocks runtime.
 public protocol BlocksError: Error {
     var message: String { get }
     var underlyingError: Error? { get }

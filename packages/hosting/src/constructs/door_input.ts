@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Assembling the {@link DoorInput} — what AWS Blocks hands a front door.
+ * Assembling the {@link DoorInput} — what CDK Blocks hands a front door.
  *
  * The app facts come from the {@link HostingPlan} (the neutral route table
  * built from the framework's build output) and the `Hosting` props; the

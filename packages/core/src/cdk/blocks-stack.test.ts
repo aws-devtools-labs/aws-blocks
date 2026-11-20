@@ -622,12 +622,12 @@ describe('deployment type propagation (synth -> runtime)', () => {
 // Apps scaffolded before `defaults` became required call create() without it.
 // cdk runs index.cdk.ts through a loader that doesn't type-check, so the props
 // arrive without `defaults` at runtime. Both entry points must fail with an
-// actionable Blocks error that names the fix and links the upgrade guide, not
+// actionable CDK Blocks error that names the fix and links the upgrade guide, not
 // a raw TypeError from deep inside the constructor.
 describe('create() without defaults (apps from older templates)', () => {
 	const assertMissingDefaultsError = (e: unknown) => {
 		assert.ok(e instanceof Error);
-		assert.ok(!(e instanceof TypeError), `expected a Blocks error, got ${e.name}: ${e.message}`);
+		assert.ok(!(e instanceof TypeError), `expected an AWS CDK Blocks error, got ${e.name}: ${e.message}`);
 		assert.match(e.message, /requires a `defaults` field/);
 		assert.match(e.message, /defaults: sandboxMode \? BlocksPresets\.sandbox : BlocksPresets\.production/);
 		assert.match(e.message, /import \{ BlocksPresets \} from 'aws-cdk-blocks\/cdk'/);

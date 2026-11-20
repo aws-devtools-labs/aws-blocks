@@ -40,7 +40,7 @@ describe('Database (owned DSQL cluster)', () => {
 		current = undefined;
 	});
 
-	test('a branded Blocks error thrown inside transaction() reaches the caller unchanged', async () => {
+	test('a branded CDK Blocks error thrown inside transaction() reaches the caller unchanged', async () => {
 		const db = owned({ '001.sql': 'CREATE TABLE acct (id TEXT PRIMARY KEY, balance INTEGER NOT NULL);' });
 		await db.execute(sql`INSERT INTO acct VALUES (${'a'}, ${100})`);
 		await assert.rejects(

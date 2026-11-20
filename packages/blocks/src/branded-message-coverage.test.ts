@@ -3,7 +3,7 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the self-tests scan TypeScript source held in plain strings.
 
 /**
- * Regression guard: a branded Blocks error's MESSAGE must not be built from a
+ * Regression guard: a branded CDK Blocks error's MESSAGE must not be built from a
  * caught error's `.message`.
  *
  * Core forwards a branded error's `name` AND `message` to the RPC caller (see
@@ -217,7 +217,7 @@ function matchParen(code: string, open: number): number {
 	return -1;
 }
 
-/** A call that mints or brands a Blocks error (not its declaration: `function blocksError(` is skipped). */
+/** A call that mints or brands a CDK Blocks error (not its declaration: `function blocksError(` is skipped). */
 const BRANDED_CALL =
 	/(?<![\w$.])(?<!function\s+)(?:new\s+ApiError|blocksError|coreBlocksError|brandBlocksError)\s*(?:<[^()]*>\s*)?\(/g;
 
@@ -293,7 +293,7 @@ export function findRawMessageHits(src: string): RawMessageHit[] {
 	return hits;
 }
 
-test('no branded Blocks error builds its message from a caught error .message', () => {
+test('no branded CDK Blocks error builds its message from a caught error .message', () => {
 	const offenders: string[] = [];
 	for (const { pkg, srcDir } of discoverSrcDirs()) {
 		for (const file of collectSources(srcDir)) {
@@ -307,7 +307,7 @@ test('no branded Blocks error builds its message from a caught error .message', 
 	assert.deepStrictEqual(
 		offenders,
 		[],
-		`These calls build a branded Blocks error from a \`.message\`. A branded error's message crosses ` +
+		`These calls build a branded AWS CDK Blocks error from a \`.message\`. A branded error's message crosses ` +
 			`the RPC wire, so raw driver/SDK/service text (account ids, ARNs, bucket names, SQL) would reach ` +
 			`the client.\n  ${offenders.join('\n  ')}\n\n` +
 			`Use a stable message and keep the raw error on a non-enumerable \`cause\` ` +

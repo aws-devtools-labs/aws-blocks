@@ -12,7 +12,7 @@ dist/
 # TypeScript incremental build info (next build writes tsconfig.tsbuildinfo)
 *.tsbuildinfo
 
-# Blocks
+# CDK Blocks
 /.cdk-blocks-sandbox/
 /.cdk-blocks/local/
 /.bb-data/

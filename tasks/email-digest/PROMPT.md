@@ -1,6 +1,6 @@
 # Task: Scheduled Email Digest
 
-Build a scheduled email-digest feature in this AWS Blocks app. A recurring job is wired up to send a digest email; the app also lets you trigger that same digest on demand and shows when the last digest was sent and to whom.
+Build a scheduled email-digest feature in this CDK Blocks app. A recurring job is wired up to send a digest email; the app also lets you trigger that same digest on demand and shows when the last digest was sent and to whom.
 
 ## Setup (do this first)
 

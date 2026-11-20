@@ -12,7 +12,7 @@ package com.aws.blocks.kotlin
  */
 @RequiresOptIn(
     level = RequiresOptIn.Level.ERROR,
-    message = "Internal AWS Blocks API. It can change or be removed in any release.",
+    message = "Internal AWS CDK Blocks API. It can change or be removed in any release.",
 )
 @Retention(AnnotationRetention.BINARY)
 @Target(

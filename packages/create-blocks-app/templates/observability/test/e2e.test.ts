@@ -41,7 +41,7 @@ function collectLines(stream: NodeJS.ReadableStream | null) {
   });
 }
 
-// Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
@@ -164,7 +164,7 @@ function savedTraces() {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `placeOrder` with your own methods.
-test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
+test('app: server serves its AWS CDK Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });

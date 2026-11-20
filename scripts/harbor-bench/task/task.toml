@@ -3,7 +3,7 @@ multi_step_reward_strategy = "final"
 
 [task]
 name = "harbor-bench/todo-evolution"
-description = "Create a local AWS Blocks todo app, add due dates, then labels in one Claude Code session."
+description = "Create a local CDK Blocks todo app, add due dates, then labels in one Claude Code session."
 
 [agent]
 timeout_sec = 1500.0

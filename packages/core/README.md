@@ -149,10 +149,10 @@ The body is JSON-RPC 2.0:
 
 Error responses use these JSON-RPC codes:
 
-| Code | Meaning | When Blocks uses it |
+| Code | Meaning | When CDK Blocks uses it |
 |------|---------|---------------------|
 | `-32700` | Parse error | Request body is not valid JSON. |
-| `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
+| `-32600` | Invalid Request | Body is not a valid CDK Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
 | `-32601` | Method not found | The requested namespace is not exported by the backend, or the method is not one the API defines (inherited members such as `toString` don't count). |
 | `-32602` | Invalid params | `params` is present and is neither an array nor an object (a string, a number, a boolean or `null`). Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
 | `-32603` | Internal error | Not used. An unhandled (non-`ApiError`) throw returns code `500`. |
@@ -298,7 +298,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 | `publicApiUrl` | The URL clients send RPC calls to. The `ApiUrl` stack output of a `BlocksStack` is this value. |
 | `apiUrl` | The shared gateway's own RPC URL (its `execute-api` address), on either `apiFrontDoor` tier. |
 | `gateway` | The shared API Gateway REST API. |
-| `executionRole` | The IAM role every Blocks compute runs as. |
+| `executionRole` | The IAM role every CDK Blocks compute runs as. |
 | `defaults` | The `defaults` passed to `create()`. |
 
 ### `BlocksPresets` and `defaults`
@@ -311,11 +311,11 @@ Start `defaults` from `BlocksPresets.sandbox` or `BlocksPresets.production` and 
 | `deletionProtection` | `boolean` | `false` | `true` | Enables service-side deletion protection on resources that support it. This is separate from CloudFormation retention and does not protect S3 buckets from direct deletion. |
 | `allowedOrigins` | `string[]` | `['^https?://(localhost\|127\\.0\\.0\\.1)(:\\d+)?$']` | `[]` | CORS origins the API accepts. See [CORS Configuration](#cors-configuration). |
 | `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | `false` | `true` | Continuous backups on stateful resources that support them (DynamoDB point-in-time recovery: 1–35 days). |
-| `logRetention` | `RetentionDays` | `RetentionDays.ONE_WEEK` | `RetentionDays.ONE_YEAR` | Retention of the CloudWatch log groups AWS CDK Blocks manages. |
+| `logRetention` | `RetentionDays` | `RetentionDays.ONE_WEEK` | `RetentionDays.ONE_YEAR` | Retention of the CloudWatch log groups CDK Blocks manages. |
 | `throttling` | `BlocksThrottling` (`{ rateLimit: number; burstLimit: number }`) | `{ rateLimit: 200, burstLimit: 400 }` | `{ rateLimit: 1000, burstLimit: 2000 }` | Requests per second and burst on the shared REST API stage; messages per second on the `Realtime` WebSocket stage. |
-| `accessLogging` | `boolean` | `false` | `false` | JSON access logs on the shared REST API and Realtime WebSocket stages. Hosting's CloudFront SSR origin uses `frontDoor.features.serverOrigin.accessLogging` instead. This is also the fallback for `storageAccessLogging`. The API Gateway CloudWatch Logs role is account- and region-wide; enable it in one Blocks stack per account and region. While it is off and `removalPolicy` is not `DESTROY`, synth warns `blocks:apigateway:access-logging-disabled`. |
-| `storageAccessLogging` | `boolean` | unset | unset | S3 server access logs for Blocks-provisioned FileBucket buckets. Unset falls back to `accessLogging`. Configure logging on imported buckets separately. |
-| `secretsStore` | `BlocksSecretsStore` (`'ssm' \| 'secrets-manager'`) | `'ssm'` | `'secrets-manager'` | Where AWS CDK Blocks stores the secrets it generates (the `Auth` session secret, the `Realtime` connection token key). Changing it on a deployed stack creates new keys, which signs every `Auth` user out once. |
+| `accessLogging` | `boolean` | `false` | `false` | JSON access logs on the shared REST API and Realtime WebSocket stages. Hosting's CloudFront SSR origin uses `frontDoor.features.serverOrigin.accessLogging` instead. This is also the fallback for `storageAccessLogging`. The API Gateway CloudWatch Logs role is account- and region-wide; enable it in one CDK Blocks stack per account and region. While it is off and `removalPolicy` is not `DESTROY`, synth warns `blocks:apigateway:access-logging-disabled`. |
+| `storageAccessLogging` | `boolean` | unset | unset | S3 server access logs for CDK Blocks-provisioned FileBucket buckets. Unset falls back to `accessLogging`. Configure logging on imported buckets separately. |
+| `secretsStore` | `BlocksSecretsStore` (`'ssm' \| 'secrets-manager'`) | `'ssm'` | `'secrets-manager'` | Where CDK Blocks stores the secrets it generates (the `Auth` session secret, the `Realtime` connection token key). Changing it on a deployed stack creates new keys, which signs every `Auth` user out once. |
 | `vpc` | `BlocksVpcOptions` | unset | unset | A VPC for the app's compute and VPC-resident resources. |
 | `permissionsBoundary` | `string \| IManagedPolicy` | unset | unset | See [Cap every role](#cap-every-role-defaultspermissionsboundary). |
 | `strictNamespacePlacement` | `boolean` | `false` | `false` | When enabled, each deployed compute serves only the namespaces placed on it. The dev server does not enforce placement. While it is off and a namespace has its own compute, synth warns `blocks:apigateway:bare-endpoint-serves-placed-namespaces`. |
@@ -344,7 +344,7 @@ WAF is off by default. Turn it on with `apiWaf` on `BlocksStack` / `BlocksBacken
 
 The web ACL goes on whichever front door clients use:
 
-- `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. For the Blocks-managed ACL, rate-limit proxied browser requests at the door. Use the door's WAF if it supports one (see the [Hosting settings matrix](../hosting/README.md)); otherwise provide your own rate limiting:
+- `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. For the CDK Blocks-managed ACL, rate-limit proxied browser requests at the door. Use the door's WAF if it supports one (see the [Hosting settings matrix](../hosting/README.md)); otherwise provide your own rate limiting:
   - a CloudFront `Hosting` that claims the API sends a marker header the rate rule exempts;
   - behind any other door (ALB, API Gateway, your own, or a CloudFront edge over a router) the rate rule is left off and synth warns (`blocks:api-waf:no-rate-limit-behind-door`).
 - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution, which also covers the container namespaces it routes straight to their load balancer. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth). Without one, synth warns that those container namespaces have no rate limit (`blocks:api:direct-routes-without-waf`).
@@ -356,7 +356,7 @@ The web ACL goes on whichever front door clients use:
 The `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` chooses how the backend's API is exposed to clients:
 
 - **`'apigateway'`** (default) — clients call the stack's API Gateway endpoint directly, on its own `execute-api` domain. Nothing extra to deploy.
-- **`'cloudfront'`** — Blocks puts a CloudFront distribution in front of that gateway; clients call the distribution's domain instead.
+- **`'cloudfront'`** — CDK Blocks puts a CloudFront distribution in front of that gateway; clients call the distribution's domain instead.
 
 Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/cdk-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
 
@@ -560,7 +560,7 @@ Registration rules:
 
 ## withAuth (SSR cookie forwarding)
 
-`withAuth<T>(fn: () => Promise<T>, cookies?: string | null, options?: WithAuthOptions): Promise<T>`, where `WithAuthOptions` is `{ allowAnonymous?: boolean }`, from the `@aws-cdk-blocks/core/server` entry point (also re-exported as `aws-cdk-blocks/server`), forwards the request's cookies to every AWS CDK Blocks API call made inside `fn`. During SSR (server components / loaders) the browser's cookies aren't attached to those calls otherwise.
+`withAuth<T>(fn: () => Promise<T>, cookies?: string | null, options?: WithAuthOptions): Promise<T>`, where `WithAuthOptions` is `{ allowAnonymous?: boolean }`, from the `@aws-cdk-blocks/core/server` entry point (also re-exported as `aws-cdk-blocks/server`), forwards the request's cookies to every CDK Blocks API call made inside `fn`. During SSR (server components / loaders) the browser's cookies aren't attached to those calls otherwise.
 
 - `withAuth` throws a `401` `ApiError` when no cookies are found.
 - For pages that signed-out visitors can see, pass `{ allowAnonymous: true }` as the third argument: `fn` then runs without cookies, as a signed-out browser call would. Public methods work, and methods gated with `auth.requireAuth` still answer `401`. This works whatever the header value is for a request without cookies (`null`, `undefined` or `''`), and with built-in detection: `withAuth(fn, undefined, { allowAnonymous: true })`.
@@ -763,7 +763,7 @@ In the dev server, `quiet` and `normal` hide the per-call `[rpc-in]` / `[rpc-cal
 
 ## CORS Configuration
 
-By default the API sends no `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (plain origins or regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the front door's own URL (registered automatically as `CORS_HOSTING_ORIGINS`).
+By default the API sends no `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (plain origins or regex patterns; every CDK Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the front door's own URL (registered automatically as `CORS_HOSTING_ORIGINS`).
 
 ### `allowedOrigins` entries
 
@@ -840,11 +840,11 @@ Some Building Blocks refuse a destructive change at synth by comparing it with a
 - **The format is versioned.** Every file has a top-level `version` (currently `1`; a file without one is read as `1`), a `fullId` naming the block that owns it, and, while that block owns a stateful resource, a `removalGuard`. The rest of the file belongs to the block that wrote it.
   - A `version` higher than the installed release knows fails synth: upgrade `@aws-cdk-blocks/core` and `aws-cdk-blocks`.
   - A `version` that is not a whole number from 1 fails synth as invalid: restore the file from version control.
-  - AWS CDK Blocks never rewrites or deletes such a file.
+  - CDK Blocks never rewrites or deletes such a file.
 
 ## IAM: permissions boundary and the composed-policy report
 
-Every Blocks compute (the API handler, raw routes, queue/cron/WebSocket handlers, the agent runtime) runs as one shared execution role, and every Building Block grants its permissions onto that role.
+Every CDK Blocks compute (the API handler, raw routes, queue/cron/WebSocket handlers, the agent runtime) runs as one shared execution role, and every Building Block grants its permissions onto that role.
 
 ### See what the role holds: `<stack>.blocks-iam.json`
 
@@ -852,7 +852,7 @@ Every synth writes a report of the shared role's composed policy next to the tem
 
 - `executionRole.statements`: every statement (`actions`, `resources`, `condition`), each with a `blocks` field: the `fullId`s of the Building Blocks that own the resources it references.
 - The managed policies and the boundary in force.
-- `roles`: every IAM role Blocks created, each with its boundary and tags exactly as the template carries them.
+- `roles`: every IAM role CDK Blocks created, each with its boundary and tags exactly as the template carries them.
 
 The file is sorted and deterministic, so a CI step can diff it against the previous build and fail when an app's permissions grow unexpectedly:
 
@@ -871,7 +871,7 @@ To fit more grants into fewer policies, the role's statements are merged before 
 
 CDK fills the default policy and the overflow policies in order, so adding or removing a grant can move statements from one policy to another, and CloudFormation updates those policies in parallel ([aws/aws-cdk#35611](https://github.com/aws/aws-cdk/issues/35611)). So that a deploy doesn't remove a statement from its old policy before its new policy is attached, each overflow policy gets a logical ID derived from its contents (`BlocksOverflowPolicy<hash>`), and the role's default policy depends on them. A changed overflow policy is created as a new resource before the default policy is updated, and the old one is deleted in CloudFormation's cleanup phase. Overflow policies whose statements didn't change keep their logical IDs. IAM is eventually consistent, so a newly attached policy can still take a few seconds to apply. Because the default policy depends on every overflow policy, making a resource depend on one specific grant to the execution role (for example `grant.applyBefore()`, a grant's `policyDependable`, or constructs such as AgentCore Memory given the execution role) while the role is also granted access to that resource can make CloudFormation report a circular dependency. To fix it, make the resource depend on the whole role, or use a separate role for it.
 
-IAM also limits how many managed policies one role can carry: 20 by default, up to 25 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role and the Building Blocks that grant the most. To fix it, consolidate resources where possible, or move some Building Blocks into a separate Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
+IAM also limits how many managed policies one role can carry: 20 by default, up to 25 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role and the Building Blocks that grant the most. To fix it, consolidate resources where possible, or move some Building Blocks into a separate CDK Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
 
 ```json
 { "context": { "@aws-cdk-blocks/core:managedPoliciesPerRoleQuota": 25 } }
@@ -883,7 +883,7 @@ Overflow statements appear in `<stack>.blocks-iam.json` like any other, with `po
 
 ### Cap every role: `defaults.permissionsBoundary`
 
-`defaults.permissionsBoundary` attaches a [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) to every IAM role AWS CDK Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks). A role's effective permissions are the intersection of its policies and the boundary.
+`defaults.permissionsBoundary` attaches a [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) to every IAM role CDK Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks). A role's effective permissions are the intersection of its policies and the boundary.
 
 ```typescript
 // cdk-blocks/index.cdk.ts
@@ -897,19 +897,19 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 Pass the policy's name (resolved in the deploying account), its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. The option is unset in both presets, and unset leaves templates unchanged.
 
 - **Scope.** On a `BlocksStack` the boundary covers every role in the stack. On an embedded `BlocksBackend` it covers the backend's subtree plus the stack-level CDK singleton roles its blocks add; roles your stack already had are left alone. Bound those, and any other stack, yourself with `iam.PermissionsBoundary.of(stack).apply(policy)`.
-- **With CDK's `@aws-cdk/core:permissionsBoundary` context.** The context bounds every role in the app. When both are set, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns. Set the context in `cdk.json` (the `-c '@aws-cdk/core:permissionsBoundary={"name":"…"}'` CLI form passes a string, which CDK ignores). The context doesn't reach the cross-region-reference provider roles CDK adds while preparing the app, such as the ones off-region `Hosting` causes; `defaults.permissionsBoundary` does.
+- **With CDK's `@aws-cdk/core:permissionsBoundary` context.** The context bounds every role in the app. When both are set, `defaults.permissionsBoundary` wins for the roles CDK Blocks creates and synth warns. Set the context in `cdk.json` (the `-c '@aws-cdk/core:permissionsBoundary={"name":"…"}'` CLI form passes a string, which CDK ignores). The context doesn't reach the cross-region-reference provider roles CDK adds while preparing the app, such as the ones off-region `Hosting` causes; `defaults.permissionsBoundary` does.
 - **What it doesn't do.** A boundary caps the shared role; it doesn't split it. Every handler still runs as the same role, so a bug in one block can still use another block's grants, up to the boundary. Separately deployed apps that need isolation from each other belong in separate AWS accounts.
 
 ### Running many apps in one AWS account (a shared platform)
 
 For platforms that deploy many independently written apps through one pipeline into one AWS account. Each app's CDK code decides the permissions of its own roles, and nothing in the app stops it from granting itself another app's resources: a single `AppSetting.fromExisting(scope, 'x', { name: '/appb-db-password', secret: true })` gives App A read access to App B's secret, and the deploy succeeds.
 
-The strongest isolation is one AWS account per app (AWS Organizations with SCPs). When apps must share an account, the platform enforces a per-app ceiling with IAM, outside the apps' code. AWS CDK Blocks provides the app side of it with one option, `defaults.appIdentity`. The platform team writes and owns the IAM policies; [SHARED-ACCOUNT.md](./SHARED-ACCOUNT.md) documents what they contain:
+The strongest isolation is one AWS account per app (AWS Organizations with SCPs). When apps must share an account, the platform enforces a per-app ceiling with IAM, outside the apps' code. CDK Blocks provides the app side of it with one option, `defaults.appIdentity`. The platform team writes and owns the IAM policies; [SHARED-ACCOUNT.md](./SHARED-ACCOUNT.md) documents what they contain:
 
 | Part | Who provides it | How |
 |---|---|---|
-| 1. An identity on everything the app creates | AWS CDK Blocks | `defaults.appIdentity: { id }` tags every resource and role `app=<id>`, and every name it derives starts with `<id>-` |
-| 2. A boundary on every role the app creates | AWS CDK Blocks | `defaults.permissionsBoundary` |
+| 1. An identity on everything the app creates | CDK Blocks | `defaults.appIdentity: { id }` tags every resource and role `app=<id>`, and every name it derives starts with `<id>-` |
+| 2. A boundary on every role the app creates | CDK Blocks | `defaults.permissionsBoundary` |
 | 3. The boundary policy, shared by every app | The platform | [The shared permissions boundary](./SHARED-ACCOUNT.md#the-shared-permissions-boundary) |
 | 4. A CloudFormation execution policy, shared by every app, so each app's execution role only creates bounded roles tagged as the app | The platform | [The shared execution policy](./SHARED-ACCOUNT.md#the-shared-execution-policy) |
 | 5. A deploy guard, shared by every app, that keeps each app's deploy role on its own stacks | The platform | [The deploy guard](./SHARED-ACCOUNT.md#the-deploy-guard) |
@@ -934,9 +934,9 @@ export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
   - `cdk`, `blocks`, `secrets`, `config`, `amplify`, `cf`, `sagemaker`;
   - the region prefixes `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`, `me`, `mx`, `sa`, `us`;
   - any id starting with `aws` or `ssm`.
-- **Names.** Name the stack `<id>` or `<id>-…`: every name then starts with `<id>-`. Every Building Block derives its resource names (tables, queues, buckets, parameters, schedules, user pools) from its `fullId`, which starts with the stack's id, and CloudFormation-generated names (functions, roles, topics, alarms, managed policies) start with the stack name. Developers don't name anything themselves. AWS CDK Blocks also names the Lambda layers (`<id>-<logical id>`) and the CloudFront Functions and KeyValueStores (`<id>-<region>-…`) it creates, unless the app chose a name itself.
+- **Names.** Name the stack `<id>` or `<id>-…`: every name then starts with `<id>-`. Every Building Block derives its resource names (tables, queues, buckets, parameters, schedules, user pools) from its `fullId`, which starts with the stack's id, and CloudFormation-generated names (functions, roles, topics, alarms, managed policies) start with the stack name. Developers don't name anything themselves. CDK Blocks also names the Lambda layers (`<id>-<logical id>`) and the CloudFront Functions and KeyValueStores (`<id>-<region>-…`) it creates, unless the app chose a name itself.
 - **Hosting `secret()` and `config()`.** Their values are named `blocks/<stackId>/secrets/…` (Secrets Manager) and `/blocks/<stackId>/config/…` (SSM), where `stackId` comes from `.cdk-blocks/config.json`. Under `defaults.appIdentity`, set `stackId` to the app id: the boundary allows `blocks/<id>/…` by name, so the values `npm run secret` / `npm run config` create untagged still work, and the IAM report treats any other `blocks/…` name as outside the app, with a hint to fix `stackId`.
-- **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role AWS CDK Blocks creates, including the CDK custom-resource provider roles. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too. An app can still remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that AWS CDK Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name.
+- **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role CDK Blocks creates, including the CDK custom-resource provider roles. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too. An app can still remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that CDK Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name.
 - **The IAM report** (`cdk.out/<stack>.blocks-iam.json`) gains an `app` section and a `violations` list. Synth fails on any violation. With `reportOnly: true`, synth only writes the report and prints a one-line summary, for example while adopting `appIdentity` in an existing app.
 
 | Violation | Details |
@@ -965,9 +965,9 @@ The report reads grants on the services listed above (and an IAM role's name, fo
 
 ### Service-principal trust: `aws:SourceAccount` and `aws:SourceArn`
 
-Every IAM role AWS CDK Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
+Every IAM role CDK Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
 
-- **Roles AWS CDK Blocks creates** — under an AWS CDK Blocks Building Block or a compute, the backend's own roles, and the stack-level roles a block creates on its behalf (custom-resource providers, `Hosting`'s). A trust without either condition fails synth, naming the role's construct path and the principal.
+- **Roles CDK Blocks creates** — under a CDK Blocks Building Block or a compute, the backend's own roles, and the stack-level roles a block creates on its behalf (custom-resource providers, `Hosting`'s). A trust without either condition fails synth, naming the role's construct path and the principal.
 - **Roles your app creates** — every other covered role: your own constructs in the backend module (on the `BlocksStack` or embedded `BlocksBackend`, at stack scope, or under a `Scope` namespace), roles you add to a `BlocksStack` after `BlocksStack.create()`, roles inside a custom Building Block you write (a `Scope` subclass, see [Pattern 3: Custom BB](https://github.com/aws/cdk-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md#pattern-3-custom-bb)), and the roles CDK creates inside any of these (for example the `EventsRole` of an `events.Rule` that targets a state machine). A trust without either condition gets a synth warning, and the deploy goes ahead.
 
 A condition counts only under an operator that requires the key and with a value that names an account. The KMS key-policy check below uses the same rules.
@@ -980,7 +980,7 @@ A condition counts only under an operator that requires the key and with a value
 Not checked:
 
 - Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`).
-- The `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` AWS CDK Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
+- The `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` CDK Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
 
 **Resolving the warning.** Add both conditions to the trust statement. For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`). Do not condition an API Gateway CloudWatch Logs role: name it as the `cloudWatchRoleArn` of an `apigateway.CfnAccount`, which the check accepts, or acknowledge the warning.
 
@@ -1010,7 +1010,7 @@ The operators and values that count are the same as for roles. `aws:SourceOrgID`
 
 One principal is exempt: `events.amazonaws.com`, in a statement that grants only `kms:GenerateDataKey*` and `kms:Decrypt`. Amazon SNS documents that `aws:SourceAccount`, `aws:SourceArn` and `aws:SourceOrgID` in a key policy aren't supported for EventBridge publishing to an encrypted topic ([Enable compatibility between event sources from AWS services and encrypted topics](https://docs.aws.amazon.com/sns/latest/dg/sns-key-management.html#compatibility-with-aws-services)), so either condition stops delivery.
 
-As with roles, a key AWS CDK Blocks creates fails synth, naming the key's construct path, the principal and the statement index; a key your app creates gets a synth warning with the id `@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition`, which you acknowledge the same way:
+As with roles, a key CDK Blocks creates fails synth, naming the key's construct path, the principal and the statement index; a key your app creates gets a synth warning with the id `@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition`, which you acknowledge the same way:
 
 ```ts
 cdk.Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition');

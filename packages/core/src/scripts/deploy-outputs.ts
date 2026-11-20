@@ -31,7 +31,7 @@ export const OUTPUTS_FILE: Readonly<Record<OutputsStage, string>> = Object.freez
 });
 
 /**
- * The output every Blocks backend stack publishes. It identifies the backend
+ * The output every CDK Blocks backend stack publishes. It identifies the backend
  * stack among the stacks of one deploy without knowing its name, which matters
  * because the name is the CDK app's choice rather than ours: `--all` writes the
  * edge and monitoring stacks into the same document.

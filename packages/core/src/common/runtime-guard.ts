@@ -42,11 +42,11 @@ import { getCachedConfigValue } from './config.js';
  * Both variables must be non-empty; a partial configuration is not treated as
  * a deployed signal.
  *
- * Consequence to keep in mind: on deployed compute that Blocks does not
+ * Consequence to keep in mind: on deployed compute that CDK Blocks does not
  * configure (a customer-owned bundler, container image, or other platform that
  * sets neither variable) this returns false and the guard is intentionally
  * inert — it is a deliberate no-op, not a bug. There the `aws-runtime` bundler
- * condition is the sole protection; see the "compute target Blocks doesn't own"
+ * condition is the sole protection; see the "compute target CDK Blocks doesn't own"
  * guidance in `docs/guides/extending-with-existing-aws-resources.md`.
  */
 function isDeployedEnv(): boolean {
@@ -59,7 +59,7 @@ export type DeploymentType = 'local' | 'sandbox' | 'production';
 /**
  * The deployment type of the current process.
  *
- * - `'local'` — local dev or tests (no Blocks deployed configuration).
+ * - `'local'` — local dev or tests (no CDK Blocks deployed configuration).
  * - `'sandbox'` — deployed by the sandbox dev loop (`sandboxMode` CDK context).
  * - `'production'` — any other deployment.
  *
@@ -86,12 +86,12 @@ export type DeploymentType = 'local' | 'sandbox' | 'production';
  *
  * So the same value is reported at synth and at runtime only inside the backend
  * module (once `BlocksStack.create` / `BlocksBackend.create` has begun importing
- * it) and on deployed compute. Wherever Blocks config and context are not
- * present (before `create()`, plain scripts, compute Blocks does not configure)
+ * it) and on deployed compute. Wherever CDK Blocks config and context are not
+ * present (before `create()`, plain scripts, compute CDK Blocks does not configure)
  * this returns `'local'`.
  *
  * Note: on deployed compute call this after the config has been loaded
- * (`loadConfigToProcessEnv()` / `preloadConfig()`), as the Blocks Lambda,
+ * (`loadConfigToProcessEnv()` / `preloadConfig()`), as the CDK Blocks Lambda,
  * container, and AgentCore entry points do before importing the backend.
  */
 export function getDeploymentType(): DeploymentType {

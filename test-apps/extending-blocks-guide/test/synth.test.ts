@@ -32,7 +32,7 @@ describe('extending-blocks-guide synth', () => {
     template = JSON.parse(readFileSync(join(SYNTH_DIR, files[0]), 'utf-8'));
   });
 
-  test('contains the Blocks Lambda handler', () => {
+  test('contains the CDK Blocks Lambda handler', () => {
     const lambdas = Object.values(template.Resources).filter(
       (r: any) => r.Type === 'AWS::Lambda::Function'
     );
@@ -76,7 +76,7 @@ describe('extending-blocks-guide synth', () => {
         r.Type === 'AWS::Lambda::Function' &&
         r.Properties?.Environment?.Variables?.NODE_ENV === 'production'
     );
-    assert.ok(handler, 'could not find Blocks handler Lambda');
+    assert.ok(handler, 'could not find AWS CDK Blocks handler Lambda');
     const envVars = handler.Properties.Environment.Variables;
     assert.ok('EXTERNAL_QUEUE_URL' in envVars, 'missing EXTERNAL_QUEUE_URL on handler');
     assert.ok('BLOCKS_LEGACY_SESSIONS_TABLE' in envVars, 'missing BLOCKS_LEGACY_SESSIONS_TABLE on handler');

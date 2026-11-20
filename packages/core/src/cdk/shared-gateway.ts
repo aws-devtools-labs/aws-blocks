@@ -69,7 +69,7 @@ export interface SharedGatewayProps {
 	readonly defaults: BlocksDefaults;
 	/**
 	 * Build the REST API as a `REGIONAL` endpoint instead of API Gateway's default
-	 * (edge-optimized). Set under `apiFrontDoor: 'cloudfront'`, where a Blocks
+	 * (edge-optimized). Set under `apiFrontDoor: 'cloudfront'`, where a CDK Blocks
 	 * CloudFront distribution already fronts the API — an edge-optimized endpoint
 	 * would add a second, AWS-managed CloudFront layer behind it. Changing the
 	 * endpoint type is an in-place update that keeps the `execute-api` hostname.
@@ -171,7 +171,7 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 
 	const restApi = new apigateway.RestApi(scope, 'API', {
 		restApiName: 'Blocks API',
-		// Left unset (API Gateway's edge-optimized default) unless a Blocks
+		// Left unset (API Gateway's edge-optimized default) unless a CDK Blocks
 		// CloudFront distribution fronts the API.
 		...(regionalEndpoint ? { endpointTypes: [apigateway.EndpointType.REGIONAL] } : {}),
 		// Don't let RestApi auto-create its own account-level CloudWatch role: it

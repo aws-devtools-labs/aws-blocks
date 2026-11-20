@@ -58,7 +58,7 @@ class JvmApplicationStorageTest {
         jarFor("com.example.one").addCookie(url, Cookie(name = "session", value = "a-session"))
 
         File(root, ".blocks/com.example.one/cookies").isDirectory shouldBe true
-        // Releases before this one wrote the store straight into `.blocks`, which every Blocks
+        // Releases before this one wrote the store straight into `.blocks`, which every CDK Blocks
         // application on the machine therefore shared.
         File(root, ".blocks/cookies").exists() shouldBe false
     }

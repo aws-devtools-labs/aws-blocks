@@ -35,7 +35,7 @@ export function canonicalBlocksPath(pathname: string): string {
 }
 
 /**
- * URL path prefix for the Blocks RPC endpoint.
+ * URL path prefix for the CDK Blocks RPC endpoint.
  *
  * CloudFront behaviors route this path (and children) to the API Gateway
  * origin. Namespaced under `/cdk-blocks/api` so it doesn't shadow
@@ -161,7 +161,7 @@ export const FORWARDED_HOST_HEADER = 'x-blocks-forwarded-host';
 export const FORWARDED_STAGE_HEADER = 'x-blocks-forwarded-stage';
 
 /**
- * The host a viewer called a Blocks CloudFront front door at (the distribution's
+ * The host a viewer called a CDK Blocks CloudFront front door at (the distribution's
  * domain or one of its custom domains), stamped by a viewer-request function on
  * every API request the door forwards — to the shared gateway (and from there to
  * a Lambda or a container) or straight to a container's load balancer. CloudFront
@@ -179,7 +179,7 @@ export const FORWARDED_STAGE_HEADER = 'x-blocks-forwarded-stage';
 export const PUBLIC_HOST_HEADER = 'x-blocks-public-host';
 
 /**
- * Config key (and so environment variable) listing the hosts of every Blocks
+ * Config key (and so environment variable) listing the hosts of every CDK Blocks
  * CloudFront front door of a backend, comma-separated: the hosts
  * {@link PUBLIC_HOST_HEADER} may name.
  *

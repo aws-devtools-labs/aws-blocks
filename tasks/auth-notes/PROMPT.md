@@ -1,6 +1,6 @@
 # Task: Authenticated Notepad
 
-Build a personal notepad in this AWS Blocks app. A visitor signs up with their email (confirming it with an emailed one-time code) or signs in, edits a single private note, and that note is saved to their account — it survives a reload and is never visible to other users.
+Build a personal notepad in this CDK Blocks app. A visitor signs up with their email (confirming it with an emailed one-time code) or signs in, edits a single private note, and that note is saved to their account — it survives a reload and is never visible to other users.
 
 The core of this task is **using the framework**: the note is read and written through an **`api` namespace** whose methods run **on the server** and persist through the app's auth + key/value blocks. The page is a thin client over that API.
 

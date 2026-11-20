@@ -19,7 +19,7 @@ const templateDir = join(dirname(fileURLToPath(import.meta.url)), '../templates/
 const templateTest = join(templateDir, 'test/e2e.test.ts');
 let compiledDir: string;
 
-const requiredTests = ['home page loads', 'app: server serves its Blocks config', 'greet returns message and timestamp'];
+const requiredTests = ['home page loads', 'app: server serves its AWS CDK Blocks config', 'greet returns message and timestamp'];
 
 function assertTemplateTestsRan(report: string) {
   // Completion events come from our own reporter; this annotation does not validate their shape.
@@ -172,11 +172,11 @@ describe('Next.js template E2E assertions', () => {
   });
 
   const scenarios = [
-    { name: 'starter page with config', html: 'Blocks + Next.js', configStatus: 200, exitCode: 0 },
+    { name: 'starter page with config', html: 'CDK Blocks + Next.js', configStatus: 200, exitCode: 0 },
     { name: 'customized page with config', html: 'My application', configStatus: 200, exitCode: 0 },
     { name: 'customized page with a trailing slash in TEST_URL', html: 'My application', configStatus: 200, exitCode: 0, trailingSlash: true },
     { name: 'customized page without config', html: 'My application', configStatus: 404, exitCode: 1 },
-    { name: 'starter page with failing config', html: 'Blocks + Next.js', configStatus: 500, exitCode: 1 },
+    { name: 'starter page with failing config', html: 'CDK Blocks + Next.js', configStatus: 500, exitCode: 1 },
     { name: 'home page fails after readiness', html: 'My application', configStatus: 200, exitCode: 1, homeFails: true },
     { name: 'sample API returns the wrong message', html: 'My application', configStatus: 200, exitCode: 1, message: 'Wrong greeting' },
     { name: 'sample API returns an invalid timestamp', html: 'My application', configStatus: 200, exitCode: 1, timestamp: 'not a timestamp' },
@@ -225,7 +225,7 @@ describe('Next.js template E2E assertions', () => {
         const { exitCode, report, diagnostic } = await runTemplateTests(env);
         assert.strictEqual(exitCode, scenario.exitCode, diagnostic);
         assertTemplateTestsRan(report);
-        assert.ok(configRequests > 0, 'E2E must request the Blocks config even when the page is customized');
+        assert.ok(configRequests > 0, 'E2E must request the AWS CDK Blocks config even when the page is customized');
         if (scenario.configStatus === 200) {
           assert.deepStrictEqual(apiRequests, [{ method: 'api.greet', params: ['World'] }], 'E2E must call the sample API');
         }

@@ -138,7 +138,7 @@ export function App() {
   return (
     <div>
       <div ref={menuRef} />
-      <h1>Blocks App</h1>
+      <h1>CDK Blocks App</h1>
       <p style={{ color: 'var(--bb-color-text-muted, #666)', fontSize: '0.9em', lineHeight: 1.5, marginBottom: 24 }}>
         This starter app demonstrates:
         {' '}<strong>authentication</strong> with cross-tab coordination,

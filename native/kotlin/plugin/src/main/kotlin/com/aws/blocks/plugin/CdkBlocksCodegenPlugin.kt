@@ -55,7 +55,7 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
         project.afterEvaluate {
             if (!project.plugins.hasPlugin("org.jetbrains.kotlin.plugin.serialization")) {
                 throw GradleException(
-                    "The AWS Blocks codegen plugin requires the kotlinx.serialization plugin. " +
+                    "The AWS CDK Blocks codegen plugin requires the kotlinx.serialization plugin. " +
                         "Add `id(\"org.jetbrains.kotlin.plugin.serialization\")` to your module's plugins block.",
                 )
             }
@@ -198,7 +198,7 @@ class CdkBlocksCodegenPlugin : Plugin<Project> {
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
         if (androidComponents == null) {
             project.logger.warn(
-                "AWS Blocks: this module's Android plugin does not expose AndroidComponentsExtension, " +
+                "AWS CDK Blocks: this module's Android plugin does not expose AndroidComponentsExtension, " +
                     "so the OIDC manifest placeholders were not set. Building an instrumented test APK " +
                     "here fails its manifest merge on `oidcRedirectScheme`/`oidcActivityExported`. " +
                     "Android Gradle Plugin 8.11 or newer exposes it.",

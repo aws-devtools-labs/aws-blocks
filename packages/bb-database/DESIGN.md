@@ -433,7 +433,7 @@ The storage of an `aurora` cluster is encrypted with an AWS-owned key. The expre
 
 **Security on an existing database.** The connection string holds a password. It is an SSM SecureString, or a value in the application's own `AppSetting` or `Secret`. The execution role and the migration functions can read that one parameter or secret. The block always verifies the server certificate. What the application can do in the database is decided by the role in the connection string, not by the block (section 7).
 
-**Cost.** A DSQL cluster costs nothing when idle. An `aurora` cluster at `minCapacity: 0` pauses after five idle minutes and costs nothing while paused. The next connection then takes about 20 seconds. `0.5` ACU keeps the cluster warm. Each cluster adds two migration functions and one custom-resource provider, which run only during deploys. A `Database` that owns its cluster uses one DSQL cluster of the default quota of 20 per account and Region. Blocks on a shared `DatabaseCluster` count once.
+**Cost.** A DSQL cluster costs nothing when idle. An `aurora` cluster at `minCapacity: 0` pauses after five idle minutes and costs nothing while paused. The next connection then takes about 20 seconds. `0.5` ACU keeps the cluster warm. Each cluster adds two migration functions and one custom-resource provider, which run only during deploys. A `Database` that owns its cluster uses one DSQL cluster of the default quota of 20 per account and Region. Database blocks on a shared `DatabaseCluster` count once.
 
 **Observability.** A driver error keeps its SQLSTATE on the server-side `cause`. The client receives only the `DatabaseErrors` name and a fixed message. The migration functions log each applied file, each job that they wait on, and the step at which a failed run stopped.
 
@@ -450,7 +450,7 @@ Provisioned clusters:
 | 3,000-row and 10 MiB transaction limits (`dsql` only) | Enforced by `RulesEngine`, cascades counted, size approximated | Enforced by DSQL (`54000`). Both are reported as `TransactionRowLimitExceeded` |
 | `simulateConflict()` | Available | Throws |
 | `bigint` results | PGlite returns a `number`, or a `BigInt` beyond ±2^53 | `pg` returns a string. `pg-engine.ts` installs a parser that matches PGlite |
-| An `ApiError` or a branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
+| An `ApiError` or a branded AWS CDK Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
 | A statement on the block inside its own `transaction()` callback | Runs in the transaction | Same |
 | Another block on the same cluster, a nested `transaction()`, or a Kysely transaction, called inside a `transaction()` callback | A savepoint of the open transaction: it sees the open transaction's writes and rolls back with it | Runs on its own connection and commits on its own |
 | A statement on the block or on the root Kysely instance, inside the callback of a Kysely transaction | Fails after five seconds with `QueryFailed` (section 4.4) | Runs on another connection, outside the transaction |

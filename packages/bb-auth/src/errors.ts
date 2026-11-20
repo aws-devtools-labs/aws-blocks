@@ -5,7 +5,7 @@ import { AuthErrors } from '@aws-cdk-blocks/auth-common';
 
 export type { AuthErrorName } from '@aws-cdk-blocks/auth-common';
 /**
- * The `Auth` Building Block throws the canonical AWS Blocks auth error
+ * The `Auth` Building Block throws the canonical CDK Blocks auth error
  * vocabulary from `@aws-cdk-blocks/auth-common`. It is re-exported here, not
  * redefined, so there is exactly one source of truth for every error `name`.
  *

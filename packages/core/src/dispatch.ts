@@ -422,9 +422,9 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     };
 
     // Store the inbound request cookies in AsyncLocalStorage so downstream code
-    // (e.g. the Blocks client making server-side API calls during SSR) can forward
+    // (e.g. the CDK Blocks client making server-side API calls during SSR) can forward
     // them automatically. Wraps both RawRoute and RPC handling so any handler that
-    // calls Blocks APIs server-side gets forwarded cookies.
+    // calls CDK Blocks APIs server-side gets forwarded cookies.
     //
     // Validate the attacker-controlled user-agent header before storing, so
     // malformed input never reaches the AWS user agent.

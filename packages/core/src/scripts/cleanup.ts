@@ -7,9 +7,9 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 
 export async function cleanup() {
   return trackCommand('cleanup', async () => {
-    console.log('🧹 Cleaning up Blocks processes...');
+    console.log('🧹 Cleaning up AWS CDK Blocks processes...');
 
-    // Find and kill processes on common Blocks ports
+    // Find and kill processes on common CDK Blocks ports
     const ports = [3000, 3001, 3002, 3003];
 
     for (const port of ports) {

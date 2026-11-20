@@ -421,7 +421,7 @@ function blockMajor(): number {
 		return 0;
 	}
 
-	console.error("\n❌ Major version bumps are not allowed while Blocks is pre-release.\n");
+	console.error("\n❌ Major version bumps are not allowed while AWS CDK Blocks is pre-release.\n");
 	console.error("The following changeset(s) declare a `major` release:\n");
 	for (const { file, pkg } of majors) {
 		console.error(`   • ${pkg}  (.changeset/${file})`);

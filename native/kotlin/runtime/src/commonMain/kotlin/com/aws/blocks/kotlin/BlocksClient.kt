@@ -30,7 +30,7 @@ internal const val CLOSED_MESSAGE: String =
     "This Blocks instance is closed. Build a new one rather than reusing a closed instance."
 
 /**
- * JSON-RPC client that executes requests against an AWS Blocks backend endpoint.
+ * JSON-RPC client that executes requests against a CDK Blocks backend endpoint.
  *
  * Obtained from [Blocks.client]; a [Blocks] instance owns one and closes it.
  */

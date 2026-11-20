@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Smoke test for the Amplify Gen 2 + Blocks scaffolding.
+ * Smoke test for the Amplify Gen 2 + CDK Blocks scaffolding.
  *
  * Verifies:
  * 1. amplify_outputs.json contains blocks_api_url
@@ -27,7 +27,7 @@ console.log(`  ✅ ${apiUrl}\n`);
 
 // ── Test 2: Public API responds ──────────────────────────────────────────────
 
-console.log('── Test 2: Public API responds ──');
+console.log('── Test 2: AWS CDK Blocks public API responds ──');
 const res = await fetch(apiUrl, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -45,7 +45,7 @@ if (body.error) {
   throw new Error(`API returned RPC error: ${JSON.stringify(body.error)}`);
 }
 const data = body.result;
-if (!data?.message?.includes('Hello from Blocks')) {
+if (!data?.message?.includes('Hello from CDK Blocks')) {
   throw new Error(`Unexpected response: ${JSON.stringify(body)}`);
 }
 console.log(`  ✅ ${data.message}\n`);

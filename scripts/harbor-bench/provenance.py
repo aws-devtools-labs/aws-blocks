@@ -55,7 +55,7 @@ def verify(registry=Path('/opt/registry'), app=Path('/app/todo-app'),
     # Persistence is a separate verify.py heuristic: verifier records must appear under .cdk-blocks/local/data.
     # Matches the unscoped umbrella and, as a substring, every `@aws-cdk-blocks/*` import: both are
     # supported ways to write the backend, so requiring the scope would fail a correct one.
-    assert 'aws-cdk-blocks' in sources and 'ApiNamespace' in sources, 'backend must expose a Blocks ApiNamespace'
+    assert 'aws-cdk-blocks' in sources and 'ApiNamespace' in sources, 'backend must expose a CDK Blocks ApiNamespace'
     return {'status': 'passed', 'packages': checked,
             'manifest_sha256': hashlib.sha256((registry / 'publish-manifest.json').read_bytes()).hexdigest()}
 
@@ -69,7 +69,7 @@ def _windows(parts, size):
     return [parts[i:i + size] for i in range(len(parts) - size + 1)]
 
 def stored_in_blocks(app, titles):
-    """Titles absent from every file under the app's Blocks mock data (.cdk-blocks/local/data)."""
+    """Titles absent from every file under the app's CDK Blocks mock data (.cdk-blocks/local/data)."""
     missing = {title.encode() for title in titles}
     for top, dirs, files in os.walk(app):
         dirs[:] = [d for d in dirs if d != 'node_modules']

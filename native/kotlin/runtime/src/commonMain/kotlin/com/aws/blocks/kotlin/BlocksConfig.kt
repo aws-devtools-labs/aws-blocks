@@ -24,7 +24,7 @@ package com.aws.blocks.kotlin
  *   gives an application no private storage at all.
  *
  *   **On desktop, a session survives a restart only when this is set.** Without it there is
- *   nowhere to put the data that another Blocks application could not also reach, so the session
+ *   nowhere to put the data that another CDK Blocks application could not also reach, so the session
  *   is held in memory for the life of the process and the user signs in again on the next launch.
  *   Choose the value once and keep it: changing it later points the application at a different
  *   directory, which reads as the user being signed out.

@@ -981,7 +981,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		});
 	}
 	let production: string | null = null;
-	let noProduction = '(not in an AWS CDK Blocks app)';
+	let noProduction = '(not in a CDK Blocks app)';
 	if (root) {
 		try {
 			production = core.getStackName({ sandbox: false, projectRoot: root });

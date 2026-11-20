@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * AWS Blocks' built-in default 404 page, and when a deploy gets it: a
+ * CDK Blocks' built-in default 404 page, and when a deploy gets it: a
  * multi-page static site (no server, no SPA fallback) that ships no 404 page
  * of its own and sets no `errorPages.notFound`. Decided once from the
  * manifest, for every front door: the CloudFront door wires it as a

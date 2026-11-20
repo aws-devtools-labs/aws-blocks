@@ -127,4 +127,4 @@ its `Blocks` instance owns, in either position. `Blocks.close()` does not reach 
 many handles accumulates engines for the lifetime of the process. An `OidcClient` is the
 exception — it runs on the instance's engine.
 
-This is tracked in [#1206](https://github.com/aws-devtools-labs/aws-blocks/issues/1206).
+This is tracked in [#1206](https://github.com/aws/cdk-blocks/issues/1206).

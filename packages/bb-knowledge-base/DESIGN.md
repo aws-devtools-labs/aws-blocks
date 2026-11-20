@@ -12,7 +12,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Decision:** Use S3 Vectors (`AWS::S3Vectors::VectorBucket` + `CfnIndex`) as the vector store instead of OpenSearch Serverless or Aurora pgvector.
 
-**Rationale:** S3 Vectors is fully serverless with no minimum cost, no cluster management, and pay-per-query pricing. OpenSearch Serverless has a ~$700/month baseline (2 OCUs minimum). Aurora pgvector requires a provisioned database. For a Building Block that should "just work" from zero scale, S3 Vectors is the only option that matches the Blocks philosophy of no idle cost.
+**Rationale:** S3 Vectors is fully serverless with no minimum cost, no cluster management, and pay-per-query pricing. OpenSearch Serverless has a ~$700/month baseline (2 OCUs minimum). Aurora pgvector requires a provisioned database. For a Building Block that should "just work" from zero scale, S3 Vectors is the only option that matches the AWS CDK Blocks philosophy of no idle cost.
 
 ### D-KB-2: Fire-and-forget ingestion via AwsCustomResource
 
@@ -42,7 +42,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Decision:** KnowledgeBase exposes only `retrieve()` (vector search), not `retrieveAndGenerate()` (search + LLM answer).
 
-**Rationale:** Blocks already has a separate Agent Building Block that handles RAG orchestration (retrieve + generate). Baking generation into KnowledgeBase would create overlapping responsibilities. `retrieve()` is the primitive — it returns ranked chunks that the Agent or application code can feed into any LLM. This keeps KnowledgeBase single-purpose and composable.
+**Rationale:** CDK Blocks already has a separate Agent Building Block that handles RAG orchestration (retrieve + generate). Baking generation into KnowledgeBase would create overlapping responsibilities. `retrieve()` is the primitive — it returns ranked chunks that the Agent or application code can feed into any LLM. This keeps KnowledgeBase single-purpose and composable.
 
 ### D-KB-5a: `asAgentTool()` returns a plain tool shape, and its filter is required
 

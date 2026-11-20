@@ -198,7 +198,7 @@ void describe('HostingConstruct — compute.type web-function', () => {
     assert.match(guardEntry, /await import\("\.\/index\.mjs"\)/);
   });
 
-  void it('forwards Blocks env, timeout, and webFunction tuning', () => {
+  void it('forwards CDK Blocks env, timeout, and webFunction tuning', () => {
     const stack = createEnvStack();
     webFunctionHosting(stack, {
       timeout: Duration.seconds(120),

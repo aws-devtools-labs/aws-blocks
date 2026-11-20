@@ -15,7 +15,7 @@ Secrets Manager
 ([*Where should I store my application data?*](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)).
 Treat `AppSetting(secret: true)` as a free, encrypted fallback for a low-value
 secret only. See [`bb-secret/DESIGN.md`](../bb-secret/DESIGN.md#when-to-use-secret-vs-appsettingsecret-true)
-for the full comparison. The user-facing docs phrase this in Blocks terms and
+for the full comparison. The user-facing docs phrase this in AWS CDK Blocks terms and
 link to the AWS page rather than naming the services inline.
 
 ## Infrastructure (CDK)

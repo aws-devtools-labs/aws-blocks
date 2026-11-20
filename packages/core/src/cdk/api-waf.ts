@@ -24,7 +24,7 @@ import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
 import type { Construct } from 'constructs';
 import type { ApiWafOptions } from '../common/index.js';
 
-/** Construct id of the Blocks-managed web ACL, under the backend owner. */
+/** Construct id of the CDK Blocks-managed web ACL, under the backend owner. */
 const WEB_ACL_ID = 'ApiWaf';
 
 /** Default per-IP request limit per 5-minute window (matches Hosting's WAF). */
@@ -58,7 +58,7 @@ export function resolveApiWaf(apiWaf: ApiWafOptions | undefined): ResolvedApiWaf
 		}
 		if (enabled !== undefined || rateLimit !== undefined) {
 			throw new Error(
-				'apiWaf takes either { webAclArn } (your own web ACL) or { enabled: true, rateLimit? } (a Blocks-managed one), not both.',
+				'apiWaf takes either { webAclArn } (your own web ACL) or { enabled: true, rateLimit? } (an AWS CDK Blocks-managed one), not both.',
 			);
 		}
 		return { webAclArn };
@@ -134,7 +134,7 @@ export const API_WAF_NO_RATE_LIMIT_WARNING = 'blocks:api-waf:no-rate-limit-behin
 const COUNTED_BODY_RULES = ['SizeRestrictions_BODY', 'CrossSiteScripting_BODY', 'GenericLFI_BODY', 'GenericRFI_BODY'];
 
 /**
- * Create the Blocks-managed web ACL.
+ * Create the CDK Blocks-managed web ACL.
  *
  * Same rule set as Hosting's WAF (AWS managed Common + Known Bad Inputs, then a
  * per-IP rate limit), except that the body rules in {@link COUNTED_BODY_RULES}
@@ -239,7 +239,7 @@ function assertWebAclArnScope(owner: Construct, webAclArn: string, scope: 'REGIO
 }
 
 /**
- * `apigateway` tier: associate a `REGIONAL` web ACL (Blocks-managed or the
+ * `apigateway` tier: associate a `REGIONAL` web ACL (CDK Blocks-managed or the
  * caller's) with the shared REST API's stage. `traffic` says whether a
  * `Hosting` door also forwards browser traffic to the stage (see
  * {@link StageWafTraffic}); a caller-supplied web ACL is attached as-is.
@@ -272,7 +272,7 @@ export function attachApiWafToStage(
 
 /**
  * `cloudfront` tier: the web ACL ARN to set as the managed distribution's
- * `webAclId` — the caller's, or a Blocks-managed `CLOUDFRONT` one. Creating one
+ * `webAclId` — the caller's, or a CDK Blocks-managed `CLOUDFRONT` one. Creating one
  * requires a us-east-1 stack; a region that is a token (an environment-agnostic
  * stack) can't be checked here and is left to CloudFormation.
  *

@@ -1,6 +1,6 @@
 # Building Block API Design Guidelines
 
-This document provides API design guidance for AWS Blocks Building Blocks and defines the template used for preliminary BB design documents (`BB-*.md`).
+This document provides API design guidance for AWS CDK Blocks Building Blocks and defines the template used for preliminary BB design documents (`BB-*.md`).
 
 ## Part 1: API Design Guidance
 
@@ -137,7 +137,7 @@ Every Building Block that throws catchable errors must export a `{BlockName}Erro
 
 Prefer matching the AWS SDK error name when the error describes a customer-initiated condition (e.g., a conditional write that failed), the name is self-explanatory without knowing the underlying service, and it has community recognition (Googling it yields useful results). `ConditionalCheckFailedException` is a good example — the customer asked for a condition, it failed, and the name says so.
 
-Create a Blocks-specific error name when the AWS error is a generic bucket (e.g., `ValidationException` used for dozens of unrelated conditions), describes an infrastructure detail the BB abstracts away (e.g., `ProvisionedThroughputExceededException` on a PAY_PER_REQUEST table), or would confuse customers who don't know the underlying service.
+Create a CDK Blocks-specific error name when the AWS error is a generic bucket (e.g., `ValidationException` used for dozens of unrelated conditions), describes an infrastructure detail the BB abstracts away (e.g., `ProvisionedThroughputExceededException` on a PAY_PER_REQUEST table), or would confuse customers who don't know the underlying service.
 
 ```typescript
 export const KVStoreErrors = {
@@ -421,7 +421,7 @@ for await (const msg of channel) { /* ... */ }
 
 ### G15: Transferables for Client-Side Live Objects
 
-Some Building Blocks need to return objects that have client-side behavior &mdash; a Realtime channel you can `.subscribe()` to, a file upload handle you can `.pause()` and `.resume()`, etc. These cannot be serialized as plain JSON. AWS Blocks solves this with **Transferables**: fully functional server-side objects that serialize themselves into descriptors via `toJSON()`, which client plugins then hydrate back into live client-side objects.
+Some Building Blocks need to return objects that have client-side behavior &mdash; a Realtime channel you can `.subscribe()` to, a file upload handle you can `.pause()` and `.resume()`, etc. These cannot be serialized as plain JSON. CDK Blocks solves this with **Transferables**: fully functional server-side objects that serialize themselves into descriptors via `toJSON()`, which client plugins then hydrate back into live client-side objects.
 
 **The problem:**
 
@@ -502,7 +502,7 @@ Customer code → receives RealtimeChannelClient with live client methods
 
 - `toJSON()` is a built-in JavaScript protocol. `JSON.stringify()` already calls it. The API handler needs zero awareness of Transferables.
 - Nested Transferables work automatically. If a return value contains a Transferable inside a plain object, `JSON.stringify()` walks the tree and calls `toJSON()` at each level.
-- Every developer and AI agent already knows how `toJSON()` works. No Blocks-specific serialization API to learn.
+- Every developer and AI agent already knows how `toJSON()` works. No CDK Blocks-specific serialization API to learn.
 
 **Server-side vs client-side implementations:**
 
@@ -533,10 +533,10 @@ G2 still applies to the vast majority of BB methods. Transferables are the expli
 
 When a BB accepts a schema for runtime validation (e.g., validating items on write, messages on publish, payloads on send), it must accept any schema that implements the [Standard Schema](https://standardschema.dev/) `StandardSchemaV1` interface &mdash; not a specific library like Zod.
 
-Standard Schema is a common interface implemented by Zod (3.24+), Valibot (1.0+), ArkType (2.0+), and many others. By accepting `StandardSchemaV1`, AWS Blocks gets:
+Standard Schema is a common interface implemented by Zod (3.24+), Valibot (1.0+), ArkType (2.0+), and many others. By accepting `StandardSchemaV1`, CDK Blocks gets:
 
 - **No vendor lock-in** &mdash; customers use whichever schema library they prefer
-- **No Blocks dependency on Zod** &mdash; `@standard-schema/spec` is types-only (zero runtime)
+- **No CDK Blocks dependency on Zod** &mdash; `@standard-schema/spec` is types-only (zero runtime)
 - **End-to-end type safety** &mdash; `StandardSchemaV1<Input, Output>` carries inferred types that BBs can extract via `StandardSchemaV1.InferOutput<S>`
 - **Runtime validation** &mdash; BBs call `schema['~standard'].validate(value)` at runtime
 
@@ -657,7 +657,7 @@ Every `BB-*.md` must include these sections in this order:
 
 > **⚠️ PRELIMINARY DESIGN** — This document is a rough starting point, not a
 > finalized specification. The API surface, mock behavior, and infrastructure
-> details must be validated against the [AWS Blocks API Design Guidelines](./API-DESIGN.md)
+> details must be validated against the [CDK Blocks API Design Guidelines](./API-DESIGN.md)
 > and built in accordance with the the Building Block architecture (see `docs/reference/`).
 > Expect breaking changes. Do not build against this document without confirming
 > the current state of the implementation.

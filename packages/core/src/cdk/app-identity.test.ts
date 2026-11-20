@@ -94,7 +94,7 @@ describe('defaults.appIdentity — tags', () => {
 		assert.strictEqual(report.violations, undefined);
 	});
 
-	test('set: every role and every taggable Blocks resource carries app=<id>, and so does the stack', async () => {
+	test('set: every role and every taggable CDK Blocks resource carries app=<id>, and so does the stack', async () => {
 		const app = new cdk.App({ context: QUALIFIER });
 		const stack = await makeStack(app, 'appa', appDefaults());
 		const template = Template.fromStack(stack);

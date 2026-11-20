@@ -443,7 +443,7 @@ function parseAuthorizeRequest(
 	) {
 		ctx.response.status = 400;
 		ctx.response.headers.set('Content-Type', 'text/plain');
-		ctx.response.send('AWS Blocks stub IdP: missing or invalid authorize request (PKCE S256 is required)');
+		ctx.response.send('AWS CDK Blocks stub IdP: missing or invalid authorize request (PKCE S256 is required)');
 		return null;
 	}
 	// RFC 6749 §4.1.2.1: an unknown client or an unregistered redirect URI is
@@ -462,7 +462,7 @@ function parseAuthorizeRequest(
 		json(ctx, 400, {
 			error: 'invalid_request',
 			error_description:
-				'redirect_uri is not registered for this client. The AWS Blocks stub IdP accepts only the ' +
+				'redirect_uri is not registered for this client. The AWS CDK Blocks stub IdP accepts only the ' +
 				`app's own sign-in callback (redirects.callbackPath): ${registered.join(', ')}.`,
 		});
 		return null;
@@ -525,11 +525,11 @@ function renderLoginPage(providerId: string, users: StubUser[], req: AuthorizeRe
 		)
 		.join('');
 	return (
-		'<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sign in — AWS Blocks stub IdP</title>' +
+		'<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sign in — AWS CDK Blocks stub IdP</title>' +
 		'<style>body{font-family:system-ui,sans-serif;max-width:400px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}' +
 		'h1{font-size:1.25rem}button{padding:8px 16px;cursor:pointer;border:0;border-radius:6px;background:#1a1a1a;color:#fff}</style>' +
 		'</head><body>' +
-		'<h1>AWS Blocks stub IdP: sign in</h1>' +
+		'<h1>CDK Blocks stub IdP: sign in</h1>' +
 		`<p style="color:#666;font-size:14px">Local sign-in for <strong>${escapeHtml(providerId)}</strong>. No real credentials.</p>` +
 		`<form method="POST" action="${escapeHtml(action)}">` +
 		options +
@@ -813,7 +813,7 @@ function handleLogout(ctx: BlocksContext, client: StubClientRegistration): void 
 			json(ctx, 400, {
 				error: 'invalid_request',
 				error_description:
-					'post_logout_redirect_uri is not registered for this client. The AWS Blocks stub IdP accepts ' +
+					'post_logout_redirect_uri is not registered for this client. The AWS CDK Blocks stub IdP accepts ' +
 					`only the app origin plus redirects.postSignOutPath or redirects.signOutPath (${client.postLogoutPaths
 						.map((path) => `${base}${path}`)
 						.join(', ')}).`,
@@ -825,7 +825,7 @@ function handleLogout(ctx: BlocksContext, client: StubClientRegistration): void 
 	}
 	ctx.response.status = 200;
 	ctx.response.headers.set('Content-Type', 'text/html; charset=utf-8');
-	ctx.response.send('<!DOCTYPE html><html><body><p>Signed out of the AWS Blocks stub IdP.</p></body></html>');
+	ctx.response.send('<!DOCTYPE html><html><body><p>Signed out of the AWS CDK Blocks stub IdP.</p></body></html>');
 }
 
 /** What {@link createStubIdp} needs to serve one `stubIdp()` provider. */

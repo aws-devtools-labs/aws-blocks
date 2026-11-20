@@ -4,7 +4,7 @@
 
 `ContainerCompute` is the internal Fargate-backed compute. Customers never
 instantiate it directly — the public `Compute` block builds one for
-`type: 'container'`. It runs the Blocks backend as a long-lived process and
+`type: 'container'`. It runs the AWS CDK Blocks backend as a long-lived process and
 self-starts the SQS pollers for the event handlers assigned to it.
 
 ## Provisioning
@@ -12,7 +12,7 @@ self-starts the SQS pollers for the event handlers assigned to it.
 - **Task.** A Fargate task definition sized from `size` (`vcpu × 1024` CPU units,
   `memory` MB), on ARM64 (Graviton). The default image and any custom `image`
   must be arm64-compatible.
-- **Task role.** The shared Blocks execution role, so every Building Block grant
+- **Task role.** The shared CDK Blocks execution role, so every Building Block grant
   reaches the container exactly as it reaches the Lambda handler. The `ecs-tasks`
   trust principal is appended to that role once per role, scoped with
   `aws:SourceAccount` (this account) and `aws:SourceArn`
@@ -50,7 +50,7 @@ self-starts the SQS pollers for the event handlers assigned to it.
   `USER` and `WORKDIR` apply) and keeps
   `BLOCKS_APP_DIR=/app`, so an image that needs root, or that prepared `/app`
   for its own user, behaves as before; setting `image` explicitly is the opt-out
-  for root. Blocks builds **no**
+  for root. CDK Blocks builds **no**
   container image, so `cdk deploy` never needs a local Docker daemon. The app
   code is co-bundled with esbuild (a `main.js` parent + a `worker.js` per-job
   worker, same bundle as the Lambda handler path) and shipped as an **S3 asset**
@@ -71,7 +71,7 @@ self-starts the SQS pollers for the event handlers assigned to it.
 - **VPC.** Fargate is VPC-resident, so the compute hooks into the framework's
   VPC context: in its constructor it reuses an app-provided VPC
   (`defaults.vpc.network`) when one is present, and only derives the shared lazy
-  Blocks VPC when none was provided. Tasks are placed in the
+  CDK Blocks VPC when none was provided. Tasks are placed in the
   `private-with-egress` tier.
 
 ## API traffic

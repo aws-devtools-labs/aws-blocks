@@ -12,7 +12,7 @@ import 'model.dart';
 /// `BlocksClient.call`, …). Each generated library names it in its header.
 /// Raise it with the runtime release that adds an API the output starts using,
 /// together with the `blocks_runtime` constraint in `pubspec.yaml`.
-const minimumRuntimeVersion = '0.2.0';
+const minimumRuntimeVersion = '1.0.0';
 
 /// Generates Dart source code from a [CodegenModel].
 class DartCodeGenerator {
@@ -957,7 +957,7 @@ class DartCodeGenerator {
 
       buf.writeln('  $asyncReturn $methodName($paramSig) async {');
 
-      // Build the params array. An AWS Blocks server reads params by
+      // Build the params array. A CDK Blocks server reads params by
       // position (`parseRpcRequest` reads a by-name object by its values, in
       // order), so the arguments go in spec order, as the TypeScript client
       // sends them: an optional argument before the last required one keeps
@@ -1073,7 +1073,7 @@ class DartCodeGenerator {
     final fields = ids.values.toSet();
     final client = _freeName('client', fields);
     const ctorParams = {'baseUrl', 'sessionStore'};
-    buf.writeln('// --- Blocks Client ---');
+    buf.writeln('// --- CDK Blocks Client ---');
     buf.writeln();
     buf.writeln('class Blocks {');
     for (final ns in namespaces) {

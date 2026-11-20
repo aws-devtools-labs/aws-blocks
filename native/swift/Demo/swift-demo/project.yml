@@ -24,8 +24,8 @@ targets:
     info:
       path: Info.plist
       properties:
-        CFBundleName: Blocks Demo
-        CFBundleDisplayName: Blocks Demo
+        CFBundleName: AWS CDK Blocks Demo
+        CFBundleDisplayName: AWS CDK Blocks Demo
         CFBundleIdentifier: com.blocksdemo.app
         CFBundleVersion: "1"
         CFBundleShortVersionString: "1.0"

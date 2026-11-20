@@ -211,7 +211,7 @@ describe('apiWaf placement (front-door aspect)', () => {
 		}
 	});
 
-	test('the marker is only offered for a Blocks-managed web ACL', () => {
+	test('the marker is only offered for a CDK Blocks-managed web ACL', () => {
 		assert.strictEqual(apiFrontDoorMarker(owner(undefined).stack), undefined);
 		assert.strictEqual(apiFrontDoorMarker(owner({ webAclArn: REGIONAL_ACL }).stack), undefined);
 	});
