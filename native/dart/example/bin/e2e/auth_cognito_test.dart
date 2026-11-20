@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'harness.dart';
 
 /// Cognito-style `Auth` E2E (native-bindings' `auth-cognito` block).
@@ -16,7 +19,7 @@ import 'harness.dart';
 ///
 ///   * DEPLOYED sandbox/prod — a returning-customer sign-in with a
 ///     PRE-PROVISIONED, CONFIRMED user. No emailed code is needed: the user is
-///     seeded out-of-band by `test-apps/native-bindings/aws-blocks/scripts/
+///     seeded out-of-band by `test-apps/native-bindings/cdk-blocks/scripts/
 ///     seed-cognito-user.ts` (AdminCreateUser + AdminSetUserPassword). This is
 ///     the real returning-customer path against a real Cognito pool.
 ///
@@ -242,7 +245,7 @@ Future<void> _returningCustomerFlow(
 
 /// Provisions the returning-customer user on the LOCAL dev server via the real
 /// sign-up → confirm flow, using the dev-only `cognitoGetLastCode` hook.
-/// Idempotent across runs that share `.bb-data`: an existing user is reused.
+/// Idempotent across runs that share `.cdk-blocks/local/data`: an existing user is reused.
 Future<void> _provisionLocalUser(
   Blocks blocks,
   String username,
@@ -254,9 +257,8 @@ Future<void> _provisionLocalUser(
       password: password,
       email: '$username@example.com',
     );
-  } on BlocksRpcException catch (e) {
-    final data = e.data;
-    if (data is Map && data['name'] == AuthErrorNames.userAlreadyExists) {
+  } on ApiException catch (e) {
+    if (isBlocksError(e, AuthErrorNames.userAlreadyExists)) {
       return; // provisioned by an earlier run
     }
     rethrow;

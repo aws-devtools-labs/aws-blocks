@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { Construct } from 'constructs';
 import { Annotations, Duration, RemovalPolicy, Stack, Token } from 'aws-cdk-lib';
 import {
@@ -94,6 +97,13 @@ export type ComputeConstructProps = {
    * `'streaming'` (the adapter's `response_stream` mode).
    */
   responseMode?: 'streaming' | 'buffered';
+  /**
+   * Construct id (and so the name) of the `us-east-1` stack an edge compute is
+   * hoisted into when the stack is in another region. Default: CDK's
+   * `edge-lambda-stack-<hash>`. AWS Blocks sets `<app id>-edge` for an app with
+   * `defaults.appIdentity`, so the edge stack carries the app's name prefix.
+   */
+  edgeStackId?: string;
 };
 
 // ---- Construct ----
@@ -303,6 +313,7 @@ export class ComputeConstruct extends Construct {
           memorySize,
           timeout: Duration.seconds(Math.min(requestedTimeout, edgeMaxTimeout)),
           logGroup,
+          ...(props.edgeStackId ? { stackId: props.edgeStackId } : {}),
         },
       );
       // Note: EdgeFunction auto-deploys to us-east-1 regardless of stack region

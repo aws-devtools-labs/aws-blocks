@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Verify lock integrity AND installed package bytes against this arm's tarballs."""
 import hashlib
 import json
@@ -12,15 +15,17 @@ def verify(registry=Path('/opt/registry'), app=Path('/app/todo-app'),
     packages = {p['name']: p for p in manifest['packages']}
     requests = [json.loads(line)['path'] for line in ledger.read_text().splitlines()]
     # However the agent invoked it (npm create, npx, a local install), the scaffolder can
-    # only have come from this run's registry: @aws-blocks has no public fallback.
-    scaffolder = packages['@aws-blocks/create-blocks-app']['tarballS3Key']
+    # only have come from this run's registry: @aws-cdk-blocks has no public fallback.
+    scaffolder = packages['@aws-cdk-blocks/create-blocks-app']['tarballS3Key']
     assert '/' + scaffolder in requests, 'scaffolder was not served by this run registry'
     assert (app / 'package-lock.json').exists(), 'no package-lock.json'
     lock = json.loads((app / 'package-lock.json').read_text())
     checked = []
     for location, entry in lock['packages'].items():
         name = location.rsplit('node_modules/', 1)[-1]
-        if not name.startswith('@aws-blocks/') or name.count('/') != 1:
+        # The umbrella is unscoped, so it has no '/' to count; a scoped package has exactly one.
+        candidate = name == 'aws-cdk-blocks' or (name.startswith('@aws-cdk-blocks/') and name.count('/') == 1)
+        if not candidate:
             continue
         assert not entry.get('link'), f'workspace link: {location}'
         expected = packages[name]
@@ -44,21 +49,33 @@ def verify(registry=Path('/opt/registry'), app=Path('/app/todo-app'),
                 count += 1
         checked.append({'name': name, 'version': expected['version'],
                         'integrity': expected['integrity'], 'files': count})
-    for required in ('@aws-blocks/blocks', '@aws-blocks/core'):
+    for required in ('aws-cdk-blocks', '@aws-cdk-blocks/core'):
         assert any(p['name'] == required for p in checked), required
-    sources = '\n'.join(p.read_text() for p in (app / 'aws-blocks').rglob('*.ts') if 'node_modules' not in p.parts)
-    # Persistence is a separate verify.py heuristic: verifier records must appear under .bb-data.
-    assert '@aws-blocks/' in sources and 'ApiNamespace' in sources, 'backend must expose a Blocks ApiNamespace'
+    sources = '\n'.join(p.read_text() for p in (app / 'cdk-blocks').rglob('*.ts') if 'node_modules' not in p.parts)
+    # Persistence is a separate verify.py heuristic: verifier records must appear under .cdk-blocks/local/data.
+    # Matches the unscoped umbrella and, as a substring, every `@aws-cdk-blocks/*` import: both are
+    # supported ways to write the backend, so requiring the scope would fail a correct one.
+    assert 'aws-cdk-blocks' in sources and 'ApiNamespace' in sources, 'backend must expose a Blocks ApiNamespace'
     return {'status': 'passed', 'packages': checked,
             'manifest_sha256': hashlib.sha256((registry / 'publish-manifest.json').read_bytes()).hexdigest()}
 
 
+
+MOCK_DATA_PARTS = ('.cdk-blocks', 'local', 'data')
+
+
+def _windows(parts, size):
+    """Every `size`-long run of consecutive `parts`."""
+    return [parts[i:i + size] for i in range(len(parts) - size + 1)]
+
 def stored_in_blocks(app, titles):
-    """Titles absent from every file under the app's Blocks mock data (.bb-data)."""
+    """Titles absent from every file under the app's Blocks mock data (.cdk-blocks/local/data)."""
     missing = {title.encode() for title in titles}
     for top, dirs, files in os.walk(app):
         dirs[:] = [d for d in dirs if d != 'node_modules']
-        if '.bb-data' not in Path(top).relative_to(app).parts:
+        # Compared as path SEGMENTS: the mock data directory is three of them now, and
+        # a multi-segment string can never equal a single entry of `.parts`.
+        if MOCK_DATA_PARTS not in _windows(Path(top).relative_to(app).parts, len(MOCK_DATA_PARTS)):
             continue
         for file in files:
             if missing:

@@ -10,12 +10,12 @@ import { ensureApiGatewayAccount } from './apigateway-account.js';
 type EnsureApiGatewayAccount = (stack: cdk.Stack) => unknown;
 
 /**
- * `@aws-blocks/hosting`'s own copy of `ensureApiGatewayAccount` (hosting does
+ * `@aws-cdk-blocks/hosting`'s own copy of `ensureApiGatewayAccount` (hosting does
  * not depend on core). It is not on hosting's export map, so it is loaded from
  * the module beside the `./constructs` entry that core already depends on.
  */
 async function hostingEnsureApiGatewayAccount(): Promise<EnsureApiGatewayAccount> {
-	const constructsEntry = import.meta.resolve('@aws-blocks/hosting/constructs');
+	const constructsEntry = import.meta.resolve('@aws-cdk-blocks/hosting/constructs');
 	const mod = (await import(new URL('./server_origin.js', constructsEntry).href)) as {
 		ensureApiGatewayAccount: EnsureApiGatewayAccount;
 	};
@@ -57,7 +57,7 @@ describe('ensureApiGatewayAccount', () => {
 		['an environment-agnostic stack', undefined],
 		['a stack with an explicit account and region', { account: '123456789012', region: 'eu-west-1' }],
 	] as const) {
-		test(`matches @aws-blocks/hosting's copy on ${label}`, async () => {
+		test(`matches @aws-cdk-blocks/hosting's copy on ${label}`, async () => {
 			const hostingEnsure = await hostingEnsureApiGatewayAccount();
 			const core = accountResources(ensureApiGatewayAccount, env);
 			assert.ok(

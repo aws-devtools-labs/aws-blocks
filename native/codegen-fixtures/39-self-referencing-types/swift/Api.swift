@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getTree(root: TreeNode) async throws -> TreeNode {
         let request = BlocksRequest(method: "api.getTree", params: [root], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getTree") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getTree") }
         return try JSONDecoder().decode(TreeNode.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func getThread() async throws -> Comment {
         let request = BlocksRequest(method: "api.getThread", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getThread") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getThread") }
         return try JSONDecoder().decode(Comment.self, from: result)
     }
 
@@ -71,5 +71,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

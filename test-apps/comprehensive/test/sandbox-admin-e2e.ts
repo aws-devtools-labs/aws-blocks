@@ -15,7 +15,7 @@
  *   - A deployed `bb-test-*` sandbox stack with the comprehensive backend.
  *   - `AWS_PROFILE=<your-sandbox-profile>` (or equivalent) with Cognito admin + CFN
  *     describe permissions.
- *   - Run from `test-apps/comprehensive` (reads `.blocks-sandbox/outputs.json`).
+ *   - Run from `test-apps/comprehensive` (reads `.cdk-blocks-sandbox/outputs.json`).
  *
  * The script does NOT call `authC.signIn(...)` directly — every assertion
  * goes through the Lambda-hosted Backend Building Block via fetch(), so
@@ -39,7 +39,7 @@ import {
 } from '@aws-sdk/client-cloudformation';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SANDBOX_DIR = join(__dirname, '..', '.blocks-sandbox');
+const SANDBOX_DIR = join(__dirname, '..', '.cdk-blocks-sandbox');
 const REGION = process.env.AWS_REGION || 'us-east-1';
 const STACK_NAME_ENV = process.env.BLOCKS_STACK_NAME;
 

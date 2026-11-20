@@ -7,26 +7,24 @@
  * These overloads provide compile-time return-type narrowing so that
  * `getSdkIdentifiers(myKvStore)` returns `{ tableName: string }` instead of
  * a generic `Record<string, string>`. The runtime implementation simply
- * delegates to the base function in `@aws-blocks/core`.
+ * delegates to the base function in `@aws-cdk-blocks/core`.
  *
  * @module
  */
 
-import type { Agent } from '@aws-blocks/bb-agent';
-import type { AppSetting } from '@aws-blocks/bb-app-setting';
-import type { AsyncJob } from '@aws-blocks/bb-async-job';
-import type { Auth } from '@aws-blocks/bb-auth';
-import type { CronJob } from '@aws-blocks/bb-cron-job';
-import type { Dashboard } from '@aws-blocks/bb-dashboard';
-import type { Database } from '@aws-blocks/bb-data';
-import type { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
-import type { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import type { FileBucket } from '@aws-blocks/bb-file-bucket';
-import type { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
-import type { KVStore } from '@aws-blocks/bb-kv-store';
-import type { Logger } from '@aws-blocks/bb-logger';
-import type { Realtime } from '@aws-blocks/bb-realtime';
-import { getSdkIdentifiers as _getSdkIdentifiers } from '@aws-blocks/core';
+import type { Agent } from '@aws-cdk-blocks/bb-agent';
+import type { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import type { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
+import type { Auth } from '@aws-cdk-blocks/bb-auth';
+import type { CronJob } from '@aws-cdk-blocks/bb-cron-job';
+import type { Dashboard } from '@aws-cdk-blocks/bb-dashboard';
+import type { Database, DatabaseCluster } from '@aws-cdk-blocks/bb-database';
+import type { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
+import type { KnowledgeBase } from '@aws-cdk-blocks/bb-knowledge-base';
+import type { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import type { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { Realtime } from '@aws-cdk-blocks/bb-realtime';
+import { getSdkIdentifiers as _getSdkIdentifiers } from '@aws-cdk-blocks/core';
 
 /**
  * Retrieve the typed SDK identifiers for a Building Block instance.
@@ -40,15 +38,14 @@ import { getSdkIdentifiers as _getSdkIdentifiers } from '@aws-blocks/core';
  *
  * @example
  * ```typescript
- * import { getSdkIdentifiers } from '@aws-blocks/blocks';
- * import { KVStore } from '@aws-blocks/bb-kv-store';
+ * import { getSdkIdentifiers } from 'aws-cdk-blocks';
+ * import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
  *
  * const store = new KVStore(scope, 'users', {});
  * const { tableName } = getSdkIdentifiers(store); // ← typed as { tableName: string }
  * ```
  */
-export function getSdkIdentifiers(bb: KVStore<any>): { tableName: string };
-export function getSdkIdentifiers(bb: DistributedTable<any, any, any>): { tableName: string };
+export function getSdkIdentifiers(bb: KVStore<any, any, any, any>): { tableName: string };
 export function getSdkIdentifiers(bb: FileBucket<any>): { bucketName: string };
 export function getSdkIdentifiers(bb: AsyncJob<any>): { queueUrl: string };
 export function getSdkIdentifiers(bb: AppSetting<any>): { parameterName: string };
@@ -64,8 +61,15 @@ export function getSdkIdentifiers(bb: Auth<any>): {
 	hostedUiDomain?: string;
 	hostedUiClientId?: string;
 };
-export function getSdkIdentifiers(bb: Database): { clusterArn: string; secretArn: string; databaseName: string };
-export function getSdkIdentifiers(bb: DistributedDatabase): { clusterEndpoint: string };
+// `Database` always registers the cluster it runs on and its schema. The endpoint and region exist
+// only in Lambda: the local build runs on PGlite and has neither.
+export function getSdkIdentifiers(bb: Database): {
+	clusterId: string;
+	schemaName: string;
+	clusterEndpoint?: string;
+	region?: string;
+};
+export function getSdkIdentifiers(bb: DatabaseCluster): { clusterEndpoint: string; region?: string };
 export function getSdkIdentifiers(bb: KnowledgeBase): { kbId: string };
 export function getSdkIdentifiers(bb: InstanceType<typeof Realtime>): { wsUrl: string; callbackUrl: string };
 export function getSdkIdentifiers(bb: Agent): {

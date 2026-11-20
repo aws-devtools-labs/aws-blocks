@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type {
 	MetricsOptions,
 	EmitOptions,
@@ -22,8 +22,8 @@ import {
 	validateNamespace,
 	mergeDimensions,
 } from './validation.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 export { MetricsErrors } from './errors.js';
 export type {
@@ -53,7 +53,7 @@ export type {
  *
  * **When NOT to use:** If you need structured log output only, use `Logging`.
  * If you need distributed request tracing, use `Tracing`. If you need to store
- * time-series data for querying, use `Database` or `DistributedTable`.
+ * time-series data for querying, use `Database` or `KVStore`.
  *
  * **Best practices:**
  * - Keep dimension cardinality low (avoid user IDs or request IDs as dimensions)
@@ -75,7 +75,7 @@ export type {
  *
  * @example
  * ```typescript
- * import { Metrics } from '@aws-blocks/bb-metrics';
+ * import { Metrics } from '@aws-cdk-blocks/bb-metrics';
  *
  * const metrics = new Metrics(scope, 'appMetrics', {
  *   namespace: 'MyApp/Orders',

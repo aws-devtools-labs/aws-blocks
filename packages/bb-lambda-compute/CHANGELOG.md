@@ -1,5 +1,185 @@
 # @aws-blocks/bb-lambda-compute
 
+## 1.0.0-rc.0
+
+### Major Changes
+
+- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+
+  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+
+  ```diff
+   {
+     "dependencies": {
+  -    "@aws-blocks/blocks": "<your range>",
+  -    "@aws-blocks/core": "<your range>"
+  +    "aws-cdk-blocks": "<your range>",
+  +    "@aws-cdk-blocks/core": "<your range>"
+     }
+   }
+  ```
+
+  ```diff
+  -import { KVStore } from '@aws-blocks/blocks';
+  +import { KVStore } from 'aws-cdk-blocks';
+
+  -import { ApiNamespace } from '@aws-blocks/core';
+  +import { ApiNamespace } from '@aws-cdk-blocks/core';
+  ```
+
+  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
+
+  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
+
+  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
+
+  The old `@aws-blocks/*` packages stop receiving releases.
+
+### Patch Changes
+
+- 1de6ea4: The framework's reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/cdk-blocks/auth/*`, `/cdk-blocks/settings`, `/cdk-blocks/dashboard`, ...). The old `/aws-blocks/` prefix stays served as an alias with the same handlers: the runtime (Lambda, container and dev server) treats `/aws-blocks/...` as `/cdk-blocks/...`, the shared API gateway and the Hosting front doors route both, so already-deployed clients, mobile apps and registered auth callbacks keep working. Clients, generated config and defaults use `/cdk-blocks/`.
+
+  `BLOCKS_RPC_PREFIX` and `BLOCKS_AUTH_PREFIX` now hold the new prefix, and `canonicalBlocksPath()` maps a legacy path to its canonical one.
+
+  **Upgrade:**
+
+  - The default `redirects.callbackPath` of an `Auth` with `providers` becomes `/cdk-blocks/auth/callback`. An external identity provider (OIDC, Google, ...) that only allows the old `/aws-blocks/auth/callback` redirect URI must have the new one registered, or set `redirects.callbackPath: '/aws-blocks/auth/callback'` to keep the old one.
+  - A custom front door or an explicit `apiPaths` that routes `/aws-blocks/*` by hand must also route `/cdk-blocks/*` (or use `cf.apiBehaviors(origins.api)`), or the upgraded frontend's API calls won't reach the backend. A custom front door that records only `/aws-blocks/*` as wired now fails synth with `ProxySameOriginApi`; one that wires only `/cdk-blocks/*` gets a warning that legacy `/aws-blocks/*` clients are not routed.
+  - The built-in CloudFront front door adds one cache behavior (`/aws-blocks/*`). An app already at the distribution's cache-behavior quota (25 by default) needs to free a behavior or raise the quota, or the upgrade fails (at synth when container namespaces add direct behaviors, else at deploy).
+
+  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`. Native clients move tokens stored under a block's old `/aws-blocks/` keys to its new keys, so an upgrade keeps their session.
+
+  The Admin UI calls `/cdk-blocks/api` and retries at `/aws-blocks/api` only when an older dev server answers 404 without a JSON-RPC envelope, so it still works with that server and never runs a method twice.
+
+  A `ContainerCompute` keeps the logical ID and priority of each API listener rule it deployed under `/aws-blocks/api/<name>`, so the upgrade updates the rule's path to `/cdk-blocks/api/<name>` in place rather than replacing it.
+
+- afad513: `defaults.allowedOrigins`: plain origins such as `https://app.example.com` now match exactly (case-insensitive), so their dots are literal. `http`/`https` plain origins are compared in the form the browser sends (default port dropped, internationalized hosts in punycode), and entries with user info, a path, a query or a fragment are rejected. Entries with regex syntax are still anchored regexes, but must compile on their own and escape `.` (unless followed by a quantifier, as in `.*`); glob-style entries such as `https://*.example.com` and patterns with nested quantifiers such as `(a+)+` are rejected, and brace quantifiers are limited to `{n}`. Invalid entries now fail `cdk synth` from `BlocksStack.create()` / `BlocksBackend.create()` with a message naming the entry, and are ignored (and logged) at runtime. The README examples now use plain origins, and suggest `https://[a-z0-9-]+\\.example\\.com` for subdomains.
+- d8a86ee: Update the `LambdaCompute` README and design doc to describe how the compute reaches an app (as the default compute and through `Compute` with `type: 'serverless'`), its options, and its VPC, CORS, tracing, and dashboard behavior. Add tests for the memory, timeout, and VPC placement settings.
+- Updated dependencies [d01c34c]
+- Updated dependencies [75c5d98]
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c67048e]
+- Updated dependencies [b2eb306]
+- Updated dependencies [703238f]
+- Updated dependencies [45a05d1]
+- Updated dependencies [1de6ea4]
+- Updated dependencies [aaf419f]
+- Updated dependencies [5938d8b]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [4665f81]
+- Updated dependencies [1deb34b]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [41968b7]
+- Updated dependencies [8894669]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [5f55dac]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [81113a3]
+- Updated dependencies [c045273]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [384827f]
+- Updated dependencies [58daa51]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [73feb71]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [99660fd]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [cd533c0]
+- Updated dependencies [44c7377]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [4d81f11]
+- Updated dependencies [072c3ff]
+- Updated dependencies [c67048e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [227a856]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [a5f39c3]
+- Updated dependencies [d01c34c]
+- Updated dependencies [5f55dac]
+- Updated dependencies [0ff1e1f]
+- Updated dependencies [d01c34c]
+- Updated dependencies [f7e28b4]
+- Updated dependencies [93d533a]
+- Updated dependencies [adb6077]
+- Updated dependencies [60360c1]
+- Updated dependencies [dd1c554]
+- Updated dependencies [8ece10a]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [6d3077e]
+- Updated dependencies [e1e4844]
+- Updated dependencies [2095f31]
+- Updated dependencies [e50b9e9]
+- Updated dependencies [6d3077e]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-cdk-blocks/core@1.0.0-rc.0
+
 ## 0.7.0
 
 ### Minor Changes

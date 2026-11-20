@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * User-facing error with structured message and resolution guidance.
  * Structured error with code, message, and resolution guidance.

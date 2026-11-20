@@ -243,9 +243,9 @@ function overlaps(a: DeploymentRecord, b: DeploymentRecord): boolean {
 /**
  * DataProvider for the local `blocks dashboard` server.
  *
- * Reads project state from the app directory (.blocks/, package.json) and —
+ * Reads project state from the app directory (.cdk-blocks/, package.json) and —
  * in later milestones — AWS APIs using the developer's local credentials.
- * Deploy history primary source is .blocks/deploy-history.jsonl (written by
+ * Deploy history primary source is .cdk-blocks/deploy-history.jsonl (written by
  * deploy.ts from M1 on); CloudFormation events are only a backfill.
  */
 export class LocalDataProvider implements DataProvider {
@@ -285,7 +285,7 @@ export class LocalDataProvider implements DataProvider {
 		private readonly runDoctorImpl: typeof runDoctor = runDoctor,
 		/** Test seam: source-scan block discovery (never throws by contract). */
 		private readonly discoverBlocksImpl: typeof discoverBlocks = discoverBlocks,
-		/** Test seam: local .blocks-data store read (never throws by contract). */
+		/** Test seam: local .cdk-blocks/local/data store read (never throws by contract). */
 		private readonly readLocalDataImpl: typeof readLocalData = readLocalData,
 		/** Test seam: deployed-store read (never rejects by contract). */
 		private readonly readCloudDataImpl: typeof readCloudData = readCloudData,
@@ -295,7 +295,7 @@ export class LocalDataProvider implements DataProvider {
 		 * changes meaning by this addition.
 		 */
 		private readonly putLocalRecordImpl: typeof putLocalRecord = putLocalRecord,
-		/** Test seam: local .bb-data record delete. */
+		/** Test seam: local .cdk-blocks/local/data record delete. */
 		private readonly deleteLocalRecordImpl: typeof deleteLocalRecord = deleteLocalRecord,
 		/** Test seam: deployed-store record put. */
 		private readonly putCloudRecordImpl: typeof putCloudRecord = putCloudRecord,
@@ -518,7 +518,7 @@ export class LocalDataProvider implements DataProvider {
 	 * "not deployed" about a standing stack.
 	 *
 	 * Stack name precedence is outputs document, then the deploy record, then the
-	 * name derived from `.blocks/config.json` + `sandbox-id.txt`. The derived name
+	 * name derived from `.cdk-blocks/config.json` + `sandbox-id.txt`. The derived name
 	 * is last because it is re-derived from two local files and goes stale: the
 	 * sandbox id is per-machine and gitignored, so losing it mints a new one and
 	 * the derived name starts naming a stack that does not exist.
@@ -561,7 +561,7 @@ export class LocalDataProvider implements DataProvider {
 			return {
 				stage,
 				groupsSource: 'unavailable',
-				groupsError: `Could not resolve the CloudFormation stack name for stage "${stage}" — deploy first, or check .blocks/config.json.`,
+				groupsError: `Could not resolve the CloudFormation stack name for stage "${stage}" — deploy first, or check .cdk-blocks/config.json.`,
 				groupsErrorCode: 'UNKNOWN',
 				awsContext,
 				groups: [],
@@ -771,7 +771,7 @@ export class LocalDataProvider implements DataProvider {
 						stage,
 						state: 'not-deployed',
 						regionSource,
-						stateReason: `No stack name could be resolved for "${stage}" — no ${stage} outputs file, no deploy record, and no .blocks/config.json to derive one from. Run \`${WRITER_COMMAND[stage === 'production' ? 'production' : 'sandbox']}\` first.`,
+						stateReason: `No stack name could be resolved for "${stage}" — no ${stage} outputs file, no deploy record, and no .cdk-blocks/config.json to derive one from. Run \`${WRITER_COMMAND[stage === 'production' ? 'production' : 'sandbox']}\` first.`,
 					};
 				}
 
@@ -1127,7 +1127,7 @@ export class LocalDataProvider implements DataProvider {
 	 *
 	 * 1. `blockFullId` is looked up in {@link listBlocks}. An unknown id is
 	 *    `BLOCK_NOT_FOUND` and NEITHER reader runs.
-	 * 2. `local` reads the on-disk .blocks-data stores under projectRoot.
+	 * 2. `local` reads the on-disk .cdk-blocks/local/data stores under projectRoot.
 	 * 3. `cloud` resolves the stage's stack, reuses the Resources view's
 	 *    block-labelled groups, and reads the deployed stores.
 	 *
@@ -1509,7 +1509,7 @@ export class LocalDataProvider implements DataProvider {
 				stage,
 				mode,
 				ok: true,
-				message: `Saved to .bb-data/settings.json. The next local run reads the new value.`,
+				message: `Saved to .cdk-blocks/local/data/settings.json. The next local run reads the new value.`,
 				stored: storedView(encoded.value, secret),
 				schemaUnchecked,
 			};
@@ -1704,14 +1704,14 @@ export class LocalDataProvider implements DataProvider {
 	/**
 	 * Stack naming scheme (mirrors core's getStackName, D-012):
 	 * production → `<stackId>-prod`; sandbox → `<stackId>-<sandboxId>` with
-	 * the sandbox id read (never created) from .blocks-sandbox/sandbox-id.txt.
+	 * the sandbox id read (never created) from .cdk-blocks-sandbox/sandbox-id.txt.
 	 */
 	private resolveStackName(stage: string): string | undefined {
 		const stackId = this.readStackId();
 		if (!stackId) return undefined;
 		if (stage === 'production') return `${stackId}-prod`;
 		if (stage === 'sandbox') {
-			const idFile = join(this.projectRoot, '.blocks-sandbox', 'sandbox-id.txt');
+			const idFile = join(this.projectRoot, '.cdk-blocks-sandbox', 'sandbox-id.txt');
 			if (!existsSync(idFile)) return undefined;
 			const sandboxId = readFileSync(idFile, 'utf-8').trim();
 			return sandboxId ? `${stackId}-${sandboxId}` : undefined;
@@ -1720,12 +1720,18 @@ export class LocalDataProvider implements DataProvider {
 	}
 
 	private readStackId(): string | undefined {
-		try {
-			const config = JSON.parse(readFileSync(join(this.projectRoot, '.blocks', 'config.json'), 'utf-8'));
-			return typeof config.stackId === 'string' && config.stackId ? config.stackId : undefined;
-		} catch {
-			return undefined;
+		// Per key across both files, as core's `getStackId` does: a renamed config
+		// holding only a telemetry projectId must not shadow a legacy stackId, or an
+		// upgraded app opens the dashboard with no stack names.
+		for (const dir of ['.cdk-blocks', '.blocks']) {
+			try {
+				const config = JSON.parse(readFileSync(join(this.projectRoot, dir, 'config.json'), 'utf-8'));
+				if (typeof config.stackId === 'string' && config.stackId) return config.stackId;
+			} catch {
+				// Missing or invalid: try the other file.
+			}
 		}
+		return undefined;
 	}
 
 	private readProjectName(): string {
@@ -1742,25 +1748,28 @@ export class LocalDataProvider implements DataProvider {
 		// Blocks today knows exactly two stages. A richer stage model is a
 		// separate core work stream; the dashboard renders what exists.
 		const stages: StageInfo[] = [{ name: 'sandbox' }, { name: 'production' }];
-		try {
-			const config = JSON.parse(readFileSync(join(this.projectRoot, '.blocks', 'config.json'), 'utf-8'));
-			if (typeof config.stackId === 'string') {
-				for (const s of stages) s.stackName = config.stackId;
-			}
-		} catch {
-			// Not deployed yet — stages stay unresolved.
+		// Shares readStackId's per-key fallback, so an upgraded app still shows its
+		// stack names instead of leaving both stages unresolved.
+		const stackId = this.readStackId();
+		if (stackId !== undefined) {
+			for (const s of stages) s.stackName = stackId;
 		}
 		return stages;
 	}
 
 	private readDeployHistory(): DeploymentRecord[] {
-		const historyPath = join(this.projectRoot, '.blocks', 'deploy-history.jsonl');
-		if (!existsSync(historyPath)) return [];
+		// Both files, pre-rename first, so an upgraded app's earlier deploys stay on
+		// the Deployments page instead of it opening empty.
+		const paths = [
+			join(this.projectRoot, '.blocks', 'deploy-history.jsonl'),
+			join(this.projectRoot, '.cdk-blocks', 'deploy-history.jsonl'),
+		].filter((p) => existsSync(p));
+		if (paths.length === 0) return [];
 		// Each deploy appends an IN_PROGRESS record at start and a terminal
 		// record with the same id at the end — merge by id, last record wins.
 		// A dangling IN_PROGRESS record (process died mid-deploy) stays visible.
 		const byId = new Map<string, DeploymentRecord>();
-		for (const line of readFileSync(historyPath, 'utf-8').split('\n')) {
+		for (const line of paths.map((p) => readFileSync(p, 'utf-8')).join('\n').split('\n')) {
 			const trimmed = line.trim();
 			if (!trimmed) continue;
 			try {

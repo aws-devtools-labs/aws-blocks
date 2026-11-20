@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Phase snapshot for later replay: the agent's app (no node_modules) and the verifier state."""
 import os
 from pathlib import Path
@@ -16,7 +19,7 @@ def _keep(member):
 
 
 def capture(app, state, target):
-    """Write `target` atomically: todo-app/ (with .bb-data and lockfile) and verifier-state.json."""
+    """Write `target` atomically: todo-app/ (with .cdk-blocks/local/data and lockfile) and verifier-state.json."""
     target = Path(target)
     partial = target.with_name(target.name + '.partial')
     with tarfile.open(partial, 'w:gz') as archive:

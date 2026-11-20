@@ -18,9 +18,10 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
-import { isBlocksError } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { signSessionId } from './cookies.js';
 import { AuthErrors } from './index.aws.js';
 import type { SessionStore } from './sessions.js';
@@ -34,10 +35,10 @@ import {
 	TEST_CLIENT_ID,
 } from './test-support/aws-harness.js';
 
-const DEFAULT_TTL = 400 * 86400;
+const DEFAULT_TTL = 30 * 86400;
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** Signed in, but the stored access token has already expired. */
 async function signedInWithExpiredAccess(opts: { refreshToken?: string | null } = {}) {
@@ -111,6 +112,37 @@ describe('AWS session lookup (unexpired access token)', () => {
 		assert.deepStrictEqual(h.sent, []);
 	});
 
+	test('a cookie from before the upgrade (its row is only in the old `sessions` store) → signed out, cookie cleared, 401 on a guarded call', async () => {
+		const h = makeAwsAuth();
+		const b = new Browser();
+		const sid = await signInAs(h, b, 'alice');
+		const cookieValue = b.jar.get(h.cookieName);
+		assert.ok(cookieValue);
+		// What a deployment of the release before left: the row under the old child
+		// id `sessions`, and a cookie signed with the same secret. The session store
+		// (child id `session-store`) has no such row.
+		const record = await h.lookupSession(sid);
+		assert.ok(record);
+		const oldStore = new KVStore<unknown>(h.auth, 'sessions');
+		await oldStore.put(sid, record);
+		await h.deleteSession(sid);
+
+		assert.strictEqual(await b.request((ctx) => h.auth.getCurrentUser(ctx)), null);
+		assert.ok(setCookieFor(b.lastSetCookies, h.cookieName)?.includes('Max-Age=0'));
+		assert.strictEqual(b.jar.get(h.cookieName), undefined);
+
+		const stale = new Browser();
+		stale.jar.set(h.cookieName, cookieValue);
+		assert.strictEqual(await stale.request((ctx) => h.auth.checkAuth(ctx)), false);
+		stale.jar.set(h.cookieName, cookieValue);
+		await assert.rejects(
+			() => stale.request((ctx) => h.auth.requireAuth(ctx)),
+			(e: Error & { status?: number }) => e.status === 401 && isBlocksError(e, AuthErrors.NotAuthenticated),
+		);
+		assert.deepStrictEqual(h.sent, [], 'no Cognito call: the old row is never read, so nothing is refreshed');
+		assert.deepStrictEqual(await oldStore.get(sid), record, 'the old row is not touched');
+	});
+
 	test('requireAuth with no session → 401 NotAuthenticatedException', async () => {
 		const h = makeAwsAuth();
 		const b = new Browser();
@@ -122,19 +154,18 @@ describe('AWS session lookup (unexpired access token)', () => {
 });
 
 describe('AWS session refresh (expired access token)', () => {
-	test('sends InitiateAuth REFRESH_TOKEN_AUTH with the stored refresh token', async () => {
+	test('sends GetTokensFromRefreshToken with the stored refresh token', async () => {
 		const { h, b, tokens } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => ({
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
 			AuthenticationResult: h.idp.authResult('alice', { refreshToken: null }),
 		}));
 		await b.request((ctx) => h.auth.getCurrentUser(ctx));
 		assert.deepStrictEqual(h.sent, [
 			{
-				name: 'InitiateAuthCommand',
+				name: 'GetTokensFromRefreshTokenCommand',
 				input: {
-					AuthFlow: 'REFRESH_TOKEN_AUTH',
 					ClientId: TEST_CLIENT_ID,
-					AuthParameters: { REFRESH_TOKEN: tokens.RefreshToken },
+					RefreshToken: tokens.RefreshToken,
 				},
 			},
 		]);
@@ -145,7 +176,7 @@ describe('AWS session refresh (expired access token)', () => {
 		const issuedAt = (await h.lookupSession(sid))?.issuedAt;
 		assert.strictEqual(typeof issuedAt, 'number');
 		const fresh = h.idp.authResult('alice', { refreshToken: null, claims: { email: 'new@example.com' } });
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: fresh }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: fresh }));
 		const user = await b.request((ctx) => h.auth.getCurrentUser(ctx));
 
 		assert.deepStrictEqual(
@@ -162,15 +193,17 @@ describe('AWS session refresh (expired access token)', () => {
 				accessToken: fresh.AccessToken,
 				refreshToken: tokens.RefreshToken,
 				issuedAt,
+				// Sign-in wrote version 1; each later write stores the next one.
+				version: 2,
 			},
-			// Conditional on the row this request read, so a concurrent sign-out or refresh wins.
-			options: { ttlSeconds: DEFAULT_TTL, ifValueEquals: { ...tokensRow(tokens), issuedAt } },
+			// Conditional on the version of the row this request read, so a concurrent sign-out or refresh wins.
+			options: { ttlSeconds: DEFAULT_TTL, ifFieldEquals: { version: 1 } },
 		});
 	});
 
 	test('stores a rotated refresh token when Cognito returns one', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => ({
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
 			AuthenticationResult: h.idp.authResult('alice', { refreshToken: 'rotated-rt' }),
 		}));
 		await b.request((ctx) => h.auth.getCurrentUser(ctx));
@@ -179,7 +212,7 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('re-issues the cookie for the same session id with a fresh Max-Age', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
 		await b.request((ctx) => h.auth.getCurrentUser(ctx));
 		const line = setCookieFor(b.lastSetCookies, h.cookieName);
 		assert.ok(line?.includes(`Max-Age=${DEFAULT_TTL}`));
@@ -188,15 +221,15 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('after a refresh the next request is served without another Cognito call', async () => {
 		const { h, b } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
 		await b.request((ctx) => h.auth.getCurrentUser(ctx));
 		await b.request((ctx) => h.auth.getCurrentUser(ctx));
-		assert.deepStrictEqual(h.sentNames(), ['InitiateAuthCommand']);
+		assert.deepStrictEqual(h.sentNames(), ['GetTokensFromRefreshTokenCommand']);
 	});
 
 	test('a refresh that completes after sign-out does not restore the session', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', async () => {
+		h.on('GetTokensFromRefreshTokenCommand', async () => {
 			// signOut() on another request deletes the session while this refresh is in flight.
 			await h.deleteSession(sid);
 			return { AuthenticationResult: h.idp.authResult('alice') };
@@ -210,7 +243,7 @@ describe('AWS session refresh (expired access token)', () => {
 	test('a rejected refresh never deletes the session a concurrent request just refreshed', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
 		const concurrent = h.idp.authResult('alice', { claims: { email: 'concurrent@example.com' } });
-		h.on('InitiateAuthCommand', async () => {
+		h.on('GetTokensFromRefreshTokenCommand', async () => {
 			// Another request refreshes the same session first...
 			await sessionsOf(h).replace(sid, tokensRow(concurrent));
 			// ...and this request's own refresh is rejected (its refresh token was rotated away).
@@ -225,7 +258,7 @@ describe('AWS session refresh (expired access token)', () => {
 	test('a refresh whose write loses to a concurrent refresh serves the concurrent one and writes nothing', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
 		const concurrent = h.idp.authResult('alice', { claims: { email: 'concurrent@example.com' } });
-		h.on('InitiateAuthCommand', async () => {
+		h.on('GetTokensFromRefreshTokenCommand', async () => {
 			await sessionsOf(h).replace(sid, tokensRow(concurrent));
 			return { AuthenticationResult: h.idp.authResult('alice', { claims: { email: 'mine@example.com' } }) };
 		});
@@ -236,7 +269,7 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('a rejected refresh → signed out, record deleted, cookie cleared', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => {
+		h.on('GetTokensFromRefreshTokenCommand', () => {
 			throw cognitoError('NotAuthorizedException', 'Refresh Token has been revoked');
 		});
 		assert.strictEqual(await b.request((ctx) => h.auth.getCurrentUser(ctx)), null);
@@ -256,7 +289,7 @@ describe('AWS session refresh (expired access token)', () => {
 			cognitoError('PasswordResetRequiredException', 'Password reset required for the user'),
 		]) {
 			const { h, b, sid } = await signedInWithExpiredAccess();
-			h.on('InitiateAuthCommand', () => {
+			h.on('GetTokensFromRefreshTokenCommand', () => {
 				throw err;
 			});
 			await assert.rejects(
@@ -278,7 +311,7 @@ describe('AWS session refresh (expired access token)', () => {
 			new TypeError('fetch failed'),
 		]) {
 			const { h, b, sid } = await signedInWithExpiredAccess();
-			h.on('InitiateAuthCommand', () => {
+			h.on('GetTokensFromRefreshTokenCommand', () => {
 				throw err;
 			});
 			await assert.rejects(
@@ -291,14 +324,14 @@ describe('AWS session refresh (expired access token)', () => {
 			assert.ok(await h.lookupSession(sid), `${err.name}: the session survives`);
 			assert.ok(b.jar.get(h.cookieName), `${err.name}: the cookie is kept`);
 			// Once Cognito recovers, the same session refreshes normally.
-			h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
+			h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
 			assert.strictEqual((await b.request((ctx) => h.auth.requireAuth(ctx))).username, 'alice');
 		}
 	});
 
 	test('a refresh that returns no tokens is treated as rejected', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: {} }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: {} }));
 		assert.strictEqual(await b.request((ctx) => h.auth.getCurrentUser(ctx)), null);
 		assert.strictEqual(await h.lookupSession(sid), null);
 		assert.strictEqual(b.jar.get(h.cookieName), undefined);
@@ -328,7 +361,7 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('requireAuth after a rejected refresh → 401 NotAuthenticatedException', async () => {
 		const { h, b } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => {
+		h.on('GetTokensFromRefreshTokenCommand', () => {
 			throw cognitoError('NotAuthorizedException', 'Refresh Token has expired');
 		});
 		await assert.rejects(
@@ -340,10 +373,10 @@ describe('AWS session refresh (expired access token)', () => {
 	test('token-bearing calls refresh first, then use the NEW access token', async () => {
 		const { h, b } = await signedInWithExpiredAccess();
 		const fresh = h.idp.authResult('alice');
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: fresh }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: fresh }));
 		h.on('ChangePasswordCommand', () => ({}));
 		await b.request((ctx) => changePassword(h, ctx));
-		assert.deepStrictEqual(h.sentNames(), ['InitiateAuthCommand', 'ChangePasswordCommand']);
+		assert.deepStrictEqual(h.sentNames(), ['GetTokensFromRefreshTokenCommand', 'ChangePasswordCommand']);
 		assert.deepStrictEqual(h.sent[1].input, {
 			AccessToken: fresh.AccessToken,
 			PreviousPassword: 'Old!pass1',
@@ -353,14 +386,14 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('token-bearing calls after a rejected refresh → 401, record deleted, cookie cleared', async () => {
 		const { h, b, sid } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => {
+		h.on('GetTokensFromRefreshTokenCommand', () => {
 			throw cognitoError('NotAuthorizedException', 'Refresh Token has expired');
 		});
 		await assert.rejects(
 			() => b.request((ctx) => changePassword(h, ctx)),
 			(e: Error & { status?: number }) => e.status === 401 && isBlocksError(e, AuthErrors.NotAuthenticated),
 		);
-		assert.deepStrictEqual(h.sentNames(), ['InitiateAuthCommand']);
+		assert.deepStrictEqual(h.sentNames(), ['GetTokensFromRefreshTokenCommand']);
 		assert.strictEqual(await h.lookupSession(sid), null);
 		assert.strictEqual(b.jar.get(h.cookieName), undefined);
 	});
@@ -372,7 +405,7 @@ describe('AWS session refresh (expired access token)', () => {
 		const genuine = ctx.h.idp.authResult('alice');
 		const payload = JSON.parse(Buffer.from(genuine.IdToken.split('.')[1], 'base64url').toString());
 		const forged = ctx.h.idp.sign({ ...payload, ...claims }, foreign);
-		ctx.h.on('InitiateAuthCommand', () => ({ AuthenticationResult: { ...genuine, IdToken: forged } }));
+		ctx.h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: { ...genuine, IdToken: forged } }));
 		return { ...ctx, forged };
 	}
 
@@ -388,7 +421,7 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('a refreshed ID token for another app client is rejected the same way', async () => {
 		const { h, b, sid } = await refreshWithForgedIdToken();
-		h.on('InitiateAuthCommand', () => ({
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
 			AuthenticationResult: {
 				...h.idp.authResult('alice'),
 				IdToken: h.idp.idToken('alice', { aud: 'other-client' }),
@@ -442,15 +475,15 @@ describe('AWS getAuthSession', () => {
 		const tokens = h.idp.authResult('alice');
 		await signInAs(h, b, 'alice', tokens);
 		const fresh = h.idp.authResult('alice');
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: fresh }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: fresh }));
 		const s = await b.request((ctx) => h.auth.getAuthSession(ctx, { forceRefresh: true }));
-		assert.deepStrictEqual(h.sent[0].input.AuthParameters, { REFRESH_TOKEN: tokens.RefreshToken });
+		assert.strictEqual((h.sent[0].input as { RefreshToken?: string }).RefreshToken, tokens.RefreshToken);
 		assert.strictEqual(String(s.tokens?.accessToken), fresh.AccessToken);
 	});
 
 	test('a rejected refresh → { tokens: undefined } and the cookie is cleared', async () => {
 		const { h, b } = await signedInWithExpiredAccess();
-		h.on('InitiateAuthCommand', () => {
+		h.on('GetTokensFromRefreshTokenCommand', () => {
 			throw cognitoError('NotAuthorizedException', 'Refresh Token has expired');
 		});
 		assert.deepStrictEqual(await b.request((ctx) => h.auth.getAuthSession(ctx)), { tokens: undefined });
@@ -559,7 +592,8 @@ describe('AWS session cookie parse/verify — bad cookies mean signed-out, never
 
 describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', () => {
 	/** An SDK-shaped store failure whose text names an account and a table. */
-	const STORE_FAILURE = 'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
+	const STORE_FAILURE =
+		'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
 
 	/** Make the session store's deletes fail, as a transient DynamoDB fault would. */
 	function failSessionDeletes(h: ReturnType<typeof makeAwsAuth>): void {
@@ -593,7 +627,9 @@ describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', 
 		await signInAs(h, b, 'alice');
 		failSessionDeletes(h);
 		const state = await b.request((ctx) =>
-			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({ action: 'signOut' }),
+			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({
+				action: 'signOut',
+			}),
 		);
 		assert.strictEqual(state.state, 'signedOut');
 		assert.strictEqual(state.errorName, AuthErrors.SignOutIncomplete);

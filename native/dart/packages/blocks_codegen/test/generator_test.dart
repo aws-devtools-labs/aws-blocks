@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -38,7 +41,7 @@ void main() {
         ),
       );
       expect(output, contains('class Blocks {'));
-      expect(output, contains('late final ApiApi api;'));
+      expect(output, contains('late final Api api;'));
       expect(output, contains("Blocks({required String baseUrl"));
       expect(output, contains("_client.call('api.greet'"));
     });

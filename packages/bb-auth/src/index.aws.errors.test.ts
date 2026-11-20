@@ -29,9 +29,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
-import { ApiError, isBlocksError, registerSdkIdentifiers } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { ApiError, isBlocksError, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { WRONG_CODE_MESSAGE } from './enumeration.js';
 import {
 	ACCESS_DENIED_MESSAGE,
@@ -63,8 +63,8 @@ function expectedMessage(name: string): string {
 	return name === AuthErrors.InvalidPassword ? passwordPolicyMessage(undefined) : clientMessageFor(name);
 }
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** `createApi()` returns a context-bound callable; narrow it to the public surface. */
 function apiFor<O extends AuthOptions>(auth: Auth<O>, ctx: BlocksContext): AuthStateApi {

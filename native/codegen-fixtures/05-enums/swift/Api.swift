@@ -17,19 +17,19 @@ public final nonisolated class Api: Sendable {
     public func setStatus(status: SetStatus.Status) async throws -> SetStatus.Result {
         let request = BlocksRequest(method: "api.setStatus", params: [status], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.setStatus") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.setStatus") }
         return try JSONDecoder().decode(SetStatus.Result.self, from: result)
     }
 
     public enum SetStatus {
 
-        public enum Status: String, Codable {
+        public enum Status: String, Codable, Sendable {
             case active
             case inactive
             case pending
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let status: Status
             public let updatedAt: String
 
@@ -38,10 +38,50 @@ public final nonisolated class Api: Sendable {
                 self.updatedAt = updatedAt
             }
 
-            public enum Status: String, Codable {
+            public enum Status: RawRepresentable, Codable, Hashable, Sendable {
                 case active
                 case inactive
                 case pending
+                case unknown(String)
+
+                public init(rawValue: String) {
+                    switch rawValue {
+                    case "active": self = .active
+                    case "inactive": self = .inactive
+                    case "pending": self = .pending
+                    default: self = .unknown(rawValue)
+                    }
+                }
+
+                public var rawValue: String {
+                    switch self {
+                    case .active: return "active"
+                    case .inactive: return "inactive"
+                    case .pending: return "pending"
+                    case .unknown(let value): return value
+                    }
+                }
+
+                public static func == (lhs: Self, rhs: Self) -> Bool {
+                    switch (lhs, rhs) {
+                    case (.active, .active): return true
+                    case (.inactive, .inactive): return true
+                    case (.pending, .pending): return true
+                    case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+                    default: return false
+                    }
+                }
+
+                public func hash(into hasher: inout Hasher) {
+                    switch self {
+                    case .active: hasher.combine(0)
+                    case .inactive: hasher.combine(1)
+                    case .pending: hasher.combine(2)
+                    case .unknown(let value):
+                        hasher.combine(3)
+                        hasher.combine(value)
+                    }
+                }
             }
         }
     }
@@ -80,5 +120,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

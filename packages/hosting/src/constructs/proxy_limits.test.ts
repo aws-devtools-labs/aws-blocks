@@ -7,7 +7,7 @@
  * is capped by the response limit of that path: 1 MB for an ALB Lambda
  * target, 6 MB for a Lambda behind API Gateway (Lambda's synchronous response
  * limit, under API Gateway's 10 MB payload limit). Synth lists every build
- * asset over the limit (`@aws-blocks/hosting:AssetExceedsProxyLimit`).
+ * asset over the limit (`@aws-cdk-blocks/hosting:AssetExceedsProxyLimit`).
  */
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -20,8 +20,8 @@ import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
-const WARNING = '@aws-blocks/hosting:AssetExceedsProxyLimit';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
+const WARNING = '@aws-cdk-blocks/hosting:AssetExceedsProxyLimit';
 
 describe('a build asset too large for the Lambda asset proxy is reported at synth', () => {
   let tmpDir: string;
@@ -73,7 +73,8 @@ describe('a build asset too large for the Lambda asset proxy is reported at synt
     frontDoor: HostingConstructProps['frontDoor'],
     extra: Partial<HostingConstructProps> = {},
   ): string[] => {
-    const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
     new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, ...extra });
     return Annotations.fromStack(stack)
       .findWarning('*', Match.stringLikeRegexp(WARNING))

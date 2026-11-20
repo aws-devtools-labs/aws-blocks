@@ -4,7 +4,7 @@
 /**
  * The per-call `fetch` store contract between the generated client
  * (`ApiNamespaceClient`, this package's browser-safe client entry) and the
- * Node-only test helpers in `@aws-blocks/blocks/utils` (`createTestClient`).
+ * Node-only test helpers in `aws-cdk-blocks/utils` (`createTestClient`).
  *
  * A Node.js process may set, on `globalThis` under {@link CLIENT_FETCH_STORE},
  * an `AsyncLocalStorage`-like object `{ getStore(): typeof fetch | undefined }`.
@@ -12,7 +12,7 @@
  * that `fetch` instead of the global one; every other call is unchanged. The
  * client only looks the store up in Node.js, so browser bundles keep the plain
  * `fetch` path. Defined here, once, and imported by both sides (the setter
- * through `@aws-blocks/core/bb-utils`). A `Symbol.for` key, so a second copy of
+ * through `@aws-cdk-blocks/core/bb-utils`). A `Symbol.for` key, so a second copy of
  * this package in one process still agrees on it.
  *
  * @internal

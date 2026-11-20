@@ -4,6 +4,8 @@
 /**
  * VPC Smoke Tests — validates each BB can reach its backing service from
  * within a VPC by calling API methods through direct HTTP/RPC.
+ *
+ * This suite's scripts only echo for now (issue #987).
  */
 
 import { test } from 'node:test';
@@ -15,13 +17,13 @@ import { dirname, join } from 'node:path';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
+const backendPath = join(__dirname, '..', 'cdk-blocks', 'index.cdk.ts');
 // Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
 // production run must not read the sandbox's.
 const outputsPath = join(
   __dirname,
   '..',
-  '.blocks-sandbox',
+  '.cdk-blocks-sandbox',
   ENV === 'production' ? 'outputs.production.json' : 'outputs.json',
 );
 
@@ -87,7 +89,7 @@ test('VPC Smoke Tests', async (t) => {
     assert.strictEqual(result, 'hello-vpc');
   });
 
-  await t.test('DistributedTable: put + query via DynamoDB gateway endpoint', async () => {
+  await t.test('KVStore (schema + key): put + query via DynamoDB gateway endpoint', async () => {
     const pk = `vpc-smoke-${Date.now()}`;
     const items = await rpc('tablePutQuery', pk, 'item-1', 'vpc-test-data') as any[];
     assert.ok(items.length >= 1);
@@ -115,7 +117,9 @@ test('VPC Smoke Tests', async (t) => {
     assert.strictEqual(result, 'published');
   });
 
-  await t.test('Database (Aurora): query via Secrets Manager + RDS Data API endpoints', async () => {
+  // The cluster is outside the VPC: this proves the Lambda's subnets route out to
+  // the cluster's public endpoint, and that its IAM token is accepted there.
+  await t.test('Database (Aurora DSQL): query the public cluster endpoint over the VPC egress route', async () => {
     const result = await rpc('dbQuery') as any[];
     assert.ok(result.length >= 1);
     assert.strictEqual(result[0].ping, 1);

@@ -184,7 +184,7 @@ function classify(
  * The app scope: the top-level construct whose children are the user's blocks.
  *
  * Source discovery NAMES the scope — `new Scope(this, 'rota')` is parsed out of
- * `aws-blocks/` and reported as `ScopeInfo` — so when that name is present
+ * `cdk-blocks/` and reported as `ScopeInfo` — so when that name is present
  * among the deployed template's top-level constructs, it IS the scope and no
  * inference is needed. {@link inferAppScope} is the fallback for the two cases
  * discovery cannot answer: it failed, or it names a scope this stack does not

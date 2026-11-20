@@ -1,4 +1,4 @@
-# AWS Blocks Kotlin
+# AWS CDK Blocks Kotlin
 
 [![Maven Central](https://img.shields.io/maven-central/v/com.aws.blocks.kotlin/runtime)](https://central.sonatype.com/search?namespace=com.aws.blocks.kotlin)
 [![Kotlin](https://img.shields.io/badge/kotlin-2.2.10-blue.svg?logo=kotlin)](https://kotlinlang.org)
@@ -6,7 +6,7 @@
 ![iOS](http://img.shields.io/badge/platform-ios-CDCDCD.svg?style=flat)
 ![Desktop](http://img.shields.io/badge/platform-desktop-DB413D.svg?style=flat)
 
-A Gradle plugin and Kotlin Multiplatform runtime that generates type-safe client code from an AWS Blocks spec. It parses your spec at build time and produces Kotlin interfaces, data classes, and a suspending client implementation that calls your backend methods with full type safety across Android, iOS, and JVM.
+A Gradle plugin and Kotlin Multiplatform runtime that generates type-safe client code from an AWS CDK Blocks spec. It parses your spec at build time and produces Kotlin interfaces, data classes, and a suspending client implementation that calls your backend methods with full type safety across Android, iOS, and JVM.
 
 ## Quick Start
 
@@ -16,6 +16,7 @@ In your app module's `build.gradle.kts`:
 
 ```kotlin
 plugins {
+    id("org.jetbrains.kotlin.plugin.serialization") version "<kotlin version>"
     id("com.aws.blocks.kotlin") version "<version>"
 }
 ```
@@ -31,8 +32,8 @@ dependencies {
 ### 3. Point at your spec
 
 ```kotlin
-awsBlocks {
-    apiSpec = rootProject.file("aws-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
+cdkBlocks {
+    apiSpec = rootProject.file("cdk-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
     packageName = "com.example.myapp.generated" // default: "com.aws.blocks.generated"
 }
 ```
@@ -67,6 +68,73 @@ closing the engine it owns — is covered in
 
 > **On JVM and desktop, give the client an [`applicationId`](docs/runtime-configuration.md#identifying-your-application)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
+## Using Auth
+
+An AWS CDK Blocks `Auth` block exposes its sign-in flow as a state machine (`export const authApi =
+auth.createApi()` in the backend). `getAuthState()` reports the current state and the actions
+available from it; the app renders those actions and submits each one through `setAuthState`. A
+block with federated providers also exports its OIDC client (`export const oidcAuthApi =
+auth.createOidcApi()`), and the federated sign-in buttons come from that client, not from the
+state machine:
+
+```kotlin
+val blocks = Blocks(BlocksConfig(server = Blocks.defaultServer, applicationId = "com.example.myapp"))
+val oidc = blocks.oidcAuthApi.getClient() // keep it for the app's lifetime
+
+// On launch: getAuthState() reports a session from an earlier launch, for every Auth block.
+var state = blocks.authApi.getAuthState()
+
+// One button per federated provider the client can sign in with. `entries` is what the spec named;
+// `oidc.providers` is what the backend serves now, so show the ones both agree on.
+OidcAuthApi.GetClient.Provider.entries
+    .filter { it.providerName in oidc.providers }
+    .forEach { provider ->
+        Button(onClick = {
+            scope.launch {
+                oidc.signIn(provider) // opens the browser
+                state = blocks.authApi.getAuthState()
+            }
+        }) { Text("Sign in with ${provider.providerName}") }
+    }
+
+// Everything else comes from state: whether the user is signed in, and the actions to render
+// (password sign-in, sign-up, MFA steps). A plain action is submitted with its fields as input:
+state = blocks.authApi.setAuthState(AuthApi.SetAuthState.Input.SignIn(username, password))
+```
+
+- **Federated sign-in** buttons come from the client's providers, one per provider, each calling
+  `oidc.signIn(provider)` and then `getAuthState()`. Don't render the state machine's `signIn:<id>`
+  actions as buttons.
+- **Plain actions** (no `url`) go through `setAuthState`, with the action's `fields` as input. The
+  response is the next state. `username` and `password` above are the values the user entered.
+- **`signOut` with a `url`** belongs to a federated session. Run `oidc.signOut()`, then call
+  `getAuthState()`. It returns the identity provider's logout URL, or `null`; the SDK does not open
+  it, so open it yourself if the provider's own session should end too. Never submit this action
+  through `setAuthState`: that signs out without the logout URL, so the provider's session stays
+  and can sign the user straight back in.
+- **`unavailable`** on an action means the backend offers it but can't run it now. Show the action
+  disabled, with that text as the reason.
+- **`capability: webauthn-*`** actions need a passkey ceremony the Kotlin SDK does not run. Hide
+  them.
+- **New actions are additive.** A backend can add actions to `setAuthState` over time, so treat an
+  action name you don't recognize as one to skip, not as an error.
+
+Call `getAuthState()` on launch to learn whether a session from an earlier launch is still signed
+in. It works for every `Auth` block. `oidc.restore()` returns the same user and settles
+`oidc.authState`, but only a block with federated providers serves it; any other answers 404.
+
+On Android and iOS, `relayTo` is a custom scheme, which any installed app can also register, so
+another app may receive the sign-in callback. PKCE is what keeps that from becoming a takeover: the
+callback carries only the authorization code, and the backend exchanges it only together with the
+code verifier, which never leaves your app. A verified link (an Android App Link or an iOS universal
+link) would stop other apps from receiving the callback at all, and is the better choice once the
+SDK supports it; the Gradle plugin registers a scheme only today, so don't set `relayTo` to an
+`https` URL.
+
+Every API reached through `blocks` shares one cookie jar, so methods the backend gates with
+`requireAuth` work after either path signs in. See [OIDC](docs/oidc.md) for the relay scheme,
+JVM landing pages and typed providers.
+
 ## Generated types
 
 A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class whose known properties are typed and whose `attributes: Map<String, V>` holds every other key. Those keys are flat on the wire, next to the properties, in both directions. For example, the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way; with `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`. An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins. If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
@@ -79,7 +147,7 @@ Generated names follow the spec, and the wire keeps the spec's names. A property
 
 | Guide | Covers |
 |---|---|
-| [Gradle plugin](docs/gradle-plugin.md) | the full `awsBlocks { }` block, tasks, and multi-module setups |
+| [Gradle plugin](docs/gradle-plugin.md) | the full `cdkBlocks { }` block, tasks, and multi-module setups |
 | [Runtime configuration](docs/runtime-configuration.md) | `BlocksConfig`, per-target configuration, where the session is stored, signing out |
 | [OIDC](docs/oidc.md) | sign-in, relay scheme registration, JVM landing pages, typed providers |
 | [Transferables](docs/transferables.md) | results that are live objects rather than data |
@@ -94,9 +162,9 @@ iOS and desktop.
 
 | Platform | Engine | Cookie Storage                                                                                                          |
 |----------|--------|-------------------------------------------------------------------------------------------------------------------------|
-| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
+| Android | OkHttp | Android Keystore AES-256-GCM key over SharedPreferences, in the app's sandbox                                            |
 | iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
-| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#identifying-your-application) — in memory if no id is set |
+| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#what-desktop-storage-protects), with the key held by the OS — in memory if no id is set |
 
 ## Support by Target
 

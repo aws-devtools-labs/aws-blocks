@@ -19,7 +19,7 @@
  *
  * @example
  * ```ts
- * import { escapeRegExp } from '@aws-blocks/core/bb-utils';
+ * import { escapeRegExp } from '@aws-cdk-blocks/core/bb-utils';
  *
  * const cookie = new RegExp(`(?:^|;\\s*)${escapeRegExp(name)}=([^;]+)`);
  * ```
@@ -56,7 +56,7 @@ const HTML_ESCAPES: Record<string, string> = {
  *
  * @example
  * ```ts
- * import { escapeHtml } from '@aws-blocks/core/bb-utils';
+ * import { escapeHtml } from '@aws-cdk-blocks/core/bb-utils';
  *
  * ctx.response.send(`<p>File location: <code>${escapeHtml(path)}</code></p>`);
  * ```

@@ -1,12 +1,12 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
-// Requires blocks_runtime 0.1.5 or later.
+// Requires blocks_runtime 0.2.0 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
-export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
+export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, RealtimeSubscriptionEndedException, TransferableException, InvalidDescriptorException;
 
 // --- Models ---
 
@@ -149,7 +149,7 @@ sealed class GetSessionResultEvent {
     switch (json['kind'] as String) {
       case 'message': return MessageGetSessionResultEvent.fromJson(json);
       case 'presence': return PresenceGetSessionResultEvent.fromJson(json);
-      default: throw ArgumentError('Unknown kind: ${json['kind']}');
+      default: return GetSessionResultEventUnknown(_blocksFrozenObject(json));
     }
   }
 }
@@ -171,7 +171,7 @@ class MessageGetSessionResultEvent extends GetSessionResultEvent {
   Map<String, dynamic> toJson() {
     return {
       'kind': 'message',
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -205,7 +205,7 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
   Map<String, dynamic> toJson() {
     return {
       'kind': 'presence',
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -222,7 +222,41 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
   String toString() => 'PresenceGetSessionResultEvent(channel: $channel)';
 }
 
+final class GetSessionResultEventUnknown extends GetSessionResultEvent {
+  final Map<String, dynamic> json;
 
+  const GetSessionResultEventUnknown(this.json);
+
+  String get discriminator => json['kind'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => Map.of(json);
+
+  @override
+  bool operator ==(Object other) =>
+      other is GetSessionResultEventUnknown && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'GetSessionResultEventUnknown' '($json)';
+}
+
+
+
+Map<String, dynamic> _blocksFrozenObject(Map<String, dynamic> json) =>
+    Map<String, dynamic>.unmodifiable(<String, dynamic>{
+      for (final e in json.entries) e.key: _blocksFrozen(e.value),
+    });
+
+Object? _blocksFrozen(Object? value) => switch (value) {
+  final Map<String, dynamic> map => _blocksFrozenObject(map),
+  final List<dynamic> list => List<dynamic>.unmodifiable(<dynamic>[
+    for (final e in list) _blocksFrozen(e),
+  ]),
+  _ => value,
+};
 
 // --- API Namespaces ---
 
@@ -241,7 +275,7 @@ class GetSessionResultInner {
 
   Map<String, dynamic> toJson() {
     return {
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -290,11 +324,11 @@ class GetSessionResult {
   Map<String, dynamic> toJson() {
     return {
       'sessionId': sessionId,
-      'channel': channel.toJson(),
+      'channel': channel,
       'inner': inner.toJson(),
       'event': event.toJson(),
-      'stringValues': stringValues.toJson(),
-      'integerValues': integerValues.toJson(),
+      'stringValues': stringValues,
+      'integerValues': integerValues,
     };
   }
 
@@ -317,9 +351,9 @@ class GetSessionResult {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<GetSessionResult> getSession() async {
     final result = await _client.call('api.getSession', const <dynamic>[]);
@@ -336,11 +370,18 @@ class ApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    api = ApiApi(client);
+    _client = client;
+    api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 

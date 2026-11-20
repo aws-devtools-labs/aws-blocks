@@ -15,10 +15,10 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { AsyncJob } from '@aws-blocks/bb-async-job';
-import { getAsyncJob } from '@aws-blocks/bb-async-job/job-registry';
-import { Scope } from '@aws-blocks/core';
-import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
+import { getAsyncJob } from '@aws-cdk-blocks/bb-async-job/job-registry';
+import { Scope } from '@aws-cdk-blocks/core';
+import { sanitizeConfigKey } from '@aws-cdk-blocks/core/bb-utils';
 import { CronJob } from './index.aws.js';
 import { cronRunnerConfigKey } from './runner.js';
 import type { CronJobEvent } from './types.js';

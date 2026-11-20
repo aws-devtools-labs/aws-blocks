@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:async';
 import 'harness.dart';
 
@@ -50,6 +53,99 @@ void main() async {
   } finally {
     await sub.cancel();
     ch.close();
+  }
+
+  group('Realtime: two subscriptions share one channel handle');
+  {
+    final shared = await blocks.api.realtimeGetChannel(channel: 'dart-shared');
+    final first = Completer<Cursor>();
+    final second = Completer<Cursor>();
+    final s1 = shared.subscribe().listen((m) {
+      if (!first.isCompleted) first.complete(m);
+    });
+    final s2 = shared.subscribe().listen((m) {
+      if (!second.isCompleted) second.complete(m);
+    });
+    await Future<void>.delayed(Duration(milliseconds: 500));
+    await blocks.api.realtimePublish(
+      channel: 'dart-shared',
+      cursor: Cursor(userId: 'both', x: 1, y: 2, color: '#123456'),
+    );
+    try {
+      final got = await Future.wait([
+        first.future,
+        second.future,
+      ]).timeout(Duration(seconds: 5));
+      check(
+        got.every((m) => m.userId == 'both'),
+        'both subscriptions receive the message',
+      );
+    } on TimeoutException {
+      check(false, 'both subscriptions receive within 5s (timed out)');
+    } finally {
+      await s1.cancel();
+      await s2.cancel();
+      shared.close();
+    }
+  }
+
+  group('Realtime: a refused subscribe ends the stream with a typed error');
+  {
+    final real = await blocks.api.realtimeGetChannel(channel: 'dart-refused');
+    // The same channel with a token the server can't verify, as a handle
+    // whose token was tampered with or minted by another backend would be.
+    final forged = RealtimeChannel.fromJsonValue({
+      '__blocks': 'realtime/channel',
+      'channel': real.channel,
+      'wsUrl': real.wsUrl,
+      'connectToken': real.connectToken,
+      'token': 'not-a-valid-token',
+    }, (payload) => payload);
+    Object? error;
+    var done = false;
+    try {
+      await forged.subscribe().timeout(Duration(seconds: 5)).drain<void>();
+      done = true;
+    } on RealtimeSubscriptionEndedException catch (e) {
+      error = e;
+    } on Object catch (e) {
+      error = e;
+    } finally {
+      forged.close();
+      real.close();
+    }
+    check(!done, 'the stream does not end silently');
+    check(
+      error is RealtimeSubscriptionEndedException,
+      'error is RealtimeSubscriptionEndedException: $error',
+    );
+    if (error is RealtimeSubscriptionEndedException) {
+      check(error.channel == real.channel, 'error names the channel');
+      check(error.code == null, 'a refused subscribe has no code');
+    }
+  }
+
+  group('Realtime: close() ends an active stream normally');
+  {
+    final ch2 = await blocks.api.realtimeGetChannel(channel: 'dart-close');
+    final ended = Completer<Object?>();
+    ch2.subscribe().listen(
+      (_) {},
+      onError: (Object e) {
+        if (!ended.isCompleted) ended.complete(e);
+      },
+      onDone: () {
+        if (!ended.isCompleted) ended.complete(null);
+      },
+    );
+    await Future<void>.delayed(Duration(milliseconds: 300));
+    ch2.close();
+    try {
+      final result = await ended.future.timeout(Duration(seconds: 5));
+      check(result == null, 'stream closes with no error: $result');
+    } on TimeoutException {
+      check(false, 'stream closes within 5s after close() (timed out)');
+    }
   }
 
   group('Realtime: multiple publishes');

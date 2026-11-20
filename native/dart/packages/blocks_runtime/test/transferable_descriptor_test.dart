@@ -1,8 +1,15 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:test/test.dart';
 
-Matcher _throwsFormat(String needle) => throwsA(
-  isA<FormatException>().having((e) => e.message, 'message', contains(needle)),
+Matcher _throwsDescriptor(String needle) => throwsA(
+  isA<TransferableException>().having(
+    (e) => e.message,
+    'message',
+    contains(needle),
+  ),
 );
 
 void main() {
@@ -12,7 +19,7 @@ void main() {
         () => validateTransferableDescriptor(<String, dynamic>{
           '__blocks': 'Example-IoT/Device-Link',
         }, expectedTag: 'example-iot/device-link'),
-        _throwsFormat("got 'Example-IoT/Device-Link'"),
+        _throwsDescriptor("got 'Example-IoT/Device-Link'"),
       );
     });
 
@@ -27,7 +34,7 @@ void main() {
             json,
             expectedTag: 'example-iot/device-link',
           ),
-          _throwsFormat("'example-iot/device-link'"),
+          _throwsDescriptor("'example-iot/device-link'"),
           reason: '$json',
         );
       }
@@ -42,7 +49,7 @@ void main() {
         // Anchored: "UnknownTransferable for ..." contains "Transferable
         // for ...", so a substring match cannot tell a wrong default apart.
         throwsA(
-          isA<FormatException>().having(
+          isA<TransferableException>().having(
             (e) => e.message,
             'message',
             startsWith("Transferable for 'example-iot/device-link' expected"),
@@ -55,7 +62,7 @@ void main() {
           expectedTag: 'example-iot/device-link',
           subject: 'UnknownTransferable',
         ),
-        _throwsFormat(
+        _throwsDescriptor(
           "UnknownTransferable for 'example-iot/device-link' expected",
         ),
       );
@@ -74,7 +81,7 @@ void main() {
         expect(
           () => UnknownTransferable.fromJson(json, expectedTag: 'ex/tag'),
           throwsA(
-            isA<FormatException>().having(
+            isA<TransferableException>().having(
               (e) => e.message,
               'message',
               startsWith('UnknownTransferable'),

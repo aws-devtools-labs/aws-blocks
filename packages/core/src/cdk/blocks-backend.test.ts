@@ -23,14 +23,14 @@ import { Scope } from './index.js';
 import { getBlocksRoot, isBlocksBackendRoot } from './root-registry.js';
 import { getVpcContext } from './vpc.js';
 
-// A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
-// @aws-blocks/blocks), which core's own tests can't depend on. Use an
+// A real app gets its default compute from @aws-cdk-blocks/bb-lambda-compute (via
+// aws-cdk-blocks), which core's own tests can't depend on. Use an
 // equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
 // via apiHandler(), so create() can build the default + the shared REST API
 // gateway and the handler/gateway/apiUrl accessors have something real to
 // resolve to. It is passed to each create() via the internal
 // `defaultComputeFactory` option (see makeBackend), exactly as
-// @aws-blocks/blocks injects LambdaCompute.
+// aws-cdk-blocks injects LambdaCompute.
 class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly logGroup: cdk.aws_logs.LogGroup;
@@ -43,7 +43,7 @@ class StubLambdaCompute extends ComputeBase {
 		// Discover the shared VPC context from the owning stack/backend, mirroring
 		// LambdaCompute — so the core-side VPC placement plumbing (initializeVpc →
 		// getVpcContext) is exercised by these tests without depending on
-		// @aws-blocks/bb-lambda-compute.
+		// @aws-cdk-blocks/bb-lambda-compute.
 		const vpcContext = getVpcContext(this);
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
@@ -100,7 +100,7 @@ const EXECUTION_ROLE_MARKER_ACTION = 'blocks-test:MarkerAction';
 const importMetaHandlerPath = join(__dirname, '__fixtures__', 'import-meta-handler.js');
 
 // Wraps BlocksBackend.create, injecting the stub default-compute factory the way
-// @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it 15 times.
+// aws-cdk-blocks injects LambdaCompute — so tests don't repeat it 15 times.
 const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
 	BlocksBackend.create(scope, id, {
 		backendHandlerPath: handlerPath,
@@ -330,7 +330,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
 	});
 
 	test('child Scope can use fullId as a construct ID inside a nested stack', async () => {
-		// The fixture mirrors bb-distributed-data: it builds a construct whose ID is
+		// The fixture mirrors bb-database: it builds a construct whose ID is
 		// `${this.fullId}Marker`. If fullId carried a token, synth would throw.
 		const app = new cdk.App();
 		const parent = new cdk.Stack(app, 'Gen2ParentStack');
@@ -650,7 +650,7 @@ describe('gateway is not available during the backend import (BlocksBackend)', (
 });
 
 describe('AWSBlocks template metadata (BlocksBackend.create)', () => {
-	before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+	before(() => delete process.env.CDK_BLOCKS_DISABLE_TEMPLATE_METADATA);
 
 	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
 

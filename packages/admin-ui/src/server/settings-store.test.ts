@@ -10,6 +10,7 @@ import {
 	classifyReadError,
 	parameterTypeFor,
 	readLocalSettings,
+	writeLocalSetting,
 	toStoredParameter,
 } from './settings-store.js';
 
@@ -95,8 +96,8 @@ describe('readLocalSettings', () => {
 
 	function makeProject(contents?: string): string {
 		tmpDir = join(tmpdir(), `admin-ui-settings-store-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.bb-data'), { recursive: true });
-		if (contents !== undefined) writeFileSync(join(tmpDir, '.bb-data/settings.json'), contents);
+		mkdirSync(join(tmpDir, '.cdk-blocks/local/data'), { recursive: true });
+		if (contents !== undefined) writeFileSync(join(tmpDir, '.cdk-blocks/local/data/settings.json'), contents);
 		return tmpDir;
 	}
 
@@ -115,6 +116,37 @@ describe('readLocalSettings', () => {
 
 	it('reads an absent file as empty, which is a project that has not run locally', () => {
 		assert.equal(readLocalSettings(makeProject()).size, 0);
+	});
+
+	/**
+	 * The pre-consolidation file a project still has before any block has run.
+	 */
+	function withLegacy(project: string, contents: string): string {
+		mkdirSync(join(project, '.bb-data'), { recursive: true });
+		writeFileSync(join(project, '.bb-data/settings.json'), contents);
+		return project;
+	}
+
+	it('reads the pre-consolidation file when the new one is absent', () => {
+		const values = readLocalSettings(withLegacy(makeProject(), JSON.stringify({ 'shop-flag': 'old' })));
+
+		assert.deepEqual([...values.entries()], [['shop-flag', 'old']]);
+	});
+
+	it('writes a setting in a project where no block has created the data directory', () => {
+		const project = join(tmpdir(), `admin-ui-settings-store-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tmpDir = project;
+		mkdirSync(project, { recursive: true });
+
+		writeLocalSetting(project, 'shop-flag', 'on');
+
+		assert.deepEqual([...readLocalSettings(project).entries()], [['shop-flag', 'on']]);
+	});
+
+	it('does not answer a corrupt new file with the pre-consolidation one', () => {
+		// `writeLocalSetting` writes this map back to the new path, so answering a
+		// corrupt file with legacy values would overwrite it with stale ones.
+		assert.equal(readLocalSettings(withLegacy(makeProject('{not json'), JSON.stringify({ 'shop-flag': 'old' }))).size, 0);
 	});
 
 	it('reads a corrupt or wrongly shaped file as empty rather than throwing', () => {

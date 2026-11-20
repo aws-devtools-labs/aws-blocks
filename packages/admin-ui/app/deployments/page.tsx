@@ -100,7 +100,7 @@ export default function DeploymentsPage() {
 						// The command this used to name is now the button, so the detail
 						// keeps only what the button cannot say: that there are TWO
 						// sources, so an empty list means both are empty.
-						detail: `Deploy history is written to .blocks/deploy-history.jsonl, and deployments made before that file existed are backfilled from CloudFormation stack events. An empty list means neither source has anything for ${cloudStage}.`,
+						detail: `Deploy history is written to .cdk-blocks/deploy-history.jsonl, and deployments made before that file existed are backfilled from CloudFormation stack events. An empty list means neither source has anything for ${cloudStage}.`,
 					}}
 				/>
 			)}

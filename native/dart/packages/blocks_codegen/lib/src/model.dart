@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /// Intermediate representation produced by the parser.
 /// TypeRef is a sealed class representing unresolved type references from the spec.
 library;
@@ -126,7 +129,11 @@ class UnionLiteralRef extends TypeRef {
   /// In spec order, which fixes the generated enum's member order.
   final List<String> values;
 
-  const UnionLiteralRef(this.values);
+  /// Whether the schema says `"type": "string"`. Without it, the values may
+  /// be numbers or other JSON values, read as their `toString()`.
+  final bool isString;
+
+  const UnionLiteralRef(this.values, {this.isString = false});
 }
 
 /// A `oneOf` whose arms are objects sharing a single-value enum field. Becomes
@@ -141,11 +148,16 @@ class DiscriminatedUnionRef extends TypeRef {
   /// (vs String) discriminant handling in the generator.
   final bool discriminantIsBoolean;
 
+  /// The name the spec gives the union (`x-blocks-type-name`, the type alias
+  /// it is declared as), or null.
+  final String? typeName;
+
   /// [variants] must be non-empty and share [discriminant].
   const DiscriminatedUnionRef({
     required this.discriminant,
     required this.variants,
     this.discriminantIsBoolean = false,
+    this.typeName,
   });
 }
 

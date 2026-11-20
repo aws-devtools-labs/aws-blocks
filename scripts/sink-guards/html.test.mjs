@@ -3,7 +3,7 @@
 
 // Repo invariant: a template literal that builds HTML interpolates only
 // constants, numbers, nested markup and values passed through an HTML escape
-// (`escapeHtml` from `@aws-blocks/core/bb-utils`, or a same-named helper that
+// (`escapeHtml` from `@aws-cdk-blocks/core/bb-utils`, or a same-named helper that
 // escapes `& < > " '`). That covers scaffolded templates, dev-server pages,
 // hosting pages, example apps and test apps alike: a file path, an error
 // message or a realtime peer's value placed in markup unescaped is script.
@@ -17,7 +17,7 @@
 // Escape helpers are trusted by name (`escapeHtml(x)`, `esc(x)`), which is safe
 // only because every declaration of those names in the tree is checked to
 // escape `& < > " '`. So only a bare call, or one on a namespace import of
-// `@aws-blocks/core/bb-utils`, is trusted; `util.esc(x)` is not.
+// `@aws-cdk-blocks/core/bb-utils`, is trusted; `util.esc(x)` is not.
 //
 // Scans every tracked production TypeScript/JavaScript file (tests excluded) on
 // the TypeScript AST. A template counts as HTML when its text has an HTML
@@ -48,10 +48,10 @@ const PEER_COLOR =
 const NATIVE_BINDINGS = 'The file is being reworked by open PR #1259, which owns it.';
 
 const ALLOWLIST = [
-	{ at: 'scripts/agent-bench/steps/analyze.mjs:127', reason: BENCH_SUMMARY },
-	{ at: 'scripts/agent-bench/steps/analyze.mjs:135', reason: BENCH_SUMMARY },
+	{ at: 'scripts/agent-bench/steps/analyze.mjs:130', reason: BENCH_SUMMARY },
+	{ at: 'scripts/agent-bench/steps/analyze.mjs:138', reason: BENCH_SUMMARY },
 	{
-		at: 'scripts/build-tech-design-pdf.mjs:92',
+		at: 'scripts/build-tech-design-pdf.mjs:94',
 		reason: 'Base64 of a PNG this script rendered, after a constant data:image/png scheme; the base64 alphabet holds no HTML metacharacters.',
 	},
 	{
@@ -59,16 +59,21 @@ const ALLOWLIST = [
 		reason: "Form action is this stub IdP's own authorize URL (stubIssuerUrl: the request's base URL or BLOCKS_API_URL plus a fixed path), so it always has an http(s) scheme.",
 	},
 	{
+		at: 'packages/bb-dashboard/src/local-dashboard.ts:25',
+		reason:
+			"`metrics` joins, per metrics source, `<h3>${escapeHtml(namespace)}</h3><ul>${names}</ul>` or '', and `names` joins `<li><code>${escapeHtml(name)}</code></li>`. This guard checks both templates (lines 12 and 13) on their own; it flags the join only because it follows `.map()` callbacks with an expression body, and this one has a block body.",
+	},
+	{
 		at: 'packages/core/src/scripts/dashboard.ts:152',
 		reason:
 			'Loopback dashboard URL this process built itself: `http://127.0.0.1:<port>` from the server it just started, plus a hex session token from randomBytes. No external input reaches it, and it is escaped for &, " and < before entering the attribute.',
 	},
-	...[41, 43, 45, 50].map((l) => ({ at: `native/kotlin/example/typescript/src/index.ts:${l}`, reason: TODO_ID })),
-	...[41, 43, 45, 50].map((l) => ({ at: `native/swift/Demo/typescript-demo/src/index.ts:${l}`, reason: TODO_ID })),
+	...[44, 46, 48, 53].map((l) => ({ at: `native/kotlin/example/typescript/src/index.ts:${l}`, reason: TODO_ID })),
+	...[44, 46, 48, 53].map((l) => ({ at: `native/swift/Demo/typescript-demo/src/index.ts:${l}`, reason: TODO_ID })),
 	...[66, 68, 70, 75].map((l) => ({ at: `packages/create-blocks-app/templates/demo/src/index.ts:${l}`, reason: TODO_ID })),
 	...[66, 68, 70, 75].map((l) => ({ at: `test-apps/native-bindings/src/index.ts:${l}`, reason: `${TODO_ID} ${NATIVE_BINDINGS}` })),
-	{ at: 'native/kotlin/example/typescript/src/index.ts:322', reason: PEER_COLOR },
-	{ at: 'native/swift/Demo/typescript-demo/src/index.ts:349', reason: PEER_COLOR },
+	{ at: 'native/kotlin/example/typescript/src/index.ts:325', reason: PEER_COLOR },
+	{ at: 'native/swift/Demo/typescript-demo/src/index.ts:352', reason: PEER_COLOR },
 	{ at: 'test-apps/comprehensive/src/index.ts:229', reason: PEER_COLOR },
 	{
 		at: 'test-apps/native-bindings/src/index.ts:170',
@@ -131,7 +136,7 @@ describe('HTML sink detector', () => {
 
 	it('trusts an escape helper by name only as a bare call or a bb-utils namespace import', () => {
 		assert.deepEqual(find('el.innerHTML = `<p>${util.esc(x)}</p><p>${lib.escapeHtml(y)}</p>`;'), ['util.esc(x)', 'lib.escapeHtml(y)']);
-		const viaBbUtils = "import * as u from '@aws-blocks/core/bb-utils';\nel.innerHTML = `<p>${u.escapeHtml(x)}</p>`;";
+		const viaBbUtils = "import * as u from '@aws-cdk-blocks/core/bb-utils';\nel.innerHTML = `<p>${u.escapeHtml(x)}</p>`;";
 		assert.deepEqual(find(viaBbUtils), []);
 	});
 

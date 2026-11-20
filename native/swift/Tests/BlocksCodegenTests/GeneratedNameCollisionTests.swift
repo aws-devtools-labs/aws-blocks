@@ -108,7 +108,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
         assertContains(output.api, "if let request_2 { _params_2.append(request_2) }")
         assertContains(output.api, #"let request_3 = BlocksRequest(method: "api.send", params: _params_2, id: BlocksRequest.nextId())"#)
         assertContains(output.api, "let result_2 = try await client.execute(request_3)")
-        assertContains(output.api, #"guard let result_2 else { throw RPCError(message: "Unexpected null result for api.send") }"#)
+        assertContains(output.api, #"guard let result_2 else { throw TransportError(message: "Unexpected null result for api.send") }"#)
         assertContains(output.api, "return try JSONDecoder().decode(String.self, from: result_2)")
     }
 
@@ -145,7 +145,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
                 if let name { _params.append(name) }
                 let request = BlocksRequest(method: "api.find", params: _params, id: BlocksRequest.nextId())
                 let result = try await client.execute(request)
-                guard let result else { throw RPCError(message: "Unexpected null result for api.find") }
+                guard let result else { throw TransportError(message: "Unexpected null result for api.find") }
                 return try JSONDecoder().decode(String.self, from: result)
             }
         """)
@@ -228,7 +228,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
         ])
         assertContains(output.api, "public func q_uote(in_put: Q_Uote.In_Put) async throws -> String {")
         assertContains(output.api, #"let request = BlocksRequest(method: "api.q\"uote", params: [in_put], id: BlocksRequest.nextId())"#)
-        assertContains(output.api, #"guard let result else { throw RPCError(message: "Unexpected null result for api.q\"uote") }"#)
+        assertContains(output.api, #"guard let result else { throw TransportError(message: "Unexpected null result for api.q\"uote") }"#)
         assertContains(output.api, #"guard q_uote.count >= 1 else { throw CodegenError.validation("q\"uote must be at least 1 characters") }"#)
         assertContains(output.api, #"case q_uote = "q\"uote""#)
     }
@@ -298,11 +298,13 @@ final class GeneratedNameCollisionTests: XCTestCase {
     func testEnumCasesAreSanitizedUniqueAndTheirRawValuesEscaped() throws {
         let output = try generate(schemas: #"{ "E": \#(strings([#"back\\slash"#, #"q\"uote"#, "default", "inProgress", "in-progress"])) }"#,
                                   methods: [method("api.get", result: ref("E"))])
-        assertContains(output.models, #"case back_slash = "back\\slash""#)
-        assertContains(output.models, #"case q_uote = "q\"uote""#)
+        // `E` is a result, so it is open: each raw value is a case of `init(rawValue:)` and `rawValue`.
+        assertContains(output.models, #"case "back\\slash": self = .back_slash"#)
+        assertContains(output.models, #"case "q\"uote": self = .q_uote"#)
         assertContains(output.models, "case `default`\n")
         assertContains(output.models, "case inProgress\n")
-        assertContains(output.models, #"case inProgress_2 = "in-progress""#)
+        assertContains(output.models, #"case "in-progress": self = .inProgress_2"#)
+        assertContains(output.models, #"case .inProgress_2: return "in-progress""#)
     }
 
     func testDiscriminatorKeyThatIsNotAnIdentifierKeepsItsWireName() throws {
@@ -322,7 +324,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
         let second = object([("kind", #"{ "const": "plain" }"#), ("y", string)])
         let union = #"{ "oneOf": [\#(first), \#(second)], "discriminator": { "propertyName": "kind" } }"#
         let output = try generate(schemas: #"{ "U": \#(union) }"#, methods: [method("api.get", result: ref("U"))])
-        assertContains(output.models, "public nonisolated struct KindSelf: Codable {")
+        assertContains(output.models, "public nonisolated struct KindSelf: Codable, Sendable {")
         assertContains(output.models, "case kindSelf(KindSelf)")
         assertContains(output.models, "case plain(Plain)")
         assertNotContains(output.models, "struct Self")
@@ -365,7 +367,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
             else { return #""pong""# }
             return String(decoding: data, as: UTF8.self)
         }
-        let server = BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/aws-blocks/api")
+        let server = BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/cdk-blocks/api")
         let api = Api(server: server)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

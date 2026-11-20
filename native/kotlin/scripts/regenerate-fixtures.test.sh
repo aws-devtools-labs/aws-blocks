@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Test for the Kotlin step of native/codegen-fixtures/regenerate-all.sh, the Gradle task
 # `:codegen:regenerateFixtures`, and for the golden check `:codegen:test`. Run from
 # anywhere; needs a JDK 17 (JAVA_HOME).

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
 import 'package:test/test.dart';
@@ -66,7 +69,7 @@ void main() {
     bool isRequired = true,
   ]) => OperationParam(name: name, type: type, isRequired: isRequired);
 
-  /// The body of `ApiApi.run`.
+  /// The body of `Api.run`.
   String runBody(String output) {
     final start = output.indexOf('  Future<');
     final end = output.indexOf('\n  }\n', start);
@@ -358,13 +361,14 @@ void main() {
           'sessionStore: sessionStore);',
         ),
       );
+      expect(out, contains(r'    _client = $client;'));
       expect(out, contains(r'    client = ClientApi($client);'));
       expect(out, contains(r'    this.baseUrl = BaseUrlApi($client);'));
       expect(
         out,
         contains(r'    this.sessionStore = SessionStoreApi($client);'),
       );
-      expect(out, contains(r'    api = ApiApi($client);'));
+      expect(out, contains(r'    api = Api($client);'));
     });
 
     test('other namespaces are unchanged', () {
@@ -373,7 +377,8 @@ void main() {
         out,
         contains(
           '    final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);\n'
-          '    api = ApiApi(client);\n'
+          '    _client = client;\n'
+          '    api = Api(client);\n'
           '    todos = TodosApi(client);\n',
         ),
       );

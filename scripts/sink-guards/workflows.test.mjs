@@ -25,13 +25,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { compareWithAllowlist, findWorkflowSinks, listWorkflowFiles, report, scan } from './sinks.mjs';
 
-const REVERT_RELEASE = 'Covered by open PR #520 (harden revert-release.yml against script injection), which owns this file.';
-
-const ALLOWLIST = [
-	{ at: '.github/workflows/revert-release.yml:35', reason: REVERT_RELEASE },
-	{ at: '.github/workflows/revert-release.yml:64', reason: REVERT_RELEASE },
-	{ at: '.github/workflows/revert-release.yml:67', reason: REVERT_RELEASE },
-];
+const ALLOWLIST = [];
 
 const workflow = (steps, extra = '') =>
 	['on: push', 'jobs:', '  build:', '    runs-on: ubuntu-latest', extra, '    steps:', ...steps].filter(Boolean).join('\n');

@@ -1,8 +1,8 @@
-import { Scope } from '@aws-blocks/core';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import type { AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import type { AuthStateApi, BlocksAuth } from '@aws-cdk-blocks/auth-common';
 import { makeExternalUserPoolRef, type AdminGetterOf, type AuthCognitoMockOptions, type AttrOf, type AuthSession, type CognitoUser, type ConfirmSignInOptions, type ConfirmSignInResponse, type DeviceRecord, type CompletePasskeyRegistrationResult, type PasskeyDescription, type StartPasskeyRegistrationResult, type FetchAuthSessionOptions, type GroupOf, type MFAPreference, type MFAPreferenceInput, type ReadAttrOf, type ResetPasswordResult, type SignInOptions, type SignInResult, type SignUpOptions, type ConfirmSignUpResult, type SignUpResult, type UpdateAttributeOutcome } from './types.js';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 export * from './types.js';
 export { SessionStore, type SessionRecord } from './sessions.js';
 /**
@@ -360,7 +360,7 @@ export declare class AuthCognito<const O extends AuthCognitoMockOptions = AuthCo
     /**
      * Write the most-recently-issued verification code to disk so e2e tests
      * can retrieve it without mailbox delivery. **Test scaffolding only** —
-     * not secure storage, and the file lives inside `.bb-data/<fullId>/`
+     * not secure storage, and the file lives inside `.cdk-blocks/local/data/<fullId>/`
      * which is gitignored at the repo root. Overwritten on every code
      * issuance, so only the last code of any purpose is visible.
      */

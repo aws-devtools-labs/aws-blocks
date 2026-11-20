@@ -4,7 +4,9 @@
 
 /**
  * Checks that the auth-derived codegen fixtures still describe what the live
- * `Auth` block emits.
+ * `Auth` block emits: fixtures 18 and 23 method for method (`--write` can
+ * rewrite them), and fixture 37's typed `oidc/client` shape, which is compared
+ * as a shape only and is edited by hand.
  *
  * `regenerate-all.sh` regenerates the golden files from each fixture's
  * committed `spec.json`, so a clean regeneration proves only that the
@@ -20,7 +22,7 @@
  *   node native/codegen-fixtures/check-live-auth-fixtures.mjs --generate
  *       regenerate the spec (`npm run spec` in test-apps/native-bindings), then check
  *   node native/codegen-fixtures/check-live-auth-fixtures.mjs [path/to/blocks.spec.json]
- *       check an already-generated spec (default: test-apps/native-bindings/aws-blocks/blocks.spec.json)
+ *       check an already-generated spec (default: test-apps/native-bindings/cdk-blocks/blocks.spec.json)
  *   node native/codegen-fixtures/check-live-auth-fixtures.mjs --write [...]
  *       rewrite the fixtures' spec.json from the live spec; then run
  *       native/codegen-fixtures/regenerate-all.sh and review the golden-file diff
@@ -37,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 const FIXTURES_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(FIXTURES_DIR, '..', '..');
 const BACKEND_DIR = join(REPO_ROOT, 'test-apps', 'native-bindings');
-const DEFAULT_SPEC = join(BACKEND_DIR, 'aws-blocks', 'blocks.spec.json');
+const DEFAULT_SPEC = join(BACKEND_DIR, 'cdk-blocks', 'blocks.spec.json');
 
 /**
  * Each fixture: the method names it carries → the live method it must equal.
@@ -198,6 +200,35 @@ for (const fixture of FIXTURES) {
 		console.error(`✗ setAuthState is not the full action union in: ${narrowed.map((m) => m.name).join(', ')}`);
 	} else {
 		console.log(`✓ every Auth namespace's setAuthState (${authStateApis.length}) is fixture 18's`);
+	}
+}
+
+// Fixture 37 is the typed OIDC client the native SDKs generate from
+// `createOidcApi().getClient()`: an `oidc/client` transferable whose one type
+// argument is a string enum of provider ids. The live block must still emit
+// that shape (its provider ids are native-bindings' own, so only the shape is
+// compared). Without it, the provider-typed native clients are generated from
+// a fixture no block emits.
+{
+	const fixture37 = JSON.parse(readFileSync(join(FIXTURES_DIR, '37-oidc-provider-enum', 'spec.json'), 'utf8'));
+	const typed = fixture37.methods.find((m) => m.name === 'auth.getClient')?.result.schema;
+	const liveClient = liveMethods.get('oidcAuthApi.getClient')?.result.schema;
+	const shape = (s) => ({
+		...s,
+		'x-blocks-type-args': (s?.['x-blocks-type-args'] ?? []).map((a) => ({ ...a, enum: Array.isArray(a.enum) ? [] : a.enum })),
+	});
+	if (!liveClient) {
+		drifted++;
+		console.error('✗ live spec has no oidcAuthApi.getClient (native-bindings must export auth.createOidcApi())');
+	} else if (!same(shape(liveClient), shape(typed))) {
+		drifted++;
+		console.error(
+			`✗ oidcAuthApi.getClient no longer has fixture 37's typed oidc/client shape:\n    live:    ${JSON.stringify(liveClient)}\n    fixture: ${JSON.stringify(typed)}\n` +
+				'  `--write` does not rewrite fixture 37 (its provider ids are its own): if the new shape is intended, edit\n' +
+				'  native/codegen-fixtures/37-oidc-provider-enum/spec.json by hand, then run native/codegen-fixtures/regenerate-all.sh.',
+		);
+	} else {
+		console.log(`✓ oidcAuthApi.getClient is fixture 37's typed oidc/client (${JSON.stringify(liveClient['x-blocks-type-args'][0].enum)})`);
 	}
 }
 

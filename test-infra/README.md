@@ -97,7 +97,7 @@ This stack creates, in each of them:
 | Resource | Purpose |
 |----------|---------|
 | GitHub OIDC identity provider | Lets GitHub Actions exchange its OIDC token for AWS credentials (skipped if `GITHUB_OIDC_PROVIDER_ARN` is set) |
-| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, the `cleanup-stacks.yml` quota sweeps (REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies, orphaned Lambda/RDS log groups) and its describe-only check on Amplify sandbox tables a stuck delete left behind, Cognito admin calls, Supabase test secret |
+| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, the `cleanup-stacks.yml` quota sweeps (REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies, orphaned Lambda/RDS log groups, orphaned E2E Cognito user pools) and its describe-only check on Amplify sandbox tables a stuck delete left behind, Cognito admin calls, Supabase test secret |
 | `blocks-github-bench` role | Account 1 only (`E2E_AGENT_BENCH=1`). Agent bench (`agent-bench.yml`), assumable only by jobs in this repo's `agent-bench` GitHub environment; Bedrock model invocation and `bench/*` in the bench bucket |
 | Agent bench bucket | Account 1 only (`E2E_AGENT_BENCH=1`). Per-cell bench results and the baseline the PR scoreboard compares against |
 
@@ -200,6 +200,11 @@ includes it, no cleanup leg sweeps it.
 CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep every
 pool account limited to E2E test stacks.
 
-`npm test` checks that each trust policy stays pinned to its own environment of
-this repo (`e2e` or `agent-bench`) with `StringEquals` and no wildcards, that
-the two roles never share one, and that the bench is only added on request.
+`npm test` checks that each trust policy stays pinned to this repo
+(`aws/cdk-blocks`) and its own environment (`e2e` or `agent-bench`) with
+`StringEquals` and no wildcards, that the two roles never share one, and that
+the bench is only added on request.
+
+Renaming or moving the repo invalidates both trust policies: the `sub`
+condition carries the repo slug, so every job fails at "Configure AWS
+credentials" until this stack is redeployed in each E2E account.

@@ -55,10 +55,32 @@ export interface BlocksDefaults {
 	deletionProtection: boolean;
 
 	/**
-	 * CORS origins the compute's API accepts, as regular-expression patterns
-	 * matched against the request `Origin` header. Empty means no cross-origin
-	 * requests are allowed. The `sandbox` preset allows localhost so a local dev
-	 * frontend can reach a deployed API; `production` allows none by default.
+	 * CORS origins the compute's API accepts, matched against the request
+	 * `Origin` header. Empty means no cross-origin requests are allowed. The
+	 * `sandbox` preset allows localhost so a local dev frontend can reach a
+	 * deployed API; `production` allows none by default.
+	 *
+	 * Each entry is either:
+	 * - a **plain origin** (`scheme://host[:port]`, e.g. `'https://app.example.com'`),
+	 *   matched exactly and case-insensitively — its dots are literal. An
+	 *   `http`/`https` origin is compared as the browser sends it (default port
+	 *   dropped, internationalized host in punycode); user info, a path, a query
+	 *   or a fragment is rejected; or
+	 * - a **regex pattern** (any entry with regex syntax such as `^`, `$`, `\`,
+	 *   `(`, `|` or `*`), anchored as `^(?:<entry>)$` and matched case-sensitively.
+	 *   Dots must be escaped (`'https://app\\.example\\.com'`) unless followed
+	 *   by a quantifier (`.*`, `.+`), and the entry must compile on its own. For
+	 *   any subdomain use e.g. `'https://[a-z0-9-]+\\.example\\.com'` (glob
+	 *   wildcards such as `'https://*.example.com'` are not supported). Brace
+	 *   quantifiers are limited to `{n}` (`{n,m}` contains a comma, and entries
+	 *   are comma-joined), and a group repeated with `*`, `+` or `{n}` that
+	 *   itself contains `*`, `+`, `{n}` or an alternation (e.g. `(a+)+`,
+	 *   `(a|b)+`) is not supported (this does not rule out every slow pattern);
+	 *   for subdomains at any depth use e.g.
+	 *   `'https://[a-z0-9.-]+\\.example\\.com'`.
+	 *
+	 * Invalid entries fail `cdk synth` (`BlocksStack.create()` /
+	 * `BlocksBackend.create()`), and are ignored at runtime.
 	 */
 	allowedOrigins: string[];
 
@@ -161,10 +183,9 @@ export interface BlocksDefaults {
 
 	/**
 	 * Where AWS Blocks stores the secrets it generates for its own Building
-	 * Blocks. It currently applies to the `Realtime` connection token key; other
-	 * keys that AWS Blocks generates will adopt it. Secrets you declare yourself
-	 * (your own `AppSetting`, `Secret`, or a value passed in at the CDK layer)
-	 * are not affected.
+	 * Blocks: the `Auth` session secret and the `Realtime` connection token key.
+	 * Secrets you declare yourself (your own `AppSetting`, `Secret`, or a value
+	 * passed in at the CDK layer) are not affected.
 	 *
 	 * - `'secrets-manager'` (the `production` preset): one Secrets Manager secret
 	 *   per key, with a CloudFormation-generated name and value. The app's
@@ -174,17 +195,17 @@ export interface BlocksDefaults {
 	 *   stacks.
 	 *
 	 * Changing this value on a deployed stack creates new keys in the new store.
-	 * For `Realtime`, open WebSocket connections keep working; on their next
+	 * For `Auth`, every signed-in user is signed out once. For `Realtime`, open WebSocket connections keep working; on their next
 	 * reconnect, clients that pass `refresh` to `subscribe()` get new tokens, and
 	 * clients without it receive `onDisconnect('error')` and must call
 	 * `getChannel()` again. To keep an existing stack's keys where they are, set
 	 * this before you deploy a version that reads it.
 	 *
-	 * Synth emits the warning `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
+	 * Synth emits the warning `@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
 	 * when this is `'ssm'` and the stack looks like production: the
 	 * `sandboxMode` context is not `'true'`, {@link removalPolicy} is `RETAIN`,
 	 * or {@link deletionProtection} is on. Acknowledge it with
-	 * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
+	 * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
 	 * if SSM is a deliberate choice.
 	 *
 	 * The local mock ignores this field; local development behaves the same in
@@ -248,8 +269,10 @@ export interface BlocksDefaults {
 	 *
 	 * **One policy for many apps.** A platform can share a single boundary policy
 	 * across every app in an account by writing it with policy variables, e.g.
-	 * `arn:aws:ssm:*:*:parameter/apps/${aws:PrincipalTag/app}/*`, and tagging each
-	 * app's stack with its `app` name. The policy (by name, ARN or
+	 * `arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}-*`, and tagging each
+	 * app's stack with its `app` name — {@link app} does the tagging, and the core
+	 * README section "Running many apps in one AWS account" documents such a
+	 * policy for the platform to write and own. The policy (by name, ARN or
 	 * `IManagedPolicy`) is referenced as-is; Blocks never rewrites its document.
 	 * The synth-time IAM report lists every Blocks role with its boundary and tags,
 	 * so a pipeline can check both. See the core README section "Running many apps
@@ -273,9 +296,9 @@ export interface BlocksDefaults {
 	 * Serve each API namespace only on the compute it is placed on.
 	 *
 	 * An `ApiNamespace` given its own `compute` (directly or through its scope) is
-	 * routed to that compute at `/aws-blocks/api/{namespace}`. The bare
-	 * `/aws-blocks/api` endpoint is served by the default compute and dispatches on
-	 * the JSON-RPC body, so without this option a raw `POST /aws-blocks/api` with
+	 * routed to that compute at `/cdk-blocks/api/{namespace}`. The bare
+	 * `/cdk-blocks/api` endpoint is served by the default compute and dispatches on
+	 * the JSON-RPC body, so without this option a raw `POST /cdk-blocks/api` with
 	 * `{ "method": "reports.build" }` runs `reports` on the **default** compute —
 	 * outside the VPC, container or sizing its placement was meant to give it.
 	 *
@@ -294,7 +317,7 @@ export interface BlocksDefaults {
 	 * role.
 	 *
 	 * The typed TypeScript client and the Kotlin, Swift and Dart clients always
-	 * call `/aws-blocks/api/{namespace}`, so they keep working. A raw HTTP caller,
+	 * call `/cdk-blocks/api/{namespace}`, so they keep working. A raw HTTP caller,
 	 * or a native client generated before clients called per-namespace paths, that
 	 * posts a placed namespace to the bare endpoint is refused: point it at the
 	 * namespace's own path before enabling this.
@@ -320,6 +343,99 @@ export interface BlocksDefaults {
 	 * ```
 	 */
 	strictNamespacePlacement?: boolean;
+
+	/**
+	 * The identity of this app on a **shared app platform**: one AWS account that
+	 * hosts many independently written apps (often written by AI coding agents)
+	 * and deploys them through one pipeline. Unset in both {@link BlocksPresets};
+	 * unset leaves synthesized templates unchanged.
+	 *
+	 * When set, AWS Blocks:
+	 * - tags every resource it creates, and every IAM role (including roles in
+	 *   helper stacks such as the `us-east-1` edge stack), with
+	 *   `app=<id>` ({@link BLOCKS_APP_TAG_KEY}), at a priority above the default
+	 *   `Tags.of(...).add()` (an app can still raise its own priority or remove the
+	 *   tag, so the platform's execution role rejects any role not tagged `<id>`);
+	 * - checks that every name it derives starts with the app's id. Building Block
+	 *   resource names (tables, queues, buckets, parameters, schedules, user
+	 *   pools) come from each block's `fullId`, which starts with the stack's id,
+	 *   and CloudFormation-generated names (functions, roles) start with the stack
+	 *   name — so the stack must be named `<id>` or `<id>-…`;
+	 * - adds an `app` section and a `violations` list to the synth-time IAM report
+	 *   (`cdk.out/<stack>.blocks-iam.json`): a role without the permissions
+	 *   boundary or the app tag, a grant on another app's resources, a wildcard
+	 *   grant on a data service, an "everything except" grant, a resource the check
+	 *   can't resolve, a resource policy that opens up another app's resource, a
+	 *   role that trusts anything but an AWS service, a broad AWS managed policy, the
+	 *   CDK asset bucket of another bootstrap, or a name outside the app's prefix;
+	 * - fails synth on any violation, unless `reportOnly: true`.
+	 *
+	 * The report and the synth failure are fast feedback, not the security boundary: the
+	 * app's own code runs at synth. The boundary is IAM, enforced by AWS — a
+	 * permissions boundary keyed on the `app` tag ({@link permissionsBoundary}),
+	 * a per-app CloudFormation execution role that only creates bounded roles
+	 * tagged as this app, and a deploy guard that keeps the app's deploy role on
+	 * its own stacks. Each app has its own CDK bootstrap, with the app id as its
+	 * qualifier. The platform writes and owns the three policies; the core README
+	 * section "Running many apps in one AWS account" documents each of them, and
+	 * how a pipeline runs synth, which fails on any violation, and confirms the report's
+	 * `app.id`.
+	 *
+	 * @example A platform's app template
+	 * ```ts
+	 * export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
+	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
+	 *   backendCDKPath: join(__dirname, 'index.ts'),
+	 *   defaults: {
+	 *     ...BlocksPresets.production,
+	 *     appIdentity: { id: process.env.APP_ID! },
+	 *     permissionsBoundary: 'apps-boundary',
+	 *   },
+	 * });
+	 * ```
+	 */
+	appIdentity?: BlocksAppIdentity;
+}
+
+/** The tag key AWS Blocks stamps with {@link BlocksAppIdentity.id} on every resource and role. */
+export const BLOCKS_APP_TAG_KEY = 'app';
+
+/**
+ * An app's identity on a shared app platform. See {@link BlocksDefaults.appIdentity}.
+ */
+export interface BlocksAppIdentity {
+	/**
+	 * The app's id: 1–10 characters, lowercase letters and digits, starting with
+	 * a letter (`/^[a-z][a-z0-9]{0,9}$/`). No hyphen, so one app's name prefix
+	 * (`<id>-`) can never match another app's resources (`appa-*` doesn't match
+	 * `appab-…`). Lowercase so it is valid in S3 bucket names. At most 10
+	 * characters, CDK's limit for a bootstrap qualifier, so the id is also the
+	 * app's qualifier: one bootstrap per app, and no two apps share one.
+	 *
+	 * Some ids are reserved, because the app's `<id>-…` / `<id>/…` names would
+	 * include names other apps, AWS Blocks, CDK or AWS share: `cdk` (every app's
+	 * CDK bootstrap, `cdk-<qualifier>-…`, and CDK's `/cdk/…` parameters), `blocks`,
+	 * `secrets` and `config` (Hosting's `secret()` / `config()` values under
+	 * `blocks/…`), `amplify`, `cf`, `sagemaker` (those services' own buckets and
+	 * stacks), the region prefixes `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`,
+	 * `me`, `mx`, `sa`, `us` (CDK names CloudFront Functions `<region>…`), and any
+	 * id starting with `aws` or `ssm` (names AWS reserves). Synth rejects them,
+	 * saying why.
+	 *
+	 * Set it from the platform's pipeline (e.g. `process.env.APP_ID`), not from a
+	 * value the app's code chooses, and have the pipeline confirm that the IAM
+	 * report's `app.id` (`cdk.out/<stack>.blocks-iam.json`) is the id it
+	 * registered for the app.
+	 */
+	id: string;
+
+	/**
+	 * Only write violations to the IAM report and print a summary, instead of
+	 * failing synth on any of them; for example while adopting `appIdentity` in
+	 * an existing app.
+	 * @default false
+	 */
+	reportOnly?: boolean;
 }
 
 /**

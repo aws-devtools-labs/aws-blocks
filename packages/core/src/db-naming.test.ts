@@ -66,10 +66,10 @@ describe('cross-site invariant: write name == read name', () => {
 
   function setupProject(stackId: string, sandboxId: string): string {
     tmpDir = mkdtempSync(join(tmpdir(), 'cross-site-'));
-    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
-    writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId }));
-    mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
-    writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), sandboxId);
+    mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId }));
+    mkdirSync(join(tmpDir, '.cdk-blocks-sandbox'), { recursive: true });
+    writeFileSync(join(tmpDir, '.cdk-blocks-sandbox', 'sandbox-id.txt'), sandboxId);
     return tmpDir;
   }
 

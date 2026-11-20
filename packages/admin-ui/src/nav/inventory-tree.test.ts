@@ -39,11 +39,11 @@ import type { NavSection, ResourcesState } from './inventory-tree.js';
 
 function block(overrides: Partial<DiscoveredBlock> = {}): DiscoveredBlock {
 	return {
-		type: 'DistributedTable',
+		type: 'KVStore',
 		id: 'todos',
 		fullId: 'my-app-todos',
 		category: 'data',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 42,
 		...overrides,
 	};
@@ -158,7 +158,7 @@ describe('reasonForBlock', () => {
 	});
 
 	it('leaves a genuine miss alone for a type that should own resources', () => {
-		assert.equal(reasonForBlock('DistributedTable', 'unmatched'), 'unmatched');
+		assert.equal(reasonForBlock('KVStore', 'unmatched'), 'unmatched');
 	});
 
 	for (const stageReason of ['not-deployed', 'unknown'] as const) {
@@ -379,12 +379,12 @@ describe('navStatus', () => {
 				blocks: blocksResponse({
 					blocksSource: 'unavailable',
 					blocksErrorCode: 'NOT_A_BLOCKS_PROJECT',
-					blocksError: 'No aws-blocks/index.ts found.',
+					blocksError: 'No cdk-blocks/index.ts found.',
 				}),
 				pending: false,
 				failed: false,
 			}),
-			{ kind: 'unavailable', code: 'NOT_A_BLOCKS_PROJECT', message: 'No aws-blocks/index.ts found.' },
+			{ kind: 'unavailable', code: 'NOT_A_BLOCKS_PROJECT', message: 'No cdk-blocks/index.ts found.' },
 		);
 	});
 
@@ -401,7 +401,7 @@ describe('navStatus', () => {
 			blocks: blocksResponse({
 				blocks: [],
 				unknownConstructs: [
-					{ text: 'blocks.Mystery', file: 'aws-blocks/index.ts', line: 3, reason: 'unknown-type' },
+					{ text: 'blocks.Mystery', file: 'cdk-blocks/index.ts', line: 3, reason: 'unknown-type' },
 				],
 			}),
 			pending: false,
@@ -421,7 +421,12 @@ describe('filterTree', () => {
 	const tree = buildInventoryTree({
 		blocks: blocksResponse({
 			blocks: [
-				block({ description: 'Structured data storage backed by DynamoDB.' }),
+				block({
+					type: 'Database',
+					id: 'orders',
+					fullId: 'my-app-orders',
+					description: 'Structured data storage with SQL.',
+				}),
 				block({ type: 'AuthBasic', id: 'auth', fullId: 'my-app-auth', category: 'auth' }),
 				block({ type: 'KVStore', id: 'cache', fullId: 'my-app-cache', category: 'data' }),
 			],
@@ -454,7 +459,7 @@ describe('filterTree', () => {
 		// 'structured' appears only in the block's catalog description. A term like
 		// 'dynamodb' would also match the framework group, whose facts name its
 		// resource type — correctly, but it would not prove the description is searched.
-		assert.deepEqual(cardTitles(filterTree(all, 'structured', '/blocks').sections), ['DistributedTable']);
+		assert.deepEqual(cardTitles(filterTree(all, 'structured', '/blocks').sections), ['Database']);
 	});
 
 	it('matches on a fact, such as a group resource type', () => {
@@ -633,7 +638,7 @@ describe('buildInventoryTree — the happy path', () => {
 			],
 		}),
 		resources: loaded([
-			group({ id: 'my-app/todos', blockFullId: 'my-app-todos', blockType: 'DistributedTable' }),
+			group({ id: 'my-app/todos', blockFullId: 'my-app-todos', blockType: 'KVStore' }),
 			group({ id: 'API', category: 'platform', resources: [resource({ typeLabel: 'Lambda Function' })] }),
 			group({ id: 'CDK internals', category: 'cdk' }),
 		]),
@@ -878,7 +883,7 @@ describe('buildInventoryTree — unrecognised things', () => {
 			blocks: blocksResponse({
 				blocks: [],
 				unknownConstructs: [
-					{ text: 'blocks.Mystery', file: 'aws-blocks/index.ts', line: 9, reason: 'unknown-type' },
+					{ text: 'blocks.Mystery', file: 'cdk-blocks/index.ts', line: 9, reason: 'unknown-type' },
 				],
 			}),
 			resources: { state: 'pending' },

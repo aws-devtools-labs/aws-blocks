@@ -1,6 +1,6 @@
 # Harbor agent check
 
-An opt-in, **non-required** GitHub Actions check for AWS Blocks PRs. It packs the PR head and
+An opt-in, **non-required** GitHub Actions check for AWS CDK Blocks PRs. It packs the PR head and
 its merge-base, then asks Claude Code to create a todo app, add due dates and add labels in one
 resumed session per trial. The default is one trial per arm (**n=1**): that report is
 descriptive, not a statistical claim. More trials give pass-rate intervals and metric
@@ -11,7 +11,8 @@ deployed.
 
 `.github/workflows/harbor-agent-check.yml`, dispatched from `main` for an open PR:
 
-1. Resolve the PR head and its merge-base with the PR base SHA.
+1. Resolve the PR head and its merge-base with the PR base SHA, and list both and the PR's changed
+   files in the run summary for the approver.
 2. On credential-free runners, `npm ci`, `npm run build` and `npm run publish:local` at both commits.
 3. After one blocks-team approval of the `approval` job (environment `harbor-bench-approval`), each
    (arm, trial) matrix job runs in the `harbor-bench` environment: `prepare.py` builds one task with
@@ -23,7 +24,7 @@ deployed.
    saves a [phase snapshot](#phase-snapshots), checks package provenance, runs `npm run build`,
    starts `npm run dev` as `node` and drives Chromium (`ui.mjs`) through every behavior added so
    far. Contract controls are located by accessible name among form fields only. It then checks
-   that the records it created appear under the app's Blocks mock data directory (`.bb-data`), a
+   that the records it created appear under the app's Blocks mock data directory (`.cdk-blocks/local/data`), a
    heuristic that catches storage outside Blocks but not a backend writing its own files there.
    Finally it restarts the server and checks the records again in a fresh browser context.
 6. Each trial uploads its allowlisted result as artifact `harbor-result-<arm>-<trial>` and, when
@@ -44,7 +45,7 @@ prompt names it. Nothing sets `PLAYWRIGHT_BROWSERS_PATH` globally, so a project'
 ## Pins and skill delivery
 
 `pins.py` holds the model (`global.anthropic.claude-opus-5-5`), Claude Code version, Harbor
-revision and the public [AWS Blocks skill](https://github.com/aws/agent-toolkit-for-aws/tree/2cb0fa1c2e668e1bb075028800b6b27efb95779e/skills/core-skills/aws-blocks)
+revision and the public [AWS CDK Blocks skill](https://github.com/aws/agent-toolkit-for-aws/tree/2cb0fa1c2e668e1bb075028800b6b27efb95779e/skills/core-skills/aws-blocks)
 revision and SHA-256. `requirements.txt` and the workflow's session policy repeat the Harbor
 revision and model ARN; change them together.
 
@@ -55,11 +56,11 @@ triggered. It is reported, never required.
 
 ## Package provenance
 
-Each arm has a loopback registry (`registry.mjs`) that serves only that arm's `@aws-blocks/*`
+Each arm has a loopback registry (`registry.mjs`) that serves only that arm's `@aws-cdk-blocks/*`
 tarballs and logs requests. Third-party packages come from public npm. `provenance.py` requires
-that the scaffolder tarball was served and that every installed `@aws-blocks/*` package in the
+that the scaffolder tarball was served and that every installed `@aws-cdk-blocks/*` package in the
 app has the arm's lockfile version, registry URL and integrity, was served, and matches the
-packed bytes. The backend must import `@aws-blocks/*` and expose an `ApiNamespace`.
+packed bytes. The backend must import `@aws-cdk-blocks/*` and expose an `ApiNamespace`.
 
 Byte-identical packages in both arms make the run an **A/A infrastructure demonstration**.
 
@@ -80,7 +81,7 @@ reported alongside. New input and cache read stay as descriptive columns and are
 across arms.
 
 Each result also records the storage block the backend constructs (`kv_store`,
-`distributed_table`, `database`, `distributed_database`, `file_bucket`, `multiple`, `none` or
+`distributed_table`, `database`, `file_bucket`, `multiple`, `none` or
 `unknown`), read from the create-phase snapshot. Agents choose between blocks and the choice
 changes cost, so the report shows counts and the primary metric per storage block, with a
 within-block difference when both arms have at least 3 passes.
@@ -93,7 +94,12 @@ three phases); this bounds a runaway session, not what the credentials allow.
 In CI the Bedrock session lasts `HARBOR_SESSION_SECONDS` (2,700 s, in the workflow; the run step
 took at most 1,125 s, p95 882 s, over 284 trials). `run.py --credentials-expire-at` stops Harbor at
 that deadline and records the trial as an infrastructure error (`outlived_credentials`), since its
-late phases could fail on expired credentials alone.
+late phases could fail on expired credentials alone. The session is tied to the run step: it is
+assumed directly before that step, it is no longer than `run.py`'s own 6,000 s Harbor timeout, and
+the step's `timeout-minutes` (47) stops it about 2 minutes after the session ends (the test
+allows at most 180 s).
+`scripts/ci/harbor-credentials.test.mjs` checks all three. A run that finishes early does not
+revoke the session: it stays valid until it expires.
 
 ## Trials and statistics
 
@@ -122,7 +128,7 @@ statistics live in `stats.py`, shared with the [local calibration](#local-calibr
 Before any check, after the agent's processes are killed and before provenance, build, server
 start or the browser exercise, `verify.py` writes `/logs/verifier/snapshot.tar.gz`
 (`task/tests/snapshot.py`): `todo-app/` as the agent left it, without any `node_modules`
-directory but with `.bb-data` and the lockfile, plus `verifier-state.json`, a copy of the
+directory but with `.cdk-blocks/local/data` and the lockfile, plus `verifier-state.json`, a copy of the
 verifier's record list seeded by the earlier phases. Writing it first means it exists whether
 the checks pass, fail or time out; a snapshot error is logged and never fails the phase. Harbor
 moves each phase's `/logs/verifier` into `steps/<phase>/verifier/`, so every phase keeps its own
@@ -204,16 +210,26 @@ machine: `calibrate.py` never uploads.
   that only allows `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the
   pinned inference profile and its foundation models.
 - Optional environment secret **`AWS_TRACES_ROLE_ARN`** and variable **`HARBOR_TRACES_BUCKET`**:
-  a role trusted for the same subject (max session 3600 s) that may only `s3:PutObject` under
-  `harbor/v1/*` in a private bucket (Block Public Access, owner-enforced, encrypted, TLS-only,
-  expiring objects). Unset means traces stay on the runner and are discarded.
+  a role trusted for the same subject (max session 3600 s; the workflow asks for 900 s) that may
+  only `s3:PutObject` under `harbor/v1/*` in a private bucket (Block Public Access,
+  owner-enforced, encrypted, TLS-only, expiring objects). Unset means traces stay on the runner
+  and are discarded.
 
 ```sh
-gh workflow run harbor-agent-check.yml --repo aws-devtools-labs/aws-blocks --ref main -f pr_number=123 -f trials=5
+gh workflow run harbor-agent-check.yml --repo aws/cdk-blocks --ref main -f pr_number=123 -f trials=5
 ```
 
-PR code is built without credentials, but its install scripts run in the approved model job:
-review the candidate before approving. A new dispatch for the same PR cancels the running one.
+PR code is built without credentials, but every file packed into the arm's registry, package
+source included, runs in the approved model job: review the candidate before approving. The run
+summary lists the exact revisions and the PR's changed files (at most 50 rows, then "+N more").
+Files that change install or build behavior, or CI config, are marked `!` and listed first:
+anything under `.github/` or a `scripts/` directory at any depth, any `package.json`, lockfile,
+`tsconfig*.json`, `.npmrc` or `.nvmrc`. An unmarked file still runs with the model credentials.
+This workflow, its harness and its task come from the dispatching `main` commit, so a PR's changes
+under `.github/` and `scripts/harbor-bench/` take effect only after merge. When the API lists only
+part of a large PR, the note above the table says how many files were not checked. `changed-files.mjs`
+builds that table from the main checkout, never from the PR. A new dispatch for the same PR cancels
+the running one.
 
 ## Security boundaries
 
@@ -224,9 +240,29 @@ IDs, never prompts, commands, output, app files or exception text. Raw traces go
 private bucket, with the model credentials redacted, and the trace role is assumed only after
 the agent's containers are gone. This is not a hostile-code sandbox: the agent can read its
 model credentials and use the network until the session expires, at most `HARBOR_SESSION_SECONDS`
-after it starts. The inline session policy limits it to invoking the pinned model. The CLI budget
-cap does not apply to calls the agent makes with the credentials directly, so an account-level
-Bedrock spend limit belongs on the account that hosts the role.
+after it starts, and it stays valid for that long even if the run ends early. The inline session
+policy limits it to invoking the pinned model. Each benchmark job has its own session; the matrix
+has no `max-parallel`, so one run with `trials=N` holds up to 2N sessions at once (100 at the
+50-trial maximum), and runs for different PRs can overlap.
+
+The task runs with `network_mode = "public"`. At run time the container needs Bedrock Runtime in
+`us-east-1` for the agent's model calls and `registry.npmjs.org` for the generated app's
+third-party dependencies (`@aws-cdk-blocks` packages come from the local registry inside the
+container), and the app's own install scripts may download more (for example, Playwright browsers
+when the agent runs `playwright install` in its project). The pinned Harbor revision also has an
+`allowlist` mode for Docker, enforced by a sidecar transparent proxy and nftables rules. It is not
+used yet: it adds a third-party proxy image pulled at run time, depends on the runner kernel's
+nftables support, fails the trial when that is missing, and changes what the agent can install
+mid-measurement. Moving to it needs a dispatched run that shows unchanged pass rates.
+
+The CLI budget cap (`--max-budget-usd 10`) is Claude Code's own list-price estimate for one
+session. It does not apply to calls the agent or PR code makes with the credentials directly, and
+nothing in this repository limits Bedrock spend. The AWS account that hosts `AWS_ROLE_ARN` must
+have its own control, configured outside this repository: an AWS Budgets budget on Bedrock cost
+for that account with a budget action that applies a deny policy for `bedrock:InvokeModel*` to the
+role (or a service control policy that does the same) when the limit is reached. A budget that only
+sends alerts does not stop spend, Budgets cost data arrives hours late (so the limit needs
+headroom), and Bedrock's tokens-per-minute quotas bound the rate, not the total.
 
 The human approval is enforced by the workflow, not by IAM. Both roles trust the
 `:environment:harbor-bench` subject, and `harbor-bench` has no reviewers, so any workflow that
@@ -236,6 +272,9 @@ checks both on every PR: it fails if any other workflow file mentions `harbor-be
 the name is assembled at runtime from parts. Changes to `main` go through reviewed pull requests
 (repository admins can bypass that review), so a new `harbor-bench` reference needs that review
 instead of a per-run approval.
+
+D-029 in [`docs/DECISIONS.md`](../../docs/DECISIONS.md) records this trade-off and what would
+change it.
 
 ## Local verification
 

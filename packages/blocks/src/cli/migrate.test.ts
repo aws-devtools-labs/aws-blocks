@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -41,13 +42,15 @@ const FIXTURES = JSON.parse(
 	readFileSync(fileURLToPath(new URL('../../test-fixtures/migrate-apps.json', import.meta.url)), 'utf-8'),
 ) as Record<string, FixtureApp>;
 
+const task = (command: string): string => `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- ${command}`;
+
 const TEMPLATES_DIR = fileURLToPath(new URL('../../../create-blocks-app/templates/', import.meta.url));
 
 /**
- * Fixtures from before create-blocks-app wrote `.blocks/config.json` (f42c604b,
+ * Fixtures from before create-blocks-app wrote `.cdk-blocks/config.json` (f42c604b,
  * #51); every later app has one with a stackId, which the tests add.
  */
-const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50'];
+const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50', 'amplify@0.1.0'];
 
 /**
  * The git these tests and `cdk-blocks migrate` run reads no system or user config,
@@ -70,7 +73,7 @@ function writeApp(name: string, edit?: (app: FixtureApp) => void): string {
 	const app = structuredClone(FIXTURES[name]);
 	assert.ok(app, `fixture ${name} exists`);
 	if (!SCAFFOLDED_BEFORE_STACK_ID.includes(name))
-		app.files['.blocks/config.json'] = `${JSON.stringify({ stackId: 'my-app-a1b2c3' }, null, 2)}\n`;
+		app.files['.cdk-blocks/config.json'] = `${JSON.stringify({ stackId: 'my-app-a1b2c3' }, null, 2)}\n`;
 	edit?.(app);
 	const root = mkdtempSync(join(tmpdir(), 'blocks-migrate-'));
 	writeFileSync(join(root, 'package.json'), `${JSON.stringify(app.packageJson, null, 2)}\n`);
@@ -171,7 +174,7 @@ describe('cdk-blocks migrate references', () => {
 		]);
 		assert.deepStrictEqual(scriptsDir(root), ['custom', 'deploy.ts', 'server.ts', 'stop.ts']);
 		// The scripts are still rewritten: only the files stay for the imports.
-		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
 	});
 
 	it('does not mistake a longer name or another directory for a wrapper', async () => {
@@ -223,7 +226,7 @@ describe('cdk-blocks migrate references', () => {
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'server.ts', 'typegen.ts']);
 		// The scripts still migrate, and the fields stay as they were.
 		const pkg: Record<string, unknown> = readPkg(root);
-		assert.strictEqual(readPkg(root).scripts.typegen, 'cdk-blocks generate types');
+		assert.strictEqual(readPkg(root).scripts.typegen, task('generate types'));
 		assert.deepStrictEqual(pkg['lint-staged'], { '*.ts': 'tsx aws-blocks/scripts/typegen.ts' });
 	});
 
@@ -243,7 +246,7 @@ describe('cdk-blocks migrate references', () => {
 			['aws-blocks/scripts/typegen.ts', 'generated, but still used by script "typegen:win"'],
 			[
 				'package.json#scripts.typegen:win',
-				'"tsx aws-blocks\\scripts\\typegen.ts" is not a generated command; replace it with a cdk-blocks command by hand',
+				'"tsx aws-blocks\\scripts\\typegen.ts" is not a generated command; replace it with an npm task by hand',
 			],
 		]);
 		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'destroy.ts', 'typegen.ts']);
@@ -258,7 +261,7 @@ describe('cdk-blocks migrate references', () => {
 				'cdk.out',
 				'dist',
 				'build-temp/aws-blocks/scripts',
-				'.blocks-sandbox',
+				'.cdk-blocks-sandbox',
 				'packages/x/node_modules',
 			])
 				app.files[`${dir}/notes.txt`] = mention;
@@ -340,7 +343,7 @@ describe('cdk-blocks migrate references', () => {
 			['aws-blocks/scripts/typegen.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
 		]);
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'sandbox-destroy.ts', 'secret.ts', 'typegen.ts']);
-		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy', 'the scripts still migrate');
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'), 'the scripts still migrate');
 	});
 
 	it('in a monorepo, keeps a wrapper that a nested script, Makefile or sibling package.json runs', async () => {
@@ -495,7 +498,7 @@ describe('cdk-blocks migrate references', () => {
 			['aws-blocks/scripts/deploy.ts', 'generated, but still used by .github/workflows/d.yml'],
 			['aws-blocks/scripts/secret.ts', 'generated, but still used by Dockerfile'],
 			['aws-blocks/scripts/typegen.ts', 'generated, but still used by scripts/ci.sh'],
-			['package.json#scripts.ci:console', '"cd aws-blocks/scripts && tsx console.ts" is not a generated command; replace it with a cdk-blocks command by hand'],
+			['package.json#scripts.ci:console', '"cd aws-blocks/scripts && tsx console.ts" is not a generated command; replace it with an npm task by hand'],
 		]);
 		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'secret.ts', 'typegen.ts']);
 	});
@@ -514,10 +517,10 @@ describe('cdk-blocks migrate references', () => {
 		const root = join(parent, 'examples', 'app');
 		renameSync(app, root);
 		const before = snapshot(root);
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 1);
 		assert.match(run.stderr, /^Error: git does not track this app/);
-		assert.match(run.stderr, /\nTry: .*cdk-blocks migrate --force/);
+		assert.match(run.stderr, /\nTry: .*node .* -- migrate --force/);
 		assert.deepStrictEqual(snapshot(root), before);
 		const json = await runCli(['migrate', '--output', 'json'], { cwd: root });
 		assert.strictEqual(json.code, 1);
@@ -525,7 +528,7 @@ describe('cdk-blocks migrate references', () => {
 			error: {
 				message:
 					'git does not track this app (a parent repository may ignore its directory), so its changes could not be undone with git.',
-				hint: '"cdk-blocks migrate --force" to migrate anyway',
+				hint: `"${task('migrate --force')}" to migrate anyway`,
 			},
 		});
 		assert.deepStrictEqual(snapshot(root), before);
@@ -591,25 +594,34 @@ describe('cdk-blocks migrate', () => {
 		const after = readPkg(root);
 		assert.deepStrictEqual(after.scripts, {
 			...before,
-			'dev:server': 'cdk-blocks dev',
-			dev: 'cdk-blocks dev',
-			'dev:stop': 'cdk-blocks dev stop',
-			sandbox: 'cdk-blocks sandbox',
-			'sandbox:deploy': 'cdk-blocks sandbox deploy',
-			'sandbox:destroy': 'cdk-blocks sandbox destroy',
-			'sandbox:console': 'cdk-blocks sandbox console',
-			cleanup: 'cdk-blocks dev stop --all',
-			deploy: 'cdk-blocks deploy',
-			secret: 'cdk-blocks secret',
-			typegen: 'cdk-blocks generate types',
-			destroy: 'cdk-blocks destroy',
+			'docs': task('docs'),
+			'docs:search': task('docs --search'),
+			'docs:api': task('docs --api'),
+			'db': task('db'),
+			'whoami': task('whoami'),
+			'migrate': task('migrate'),
+			'help': task('--help'),
+			'generate-client': task('generate client'),
+			'dev:server': task('dev'),
+			dev: task('dev'),
+			'dev:stop': task('dev stop'),
+			sandbox: task('sandbox'),
+			'sandbox:deploy': task('sandbox deploy'),
+			'sandbox:destroy': task('sandbox destroy'),
+			'sandbox:console': task('sandbox console'),
+			cleanup: task('dev stop --all'),
+			deploy: task('deploy'),
+			secret: task('secret'),
+			typegen: task('generate types'),
+			destroy: task('destroy'),
 		});
 		assert.deepStrictEqual(result.scriptsRewritten.deploy, {
 			from: 'tsx aws-blocks/scripts/deploy.ts',
-			to: 'cdk-blocks deploy',
+			to: task('deploy'),
 		});
-		// The vite command equals what cdk-blocks dev detects from the vite dependency, so only the port moves:
-		// leaving frontendCommand out keeps `cdk-blocks dev --frontend-port` working.
+		// cdk-blocks dev detects the same vite dev server from the vite dependency (its command adds
+		// `--host 127.0.0.1`), so only the port moves: leaving frontendCommand out keeps
+		// `cdk-blocks dev --frontend-port` working.
 		assert.deepStrictEqual(after.blocks, { dev: { frontendPort: 3100 } });
 		assert.deepStrictEqual(result.devConfig, after.blocks?.dev, 'the JSON reports the blocks.dev it wrote');
 		assert.strictEqual(result.removed.length, 10);
@@ -624,11 +636,11 @@ describe('cdk-blocks migrate', () => {
 		assert.deepStrictEqual(result.kept, []);
 		assert.deepStrictEqual(result.scriptsRewritten['sandbox:preview'], {
 			from: 'tsx aws-blocks/scripts/sandbox.ts --preview',
-			to: 'cdk-blocks sandbox preview',
+			to: task('sandbox preview'),
 		});
 		const { scripts } = readPkg(root);
-		assert.strictEqual(scripts['sandbox:preview'], 'cdk-blocks sandbox preview');
-		assert.strictEqual(scripts['sandbox:deploy'], 'cdk-blocks sandbox deploy');
+		assert.strictEqual(scripts['sandbox:preview'], task('sandbox preview'));
+		assert.strictEqual(scripts['sandbox:deploy'], task('sandbox deploy'));
 		assert.ok(!existsSync(join(root, 'aws-blocks', 'scripts')), 'the preview-aware sandbox.ts is generated, so it goes');
 	});
 
@@ -653,14 +665,17 @@ describe('cdk-blocks migrate', () => {
 			['api-only', 'api-only@0ab6b047'],
 		] as const) {
 			const root = writeApp(fixture);
-			const run = await runCli(['migrate', '--force'], { cwd: root });
+			const run = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 			assert.strictEqual(run.code, 0, run.stderr);
 			const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, template, 'package.json'), 'utf-8'));
 			const migrated = readPkg(root);
 			// spec, vendorize, prebuild and test:e2e run no wrapper (bins, or the app's own test), and the
 			// templates have changed them since; migrate leaves them as they are. config is new in the
 			// templates and no released app had it or a wrapper for it, so migrate adds nothing for it.
-			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config'];
+			// typecheck and build run no wrapper either: the Vite templates now run `tsc -b --force`
+			// over project references, an optional move that also needs new tsconfig files (see
+			// docs/guides/upgrading-older-apps.md, "Keep Node types out of the frontend").
+			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config', 'typecheck', 'build'];
 			const pick = (scripts: Record<string, string>) =>
 				Object.fromEntries(Object.entries(scripts).filter(([name]) => !omit.includes(name)));
 			const expected = pick(current.scripts);
@@ -670,6 +685,18 @@ describe('cdk-blocks migrate', () => {
 		}
 	});
 
+	it('migrates exact CLI aliases and only fills missing user tasks', () => {
+		const root = writeApp('cli-alias-app');
+		const plan = planMigration(root, null);
+		assert.deepStrictEqual(plan.result.scriptsRewritten.db, { from: null, to: task('db') });
+		applyMigration(root, plan);
+		const { scripts } = readPkg(root);
+		assert.strictEqual(scripts.dev, task('dev'));
+		assert.strictEqual(scripts.prebuild, task('generate client'));
+		assert.strictEqual(scripts.docs, 'my-custom-docs');
+		assert.strictEqual(scripts.custom, 'cdk-blocks deploy && echo done');
+	});
+
 	it('renames the scripts that a prerelease build scaffolded with the blocks command', async () => {
 		const root = writeApp('default@d79a0bda');
 		const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, 'default', 'package.json'), 'utf-8'));
@@ -677,17 +704,17 @@ describe('cdk-blocks migrate', () => {
 		pkg.scripts = Object.fromEntries(
 			Object.entries(current.scripts as Record<string, string>).map(([name, value]) => [
 				name,
-				value.replace(/^cdk-blocks /, 'blocks '),
+				value.startsWith(task('')) ? `blocks ${value.slice(task('').length)}` : value,
 			]),
 		);
 		writeFileSync(join(root, 'package.json'), JSON.stringify(pkg, null, 2));
-		const run = await runCli(['migrate', '--force'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(readPkg(root).scripts, current.scripts);
 	});
 
 	it('migrates an app from the first template version and an old nextjs version', async () => {
-		// It predates .blocks/config.json, which cdk-blocks deploy and cdk-blocks destroy need for the
+		// It predates .cdk-blocks/config.json, which cdk-blocks deploy and cdk-blocks destroy need for the
 		// stack name: deploy and destroy stay on their wrappers and are reported; the rest migrates.
 		const backend = writeApp('backend@1aeebe50');
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: backend });
@@ -700,8 +727,8 @@ describe('cdk-blocks migrate', () => {
 			'package.json#scripts.destroy',
 		]);
 		for (const { file, reason } of kept) {
-			assert.match(reason, /\.blocks\/config\.json.*"stackId"/, file);
-			assert.match(reason, /but this app has no \.blocks\/config\.json: create \.blocks\/config\.json/, file);
+			assert.match(reason, /\.cdk-blocks\/config\.json.*"stackId"/, file);
+			assert.match(reason, /but this app has no \.cdk-blocks\/config\.json: create \.cdk-blocks\/config\.json/, file);
 			// The stack that cdk-blocks deploy and destroy name must be the one the CDK app defines.
 			assert.match(
 				reason,
@@ -710,14 +737,14 @@ describe('cdk-blocks migrate', () => {
 			);
 		}
 		assert.deepStrictEqual(readPkg(backend).blocks, { dev: { port: 3001, frontend: false } });
-		assert.strictEqual(readPkg(backend).scripts.dev, 'cdk-blocks dev');
+		assert.strictEqual(readPkg(backend).scripts.dev, task('dev'));
 		assert.strictEqual(readPkg(backend).scripts.deploy, 'tsx aws-blocks/scripts/deploy.ts');
 		assert.strictEqual(readPkg(backend).scripts.destroy, 'tsx aws-blocks/scripts/destroy.ts');
 		// sandbox-id.ts is imported by index.cdk.ts and is not a lifecycle wrapper: left alone.
 		assert.deepStrictEqual(scriptsDir(backend), ['deploy.ts', 'destroy.ts', 'sandbox-id.ts']);
 
 		const nextjs = writeApp('nextjs@0ac38793');
-		const next = await runCli(['migrate', '--force'], { cwd: nextjs });
+		const next = await runCli(['migrate', '--force', '--output', 'text'], { cwd: nextjs });
 		assert.strictEqual(next.code, 0, next.stderr);
 		assert.deepStrictEqual(readPkg(nextjs).blocks, {
 			dev: { frontendCommand: 'npx next dev --port 3100', frontendPort: 3100 },
@@ -725,9 +752,9 @@ describe('cdk-blocks migrate', () => {
 		assert.deepStrictEqual(scriptsDir(nextjs), []);
 	});
 
-	it('keeps deploy and destroy while .blocks/config.json has no stackId, and finishes once it has', async () => {
+	it('keeps deploy and destroy while .cdk-blocks/config.json has no stackId, and finishes once it has', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
-			app.files['.blocks/config.json'] = '{}\n';
+			app.files['.cdk-blocks/config.json'] = '{}\n';
 		});
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
@@ -740,24 +767,24 @@ describe('cdk-blocks migrate', () => {
 		]);
 		assert.match(
 			result.kept.find((k: { file: string }) => k.file === 'package.json#scripts.deploy').reason,
-			/^"cdk-blocks deploy" needs "stackId" in \.blocks\/config\.json, but \.blocks\/config\.json has no string "stackId": create/,
+			/^"node .* -- deploy" needs "stackId" in \.cdk-blocks\/config\.json, but \.cdk-blocks\/config\.json has no string "stackId": create/,
 		);
-		assert.strictEqual(result.scriptsRewritten.sandbox.to, 'cdk-blocks sandbox', 'the other scripts migrate');
+		assert.strictEqual(result.scriptsRewritten.sandbox.to, task('sandbox'), 'the other scripts migrate');
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
 
-		writeFileSync(join(root, '.blocks', 'config.json'), '{ "stackId": "my-app-a1b2c3" }\n');
+		writeFileSync(join(root, '.cdk-blocks', 'config.json'), '{ "stackId": "my-app-a1b2c3" }\n');
 		const again = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(again.code, 0, again.stdout);
-		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
-		assert.strictEqual(readPkg(root).scripts.destroy, 'cdk-blocks destroy');
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
+		assert.strictEqual(readPkg(root).scripts.destroy, task('destroy'));
 		assert.deepStrictEqual(scriptsDir(root), []);
 	});
 
-	it('tells a .blocks/config.json that is not valid JSON from a missing one, and keeps deploy and destroy', async () => {
+	it('tells a .cdk-blocks/config.json that is not valid JSON from a missing one, and keeps deploy and destroy', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
-			app.files['.blocks/config.json'] = '{ "stackId": "my-app-a1b2c3", }\n';
+			app.files['.cdk-blocks/config.json'] = '{ "stackId": "my-app-a1b2c3", }\n';
 		});
-		const path = join(root, '.blocks', 'config.json');
+		const path = join(root, '.cdk-blocks', 'config.json');
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const kept = keptReasons(run.stdout);
@@ -766,24 +793,60 @@ describe('cdk-blocks migrate', () => {
 			['aws-blocks/scripts/deploy.ts', 'aws-blocks/scripts/destroy.ts', 'package.json#scripts.deploy', 'package.json#scripts.destroy'],
 		);
 		for (const [file, reason] of kept) {
-			assert.match(reason, /, but \.blocks\/config\.json is not valid JSON \(.+\): fix /, file);
-			assert.ok(reason.endsWith(`fix ${path}, then run cdk-blocks migrate again`), reason);
-			assert.doesNotMatch(reason, /create \.blocks\/config\.json/, file);
+			assert.match(reason, /, but \.cdk-blocks\/config\.json is not valid JSON \(.+\): fix /, file);
+			assert.ok(reason.endsWith(`fix ${path}, then rerun migration`), reason);
+			assert.doesNotMatch(reason, /create \.cdk-blocks\/config\.json/, file);
 		}
-		assert.strictEqual(readPkg(root).scripts.sandbox, 'cdk-blocks sandbox', 'the other scripts migrate');
+		assert.strictEqual(readPkg(root).scripts.sandbox, task('sandbox'), 'the other scripts migrate');
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
 	});
 
 	it('migrates the amplify overlay and keeps its client generator', async () => {
 		const root = writeApp('amplify@0ab6b047');
-		const run = await runCli(['migrate', '--force'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const pkg = readPkg(root);
-		assert.strictEqual(pkg.scripts['blocks:dev'], 'cdk-blocks dev');
-		assert.strictEqual(pkg.scripts['blocks:stop'], 'cdk-blocks dev stop');
+		assert.strictEqual(pkg.scripts['blocks:dev'], task('dev'));
+		assert.strictEqual(pkg.scripts['blocks:stop'], task('dev stop'));
 		assert.match(pkg.scripts['blocks:generate-client'], /tsx aws-blocks\/scripts\/generate-client\.ts$/);
-		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false } });
+		// generateClient: false keeps the overlay's own client.js under the dev server
+		// (the Cognito token and the amplify_outputs.json API URL).
+		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
+		const json = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: writeApp('amplify@0ab6b047') });
+		assert.deepStrictEqual(JSON.parse(json.stdout).devConfig, { port: 3001, frontend: false, generateClient: false });
 		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts']);
+	});
+
+	it('gives an amplify overlay without a server.ts the overlay dev config', async () => {
+		// Overlays 0.1.0-0.1.15 ship no server.ts, so no generated server.ts gives the dev config,
+		// but `cdk-blocks dev` would still replace the overlay's own client.js. Their generated
+		// generate-client.ts tells migrate that the app is the overlay.
+		const root = writeApp('amplify@0.1.0');
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.deepStrictEqual(result.scriptsRewritten['blocks:dev'], {
+			from: 'tsx watch aws-blocks/scripts/server.ts',
+			to: task('dev'),
+		});
+		assert.deepStrictEqual(result.devConfig, { port: 3001, frontend: false, generateClient: false });
+		assert.deepStrictEqual(readPkg(root).blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
+		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts', 'sandbox-id.ts']);
+
+		// An existing blocks.dev is the app's own choice, as with a generated server.ts.
+		const configured = writeApp('amplify@0.1.0', (app) => {
+			app.packageJson.blocks = { dev: { port: 4001 } };
+		});
+		const kept = await runCli(['migrate', '--force', '--output', 'json'], { cwd: configured });
+		assert.strictEqual(JSON.parse(kept.stdout).devConfig, null);
+		assert.deepStrictEqual(readPkg(configured).blocks, { dev: { port: 4001 } });
+
+		// --query checks its path against the declared result shape, which has generateClient.
+		const query = await runCli(['migrate', '--dry-run', '--query', 'devConfig.generateClient'], {
+			cwd: writeApp('amplify@0.1.0'),
+		});
+		assert.strictEqual(query.code, 0, query.stderr);
+		assert.strictEqual(query.stdout.trim(), 'false');
 	});
 
 	it('keeps the amplify stop.ts and blocks:stop when server.ts is customized', async () => {
@@ -795,7 +858,16 @@ describe('cdk-blocks migrate', () => {
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const result = JSON.parse(run.stdout);
-		assert.deepStrictEqual(result.scriptsRewritten, {});
+		assert.deepStrictEqual(Object.keys(result.scriptsRewritten).sort(), [
+			'db',
+			'docs',
+			'docs:api',
+			'docs:search',
+			'generate-client',
+			'help',
+			'migrate',
+			'whoami',
+		]);
 		assert.strictEqual(result.devConfig, null);
 		const pkg = readPkg(root);
 		assert.strictEqual(pkg.scripts['blocks:stop'], 'tsx aws-blocks/scripts/stop.ts');
@@ -830,14 +902,14 @@ describe('cdk-blocks migrate', () => {
 		// The script that still runs it is listed too, so a JSON consumer sees every script left on a wrapper.
 		assert.strictEqual(
 			kept.find((k) => k.file === 'package.json#scripts.deploy')?.reason,
-			'"tsx aws-blocks/scripts/deploy.ts" runs aws-blocks/scripts/deploy.ts, an unrecognised version that migrate keeps; "cdk-blocks deploy" would bypass it, so switch the script by hand once you have moved its changes',
+			`"tsx aws-blocks/scripts/deploy.ts" runs aws-blocks/scripts/deploy.ts, an unrecognised version that migrate keeps; "${task('deploy')}" would bypass it, so switch the script by hand once you have moved its changes`,
 		);
 		const pkg = readPkg(root);
 		assert.strictEqual(pkg.scripts.deploy, 'tsx aws-blocks/scripts/deploy.ts', 'its script still runs it');
-		assert.strictEqual(pkg.scripts.destroy, 'cdk-blocks destroy');
+		assert.strictEqual(pkg.scripts.destroy, task('destroy'));
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts']);
 
-		const text = await runCli(['migrate', '--force'], { cwd: root });
+		const text = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(text.code, 1);
 		assert.match(text.stdout, /finish by hand/);
 		assert.match(text.stdout, /aws-blocks\/scripts\/deploy\.ts: unrecognised version/);
@@ -872,7 +944,7 @@ describe('cdk-blocks migrate', () => {
 				/customized aws-blocks\/scripts\/server\.ts/,
 			);
 			assert.strictEqual(result.devConfig, null, 'no dev config is derived from a customized server');
-			assert.strictEqual(pkg.scripts.deploy, 'cdk-blocks deploy', 'unrelated scripts still migrate');
+			assert.strictEqual(pkg.scripts.deploy, task('deploy'), 'unrelated scripts still migrate');
 			const left = scriptsDir(root);
 			assert.ok(left.includes('server.ts') && left.includes('sandbox.ts'), `kept wrappers: ${left.join(', ')}`);
 		});
@@ -899,7 +971,7 @@ describe('cdk-blocks migrate', () => {
 			/used by aws-blocks\/scripts\/sandbox\.ts/,
 		);
 		assert.strictEqual(readPkg(root).scripts.sandbox, 'tsx aws-blocks/scripts/sandbox.ts');
-		assert.strictEqual(readPkg(root).scripts.dev, 'cdk-blocks dev');
+		assert.strictEqual(readPkg(root).scripts.dev, task('dev'));
 	});
 
 	it('keeps a generated server.ts that a customized sandbox.ts starts without naming it', async () => {
@@ -944,17 +1016,17 @@ describe('cdk-blocks migrate', () => {
 	it('--dry-run writes nothing and prints the plan', async () => {
 		const root = writeApp('default@0ab6b047');
 		const before = snapshot(root);
-		const run = await runCli(['migrate', '--dry-run'], { cwd: root });
+		const run = await runCli(['migrate', '--dry-run', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(snapshot(root), before);
 		assert.match(run.stdout, /^Dry run; nothing was written/);
-		assert.match(run.stdout, /rewrite script "deploy": tsx aws-blocks\/scripts\/deploy\.ts -> cdk-blocks deploy/);
+		assert.match(run.stdout, /rewrite script "deploy": tsx aws-blocks\/scripts\/deploy\.ts -> node .* -- deploy/);
 		assert.match(run.stdout, /delete aws-blocks\/scripts\/server\.ts/);
 	});
 
 	it('--dry-run words the kept items as the plan, not as done', async () => {
 		const root = writeApp('backend@1aeebe50');
-		const run = await runCli(['migrate', '--dry-run'], { cwd: root });
+		const run = await runCli(['migrate', '--dry-run', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		assert.match(run.stdout, /\nWould be left for you to finish by hand \(exit code 1; everything else would be migrated\):\n/);
 		assert.doesNotMatch(run.stdout, /was migrated/);
@@ -980,10 +1052,10 @@ describe('cdk-blocks migrate', () => {
 		git(root, 'commit', '-q', '-m', 'init');
 		writeFileSync(join(root, 'notes.txt'), 'uncommitted\n');
 		const before = snapshot(root);
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 1);
 		assert.match(run.stderr, /^Error: the git working tree has uncommitted changes/);
-		assert.match(run.stderr, /\nTry: .*cdk-blocks migrate --force/);
+		assert.match(run.stderr, /\nTry: .*node .* -- migrate --force/);
 		assert.deepStrictEqual(snapshot(root), before);
 
 		// Under --output json the refusal is a JSON document on stdout, so an agent tells it from kept items (also exit 1).
@@ -992,10 +1064,13 @@ describe('cdk-blocks migrate', () => {
 		assert.deepStrictEqual(JSON.parse(json.stdout), {
 			error: {
 				message: 'the git working tree has uncommitted changes; commit or stash them first.',
-				hint: 'git stash, or "cdk-blocks migrate --force" to migrate anyway',
+				hint: `git stash, or "${task('migrate --force')}" to migrate anyway`,
 			},
 		});
 		assert.match(json.stderr, /^Error: the git working tree has uncommitted changes/);
+		const piped = await runCli(['migrate'], { cwd: root, stdoutIsTTY: false });
+		assert.strictEqual(piped.code, 1);
+		assert.deepStrictEqual(JSON.parse(piped.stdout), JSON.parse(json.stdout));
 		assert.deepStrictEqual(snapshot(root), before);
 
 		// --query prints one field of the result; a refusal has none, so stdout stays empty and the error is on stderr.
@@ -1011,9 +1086,9 @@ describe('cdk-blocks migrate', () => {
 		assert.match(help.stdout, /\{"error": \{"message", "hint"\}\}/);
 		assert.match(help.stdout, /\n {2}2 {2}usage error/);
 
-		const forced = await runCli(['migrate', '--force'], { cwd: root });
+		const forced = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(forced.code, 0, forced.stderr);
-		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
 	});
 
 	it('runs in a clean git tree', async () => {
@@ -1021,17 +1096,17 @@ describe('cdk-blocks migrate', () => {
 		git(root, 'init', '-q');
 		git(root, 'add', '-A');
 		git(root, 'commit', '-q', '-m', 'init');
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 	});
 
 	it('refuses an app outside git unless --force, and writes nothing', async () => {
 		const root = writeApp('api-only@0ab6b047');
 		const before = snapshot(root);
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 1);
 		assert.match(run.stderr, /^Error: this app is not in a git work tree \(or git is not installed\)/);
-		assert.match(run.stderr, /\nTry: "cdk-blocks migrate --dry-run" to see the plan, then "cdk-blocks migrate --force"/);
+		assert.match(run.stderr, /\nTry: "node .* -- migrate --dry-run" to see the plan, then "node .* -- migrate --force"/);
 		assert.deepStrictEqual(snapshot(root), before);
 
 		const json = await runCli(['migrate', '--output', 'json'], { cwd: root });
@@ -1040,7 +1115,7 @@ describe('cdk-blocks migrate', () => {
 			error: {
 				message:
 					'this app is not in a git work tree (or git is not installed), so its changes could not be undone with git.',
-				hint: '"cdk-blocks migrate --dry-run" to see the plan, then "cdk-blocks migrate --force" to migrate without git',
+				hint: `"${task('migrate --dry-run')}" to see the plan, then "${task('migrate --force')}" to migrate without git`,
 			},
 		});
 		assert.deepStrictEqual(snapshot(root), before);
@@ -1050,14 +1125,14 @@ describe('cdk-blocks migrate', () => {
 		assert.ok(JSON.parse(dryRun.stdout).removed.length > 0);
 		assert.deepStrictEqual(snapshot(root), before);
 
-		const forced = await runCli(['migrate', '--force'], { cwd: root });
+		const forced = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(forced.code, 0, forced.stderr);
-		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
 		assert.deepStrictEqual(scriptsDir(root), []);
 	});
 
 	it('two concurrent runs do not crash on a file the other one deleted', async () => {
-		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
+		const entry = new URL('./run.js', import.meta.url);
 		for (let attempt = 0; attempt < 3; attempt++) {
 			const root = writeApp('default@0ab6b047');
 			git(root, 'init', '-q');
@@ -1067,7 +1142,7 @@ describe('cdk-blocks migrate', () => {
 				[0, 1].map(
 					() =>
 						new Promise<{ code: number | null; stderr: string }>((resolve) => {
-							const child = spawn(process.execPath, [bin, '-C', root, 'migrate', '--output', 'json'], {
+							const child = spawn(process.execPath, ['--input-type=module', '-e', `import ${JSON.stringify(entry.href)}`, '--', '-C', root, 'migrate', '--output', 'json'], {
 								stdio: ['ignore', 'ignore', 'pipe'],
 							});
 							let stderr = '';
@@ -1082,14 +1157,14 @@ describe('cdk-blocks migrate', () => {
 				if (run.code !== 0) {
 					assert.match(
 						run.stderr,
-						/^Error: (the git working tree has uncommitted changes|package\.json changed while cdk-blocks migrate ran; nothing was written)/,
+						/^Error: (the git working tree has uncommitted changes|package\.json changed while npm run migrate ran; nothing was written)/,
 						run.stderr,
 					);
 				}
 				assert.doesNotMatch(run.stderr, /ENOENT/);
 			}
 			assert.deepStrictEqual(scriptsDir(root), []);
-			assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+			assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
 		}
 	});
 
@@ -1105,8 +1180,8 @@ describe('cdk-blocks migrate', () => {
 		assert.throws(
 			() => applyMigration(root, plan),
 			(error: Error & { hint?: string }) => {
-				assert.strictEqual(error.message, 'package.json changed while cdk-blocks migrate ran; nothing was written.');
-				assert.match(error.hint ?? '', /"cdk-blocks migrate" again/);
+				assert.strictEqual(error.message, 'package.json changed while npm run migrate ran; nothing was written.');
+				assert.match(error.hint ?? '', /-- migrate" again/);
 				return true;
 			},
 		);
@@ -1163,6 +1238,58 @@ describe('cdk-blocks migrate', () => {
 		removeIfEmpty(dir);
 	});
 
+	it('deletes every wrapper it can after the package.json rewrite, names the ones it cannot, and a rerun deletes them', {
+		skip:
+			(process.platform === 'win32' && 'POSIX permissions') ||
+			(process.getuid?.() === 0 && 'root deletes from a read-only directory'),
+	}, async (t) => {
+		const root = writeApp('default@0ab6b047');
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		const planned = JSON.parse((await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root })).stdout);
+		assert.strictEqual(planned.removed.length, 10);
+		const dir = join(root, 'aws-blocks', 'scripts');
+		chmodSync(dir, 0o555);
+		t.after(() => existsSync(dir) && chmodSync(dir, 0o755));
+
+		const run = await runCli(['migrate', '--output', 'text'], { cwd: root });
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(
+			run.stderr,
+			[
+				'Error: package.json was rewritten, but 10 wrappers could not be deleted.',
+				...planned.removed.map((file: string) => `  ${file}: EACCES`),
+				`Try: fix the permissions, then "${task('migrate --force')}" to delete them`,
+				'',
+			].join('\n'),
+		);
+		// The scripts no longer run the wrappers, so the ones left behind are harmless.
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
+		assert.deepStrictEqual(readPkg(root).blocks, { dev: { frontendPort: 3100 } });
+		assert.strictEqual(scriptsDir(root).length, 10);
+
+		// Run again with the directory still read-only: package.json is already migrated, and the error says so.
+		const json = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(json.code, 1);
+		assert.deepStrictEqual(JSON.parse(json.stdout), {
+			error: {
+				message: '10 wrappers could not be deleted.',
+				hint: `fix the permissions, then "${task('migrate --force')}" to delete them`,
+			},
+		});
+
+		chmodSync(dir, 0o755);
+		// The tree now holds the first run's changes, so a run without --force refuses, as the hint expects.
+		const plain = await runCli(['migrate', '--output', 'text'], { cwd: root });
+		assert.strictEqual(plain.code, 1);
+		assert.match(plain.stderr, /^Error: the git working tree has uncommitted changes/);
+		const rerun = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(rerun.code, 0, rerun.stderr);
+		assert.deepStrictEqual(JSON.parse(rerun.stdout).removed, planned.removed);
+		assert.ok(!existsSync(dir), 'the emptied scripts directory is removed');
+	});
+
 	it('refuses a repository that git does not read, quoting git, unless --force', async (t) => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.files['tools/release.sh'] = '#!/bin/sh\nnpx tsx aws-blocks/scripts/deploy.ts\n';
@@ -1185,16 +1312,16 @@ describe('cdk-blocks migrate', () => {
 				t.skip(`git does not report dubious ownership under GIT_TEST_ASSUME_DIFFERENT_OWNER (git rev-parse: ${probe.stderr.trim() || probe.stdout.trim()})`);
 				return;
 			}
-			const run = await runCli(['migrate'], { cwd: root });
+			const run = await runCli(['migrate', '--output', 'text'], { cwd: root });
 			assert.strictEqual(run.code, 1);
 			assert.match(run.stderr, /^Error: git failed in .*: fatal: detected dubious ownership in repository at /);
-			assert.match(run.stderr, /\nTry: .*cdk-blocks migrate --force/);
+			assert.match(run.stderr, /\nTry: .*node .* -- migrate --force/);
 			assert.deepStrictEqual(snapshot(root), before);
 			const json = await runCli(['migrate', '--output', 'json'], { cwd: root });
 			assert.strictEqual(json.code, 1);
 			const { error } = JSON.parse(json.stdout) as { error: { message: string; hint: string } };
 			assert.match(error.message, /^git failed in .*: fatal: detected dubious ownership in repository at /);
-			assert.match(error.hint, /cdk-blocks migrate --force/);
+			assert.match(error.hint, /node .* -- migrate --force/);
 
 			const forced = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 			assert.strictEqual(forced.code, 1, forced.stderr);
@@ -1243,7 +1370,7 @@ describe('cdk-blocks migrate', () => {
 
 	it('is idempotent', async () => {
 		const root = writeApp('default@0ab6b047');
-		assert.strictEqual((await runCli(['migrate', '--force'], { cwd: root })).code, 0);
+		assert.strictEqual((await runCli(['migrate', '--force', '--output', 'text'], { cwd: root })).code, 0);
 		const once = snapshot(root);
 		const again = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(again.code, 0, again.stderr);
@@ -1255,7 +1382,7 @@ describe('cdk-blocks migrate', () => {
 			devConfig: null,
 		});
 		assert.deepStrictEqual(snapshot(root), once);
-		const text = await runCli(['migrate', '--dry-run'], { cwd: root });
+		const text = await runCli(['migrate', '--dry-run', '--output', 'text'], { cwd: root });
 		assert.match(text.stdout, /^Nothing to migrate/);
 	});
 
@@ -1273,10 +1400,10 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('api-only@0ab6b047');
 		const path = join(root, 'package.json');
 		writeFileSync(path, readFileSync(path, 'utf-8').replace(/\n/g, '\r\n'));
-		const run = await runCli(['migrate', '--force'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const text = readFileSync(path, 'utf-8');
-		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
 		assert.ok(text.endsWith('}\r\n'), 'the trailing newline is CRLF');
 		assert.doesNotMatch(text, /[^\r]\n/, 'every line ends with CRLF');
 	});
@@ -1285,11 +1412,11 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('api-only@0ab6b047');
 		const path = join(root, 'package.json');
 		writeFileSync(path, `\uFEFF${readFileSync(path, 'utf-8')}`);
-		const run = await runCli(['migrate', '--force'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const text = readFileSync(path, 'utf-8');
 		assert.ok(text.startsWith('\uFEFF{'), 'the BOM is kept');
-		assert.strictEqual(JSON.parse(text.slice(1)).scripts.deploy, 'cdk-blocks deploy');
+		assert.strictEqual(JSON.parse(text.slice(1)).scripts.deploy, task('deploy'));
 	});
 
 	it('names the package.json that it cannot parse', async () => {
@@ -1363,8 +1490,8 @@ describe('cdk-blocks migrate', () => {
 				.replace(/\n/g, '\r\n')
 				.replace(/ {2}/g, '\t');
 		});
-		const run = await runCli(['migrate', '--force'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'text'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stdout);
-		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
 	});
 });

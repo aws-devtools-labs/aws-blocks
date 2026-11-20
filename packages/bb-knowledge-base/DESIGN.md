@@ -2,7 +2,7 @@
 
 Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-knowledge-base`
+**Package:** `@aws-cdk-blocks/bb-knowledge-base`
 **Type:** Primitive (new infrastructure)
 **AWS Services:** Amazon Bedrock Knowledge Bases, S3, S3 Vectors
 
@@ -24,7 +24,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Embedding-propagation lag after `COMPLETE`:** `isSynced() === true` means the ingestion *job* reached `COMPLETE`. Per the Bedrock docs, for non-Aurora vector stores — and this BB uses S3 Vectors — newly-written embeddings can take a few minutes after `COMPLETE` before they are fully queryable. So `isSynced()` signals "the ingestion job finished," with a possible short embedding-propagation lag before the freshest chunks surface in `retrieve()` results.
 
-**Source coverage (folder and imported `s3://`):** Both a local-folder source and an imported `s3://` URI create a BB-managed `CfnDataSource` and register its `DATA_SOURCE_ID` unconditionally, so the sync API tracks the ingestion job for either source type — `isSynced()` / `waitUntilSynced()` reflect that data source's most recent ingestion job in both cases. (For an `s3://` source the construct skips the `BucketDeployment` step, since the documents are expected to already be in the bucket, but it still creates the data source and fires the ingestion job — so sync is tracked the same way.) The only case with nothing to track is a deployment that predates this sync API: such a handler has no `DATA_SOURCE_ID` injected, so `isSynced()` returns `true` immediately (treating "no managed data source" as synced). Re-deploying injects the id and enables sync tracking.
+**Source coverage (folder and imported `s3://`):** Both a local-folder source and an imported `s3://` URI create a BB-managed `CfnDataSource` and register its `DATA_SOURCE_ID` unconditionally, so the sync API tracks the ingestion job for either source type — `isSynced()` / `waitUntilSynced()` reflect that data source's most recent ingestion job in both cases. (For an `s3://` source the construct skips the `BucketDeployment` step, since the documents are expected to already be in the bucket, but it still creates the data source and fires the ingestion job — so sync is tracked the same way.) The only case with nothing to track is a handler whose config carries no `DATA_SOURCE_ID`: `isSynced()` then returns `true` immediately (treating "no managed data source" as synced). Deploying the stack injects the id and enables sync tracking.
 
 ### D-KB-3: Semantic chunking as default strategy
 
@@ -46,7 +46,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 ### D-KB-5a: `asAgentTool()` returns a plain tool shape, and its filter is required
 
-**Decision:** `asAgentTool(options)` returns a plain object shaped like `@aws-blocks/bb-agent`'s `ToolDefinition` (`description`, a zod `parameters` schema with a single `query`, `untrustedOutput: true`, `handler`). The metadata filter is never a tool input: a required `filter(context)` callback derives it from the agent's per-call tool context on every call. Returning `undefined` (an explicit `filter: () => undefined`) searches everything; a throw fails the call before Bedrock is queried.
+**Decision:** `asAgentTool(options)` returns a plain object shaped like `@aws-cdk-blocks/bb-agent`'s `ToolDefinition` (`description`, a zod `parameters` schema with a single `query`, `untrustedOutput: true`, `handler`). The metadata filter is never a tool input: a required `filter(context)` callback derives it from the agent's per-call tool context on every call. Returning `undefined` (an explicit `filter: () => undefined`) searches everything; a throw fails the call before Bedrock is queried.
 
 **Rationale:** A filter the model can set is not an access control, and retrieved text is untrusted, so the safe composition is the one this method hard-codes. Making `filter` required means a multi-tenant app can't forget it, and a single-tenant app opts out visibly. Returning a structural shape (not importing `bb-agent`) keeps the dependency one-way: `bb-agent` already sits above the data blocks, and the Agent's `tool()` factory infers `TContext` from its `toolContextSchema` through the generic, so `context` is typed with no casts. `zod` is a runtime dependency for the tool's own input schema, the same library `bb-agent` uses for `ToolDefinition.parameters`. The CDK entry implements the method for real (it's in `SYNTH_SAFE_METHODS`) because tools may be declared at module top level; the returned handler calls the guarded `retrieve()`, so a search still can't run at synth.
 
@@ -106,7 +106,7 @@ Creates the following resources:
 
 1. **S3 Data Bucket** — Stores source documents. Created new for local folder sources; imported via `Bucket.fromBucketName` for `s3://` URI sources. Block public access enabled, SSE-S3 encryption. Removal policy defaults to CDK's default (`RETAIN`) — the bucket and its documents are preserved on `cdk destroy` — unless `removalPolicy: 'destroy'` is set or the stack is in sandbox mode (`sandboxMode` context), in which case it becomes `DESTROY` with `autoDeleteObjects` enabled.
 
-2. **S3 Vectors VectorBucket + Index** — Serverless vector store for embeddings. Index configured with `float32` data type, cosine distance metric, and configurable dimensions (default 1024). `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` marked as non-filterable metadata keys. On teardown these two L1 resources now mirror the data bucket's removal policy — `DeletionPolicy: Delete` when `removalPolicy: 'destroy'` (or sandbox mode), `Retain` otherwise — so they are dropped alongside the data bucket instead of being left behind (see D-KB-10).
+2. **S3 Vectors VectorBucket + Index** — Serverless vector store for embeddings. Index configured with `float32` data type, cosine distance metric, and configurable dimensions (default 1024). `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` marked as non-filterable metadata keys. On teardown these two L1 resources mirror the data bucket's removal policy — `DeletionPolicy: Delete` when `removalPolicy: 'destroy'` (or sandbox mode), `Retain` otherwise — so they are dropped alongside the data bucket instead of being left behind (see D-KB-10).
 
 3. **IAM Role** — Assumed by `bedrock.amazonaws.com` (scoped via `aws:SourceAccount`). Grants: S3 read on data bucket, S3 Vectors CRUD on vector bucket/index, `bedrock:InvokeModel` on Titan V2 (both inference profile and foundation model ARNs).
 
@@ -126,7 +126,7 @@ Creates the following resources:
 - Documents read from the local folder specified in `options.source` (must be a relative path within the project).
 - Text files chunked per the configured strategy: `'fixed'` uses overlapping word windows (`chunkSize` words, `chunkOverlap` percent overlap), `'none'` keeps each document whole, and `'semantic'`/`'hierarchical'` split on blank-line paragraphs. Chunks under 20 characters are dropped (except the final `'fixed'` window).
 - Relevance scoring via TF-IDF (term frequency–inverse document frequency) — not real embeddings. Algorithm: tokenize → normalized TF → smoothed IDF (`log((N+1)/(df+1)) + 1`) → scores normalized to [0, 1].
-- Chunks cached to `.bb-data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .bb-data`.
+- Chunks cached to `.cdk-blocks/local/data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 - Folder metadata derived from directory structure (top-level subfolder name). Customer-provided `.metadata.json` sidecar files take precedence.
 - Metadata filtering via in-memory equality check with AND semantics.
 - Supported formats: `.md`, `.txt`, `.html`, `.htm`, `.csv`, `.json`.

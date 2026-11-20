@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * SvelteKit adapter — works for any SvelteKit 2 project.
  *
@@ -28,6 +31,7 @@
  */
 import { shouldSkipBuild } from './shared/build_profile.js';
 import { spawn } from './spawn.js';
+import { appBuildEnv } from './shared/app_build_env.js';
 import { normalizeBasePath } from './shared/basepath.js';
 import { warnIfVercelCron } from './shared/feature_warnings.js';
 import * as fs from 'fs';
@@ -580,7 +584,7 @@ const runSvelteKitBuild = (
   process.stderr.write(`\u{1F528} Running SvelteKit build: ${cmd.join(' ')}\n`);
   try {
     const [bin, ...args] = cmd;
-    spawn.sync(bin!, args, { cwd: projectDir, stdio: 'inherit' });
+    spawn.sync(bin!, args, { cwd: projectDir, stdio: 'inherit', env: appBuildEnv() });
   } catch (error) {
     throw new HostingError(
       'SvelteKitBuildError',

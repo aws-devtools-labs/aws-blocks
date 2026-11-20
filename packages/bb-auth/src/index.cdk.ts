@@ -2,16 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth` — `cdk` entry (synth).
+ * `@aws-cdk-blocks/bb-auth` — `cdk` entry (synth).
  *
- * Provisions the same resources as `AuthCognito`, under the same construct
- * ids, so an existing `AuthCognito` deployment that switches to `Auth` keeps
- * its user pool, its app client and its signed-in sessions. The frozen
- * contract: child ids `pool`, `client`, `sessions`, `session-secret`,
- * `group-<name>`; `userPoolName: this.fullId`; no `GenerateSecret` on
- * `client`; the `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_*` config keys.
- * `resource-identity.cdk.test.ts` pins it against `AuthCognito`'s golden
- * fixture, and `property-snapshot.cdk.test.ts` compares the full templates.
+ * Provisions the user pool, the app client, the groups and the session secret
+ * of `AuthCognito` under the same construct ids, so an existing `AuthCognito`
+ * deployment that switches to `Auth` keeps its user pool, its app client and
+ * its users. The frozen contract: child ids `pool`, `client`,
+ * `session-secret`, `group-<name>`; `userPoolName: this.fullId`; no
+ * `GenerateSecret` on `client`; the `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_*`
+ * config keys. `resource-identity.cdk.test.ts` pins it against `AuthCognito`'s
+ * golden fixture, and `property-snapshot.cdk.test.ts` compares the full
+ * templates.
+ *
+ * The session store is the one resource that is not kept. It has its own
+ * child id, `session-store` (`SESSION_STORE_ID`; `AuthCognito`'s was
+ * `sessions`), so an upgrade creates a new table, removes the old one from
+ * the stack, and each user signs in once more. Both tests pin that too.
  *
  * Two deliberate differences from `AuthCognito`:
  * - **Durability:** the pool's removal policy and deletion protection follow the
@@ -26,9 +32,9 @@
  * `TypeError`.
  */
 
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import type { ScopeParent } from '@aws-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { frameworkKey } from '@aws-cdk-blocks/bb-secret/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import {
 	ApiNamespace,
 	BuildingBlockScope,
@@ -37,12 +43,13 @@ import {
 	isSandboxContext,
 	registerConfig,
 	synthGuard,
-} from '@aws-blocks/core/cdk';
+} from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { lazyBackendApiUrl } from './cdk/api-url.js';
+import { authRoutes, stubProviders } from './cdk/auth-routes.js';
 import {
 	AUTH_ROUTE_PREFIX,
 	assertBearerClientIds,
@@ -51,7 +58,6 @@ import {
 	cognitoConfigKeys,
 	cognitoFederatedProviderIds,
 	emailPasswordEnabled,
-	federationRedirectPaths,
 	ownsPreSignUpTrigger,
 	preSignUpTriggerConfigKey,
 	requiresUserPool,
@@ -65,6 +71,7 @@ import { guardUserPool } from './cdk/immutability-guard.js';
 import {
 	adminIamActions,
 	CLIENT_IAM_ACTIONS,
+	endUserWriteAttributes,
 	mapAutoVerify,
 	mapCustomAttributes,
 	mapFeaturePlan,
@@ -77,11 +84,13 @@ import {
 } from './cdk/mappers.js';
 import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { scopeSmsRoleTrust } from './cdk/sms-role.js';
-import { stubIssuerPath } from './engines/stub-idp-routes.js';
+import { clientLifetimes, setsClientLifetimes } from './cdk/token-settings.js';
+import { STUB_ROOT, stubIssuerPath } from './engines/stub-idp-routes.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
 import { type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
+import { SESSION_STORE_ID } from './session-store-id.js';
 import type {
 	ApiMethods,
 	AuthOptions,
@@ -89,7 +98,6 @@ import type {
 	ProtectedApi,
 	ProtectHandlers,
 	ProtectOptions,
-	StubUser,
 } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -101,8 +109,8 @@ export { relayOrigin } from './relay.js';
 export type * from './types.js';
 
 /**
- * The unified auth Building Block (CDK layer), published as `@aws-blocks/bb-auth`
- * and exported from `@aws-blocks/blocks`. See the package README.
+ * The unified auth Building Block (CDK layer), published as `@aws-cdk-blocks/bb-auth`
+ * and exported from `aws-cdk-blocks`. See the package README.
  *
  * Creates, when the configuration needs a user pool (see {@link AuthOptions}):
  * - `cognito.UserPool` (`pool`), named `fullId` — or `UserPool.fromUserPoolId`
@@ -119,8 +127,11 @@ export type * from './types.js';
  * - One IdP registration per provider (`idp-<id>` custom resource, or `saml-<id>`).
  *
  * Always creates:
- * - `AppSetting(this, 'session-secret', { secret: true })` — the session HMAC key.
- * - `KVStore(this, 'sessions', { ttl: true })` — the server-side session store.
+ * - `frameworkKey(this, 'session-secret')`: the session HMAC key. A Secrets
+ *   Manager secret under `defaults.secretsStore: 'secrets-manager'` (the
+ *   production preset); the `AppSetting(this, 'session-secret', { secret: true })`
+ *   SSM SecureString under `'ssm'` (the sandbox preset).
+ * - `KVStore(this, 'session-store')` — the server-side session store (`SESSION_STORE_ID`). DynamoDB TTL is always on for it.
  *
  * Grants the shared execution role the client-facing `cognito-idp:*` actions on
  * the pool (and the `Admin*`/`List*` set only when `admin` is set).
@@ -202,10 +213,16 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		// than truncating (two long fullIds differing past 128 would collide).
 		// Checked even when no pool is provisioned, so enabling a pool-backed
 		// sign-in method later never forces a rename of the block — which would
-		// replace `sessions` and sign everyone out.
+		// replace the session store and sign everyone out.
 		if (this.fullId.length > 128) {
 			throw new Error(
 				`Auth: computed userPoolName '${this.fullId}' is ${this.fullId.length} chars; Cognito's limit is 128. Shorten the BB id or stack name.`,
+			);
+		}
+
+		if (opts.userPool && setsClientLifetimes(opts)) {
+			throw new Error(
+				"Auth: session.accessTokenValiditySeconds, idTokenValiditySeconds, refreshTokenValiditySeconds and refreshTokenRotation configure the app clients this block creates; with `userPool`, set them on your own pool's app client.",
 			);
 		}
 
@@ -315,7 +332,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 
 			// ── 2. Native app client — FROZEN: never set `generateSecret: true` ──
 			// (replace-only: it would replace `client` and invalidate every refresh
-			// token stored in `sessions`). Hosted-UI federation gets its own client.
+			// token in the session store). Hosted-UI federation gets its own client.
 			this.userPoolClient = new cognito.UserPoolClient(this, 'client', {
 				userPool: pool,
 				generateSecret: false,
@@ -334,6 +351,11 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					adminUserPassword: false,
 					user: emailPassword && authFlow === 'USER_AUTH',
 				},
+				// Only what end users may set (no `*_verified` flag, no `userWritable: false`
+				// attribute); Cognito's default is every standard and custom attribute. Updates in place.
+				writeAttributes: endUserWriteAttributes(opts.users?.attributes),
+				// Explicit lifetimes and refresh rotation (`session.*`). Updates in place.
+				...clientLifetimes(opts),
 			});
 
 			// ── Hosted-UI federation ────────────────────────────────────────
@@ -380,7 +402,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					? users.map((u) => `'${u.email}'`).join(', ')
 					: `its built-in default user ('${providerId}-user@stub.invalid')`;
 			cdk.Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-auth:StubIdpDeployed',
+				'@aws-cdk-blocks/bb-auth:StubIdpDeployed',
 				`Auth '${this.fullId}': providers.${providerId} is a stubIdp() provider, served by this sandbox ` +
 					'deployment. The stub IdP signs users in WITHOUT CREDENTIALS: anyone who can reach ' +
 					`this sandbox can sign in as the stub's users (${who}), with every claim and group they carry. ` +
@@ -405,19 +427,31 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			registerConfig(this, stubIdpConfigKeys(this.fullId).API_URL, apiUrl);
 		}
 
-		// ── 4. Session HMAC secret — SSM SecureString via AppSetting ─────────
+		// ── 4. Session HMAC secret via frameworkKey ──────────────────────────
 		// Needed in every configuration: directly federated sessions are signed
-		// with it too. AppSetting grants `ssm:GetParameter` + `kms:Decrypt`.
-		new AppSetting(this, 'session-secret', { secret: true });
+		// with it too. The store follows `defaults.secretsStore`: a Secrets
+		// Manager secret (read-only grant, ARN also on every compute's
+		// environment) or the SSM SecureString AppSetting (`ssm:GetParameter` +
+		// `kms:Decrypt`).
+		frameworkKey(this, 'session-secret');
 
 		// ── 5. Session store ─────────────────────────────────────────────────
-		// Durability options propagate; unset, KVStore follows the stack defaults.
-		// TTL on, so session records (which hold refresh tokens) expire.
-		new KVStore(this, 'sessions', {
-			removalPolicy: opts.removalPolicy,
-			deletionProtection: opts.deletionProtection,
-			ttl: true,
-		});
+		// Durability options propagate through the store's one `protection`
+		// setting; with neither option set, KVStore follows the stack defaults.
+		// Each option resolves against the stack default first, as for the pool:
+		// deletion protection on is 'locked' (the table is retained too), off with
+		// `retain` is 'retained', off with `destroy` is 'disposable'.
+		// DynamoDB TTL is always on for the store, so session records (which hold
+		// refresh tokens) expire.
+		const sessionProtection =
+			opts.removalPolicy === undefined && opts.deletionProtection === undefined
+				? undefined
+				: (opts.deletionProtection ?? this.defaults.deletionProtection)
+					? 'locked'
+					: resolveRemovalPolicy(opts.removalPolicy, this.defaults.removalPolicy) === cdk.RemovalPolicy.RETAIN
+						? 'retained'
+						: 'disposable';
+		new KVStore(this, SESSION_STORE_ID, { protection: sessionProtection });
 
 		// ── 6. Config + IAM — only when a pool exists ────────────────────────
 		// A pool-less configuration registers no `BLOCKS_AUTH_COGNITO_*` key; the
@@ -447,7 +481,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		// made directly against Cognito, or a federated first sign-in, is not seen.
 		if (opts.userPool && opts.validateUser !== undefined) {
 			cdk.Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-auth:ValidateUserExternalPool',
+				'@aws-cdk-blocks/bb-auth:ValidateUserExternalPool',
 				`Auth '${this.fullId}': \`validateUser\` is set on a pool wrapped with \`userPool\`, so no PreSignUp ` +
 					'trigger is attached (the pool and its triggers belong to its owner). It runs in-process on ' +
 					'`signUp`, `admin.createUser` and every sign-in, but users created directly in Cognito — a `SignUp` ' +
@@ -461,7 +495,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		if (this.userPool && !opts.userPool && opts.removalPolicy === undefined) {
 			const resolved = this.defaults.removalPolicy === cdk.RemovalPolicy.RETAIN ? 'retain' : 'destroy';
 			cdk.Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-auth:RemovalPolicyUnset',
+				'@aws-cdk-blocks/bb-auth:RemovalPolicyUnset',
 				`Auth '${this.fullId}': \`removalPolicy\` is not set, so the user pool follows the stack default ` +
 					`('${resolved}'). Set \`removalPolicy: 'retain'\` explicitly for any pool that holds real users — ` +
 					'deleting the pool deletes every user in it, and they cannot be recovered.',
@@ -478,6 +512,11 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	 */
 	createApi() {
 		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
+	}
+
+	/** Synth-time stand-in for the runtime `createOidcApi()`, like {@link createApi}. */
+	createOidcApi() {
+		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'oidc' });
 	}
 
 	/**
@@ -631,69 +670,76 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	}
 }
 
-/** A provider's `stubIdp` settings object, read structurally (the declared union does not list it). */
-function stubSettingsOf(provider: object): object | undefined {
-	const settings: unknown = Reflect.get(provider, 'stubIdp');
-	return typeof settings === 'object' && settings !== null ? settings : undefined;
-}
-
-/** The configured `stubIdp()` providers, with their inline users. */
-function stubProviders(opts: ResolvedAuthOptions): Array<{ id: string; users: readonly StubUser[] }> {
-	const out: Array<{ id: string; users: readonly StubUser[] }> = [];
-	for (const [id, provider] of Object.entries(opts.oidcProviders ?? {})) {
-		const settings = provider ? stubSettingsOf(provider) : undefined;
-		if (!settings) continue;
-		const users: unknown = Reflect.get(settings, 'users');
-		out.push({
-			id,
-			users: Array.isArray(users)
-				? users.filter((u): u is StubUser => typeof u === 'object' && u !== null && typeof u.email === 'string')
-				: [],
-		});
-	}
-	return out;
-}
-
-/** The route claims of every `Auth` block on one backend root (one Lambda): `'<METHOD> <path>'` → the claiming block. */
+/**
+ * The route claims of every `Auth` block on one backend root (one Lambda): `'<METHOD> <path>'` → the claiming block,
+ * and whether the route is one of its stub IdP's.
+ */
 const AUTH_ROUTE_CLAIMS = Symbol.for('blocks:AuthRouteClaims');
 
 /**
- * Claim, on the block's backend root, one route of each set the runtime mounts for it, so two blocks that would
- * collide when the backend loads (`DuplicateRouteException`) fail synth instead, with the fix. Scoped like the
- * runtime's route table: per backend, so the same paths in two stacks are fine. A route of each set is enough:
- * the sign-in routes (`exchange`, `session`, …) live beside `callbackPath`, the sign-out route is `signOutPath`, and
- * a stub IdP's routes are keyed by its provider key alone.
+ * Claim, on the block's backend root, every route the runtime mounts for it (`'<METHOD> <path>'`, as
+ * `federationRoutePaths` and `mountStubIdpRoutes` derive them), so two blocks that would collide when the backend
+ * loads (`DuplicateRouteException`) fail synth instead, with the fix. Scoped like the runtime's route table: per
+ * backend, so the same paths in two stacks are fine. A block's sign-in routes (`exchange`, `session`, …) live beside
+ * `callbackPath`, its sign-out routes are `signOutPath`, and a stub IdP's routes are keyed by its provider key alone,
+ * so one block's `signOutPath` can still land on another block's sign-in route (`/cdk-blocks/auth/session`). A block
+ * whose own `redirects` put two of its routes on one path (`signOutPath: '/cdk-blocks/auth/session'`) fails too.
  */
 function claimAuthRoutes(block: Auth, id: string, opts: ResolvedAuthOptions): void {
-	const claims = getOrCreateOnRoot(block, AUTH_ROUTE_CLAIMS, () => new Map<string, string>());
-	const normalise = (path: string) => path.replace(/\/+/g, '/').replace(/\/$/, '');
-	const { callbackPath, signOutPath } = federationRedirectPaths(opts);
-	const base = callbackPath.slice(0, callbackPath.lastIndexOf('/'));
-	const routes = [
-		{ route: `POST ${normalise(`${base}/exchange`)}`, what: `its sign-in routes (${base}/…) are` },
-		{ route: `GET ${normalise(signOutPath)}`, what: `its sign-out route (${signOutPath}) is` },
+	const claims = getOrCreateOnRoot(
+		block,
+		AUTH_ROUTE_CLAIMS,
+		() => new Map<string, { owner: string; stub: boolean }>(),
+	);
+	const { callbackPath, signOutPath, base, signIn, signOut, stubs } = authRoutes(
+		opts,
+		stubProviders(opts).map((st) => st.id),
+	);
+	const groups = [
+		{ routes: signIn, what: `its sign-in routes (${base}/…) are` },
+		{ routes: signOut, what: `its sign-out route (${signOutPath}) is` },
 	];
+	const own = new Set<string>();
+	for (const r of [...groups.flatMap((g) => g.routes), ...stubs.flatMap((st) => st.routes)]) {
+		if (own.has(r)) {
+			throw new Error(
+				`Auth '${block.fullId}': it would mount ${r} twice. Its redirects.callbackPath (${callbackPath}) or ` +
+					`redirects.signOutPath (${signOutPath}) lands on another of its own routes (${base}/exchange, ` +
+					`${base}/session, ${base}/signin/<id>, ${base}/authorize-params/<id>, ${STUB_ROOT}/<id>/…): move it.`,
+			);
+		}
+		own.add(r);
+	}
+	const claimedBy = (routes: readonly string[]) =>
+		routes.map((r) => claims.get(r)).find((c) => c !== undefined && c.owner !== block.fullId);
 	const redirectsFix =
 		'Each Auth block with `providers` needs its own `redirects.callbackPath` and `redirects.signOutPath`, e.g. ' +
 		`\`redirects: { callbackPath: '${AUTH_ROUTE_PREFIX}/${id}/callback', signOutPath: '${AUTH_ROUTE_PREFIX}/${id}/signout' }\`.`;
-	for (const { route, what } of routes) {
-		const other = claims.get(route);
-		if (other !== undefined && other !== block.fullId) {
-			throw new Error(`Auth '${block.fullId}': ${what} already mounted by Auth '${other}'. ${redirectsFix}`);
+	for (const { routes, what } of groups) {
+		const other = claimedBy(routes);
+		if (other !== undefined) {
+			throw new Error(
+				`Auth '${block.fullId}': ${what} already mounted by Auth '${other.owner}'. ${redirectsFix}`,
+			);
 		}
 	}
-	for (const { id: key } of stubProviders(opts)) {
-		const route = `GET ${normalise(`${stubIssuerPath(key)}/jwks.json`)}`;
-		const other = claims.get(route);
-		if (other !== undefined && other !== block.fullId) {
+	for (const { key, routes } of stubs) {
+		const other = claimedBy(routes);
+		if (other?.stub) {
 			throw new Error(
-				`Auth '${block.fullId}': providers.${key} is a stubIdp() provider, but Auth '${other}' already serves a stub IdP ` +
+				`Auth '${block.fullId}': providers.${key} is a stubIdp() provider, but Auth '${other.owner}' already serves a stub IdP ` +
 					`under that key (${stubIssuerPath(key)}/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.`,
 			);
 		}
-		claims.set(route, block.fullId);
+		if (other !== undefined) {
+			throw new Error(
+				`Auth '${block.fullId}': the stub IdP routes of providers.${key} (${stubIssuerPath(key)}/…) are already mounted by ` +
+					`Auth '${other.owner}' as its redirects.callbackPath or redirects.signOutPath. Move that block's redirects out of ${STUB_ROOT}/.`,
+			);
+		}
 	}
-	for (const { route } of routes) claims.set(route, block.fullId);
+	for (const { routes } of stubs) for (const r of routes) claims.set(r, { owner: block.fullId, stub: true });
+	for (const { routes } of groups) for (const r of routes) claims.set(r, { owner: block.fullId, stub: false });
 }
 
 /** Per-block `'destroy' | 'retain'` wins; unset falls back to the stack default. */

@@ -169,7 +169,7 @@ Each option below produces a `Compute` object that can be injected into "job"-ty
 In this option, we present a single `Compute` block with a required `type` field. This fits the `new X(scope, id, options)` shape that other Building Block use, so it composes uniformly and gets a `fullId`, tree position, and registry entry.
 
 ```ts
-import { Compute } from '@aws-blocks/blocks';
+import { Compute } from 'aws-cdk-blocks';
 
 const reports = new Compute(scope, 'reports', { type: 'container', size: { vcpu: 1, memory: 2048 } });
 const api     = new Compute(scope, 'api',     { type: 'serverless', memory: 512 });
@@ -191,7 +191,7 @@ type ComputeOptions =
 ### Option 2 &mdash; type as a factory method
 
 ```ts
-import { Compute } from '@aws-blocks/blocks';
+import { Compute } from 'aws-cdk-blocks';
 
 const reports = Compute.container(scope, 'reports', { size: { vcpu: 1, memory: 2048 } });
 const api     = Compute.serverless(scope, 'api', { memory: 512 });
@@ -202,7 +202,7 @@ This is nearly identical to Option 1 except the compute type is a factory method
 ### Option 3 &mdash; distinct blocks per type
 
 ```ts
-import { ServerlessCompute, ContainerCompute } from '@aws-blocks/blocks';
+import { ServerlessCompute, ContainerCompute } from 'aws-cdk-blocks';
 
 const reports = new ContainerCompute(scope, 'reports', { size: { vcpu: 1, memory: 2048 } });
 const api     = new ServerlessCompute(scope, 'api', { memory: 512 });

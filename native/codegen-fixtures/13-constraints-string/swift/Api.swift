@@ -17,13 +17,13 @@ public final nonisolated class Api: Sendable {
     public func createUser(input: CreateUser.Input) async throws -> CreateUser.Result {
         let request = BlocksRequest(method: "api.createUser", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.createUser") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.createUser") }
         return try JSONDecoder().decode(CreateUser.Result.self, from: result)
     }
 
     public enum CreateUser {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let code: String
             public let email: String
             public let nickname: String?
@@ -55,7 +55,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
@@ -98,5 +98,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

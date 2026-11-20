@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Compile-time contract of `frontDoor.features`: each door kind accepts exactly
  * the settings its door implements. This file is typechecked by the package
@@ -82,7 +85,7 @@ const negatives: HostingFrontDoor[] = [
   // @ts-expect-error — the ALB has no www redirect.
   { kind: 'alb', features: { domain: { ...domain, wwwRedirect: 'toApex' } } },
   // @ts-expect-error — the backend API is an L3 prop (`backendApi`), not a door option.
-  { kind: 'alb', backendApiUrl: 'https://x.example.com/prod/aws-blocks/api' },
+  { kind: 'alb', backendApiUrl: 'https://x.example.com/prod/cdk-blocks/api' },
   // @ts-expect-error — locking the ALB to CloudFront is the stacked door's router only.
   { kind: 'alb', restrictToCloudFront: true },
   // @ts-expect-error — no backend paths on a door either.

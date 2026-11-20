@@ -9,7 +9,7 @@
  * Both `index.mock.ts` and `index.aws.ts` re-export from here.
  */
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 /**
  * Configuration options for creating an AppSetting.
@@ -53,7 +53,7 @@ export interface AppSettingOptions<T = string> {
  * Package-internal options. Not exported from the package's public entry points,
  * so `external` is never part of the public API — it is set ONLY by
  * {@link AppSetting.fromExisting} and read by the constructors. (Mirrors how
- * `KVStore`/`DistributedTable` model "existing" via a branded ref rather than a
+ * `KVStore` models "existing" via a branded ref rather than a
  * public boolean.)
  */
 export interface InternalAppSettingOptions<T = string> extends AppSettingOptions<T> {
@@ -65,7 +65,7 @@ export interface InternalAppSettingOptions<T = string> extends AppSettingOptions
 	 *
 	 * Precondition: the parameter MUST already exist at deploy time — this construct
 	 * does not create it, so if the external provisioner did not run (e.g. a raw
-	 * `cdk deploy` that skipped `ensureSecrets`) the deploy succeeds but the app
+	 * `cdk deploy` before `npm run db -- connect --stage`) the deploy succeeds but the app
 	 * fails at runtime with `ParameterNotFound`.
 	 */
 	external?: boolean;

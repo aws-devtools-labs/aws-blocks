@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getAttachmentFeed() async throws -> RealtimeChannel<Attachment> {
         let request = BlocksRequest(method: "api.getAttachmentFeed", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getAttachmentFeed") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getAttachmentFeed") }
         return try self.client.makeDecoder().decode(RealtimeChannel<Attachment>.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func getDownloadFeed() async throws -> RealtimeChannel<[FileDownloadHandle]> {
         let request = BlocksRequest(method: "api.getDownloadFeed", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getDownloadFeed") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getDownloadFeed") }
         return try self.client.makeDecoder().decode(RealtimeChannel<[FileDownloadHandle]>.self, from: result)
     }
 
@@ -33,7 +33,7 @@ public final nonisolated class Api: Sendable {
     public func getChatFeed() async throws -> GetChatFeed.Result {
         let request = BlocksRequest(method: "api.getChatFeed", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getChatFeed") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getChatFeed") }
         return try JSONDecoder().decode(GetChatFeed.Result.self, from: result)
     }
 
@@ -41,7 +41,7 @@ public final nonisolated class Api: Sendable {
     public func getCounterFeed() async throws -> GetCounterFeed.Result {
         let request = BlocksRequest(method: "api.getCounterFeed", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getCounterFeed") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getCounterFeed") }
         return try JSONDecoder().decode(GetCounterFeed.Result.self, from: result)
     }
 
@@ -49,7 +49,7 @@ public final nonisolated class Api: Sendable {
     public func getLobby() async throws -> Lobby {
         let request = BlocksRequest(method: "api.getLobby", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getLobby") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getLobby") }
         return try JSONDecoder().decode(Lobby.self, from: result)
     }
 
@@ -57,7 +57,7 @@ public final nonisolated class Api: Sendable {
     public func getSignInFeed() async throws -> RealtimeChannel<SignInOption> {
         let request = BlocksRequest(method: "api.getSignInFeed", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getSignInFeed") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getSignInFeed") }
         return try self.client.makeDecoder().decode(RealtimeChannel<SignInOption>.self, from: result)
     }
 
@@ -65,7 +65,7 @@ public final nonisolated class Api: Sendable {
     public func getSignInBoard() async throws -> SignInBoard {
         let request = BlocksRequest(method: "api.getSignInBoard", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getSignInBoard") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getSignInBoard") }
         return try client.makeDecoder().decode(SignInBoard.self, from: result)
     }
 
@@ -73,7 +73,7 @@ public final nonisolated class Api: Sendable {
     public func getProviderDirectory() async throws -> ProviderDirectory {
         let request = BlocksRequest(method: "api.getProviderDirectory", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getProviderDirectory") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getProviderDirectory") }
         return try client.makeDecoder().decode(ProviderDirectory.self, from: result)
     }
 
@@ -86,7 +86,7 @@ public final nonisolated class Api: Sendable {
                 self.channel = channel
             }
 
-            public struct ChannelMessage: Codable {
+            public struct ChannelMessage: Codable, Sendable {
                 public let text: String
 
                 public init(text: String) {
@@ -105,7 +105,7 @@ public final nonisolated class Api: Sendable {
                 self.channel = channel
             }
 
-            public struct ChannelMessage: Codable {
+            public struct ChannelMessage: Codable, Sendable {
                 public let count: Double
 
                 public init(count: Double) {
@@ -149,5 +149,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

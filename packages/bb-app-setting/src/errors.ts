@@ -6,8 +6,8 @@
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { AppSettingErrors } from '@aws-blocks/bb-app-setting';
+ * import { isBlocksError } from '@aws-cdk-blocks/core';
+ * import { AppSettingErrors } from '@aws-cdk-blocks/bb-app-setting';
  *
  * try {
  *   await setting.put(value);

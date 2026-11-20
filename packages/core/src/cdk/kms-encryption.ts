@@ -24,7 +24,7 @@ export type KmsEncryptionOption = 'aws-managed' | 'customer-managed' | ExternalK
  * with another's factory hint.
  */
 export interface KmsBlockIdentity {
-	/** The block's npm name, used as the annotation ID prefix (e.g. `@aws-blocks/bb-kv-store`). */
+	/** The block's npm name, used as the annotation ID prefix (e.g. `@aws-cdk-blocks/bb-kv-store`). */
 	readonly warningPrefix: string;
 	/** The block's factory name shown in the unrecognized-encryption error (e.g. `KVStore.fromKmsKey`). */
 	readonly fromKmsKeyHint: string;
@@ -44,7 +44,7 @@ export type ResolvedKmsEncryption =
 /**
  * Resolve a block's `encryption` option into a service-agnostic choice. Shared
  * by every Blocks storage resource that exposes `encryption`
- * (`bb-kv-store`, `bb-distributed-table`, `bb-file-bucket`) so the accepted
+ * (`bb-kv-store`, `bb-file-bucket`) so the accepted
  * values and the unrecognized-value error cannot drift between them. Each
  * caller maps the result onto its own service's encryption props.
  *

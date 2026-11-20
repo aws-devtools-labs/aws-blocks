@@ -16,7 +16,7 @@
 import type { Server, IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { validateFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { assertContainedPath } from './mock-utils.js';
 import { contentRoot, contentPath, deleteMarkerPath, metaPath, versionContentPath, versionMetaPath } from './paths.js';
@@ -97,7 +97,7 @@ export function attach(httpServer: Server) {
 		}
 
 		const { fullId, path, token, versionId } = parsed;
-		const dataDir = join(process.cwd(), '.bb-data', fullId);
+		const dataDir = join(process.cwd(), '.cdk-blocks/local/data', fullId);
 
 		try {
 			// User keys live under the content root; validate against it so a

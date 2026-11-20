@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Judge step: grade the agent's implementation on the source code only.
  *
@@ -32,12 +35,15 @@ import { stringifyRedacted } from './lib/secrets.mjs';
 // Physical spec-blinding: the judge grades a SOURCE-ONLY COPY (JUDGE_SRC) with these excluded, so the
 // objective test can't anchor the score — blinding by ABSENCE.
 //   - STAGE_EXCLUDE_DIRS: node_modules, .git, dist, the staged `bench-tests/` spec dir,
-//     `.blocks-sandbox` (a build-time artifact), and `.bb-data` (the PGlite/BB mock datadir — runtime
+//     `.cdk-blocks-sandbox` (a build-time artifact), and `.cdk-blocks/local/data` (the PGlite/BB mock datadir — runtime
 //     state, not source; copying it across the judge's UID boundary throws EACCES on internal files
 //     like pg_logical/replorigin_checkpoint). Also the grep exclude-dirs in collectBlocksImports.
 //   - EXCLUDED_FILE_RE: the objective *.spec.{js,ts,jsx,tsx,cjs,mjs} test CODE files — deliberately
 //     NOT framework *.spec.json manifests (e.g. blocks.spec.json), which are legit app source.
-const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.blocks-sandbox', '.bb-data']);
+const STAGE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests', '.cdk-blocks-sandbox']);
+// Matched as consecutive path SEGMENTS: the mock data directory is three of them, and a
+// multi-segment string can never equal a single entry of the set above.
+const STAGE_EXCLUDE_PATHS = [['.cdk-blocks', 'local', 'data']];
 const EXCLUDED_FILE_RE = /\.spec\.[cm]?[jt]sx?$/;
 
 const WORKSPACE = required('WORKSPACE', '[judge]');
@@ -76,7 +82,7 @@ try {
 mergeAndWrite(builderResult, { ...EVIDENCE });
 
 // Physical spec-blinding: stage a SOURCE-ONLY COPY and point the judge's Sandbox at it. The spec and
-// everything that isn't agent source (deps, build output, .blocks-sandbox, *.spec.{js,ts,jsx,tsx,cjs,
+// everything that isn't agent source (deps, build output, .cdk-blocks-sandbox, *.spec.{js,ts,jsx,tsx,cjs,
 // mjs}) is left OUT, so the judge is blinded by ABSENCE. The copy is disposable, so bash writes can't affect scoring.
 const JUDGE_SRC = mkdtempSync(join(tmpdir(), 'bench-judge-src-'));
 
@@ -86,6 +92,11 @@ function stageFilter(src: string): boolean {
 	if (rel === '') return true; // the root itself
 	const parts = rel.split(sep);
 	if (parts.some((seg) => STAGE_EXCLUDE_DIRS.has(seg))) return false;
+	for (const want of STAGE_EXCLUDE_PATHS) {
+		for (let i = 0; i + want.length <= parts.length; i++) {
+			if (want.every((seg, j) => parts[i + j] === seg)) return false;
+		}
+	}
 	return !EXCLUDED_FILE_RE.test(parts[parts.length - 1] ?? '');
 }
 cpSync(WORKSPACE, JUDGE_SRC, { recursive: true, filter: stageFilter });
@@ -154,12 +165,12 @@ function makeJudgeAgent(): Agent {
 // lib/bedrock-retry.ts). A StructuredOutputError is a real grading outcome and is never retried.
 
 // Evidence is omitted from the prompt (the orchestrator applies objective caps after). blocks_fidelity
-// input: a mechanical grep of the agent's source is ground truth for which @aws-blocks blocks were
-// actually imported — an anti-gaming signal. Injected before the rubric/task sections.
+// input: a mechanical grep of the agent's source is ground truth for which blocks were actually
+// imported — an anti-gaming signal. Injected before the rubric/task sections.
 const blocksImports = collectBlocksImports(JUDGE_SRC);
 const judgeSections: string[] = [];
 judgeSections.push(
-	`<imports>\nMechanical grep of the agent's workspace source for @aws-blocks imports (node_modules/.git/dist/bench-tests excluded) — ground truth for which blocks were actually imported:\n\n${blocksImports}\n</imports>`,
+	`<imports>\nMechanical grep of the agent's workspace source for aws-cdk-blocks imports, scoped siblings and the unscoped umbrella alike (node_modules/.git/dist/bench-tests excluded) — ground truth for which blocks were actually imported:\n\n${blocksImports}\n</imports>`,
 );
 judgeSections.push(`<rubric>\n${judgeRubric()}\n</rubric>`);
 judgeSections.push(`<task>\n${taskPrompt}\n</task>`);
@@ -246,22 +257,25 @@ process.stderr.write(
 // a command the judge ran could keep Node's loop ref'd and idle the step until its timeout.
 process.exit(0);
 
-// Mechanically grep the workspace for @aws-blocks imports. Inner grep finds the scope; outer keeps
+// Mechanically grep the workspace for @aws-cdk-blocks imports. Inner grep finds the scope; outer keeps
 // only import/from/require lines. grep exits 1 (clean "none found") when nothing matches.
 function collectBlocksImports(workspace: string): string {
 	try {
 		// --exclude-dir flags derive from STAGE_EXCLUDE_DIRS (one source of truth). Globs quoted so
 		// the shell can't expand them before grep sees them.
 		const excludeArgs = [...STAGE_EXCLUDE_DIRS].map((d) => `--exclude-dir=${d}`).join(' ');
+		// Both forms: the siblings are scoped, the umbrella is not, and every template imports
+		// the umbrella. Matching only the scope would report "none found" for almost every
+		// scaffolded app, which the judge then takes as ground truth for blocks_fidelity.
 		const out = execSync(
-			`grep -rn "@aws-blocks/" . --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.mjs" --include="*.cjs" ${excludeArgs} | grep -Ew "import|from|require"`,
+			`grep -rnE "['\\"](@aws-cdk-blocks/|aws-cdk-blocks(/|['\\"]))" . --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.mjs" --include="*.cjs" ${excludeArgs} | grep -Ew "import|from|require"`,
 			{ cwd: workspace, encoding: 'utf-8', maxBuffer: 4 * 1024 * 1024 },
 		).trim();
-		if (!out) return '(no @aws-blocks imports found in the workspace source)';
+		if (!out) return '(no aws-cdk-blocks imports found in the workspace source)';
 		return out.length > 6000 ? `${out.slice(0, 6000)}\n… (truncated)` : out;
 	} catch (err) {
 		if ((err as { status?: number }).status === 1) {
-			return '(no @aws-blocks imports found in the workspace source)';
+			return '(no aws-cdk-blocks imports found in the workspace source)';
 		}
 		return `(import scan failed: ${describeError(err)})`;
 	}

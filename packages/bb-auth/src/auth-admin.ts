@@ -21,7 +21,8 @@
  * @internal
  */
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
+import { markServerOnlyFunction } from '@aws-cdk-blocks/core/internal';
 import { assertAdminUserFilter } from './admin-filter.js';
 import type { NativeAdminUser, NativeAdminUserPage, NativeEngine } from './engines/types.js';
 import { AuthErrors } from './errors.js';
@@ -32,6 +33,8 @@ import type {
 	AdminSurface,
 	AdminUser,
 	AdminUserFilter,
+	AttrOf,
+	AuthAuditRecord,
 	AuthOptions,
 	GroupOf,
 	ReadAttrOf,
@@ -50,6 +53,10 @@ export interface AdminDeps<O extends AuthOptions> {
 	readAttributes(attrs: Record<string, string>): Partial<Record<ReadAttrOf<O>, string>>;
 	/** Delete every session row of `username` (`SessionStore.deleteByUsername`). */
 	deleteSessionsOf(username: string): Promise<number>;
+	/** Whether the `audit` option is on; the lookup that feeds a record is skipped when it is off. */
+	auditEnabled: boolean;
+	/** Write an audit record (the `audit` option); a no-op when it is off. */
+	audit(record: Omit<AuthAuditRecord, 'block'>): void;
 	/**
 	 * Run `validateUser` for a user about to be created (`phase: 'signUp'`,
 	 * `provider: 'password'`) — the in-process half of the PreSignUp check.
@@ -144,6 +151,18 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 				);
 			});
 		},
+		updateUserAttributes: (
+			username: string,
+			attributes: Partial<Record<AttrOf<O>, string>>,
+			...gate: AdminActionGate<O, 'lifecycle'>
+		): Promise<void> => {
+			void gate;
+			return run('lifecycle', async (n) => {
+				const prefixed = deps.prefixAttributes(attributes);
+				// Nothing to write: no call on either runtime.
+				if (Object.keys(prefixed).length > 0) await n.admin.updateUserAttributes(username, prefixed);
+			});
+		},
 		deleteUser: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {
 			void gate;
 			return run('lifecycle', (n) => n.admin.deleteUser(username));
@@ -200,11 +219,57 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 		revokeUserSessions: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {
 			void gate;
 			return run('lifecycle', async (n) => {
-				await n.admin.globalSignOut(username);
-				// Make the revocation immediate: the session rows would otherwise stay
-				// valid until their access token next needs refreshing.
-				await deps.deleteSessionsOf(username);
+				// Record the user by `sub`: `username` may be a sign-in email. The lookup costs
+				// Cognito calls, so it runs only when a record will be written.
+				const sub = deps.auditEnabled
+					? await n.admin
+							.getUser(username)
+							.then((u) => u?.userSub)
+							.catch(() => undefined)
+					: undefined;
+				try {
+					await n.admin.globalSignOut(username);
+					// Make the revocation immediate: the session rows would otherwise stay
+					// valid until their access token next needs refreshing.
+					await deps.deleteSessionsOf(username);
+				} catch (e) {
+					deps.audit({
+						event: 'auth.sessions.revoked',
+						sub,
+						outcome: 'incomplete',
+						reason: 'admin',
+						error: e instanceof Error ? e.name : typeof e,
+					});
+					throw e;
+				}
+				deps.audit({ event: 'auth.sessions.revoked', sub, outcome: 'success', reason: 'admin' });
 			});
 		},
 	};
+}
+
+/**
+ * Keep the `auth.admin` handle and its methods off the RPC surface. The RPC
+ * dispatcher (`@aws-cdk-blocks/core` `rpc-dispatch`) refuses a Building Block
+ * instance, as an exported namespace and as the method map a handler returns, and
+ * recognises a block structurally by string `id` + `fullId`. The admin surface is
+ * a plain object, so it gets its block's identity — non-enumerable, so it never
+ * reads as a method — and is refused the same way.
+ *
+ * That identity does not survive a copy (`{ ...auth.admin }`,
+ * `Object.assign({}, auth.admin)`, a destructured method), so each method is also
+ * registered as server-only: the dispatcher refuses that function by identity
+ * wherever it ends up. Calling the methods from server code is unchanged, and
+ * they stay enumerable.
+ *
+ * @internal
+ */
+export function markServerOnly<T extends object>(block: { id: string; fullId: string }, surface: T): T {
+	for (const method of Object.values(surface)) {
+		if (typeof method === 'function') markServerOnlyFunction(method);
+	}
+	return Object.defineProperties(surface, {
+		id: { value: block.id, enumerable: false },
+		fullId: { value: block.fullId, enumerable: false },
+	});
 }

@@ -6,7 +6,7 @@
  * fails locally also fails when deployed (and the other way round). Internal to
  * the package — not re-exported from the entry points.
  */
-import { blocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-cdk-blocks/core';
 import { EmailErrors } from './errors.js';
 import type { EmailMessage } from './types.js';
 
@@ -27,8 +27,8 @@ const ATOM = "[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+";
 const PHRASE = `${ATOM}(?:[ \\t]+${ATOM})*`;
 const QUOTED_STRING = '"(?:[^"\\\\]|\\\\.)*"';
 const NAME_ADDR_REGEX = new RegExp(`^(?:(?:${PHRASE}|${QUOTED_STRING})[ \\t]*)?<([^<>]+)>$`);
-// Control characters are never valid in an address: C0 (CR/LF included), DEL,
-// C1 (NEL included), and the Unicode line and paragraph separators.
+// Control characters are never valid in an address or a subject: C0 (CR/LF
+// included), DEL, C1 (NEL included), and the Unicode line and paragraph separators.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
@@ -65,6 +65,20 @@ export function validateAddresses(addresses: string | string[]): void {
 	}
 }
 
+/**
+ * Validate a subject line. A subject is a single header line, so line breaks
+ * (CR, LF, NEL, U+2028, U+2029) and other control characters (C0, DEL, C1) are
+ * rejected; SES rejects a subject with a line break. The subject is not echoed
+ * in the error message, since it is often built from user input.
+ *
+ * @throws {EmailErrors.InvalidInput} If the subject contains a control character.
+ */
+export function validateSubject(subject: string): void {
+	if (typeof subject === 'string' && CONTROL_CHARS.test(subject)) {
+		throw blocksError(EmailErrors.InvalidInput, 'Subject must not contain line breaks or other control characters.');
+	}
+}
+
 /** Number of recipients on a message: To + CC + BCC combined. */
 export function countRecipients(msg: { to: string | string[]; cc?: string[]; bcc?: string[] }): number {
 	const toCount = Array.isArray(msg.to) ? msg.to.length : 1;
@@ -75,14 +89,14 @@ export function countRecipients(msg: { to: string | string[]; cc?: string[]; bcc
 
 /**
  * Validate a message before it is sent: every address (To, CC, BCC, the sender
- * and any reply-to), the recipient count and the total size. Both `send()` and
+ * and any reply-to), the recipient count, the subject and the total size. Both `send()` and
  * each `sendBatch()` entry go through this, on the mock and on AWS.
  *
  * The size check is an approximate early check: it measures the message as
  * JSON, without MIME headers or transfer-encoding overhead, so a message under
  * it can still exceed SES's 40 MB limit once encoded.
  *
- * @throws {EmailErrors.InvalidInput} If any address is malformed or the message has more than 50 recipients.
+ * @throws {EmailErrors.InvalidInput} If any address is malformed, the message has more than 50 recipients, or the subject contains a line break or other control character.
  * @throws {EmailErrors.SendFailed} If the message exceeds 40 MB.
  */
 export function validateMessage(message: EmailMessage, fromAddress: string, replyTo?: string[]): void {
@@ -96,6 +110,8 @@ export function validateMessage(message: EmailMessage, fromAddress: string, repl
 	if (countRecipients({ to, cc, bcc }) > MAX_RECIPIENTS_PER_MESSAGE) {
 		throw blocksError(EmailErrors.InvalidInput, `Recipient count exceeds ${MAX_RECIPIENTS_PER_MESSAGE}.`);
 	}
+
+	validateSubject(message.subject);
 
 	const messageSize = Buffer.byteLength(JSON.stringify(message), 'utf8');
 	if (messageSize > MAX_MESSAGE_BYTES) {
@@ -128,4 +144,33 @@ export function validateBatchSize(count: number, maxBatchSize: number): void {
 	if (count > maxBatchSize) {
 		throw blocksError(EmailErrors.InvalidInput, `Batch size ${count} exceeds the maximum of ${maxBatchSize} messages.`);
 	}
+}
+
+/** Second-level domains reserved for documentation (RFC 2606 section 3). */
+const RESERVED_DOMAINS = ['example.com', 'example.net', 'example.org'];
+/** Top-level domains reserved by RFC 2606 section 2 and RFC 6761 section 6. */
+const RESERVED_TLDS = ['test', 'example', 'invalid', 'localhost'];
+
+/**
+ * The reserved domain an address is on, or `undefined` when it is on a normal
+ * domain. Reserved names (`example.com`, `example.net`, `example.org` and their
+ * subdomains, and anything under `.test`, `.example`, `.invalid` or
+ * `.localhost`) are never delegated, so they can't be verified as an SES
+ * identity and mail to them can't be delivered. Accepts a bare addr-spec or a
+ * name-addr; matching ignores case and a trailing dot.
+ *
+ * Synth-time only: the CDK entry uses it to raise a warning. It is not part of
+ * the caller-input validation shared by the mock and AWS entries, so a reserved
+ * address still passes `send()` validation and local dev keeps working.
+ */
+export function reservedDomainOf(address: string): string | undefined {
+	const addrSpec = NAME_ADDR_REGEX.exec(address)?.[1] ?? address;
+	const at = addrSpec.lastIndexOf('@');
+	if (at < 0) return undefined;
+	const domain = addrSpec.slice(at + 1).trim().toLowerCase().replace(/\.$/, '');
+	if (!domain) return undefined;
+	const tld = domain.slice(domain.lastIndexOf('.') + 1);
+	const reserved =
+		RESERVED_TLDS.includes(tld) || RESERVED_DOMAINS.some((name) => domain === name || domain.endsWith(`.${name}`));
+	return reserved ? domain : undefined;
 }

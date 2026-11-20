@@ -4,9 +4,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
-import type { api as apiType } from 'aws-blocks';
-import { isBlocksError } from '@aws-blocks/core';
-import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
+import type { api as apiType } from 'cdk-blocks';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { AsyncJobErrors } from '@aws-cdk-blocks/bb-async-job';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isDeployed = ENV === 'sandbox' || ENV === 'production';

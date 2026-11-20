@@ -1,25 +1,25 @@
-# @aws-blocks/bb-lambda-compute
+# @aws-cdk-blocks/bb-lambda-compute
 
-The Lambda-backed **compute** for AWS Blocks: a `NodejsFunction` that backs the
+The Lambda-backed **compute** for AWS CDK Blocks: a `NodejsFunction` that backs the
 handler code an app's Building Blocks run on. The stack's single shared API
 Gateway REST API (provisioned by core) integrates this compute's function — not
 a per-compute gateway.
 
 > **Framework machinery — don't depend on it directly.** `LambdaCompute` is not
-> re-exported from `@aws-blocks/blocks`. It reaches an app two ways:
+> re-exported from `aws-cdk-blocks`. It reaches an app two ways:
 >
 > - **As the default compute.** `BlocksStack` / `BlocksBackend` from
->   `@aws-blocks/blocks` build one `LambdaCompute` for every app; handlers that
+>   `aws-cdk-blocks` build one `LambdaCompute` for every app; handlers that
 >   don't name a compute run on it.
 > - **Through the `Compute` block.** `new Compute(scope, id, { type: 'serverless', … })`
->   from `@aws-blocks/blocks` creates and owns a `LambdaCompute`. See the
+>   from `aws-cdk-blocks` creates and owns a `LambdaCompute`. See the
 >   [`Compute` README](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-compute#readme).
 
 > Design and rationale: [DESIGN.md](./DESIGN.md)
 
 ## What it provides
 
-`LambdaCompute` — a `Compute` (the abstract base from `@aws-blocks/core`) that
+`LambdaCompute` — a `Compute` (the abstract base from `@aws-cdk-blocks/core`) that
 provisions and owns a `NodejsFunction` and its CloudWatch log group. The stack's
 shared REST API fronts it (via `apiHandler()`). The function assumes the
 shared Blocks execution role, so Building Block grants reach it; its handler
@@ -55,8 +55,8 @@ to these options.
   compute) does not move the default compute, which is built before that VPC
   exists; a serverless `Compute` declared after the container compute does land in it.
 - **CORS.** When the stack's `defaults.allowedOrigins` is non-empty (e.g. the
-  sandbox preset allows localhost), the origin patterns (regular expressions)
-  are set on the function as `CORS_ALLOWED_ORIGINS`.
+  sandbox preset allows localhost), the entries (plain origins, matched
+  exactly, or regex patterns) are set on the function as `CORS_ALLOWED_ORIGINS`.
 - **Tracing.** When a `Tracer` is registered, the function switches to X-Ray
   Active tracing.
 - **Dashboard.** Contributes health (invocations, errors, duration, concurrent

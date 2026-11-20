@@ -3,8 +3,9 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
+import { blocksCommand } from './errors.js';
 import { commandHelp, rootHelp } from './help.js';
-import { ALIASES, COMMANDS, findCommand, GROUPS } from './registry.js';
+import { COMMANDS, findCommand, GROUPS } from './registry.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
 /** The command names that root help lists, one per row. */
@@ -30,16 +31,19 @@ describe('root help', () => {
 		);
 	});
 
-	it('lists every canonical command that runs, and no alias', () => {
+	it('lists every runnable task once under its package script name', () => {
 		const listed = listedCommands(help);
-		const runnable = COMMANDS.filter((command) => command.handler).map((command) => command.path.join(' '));
+		const runnable = [
+			'dev', 'dev:stop', 'sandbox', 'sandbox:deploy', 'sandbox:preview', 'sandbox:destroy', 'sandbox:console',
+			'docs', 'docs:api', 'docs:search', 'deploy', 'destroy', 'whoami', 'secret', 'config',
+			'generate-client', 'spec', 'typegen', 'db', 'vendorize', 'migrate', 'help',
+		];
 		assert.deepStrictEqual(listed.sort(), [...runnable].sort());
-		for (const alias of ALIASES) assert.ok(!listed.includes(alias.name.join(' ')), alias.name.join(' '));
-		assert.doesNotMatch(help, /dev:stop|sandbox:deploy|sandbox:preview|sandbox:destroy|sandbox:console|generate-client|cleanup/);
+		assert.doesNotMatch(help, /(?<![\w.-])cdk-blocks\b(?!\/)|sandbox up/);
 	});
 
 	it('shows the version, global options and the exit codes', () => {
-		assert.match(help, /^AWS Blocks CLI 1\.2\.3\n/);
+		assert.match(help, /^CDK Blocks tasks 1\.2\.3\n/);
 		assert.match(help, /-C, --cwd <dir>/);
 		assert.match(help, /--no-input/);
 		assert.match(help, /Exit codes: 0 success, 1 failed, 2 usage error, 130 interrupted, 143 stopped by SIGTERM\./);
@@ -50,9 +54,29 @@ describe('command help', () => {
 	it('has usage, options and examples for every runnable command', () => {
 		for (const command of COMMANDS.filter((c) => c.handler)) {
 			const help = commandHelp(command);
-			assert.match(help, new RegExp(`Usage: cdk-blocks ${command.path.join(' ')}`), command.path.join(' '));
-			assert.match(help, /\nExamples\n {2}cdk-blocks /, command.path.join(' '));
+			assert.ok(help.includes(`Usage: ${blocksCommand(command.path[0], ...command.path.slice(1))}`), command.path.join(' '));
+			assert.match(help, /\nExamples\n {2}npm run /, command.path.join(' '));
+			assert.doesNotMatch(help, /(?<![\w.-])cdk-blocks\b(?!\/)/);
+			const examples = command.examples?.map(({ command }) => command) ?? [];
+			assert.strictEqual(new Set(examples).size, examples.length, command.path.join(' '));
 		}
+	});
+
+	it('preserves distinct docs forms, forwarded flags and silent machine output', () => {
+		const docs = commandHelp(findCommand(['docs']) ?? assert.fail());
+		for (const form of [
+			'npm run docs KVStore core',
+			'npm run docs:api KVStore',
+			'npm run docs:search ConditionalCheckFailed',
+			'npm run docs KVStore -- --section query',
+			'npm run docs -- --exports Error',
+			'npm run -s docs ApiError -- --output json',
+		]) assert.ok(docs.includes(form), form);
+		assert.match(docs, /defaults to JSON on a pipe and Markdown on a terminal/);
+		const deploy = commandHelp(findCommand(['deploy']) ?? assert.fail());
+		assert.ok(deploy.includes('API_URL=$(npm run -s deploy -- --query apiUrl)'));
+		const secret = commandHelp(findCommand(['secret']) ?? assert.fail());
+		assert.ok(secret.includes('cat key.txt | npm run -s secret set API_KEY -- --value-stdin'));
 	});
 
 	it('says which dev port is opened in the browser and which is internal', () => {
@@ -65,7 +89,7 @@ describe('command help', () => {
 			help,
 			/--frontend-port <N> +Internal port of the frontend dev server, proxied behind --port \[3100\]/,
 		);
-		assert.match(help, /\n {2}cdk-blocks dev --port 4000 +# open http:\/\/localhost:4000\n/);
+		assert.match(help, /\n {2}npm run dev -- --port 4000 +# open http:\/\/localhost:4000\n/);
 	});
 
 	it('documents --stage for secret and config without a fixed list of stages', () => {
@@ -78,8 +102,8 @@ describe('command help', () => {
 
 	it('lists the subcommands of a group', () => {
 		const help = commandHelp(findCommand(['sandbox']) ?? assert.fail());
-		assert.match(help, /sandbox destroy {2,}Delete your sandbox stack/);
-		assert.doesNotMatch(help, /sandbox up|sandbox:destroy/);
+		assert.match(help, /sandbox:destroy {2,}Delete your sandbox stack/);
+		assert.doesNotMatch(help, /sandbox up|sandbox destroy/);
 	});
 
 	it('prints on stdout for --help, help <command> and an alias', async () => {
@@ -87,17 +111,21 @@ describe('command help', () => {
 		for (const argv of [
 			['destroy', '--help'],
 			['help', 'destroy'],
+			['destroy', '--help', '--output', 'json'],
+			['destroy', '--help', '--query', 'destroyed'],
 			['-h', 'destroy'],
 		]) {
 			const run = await runCli(argv, { cwd });
 			assert.strictEqual(run.code, 0, argv.join(' '));
-			assert.match(run.stdout, /Usage: cdk-blocks destroy/);
+			assert.match(run.stdout, /Usage: npm run destroy/);
 			assert.strictEqual(run.spawned.length, 0);
 		}
 		const alias = await runCli(['help', 'typegen'], { cwd });
-		assert.match(alias.stdout, /Usage: cdk-blocks generate types/);
+		assert.match(alias.stdout, /Usage: npm run typegen/);
+		const vendorize = await runCli(['vendorize', '--help'], { cwd });
+		assert.match(vendorize.stdout, /Usage: npm run vendorize <package> \[options\.\.\.\]/);
 		const db = await runCli(['db', '--help'], { cwd });
-		assert.match(db.stdout, /Usage: cdk-blocks db <verb> \[args\.\.\.\]/);
+		assert.match(db.stdout, /Usage: npm run db <verb> \[args\.\.\.\]/);
 		const unknown = await runCli(['help', 'deplyo'], { cwd });
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /Did you mean "deploy"\?/);

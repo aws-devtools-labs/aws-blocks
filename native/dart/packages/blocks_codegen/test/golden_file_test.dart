@@ -1,7 +1,13 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:io';
 
 import 'package:blocks_codegen/blocks_codegen.dart';
 import 'package:test/test.dart';
+
+/// The golden of a fixture whose spec the generator refuses: its message.
+const _codegenErrorGolden = 'codegen-error.txt';
 
 void main() {
   final regenerate = Platform.environment['REGENERATE_FIXTURES'] == '1';
@@ -31,9 +37,35 @@ void main() {
       final rpcModel = const OpenRpcParser().parse(spec);
       final codegenModel = CodegenModelBuilder().build(rpcModel);
 
-      final output = const DartCodeGenerator().generate(codegenModel);
-
       final goldenDir = Directory('${fixture.path}/dart');
+      final errorGolden = File('${goldenDir.path}/$_codegenErrorGolden');
+
+      final String output;
+      try {
+        output = const DartCodeGenerator().generate(codegenModel);
+      } on FormatException catch (e) {
+        // A spec the generator refuses (a transferable parameter): the
+        // golden is the error.
+        if (regenerate) {
+          goldenDir.createSync(recursive: true);
+          for (final f in goldenDir.listSync().whereType<File>()) {
+            f.deleteSync();
+          }
+          errorGolden.writeAsStringSync('${e.message}\n');
+          // ignore: avoid_print
+          print('  ✓ regenerated $name: codegen error');
+        } else {
+          expect(
+            errorGolden.existsSync(),
+            isTrue,
+            reason:
+                '$name failed to generate: ${e.message}\n'
+                'Run: REGENERATE_FIXTURES=1 dart test test/golden_file_test.dart',
+          );
+          expect('${e.message}\n', errorGolden.readAsStringSync());
+        }
+        return;
+      }
 
       if (regenerate) {
         goldenDir.createSync(recursive: true);
@@ -50,6 +82,11 @@ void main() {
             'Run: REGENERATE_FIXTURES=1 dart test test/golden_file_test.dart',
           );
         }
+        expect(
+          errorGolden.existsSync(),
+          isFalse,
+          reason: '$name generates, but its golden is a codegen error',
+        );
         final goldenFile = File('${goldenDir.path}/client.dart');
         if (!goldenFile.existsSync()) {
           fail(

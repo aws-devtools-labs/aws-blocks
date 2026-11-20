@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin.e2e
 
 import blocks.e2e.Cursor
@@ -60,6 +63,23 @@ class RealtimeE2ETest {
         }
         msg.userId shouldBe "kotlin-sub"
         msg.x shouldBe 42.0
+    }
+
+    @Test
+    fun closeCompletesTheFlowNormally() = runTest {
+        val ch = api.realtimeGetChannel("kotlin-close")
+
+        val ended = withContext(Dispatchers.Default) {
+            val collection = async {
+                ch.subscribe().collect {}
+                true
+            }
+            // Let the subscription reach the server before closing.
+            delay(500)
+            ch.close()
+            withTimeout(10.seconds) { collection.await() }
+        }
+        ended.shouldBeTrue()
     }
 
     @Test

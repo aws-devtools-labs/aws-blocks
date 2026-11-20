@@ -12,7 +12,7 @@
  * here — the registry is the bridge's "find the right job" half.
  *
  * Stored on `globalThis` (like the event-handler and SDK-identifier registries)
- * so a single shared map survives duplicate `@aws-blocks/bb-async-job` copies in
+ * so a single shared map survives duplicate `@aws-cdk-blocks/bb-async-job` copies in
  * one module graph.
  */
 

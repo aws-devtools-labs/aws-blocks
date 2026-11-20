@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:io';
 import 'dart:math';
 import '../../lib/blocks_client.dart';
@@ -10,7 +13,7 @@ int _failed = 0;
 /// native-bindings dev server (`npm run dev:server`).
 String blocksUrl() =>
     Platform.environment['BLOCKS_URL'] ??
-    'http://localhost:3001/aws-blocks/api';
+    'http://localhost:3001/cdk-blocks/api';
 
 /// True when the suite is pointed at the local dev server (vs. a deployed
 /// sandbox/production backend). Reuses the same `BLOCKS_URL` mechanism the
@@ -32,7 +35,7 @@ bool isLocalEndpoint() {
 }
 
 /// Creates a Blocks client pointing at test-apps/native-bindings.
-/// Default: http://localhost:3001/aws-blocks/api (the native-bindings dev server,
+/// Default: http://localhost:3001/cdk-blocks/api (the native-bindings dev server,
 /// `npm run dev:server`).
 /// Override with BLOCKS_URL env var for sandbox/production testing.
 Blocks createBlocks() {
@@ -72,7 +75,7 @@ String uniqueUsername(String label) =>
 
 /// The pre-provisioned, confirmed user a deployed backend signs in instead of
 /// signing up (seeded into every user pool of the stack by
-/// `test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts`). These
+/// `test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts`). These
 /// defaults MUST match that script. Override both sides with
 /// COGNITO_TEST_USERNAME / COGNITO_TEST_PASSWORD. Not a secret — a
 /// deterministic fixture for a throwaway test pool.
@@ -157,10 +160,10 @@ Future<T?> expectError<T>(Future<T> Function() fn, {String? label}) async {
     _failed++;
     print('  ✗ ${label ?? "expected error"} — no error thrown');
     return null;
-  } on BlocksRpcException catch (e) {
+  } on ApiException catch (e) {
     _passed++;
     print(
-      '  ✓ ${label ?? "expected error"} — got BlocksRpcException(${e.code}): ${e.message}',
+      '  ✓ ${label ?? "expected error"}: got ApiException(${e.status} ${e.name}): ${e.message}',
     );
     return null;
   } catch (e) {
@@ -171,7 +174,7 @@ Future<T?> expectError<T>(Future<T> Function() fn, {String? label}) async {
 }
 
 /// Like [expectError], but passes only when the call throws a
-/// [BlocksRpcException] whose server error name (`error.data.name`) is [name].
+/// [ApiException] whose server error name ([ApiException.name]) is [name].
 /// Errors cross the wire by name, so suites assert on it rather than on the
 /// message.
 Future<void> expectErrorNamed(
@@ -183,13 +186,14 @@ Future<void> expectErrorNamed(
     await fn();
     _failed++;
     print('  ✗ $label — no error thrown (expected $name)');
-  } on BlocksRpcException catch (e) {
-    final data = e.data;
-    final actual = data is Map ? data['name'] : null;
-    check(actual == name, '$label — $name (got $actual: ${e.message})');
+  } on ApiException catch (e) {
+    check(
+      isBlocksError(e, name),
+      '$label: $name (got ${e.name}: ${e.message})',
+    );
   } catch (e) {
     _failed++;
-    print('  ✗ $label — expected BlocksRpcException $name, got $e');
+    print('  ✗ $label: expected ApiException $name, got $e');
   }
 }
 

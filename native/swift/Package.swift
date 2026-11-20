@@ -1,4 +1,10 @@
 // swift-tools-version: 6.2
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
 
 import PackageDescription
 
@@ -6,7 +12,7 @@ import PackageDescription
 let generatedCodeSettings: [SwiftSetting] = [.swiftLanguageMode(.v6), .treatAllWarnings(as: .error)]
 
 let package = Package(
-    name: "aws-blocks-swift",
+    name: "cdk-blocks-swift",
     platforms: [.iOS(.v16), .macOS(.v13)],
     products: [
         .library(
@@ -66,6 +72,15 @@ let package = Package(
             name: "BlocksGeneratedCodeTests",
             dependencies: ["BlocksRuntime"],
             path: "Tests/BlocksGeneratedCodeTests",
+            swiftSettings: generatedCodeSettings,
+            plugins: ["BlocksCodegenBuildPlugin"]
+        ),
+        // Compiles the build plugin's output for the non-identifier-names codegen fixture. This
+        // target's blocks.spec.json is a copy of the fixture's spec; PluginSpecCopyTests keeps them equal.
+        .testTarget(
+            name: "BlocksGeneratedNonIdentifierNamesTests",
+            dependencies: ["BlocksRuntime"],
+            path: "Tests/BlocksGeneratedNonIdentifierNamesTests",
             swiftSettings: generatedCodeSettings,
             plugins: ["BlocksCodegenBuildPlugin"]
         ),

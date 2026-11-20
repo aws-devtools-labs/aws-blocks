@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Compiles every codegen fixture's Swift golden as its own module against the
 # in-repo BlocksRuntime, and fails if any doesn't compile. The goldens are what
 # the Swift generator emits for each spec, so an error here is an error in a
@@ -8,6 +11,9 @@
 # Usage: compile-fixture-goldens.sh [FIXTURES_DIR]
 #   FIXTURES_DIR  defaults to native/codegen-fixtures. Each `*/swift/` under it
 #                 holding `Api.swift` (and usually `Models.swift`) is compiled.
+#                 A fixture whose Swift golden is `swift/codegen-error.txt` (a
+#                 spec the generator refuses) has nothing to compile and is
+#                 skipped; one with both that file and `Api.swift` fails the run.
 #   SWIFTC        the compiler command (default: `xcrun swiftc`). macOS only:
 #                 BlocksRuntime uses Apple frameworks (CryptoKit, Security, os).
 #
@@ -15,8 +21,10 @@
 # directory, as a library module for the package's minimum macOS. Each golden is
 # then compiled and linked as a separate library module that imports it, the
 # way an app that keeps its generated client in its own module builds it. The
-# `public` surface, access control and cross-module rules all apply. Swift 5
-# language mode, as in Package.swift.
+# `public` surface, access control and cross-module rules all apply. A golden
+# compiles in Swift 6 language mode, so a `Sendable` it claims but can't keep is
+# an error, not an advisory warning; BlocksRuntime and the stubs compile in
+# Swift 5 mode, as in Package.swift.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +35,7 @@ read -r -a SWIFTC_CMD <<< "${SWIFTC:-xcrun swiftc}"
 # Package.swift: `platforms: [.iOS(.v16), .macOS(.v13)]`.
 TARGET="$(uname -m)-apple-macos13.0"
 COMMON=(-swift-version 5 -target "$TARGET" -parse-as-library)
+GOLDEN=(-swift-version 6 -target "$TARGET" -parse-as-library)
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -47,6 +56,16 @@ if ! "${SWIFTC_CMD[@]}" "${COMMON[@]}" -module-name BlocksRuntime -emit-library 
   echo "error: BlocksRuntime didn't compile" >&2
   exit 1
 fi
+
+refused=0
+for error_golden in "$FIXTURES_DIR"/*/swift/codegen-error.txt; do
+  [ -f "$error_golden" ] || continue
+  if [ -f "$(dirname "$error_golden")/Api.swift" ]; then
+    echo "error: $(dirname "$error_golden") has both Api.swift and codegen-error.txt" >&2
+    exit 1
+  fi
+  refused=$((refused + 1))
+done
 
 count=0
 warnings=0
@@ -78,7 +97,7 @@ for dir in "$FIXTURES_DIR"/*/swift; do
   sources=("$dir/Api.swift")
   # Models.swift is empty when the spec has no component schemas.
   [ -s "$dir/Models.swift" ] && sources=("$dir/Models.swift" "${sources[@]}")
-  if "${SWIFTC_CMD[@]}" "${COMMON[@]}" -module-name "$module" -emit-library -emit-module \
+  if "${SWIFTC_CMD[@]}" "${GOLDEN[@]}" -module-name "$module" -emit-library -emit-module \
       -emit-module-path "$out/$module.swiftmodule" -o "$out/lib$module.dylib" \
       -I "$WORK/runtime" -L "$WORK/runtime" -lBlocksRuntime ${stub_flags[@]+"${stub_flags[@]}"} \
       "${sources[@]}" > "$out/compile.log" 2>&1; then
@@ -101,3 +120,6 @@ if [ "${#failed[@]}" -gt 0 ]; then
 fi
 
 echo "OK: $count Swift fixture golden(s) compile as their own module against BlocksRuntime ($warnings warning(s), advisory)"
+if [ "$refused" -gt 0 ]; then
+  echo "Skipped $refused fixture(s) whose Swift golden is an expected codegen-error.txt"
+fi

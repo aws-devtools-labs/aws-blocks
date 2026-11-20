@@ -1,4 +1,4 @@
-# @aws-blocks/bb-async-job
+# @aws-cdk-blocks/bb-async-job
 
 Background job processing backed by SQS, run on Lambda or a container.
 
@@ -28,8 +28,8 @@ Background job processing backed by SQS, run on Lambda or a container.
 ## Quick Start
 
 ```typescript
-import { Scope } from '@aws-blocks/core';
-import { AsyncJob } from '@aws-blocks/bb-async-job';
+import { Scope } from '@aws-cdk-blocks/core';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
 
 const scope = new Scope('my-app');
 
@@ -57,7 +57,7 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 |--------|---------|-------------|
 | `handler` | (required) | Async function that processes each job |
 | `schema` | — | StandardSchemaV1 (Zod, Valibot, etc.) for payload validation on submit |
-| `maxRetries` | 3 | Maximum attempts before sending to the dead-letter queue |
+| `maxRetries` | 3 | Total deliveries, **including the first**, before the job goes to the dead-letter queue (the queue's `maxReceiveCount`). `3` = one attempt plus two retries; to run a job at most twice, set `maxRetries: 2` |
 | `batchSize` | 10 | Messages per Lambda invocation |
 | `maxBatchingWindowSeconds` | 5 | Seconds SQS waits to fill a batch before invoking the Lambda |
 | `trackStatus` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |
@@ -74,7 +74,7 @@ compute, normally Lambda. Assign a container `Compute` explicitly for
 long-running or high-memory work:
 
 ```ts
-import { Compute } from '@aws-blocks/blocks';
+import { Compute } from 'aws-cdk-blocks';
 
 const worker = new Compute(scope, 'worker', {
   type: 'container',
@@ -96,7 +96,7 @@ worker thread, so `timeoutSeconds` is hard-enforced (the worker is terminated at
 the deadline). `timeoutSeconds` and `maxConcurrencyPerCPU` are properties of the
 work and live on the job; `size`/`scaling` are properties of the machine and live
 on the `Compute`. In local dev the assignment is transparent — handlers run
-in-process. See `@aws-blocks/bb-compute`.
+in-process. See `@aws-cdk-blocks/bb-compute`.
 
 A deploy that changes your code replaces the container's tasks. A delivery still
 running about 2 minutes later is stopped and redelivered from the start, and the
@@ -144,7 +144,7 @@ In AWS, `receiveCount` is the SQS `ApproximateReceiveCount` attribute, and the n
 ## Error Constants
 
 ```typescript
-import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
+import { AsyncJobErrors } from '@aws-cdk-blocks/bb-async-job';
 
 AsyncJobErrors.PayloadTooLarge    // payload > 256 KB
 AsyncJobErrors.BatchEmpty         // submitBatch([]) called with no items

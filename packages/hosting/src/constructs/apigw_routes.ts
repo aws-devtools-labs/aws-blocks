@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Shared route helpers for the two API Gateway front-door flavors
  * ({@link ApiGatewayConstruct} HTTP API v2 and {@link ApiGatewayRestConstruct}
@@ -21,7 +24,7 @@ export const globToProxyPath = (pattern: string): string | null => {
 };
 
 /**
- * Warn at synth (`@aws-blocks/hosting:CatchAllApiPathNotRouted`) when the
+ * Warn at synth (`@aws-cdk-blocks/hosting:CatchAllApiPathNotRouted`) when the
  * backend's raw routes include the catch-all `/*` (e.g.
  * `RawRoute('/{proxy+}')`): routing it to the API would send every page and
  * asset there, so the regional doors leave it out and the site keeps its own
@@ -36,7 +39,7 @@ export const routableApiPaths = (scope: IConstruct, door: string, patterns: Iter
 	const routable = all.filter((p) => globToProxyPath(p) !== null);
 	if (routable.length < all.length) {
 		Annotations.of(scope).addWarningV2(
-			'@aws-blocks/hosting:CatchAllApiPathNotRouted',
+			'@aws-cdk-blocks/hosting:CatchAllApiPathNotRouted',
 			`The ${door} front door does not route the backend's catch-all raw route ('/*'): it would send every page ` +
 				'and asset to the API. Register the raw routes under a path prefix (`/hooks/*`).',
 		);
@@ -46,18 +49,21 @@ export const routableApiPaths = (scope: IConstruct, door: string, patterns: Iter
 
 /**
  * The backend base URL for a same-origin API proxy: split a namespace ingress
- * URL (`https://…/prod/aws-blocks/api`) on the `/aws-blocks/api` suffix to get
+ * URL (`https://…/prod/cdk-blocks/api`) on the `/cdk-blocks/api` suffix to get
  * the base (`https://…/prod`) — token-safe, the same shape whether the ingress is
  * a Lambda API Gateway, a container ALB, or a BYOC endpoint.
  */
-export const backendBaseUrl = (ingressUrl: string): string => Fn.select(0, Fn.split('/aws-blocks/api', ingressUrl));
+export const backendBaseUrl = (ingressUrl: string): string => Fn.select(0, Fn.split('/cdk-blocks/api', ingressUrl));
+
+/** The canonical `/cdk-blocks` path prefix, then its legacy `/aws-blocks` alias. */
+export const BLOCKS_PATH_PREFIXES: readonly string[] = ['/cdk-blocks', '/aws-blocks'];
 
 /**
  * The default API path set for a single-compute backend when the door was not
- * handed `DoorInput.origins.api.paths`: the reserved `/aws-blocks/*` subtree
- * (RPC, and sign-in at `/aws-blocks/auth/*`).
+ * handed `DoorInput.origins.api.paths`: the reserved `/cdk-blocks/*` subtree
+ * (RPC, and sign-in at `/cdk-blocks/auth/*`), and its legacy `/aws-blocks/*` alias.
  */
-export const DEFAULT_API_PATHS: readonly string[] = ['/aws-blocks/*'];
+export const DEFAULT_API_PATHS: readonly string[] = BLOCKS_PATH_PREFIXES.map((prefix) => `${prefix}/*`);
 
 /** Whether a route-table pattern has a wildcard API Gateway can't express (anything but one trailing `/*`). */
 export const hasInnerWildcard = (pattern: string): boolean => {

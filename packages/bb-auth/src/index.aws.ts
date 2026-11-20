@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth` — `aws-runtime` entry (Lambda).
+ * `@aws-cdk-blocks/bb-auth` — `aws-runtime` entry (Lambda).
  *
  * `Auth` is the real engine-agnostic `AuthBase` (sessions,
  * cookies, guards, the `createApi()` state machine) over the Cognito SDK
@@ -26,10 +26,10 @@
  * same Lambda; the layer routes it to the block (`presignup-trigger.ts`).
  */
 
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { ApiError, getDeploymentType } from '@aws-blocks/core';
-import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
+import { frameworkKey } from '@aws-cdk-blocks/bb-secret/internal';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { ApiError, getDeploymentType } from '@aws-cdk-blocks/core';
+import { EventSourceMapping } from '@aws-cdk-blocks/core/bb-utils';
 import { AuthBase, type AuthLayer, defineAuthLayer } from './auth-base.js';
 import { CognitoAccessTokenVerifier } from './bearer-cognito.js';
 import { cognitoConfigKeys, preSignUpTriggerConfigKey, stubIdpConfigKeys } from './cdk/contract.js';
@@ -89,15 +89,22 @@ function deployedStubIdp(
 }
 
 /**
- * The AWS layer: the session secret is the `session-secret` `AppSetting` child
- * — the same construct id, and so the same SSM parameter, `AuthCognito` uses —
- * so existing sessions keep verifying after the switch. The native engine
+ * The AWS layer: the session secret is the `session-secret` framework key
+ * (`frameworkKey()` from `@aws-cdk-blocks/bb-secret/internal`), at the same
+ * construct id `AuthCognito` used. Under `defaults.secretsStore: 'ssm'` that is
+ * the same SSM parameter, so existing sessions keep verifying after the switch;
+ * under `'secrets-manager'` (the production preset) it is a new Secrets Manager
+ * secret, chosen from the ARN that arrives on the compute's environment.
+ *
+ * Only a successful read is cached. A failed read (throttling, a network blip,
+ * IAM still propagating at cold start) is retried on the next request instead
+ * of breaking the container for its lifetime. The native engine
  * drives Cognito through the SDK; it is built only when the configuration has a
  * user pool, and creates its SDK client lazily.
  */
 const AWS_LAYER: AuthLayer = {
 	sessionSecret(auth) {
-		const setting = new AppSetting(auth, 'session-secret', { secret: true });
+		const setting = frameworkKey(auth, 'session-secret');
 		let cached: string | undefined;
 		return async () => {
 			if (cached) return cached;
@@ -157,8 +164,8 @@ const AWS_LAYER: AuthLayer = {
 };
 
 /**
- * The unified auth Building Block, published as `@aws-blocks/bb-auth` and exported
- * from `@aws-blocks/blocks`. See the package README.
+ * The unified auth Building Block, published as `@aws-cdk-blocks/bb-auth` and exported
+ * from `aws-cdk-blocks`. See the package README.
  *
  * @typeParam O - The options literal, captured with `const` so inline options
  * narrow the method surface without `as const`.

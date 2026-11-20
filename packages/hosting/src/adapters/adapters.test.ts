@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
@@ -81,7 +84,7 @@ void describe('detectFramework', () => {
 
   void it('returns spa when next is installed in node_modules (peer dep) but NOT in project deps — regression #833', () => {
     // This is the KEY regression test: next is resolvable from
-    // node_modules (e.g. installed as a peer dep of @aws-blocks/core)
+    // node_modules (e.g. installed as a peer dep of @aws-cdk-blocks/core)
     // but the project's own package.json does NOT list it.
     writePackageJson(tmpDir, {
       dependencies: { react: '^18.0.0', vite: '^5.0.0' },

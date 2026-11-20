@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin
 
 import io.kotest.matchers.shouldBe
@@ -8,7 +11,7 @@ import kotlin.test.Test
  * removing the companion from [Blocks] fails here rather than in a customer's build.
  */
 private operator fun Blocks.Companion.invoke(): Blocks =
-    Blocks(BlocksServer(name = "generated", url = "http://localhost:3001/aws-blocks/api"))
+    Blocks(BlocksServer(name = "generated", url = "http://localhost:3001/cdk-blocks/api"))
 
 class BlocksCompanionInvokeTest {
 

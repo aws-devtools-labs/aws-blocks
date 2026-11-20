@@ -1,0 +1,35 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Fixture of `upgrade-sql-blocks.ts`: the same app on this checkout. The block is a `Database` with
+// the id and the migrations directory of the `DistributedDatabase`.
+
+import { ApiNamespace, Database, Scope, sql } from 'aws-cdk-blocks';
+
+const scope = new Scope('upgrade');
+const ledger = new Database(scope, 'ledger', { migrationsPath: './cdk-blocks/migrations' });
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async dump() {
+		return ledger.query<{ owner: string; name: string; balance: string }>(
+			sql`SELECT owner, name, balance::text AS balance FROM accounts ORDER BY owner, name`,
+		);
+	},
+
+	/** A write to a table of the release, in a transaction. */
+	async deposit(owner: string, name: string, amount: number) {
+		return ledger.transaction(async (tx) => {
+			await tx.execute(sql`UPDATE accounts SET balance = balance + ${amount} WHERE owner = ${owner} AND name = ${name}`);
+			const row = await tx.queryOne<{ balance: string }>(
+				sql`SELECT balance::text AS balance FROM accounts WHERE owner = ${owner} AND name = ${name}`,
+			);
+			return row?.balance ?? null;
+		});
+	},
+
+	/** A write to and a read of the table that the new migration file creates. */
+	async addNote(id: string, body: string) {
+		await ledger.execute(sql`INSERT INTO notes (id, body) VALUES (${id}, ${body})`);
+		return ledger.query<{ id: string; body: string }>(sql`SELECT id, body FROM notes ORDER BY id`);
+	},
+}));

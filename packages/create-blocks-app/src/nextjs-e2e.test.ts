@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { execFile, execFileSync } from 'node:child_process';
@@ -190,9 +193,9 @@ describe('Next.js template E2E assertions', () => {
         if (req.url === '/.blocks-sandbox/config.json') {
           configRequests++;
           res.writeHead(scenario.configStatus, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ apiUrl: scenario.relativeApiUrl ? '/aws-blocks/api' : `http://${req.headers.host}/aws-blocks/api` }));
-        } else if ((req.url === '/aws-blocks/api' || req.url?.startsWith('/aws-blocks/api/')) && req.method === 'POST') {
-          // The typed client POSTs to the per-namespace path (/aws-blocks/api/{namespace}).
+          res.end(JSON.stringify({ apiUrl: scenario.relativeApiUrl ? '/cdk-blocks/api' : `http://${req.headers.host}/cdk-blocks/api` }));
+        } else if ((req.url === '/cdk-blocks/api' || req.url?.startsWith('/cdk-blocks/api/')) && req.method === 'POST') {
+          // The typed client POSTs to the per-namespace path (/cdk-blocks/api/{namespace}).
           let body = '';
           for await (const chunk of req) body += chunk;
           const request = JSON.parse(body);

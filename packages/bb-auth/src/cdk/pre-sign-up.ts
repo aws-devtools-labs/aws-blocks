@@ -58,7 +58,7 @@ function backendFunction(owner: PreSignUpTriggerOwner): lambda.IFunction {
 	let fn: unknown;
 	try {
 		// Read structurally (a Lambda-shaped compute exposes `fn`), so this
-		// needs no dependency on `@aws-blocks/bb-lambda-compute`.
+		// needs no dependency on `@aws-cdk-blocks/bb-lambda-compute`.
 		fn = Reflect.get(owner.compute, 'fn');
 	} catch {
 		fn = undefined;

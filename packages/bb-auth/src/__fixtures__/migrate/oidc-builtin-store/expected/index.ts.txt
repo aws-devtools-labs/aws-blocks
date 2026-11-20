@@ -1,6 +1,6 @@
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Scope } from '@aws-blocks/core';
-import { Auth, github, stubIdp } from '@aws-blocks/bb-auth';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Scope } from '@aws-cdk-blocks/core';
+import { Auth, github, stubIdp } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('app');
 const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
@@ -28,4 +28,5 @@ export const auth = new Auth(scope, 'sso', {
 	},
 });
 
+// TODO(aws-blocks-auth-migrate): createApi() is now the sign-in state machine (getAuthState / setAuthState) and has no getClient(). If a native app (Swift, Kotlin, Dart) calls getClient() on this export, export auth.createOidcApi() under this name instead, and auth.createApi() under another one (MIGRATION.md, "Native apps").
 export const authApi = auth.createApi();

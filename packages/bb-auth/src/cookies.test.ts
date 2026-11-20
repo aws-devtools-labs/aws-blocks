@@ -5,7 +5,10 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
+import { S3Client } from '@aws-sdk/client-s3';
+import { _resetConfigCache, isBlocksError, preloadConfig } from '@aws-cdk-blocks/core';
 import {
+	assertSessionCookieTransport,
 	clearAutoSignInCookie,
 	clearPendingAuthCookie,
 	clearSessionCookie,
@@ -20,6 +23,7 @@ import {
 	signSessionId,
 	verifySessionId,
 } from './cookies.js';
+import { AuthErrors } from './errors.js';
 import { makeContext } from './test-helpers.js';
 
 describe('session id signing', () => {
@@ -160,6 +164,28 @@ describe('a front door served over plain HTTP (BLOCKS_PUBLIC_ORIGIN=http://…)'
 			else process.env.BLOCKS_PUBLIC_ORIGIN = before;
 		}
 	}
+	/** Async {@link withPublicOrigin}. */
+	async function withPublicOriginAsync(origin: string, fn: () => Promise<void>): Promise<void> {
+		const before = process.env.BLOCKS_PUBLIC_ORIGIN;
+		process.env.BLOCKS_PUBLIC_ORIGIN = origin;
+		try {
+			await fn();
+		} finally {
+			if (before === undefined) delete process.env.BLOCKS_PUBLIC_ORIGIN;
+			else process.env.BLOCKS_PUBLIC_ORIGIN = before;
+		}
+	}
+	/** Run `fn` with `BLOCKS_ALLOW_PLAIN_HTTP` (the door's `allowPlainHttp` opt-out) set to `value`, then restore it. */
+	function withAllowPlainHttp(value: string, fn: () => void): void {
+		const before = process.env.BLOCKS_ALLOW_PLAIN_HTTP;
+		process.env.BLOCKS_ALLOW_PLAIN_HTTP = value;
+		try {
+			fn();
+		} finally {
+			if (before === undefined) delete process.env.BLOCKS_ALLOW_PLAIN_HTTP;
+			else process.env.BLOCKS_ALLOW_PLAIN_HTTP = before;
+		}
+	}
 	/** Every cookie this block sets, on one non-loopback request. */
 	function everyCookie(): string[] {
 		const ctx = makeContext(undefined, 'app.example.com');
@@ -169,8 +195,109 @@ describe('a front door served over plain HTTP (BLOCKS_PUBLIC_ORIGIN=http://…)'
 		return ctx.response.headers.getSetCookie();
 	}
 
-	test('every cookie drops Secure: a browser discards a Secure cookie set over HTTP (an ALB without TLS)', () => {
-		withPublicOrigin('http://my-alb-123.us-east-1.elb.amazonaws.com', () => {
+	/** Run `fn` with `BLOCKS_DEPLOYMENT_TYPE` set to `value`, then restore it. */
+	function withDeploymentType(value: string, fn: () => void): void {
+		const before = process.env.BLOCKS_DEPLOYMENT_TYPE;
+		process.env.BLOCKS_DEPLOYMENT_TYPE = value;
+		try {
+			fn();
+		} finally {
+			if (before === undefined) delete process.env.BLOCKS_DEPLOYMENT_TYPE;
+			else process.env.BLOCKS_DEPLOYMENT_TYPE = before;
+		}
+	}
+
+	test('outside a sandbox, no session cookie is issued over plain HTTP: every setter throws InsecureTransportException', () => {
+		withDeploymentType('production', () =>
+			withPublicOrigin('http://my-alb-123.us-east-1.elb.amazonaws.com', () => {
+				const ctx = makeContext(undefined, 'app.example.com');
+				const refused = (e: unknown) => isBlocksError(e, AuthErrors.InsecureTransport);
+				assert.throws(() => setSessionCookie(ctx, 'app-auth', 'sid.sig', 100), refused);
+				assert.throws(() => setAutoSignInCookie(ctx, 'app-auth', 'bridge', 60), refused);
+				assert.throws(() => setPendingAuthCookie(ctx, 'app-auth', 'pending', 60), refused);
+				assert.deepStrictEqual(ctx.response.headers.getSetCookie(), [], 'no Set-Cookie line was written');
+				assert.throws(() => assertSessionCookieTransport(ctx, false), refused, 'the pre-check refuses too');
+				// A clearing cookie (Max-Age=0) carries no value, so it is still written, without Secure.
+				clearSessionCookie(ctx, 'app-auth');
+				clearAutoSignInCookie(ctx, 'app-auth');
+				clearPendingAuthCookie(ctx, 'app-auth');
+				const cleared = ctx.response.headers.getSetCookie();
+				assert.strictEqual(cleared.length, 3);
+				for (const line of cleared) {
+					assert.match(line, /=; HttpOnly; SameSite=Lax; Path=\/; Max-Age=0$/, line);
+				}
+				// A cross-domain cookie is set by the API's own (HTTPS) response: still issued, Secure.
+				const cross = makeContext(undefined, 'api.example.com');
+				setSessionCookie(cross, 'a', 'v.s', 1, true);
+				assert.match(cross.response.headers.getSetCookie()[0] ?? '', /SameSite=None; Secure; Partitioned/);
+			}),
+		);
+	});
+
+	test("outside a sandbox, the door's `allowPlainHttp` opt-out (BLOCKS_ALLOW_PLAIN_HTTP=true) issues every cookie without Secure", () => {
+		withDeploymentType('production', () =>
+			withPublicOrigin('http://my-alb-123.us-east-1.elb.amazonaws.com', () => {
+				withAllowPlainHttp('true', () => {
+					const lines = everyCookie();
+					assert.strictEqual(lines.length, 3);
+					for (const line of lines) {
+						assert.ok(!/;\s*Secure/.test(line), line);
+						assert.match(line, /SameSite=Lax/);
+					}
+					assert.doesNotThrow(() => assertSessionCookieTransport(makeContext(undefined, 'app.example.com'), false));
+				});
+				// Any other value fails closed.
+				for (const value of ['false', 'TRUE', '1', '']) {
+					withAllowPlainHttp(value, () =>
+						assert.throws(
+							() => setSessionCookie(makeContext(undefined, 'app.example.com'), 'app-auth', 'sid.sig', 100),
+							(e: unknown) => isBlocksError(e, AuthErrors.InsecureTransport),
+							value,
+						),
+					);
+				}
+			}),
+		);
+	});
+
+	test('on deployed compute, only the loaded config entry BLOCKS_ALLOW_PLAIN_HTTP=true opts out (an env var does not)', async (t) => {
+		const keys = ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY', 'BLOCKS_DEPLOYMENT_TYPE', 'BLOCKS_ALLOW_PLAIN_HTTP'] as const;
+		const previous = keys.map((k) => process.env[k]);
+		const load = async (config: Record<string, string>) => {
+			_resetConfigCache();
+			t.mock.method(S3Client.prototype, 'send', async () => ({
+				Body: { transformToString: async () => JSON.stringify(config) },
+			}));
+			await preloadConfig();
+			t.mock.restoreAll();
+		};
+		const issue = () => setSessionCookie(makeContext(undefined, 'app.example.com'), 'app-auth', 'sid.sig', 100);
+		const refused = (e: unknown) => isBlocksError(e, AuthErrors.InsecureTransport);
+		process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'config.json';
+		delete process.env.BLOCKS_DEPLOYMENT_TYPE;
+		try {
+			await withPublicOriginAsync('http://my-alb-123.us-east-1.elb.amazonaws.com', async () => {
+				await load({ BLOCKS_DEPLOYMENT_TYPE: 'production', BLOCKS_ALLOW_PLAIN_HTTP: 'true' });
+				assert.doesNotThrow(issue, 'the synth-time opt-out is honoured');
+				await load({ BLOCKS_DEPLOYMENT_TYPE: 'production' });
+				process.env.BLOCKS_ALLOW_PLAIN_HTTP = 'true';
+				assert.throws(issue, refused, 'an env var on the compute cannot opt out');
+				delete process.env.BLOCKS_ALLOW_PLAIN_HTTP;
+				await load({ BLOCKS_DEPLOYMENT_TYPE: 'production', BLOCKS_ALLOW_PLAIN_HTTP: 'yes' });
+				assert.throws(issue, refused, 'a malformed entry fails closed');
+			});
+		} finally {
+			_resetConfigCache();
+			keys.forEach((k, i) => {
+				if (previous[i] === undefined) delete process.env[k];
+				else process.env[k] = previous[i];
+			});
+		}
+	});
+
+	test('in a sandbox, every cookie drops Secure: a browser discards a Secure cookie set over HTTP (an ALB without TLS)', () => {
+		withDeploymentType('sandbox', () => withPublicOrigin('http://my-alb-123.us-east-1.elb.amazonaws.com', () => {
 			const lines = everyCookie();
 			assert.strictEqual(lines.length, 3);
 			for (const line of lines) {
@@ -181,7 +308,7 @@ describe('a front door served over plain HTTP (BLOCKS_PUBLIC_ORIGIN=http://…)'
 			const cross = makeContext(undefined, 'api.example.com');
 			setSessionCookie(cross, 'a', 'v.s', 1, true);
 			assert.match(cross.response.headers.getSetCookie()[0] ?? '', /SameSite=None; Secure; Partitioned/);
-		});
+		}));
 	});
 
 	test('an https:// front door, or none set, keeps Secure on every cookie', () => {

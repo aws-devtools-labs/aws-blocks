@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Edge-case coverage for the IPX image-optimization Lambda allowlist
  * matchers. Driven by review feedback on PR #3220 — the

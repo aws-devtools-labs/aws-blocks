@@ -3,8 +3,8 @@
 
 import assert from 'node:assert';
 import { afterEach, describe, it } from 'node:test';
-import { _setSynthSecretFetcher } from '@aws-blocks/hosting/constructs';
-import { config } from '@aws-blocks/hosting';
+import { _setSynthSecretFetcher } from '@aws-cdk-blocks/hosting/constructs';
+import { config } from '@aws-cdk-blocks/hosting';
 import type * as cdk from 'aws-cdk-lib';
 import { App, Stack } from 'aws-cdk-lib';
 import { Pipeline } from './pipeline/index.js';

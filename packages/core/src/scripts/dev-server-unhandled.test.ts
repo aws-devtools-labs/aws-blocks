@@ -87,7 +87,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
 		const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
 		devProcess = spawn(tsxBin, [join(tempDir, 'run-dev.ts')], {
 			cwd: tempDir,
-			env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
+			env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		devProcess.stdout?.on('data', (chunk) => {
@@ -103,7 +103,7 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
 		let lastError: unknown;
 		while (Date.now() < deadline) {
 			try {
-				const response = await fetch(`http://127.0.0.1:${port}/aws-blocks/api`, {
+				const response = await fetch(`http://127.0.0.1:${port}/cdk-blocks/api`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ jsonrpc: '2.0', method, params: [], id: 1 }),

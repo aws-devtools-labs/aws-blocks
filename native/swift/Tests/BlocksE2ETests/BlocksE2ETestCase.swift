@@ -26,7 +26,7 @@ enum AuthErrorNames {
 class BlocksE2ETestCase: XCTestCase {
     static let blocksUrl: String = ProcessInfo.processInfo.environment["BLOCKS_URL"]
         .flatMap { $0.isEmpty ? nil : $0 }
-        ?? "http://localhost:3001/aws-blocks/api"
+        ?? "http://localhost:3001/cdk-blocks/api"
 
     static let server: BlocksServer = .init(name: "e2e", url: blocksUrl)
 
@@ -67,7 +67,7 @@ class BlocksE2ETestCase: XCTestCase {
     }
 
     /// The pre-provisioned, confirmed user a deployed backend signs in instead of signing up
-    /// (seeded by `test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts`).
+    /// (seeded by `test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts`).
     func returningUser() -> (username: String, password: String) {
         let env = ProcessInfo.processInfo.environment
         let username = env["COGNITO_TEST_USERNAME"].flatMap { $0.isEmpty ? nil : $0 } ?? "e2e-returning-user"
@@ -101,20 +101,23 @@ class BlocksE2ETestCase: XCTestCase {
         return user
     }
 
-    /// Assert that `body` throws an `RPCError` whose server error name is `name`.
+    /// Assert that `body` throws an `ApiError` whose server error name is `name`; `inspect` gets
+    /// the error for further assertions.
     func assertThrowsBlocksError(
         _ name: String,
         file: StaticString = #filePath,
         line: UInt = #line,
-        _ body: () async throws -> Void
+        _ body: () async throws -> Void,
+        inspect: ((ApiError) -> Void)? = nil
     ) async {
         do {
             try await body()
             XCTFail("Expected \(name), but no error was thrown", file: file, line: line)
-        } catch let error as RPCError {
+        } catch let error as ApiError {
             XCTAssertEqual(error.name, name, "error: \(error.message)", file: file, line: line)
+            inspect?(error)
         } catch {
-            XCTFail("Expected RPCError \(name), got \(error)", file: file, line: line)
+            XCTFail("Expected ApiError \(name), got \(error)", file: file, line: line)
         }
     }
 }

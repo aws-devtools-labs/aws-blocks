@@ -1,11 +1,11 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
-// Requires blocks_runtime 0.1.5 or later.
+// Requires blocks_runtime 0.2.0 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
 
 // --- Models ---
 
@@ -182,9 +182,9 @@ class ConfirmSignInInput extends AlphaApiSetStateInput {
 
 // --- API Namespaces ---
 
-class AlphaApiApi {
+class AlphaApi {
   final BlocksClient _client;
-  AlphaApiApi(this._client);
+  AlphaApi(this._client);
 
   Future<bool> setState({required AlphaApiSetStateInput input}) async {
     final params = <dynamic>[
@@ -196,9 +196,9 @@ class AlphaApiApi {
 }
 
 
-class BetaApiApi {
+class BetaApi {
   final BlocksClient _client;
-  BetaApiApi(this._client);
+  BetaApi(this._client);
 
   Future<bool> setState({required AlphaApiSetStateInput input}) async {
     final params = <dynamic>[
@@ -213,13 +213,20 @@ class BetaApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final AlphaApiApi alphaApi;
-  late final BetaApiApi betaApi;
+  late final AlphaApi alphaApi;
+  late final BetaApi betaApi;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    alphaApi = AlphaApiApi(client);
-    betaApi = BetaApiApi(client);
+    _client = client;
+    alphaApi = AlphaApi(client);
+    betaApi = BetaApi(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 

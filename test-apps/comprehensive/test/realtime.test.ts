@@ -4,8 +4,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
-import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import type { api as apiType } from 'cdk-blocks';
 
 type Cursor = Parameters<typeof apiType.realtimePublishCursor>[0];
 
@@ -276,6 +276,61 @@ export function realtimeTests(getApi: () => typeof apiType) {
 			});
 		});
 
+		describe('Channel token principal binding', () => {
+			const cursor: Cursor = { userId: 'u1', x: 3, y: 4, color: 'green' };
+
+			async function firstMessage(channel: Awaited<ReturnType<typeof apiType.realtimeGetPrincipalChannel>>, publish: () => Promise<unknown>) {
+				return new Promise<Cursor>((resolve, reject) => {
+					const timer = globalThis.setTimeout(() => reject(new Error('No message within 10s')), 10000);
+					const sub = channel.subscribe((msg) => {
+						clearTimeout(timer);
+						sub.unsubscribe();
+						resolve(msg);
+					});
+					sub.established.then(publish).catch(reject);
+				});
+			}
+
+			test('a handle bound to a user subscribes and receives messages', async () => {
+				const api = getApi();
+				const channel = await api.realtimeGetPrincipalChannel('bound-ok', 'user-a');
+				assert.deepStrictEqual(await firstMessage(channel, () => api.realtimePublishToChannel('bound-ok', cursor)), cursor);
+			});
+
+			test("a channel token bound to one user is refused on another user's connection", async () => {
+				const api = getApi();
+				const channel = await api.realtimeGetMismatchedPrincipalChannel('bound-mismatch', 'user-a', 'user-b');
+				const sub = channel.subscribe(() => {});
+				await assert.rejects(
+					sub.established,
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
+					"a channel token bound to user-a must not subscribe on user-b's connection",
+				);
+				sub.unsubscribe();
+			});
+
+			test('getChannel rejects an empty principal', async () => {
+				const api = getApi();
+				await assert.rejects(
+					() => api.realtimeGetPrincipalChannel('bound-empty', ''),
+					(err: unknown) => isBlocksError(err, 'ValidationFailedException'),
+				);
+			});
+
+			test('revokeAccess refuses a channel token minted before it and accepts one minted after', async () => {
+				const api = getApi();
+				const { stale, fresh } = await api.realtimeRevokeBetweenHandles('bound-revoke', `revoked-user-${Date.now()}`);
+				const refused = stale.subscribe(() => {});
+				await assert.rejects(
+					refused.established,
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
+					'a channel token minted before revokeAccess must be refused',
+				);
+				refused.unsubscribe();
+				assert.deepStrictEqual(await firstMessage(fresh, () => api.realtimePublishToChannel('bound-revoke', cursor)), cursor);
+			});
+		});
+
 		describe('Subscribe Options Form', () => {
 			test('options form receives messages via onMessage', async () => {
 				const api = getApi();
@@ -441,7 +496,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 						const fresh = await api.realtimeGetRawDescriptor(channelName);
 						return { ...fresh, __blocks: 'realtime/channel' };
 					},
-				} satisfies import('aws-blocks').SubscribeOptions<Cursor>);
+				} satisfies import('cdk-blocks').SubscribeOptions<Cursor>);
 
 				try {
 					await sub.established;
@@ -567,12 +622,12 @@ export function realtimeTests(getApi: () => typeof apiType) {
 
 			test('DisconnectReason type is correctly constrained', () => {
 				// @ts-expect-error — 'user' is not a valid DisconnectReason
-				const _bad: import('aws-blocks').DisconnectReason = 'user';
+				const _bad: import('cdk-blocks').DisconnectReason = 'user';
 
-				const _good0: import('aws-blocks').DisconnectReason = 'client';
-				const _good1: import('aws-blocks').DisconnectReason = 'timeout';
-				const _good2: import('aws-blocks').DisconnectReason = 'error';
-				const _good3: import('aws-blocks').DisconnectReason = 'unknown';
+				const _good0: import('cdk-blocks').DisconnectReason = 'client';
+				const _good1: import('cdk-blocks').DisconnectReason = 'timeout';
+				const _good2: import('cdk-blocks').DisconnectReason = 'error';
+				const _good3: import('cdk-blocks').DisconnectReason = 'unknown';
 				assert.ok(true);
 			});
 		});

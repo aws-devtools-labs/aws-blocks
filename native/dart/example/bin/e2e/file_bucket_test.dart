@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:typed_data';
 import 'harness.dart';
 
@@ -31,6 +34,19 @@ void main() async {
     _bytesEqual(bytes2, binaryData),
     'binary content matches byte-for-byte',
   );
+
+  group('FileBucket: a failed transfer carries its HTTP status');
+  final missing = await blocks.api.fileGetHandle(path: '$prefix/missing.txt');
+  try {
+    await missing.download();
+    check(false, 'downloading a missing file throws');
+  } on FileTransferException catch (e) {
+    check(
+      e.statusCode == 404,
+      'a missing file is a FileTransferException with statusCode 404 '
+      '(got: ${e.statusCode}: ${e.message})',
+    );
+  }
 
   group('FileBucket: server-side put/get');
   await blocks.api.filePut(path: '$prefix/server.txt', content: 'server-side');

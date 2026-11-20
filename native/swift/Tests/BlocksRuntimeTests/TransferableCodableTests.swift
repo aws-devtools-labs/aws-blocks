@@ -98,24 +98,15 @@ final class TransferableCodableTests: XCTestCase {
         XCTAssertEqual(note, Note(id: "1", body: "hi"))
     }
 
-    func testChannelEncodesTheWireDescriptor() throws {
-        // The descriptor as the server sent it: the raw wsUrl, not the rewritten one with the connect token.
-        BlocksClient.baseHost = "192.168.1.5"
-        let channel = try JSONDecoder().decode(RealtimeChannel<Note>.self, from: Data(Self.channelJSON.utf8))
-        let encoded = try object(try JSONEncoder().encode(channel))
-        XCTAssertEqual(encoded, try object(Data(Self.channelJSON.utf8)))
-    }
-
-    func testFromJSONChannelEncodesTheWireDescriptor() throws {
+    /// Transferables are read-only: encoding one, decoded or built with `init`, throws.
+    func testEncodingAChannelThrows() throws {
+        let decoded = try JSONDecoder().decode(RealtimeChannel<Note>.self, from: Data(Self.channelJSON.utf8))
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(Self.channelJSON.utf8)) as? [String: Any])
-        let channel = RealtimeChannel<Note>.fromJSON(json) { try JSONDecoder().decode(Note.self, from: $0) }
-        XCTAssertEqual(try object(try JSONEncoder().encode(channel)), try object(Data(Self.channelJSON.utf8)))
-    }
-
-    func testConstructedChannelEncodesItsFields() throws {
-        let channel = RealtimeChannel<Note>(channel: "c", wsUrl: "wss://x/ws", token: "t") { _ in Note(id: "", body: "") }
-        let encoded = try object(try JSONEncoder().encode(channel))
-        XCTAssertEqual(encoded, ["__blocks": "realtime/channel", "channel": "c", "wsUrl": "wss://x/ws", "token": "t"] as NSDictionary)
+        let hydrated = RealtimeChannel<Note>.fromJSON(json) { try JSONDecoder().decode(Note.self, from: $0) }
+        let constructed = RealtimeChannel<Note>(channel: "c", wsUrl: "wss://x/ws", token: "t") { _ in Note(id: "", body: "") }
+        for channel in [decoded, hydrated, constructed] {
+            assertReadOnly(channel, tag: "realtime/channel")
+        }
     }
 
     func testChannelDecodeRejectsAnotherTransferable() {
@@ -135,7 +126,7 @@ final class TransferableCodableTests: XCTestCase {
 
     // MARK: - File handles
 
-    func testFileHandlesDecodeAndEncode() throws {
+    func testFileHandlesDecodeAndRefuseToEncode() throws {
         let download = #"{"__blocks":"file-bucket/download","url":"https://s3/get"}"#
         let upload = #"{"__blocks":"file-bucket/upload","url":"https://s3/put","contentType":"image/png"}"#
         let bareUpload = #"{"__blocks":"file-bucket/upload","url":"https://s3/put"}"#
@@ -146,9 +137,9 @@ final class TransferableCodableTests: XCTestCase {
 
         XCTAssertEqual(downloadHandle.getUrl(), "https://s3/get")
         XCTAssertEqual(uploadHandle.getUrl(), "https://s3/put")
-        XCTAssertEqual(try object(try JSONEncoder().encode(downloadHandle)), try object(Data(download.utf8)))
-        XCTAssertEqual(try object(try JSONEncoder().encode(uploadHandle)), try object(Data(upload.utf8)))
-        XCTAssertEqual(try object(try JSONEncoder().encode(bareUploadHandle)), try object(Data(bareUpload.utf8)))
+        XCTAssertEqual(bareUploadHandle.getUrl(), "https://s3/put")
+        assertReadOnly(downloadHandle, tag: "file-bucket/download")
+        assertReadOnly(uploadHandle, tag: "file-bucket/upload")
     }
 
     func testFileHandleDecodeThrowsWithoutAURLOrForAnotherTransferable() {
@@ -162,7 +153,7 @@ final class TransferableCodableTests: XCTestCase {
 
     // MARK: - Containers and nested models
 
-    func testModelHoldingTransferablesAtAnyDepthRoundTrips() throws {
+    func testModelHoldingTransferablesAtAnyDepthDecodes() throws {
         let channel = Self.channelJSON
         let json = """
         {"channel":\(channel),"channels":[\(channel),\(channel)],"byRoom":{"a":\(channel)},"maybe":\(channel),\
@@ -179,13 +170,13 @@ final class TransferableCodableTests: XCTestCase {
         XCTAssertEqual(board.inner.feed.wsUrl, "ws://localhost:3001/ws?token=ct")
         XCTAssertEqual(board.downloads.first?.getUrl(), "https://s3/get")
         XCTAssertEqual(board.upload?.getUrl(), "https://s3/put")
-        XCTAssertEqual(try object(try JSONEncoder().encode(board)), try object(Data(json.utf8)))
+        assertReadOnly(board, tag: "realtime/channel")
     }
 
     // MARK: - OIDCClient
 
     func testOIDCClientDecodesWithTheClientFromUserInfo() throws {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         let oidc = try client.makeDecoder().decode(OIDCClient<String>.self, from: Data(Self.oidcJSON.utf8))
 
         XCTAssertEqual(oidc.providers, ["google"])
@@ -193,12 +184,12 @@ final class TransferableCodableTests: XCTestCase {
         XCTAssertEqual(oidc.refreshPath, "/auth/exchange/refresh")
         XCTAssertEqual(oidc.signOutPath, "/auth/signout")
         XCTAssertEqual(oidc.providerConfigs["google"]?.clientId, "cid")
-        XCTAssertEqual(oidc.baseUrl, "http://localhost:3001/aws-blocks/api")
+        XCTAssertEqual(oidc.baseUrl, "http://localhost:3001/cdk-blocks/api")
         XCTAssertTrue(oidc.client === client)
     }
 
     func testMakeDecoderCarriesTheClient() {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         XCTAssertTrue(client.makeDecoder().userInfo[.blocksClient] as? BlocksClient === client)
     }
 
@@ -211,26 +202,19 @@ final class TransferableCodableTests: XCTestCase {
         }
     }
 
-    func testOIDCClientEncodesTheDescriptorItWasDecodedFrom() throws {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
-        let oidc = try client.makeDecoder().decode(OIDCClient<String>.self, from: Data(Self.oidcJSON.utf8))
-        XCTAssertEqual(try object(try JSONEncoder().encode(oidc)), try object(Data(Self.oidcJSON.utf8)))
-    }
-
-    func testConstructedOIDCClientEncodesItsFields() throws {
-        let oidc = OIDCClient<String>(
+    func testEncodingAnOIDCClientThrows() throws {
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
+        let decoded = try client.makeDecoder().decode(OIDCClient<String>.self, from: Data(Self.oidcJSON.utf8))
+        let constructed = OIDCClient<String>(
             exchangePath: "/e", refreshPath: "/r", signOutPath: "/s", providers: ["p"],
             providerConfigs: [:], baseUrl: "http://h", client: BlocksClient(url: "http://h")
         )
-        let encoded = try object(try JSONEncoder().encode(oidc))
-        XCTAssertEqual(encoded, [
-            "__blocks": "oidc/client", "exchangePath": "/e", "refreshPath": "/r", "signOutPath": "/s",
-            "providers": ["p"], "providerConfigs": [String: Any]()
-        ] as NSDictionary)
+        assertReadOnly(decoded, tag: "oidc/client")
+        assertReadOnly(constructed, tag: "oidc/client")
     }
 
     func testOIDCClientsInNestedModelsAndArraysDecode() throws {
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         let json = """
         {"primary":{"label":"Google","client":\(Self.oidcJSON)},\
         "options":[{"label":"A","client":\(Self.oidcJSON)},{"label":"B","client":\(Self.oidcJSON)}]}
@@ -241,14 +225,30 @@ final class TransferableCodableTests: XCTestCase {
         XCTAssertEqual(menu.options.map(\.label), ["A", "B"])
         XCTAssertTrue(menu.options[1].client.client === client)
         XCTAssertNil(menu.fallback)
-        XCTAssertEqual(try object(try JSONEncoder().encode(menu)), try object(Data(json.utf8)))
+        assertReadOnly(menu, tag: "oidc/client")
     }
 
     func testChannelMessagesDecodeWithTheOuterUserInfo() throws {
         // A message type holding an OIDC client hydrates it with the client of the decoder that decoded the channel.
-        let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api")
+        let client = BlocksClient(url: "http://localhost:3001/cdk-blocks/api")
         let channel = try client.makeDecoder().decode(RealtimeChannel<SignInOption>.self, from: Data(Self.channelJSON.utf8))
         let option = try channel.deserializer(Data(#"{"label":"L","client":\#(Self.oidcJSON)}"#.utf8))
         XCTAssertTrue(option.client.client === client)
+    }
+}
+
+/// Asserts that encoding `value` throws the read-only `EncodingError` for a `tag` transferable.
+private func assertReadOnly(
+    _ value: some Encodable,
+    tag: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    XCTAssertThrowsError(try JSONEncoder().encode(value), file: file, line: line) { error in
+        guard case EncodingError.invalidValue(_, let context) = error else {
+            return XCTFail("Expected EncodingError.invalidValue, got \(error)", file: file, line: line)
+        }
+        XCTAssertTrue(context.debugDescription.contains("read-only"), context.debugDescription, file: file, line: line)
+        XCTAssertTrue(context.debugDescription.contains(tag), context.debugDescription, file: file, line: line)
     }
 }

@@ -14,12 +14,12 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { type BlocksContext, isBlocksError } from '@aws-blocks/core';
+import { type BlocksContext, isBlocksError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './index.aws.js';
 import { Browser, makeAwsAuth, signInAs, TEST_POOL_ID } from './test-support/aws-harness.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const ROOT = { id: 'protect-app' };
 

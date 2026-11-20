@@ -1,5 +1,8 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
- * `@aws-blocks/hosting` plan layer — the service-agnostic core.
+ * `@aws-cdk-blocks/hosting` plan layer — the service-agnostic core.
  *
  * The barrel for the Ports & Adapters seam: the {@link HostingPlan} contracts
  * and the neutral {@link buildRouteTable} / {@link buildHostingPlan} builders.

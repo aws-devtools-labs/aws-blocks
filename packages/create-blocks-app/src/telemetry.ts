@@ -4,7 +4,7 @@
 /**
  * Lightweight, self-contained telemetry for create-blocks-app.
  *
- * This avoids depending on @aws-blocks/core (whose postinstall scripts
+ * This avoids depending on @aws-cdk-blocks/core (whose postinstall scripts
  * require devDependencies that aren't available when installed from the registry).
  */
 
@@ -13,6 +13,8 @@ import { spawn } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
+
+/** The hidden folder's pre-rename name. Mirrored from `@aws-cdk-blocks/core`, which this package does not depend on. */
 import { fileURLToPath } from 'node:url';
 import { debuglog } from 'node:util';
 
@@ -43,63 +45,99 @@ export function isCI(): boolean {
 }
 
 /**
- * Whether an `AWS_BLOCKS_DISABLE_TELEMETRY` value means "disabled".
+ * Keep behaviorally identical to packages/core/src/telemetry/cdk-consent.ts, which
+ * packages/core/src/telemetry/cdk-consent-cases.test.json enforces for both copies.
  *
- * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
+ * Mirrors the CDK CLI's `['true', '1'].includes(value ?? '')`, so the match is
+ * case-sensitive and untrimmed, unlike the template-metadata variable.
  */
-export function isDisableValue(value: string | undefined): boolean {
-  if (value === undefined) return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+export function isCdkDisableEnvValue(value: string | undefined): boolean {
+  return value === 'true' || value === '1';
+}
+
+/**
+ * Keep behaviorally identical to packages/core/src/telemetry/cdk-consent.ts, which
+ * packages/core/src/telemetry/cdk-consent-cases.test.json enforces for both copies.
+ *
+ * Mirrors the CDK CLI's `['false', false].includes(...)`, so only the JSON boolean
+ * `false` and the string `'false'` disable it.
+ */
+export function isCdkDisableContextValue(value: unknown): boolean {
+  return value === false || value === 'false';
+}
+
+/**
+ * Keep behaviorally identical to packages/core/src/telemetry/cdk-consent.ts.
+ *
+ * Resolves CDK's `cli-telemetry` context value the way CDK does: the first config
+ * file that has the key at all wins, so an enable in an earlier file shadows a
+ * disable in a later one. `cdk.json` and `~/.cdk.json` carry it inside a `context`
+ * element; the whole of `cdk.context.json` is a context bag, and that is where
+ * `cdk cli-telemetry --disable` writes it.
+ */
+export function isCdkTelemetryDisabled(): boolean {
+  // The two literals below are CDK_DISABLE_ENV_VAR and CDK_TELEMETRY_CONTEXT_KEY in
+  // packages/core/src/telemetry/cdk-consent.ts, which this file cannot import.
+  if (isCdkDisableEnvValue(process.env.CDK_DISABLE_CLI_TELEMETRY)) return true;
+
+  const read = (path: string): Record<string, unknown> | undefined => {
+    try {
+      return JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      return undefined;
+    }
+  };
+  const contextElement = (path: string): Record<string, unknown> | undefined => {
+    const context = read(path)?.context;
+    return typeof context === 'object' && context !== null ? (context as Record<string, unknown>) : undefined;
+  };
+
+  // Core resolves first and classifies later; shared cases keep both implementations equivalent.
+  for (const bag of [
+    contextElement(join(process.cwd(), 'cdk.json')),
+    read(join(process.cwd(), 'cdk.context.json')),
+    contextElement(join(homedir(), '.cdk.json')),
+  ]) {
+    const value = bag?.['cli-telemetry'];
+    if (value !== undefined) return isCdkDisableContextValue(value);
+  }
+  return false;
 }
 
 /**
  * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
  *
- * `telemetry.enabled: true` only expresses "no objection from this file"; it never
- * overrides another mechanism's disable. There is deliberately no `=== true` branch.
+ * AWS Blocks has no opt-out of its own: consent is CDK's.
+ *
+ * Project-level CDK config in `process.cwd()` takes precedence over `~/.cdk.json`, so
+ * scaffolding from inside an existing CDK project applies that project's setting.
  */
 export function isTelemetryEnabled(): boolean {
-  if (isDisableValue(process.env.AWS_BLOCKS_DISABLE_TELEMETRY)) return false;
-
-  try {
-    const projectConfigPath = join(process.cwd(), '.blocks', 'config.json');
-    const config = JSON.parse(readFileSync(projectConfigPath, 'utf-8'));
-    if (config.telemetry?.enabled === false) return false;
-  } catch { /* no config */ }
-
-  try {
-    const globalConfigPath = join(homedir(), '.blocks', 'config.json');
-    const config = JSON.parse(readFileSync(globalConfigPath, 'utf-8'));
-    if (config.telemetry?.enabled === false) return false;
-  } catch { /* no config */ }
-
-  return true;
+  return !isCdkTelemetryDisabled();
 }
 
 // ─── Identifiers ─────────────────────────────────────────────────────────────
 
 const FIRST_RUN_NOTICE = `
-AWS Blocks collects usage data to improve the product. Each event can include:
+AWS CDK Blocks collects usage data to improve the product. Each event can include:
   random installation and project IDs, and an event ID and timestamp;
   the command, its outcome, duration and error category (never the error message);
   your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent;
-  the AWS Blocks and CDK versions, the framework, and the template name and version;
+  the AWS CDK Blocks and CDK versions, the framework, and the template name and version;
   the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses,
   and how many of them are custom (custom Building Block names are never sent).
 Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code.
 The collection endpoint also receives your IP address, as with any HTTPS request.
 It is not stored, except in logs of requests that the endpoint's firewall blocks.
 Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years.
-To opt out everywhere, export AWS_BLOCKS_DISABLE_TELEMETRY=1 (accepts 1, true, or yes, case-insensitive),
-or run one of these inside an AWS Blocks app:
-  npx --no -- cdk-blocks telemetry disable --global
-  npx --no -- blocks-telemetry --disable --global
-Without --global, these commands opt out the current app only.
+Telemetry follows your CDK CLI telemetry setting, and AWS CDK Blocks has no separate opt-out.
+To opt out of both, run cdk cli-telemetry --disable, or export CDK_DISABLE_CLI_TELEMETRY=1.
+CDK documents those settings at
+https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out
 `;
 
 function getInstallationId(): string {
-  const filePath = join(homedir(), '.blocks', 'telemetry', 'installation-id');
+  const filePath = join(homedir(), '.cdk-blocks', 'telemetry', 'installation-id');
   try {
     const existing = readFileSync(filePath, 'utf-8').trim();
     if (existing) return existing;
@@ -283,7 +321,7 @@ export async function trackCommand(
     throw error;
   } finally {
     // Re-read consent: an opt-out can land while fn() runs. A bare `return` here would
-    // swallow the rethrow above.
+    // swallow the rethrow above. No projectRoot: cwd is where a scaffold's CDK config sits.
     if (isTelemetryEnabled()) {
       const duration = Date.now() - startTime;
 

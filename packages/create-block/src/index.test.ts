@@ -79,10 +79,10 @@ describe('kebab derivation', () => {
 });
 
 describe('name derivation by mode', () => {
-	test('contributor uses @aws-blocks scope', () => {
+	test('contributor uses @aws-cdk-blocks scope', () => {
 		const n = deriveNames('SearchIndex', 'contributor', 'ignored');
 		assert.strictEqual(n.folder, 'bb-search-index');
-		assert.strictEqual(n.pkgName, '@aws-blocks/bb-search-index');
+		assert.strictEqual(n.pkgName, '@aws-cdk-blocks/bb-search-index');
 	});
 	test('external uses the given scope', () => {
 		const n = deriveNames('SearchIndex', 'external', 'acme');
@@ -120,6 +120,14 @@ describe('marker insertion', () => {
 		const b = insertBetweenMarkers(a, "export { B } from '@x/bb-b';");
 		assert.match(b, /bb-a/);
 		assert.match(b, /bb-b/);
+	});
+	test('drops trailing whitespace before the markers and inside the block', () => {
+		const entry = "export { Foo } from '@x/bb-foo';";
+		const out = insertBetweenMarkers(`x${' '.repeat(50_000)}\n\t \n`, entry);
+		assert.strictEqual(
+			out,
+			`x\n\n// <!-- BEGIN:generated-block-exports -->\n${entry}\n// <!-- END:generated-block-exports -->\n`,
+		);
 	});
 });
 

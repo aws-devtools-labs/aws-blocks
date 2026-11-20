@@ -1,12 +1,12 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
-// Requires blocks_runtime 0.1.5 or later.
+// Requires blocks_runtime 0.2.0 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
-export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
+export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
+export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle, FileTransferException, RealtimeException, RealtimeChannelClosedException, RealtimeConnectionException, RealtimeSubscriptionEndedException, TransferableException, InvalidDescriptorException;
 export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;
 
 // --- Models ---
@@ -71,8 +71,8 @@ class Attachment {
   Map<String, dynamic> toJson() {
     return {
       'name': name,
-      'file': file.toJson(),
-      'previews': previews.map((e) => e.toJson()).toList(),
+      'file': file,
+      'previews': previews,
     };
   }
 
@@ -111,7 +111,7 @@ class SignInOption {
   Map<String, dynamic> toJson() {
     return {
       'label': label,
-      'client': client.toJson(),
+      'client': client,
     };
   }
 
@@ -219,9 +219,9 @@ class Lobby {
 
   Map<String, dynamic> toJson() {
     return {
-      'rooms': rooms.toJson(),
-      'roomGroups': roomGroups.map((e) => e.toJson()).toList(),
-      'uploadsByRoom': uploadsByRoom.map((k, v) => MapEntry(k, v.toJson())),
+      'rooms': rooms,
+      'roomGroups': roomGroups,
+      'uploadsByRoom': uploadsByRoom,
     };
   }
 
@@ -259,8 +259,8 @@ class SignInBoard {
 
   Map<String, dynamic> toJson() {
     return {
-      'feeds': feeds.map((e) => e.toJson()).toList(),
-      'clientsByTenant': clientsByTenant.map((k, v) => MapEntry(k, v.toJson())),
+      'feeds': feeds,
+      'clientsByTenant': clientsByTenant,
     };
   }
 
@@ -303,7 +303,7 @@ class ProviderDirectory {
     return {
       'title': title,
       for (final e in additionalProperties.entries)
-        if (!const {'title'}.contains(e.key)) e.key: e.value.toJson(),
+        if (!const {'title'}.contains(e.key)) e.key: e.value,
     };
   }
 
@@ -337,7 +337,7 @@ class GetChatFeedResult {
 
   Map<String, dynamic> toJson() {
     return {
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -370,7 +370,7 @@ class GetCounterFeedResult {
 
   Map<String, dynamic> toJson() {
     return {
-      'channel': channel.toJson(),
+      'channel': channel,
     };
   }
 
@@ -388,9 +388,9 @@ class GetCounterFeedResult {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<RealtimeChannel<Attachment>> getAttachmentFeed() async {
     final result = await _client.call('api.getAttachmentFeed', const <dynamic>[]);
@@ -437,11 +437,18 @@ class ApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    api = ApiApi(client);
+    _client = client;
+    api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 

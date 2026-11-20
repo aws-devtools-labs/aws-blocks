@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for the Bedrock invoke-layer retry classifier (bedrock-retry.mjs). `isRetryableModelError`
 // decides whether a throttled invoke RETRIES (throttle/transient) or GIVES UP (real outcome); these
 // pin that boundary. Run under bare `node --test`.

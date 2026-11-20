@@ -8,9 +8,9 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
-import { markAddedChildrenBlocksOwned, registerSharedConfig } from '@aws-blocks/core/cdk/internal';
-import type { ScopeParent } from '@aws-blocks/core';
+import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-cdk-blocks/core/cdk';
+import { markAddedChildrenBlocksOwned, registerSharedConfig } from '@aws-cdk-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { validateAppSettingOptions } from './validation.js';
 
@@ -61,7 +61,7 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
-	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
+	 * (e.g. a connection string stored by `npm run db -- connect --stage`). The
 	 * construct does not create, seed, tag, or delete it — it only grants the app
 	 * **read-only** access (`ssm:GetParameter`, plus `kms:Decrypt` when `secret`)
 	 * and registers the name for config resolution.
@@ -113,8 +113,8 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 
 		if (options.secret) {
 			// ── SecureString ────────────────────────────────────────────────
-			// Externally-owned secrets (e.g. the connection string seeded by
-			// ensureSecrets) are NOT enrolled in the bulk-init: it would
+			// Externally-owned secrets (e.g. a connection string stored before
+			// the deploy) are NOT enrolled in the bulk-init: it would
 			// PutParameter a random placeholder over a parameter we don't own and
 			// then fail tagging it (AddTagsToResource needs ssm:GetParameters).
 			// We only need runtime read access, granted below.
@@ -166,16 +166,15 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 		}));
 
 		// Pass the parameter name to the runtime via config registry. The key is
-		// built from the block's local `id`, not its `fullId` (db-pull's generated
-		// code reads `BLOCKS_SSM_PARAM_DB_URL`, and the key is part of existing
-		// deployed config), so two settings with one local id under different scopes
+		// built from the block's local `id`, not its `fullId` (the key is part of
+		// existing deployed config), so two settings with one local id under different scopes
 		// share it; the AppSetting runtime itself resolves its parameter by `fullId`.
 		// It therefore keeps last-one-wins instead of registerConfig's conflict check.
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 		registerSharedConfig(this, envKey, parameterName);
 	}
 
-	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-cdk-blocks/core/cdk`).
 	get(..._args: unknown[]): never { return synthGuard('AppSetting', 'get'); }
 	put(..._args: unknown[]): never { return synthGuard('AppSetting', 'put'); }
 }

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { dirname, join } from 'node:path';
@@ -31,6 +34,8 @@ const SECRET_PATHS = [
   'credentials',
   'config/credentials',
   '.aws/credentials',
+  '.cdk-blocks/local/data/settings.json',
+  // Left on disk and still read, so an older CLI writing here must not be stageable.
   '.bb-data/settings.json',
 ];
 
@@ -78,6 +83,12 @@ describe('create-blocks-app template .gitignore covers secrets', () => {
         assert.strictEqual(checkIgnore(path).status, 1, `${name}/gitignore must not ignore ${path}`);
       }
     });
+
+    // Adding AWS Blocks to an existing project ignores `node_modules` too; keep the two in step.
+    it(`template "${name}" ignores node_modules`, () => {
+      copyFileSync(join(templateDir, 'gitignore'), join(repo, '.gitignore'));
+      assert.strictEqual(checkIgnore('node_modules/pkg/index.js').status, 0);
+    });
   }
 });
 
@@ -97,7 +108,7 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       cwd: dir,
       encoding: 'utf-8',
       timeout: 30_000,
-      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop' },
+      env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop' },
     });
     assert.strictEqual(result.status, 0, `create-blocks-app failed: ${result.stderr}`);
     const init = spawnSync('git', ['init', '-q', dir]);
@@ -184,10 +195,10 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       '.gitignore': 'node_modules\n.env\n',
     });
     try {
-      assert.match(stdout, /MODIFY {2}\.gitignore .*secret and key-material patterns/);
+      assert.match(stdout, /MODIFY {2}\.gitignore .*node_modules if missing, and secret and key-material patterns/);
       const modified = stdout.split('\n').find((line) => line.includes('Modified .gitignore'));
       assert.ok(modified, `no "Modified .gitignore" line in:\n${stdout}`);
-      for (const entry of ['.blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
+      for (const entry of ['.cdk-blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
         assert.ok(modified.includes(entry), `"${modified}" does not list ${entry}`);
       }
       assert.ok(!/[(,] ?\.env[,)]/.test(modified), `"${modified}" lists .env, which the project already ignores`);
@@ -229,6 +240,122 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       }
     });
   }
+
+  // The scaffold adds dependencies, so the next `npm install` creates
+  // `node_modules`; without a line for it, `git add -A` stages the directory.
+  const withoutNodeModules: Record<string, Record<string, string>> = {
+    'a project with no .gitignore': { 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }) },
+    'a project whose .gitignore has no node_modules line': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'dist\n*.log\n',
+    },
+    'an Amplify Gen 2 project': {
+      'package.json': JSON.stringify({ name: 'amplify-app', version: '1.0.0' }),
+      'amplify/backend.ts': 'export const backend = defineBackend({});',
+    },
+    // Neither a line for one package's `node_modules` nor `dist/*` covers the root one.
+    'a project whose .gitignore only ignores a nested node_modules': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'packages/site/node_modules\ndist/*\n',
+    },
+    // Only literal lines count as covering it. Git reads `[!n]` as "not n", `n*x*s`
+    // does not match, and leading spaces are part of the pattern.
+    'a project whose .gitignore has [!n]ode_modules': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '[!n]ode_modules\n',
+    },
+    'a project whose .gitignore has n*x*s': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'n*x*s\n',
+    },
+    'a project whose .gitignore has node_modules after leading spaces': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '  node_modules\n',
+    },
+    // Git strips trailing spaces only; a trailing tab is part of the pattern.
+    'a project whose .gitignore has node_modules before a trailing tab': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'node_modules\t\n',
+    },
+    // A negation that reverses no earlier line is no choice about node_modules.
+    'a project whose .gitignore only has !node_modules/*': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '!node_modules/*\n',
+    },
+  };
+  for (const [label, files] of Object.entries(withoutNodeModules)) {
+    it(`ignores node_modules in ${label}`, () => {
+      const dir = addBlocks(files);
+      try {
+        assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), []);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  // An explicit `!node_modules` (vendored dependencies) is the project's choice: git
+  // applies the last matching line, so appending `node_modules` would reverse it. The
+  // same goes for `!node_modules/*` after `node_modules/*`, which leaves the directory
+  // itself included, so git re-includes its contents.
+  const unignoring = [
+    'node_modules\n!node_modules\n',
+    '!node_modules\n',
+    'node_modules/*\n!node_modules/*\n',
+    'node_modules/**\n!node_modules/**\n',
+  ];
+  for (const gitignore of unignoring) {
+    it(`adds no node_modules line when the existing .gitignore is ${JSON.stringify(gitignore)}`, () => {
+      const { dir, stdout } = runAddBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': gitignore });
+      try {
+        const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+        assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), gitignore.trimEnd().split('\n'));
+        assert.match(stdout, /Left node_modules as your \.gitignore configures it/);
+        assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), ['node_modules/pkg/index.js'], 'git agrees it is un-ignored');
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  const covering = ['node_modules', 'node_modules/', '/node_modules', '/node_modules/', 'node_modules/*', 'node_modules/**', '**/node_modules'];
+  for (const line of covering) {
+    it(`adds no node_modules line when the existing .gitignore has ${line}`, () => {
+      const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': `${line}\n` });
+      try {
+        const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+        assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), [line]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  // Git can't re-include a file whose parent directory is excluded, so `!node_modules/*`
+  // after `node_modules` leaves it ignored: no line, and no "un-ignored" note.
+  it('treats node_modules followed by !node_modules/* as ignored', () => {
+    const gitignore = 'node_modules\n!node_modules/*\n';
+    const { dir, stdout } = runAddBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': gitignore });
+    try {
+      const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
+      assert.deepStrictEqual(lines.filter((l) => l.includes('node_modules')), gitignore.trimEnd().split('\n'));
+      assert.doesNotMatch(stdout, /Left node_modules/);
+      assert.deepStrictEqual(notIgnored(dir, ['node_modules/pkg/index.js']), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('adds no node_modules line to a CRLF .gitignore that has one', () => {
+    const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': 'node_modules\r\n' });
+    try {
+      const gitignore = readFileSync(join(dir, '.gitignore'), 'utf-8');
+      assert.deepStrictEqual(gitignore.split('\r\n').filter((l) => l.includes('node_modules')), ['node_modules']);
+      assert.ok(!/(^|[^\r])\n/.test(gitignore), 'the .gitignore has a bare \\n line ending');
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });
 
 /** `source` with `/* … *\/` and `// …` comments removed, so a doc comment can't satisfy a check on the code. */
@@ -245,7 +372,7 @@ function methodBody(source: string, method: string): string {
 
 describe('create-blocks-app template key-value methods require auth', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const source = stripComments(readFileSync(backend, 'utf-8'));
     // Deny by default: an `auth.protect` namespace runs its methods only after the
@@ -265,21 +392,27 @@ describe('create-blocks-app template key-value methods require auth', () => {
   }
 });
 
-describe('create-blocks-app auth template defines its signed-in methods with auth.protect', () => {
-  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'auth', 'aws-blocks', 'index.ts'), 'utf-8'));
-  const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
+describe('create-blocks-app auth templates define their signed-in methods with auth.protect', () => {
+  const protectedMethods: Record<string, string[]> = {
+    auth: ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo'],
+    'auth-oidc': ['getValue', 'setValue', 'whoAmI'],
+  };
+  for (const [name, methodNames] of Object.entries(protectedMethods)) {
+    const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts'), 'utf-8'));
+    const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
 
-  it('the template\'s api namespace is auth.protect(...)', () => {
-    assert.ok(protect, 'auth template: export const api = auth.protect(scope, \'api\', { ... }) not found');
-  });
-
-  const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
-  for (const method of ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo']) {
-    it(`auth template ${method} is a protected method (in methods, not public)`, () => {
-      assert.strictEqual(parts.length, 2, 'auth template: a single `methods: (context, user) => ({` factory');
-      assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
-      assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+    it(`the ${name} template's api namespace is auth.protect(...)`, () => {
+      assert.ok(protect, `${name} template: export const api = auth.protect(scope, 'api', { ... }) not found`);
     });
+
+    const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
+    for (const method of methodNames) {
+      it(`${name} template ${method} is a protected method (in methods, not public)`, () => {
+        assert.strictEqual(parts.length, 2, `${name} template: a single \`methods: (context, user) => ({\` factory`);
+        assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
+        assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+      });
+    }
   }
 });
 
@@ -452,8 +585,11 @@ function callsSessionGatedAuth(body: ts.Block): boolean {
 
 describe('create-blocks-app template RPC methods require auth unless listed as public', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
+    // A template whose only RPC surface is `auth.protect` has no ApiNamespace to
+    // check here; the auth.protect test above checks which of its methods are public.
+    if (apiMethods(backend).length === 0 && /export const api = auth\.protect\(/.test(readFileSync(backend, 'utf-8'))) continue;
 
     it(`template "${name}" gates every API method that is not listed in UNGATED`, () => {
       const methods = apiMethods(backend);
@@ -487,6 +623,93 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
     it(`template "${name}" never spreads or Object.assigns a caller's argument into an object`, () => {
       const spreads = apiMethods(backend).flatMap(argumentSpreads);
       assert.deepStrictEqual(spreads, [], `${name}: copy the fields a caller may set instead of spreading the argument`);
+    });
+  }
+});
+
+/**
+ * Template RawRoutes whose handler does not start with `requireAuth`/`requireRole`,
+ * keyed `<METHOD> <path>`, each with its reason. A RawRoute is a public,
+ * internet-reachable endpoint just like an ApiNamespace method, so listing one
+ * here is the same security decision as listing a method in UNGATED.
+ */
+const PUBLIC_ROUTES: Record<string, Record<string, string>> = {
+  'api-only': { 'GET /healthz': 'public: liveness probe for load balancers, touches no data' },
+};
+
+interface TemplateRoute {
+  /** `<METHOD> <path>` */
+  name: string;
+  body?: ts.Block;
+}
+
+/** Every `new RawRoute(scope, '<id>', { method, path, handler })` in `file`. */
+function rawRoutes(file: string): TemplateRoute[] {
+  const sourceFile = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true);
+  const routes: TemplateRoute[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isNewExpression(node) && node.expression.getText(sourceFile) === 'RawRoute') {
+      const options = node.arguments?.[2];
+      assert.ok(options && ts.isObjectLiteralExpression(options), `${file}: RawRoute options must be an object literal`);
+      const property = (key: string) =>
+        options.properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText(sourceFile) === key);
+      const literal = (key: string) => {
+        const p = property(key);
+        assert.ok(
+          p && ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer),
+          `${file}: RawRoute ${key} must be a string literal`,
+        );
+        return p.initializer.text;
+      };
+      const body = handlerBody(options, sourceFile);
+      routes.push({ name: `${literal('method')} ${literal('path')}`, body });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return routes;
+}
+
+/**
+ * The block body of a RawRoute `handler` written inline as an arrow function,
+ * a function expression or a method shorthand. A concise-arrow or referenced
+ * handler has no inline block to check, so it returns undefined and is
+ * reported as ungated.
+ */
+function handlerBody(options: ts.ObjectLiteralExpression, sourceFile: ts.SourceFile): ts.Block | undefined {
+  const handler = options.properties.find((p) => p.name?.getText(sourceFile) === 'handler');
+  if (handler && ts.isMethodDeclaration(handler)) return handler.body;
+  if (!handler || !ts.isPropertyAssignment(handler)) return undefined;
+  const fn = handler.initializer;
+  if ((ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isBlock(fn.body)) return fn.body;
+  return undefined;
+}
+
+/** Every `.ts` file under a template's `cdk-blocks/` directory, skipping `node_modules`. */
+function templateBackendFiles(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf-8' })
+    .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
+    .map((f) => join(dir, f));
+}
+
+describe('create-blocks-app template RawRoutes require auth unless listed as public', () => {
+  for (const name of templateNames) {
+    const dir = join(TEMPLATES_DIR, name, 'cdk-blocks');
+    if (!existsSync(dir)) continue;
+
+    it(`template "${name}" gates every RawRoute that is not listed in PUBLIC_ROUTES`, () => {
+      const allowed = PUBLIC_ROUTES[name] ?? {};
+      const ungated = templateBackendFiles(dir)
+        .flatMap(rawRoutes)
+        .filter((r) => !r.body || !gatesFirst(r.body))
+        .map((r) => r.name);
+      assert.deepStrictEqual(
+        ungated.filter((r) => !(r in allowed)),
+        [],
+        `${name}: start these handlers with \`await auth.requireAuth(context)\`, or list them in PUBLIC_ROUTES with the reason they are safe to call signed out`,
+      );
+      const stale = Object.keys(allowed).filter((r) => !ungated.includes(r));
+      assert.deepStrictEqual(stale, [], `${name}: remove these from PUBLIC_ROUTES (gated or no longer present)`);
     });
   }
 });
@@ -550,11 +773,9 @@ describe('create-blocks-app template methods that return a presigned URL require
   // holds under --test-name-pattern / --test-only too.
   const callsPerTemplate: Record<string, number> = {};
   for (const name of templateNames) {
-    const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
+    const dir = join(TEMPLATES_DIR, name, 'cdk-blocks');
     if (!existsSync(dir)) continue;
-    const files = readdirSync(dir, { recursive: true, encoding: 'utf-8' })
-      .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
-      .map((f) => join(dir, f));
+    const files = templateBackendFiles(dir);
     callsPerTemplate[name] = files.reduce((total, file) => total + presignedUrlCalls(file).length, 0);
 
     it(`template "${name}" signs URLs only inside API methods that gate first`, () => {
@@ -610,6 +831,45 @@ describe('ungatedPresignedUrlCalls', () => {
   });
 });
 
+describe('rawRoutes', () => {
+  it('passes gated handlers and flags ungated, concise-arrow and referenced handlers', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cba-rawroutes-'));
+    const file = join(dir, 'index.ts');
+    writeFileSync(
+      file,
+      `const probe = async (context) => context.response.send({});
+      new RawRoute(scope, 'gated', { method: 'GET', path: '/gated', handler: async (context) => { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-method', { method: 'GET', path: '/gated-method', async handler(context) { await auth.requireAuth(context); context.response.send({}); } });
+      new RawRoute(scope, 'gated-function', { method: 'GET', path: '/gated-function', handler: async function (context) { await auth.requireRole(context, 'admin'); context.response.send({}); } });
+      new RawRoute(scope, 'open', { method: 'POST', path: '/open', handler: async (context) => { context.response.send({}); } });
+      new RawRoute(scope, 'open-method', { method: 'POST', path: '/open-method', async handler(context) { context.response.send({}); } });
+      new RawRoute(scope, 'concise', { method: 'GET', path: '/concise', handler: async (context) => context.response.send({}) });
+      new RawRoute(scope, 'referenced', { method: 'GET', path: '/referenced', handler: probe });`,
+    );
+    try {
+      const routes = rawRoutes(file);
+      assert.deepStrictEqual(
+        routes.map((r) => r.name),
+        [
+          'GET /gated',
+          'GET /gated-method',
+          'GET /gated-function',
+          'POST /open',
+          'POST /open-method',
+          'GET /concise',
+          'GET /referenced',
+        ],
+      );
+      assert.deepStrictEqual(
+        routes.filter((r) => !r.body || !gatesFirst(r.body)).map((r) => r.name),
+        ['POST /open', 'POST /open-method', 'GET /concise', 'GET /referenced'],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('argumentSpreads', () => {
   it('flags every way a method copies a caller argument wholesale into an object', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cba-spreads-'));
@@ -645,7 +905,7 @@ describe('argumentSpreads', () => {
 // explicit set of content types.
 describe('create-blocks-app template file buckets are versioned and uploads are typed', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const source = stripComments(readFileSync(backend, 'utf-8'));
     if (!source.includes('new FileBucket(')) continue;
@@ -668,7 +928,7 @@ describe('create-blocks-app template file buckets are versioned and uploads are 
 });
 
 describe('create-blocks-app demo template scopes per-user data', () => {
-  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'aws-blocks', 'index.ts'), 'utf-8'));
+  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'cdk-blocks', 'index.ts'), 'utf-8'));
 
   it('demo KV keys use an encoded, prefixed per-user namespace', () => {
     // `user:` keeps user keys apart from app keys (`job-ran:`); encoding stops a
@@ -686,9 +946,41 @@ describe('create-blocks-app demo template scopes per-user data', () => {
   });
 });
 
+describe('create-blocks-app template email senders are explicit placeholders, not example.com', () => {
+  // example.com/.net/.org can never be verified as an SES identity, so an app that
+  // keeps such a sender fails every send once deployed. Templates name the sender
+  // in one constant, flagged as a placeholder to replace before production.
+  for (const name of templateNames) {
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
+    if (!existsSync(backend)) continue;
+    const raw = readFileSync(backend, 'utf-8');
+    const source = stripComments(raw);
+    if (!/new EmailClient\(/.test(source)) continue;
+
+    it(`template "${name}" does not send from an example.com, example.net or example.org address`, () => {
+      assert.doesNotMatch(source, /['"`][^'"`]*@(?:[\w-]+\.)*example\.(?:com|net|org)['"`]/i);
+    });
+
+    it(`template "${name}" passes its sender through a named constant marked for replacement`, () => {
+      // Each `new EmailClient(...)` statement, up to its closing `);`, so a call inside the
+      // options (e.g. `configurationSet: name()`) doesn't cut the match short.
+      const constructions = [...source.matchAll(/new EmailClient\(([\s\S]*?)\);/g)];
+      assert.ok(constructions.length > 0, `${name}: expected a new EmailClient(...) statement`);
+      for (const [statement, args] of constructions) {
+        const match = /fromAddress:\s*([A-Z_][A-Z0-9_]*)\b/.exec(args);
+        assert.ok(match, `${name}: fromAddress should be a named constant, not an inline string, in ${statement}`);
+        const declaration = new RegExp(`const ${match[1]} = '([^']+)'`).exec(source);
+        assert.ok(declaration, `${name}: ${match[1]} should be declared as a string constant`);
+        assert.match(declaration[1], /\.invalid$/, `${name}: the placeholder sender should be on the reserved .invalid domain`);
+      }
+      assert.match(raw, /verified SES identity before deploying to\s+(?:\/\/\s*)?production/, `${name}: say to replace the sender before production`);
+    });
+  }
+});
+
 describe('create-blocks-app template cookies are fixed-name, HttpOnly, SameSite=Lax', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const source = stripComments(readFileSync(backend, 'utf-8'));
     if (!/set-cookie/i.test(source)) continue;
@@ -711,7 +1003,7 @@ describe('create-blocks-app template cookies are fixed-name, HttpOnly, SameSite=
   }
 
   it('demo template applies its cookie attributes to every set-cookie header', () => {
-    const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'aws-blocks', 'index.ts'), 'utf-8'));
+    const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'cdk-blocks', 'index.ts'), 'utf-8'));
     const calls = [...source.matchAll(/headers\.set\(\s*'set-cookie',([\s\S]*?)\);/g)];
     assert.ok(calls.length >= 2, 'expected the setCookie and deleteCookie set-cookie calls');
     for (const [call, header] of calls) {

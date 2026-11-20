@@ -1,11 +1,11 @@
-# @aws-blocks/bb-compute
+# @aws-cdk-blocks/bb-compute
 
 The `Compute` Building Block is the single surface for choosing where a workload runs.
 State the compute `type` and its options; Blocks maps the type to the AWS
 service that backs it. The service name never appears in your code.
 
 ```ts
-import { Compute } from '@aws-blocks/blocks';
+import { Compute } from 'aws-cdk-blocks';
 
 // Serverless (Lambda today): pay-as-you-go, per-request.
 const api = new Compute(scope, 'api', { type: 'serverless', memory: 512 });
@@ -136,12 +136,25 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 }), { compute: reportsCompute });
 ```
 
+- **What placement guarantees.** By default, placing a namespace on its own
+  compute is a **routing preference, not a boundary**. The namespace's own path
+  goes to its compute, but the bare `POST /cdk-blocks/api` endpoint, served by
+  the default compute, runs **any** namespace named in the request body. So
+  anyone who can call your API can run a placed namespace on the default
+  compute instead: with the default compute's memory and timeout, outside the
+  container you placed it on, and outside the app's VPC unless you set
+  `defaults.vpc` (only then does the default compute join it).
+  Your per-method `requireAuth` and `requireRole` checks still run either way.
+  To make each compute refuse namespaces placed elsewhere, set
+  `strictNamespacePlacement: true` in the stack's `defaults`, as "Clients don't
+  change" below describes. It is `false` in both presets. Neither setting gives a namespace
+  its own IAM permissions; see "It's placement, not isolation" below.
 - **Clients don't change.** `reports.build('2026-10')` still calls
-  `POST /aws-blocks/api/reports` — from the TypeScript client and from the
+  `POST /cdk-blocks/api/reports` — from the TypeScript client and from the
   Swift, Kotlin and Dart clients alike — and the stack's shared API gateway
   routes that path to the namespace's compute. It works the same on every
   `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain. A call
-  to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a native
+  to the bare `/cdk-blocks/api` endpoint — a raw HTTP call, or one from a native
   client released before per-namespace paths — still runs on the default
   compute, and synth warns (`blocks:apigateway:bare-endpoint-serves-placed-namespaces`).
   Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the
@@ -195,7 +208,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   - The load balancer allows 100 namespaces by default (synth warns past that;
     the quota can be raised), and an export name can be at most 112 characters
     (the load balancer's 128-character rule path limit, minus the 16-character
-    `/aws-blocks/api/` prefix).
+    `/cdk-blocks/api/` prefix).
 
   Through a Blocks CloudFront front door, `ctx.request.url` is the CloudFront
   (or custom-domain) URL in a container namespace and in a namespace on a
@@ -203,7 +216,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   both report the gateway's host.
 - **Everything else stays on the default compute:** namespaces with no
   `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
-  routes (`/aws-blocks/auth/*`).
+  routes (`/cdk-blocks/auth/*`).
 
 ## Local development
 

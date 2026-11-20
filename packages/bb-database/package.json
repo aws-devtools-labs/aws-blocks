@@ -1,6 +1,6 @@
 {
-  "name": "@aws-blocks/bb-database",
-  "version": "0.1.0",
+  "name": "@aws-cdk-blocks/bb-database",
+  "version": "1.0.0-rc.0",
   "keywords": [
     "aws-blocks",
     "database",
@@ -12,12 +12,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "url": "git+https://github.com/aws/cdk-blocks.git",
     "directory": "packages/bb-database"
   },
-  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-database#readme",
+  "homepage": "https://github.com/aws/cdk-blocks/tree/main/packages/bb-database#readme",
   "bugs": {
-    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+    "url": "https://github.com/aws/cdk-blocks/issues"
   },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
@@ -55,10 +55,13 @@
     "test": "node --test 'dist/**/*.test.js'"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.3.0",
-    "@aws-blocks/core": "^0.8.0",
-    "@aws-blocks/data-common": "^0.1.6",
+    "@aws-cdk-blocks/bb-app-setting": "^1.0.0-rc.0",
+    "@aws-cdk-blocks/bb-logger": "^1.0.0-rc.0",
+    "@aws-cdk-blocks/core": "^1.0.0-rc.0",
+    "@aws-sdk/client-rds-data": "^3.1156.0",
     "@aws-sdk/client-s3": "^3.700.0",
+    "@aws-sdk/client-secrets-manager": "^3.1156.0",
+    "@aws-sdk/client-ssm": "^3.1156.0",
     "@aws-sdk/dsql-signer": "^3.700.0",
     "@aws-sdk/rds-signer": "^3.700.0",
     "@aws/dsql-lint": "^0.2.20",
@@ -83,5 +86,8 @@
     "kysely": {
       "optional": true
     }
+  },
+  "bin": {
+    "bb-database": "./dist/cli.js"
   }
 }

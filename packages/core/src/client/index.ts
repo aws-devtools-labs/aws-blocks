@@ -4,8 +4,10 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { BLOCKS_SANDBOX_PREFIX } from '../constants.js';
 import { contextFetch } from './fetch-store.js';
 import { fetchWithStaleConnectionRetry } from './stale-connection.js';
+import { legacyDeployedStage } from './legacy-config.js';
 
 const IS_SSR = typeof window === 'undefined';
 
@@ -47,7 +49,7 @@ async function resolveApiUrl(): Promise<string> {
   function isInvalidUrl(url: string): boolean {
     if (!url || typeof url !== 'string' || !url.trim()) return true;
     if (url === 'undefined' || url.startsWith('undefined')) return true;
-    // Relative URLs (e.g. '/aws-blocks/api') are valid for browser fetch
+    // Relative URLs (e.g. '/cdk-blocks/api') are valid for browser fetch
     if (url.startsWith('/')) return false;
     try {
       const parsed = new URL(url);
@@ -104,22 +106,52 @@ async function resolveApiUrl(): Promise<string> {
     }
   }
 
-  // 3. Node.js: read config file from filesystem
+  // 3. Node.js: read the config file a local dev server writes (`npm run dev`, or
+  //    the one `npm run sandbox` runs). A deploy never writes it: it records its
+  //    URL in `config.<stage>.json`, so the local loop never targets AWS by accident.
+  //    A file an older deploy wrote is refused, never used (see legacyDeployedStage).
+  // `process.getBuiltinModule` (Node.js 22.3 or later) loads `fs` synchronously
+  // without a dynamic `import()`. This module is also the browser / React
+  // Native entry: a static `node:fs` import breaks those bundles, and a dynamic
+  // `import()` left in place by a bundler (Expo's Metro honors `webpackIgnore`)
+  // fails to compile under Hermes, even though this branch never runs there.
+  // Node.js older than 22.3 has no way to load `fs` here, so it skips the file;
+  // the error below then says so.
+  let configFileNeedsNewerNode = false;
   if (typeof process !== 'undefined' && process.versions?.node) {
-    try {
-      const fs = await import(/* webpackIgnore: true */ 'node:fs');
-      const config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-      const validated = validateAndCache(config.apiUrl, 'config.json file');
-      console.log('[Blocks] Using API (config.json file):', validated);
-      return validated;
-    } catch {
-      // Config doesn't exist or not in Node.js
+    let config: { apiUrl?: unknown } | undefined;
+    if (typeof process.getBuiltinModule === 'function') {
+      try {
+        const fs = process.getBuiltinModule('node:fs');
+        config = JSON.parse(fs.readFileSync('.cdk-blocks-sandbox/config.json', 'utf-8'));
+      } catch {
+        // Config doesn't exist or not in Node.js
+      }
+    } else {
+      configFileNeedsNewerNode = true;
+    }
+    if (config) {
+      const stage = legacyDeployedStage(config);
+      if (stage) {
+        throw new Error(
+          `.cdk-blocks-sandbox/config.json points at the deployed ${stage} stack (${String(config.apiUrl)}), written by an older deploy. ` +
+            'Start the dev server (`npm run dev`), which rewrites it, ' +
+            'or set BLOCKS_API_URL to target that stack on purpose.',
+        );
+      }
+      try {
+        const validated = validateAndCache(config.apiUrl, 'config.json file');
+        console.log('[Blocks] Using API (config.json file):', validated);
+        return validated;
+      } catch {
+        // No usable apiUrl in the file — fall through, as before
+      }
     }
   }
   
   // 4. Browser: fetch config.json from hosting origin
   try {
-    const response = await fetch('/.blocks-sandbox/config.json');
+    const response = await fetch(`${BLOCKS_SANDBOX_PREFIX}/config.json`);
     if (response.ok) {
       const config = await response.json();
       const validated = validateAndCache(config.apiUrl, 'config.json fetch');
@@ -133,9 +165,13 @@ async function resolveApiUrl(): Promise<string> {
   // Fallback — no config found
   throw new Error(
     'Blocks API URL not configured. Ensure:\n' +
-    '1. You ran `npm run deploy` (deploys config.json)\n' +
-    '2. SSR Lambda has BLOCKS_API_URL env var, OR\n' +
-    '3. config.json exists at /.blocks-sandbox/config.json'
+    '1. A dev server is running (`npm run dev` writes .cdk-blocks-sandbox/config.json), OR\n' +
+    '2. BLOCKS_API_URL is set (Hosting sets it on SSR functions), OR\n' +
+    `3. config.json is served at ${BLOCKS_SANDBOX_PREFIX}/config.json (the dev server and Hosting serve it)` +
+    (configFileNeedsNewerNode
+      ? `\nNode.js ${process.versions.node} cannot read .cdk-blocks-sandbox/config.json from the working directory; ` +
+        'that needs Node.js 22.3 or later. Upgrade Node.js or set BLOCKS_API_URL.'
+      : '')
   );
 }
 
@@ -245,7 +281,7 @@ export interface ApiNamespaceClientOptions {
    * This replaces only the *discovery* of the base URL, not the request path: the
    * client still appends `/{namespace}` to it, exactly as it does for a base URL
    * resolved from config.json. Pass the same value config.json would carry
-   * (for example `https://d123.cloudfront.net/aws-blocks/api`), not a
+   * (for example `https://d123.cloudfront.net/cdk-blocks/api`), not a
    * namespace-qualified URL. A trailing slash is tolerated.
    */
   url?: string;
@@ -277,10 +313,10 @@ export interface ApiNamespaceClientOptions {
  * compute that hosts it — a single-compute backend serves every namespace path
  * from the same origin, so this is safe there too. The namespace also stays in
  * the JSON-RPC body, which is what the server dispatches on — the path must name
- * the same namespace — so raw HTTP callers posting to the bare `/aws-blocks/api`
+ * the same namespace — so raw HTTP callers posting to the bare `/cdk-blocks/api`
  * endpoint keep working.
  *
- * `baseUrl` may be relative (Hosting publishes `/aws-blocks/api` for same-origin
+ * `baseUrl` may be relative (Hosting publishes `/cdk-blocks/api` for same-origin
  * browser calls), so this does deliberate string concatenation rather than going
  * through `new URL()`.
  */
@@ -309,11 +345,11 @@ const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
  *
  * ```typescript
  * // Generated client.js
- * import { ApiNamespaceClient } from '@aws-blocks/core/client';
+ * import { ApiNamespaceClient } from '@aws-cdk-blocks/core/client';
  * export const api = ApiNamespaceClient('api');
  *
- * // Frontend usage — fully typed via the 'aws-blocks' types export
- * import { api } from 'aws-blocks';
+ * // Frontend usage — fully typed via the 'cdk-blocks' types export
+ * import { api } from 'cdk-blocks';
  * const user = await api.getUser('123');
  * ```
  *
@@ -343,7 +379,7 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
     options?.retryStaleConnection === false
       ? (url, init) => (contextFetch() ?? fetch)(url, init)
       : (url, init) => fetchWithStaleConnectionRetry(url, init, contextFetch());
-  // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
+  // The namespace this client calls, the same in every tab: `@aws-cdk-blocks/auth-common` tags its
   // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
   const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;
   return new Proxy({} as any, {

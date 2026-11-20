@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import {
 	DEFAULT_TYPEGEN_MODULES,
@@ -49,8 +50,8 @@ after(async () => {
 void describe('scanValueKeys()', () => {
 	void it('collects string-literal secret()/config() keys, sorted + de-duped', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `
-				import { secret, config } from '@aws-blocks/hosting';
+			'cdk-blocks/index.cdk.ts': `
+				import { secret, config } from '@aws-cdk-blocks/hosting';
 				const e = {
 					STRIPE_KEY: secret('STRIPE_KEY'),
 					FEATURE_FLAGS: config('FEATURE_FLAGS'),
@@ -67,8 +68,8 @@ void describe('scanValueKeys()', () => {
 
 	void it('ignores commented-out and string-literal occurrences (AST, not regex)', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `
-				import { secret } from '@aws-blocks/hosting';
+			'cdk-blocks/index.cdk.ts': `
+				import { secret } from '@aws-cdk-blocks/hosting';
 				// secret('COMMENTED') should NOT be captured
 				const s = "secret('IN_A_STRING')"; // not a call
 				const real = secret('REAL_KEY');
@@ -80,8 +81,8 @@ void describe('scanValueKeys()', () => {
 
 	void it('reports non-literal keys as dynamic call sites (skipped)', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `
-				import { secret } from '@aws-blocks/hosting';
+			'cdk-blocks/index.cdk.ts': `
+				import { secret } from '@aws-cdk-blocks/hosting';
 				const NAME = 'X';
 				const dyn = secret(NAME);
 				const lit = secret('LITERAL');
@@ -96,8 +97,8 @@ void describe('scanValueKeys()', () => {
 
 	void it('resolves the import binding, not the identifier text', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `
-				import { secret as sec, config } from '@aws-blocks/hosting';
+			'cdk-blocks/index.cdk.ts': `
+				import { secret as sec, config } from '@aws-cdk-blocks/hosting';
 				// A local function of the same name must NOT be treated as a marker.
 				function secretHelper() { return 'x'; }
 				const localSecret = (k: string) => k;
@@ -107,7 +108,7 @@ void describe('scanValueKeys()', () => {
 				const c = localSecret('LOCAL');      // local fn → ignored
 			`,
 			// A same-named import from an UNRELATED module (dotenv) must be ignored.
-			'aws-blocks/env.ts': `
+			'cdk-blocks/env.ts': `
 				import { config } from 'dotenv';
 				config({ path: '.env' });            // not a marker; also not a "non-literal" warning
 			`,
@@ -118,10 +119,10 @@ void describe('scanValueKeys()', () => {
 		assert.equal(scan.dynamicCallSites.length, 0, 'dotenv config({path}) must not be flagged');
 	});
 
-	void it('detects markers imported via @aws-blocks/blocks/cdk (the primary app path)', async () => {
+	void it('detects markers imported via aws-cdk-blocks/cdk (the primary app path)', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `
-				import { secret, config } from '@aws-blocks/blocks/cdk';
+			'cdk-blocks/index.cdk.ts': `
+				import { secret, config } from 'aws-cdk-blocks/cdk';
 				const s = secret('VIA_BLOCKS_CDK');
 				const c = config('CFG_VIA_BLOCKS_CDK');
 			`,
@@ -133,8 +134,8 @@ void describe('scanValueKeys()', () => {
 
 	void it('detects namespace-imported markers (import * as blocks)', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `
-				import * as blocks from '@aws-blocks/core/cdk';
+			'cdk-blocks/index.cdk.ts': `
+				import * as blocks from '@aws-cdk-blocks/core/cdk';
 				const s = blocks.secret('NS_SECRET');
 				const c = blocks.config('NS_CONFIG');
 			`,
@@ -146,19 +147,81 @@ void describe('scanValueKeys()', () => {
 
 	void it('ignores marker-looking calls with no import binding in the file', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `secret('NO_IMPORT'); config('NO_IMPORT_2');`,
+			'cdk-blocks/index.cdk.ts': `secret('NO_IMPORT'); config('NO_IMPORT_2');`,
 		});
 		const scan = await scanValueKeys({ cwd });
 		assert.deepEqual(scan.secretKeys, []);
 		assert.deepEqual(scan.configKeys, []);
 	});
 
-	void it('does not descend into node_modules / dist / .blocks', async () => {
+	void it('infers schema types with the tsconfig that compiles each file, strict by default', async () => {
+		// A solution-style root (create-vite, the Vite templates) has no compilerOptions of its own.
+		// Read as the app's options, it turned strictNullChecks off and .nullable() lost its null.
+		const schemas = `
+import { z } from 'zod';
+export const limits = config('LIMITS', { schema: z.object({ max: z.number().nullable(), label: z.string().optional() }) });
+export const tags = config('TAGS', { schema: z.array(z.string().nullable()) });
+export const keys = secret('KEYS', { schema: z.record(z.string(), z.string().optional()) });
+`;
+		const strictProject = { strict: true, module: 'ES2022', moduleResolution: 'bundler', skipLibCheck: true };
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('KEEP');`,
+			'tsconfig.json': JSON.stringify({
+				files: [],
+				references: [{ path: './tsconfig.app.json' }, { path: './cdk-blocks' }],
+			}),
+			'tsconfig.app.json': JSON.stringify({
+				compilerOptions: { ...strictProject, noEmit: true },
+				include: ['src/**/*'],
+				references: [{ path: './cdk-blocks' }],
+			}),
+			'cdk-blocks/tsconfig.json': JSON.stringify({
+				compilerOptions: {
+					...strictProject,
+					composite: true,
+					emitDeclarationOnly: true,
+					outDir: '../node_modules/.tmp/cdk-blocks',
+					rootDir: '..',
+				},
+				include: ['**/*'],
+			}),
+			'cdk-blocks/index.ts': `import { config, secret } from 'aws-cdk-blocks';${schemas}`,
+			'src/app.ts': `import { config } from '@aws-cdk-blocks/hosting';
+import { z } from 'zod';
+export const banner = config('BANNER', { schema: z.object({ text: z.string().nullable() }) });
+`,
+		});
+		const zod = dirname(createRequire(import.meta.url).resolve('zod/package.json'));
+		const { mkdir } = await import('node:fs/promises');
+		await mkdir(join(cwd, 'node_modules'));
+		await symlink(zod, join(cwd, 'node_modules', 'zod'), 'junction');
+		const expected = {
+			config: {
+				BANNER: '{ text: string | null; }',
+				LIMITS: '{ max: number | null; label?: string | undefined; }',
+				TAGS: '(string | null)[]',
+			},
+			secret: { KEYS: '{ [x: string]: string | undefined; }' },
+		};
+		assert.deepStrictEqual((await scanValueKeys({ cwd })).valueTypes, expected);
+		// With no tsconfig at all, the defaults are strict too.
+		const bare = await fixture({
+			'cdk-blocks/index.ts': `import { config, secret } from 'aws-cdk-blocks';${schemas}`,
+		});
+		await mkdir(join(bare, 'node_modules'));
+		await symlink(zod, join(bare, 'node_modules', 'zod'), 'junction');
+		const { BANNER: _banner, ...backendConfig } = expected.config;
+		assert.deepStrictEqual((await scanValueKeys({ cwd: bare })).valueTypes, {
+			config: backendConfig,
+			secret: expected.secret,
+		});
+	});
+
+	void it('does not descend into node_modules / dist / .cdk-blocks', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('KEEP');`,
 			'node_modules/pkg/index.ts': `secret('FROM_NODE_MODULES');`,
 			'dist/index.js': `secret('FROM_DIST');`,
-			'.blocks/hosting-values.d.ts': `secret('FROM_BLOCKS');`,
+			'.cdk-blocks/hosting-values.d.ts': `secret('FROM_BLOCKS');`,
 		});
 		const scan = await scanValueKeys({ cwd });
 		assert.deepEqual(scan.secretKeys, ['KEEP']);
@@ -188,7 +251,7 @@ void describe('renderHostingValuesDts()', () => {
 void describe('generateHostingValuesDts()', () => {
 	void it('writes the file, then reports upToDate on a re-run (deterministic)', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `import { secret, config } from '@aws-blocks/hosting'; secret('K1'); config('C1');`,
+			'cdk-blocks/index.cdk.ts': `import { secret, config } from '@aws-cdk-blocks/hosting'; secret('K1'); config('C1');`,
 		});
 		const first = await generateHostingValuesDts({ cwd });
 		assert.equal(first.upToDate, false); // did not exist
@@ -202,7 +265,7 @@ void describe('generateHostingValuesDts()', () => {
 
 	void it('check mode does not write and flags staleness via exit code', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('NEW_KEY');`,
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('NEW_KEY');`,
 		});
 		const messages: string[] = [];
 		// No file yet → stale → exit 1, nothing written.
@@ -212,7 +275,7 @@ void describe('generateHostingValuesDts()', () => {
 		});
 		assert.equal(code, 1);
 		assert.ok(messages.some((m) => /out of date/.test(m)));
-		await assert.rejects(readFile(join(cwd, '.blocks', 'hosting-values.d.ts'), 'utf-8'));
+		await assert.rejects(readFile(join(cwd, '.cdk-blocks', 'hosting-values.d.ts'), 'utf-8'));
 
 		// Generate, then --check passes.
 		await runTypegenCli(['--cwd', cwd], { log: () => {}, error: () => {} });
@@ -224,19 +287,19 @@ void describe('generateHostingValuesDts()', () => {
 void describe('watchHostingValues()', () => {
 	void it('regenerates when a scanned file changes; stop() tears down', async () => {
 		const cwd = await fixture({
-			'aws-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('K1');`,
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
 		});
 		// Low debounce + poll so it is fast on both fs.watch (macOS/Windows) and the
 		// polling fallback (Linux, where recursive fs.watch is unavailable).
 		const stop = await watchHostingValues({ cwd, debounceMs: 20, pollMs: 50, log: () => {}, error: () => {} });
 		try {
-			const outFile = join(cwd, '.blocks', 'hosting-values.d.ts');
+			const outFile = join(cwd, '.cdk-blocks', 'hosting-values.d.ts');
 			assert.ok((await readFile(outFile, 'utf-8')).includes('"K1": string;'));
 
 			// Add a new key → the watcher should regenerate with it.
 			await writeFile(
-				join(cwd, 'aws-blocks', 'index.cdk.ts'),
-				`import { secret, config } from '@aws-blocks/hosting'; secret('K1'); config('C2');`,
+				join(cwd, 'cdk-blocks', 'index.cdk.ts'),
+				`import { secret, config } from '@aws-cdk-blocks/hosting'; secret('K1'); config('C2');`,
 				'utf-8',
 			);
 			const updated = await waitFor(async () => {
@@ -247,5 +310,58 @@ void describe('watchHostingValues()', () => {
 		} finally {
 			stop();
 		}
+	});
+
+	void it('does not start watching when the signal is aborted during the first scan', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const controller = new AbortController();
+		const logs: string[] = [];
+		await watchHostingValues({
+			cwd,
+			signal: controller.signal,
+			// The first scan writes the file and logs it; abort there, as Ctrl-C would mid-scan.
+			log: (m) => {
+				logs.push(m);
+				if (m.includes('regenerated')) controller.abort();
+			},
+			error: () => {},
+		});
+		assert.ok(controller.signal.aborted, 'the first scan should have aborted the signal');
+		assert.ok(!logs.some((m) => m.includes('watching')), `watcher started after abort: ${logs.join('\n')}`);
+	});
+});
+
+void describe('runTypegenCli() --watch', () => {
+	/** Resolve to `'timeout'` if `p` has not settled within `ms`. */
+	const within = <T>(p: Promise<T>, ms: number): Promise<T | 'timeout'> =>
+		Promise.race([p, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), ms).unref())]);
+
+	void it('resolves 0 when the signal is aborted during the first scan', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const controller = new AbortController();
+		const run = runTypegenCli(['--watch', '--cwd', cwd], {
+			signal: controller.signal,
+			log: (m) => {
+				if (m.includes('regenerated')) controller.abort();
+			},
+			error: () => {},
+		});
+		assert.strictEqual(await within(run, 3000), 0);
+	});
+
+	void it('resolves 0 when the signal is already aborted', async () => {
+		const cwd = await fixture({
+			'cdk-blocks/index.cdk.ts': `import { secret } from '@aws-cdk-blocks/hosting'; secret('K1');`,
+		});
+		const run = runTypegenCli(['--watch', '--cwd', cwd], {
+			signal: AbortSignal.abort(),
+			log: () => {},
+			error: () => {},
+		});
+		assert.strictEqual(await within(run, 3000), 0);
 	});
 });

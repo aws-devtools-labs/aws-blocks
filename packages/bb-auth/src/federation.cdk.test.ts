@@ -17,8 +17,8 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
-import { BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { BLOCKS_AUTH_PREFIX } from '@aws-cdk-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import {
 	AUTH_ROUTE_PREFIX,
@@ -71,7 +71,7 @@ const CONFIGS = {
 	// Password + social + SAML in `auth`; the directly federated okta can no longer share it, so it gets its own
 	// `store: 'builtin'` block, built first (the comma expression keeps `auth` the block under test), with its own
 	// sign-in routes (two blocks with providers on the default `redirects` fail synth).
-	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${P.oktaDirect} }, redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' } }), new Auth(stack, 'auth', { providers: { ${P.google}, ${P.apple}, ${P.corpUrl} } }))`,
+	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${P.oktaDirect} }, redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' } }), new Auth(stack, 'auth', { providers: { ${P.google}, ${P.apple}, ${P.corpUrl} } }))`,
 	allSocial: `new Auth(stack, 'auth', { providers: { ${P.google}, ${P.facebook}, ${P.amazon}, ${P.apple} } })`,
 	defaultPlusGoogle: `new Auth(stack, 'auth', { providers: { ${P.google} } })`,
 } as const;
@@ -92,10 +92,10 @@ function synth(construct: string, options: SynthOptions = {}): CdkSynthResult {
 	if (hit) return hit;
 	const result = synthUnderCdkConditions({
 		imports: [
-			"import { Auth } from '@aws-blocks/bb-auth';",
-			"import { AppSetting } from '@aws-blocks/bb-app-setting';",
-			"import { Secret } from '@aws-blocks/bb-secret';",
-			"import { registerConfig } from '@aws-blocks/core/cdk';",
+			"import { Auth } from '@aws-cdk-blocks/bb-auth';",
+			"import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';",
+			"import { Secret } from '@aws-cdk-blocks/bb-secret';",
+			"import { registerConfig } from '@aws-cdk-blocks/core/cdk';",
 		].join('\n'),
 		build: `${SECRETS}\n${options.before ?? ''}\nconst auth = ${construct};\n${options.after ?? ''}\nreport.fullId = auth.fullId;`,
 		apiUrl: options.apiUrl,
@@ -338,7 +338,7 @@ describe('Auth federation — coexists with the immutability guard', () => {
 // ── The hosted-UI client ─────────────────────────────────────────────────────
 
 describe('Auth federation — the hosted-UI app client', () => {
-	test('a separate client: public (no secret), authorization-code grant, OIDC scopes, refresh-only SDK flows', () => {
+	test('a separate client: public (no secret), authorization-code grant, OIDC scopes, no SDK flows (rotation removes the refresh flow)', () => {
 		const [id, resource] = hostedUiClient(synth(CONFIGS.socialOnly).template);
 		assert.notStrictEqual(id, 'authclientB98ED767');
 		assert.strictEqual(id, 'authhosteduiclient8CF4B242', 'the hosted-UI client id is stable once deployed');
@@ -347,7 +347,7 @@ describe('Auth federation — the hosted-UI app client', () => {
 		assert.strictEqual(p.AllowedOAuthFlowsUserPoolClient, true);
 		assert.deepStrictEqual(p.AllowedOAuthFlows, ['code']);
 		assert.deepStrictEqual(p.AllowedOAuthScopes, ['openid', 'email', 'profile']);
-		assert.deepStrictEqual(p.ExplicitAuthFlows, ['ALLOW_REFRESH_TOKEN_AUTH']);
+		assert.deepStrictEqual(p.ExplicitAuthFlows, []);
 		assert.strictEqual(p.PreventUserExistenceErrors, 'ENABLED');
 	});
 
@@ -362,12 +362,12 @@ describe('Auth federation — the hosted-UI app client', () => {
 // ── Callback / logout URLs ───────────────────────────────────────────────────
 
 describe('Auth federation — callback and logout URLs are the real front doors', () => {
-	const API_BASE = HARNESS_API_URL.slice(0, -'/aws-blocks/api'.length);
+	const API_BASE = HARNESS_API_URL.slice(0, -'/cdk-blocks/api'.length);
 
 	test('without Hosting: the API Gateway URL (from the compute apiUrl), never a localhost placeholder', () => {
 		const p = props(hostedUiClient(synth(CONFIGS.socialOnly).template));
-		assert.deepStrictEqual(p.CallbackURLs, [`${API_BASE}/aws-blocks/auth/callback`]);
-		assert.deepStrictEqual(p.LogoutURLs, [`${API_BASE}/aws-blocks/auth/signout`]);
+		assert.deepStrictEqual(p.CallbackURLs, [`${API_BASE}/cdk-blocks/auth/callback`]);
+		assert.deepStrictEqual(p.LogoutURLs, [`${API_BASE}/cdk-blocks/auth/signout`]);
 		const urls = urlsIn(p);
 		assert.ok(urls.length >= 2, 'expected the callback and logout URLs to be found');
 		for (const url of urls) {
@@ -378,12 +378,12 @@ describe('Auth federation — callback and logout URLs are the real front doors'
 	test('with Hosting registered AFTER Auth (as BlocksStack does): both the API and the public origin', () => {
 		const p = props(hostedUiClient(synth(CONFIGS.socialOnly, withHosting).template));
 		assert.deepStrictEqual(p.CallbackURLs, [
-			`${API_BASE}/aws-blocks/auth/callback`,
-			`${HOSTING_ORIGIN}/aws-blocks/auth/callback`,
+			`${API_BASE}/cdk-blocks/auth/callback`,
+			`${HOSTING_ORIGIN}/cdk-blocks/auth/callback`,
 		]);
 		assert.deepStrictEqual(p.LogoutURLs, [
-			`${API_BASE}/aws-blocks/auth/signout`,
-			`${HOSTING_ORIGIN}/aws-blocks/auth/signout`,
+			`${API_BASE}/cdk-blocks/auth/signout`,
+			`${HOSTING_ORIGIN}/cdk-blocks/auth/signout`,
 		]);
 	});
 
@@ -393,7 +393,7 @@ describe('Auth federation — callback and logout URLs are the real front doors'
 				synth(CONFIGS.socialOnly, {
 					apiUrl: null,
 					// biome-ignore lint/suspicious/noTemplateCurlyInString: probe source — the template literal is evaluated in the synth child process.
-					before: 'stack._defaultCompute = { apiUrl: `https://${cdk.Aws.STACK_NAME}.execute-api.${cdk.Aws.REGION}.amazonaws.com/prod/aws-blocks/api` };',
+					before: 'stack._defaultCompute = { apiUrl: `https://${cdk.Aws.STACK_NAME}.execute-api.${cdk.Aws.REGION}.amazonaws.com/prod/cdk-blocks/api` };',
 				}).template,
 			),
 		);
@@ -401,20 +401,20 @@ describe('Auth federation — callback and logout URLs are the real front doors'
 		assert.strictEqual(callbacks.length, 1);
 		const json = JSON.stringify(callbacks[0]);
 		assert.match(json, /"Fn::Join"/);
-		assert.match(json, /"Fn::Select":\[0,\{"Fn::Split":\["\/aws-blocks\/api"/);
-		assert.match(json, /"\/aws-blocks\/auth\/callback"\]/);
+		assert.match(json, /"Fn::Select":\[0,\{"Fn::Split":\["\/cdk-blocks\/api"/);
+		assert.match(json, /"\/cdk-blocks\/auth\/callback"\]/);
 	});
 
 	test('custom redirects paths are honoured', () => {
 		const p = props(
 			hostedUiClient(
 				synth(
-					`new Auth(stack, 'auth', { providers: { ${P.google} }, redirects: { callbackPath: '/aws-blocks/auth/cb', signOutPath: '/aws-blocks/auth/bye' } })`,
+					`new Auth(stack, 'auth', { providers: { ${P.google} }, redirects: { callbackPath: '/cdk-blocks/auth/cb', signOutPath: '/cdk-blocks/auth/bye' } })`,
 				).template,
 			),
 		);
-		assert.deepStrictEqual(p.CallbackURLs, [`${API_BASE}/aws-blocks/auth/cb`]);
-		assert.deepStrictEqual(p.LogoutURLs, [`${API_BASE}/aws-blocks/auth/bye`]);
+		assert.deepStrictEqual(p.CallbackURLs, [`${API_BASE}/cdk-blocks/auth/cb`]);
+		assert.deepStrictEqual(p.LogoutURLs, [`${API_BASE}/cdk-blocks/auth/bye`]);
 	});
 
 	test('no compute API URL and no Hosting origin: synth fails rather than inventing a URL', () => {
@@ -877,33 +877,30 @@ describe('Auth federation — the hosted-UI domain prefix', () => {
 describe('Auth federation — emailPassword: false leaves no password flow on `client`', () => {
 	const clientOf = (construct: string) => mustByPath(synth(construct).template, 'client/Resource');
 
-	test('default: USER_PASSWORD_AUTH + refresh (unchanged from AuthCognito)', () => {
-		assert.deepStrictEqual(props(clientOf(CONFIGS.default)).ExplicitAuthFlows, [
-			'ALLOW_USER_PASSWORD_AUTH',
-			'ALLOW_REFRESH_TOKEN_AUTH',
-		]);
+	test('default: USER_PASSWORD_AUTH only (rotation removes the refresh flow)', () => {
+		assert.deepStrictEqual(props(clientOf(CONFIGS.default)).ExplicitAuthFlows, ['ALLOW_USER_PASSWORD_AUTH']);
 	});
 
 	for (const name of ['socialOnly', 'samlOnly', 'cognitoOidcOnly'] as const) {
-		test(`${name}: refresh-token only, same logical id, every other property unchanged`, () => {
+		test(`${name}: no flow, same logical id, every other property unchanged`, () => {
 			const off = clientOf(CONFIGS[name]);
 			const on = clientOf(CONFIGS.default);
 			assert.strictEqual(off[0], 'authclientB98ED767');
 			assert.strictEqual(off[0], on[0]);
-			assert.deepStrictEqual(props(off).ExplicitAuthFlows, ['ALLOW_REFRESH_TOKEN_AUTH']);
+			assert.deepStrictEqual(props(off).ExplicitAuthFlows, []);
 			const { ExplicitAuthFlows: _a, ...restOff } = props(off);
 			const { ExplicitAuthFlows: _b, ...restOn } = props(on);
 			assert.deepStrictEqual(restOff, restOn);
 		});
 	}
 
-	test("with users.authFlow: 'USER_AUTH' too: refresh-token only (no ALLOW_USER_AUTH)", () => {
+	test("with users.authFlow: 'USER_AUTH' too: no flow (no ALLOW_USER_AUTH)", () => {
 		const p = props(
 			clientOf(
 				`new Auth(stack, 'auth', { emailPassword: false, users: { authFlow: 'USER_AUTH' }, providers: { ${P.google} } })`,
 			),
 		);
-		assert.deepStrictEqual(p.ExplicitAuthFlows, ['ALLOW_REFRESH_TOKEN_AUTH']);
+		assert.deepStrictEqual(p.ExplicitAuthFlows, []);
 	});
 });
 
@@ -1007,13 +1004,13 @@ describe('Auth federation — synth-time checks', () => {
 		);
 	});
 
-	test('redirect paths must be explicit paths under /aws-blocks/auth/', () => {
+	test('redirect paths must be explicit paths under /cdk-blocks/auth/', () => {
 		assert.match(
 			constructError({ providers: { google }, redirects: { callbackPath: '/callback' } }),
-			/redirects\.callbackPath must be an explicit path under '\/aws-blocks\/auth\/'/,
+			/redirects\.callbackPath must be an explicit path under '\/cdk-blocks\/auth\/'/,
 		);
 		assert.match(
-			constructError({ providers: { google }, redirects: { signOutPath: '/aws-blocks/auth/*' } }),
+			constructError({ providers: { google }, redirects: { signOutPath: '/cdk-blocks/auth/*' } }),
 			/redirects\.signOutPath/,
 		);
 	});
@@ -1022,7 +1019,7 @@ describe('Auth federation — synth-time checks', () => {
 		const okta = { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' };
 		assert.match(
 			constructError({ store: 'builtin', providers: { okta }, redirects: { callbackPath: '/oops/callback' } }),
-			/redirects\.callbackPath must be an explicit path under '\/aws-blocks\/auth\/'/,
+			/redirects\.callbackPath must be an explicit path under '\/cdk-blocks\/auth\/'/,
 		);
 		assert.match(
 			constructError({ store: 'builtin', providers: { okta }, redirects: { signOutPath: '/signout' } }),
@@ -1043,7 +1040,7 @@ describe('Auth federation — synth-time checks', () => {
 					constructError({
 						store,
 						providers: store ? { okta } : { google },
-						redirects: { [key]: '/aws-blocks/auth/' },
+						redirects: { [key]: '/cdk-blocks/auth/' },
 					}),
 					new RegExp(`redirects\\.${key} must be an explicit path under`),
 					`${store ?? 'cognito'} ${key}`,
@@ -1100,7 +1097,21 @@ describe('Auth federation — two blocks with providers on one backend cannot sh
 		new Auth(stack, 'sso', { store: 'builtin', providers: { okta } });
 		assert.throws(
 			() => new Auth(stack, 'staff', { store: 'builtin', providers: { okta } }),
-			/Auth '[^']*staff': its sign-in routes \(\/aws-blocks\/auth\/…\) are already mounted by Auth '[^']*sso'\. Each Auth block with `providers` needs its own `redirects\.callbackPath` and `redirects\.signOutPath`, e\.g\. `redirects: \{ callbackPath: '\/aws-blocks\/auth\/staff\/callback', signOutPath: '\/aws-blocks\/auth\/staff\/signout' \}`/,
+			/Auth '[^']*staff': its sign-in routes \(\/cdk-blocks\/auth\/…\) are already mounted by Auth '[^']*sso'\. Each Auth block with `providers` needs its own `redirects\.callbackPath` and `redirects\.signOutPath`, e\.g\. `redirects: \{ callbackPath: '\/cdk-blocks\/auth\/staff\/callback', signOutPath: '\/cdk-blocks\/auth\/staff\/signout' \}`/,
+		);
+	});
+
+	test('a legacy /aws-blocks/auth/ redirect collides with its /cdk-blocks/auth/ twin', () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta } });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: '/aws-blocks/auth/callback', signOutPath: '/aws-blocks/auth/staff/signout' },
+				}),
+			/Auth '[^']*staff': its sign-in routes \(\/aws-blocks\/auth\/…\) are already mounted by Auth '[^']*sso'/,
 		);
 	});
 
@@ -1114,7 +1125,7 @@ describe('Auth federation — two blocks with providers on one backend cannot sh
 					providers: { okta },
 					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${own('sso').signOutPath}/` },
 				}),
-			/its sign-out route \(\/aws-blocks\/auth\/sso\/signout\/\) is already mounted by Auth '[^']*sso'/,
+			/its sign-out route \(\/cdk-blocks\/auth\/sso\/signout\/\) is already mounted by Auth '[^']*sso'/,
 		);
 		assert.throws(
 			() =>
@@ -1123,8 +1134,70 @@ describe('Auth federation — two blocks with providers on one backend cannot sh
 					providers: { okta },
 					redirects: { callbackPath: `${AUTH_ROUTE_PREFIX}/sso/cb`, signOutPath: own('other').signOutPath },
 				}),
-			/its sign-in routes \(\/aws-blocks\/auth\/sso\/…\) are already mounted by Auth '[^']*sso'/,
+			/its sign-in routes \(\/cdk-blocks\/auth\/sso\/…\) are already mounted by Auth '[^']*sso'/,
 		);
+	});
+
+	test("a sign-out path on another block's sign-in route (its session) collides, in either order", () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta } });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/session` },
+				}),
+			/Auth '[^']*staff': its sign-out route \(\/cdk-blocks\/auth\/session\) is already mounted by Auth '[^']*sso'/,
+		);
+		const reversed = newStack();
+		new Auth(reversed, 'staff', {
+			store: 'builtin',
+			providers: { okta },
+			redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/session` },
+		});
+		assert.throws(
+			() => new Auth(reversed, 'sso', { store: 'builtin', providers: { okta } }),
+			/Auth '[^']*sso': its sign-in routes \(\/cdk-blocks\/auth\/…\) are already mounted by Auth '[^']*staff'/,
+		);
+	});
+
+	test("bearer refresh routes are claimed: a sign-out path on another block's refresh route collides", () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, allowBearerAuth: true });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/refresh` },
+				}),
+			/its sign-out route \(\/cdk-blocks\/auth\/refresh\) is already mounted by Auth '[^']*sso'/,
+		);
+		// Without bearer the refresh routes are not mounted, so the same path is free.
+		const plain = newStack();
+		new Auth(plain, 'sso', { store: 'builtin', providers: { okta } });
+		new Auth(plain, 'staff', {
+			store: 'builtin',
+			providers: { okta },
+			redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${AUTH_ROUTE_PREFIX}/refresh` },
+		});
+	});
+
+	test('one block whose signOutPath lands on one of its own sign-in routes fails synth', () => {
+		for (const route of ['exchange', 'session', 'callback']) {
+			assert.throws(
+				() =>
+					new Auth(newStack(), 'auth', {
+						store: 'builtin',
+						providers: { okta },
+						redirects: { signOutPath: `${AUTH_ROUTE_PREFIX}/${route}` },
+					}),
+				new RegExp(
+					`Auth '[^']*auth': it would mount (GET|POST) /cdk-blocks/auth/${route} twice\\. Its redirects\\.callbackPath`,
+				),
+			);
+		}
 	});
 
 	test('own redirects on each block, and the same paths on another backend, synthesize', () => {
@@ -1192,5 +1265,51 @@ describe('Auth federation — contract helpers', () => {
 			DOMAIN: 'BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_DOMAIN',
 			HOSTED_UI_CLIENT_ID: 'BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_HOSTED_UI_CLIENT_ID',
 		});
+	});
+});
+
+// ── Write attributes of both app clients ─────────────────────────────────────
+
+describe('Auth federation — both app clients write only what end users may set', () => {
+	const STANDARD = [
+		...['address', 'birthdate', 'email', 'family_name', 'gender', 'given_name', 'locale', 'middle_name'],
+		...['name', 'nickname', 'phone_number', 'picture', 'preferred_username', 'profile', 'updated_at'],
+		...['website', 'zoneinfo'],
+	];
+	const ATTRIBUTES = "attributes: [{ name: 'team' }, { name: 'role', userWritable: false }]";
+	const writeAttributes = (template: CfnTemplateJson, path: string) =>
+		props(mustByPath(template, `${path}/Resource`)).WriteAttributes;
+
+	test('email + password and Google: neither client lists a `userWritable: false` attribute', () => {
+		const { template } = synth(`new Auth(stack, 'auth', { providers: { ${P.google} }, users: { ${ATTRIBUTES} } })`);
+		const expected = [...STANDARD, 'custom:team'].sort();
+		assert.deepStrictEqual(writeAttributes(template, 'client'), expected);
+		assert.deepStrictEqual(writeAttributes(template, 'hosted-ui-client'), expected);
+	});
+
+	// Pins what a mapped verified flag does to the lists (self sign-up on, the default): the
+	// hosted-UI client lists it so the mapping takes effect; the native client never does.
+	test('a provider mapping `email_verified`: the hosted-UI client lists it, the native client does not', () => {
+		const google =
+			"google: { type: 'google', clientId: 'g-client', clientSecret: googleSecret, " +
+			"attributeMapping: { email_verified: 'email_verified', team: 'hd' } }";
+		const { template } = synth(`new Auth(stack, 'auth', { providers: { ${google} }, users: { ${ATTRIBUTES} } })`);
+		assert.deepStrictEqual(writeAttributes(template, 'client'), [...STANDARD, 'custom:team'].sort());
+		assert.deepStrictEqual(
+			writeAttributes(template, 'hosted-ui-client'),
+			[...STANDARD, 'custom:team', 'email_verified'].sort(),
+		);
+	});
+
+	test('a provider mapping onto a `userWritable: false` attribute fails synth', () => {
+		const google =
+			"google: { type: 'google', clientId: 'g-client', clientSecret: googleSecret, attributeMapping: { role: 'hd' } }";
+		assert.throws(
+			() =>
+				synth(
+					`new Auth(stack, 'auth', { emailPassword: { selfSignUp: false }, providers: { ${google} }, users: { ${ATTRIBUTES} } })`,
+				),
+			/'role' is `userWritable: false`, but provider 'google' maps 'role'/,
+		);
 	});
 });

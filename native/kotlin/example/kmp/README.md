@@ -1,6 +1,6 @@
 # Kotlin Multiplatform Example App
 
-A Compose Multiplatform app demonstrating the AWS Blocks Kotlin plugin across Android, iOS, and Desktop (JVM) targets. It uses a shared UI written in Compose with platform-specific entry points.
+A Compose Multiplatform app demonstrating the AWS CDK Blocks Kotlin plugin across Android, iOS, and Desktop (JVM) targets. It uses a shared UI written in Compose with platform-specific entry points.
 
 ## Features Demonstrated
 
@@ -20,12 +20,12 @@ A Compose Multiplatform app demonstrating the AWS Blocks Kotlin plugin across An
 
 ## Prerequisites
 
-From the `example/typescript/aws-blocks` directory, run the following to start the backend and generate the spec file:
+From the `example/typescript/cdk-blocks` directory, run the following to start the backend and generate the spec file:
 
 ```bash
 npm install
 npm run dev
-npx blocks-generate-spec
+npm run spec
 ```
 
 This produces the `blocks.spec.json` file that the Gradle plugin reads at build time.
@@ -62,8 +62,8 @@ iosApp/             - Xcode project that hosts the Compose framework
 The app applies the `com.aws.blocks.kotlin` plugin in `composeApp/build.gradle.kts`:
 
 ```kotlin
-awsBlocks {
-    apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
+cdkBlocks {
+    apiSpec = rootProject.file("../typescript/cdk-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {
         relayTo = "blocks.testapp://oidcRedirect"

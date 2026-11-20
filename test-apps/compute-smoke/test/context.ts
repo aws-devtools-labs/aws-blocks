@@ -22,7 +22,7 @@ export interface ComputeTestContext {
   apiUrl(): string;
   /**
    * The Hosting distribution's public URL (its `HostingUrl` output), deployed on
-   * the `cloudfront` leg only (see aws-blocks/index.cdk.ts). Set once the harness
+   * the `cloudfront` leg only (see cdk-blocks/index.cdk.ts). Set once the harness
    * has deployed.
    */
   hostingUrl(): string;
@@ -36,7 +36,7 @@ export type RpcReply = { result?: unknown; error?: { code?: number; message?: st
  * Gateway stage, so on the `apigateway` leg this is `ApiUrl` without its `/prod`.
  */
 export function requestUrlFor(apiUrl: string, namespace: string): string {
-  return `${new URL(apiUrl).origin}/aws-blocks/api/${namespace}`;
+  return `${new URL(apiUrl).origin}/cdk-blocks/api/${namespace}`;
 }
 
 /**

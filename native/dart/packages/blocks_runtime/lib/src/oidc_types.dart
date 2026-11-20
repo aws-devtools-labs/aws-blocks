@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:convert';
 
 import 'oidc_exception.dart';
@@ -96,8 +99,9 @@ class StatePayload {
       return StatePayload.fromJson(decoded);
     } on OidcCallbackException {
       rethrow;
-    } catch (e) {
-      throw OidcCallbackException('Failed to decode state envelope: $e');
+    } catch (_) {
+      // A fixed message: the decode error would quote part of the input.
+      throw OidcCallbackException('Undecodable state envelope');
     }
   }
 }

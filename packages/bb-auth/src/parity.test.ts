@@ -18,8 +18,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthActionInput, AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { AuthActionInput, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 import { INCORRECT_CREDENTIALS_MESSAGE } from './enumeration.js';
 import { clientMessageFor } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
@@ -34,8 +34,8 @@ import {
 } from './test-support/aws-harness.js';
 import type { AuthOptions, CodeDeliveryPurpose } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 let n = 0;
@@ -156,7 +156,9 @@ describe('parity: user attributes', () => {
 		// verifies the email and the phone stays unverified.
 		const claims = { ...contact, email_verified: true, phone_number_verified: false };
 		await signInAs(h, awsBrowser, 'alice', h.idp.authResult('alice', { claims }));
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice', { claims }) }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
+			AuthenticationResult: h.idp.authResult('alice', { claims }),
+		}));
 
 		for (const [label, browser, auth] of [
 			['mock', mockBrowser, mockAuth],
@@ -789,9 +791,9 @@ describe('parity: displayName honours the ID token’s `*_verified` flags', () =
 		await signInAs(h, browser, generated, result(claims));
 		const api = h.auth.createApi();
 		const state = () => browser.request((ctx) => bindAuthApi(api, ctx).getAuthState());
-		/** What the next refresh (`InitiateAuth` REFRESH_TOKEN_AUTH) answers. */
+		/** What the next refresh (`GetTokensFromRefreshToken`) answers. */
 		const refreshesTo = (c: Record<string, unknown>) =>
-			h.on('InitiateAuthCommand', () => ({ AuthenticationResult: result(c) }));
+			h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: result(c) }));
 		return { h, auth: h.auth, browser, state, refreshesTo };
 	}
 
@@ -855,7 +857,9 @@ describe('parity: ID-token claims Cognito types as non-strings — `updated_at`,
 			updated_at: Number(profile.updated_at),
 		};
 		await signInAs(h, awsBrowser, 'alice', h.idp.authResult('alice', { claims }));
-		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice', { claims }) }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
+			AuthenticationResult: h.idp.authResult('alice', { claims }),
+		}));
 
 		for (const [label, browser, auth] of [
 			['mock', mockBrowser, mockAuth],
@@ -950,6 +954,9 @@ describe('parity: confirmSignUp verifies only the contact the code was sent to',
 			return {};
 		});
 		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult(username, { claims: claims() }) }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({
+			AuthenticationResult: h.idp.authResult(username, { claims: claims() }),
+		}));
 		h.on('GetUserCommand', () => ({
 			Username: username,
 			UserAttributes: Object.entries({ sub, ...attributes }).map(([Name, Value]) => ({ Name, Value })),

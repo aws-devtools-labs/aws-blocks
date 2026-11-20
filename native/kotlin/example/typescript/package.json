@@ -7,26 +7,35 @@
     "node": ">=22.0.0"
   },
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:server": "tsx watch cdk-blocks/scripts/server.ts",
     "dev:client": "vite",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "sandbox:console": "tsx aws-blocks/scripts/console.ts",
-    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "sandbox": "tsx cdk-blocks/scripts/sandbox.ts",
+    "sandbox:destroy": "tsx -C cdk cdk-blocks/scripts/sandbox-destroy.ts",
+    "sandbox:console": "tsx cdk-blocks/scripts/console.ts",
+    "cleanup": "tsx cdk-blocks/scripts/cleanup.ts",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "deploy": "tsx aws-blocks/deploy.ts",
+    "deploy": "tsx cdk-blocks/deploy.ts",
     "test": "npm run typecheck && npm run test:e2e",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
-    "vendorize": "blocks-vendorize"
+    "docs": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs",
+    "docs:search": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --search",
+    "docs:api": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --api",
+    "spec": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate spec",
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize",
+    "db": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- db",
+    "whoami": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- whoami",
+    "migrate": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- migrate",
+    "help": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- help",
+    "generate-client": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "latest",
+    "aws-cdk-blocks": "latest",
     "zod": "^4.3.0"
   },
   "devDependencies": {

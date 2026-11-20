@@ -33,7 +33,7 @@
  * | `geoRestriction` | ✓ | – | – | ✓ |
  * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheGuardIgnoredCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
  *
- * The stacked door (`@aws-blocks/core` `Hosting` only) scopes its settings
+ * The stacked door (`@aws-cdk-blocks/core` `Hosting` only) scopes its settings
  * per layer: {@link StackedDoorFeatures}. `'none'` takes no settings.
  *
  * @module
@@ -99,7 +99,7 @@ export type HostingServerOriginConfig = {
    * Off by default: REST API access logging needs the account-level API
    * Gateway CloudWatch Logs role (`AWS::ApiGateway::Account`), an
    * account/region-level setting. This creates it once per stack (shared with
-   * `@aws-blocks/core`'s own access logging), so turn it on in one stack per
+   * `@aws-cdk-blocks/core`'s own access logging), so turn it on in one stack per
    * account and region, or manage that role yourself.
    * @default false
    */
@@ -130,7 +130,7 @@ export type HostingServerOriginConfig = {
    * releases served from it, and its stage gets no web ACL yet (edges on the
    * previous config don't send the marker its rate rule exempts); the next
    * deploy attaches it. Synth warns
-   * (`@aws-blocks/hosting:AcceptLegacyVerifyHeader`) while it is set.
+   * (`@aws-cdk-blocks/hosting:AcceptLegacyVerifyHeader`) while it is set.
    * @default false
    */
   acceptLegacyVerifyHeader?: boolean;
@@ -172,7 +172,7 @@ export type HostingGeoRestriction = {
  * `features.priceClass`, and so on).
  *
  * `TDomain` is the custom-domain shape: {@link HostingDomainConfig} here; the
- * `@aws-blocks/core` `Hosting` widens `domainName` to accept `config()` markers.
+ * `@aws-cdk-blocks/core` `Hosting` widens `domainName` to accept `config()` markers.
  */
 export type CloudFrontDoorFeatures<TDomain = HostingDomainConfig> = {
   /** Custom domain(s): ACM certificate (us-east-1), distribution aliases, Route 53 records, `wwwRedirect`. */
@@ -302,7 +302,7 @@ export type CustomDoorFeatures<TDomain = HostingDomainConfig> = {
 
 /**
  * Settings the stacked door (`{ kind: 'stacked', edge: 'cloudfront', router:
- * 'alb' }`, on the `@aws-blocks/core` `Hosting`) implements, per layer. Each
+ * 'alb' }`, on the `@aws-cdk-blocks/core` `Hosting`) implements, per layer. Each
  * layer takes its own WAF: the edge a CLOUDFRONT-scoped ACL, the router a
  * REGIONAL one.
  */
@@ -354,14 +354,41 @@ export type AlbDoorOptions<TDomain = HostingDomainConfig> = {
    * It must cover `features.domain`, which is required with it: a certificate
    * can't cover the ALB's own `*.elb.amazonaws.com` name, so the app is
    * reached at the custom domain.
+   *
+   * Without it the ALB serves plain HTTP :80. With an API, that is
+   * sandbox-only: a production deploy fails synth (`PlainHttpFrontDoorError`),
+   * and a sandbox deploy (`sandboxMode` context) warns
+   * (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`), unless {@link AlbDoorOptions.allowPlainHttp}.
    */
   certificate?: ICertificate;
+  /**
+   * Serve a production deploy over plain HTTP :80 with an API: the explicit
+   * opt-out of `PlainHttpFrontDoorError`, for an ALB without a `certificate`.
+   *
+   * Dangerous: sign-in, session cookies and every RPC travel in cleartext
+   * between the browser and the ALB, and `Auth` issues its session cookie
+   * without `Secure` (this flag is what lets it, outside a sandbox: without it
+   * sign-in is refused with `InsecureTransportException`). Anyone who can read
+   * or alter traffic on that path can take over a session.
+   *
+   * Legitimate only when the network path is trusted: an `internal` ALB reached
+   * only inside a private network, or TLS ended upstream (a corporate proxy or
+   * another load balancer in front of this one). Use it in production only then.
+   *
+   * Outside a sandbox, synth warns
+   * (`@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`).
+   * A sandbox deploy is unchanged (it always only warns). Has no effect with a
+   * `certificate` (the ALB serves HTTPS).
+   * @default false
+   */
+  allowPlainHttp?: boolean;
   /** The settings the app asks the ALB door for. */
   features?: AlbDoorFeatures<TDomain>;
 };
 
 /**
- * The ALB door as the stacked door's router, as `@aws-blocks/core` `Hosting`
+ * The ALB door as the stacked door's router, as `@aws-cdk-blocks/core` `Hosting`
  * hands it to the L3. Not for apps: it locks the ALB to a CloudFront door in
  * front of it (every listener rule requires the origin-verify header, the
  * default action is a 403, and the security group admits only CloudFront —
@@ -427,6 +454,28 @@ export type CustomDoorOptions<TDomain = HostingDomainConfig> = {
    * @default true
    */
   wiringCheck?: boolean;
+  /**
+   * Serve a production deploy at the plain-HTTP (`http://`) `url` the door
+   * returns, with an API: the explicit opt-out of `PlainHttpFrontDoorError`.
+   *
+   * Dangerous: sign-in, session cookies and every RPC travel in cleartext
+   * between the browser and the door, and `Auth` issues its session cookie
+   * without `Secure` (this flag is what lets it, outside a sandbox: without it
+   * sign-in is refused with `InsecureTransportException`). Anyone who can read
+   * or alter traffic on that path can take over a session.
+   *
+   * Legitimate only when the network path is trusted: a door reached only
+   * inside a private network, or TLS ended upstream (a corporate proxy or
+   * another load balancer in front of the door). Use it in production only then.
+   *
+   * Outside a sandbox, synth warns
+   * (`@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`).
+   * A sandbox deploy is unchanged (it always only warns). Has no effect when
+   * the door returns an `https://` url.
+   * @default false
+   */
+  allowPlainHttp?: boolean;
   /** The settings the door receives as `input.features` (see {@link CustomDoorFeatures}). */
   features?: CustomDoorFeatures<TDomain>;
 };
@@ -447,9 +496,9 @@ export type HostingFrontDoor<TDomain = HostingDomainConfig> =
    * mechanism, not a front door. It takes no settings.
    *
    * Because the site is served without TLS, `'none'` always warns at synth
-   * (`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API.
+   * (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API.
    * If that is intended, acknowledge it with
-   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor')`.
+   * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFrontDoor')`.
    */
   | 'none'
   | CloudFrontDoorOptions<TDomain>
@@ -537,9 +586,9 @@ export type ResolveFrontDoorOptions = {
 const DOOR_OPTION_KEYS: Readonly<Record<FrontDoorKind | 'stackedRouter', readonly string[]>> = {
   cloudfront: [],
   none: [],
-  alb: ['vpc', 'internal', 'certificate'],
+  alb: ['vpc', 'internal', 'certificate', 'allowPlainHttp'],
   apiGateway: ['api', 'certificate'],
-  custom: ['door', 'wiringCheck'],
+  custom: ['door', 'wiringCheck', 'allowPlainHttp'],
   stackedRouter: ['vpc', 'internal', 'certificate'],
 };
 
@@ -641,6 +690,12 @@ const validateDoorOptions = (frontDoor: object, kind: FrontDoorKind, label: stri
   if (door.wiringCheck !== undefined && typeof door.wiringCheck !== 'boolean') {
     throw invalidOption(`\`frontDoor.wiringCheck\` must be true or false (got ${JSON.stringify(door.wiringCheck)}).`, 'Pass a boolean.');
   }
+  if (door.allowPlainHttp !== undefined && typeof door.allowPlainHttp !== 'boolean') {
+    throw invalidOption(
+      `\`frontDoor.allowPlainHttp\` must be true or false (got ${JSON.stringify(door.allowPlainHttp)}).`,
+      'Pass a boolean.',
+    );
+  }
   if (door.api !== undefined && door.api !== 'http' && door.api !== 'rest') {
     throw invalidOption(
       `\`frontDoor.api\` must be 'http' or 'rest' (got ${JSON.stringify(door.api)}).`,
@@ -664,7 +719,7 @@ const validateDoorOptions = (frontDoor: object, kind: FrontDoorKind, label: stri
 
 /**
  * The settings with only the keys each setting takes (`waf: { enabled, rateLimit, webAclArn }`, …).
- * `@aws-blocks/core` merges the deprecated top-level props into the
+ * `@aws-cdk-blocks/core` merges the deprecated top-level props into the
  * `frontDoor.features` it hands this construct; a released prop never
  * rejected an unknown key (`waf: { enable: true }` was ignored), so the merged
  * settings drop such keys rather than fail the check below on a prop the app
@@ -774,7 +829,7 @@ const normalizeGeo = (geo: HostingGeoRestriction, prop: string): HostingGeoRestr
  * @throws HostingError('InvalidFrontDoorSettingError') for an unknown key inside a setting, an unknown geo type, or a `serverOrigin.verifySecretRotation` that is not a non-negative integer.
  * @throws HostingError('FrontDoorSettingConflictError') when a setting is set twice.
  * @throws HostingError('UnsupportedFrontDoorSettingError') when the kind doesn't implement a setting.
- * @internal Framework-only: the merge `HostingConstruct` and the `@aws-blocks/core` `Hosting` share.
+ * @internal Framework-only: the merge `HostingConstruct` and the `@aws-cdk-blocks/core` `Hosting` share.
  */
 export function resolveFrontDoorFeatures<TDomain>(
   frontDoor: HostingFrontDoor<TDomain> | StackedRouterDoorOptions | null | undefined,

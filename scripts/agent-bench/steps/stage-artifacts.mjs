@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Step 4c: build the ONLY copy of the cell's files that gets published. The bench-result,
 // bench-source and bench-trace uploads and the S3 persist read STAGE_DIR, never the originals, and
 // run only if this step succeeded, so a failed or partial sanitize publishes nothing.
@@ -14,7 +17,7 @@
 //      only (exact credential values + token formats; no name heuristics, so package.json scripts
 //      and lockfile package names stay intact); JSON files are also checked value by value, which
 //      catches an exact secret that only matches unescaped. The dirs the upload always excluded
-//      (node_modules, .git, dist, .blocks-sandbox, .aws, .env*, *.pem) are not staged.
+//      (node_modules, .git, dist, .cdk-blocks-sandbox, .aws, .env*, *.pem) are not staged.
 // Paths in messages are redacted and JSON-escaped. STAGE_DIR should live under RUNNER_TEMP (0700).
 // Exit 1 (and STAGE_DIR removed) on any hard failure.
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,7 +25,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { isolationAvailable, reapAgentProcesses } from './lib/isolation.mjs';
 import { createRedactor, credentialValues, redactDeep, redactSecrets, stringifyRedacted } from './lib/secrets.mjs';
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.blocks-sandbox', '.aws']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.cdk-blocks-sandbox', '.aws']);
 const SKIP_FILE_RE = /^\.env|\.pem$/;
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const MAX_HARNESS_BYTES = 256 * 1024 * 1024;

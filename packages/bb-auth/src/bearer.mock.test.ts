@@ -19,7 +19,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import { ApiError, type BlocksContext, clearRouteRegistry, RawRoute, type ScopeParent } from '@aws-blocks/core';
+import { ApiError, type BlocksContext, clearRouteRegistry, RawRoute, type ScopeParent } from '@aws-cdk-blocks/core';
 import { SignJWT } from 'jose';
 import { pkceChallenge } from './engines/federation-direct.js';
 import { AuthErrors } from './errors.js';
@@ -44,15 +44,16 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** A request context for `origin` carrying `Authorization: Bearer <token>` (and optionally a cookie). */
 function bearerCtx(origin: string, token: string, cookie?: string): BlocksContext {
 	const ctx = makeContext(cookie, new URL(origin).host);
 	ctx.request.headers.set('authorization', `Bearer ${token}`);
-	ctx.request.url = new URL(`${origin}/aws-blocks/api`);
+	ctx.request.url = new URL(`${origin}/cdk-blocks/api`);
 	return ctx;
 }
 
@@ -126,14 +127,14 @@ async function nativeSignIn(): Promise<{ accessToken: string; refreshToken: stri
 	const csrf = 'c'.repeat(40);
 	const relayTo = 'http://127.0.0.1:53682/callback';
 	const params = await (
-		await fetch(`${server.origin}/aws-blocks/auth/authorize-params/corp`, {
+		await fetch(`${server.origin}/cdk-blocks/auth/authorize-params/corp`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ csrf, relayTo }),
 		})
 	).json();
 	const verifier = 'native-verifier-0123456789-abcdefghijklmnopqrstuvwxyz';
-	const callbackUrl = `${server.origin}/aws-blocks/auth/callback`;
+	const callbackUrl = `${server.origin}/cdk-blocks/auth/callback`;
 	const authorize = new URL(params.authorizeUrl);
 	for (const [k, v] of Object.entries({
 		response_type: 'code',
@@ -151,7 +152,7 @@ async function nativeSignIn(): Promise<{ accessToken: string; refreshToken: stri
 	const relayed = await fetch(location(toCallback, server.origin), { redirect: 'manual' });
 	const code = new URL(location(relayed, server.origin)).searchParams.get('code') ?? '';
 	// A fresh client with no cookie jar: the SDK keeps only the bearer tokens.
-	const exchanged = await fetch(`${server.origin}/aws-blocks/auth/exchange`, {
+	const exchanged = await fetch(`${server.origin}/cdk-blocks/auth/exchange`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({
@@ -182,7 +183,7 @@ describe('allowBearerAuth — direct OIDC (stub IdP, real ES256) on the mock', (
 	test('the SDK flow: exchange → bearer → /exchange/refresh → the new token as a bearer', async () => {
 		const auth = makeStubAuth(true);
 		mountWhoAmI(auth);
-		const issuer = `${server.origin}/aws-blocks/auth/idp/corp`;
+		const issuer = `${server.origin}/cdk-blocks/auth/idp/corp`;
 
 		const tokens = await nativeSignIn();
 		const first = await whoAmI(tokens.accessToken);
@@ -202,7 +203,7 @@ describe('allowBearerAuth — direct OIDC (stub IdP, real ES256) on the mock', (
 		assert.strictEqual((await whoAmI(tokens.accessToken, '?role=admin')).status, 200);
 
 		// Swift / Dart: refresh with `{ refreshToken }` only, then use the new access token.
-		const refreshed = await fetch(`${server.origin}/aws-blocks/auth/exchange/refresh`, {
+		const refreshed = await fetch(`${server.origin}/cdk-blocks/auth/exchange/refresh`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ refreshToken: tokens.refreshToken }),
@@ -255,7 +256,7 @@ describe('allowBearerAuth — direct OIDC (stub IdP, real ES256) on the mock', (
 		const root = unique();
 		const auth = makeStubAuth(true, root);
 		const tokens = await nativeSignIn();
-		const issuer = `${server.origin}/aws-blocks/auth/idp/corp`;
+		const issuer = `${server.origin}/cdk-blocks/auth/idp/corp`;
 
 		// A cookie session for a different user (Bob) through the browser flow.
 		// The same block (same fullId, so the same session secret — the stub IdP
@@ -269,7 +270,7 @@ describe('allowBearerAuth — direct OIDC (stub IdP, real ES256) on the mock', (
 			users: { groups: ['admin'] },
 		});
 		const b = new TestBrowser();
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		const toCallback = await b.fetch(location(start, server.origin));
 		await b.fetch(location(toCallback, server.origin));
 		const cookie = b.cookieHeader();

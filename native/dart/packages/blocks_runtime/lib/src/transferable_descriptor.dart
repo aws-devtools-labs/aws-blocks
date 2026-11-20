@@ -1,24 +1,9 @@
-/// A transferable's `{"__blocks": tag, …}` descriptor for `toJson()`: a deep
-/// copy of [descriptor], the JSON it was hydrated from, led by [tag] when the
-/// descriptor names none. Key order is kept, so a descriptor the server sent
-/// encodes byte for byte as it arrived. A copy, so a caller changing the
-/// result doesn't change the transferable.
-Map<String, dynamic> transferableDescriptor(
-  String tag,
-  Map<String, dynamic> descriptor,
-) => {'__blocks': tag, ..._copyJsonMap(descriptor)};
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
 
-Map<String, dynamic> _copyJsonMap(Map<String, dynamic> map) => {
-  for (final e in map.entries) e.key: _copyJson(e.value),
-};
+import 'transferable_exception.dart';
 
-Object? _copyJson(Object? value) => switch (value) {
-  final Map<String, dynamic> map => _copyJsonMap(map),
-  final List<dynamic> list => [for (final e in list) _copyJson(e)],
-  _ => value,
-};
-
-/// Throws a [FormatException] unless [json] is an object whose `__blocks` is a
+/// Throws a [TransferableException] unless [json] is an object whose `__blocks` is a
 /// non-empty string equal to [expectedTag]; returns that same instance, not a
 /// copy, so the caller owns any copying it needs.
 Map<String, dynamic> validateTransferableDescriptor(
@@ -27,23 +12,54 @@ Map<String, dynamic> validateTransferableDescriptor(
   String subject = 'Transferable',
 }) {
   if (json is! Map<String, dynamic>) {
-    throw FormatException(
+    throw TransferableException(
       "$subject for '$expectedTag' expected a JSON object descriptor",
     );
   }
   final tag = json['__blocks'];
   if (tag is! String) {
-    throw FormatException(
+    throw TransferableException(
       "$subject for '$expectedTag' expected a string '__blocks' tag",
     );
   }
   if (tag.isEmpty) {
-    throw FormatException(
+    throw TransferableException(
       "$subject for '$expectedTag' expected a non-empty '__blocks' tag",
     );
   }
   if (tag != expectedTag) {
-    throw FormatException("$subject expected tag '$expectedTag', got '$tag'");
+    throw TransferableException(
+      "$subject expected tag '$expectedTag', got '$tag'",
+    );
   }
   return json;
+}
+
+/// The [field] of a transferable [descriptor] for [tag] that the client
+/// can't work without. Throws an [InvalidDescriptorException] naming [field]
+/// when it is missing or is not a [T], instead of the `TypeError` of a cast.
+///
+/// Not exported: the package's descriptor errors are raised here and in
+/// [validateTransferableDescriptor].
+T requireDescriptorField<T extends Object>(
+  Map<String, dynamic> descriptor,
+  String field, {
+  required String tag,
+  String subject = 'Transferable',
+}) {
+  final value = descriptor[field];
+  if (value is T) return value;
+  if (value == null) {
+    throw InvalidDescriptorException(
+      "$subject for '$tag' is missing the required field '$field'",
+      blocksType: tag,
+      missingField: field,
+    );
+  }
+  throw InvalidDescriptorException(
+    "$subject for '$tag' expected '$field' to be a $T, got "
+    '${value.runtimeType}',
+    blocksType: tag,
+    missingField: field,
+  );
 }

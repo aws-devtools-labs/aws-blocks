@@ -1,14 +1,16 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import * as cdk from 'aws-cdk-lib';
 import type { Construct, IConstruct } from 'constructs';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
-import { isDisableValue } from '../telemetry/consent.js';
 import { CORE_VERSION } from '../version.js';
 
 const TOOLS_METRICS_METADATA_KEY = 'AWSToolsMetrics';
 const BLOCKS_TOOLS_METRICS_KEY = 'AWSBlocks';
 const BLOCKS_TOOLS_METRICS_FORMAT_VERSION = 1;
 const BUILDING_BLOCK_CENSUS_KEY = Symbol.for('BLOCKS_BUILDING_BLOCK_CENSUS');
-const TEMPLATE_METADATA_DISABLE_ENV = 'AWS_BLOCKS_DISABLE_TEMPLATE_METADATA';
+const TEMPLATE_METADATA_DISABLE_ENV = 'CDK_BLOCKS_DISABLE_TEMPLATE_METADATA';
 const TEMPLATE_METADATA_CONTEXT_KEY = 'blocks:template-metadata';
 const CDK_VERSION_REPORTING_CONTEXT_KEY = 'aws:cdk:version-reporting';
 // Set by the CDK CLI instead of `aws:cdk:version-reporting` when version reporting is off.
@@ -17,6 +19,18 @@ const CDK_DISABLE_VERSION_REPORTING_CONTEXT_KEY = 'aws:cdk:disable-version-repor
 interface BuildingBlockCensus {
 	readonly officialNames: Set<string>;
 	customCount: number;
+}
+
+/**
+ * Whether a `CDK_BLOCKS_DISABLE_TEMPLATE_METADATA` value means "disabled".
+ *
+ * Lax on purpose, unlike CDK's own telemetry variable: `1`, `true` and `yes` all
+ * count, case-insensitively and with surrounding whitespace ignored.
+ */
+export function isDisableValue(value: string | undefined): boolean {
+	if (value === undefined) return false;
+	const normalized = value.trim().toLowerCase();
+	return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
 /**
@@ -56,14 +70,14 @@ export function isSandboxContext(scope: IConstruct): boolean {
  *
  * The `AWSBlocks` entry is enabled by default. It is omitted entirely, leaving any existing
  * `AWSToolsMetrics` value untouched, in any of these cases:
- * - the env var `AWS_BLOCKS_DISABLE_TEMPLATE_METADATA` is `1`, `true` or `yes`
+ * - the env var `CDK_BLOCKS_DISABLE_TEMPLATE_METADATA` is `1`, `true` or `yes`
  *   (case-insensitive, trimmed);
  * - the CDK context key `blocks:template-metadata` is `false` or `"false"`;
  * - CDK version reporting is turned off (`cdk --no-version-reporting`, `"versionReporting": false`
  *   in `cdk.json`, `new App({ analyticsReporting: false })`, or the context key
  *   `aws:cdk:version-reporting` set to `false`).
  *   Via the CDK CLI, use `--no-version-reporting` or `cdk.json`; `-c aws:cdk:version-reporting=false` is overridden.
- * The CLI telemetry opt-out (`AWS_BLOCKS_DISABLE_TELEMETRY`, `.blocks/config.json`) does not
+ * The CLI telemetry opt-out, which is CDK's own (see `telemetry/cdk-consent.ts`), does not
  * affect it. The `blocks:deployment-type` tag is applied either way.
  *
  * @param stack - The CDK stack to annotate. May be a nested stack; the metadata is

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Print the body of a single CHANGELOG section.
 # Usage: extract-changelog.sh <changelog-path> <version>
 # Prints everything between "## <version>" and the next "## " heading,

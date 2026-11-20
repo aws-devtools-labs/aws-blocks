@@ -1,5 +1,10 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Persistent [TokenStore] backed by iOS Keychain / Android Keystore.
@@ -10,6 +15,16 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// accessibility, they can be read only while the device is unlocked, and they
 /// now do not move to another device. This matches the Swift and Kotlin
 /// runtimes.
+///
+/// The plugin talks to the platform over a method channel, which needs the
+/// Flutter binding. On the main isolate the store calls
+/// `WidgetsFlutterBinding.ensureInitialized()` itself before its first read
+/// or write, so it works even when used before `runApp` (for example from a
+/// `Blocks` call at the top of `main`). An app that installs a binding of its
+/// own must do that before the store is first used. On a background isolate
+/// the store does not create a binding: initialize the isolate's messenger
+/// with `BackgroundIsolateBinaryMessenger.ensureInitialized` first, as for any
+/// plugin.
 class FlutterSecureStore implements TokenStore {
   /// Creates a store. Pass [storage] to configure flutter_secure_storage
   /// yourself; its options are then used as given, and items stored by an
@@ -76,8 +91,20 @@ class FlutterSecureStore implements TokenStore {
       (defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.macOS);
 
+  static bool _bindingReady = false;
+
+  /// Creates the Flutter binding on the main isolate if the app has not yet.
+  static void _ensureBinding() {
+    if (_bindingReady) return;
+    if (kIsWeb || ServicesBinding.rootIsolateToken != null) {
+      WidgetsFlutterBinding.ensureInitialized();
+    }
+    _bindingReady = true;
+  }
+
   @override
   Future<String?> get(String key) async {
+    _ensureBinding();
     final value = await _storage.read(key: key);
     final previous = _previousStorage;
     if (value != null || previous == null) return value;
@@ -93,6 +120,7 @@ class FlutterSecureStore implements TokenStore {
   /// in again. The plugin's own write has the same window.
   @override
   Future<void> set(String key, String value) async {
+    _ensureBinding();
     final previous = _previousStorage;
     if (previous != null &&
         !await _storage.containsKey(key: key) &&
@@ -107,5 +135,8 @@ class FlutterSecureStore implements TokenStore {
   }
 
   @override
-  Future<void> delete(String key) => _storage.delete(key: key);
+  Future<void> delete(String key) {
+    _ensureBinding();
+    return _storage.delete(key: key);
+  }
 }

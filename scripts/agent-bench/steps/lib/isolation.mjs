@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // The uid boundary every agent-controlled process runs behind: the builder and judge shells
 // (run-shell.ts) and every process step 3 starts from the agent's app (agent-exec.mjs).
 //

@@ -49,7 +49,8 @@ const PERMITTED: Record<string, string> = {
 	'MFA config':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, mfa: { mode: 'optional', types: ['TOTP'] } })",
 	'token validities (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('AccessTokenValidity', 30); ${L1_CLIENT}.addPropertyOverride('IdTokenValidity', 30); ${L1_CLIENT}.addPropertyOverride('RefreshTokenValidity', 7); ${L1_CLIENT}.addPropertyOverride('TokenValidityUnits', { AccessToken: 'minutes', IdToken: 'minutes', RefreshToken: 'days' });`,
-	'callback URLs (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('CallbackURLs', ['https://app.example.com/aws-blocks/auth/callback']); ${L1_CLIENT}.addPropertyOverride('LogoutURLs', ['https://app.example.com/']);`,
+	'refresh-token rotation + explicit auth flows (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('RefreshTokenRotation', { Feature: 'ENABLED', RetryGracePeriodSeconds: 10 }); ${L1_CLIENT}.addPropertyOverride('ExplicitAuthFlows', ['ALLOW_USER_PASSWORD_AUTH']);`,
+	'callback URLs (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('CallbackURLs', ['https://app.example.com/cdk-blocks/auth/callback']); ${L1_CLIENT}.addPropertyOverride('LogoutURLs', ['https://app.example.com/']);`,
 	'SupportedIdentityProviders (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('SupportedIdentityProviders', ['COGNITO', 'Google']);`,
 	'adding a social provider': `new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } } })`,
 	'adding a custom attribute':
@@ -139,8 +140,8 @@ function baseSynth(): { dir: string; result: GuardSynthResult } {
 /** A fresh app dir holding BASE's committed baseline — the state after BASE was deployed. */
 function deployedAppDir(): string {
 	const dir = appDir();
-	mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
-	cpSync(join(baseSynth().dir, 'aws-blocks', 'baselines'), join(dir, 'aws-blocks', 'baselines'), { recursive: true });
+	mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
+	cpSync(join(baseSynth().dir, 'cdk-blocks', 'baselines'), join(dir, 'cdk-blocks', 'baselines'), { recursive: true });
 	return dir;
 }
 
@@ -619,9 +620,9 @@ describe('the baseline file', () => {
 		assert.ok(!result.ok, 'synth must fail');
 		assert.match(
 			result.stderr,
-			/uses format version 2, written by a newer\s+version of @aws-blocks\/bb-auth or @aws-blocks\/core/,
+			/uses format version 2, written by a newer\s+version of @aws-cdk-blocks\/bb-auth or @aws-cdk-blocks\/core/,
 		);
-		assert.match(result.stderr, /Upgrade @aws-blocks\/bb-auth and @aws-blocks\/core/);
+		assert.match(result.stderr, /Upgrade @aws-cdk-blocks\/bb-auth and @aws-cdk-blocks\/core/);
 		assert.strictEqual(readFileSync(file, 'utf8'), content, 'the newer file is not overwritten');
 	});
 
@@ -660,7 +661,7 @@ describe('the baseline file', () => {
 			assert.ok(warning, `expected the pool-deletion warning, got ${JSON.stringify(first.warnings)}`);
 			assert.deepStrictEqual(rest, [], 'one warning per block');
 			assert.match(warning, /^Auth 'TestStack-auth': this is the block's first baseline/);
-			assert.match(warning, /see MIGRATION\.md in @aws-blocks\/bb-auth/);
+			assert.match(warning, /see MIGRATION\.md in @aws-cdk-blocks\/bb-auth/);
 			assert.match(warning, /Deploy the migrated code unchanged first, commit its baseline/);
 			const baseline = JSON.parse(readFileSync(defaultBaselineFile(dir), 'utf8')) as Record<string, unknown>;
 			assert.strictEqual(baseline.ownsPool, false);

@@ -8,15 +8,15 @@ import {
 	PutParameterCommand,
 } from '@aws-sdk/client-ssm';
 import type { GetParameterCommandOutput } from '@aws-sdk/client-ssm';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { assertValueWithinSizeLimit } from './validation.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 // Re-export public types from types module (canonical source)
 export { AppSettingErrors } from './errors.js';
@@ -51,7 +51,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
  * `Secret`, the recommended home for credentials.
  *
  * **When NOT to use:** If you need structured key-value data with conditional
- * writes and queries, use `KVStore` or `DistributedTable`.
+ * writes and queries, use `KVStore`.
  *
  * **Best practices:**
  * - One AppSetting per logical configuration value
@@ -64,7 +64,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
 export class AppSetting<T = string> extends Scope {
 	/**
 	 * Reference an SSM parameter created and owned **outside this stack** (e.g. a
-	 * connection string seeded by `ensureSecrets` before deploy). At runtime this
+	 * connection string stored by `npm run db -- connect --stage`). At runtime this
 	 * reads the value like any other setting; the construct-time behavior (no
 	 * create/seed/tag/delete, read-only grant) is applied by the CDK variant. The
 	 * factory exists on every variant so app code uses one API across dev/deploy.

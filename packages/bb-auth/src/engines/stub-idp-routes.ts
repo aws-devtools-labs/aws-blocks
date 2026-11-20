@@ -18,8 +18,8 @@
  * @internal
  */
 
-import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, RawRouteErrors, type Scope } from '@aws-blocks/core';
-import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, RawRouteErrors, type Scope } from '@aws-cdk-blocks/core';
+import { getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 
 /** Root under which every stub issuer is mounted (inside the reserved auth subtree). */
 export const STUB_ROOT = `${BLOCKS_AUTH_PREFIX}/idp`;
@@ -32,7 +32,7 @@ export function stubIssuerPath(providerId: string): string {
 /**
  * The absolute issuer URL of a provider's stub for this request: the
  * deploy-injected `BLOCKS_API_URL` (which the server can reach itself) with any
- * stage prefix before `/aws-blocks`, else the request's base URL, origin plus any
+ * stage prefix before `/cdk-blocks` (or legacy `/aws-blocks`), else the request's base URL, origin plus any
  * API Gateway stage (`getRequestBaseUrl()`; `ctx.request.url` is the route path
  * and never has the stage) — `bb-auth-oidc`'s rule.
  *
@@ -48,7 +48,7 @@ export function stubIssuerUrl(
 ): string {
 	if (!apiUrl) return `${getRequestBaseUrl(ctx).replace(/\/+$/, '')}${stubIssuerPath(providerId)}`;
 	const url = new URL(apiUrl);
-	const routeStart = url.pathname.search(/\/aws-blocks\b/);
+	const routeStart = url.pathname.search(/\/(cdk|aws)-blocks\b/);
 	const stagePrefix = routeStart > 0 ? url.pathname.slice(0, routeStart) : '';
 	return `${url.protocol}//${url.host}${stagePrefix}${stubIssuerPath(providerId)}`;
 }
@@ -67,6 +67,23 @@ export interface StubIdpHandlers {
 	revoke: StubHandler;
 	logout: StubHandler;
 }
+
+/**
+ * Every route of one stub issuer, relative to {@link stubIssuerPath}: construct id suffix, method, path and handler.
+ * The CDK layer claims the same table at synth (`claimAuthRoutes`).
+ */
+export const STUB_IDP_ROUTES: ReadonlyArray<
+	readonly [suffix: string, method: 'GET' | 'POST', path: string, name: keyof StubIdpHandlers]
+> = [
+	['discovery', 'GET', '/.well-known/openid-configuration', 'discovery'],
+	['jwks', 'GET', '/jwks.json', 'jwks'],
+	['authorize', 'GET', '/authorize', 'authorize'],
+	['authorize-submit', 'POST', '/authorize', 'authorizeSubmit'],
+	['token', 'POST', '/token', 'token'],
+	['userinfo', 'GET', '/userinfo', 'userinfo'],
+	['revoke', 'POST', '/revoke', 'revoke'],
+	['logout', 'GET', '/logout', 'logout'],
+];
 
 /**
  * Mount one provider's stub IdP routes on `scope` (the `Auth` instance). The
@@ -90,18 +107,8 @@ export function mountStubIdpRoutes(scope: Scope, providerId: string, load: () =>
 	};
 	const base = stubIssuerPath(providerId);
 	const id = (suffix: string) => `auth-idp-${providerId}-${suffix}`;
-	const routes: ReadonlyArray<[suffix: string, method: 'GET' | 'POST', path: string, name: keyof StubIdpHandlers]> = [
-		['discovery', 'GET', '/.well-known/openid-configuration', 'discovery'],
-		['jwks', 'GET', '/jwks.json', 'jwks'],
-		['authorize', 'GET', '/authorize', 'authorize'],
-		['authorize-submit', 'POST', '/authorize', 'authorizeSubmit'],
-		['token', 'POST', '/token', 'token'],
-		['userinfo', 'GET', '/userinfo', 'userinfo'],
-		['revoke', 'POST', '/revoke', 'revoke'],
-		['logout', 'GET', '/logout', 'logout'],
-	];
 	try {
-		for (const [suffix, method, path, name] of routes) {
+		for (const [suffix, method, path, name] of STUB_IDP_ROUTES) {
 			new RawRoute(scope, id(suffix), {
 				method,
 				path: `${base}${path}`,

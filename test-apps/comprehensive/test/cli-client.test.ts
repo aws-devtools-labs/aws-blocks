@@ -4,15 +4,16 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { testApiUrl } from './api-url.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = join(__dirname, '..');
-const clientUrl = pathToFileURL(join(projectRoot, 'aws-blocks', 'client.js')).href;
+const clientUrl = pathToFileURL(join(projectRoot, 'cdk-blocks', 'client.js')).href;
 
 /**
  * How long the keep-alive regression test idles the main test process's HTTP pool
@@ -58,7 +59,7 @@ export function cliClientTests(getApi: () => typeof apiType) {
     });
 
     test('default export fails when CWD has no config.json', { timeout: 15_000 }, async () => {
-      // A fresh directory has no .blocks-sandbox/config.json.
+      // A fresh directory has no .cdk-blocks-sandbox/config.json.
       // The client's auto-discovery reads config.json relative to CWD, so it fails.
       const result = await runCli(`
         const { api } = await import(clientUrl);
@@ -83,7 +84,7 @@ export function cliClientTests(getApi: () => typeof apiType) {
     });
 
     test('generateClient with correct URL succeeds', { timeout: 15_000 }, async () => {
-      const config = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'config.json'), 'utf-8'));
+      const config = { apiUrl: testApiUrl() };
 
       // CWD has no config.json, but generateClient bypasses discovery entirely.
       const result = await runCli(`
@@ -126,7 +127,7 @@ export function cliClientTests(getApi: () => typeof apiType) {
             });
             server.keepAliveTimeout = 60_000;
             await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-            const url = 'http://127.0.0.1:' + server.address().port + '/aws-blocks/api';
+            const url = 'http://127.0.0.1:' + server.address().port + '/cdk-blocks/api';
             const { generateClient } = await import(clientUrl);
             const { api } = generateClient(${retry === undefined ? '{ url }' : '{ url, retryStaleConnection: false }'});
             const first = await api.echoData('first');

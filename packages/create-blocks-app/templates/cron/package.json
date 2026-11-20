@@ -8,27 +8,35 @@
     "node": ">=22.0.0"
   },
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ],
   "scripts": {
     "build": "npm run typecheck",
     "typecheck": "tsc --noEmit",
-    "spec": "cdk-blocks generate spec",
-    "prebuild": "cdk-blocks generate client",
-    "dev": "cdk-blocks dev",
-    "dev:stop": "cdk-blocks dev stop",
-    "sandbox": "cdk-blocks sandbox",
-    "sandbox:deploy": "cdk-blocks sandbox deploy",
-    "sandbox:destroy": "cdk-blocks sandbox destroy",
-    "sandbox:console": "cdk-blocks sandbox console",
-    "cleanup": "cdk-blocks dev stop --all",
-    "deploy": "cdk-blocks deploy",
-    "secret": "cdk-blocks secret",
-    "config": "cdk-blocks config",
-    "typegen": "cdk-blocks generate types",
-    "destroy": "cdk-blocks destroy",
+    "spec": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate spec",
+    "prebuild": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client",
+    "dev": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev",
+    "dev:stop": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev stop",
+    "sandbox": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox",
+    "sandbox:deploy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox deploy",
+    "sandbox:destroy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox destroy",
+    "sandbox:console": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox console",
+    "cleanup": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev stop --all",
+    "deploy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- deploy",
+    "secret": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- secret",
+    "config": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- config",
+    "typegen": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate types",
+    "destroy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- destroy",
     "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
-    "vendorize": "cdk-blocks vendorize"
+    "docs": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs",
+    "docs:search": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --search",
+    "docs:api": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --api",
+    "db": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- db",
+    "whoami": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- whoami",
+    "migrate": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- migrate",
+    "help": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- --help",
+    "generate-client": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client",
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "blocks": {
     "dev": {
@@ -37,7 +45,7 @@
     }
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*"
+    "aws-cdk-blocks": "*"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

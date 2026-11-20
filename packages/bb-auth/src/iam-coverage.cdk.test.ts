@@ -23,8 +23,8 @@ import type { CfnTemplateJson } from './test-support/cdk-synth.js';
 import { synthIdentity } from './test-support/identity.js';
 import type { AuthOptions } from './types.js';
 
-before(() => rmSync('.bb-data', { recursive: true, force: true }));
-after(() => rmSync('.bb-data', { recursive: true, force: true }));
+before(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+after(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** A plausible answer for every command the engine may send. */
 const REPLIES: Record<string, () => unknown> = {
@@ -54,6 +54,7 @@ const REPLIES: Record<string, () => unknown> = {
 	AdminEnableUserCommand: () => ({}),
 	AdminResetUserPasswordCommand: () => ({}),
 	AdminSetUserPasswordCommand: () => ({}),
+	AdminUpdateUserAttributesCommand: () => ({}),
 	AdminGetUserCommand: () => ({ Username: 'bob', UserAttributes: [] }),
 	ListUsersCommand: () => ({ Users: [] }),
 	ConfirmForgotPasswordCommand: () => ({}),
@@ -143,6 +144,19 @@ describe('IAM coverage — the account surface needs only the base statement', (
 	});
 });
 
+describe('IAM coverage — session refresh', () => {
+	test('refreshing an expired session (GetTokensFromRefreshToken) is granted without admin', async () => {
+		const h = makeAwsAuth(OPTIONS);
+		const b = new Browser();
+		await signInAs(h, b, 'alice', h.idp.authResult('alice', { accessExpIn: -60 }));
+		h.on('GetTokensFromRefreshTokenCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
+		await b.request((c) => h.auth.requireAuth(c));
+		const sent = [...new Set(h.sentNames().map((n) => `cognito-idp:${n.replace(/Command$/, '')}`))];
+		assert.ok(sent.includes('cognito-idp:GetTokensFromRefreshToken'), 'the refresh was sent');
+		assertCovered(sent, granted(BASE), 'session refresh');
+	});
+});
+
 describe("IAM coverage — admin: { actions: ['groups'] }", () => {
 	test('every groups method is granted', async () => {
 		const sent = await observedActions(async (h) => {
@@ -162,6 +176,7 @@ describe("IAM coverage — admin: { actions: ['groups'] }", () => {
 			'AdminDeleteUser',
 			'AdminDisableUser',
 			'AdminSetUserPassword',
+			'AdminUpdateUserAttributes',
 			'ListUsers',
 		]) {
 			assert.ok(!grants.has(`cognito-idp:${a}`), `${a} must not be granted`);
@@ -179,6 +194,7 @@ describe("IAM coverage — admin: { actions: ['lifecycle'] }", () => {
 			await h.auth.admin.enableUser('bob');
 			await h.auth.admin.resetUserPassword('bob');
 			await h.auth.admin.setUserPassword('bob', 'Final!1234', { permanent: true });
+			await h.auth.admin.updateUserAttributes('bob', { name: 'Bob' });
 			await h.auth.admin.revokeUserSessions('bob');
 			await h.auth.admin.deleteUser('bob');
 		});

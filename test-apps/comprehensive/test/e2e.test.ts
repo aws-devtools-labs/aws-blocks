@@ -12,14 +12,15 @@ import type {
   authSocialApi as authSocialApiType,
   isolatedApi as isolatedApiType,
   strictStatusApi as strictStatusApiType,
-} from 'aws-blocks';
-import { ApiError } from '@aws-blocks/core';
+} from 'cdk-blocks';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
 import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
-import { distributedTableTests } from './distributed-table.test.js';
-import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
+import { legacyKvStoreTests, seedLegacyStore } from './legacy-kv-store.test.js';
+import { kvStoreDocumentsTests } from './kv-store-documents.test.js';
+import { kvStoreSecureDefaultsTests } from './kv-store-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
@@ -33,11 +34,10 @@ import { oidcAuthTests } from './oidc-auth.test.js';
 import { authApiNarrowingTests, type AuthStateApis } from './auth-api-narrowing.test.js';
 import { authTestHelpersTests } from './auth-test-helpers.test.js';
 import { authProtectTests, type ProtectApis } from './auth-protect.test.js';
+import { withAuthAnonymousTests } from './with-auth-anonymous.test.js';
 import { authTotpEnrolmentTests, type AuthTotpApis } from './auth-totp-enrolment.test.js';
 import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
-import { databaseTests } from './database.test.js';
-import { dsqlTests } from './dsql.test.js';
 import { databaseBlockTests } from './database-block.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
@@ -54,11 +54,14 @@ import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
 import { httpErrorStatusTests } from './http-error-status.test.js';
+import { voidResultTests } from './void-result.test.js';
+import { apiUrlStageTests } from './api-url-stage.test.js';
 import { authSocialLocalTests } from './auth-social-local.test.js';
+import { testApiUrl } from './api-url.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
+const backendPath = join(__dirname, '..', 'cdk-blocks', 'index.cdk.ts');
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
@@ -66,7 +69,7 @@ let isolatedApi: typeof isolatedApiType;
 let strictStatusApi: typeof strictStatusApiType;
 let authSocialApi: typeof authSocialApiType;
 let authStateApis: AuthStateApis;
-let appModule: typeof import('aws-blocks');
+let appModule: typeof import('cdk-blocks');
 let protectApis: ProtectApis;
 let authTotpApis: AuthTotpApis;
 
@@ -101,6 +104,8 @@ test.before(async () => {
   }
   
   if (ENV === 'local') {
+    // The data file of a store of a KVStore release up to 0.4.0, for the LegacyKVStore tests.
+    seedLegacyStore();
     console.log('🚀 Starting local dev server...');
     
     server = spawn('npm', ['run', 'dev:server'], {
@@ -157,8 +162,9 @@ test.before(async () => {
   // server persist across requests — Node's fetch doesn't do this natively.
   installCookieJar();
 
-  // Import API after config is written
-  const module = await import('aws-blocks');
+  // Import API after config is written, pinned to the target of BLOCKS_TEST_ENV (see testApiUrl).
+  process.env.BLOCKS_API_URL = testApiUrl();
+  const module = await import('cdk-blocks');
   appModule = module;
   api = module.api;
   isolatedApi = module.isolatedApi;
@@ -211,7 +217,7 @@ test.after(async (t) => {
   // even when every test passed.
   //
   // Which module owns that pool is environment-dependent. Under `tsx -C browser`
-  // `import 'aws-blocks'` resolves (via the package's `browser` export) to the
+  // `import 'cdk-blocks'` resolves (via the package's `browser` export) to the
   // generated client.js, which side-effect-imports the realtime client
   // middleware — bb-realtime/mock-middleware locally, bb-realtime/aws-middleware
   // on sandbox/production. We reset BOTH, best-effort: a dynamic import of the
@@ -219,7 +225,7 @@ test.after(async (t) => {
   // live sockets, and the other module's reset is a harmless no-op over an empty
   // pool. Doing this as a dynamic (not top-level) import keeps the inactive
   // module out of the response-hydration chain during the tests themselves.
-  for (const spec of ['@aws-blocks/bb-realtime/mock-middleware', '@aws-blocks/bb-realtime/aws-middleware']) {
+  for (const spec of ['@aws-cdk-blocks/bb-realtime/mock-middleware', '@aws-cdk-blocks/bb-realtime/aws-middleware']) {
     try {
       const mw = await import(spec);
       (mw as { __resetConnectionsForTest?: () => void }).__resetConnectionsForTest?.();
@@ -265,6 +271,8 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 // Before any suite signs into `auth`: the signed-out call must stay signed out.
 httpErrorStatusTests(() => ({ api, strictStatusApi }));
 
+voidResultTests(() => api);
+
 // Local only: the `auth-social` block exists only in `npm run dev`.
 if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
 
@@ -272,7 +280,7 @@ if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
 // before the background suites below start, because once they overlap a full
 // purge could delete a code one of them is waiting to read (basic-auth.test.ts
 // covers the per-user purge). Locally it also sweeps the records earlier runs
-// left in .bb-data/.
+// left in .cdk-blocks/local/data/.
 test('Auth - full purge clears every code record and leaves other keys alone', { skip: ENV !== 'local' && 'codeDelivery is mock-only; deployed Auth emails the code' }, async () => {
   const stamp = Date.now().toString(36);
   const username = `purge-probe-${stamp}`;
@@ -315,6 +323,9 @@ authTestHelpersTests(() => appModule);
 // Auth protect(): a deny-by-default namespace (separate file)
 authProtectTests(() => protectApis);
 
+// withAuth allowAnonymous: server rendering signed out (separate file)
+withAuthAnonymousTests(() => protectApis);
+
 // Auth createApi() TOTP enrolment: set up, verify, challenged sign-in (separate file)
 authTotpEnrolmentTests(() => authTotpApis);
 
@@ -329,18 +340,16 @@ test('Background suites - start Agent, AsyncJob, AsyncJob status', () => backgro
 // KVStore tests (separate file)
 kvStoreTests(() => api);
 
-// DistributedTable tests (separate file)
-distributedTableTests(() => api);
+// LegacyKVStore tests (separate file)
+legacyKvStoreTests(() => api);
 
-// DistributedTable secure-defaults deploy coverage (separate file)
-distributedTableSecureDefaultsTests(() => api);
+// KVStore with a declared key (documents) tests (separate file)
+kvStoreDocumentsTests(() => api);
+
+// KVStore secure-defaults deploy coverage (separate file)
+kvStoreSecureDefaultsTests(() => api);
 
 // Database tests (separate file)
-databaseTests(() => api);
-
-// DSQL Database tests (separate file)
-dsqlTests(() => api);
-
 databaseBlockTests(() => api);
 
 // AppSetting tests (separate file)
@@ -363,6 +372,9 @@ responseCookieTests(() => api);
 
 // The e2e build's test-only support endpoints are secret-gated (separate file)
 testSupportGateTests();
+
+// The deployed suites resolve their target from the stage config, never config.json (separate file)
+apiUrlStageTests();
 
 // CORS preflight allow-list tests (separate file)
 corsPreflightTests(() => api);

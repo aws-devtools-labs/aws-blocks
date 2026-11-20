@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Local A/A calibration: N paid trials per arm from the SAME packages, to measure run-to-run
 variance and choose a trial count. Each trial gets fresh 1-hour STS credentials for a
 Bedrock-only role; the source profile's own credentials never reach Harbor or the agent.

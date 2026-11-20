@@ -4,8 +4,8 @@ pubspec.lock
 .metadata
 .packages
 build/
-.bb-data/
-.blocks-sandbox/
+.cdk-blocks/local/data/
+.cdk-blocks-sandbox/
 node_modules/
 *.backup
 .npmrc

@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct Bag: Codable {
+public nonisolated struct Bag: Codable, Sendable {
     public let attributes: String
     public let attributes_2: [String: String]
 
@@ -40,12 +40,48 @@ public nonisolated struct Bag: Codable {
     }
 }
 
-public nonisolated enum ProfileState: String, Codable {
-    case inProgress = "in-progress"
-    case in_Progress = "in_progress"
+public nonisolated enum ProfileState: RawRepresentable, Codable, Hashable, Sendable {
+    case inProgress
+    case in_Progress
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "in-progress": self = .inProgress
+        case "in_progress": self = .in_Progress
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .inProgress: return "in-progress"
+        case .in_Progress: return "in_progress"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.inProgress, .inProgress): return true
+        case (.in_Progress, .in_Progress): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .inProgress: hasher.combine(0)
+        case .in_Progress: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
-public nonisolated struct Profile: Codable {
+public nonisolated struct Profile: Codable, Sendable {
     public let Meta: Meta
     public let state: ProfileState
     public let userName: UserName
@@ -58,7 +94,7 @@ public nonisolated struct Profile: Codable {
         self.user_name = user_name
     }
 
-    public nonisolated struct Meta: Codable {
+    public nonisolated struct Meta: Codable, Sendable {
         public let x: String
 
         public init(x: String) {
@@ -66,7 +102,7 @@ public nonisolated struct Profile: Codable {
         }
     }
 
-    public nonisolated struct UserName: Codable {
+    public nonisolated struct UserName: Codable, Sendable {
         public let last: String
 
         public init(last: String) {
@@ -74,7 +110,7 @@ public nonisolated struct Profile: Codable {
         }
     }
 
-    public nonisolated struct User_Name: Codable {
+    public nonisolated struct User_Name: Codable, Sendable {
         public let first: String
 
         public init(first: String) {
@@ -83,7 +119,7 @@ public nonisolated struct Profile: Codable {
     }
 }
 
-public nonisolated struct Weird: Codable {
+public nonisolated struct Weird: Codable, Sendable {
     public let back_slash: String
 
     enum CodingKeys: String, CodingKey {

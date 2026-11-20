@@ -22,13 +22,13 @@ describe('LocalDataProvider.getUsage', () => {
 
 	function makeProject(): string {
 		tmpDir = join(tmpdir(), `admin-ui-usage-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
-		mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks-sandbox'), { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-app' }));
-		writeFileSync(join(tmpDir, '.blocks/config.json'), JSON.stringify({ stackId: 'my-app-abc123' }));
+		writeFileSync(join(tmpDir, '.cdk-blocks/config.json'), JSON.stringify({ stackId: 'my-app-abc123' }));
 		// Production's own outputs document supplies its stack AND its region.
 		writeFileSync(
-			join(tmpDir, '.blocks-sandbox/outputs.production.json'),
+			join(tmpDir, '.cdk-blocks-sandbox/outputs.production.json'),
 			JSON.stringify({ 'my-app-prod': { ApiUrl: 'https://abc.execute-api.eu-west-1.amazonaws.com/prod/' } }),
 		);
 		return tmpDir;

@@ -10,8 +10,8 @@
  * @internal
  */
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 import { AuthBase, defineAuthLayer } from './auth-base.js';
 import type {
 	AuthLayer,
@@ -41,7 +41,7 @@ export function makeContext(cookie?: string, host = 'app.example.com'): BlocksCo
 			body: null,
 			json: async () => ({}),
 			text: async () => '',
-			url: new URL(`https://${host}/aws-blocks/api`),
+			url: new URL(`https://${host}/cdk-blocks/api`),
 			params: {},
 		},
 		response: { headers: new Headers(), status: 200, send: () => {} },
@@ -177,6 +177,7 @@ export class FakeNativeEngine implements NativeEngine {
 		removeUserFromGroup: unmodelled('admin.removeUserFromGroup'),
 		listUsersInGroup: unmodelled('admin.listUsersInGroup'),
 		createUser: unmodelled('admin.createUser'),
+		updateUserAttributes: unmodelled('admin.updateUserAttributes'),
 		deleteUser: unmodelled('admin.deleteUser'),
 		disableUser: unmodelled('admin.disableUser'),
 		enableUser: unmodelled('admin.enableUser'),

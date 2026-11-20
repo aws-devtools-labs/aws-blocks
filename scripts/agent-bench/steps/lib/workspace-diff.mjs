@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Best-effort LOC/files churn for a bench cell, measured by snapshotting the scaffolded workspace
 // BEFORE the agent runs and diffing it AFTER. Kept OFF the agent's own git: every git op here targets
 // a THROWAWAY external GIT_DIR (in the OS temp dir) with the workspace as its work-tree, so it only

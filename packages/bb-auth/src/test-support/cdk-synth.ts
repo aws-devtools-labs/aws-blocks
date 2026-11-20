@@ -64,7 +64,7 @@ export interface CdkSynthResult {
 }
 
 export interface CdkSynthOptions {
-	/** ES-module import lines for the probe (e.g. `import { Auth } from '@aws-blocks/bb-auth';`). */
+	/** ES-module import lines for the probe (e.g. `import { Auth } from '@aws-cdk-blocks/bb-auth';`). */
 	imports: string;
 	/**
 	 * Script body run after the harness stack exists. In scope: `stack` (a plain
@@ -90,10 +90,16 @@ export interface CdkSynthOptions {
 	apiUrl?: string | null;
 	/** Extra CDK app context (e.g. `{ sandboxMode: 'true' }`, as `npm run sandbox` sets it). */
 	context?: Record<string, unknown>;
+	/**
+	 * Override `defaults.secretsStore` on top of `preset` (or of the production
+	 * fallback when `preset` is omitted), as a
+	 * `defaults: { ...BlocksPresets.production, secretsStore }` app would.
+	 */
+	secretsStore?: 'ssm' | 'secrets-manager';
 }
 
 /** The harness's default API URL (a literal, so resolved callback URLs are readable). */
-export const HARNESS_API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
+export const HARNESS_API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api';
 
 let probeCounter = 0;
 
@@ -109,7 +115,12 @@ export function synthUnderCdkConditions(options: CdkSynthOptions): CdkSynthResul
 		dirname(fileURLToPath(import.meta.url)),
 		`.cdk-synth-probe.${process.pid}.${probeCounter++}.mjs`,
 	);
-	const presetLine = options.preset ? `stack.defaults = BlocksPresets.${options.preset};` : '';
+	const presetLine = [
+		options.preset ? `stack.defaults = BlocksPresets.${options.preset};` : '',
+		options.secretsStore
+			? `stack.defaults = { ...(stack.defaults ?? BlocksPresets.production), secretsStore: ${JSON.stringify(options.secretsStore)} };`
+			: '',
+	].join('\n');
 	const apiUrl = options.apiUrl === undefined ? HARNESS_API_URL : options.apiUrl;
 	const computeLine = apiUrl === null ? '' : `stack._defaultCompute = { apiUrl: ${JSON.stringify(apiUrl)} };`;
 	writeFileSync(
@@ -118,7 +129,7 @@ export function synthUnderCdkConditions(options: CdkSynthOptions): CdkSynthResul
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME, BlocksPresets } from '@aws-blocks/core/cdk';
+import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME, BlocksPresets } from '@aws-cdk-blocks/core/cdk';
 ${options.imports}
 
 // Path metadata on, as the CDK CLI does, so each resource names its construct path.

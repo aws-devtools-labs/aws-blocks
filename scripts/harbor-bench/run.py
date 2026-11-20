@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Run Harbor with an explicit host environment; publish only allowlisted evidence."""
 import argparse
 import json

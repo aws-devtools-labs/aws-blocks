@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { WINDOWS_E2E_PURPOSE, addPurposeTag } from './_scaffold-tag.mjs';
 
 const repoFile = (rel) => fileURLToPath(new URL(`../../${rel}`, import.meta.url));
-const BACKEND_CDK_ENTRY = repoFile('packages/create-blocks-app/templates/backend/aws-blocks/index.cdk.ts');
+const BACKEND_CDK_ENTRY = repoFile('packages/create-blocks-app/templates/backend/cdk-blocks/index.cdk.ts');
 const CLEANUP_WORKFLOW = readFileSync(repoFile('.github/workflows/cleanup-stacks.yml'), 'utf-8');
 const WINDOWS_DRIVER = readFileSync(repoFile('scripts/ci/windows-template-e2e.mjs'), 'utf-8');
 
@@ -73,7 +73,7 @@ describe('Windows E2E stacks are reclaimable by cleanup-stacks.yml', () => {
 	it('the driver fails the run when a teardown failed', () => {
 		assert.match(WINDOWS_DRIVER, /if \(teardownFailures\.length > 0\) \{\s*throw /);
 		const checkAt = WINDOWS_DRIVER.indexOf('if (teardownFailures.length > 0)');
-		// `cdk-blocks destroy` prompts for confirmation, so the driver passes --yes.
+		// `npm run destroy` prompts for confirmation, so the driver passes --yes.
 		const destroyAt = WINDOWS_DRIVER.lastIndexOf("teardown('npm', ['run', 'destroy', '--', '--yes']");
 		const lastTeardownAt = Math.max(...[...WINDOWS_DRIVER.matchAll(/\bteardown\(/g)].map((m) => m.index));
 		assert.ok(

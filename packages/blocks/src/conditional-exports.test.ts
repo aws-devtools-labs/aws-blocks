@@ -62,7 +62,7 @@ type Policy = 'equal' | 'superset' | 'skip';
 /**
  * Building Blocks (and {@link EXTRA_PACKAGES}): every condition must match `default` exactly.
  *
- * - `aws-runtime` and `cdk`: the same app module (`aws-blocks/index.ts`) is evaluated under
+ * - `aws-runtime` and `cdk`: the same app module (`cdk-blocks/index.ts`) is evaluated under
  *   default (local dev), `cdk` (synth) and `aws-runtime` (Lambda), so a missing name crashes
  *   that stage at import, and an extra name is untyped (types resolve to the mock) and
  *   untested locally.
@@ -74,12 +74,12 @@ type Policy = 'equal' | 'superset' | 'skip';
 const BB_POLICY: Record<Condition, Policy> = { 'aws-runtime': 'equal', cdk: 'equal', browser: 'equal' };
 
 /**
- * `@aws-blocks/blocks`:
+ * `aws-cdk-blocks`:
  * - `aws-runtime`: no dedicated entry — falls back to default, but each re-exported BB then
  *   resolves to its aws entry, so the names must still match.
- * - `cdk`: intentionally a superset — it re-exports `@aws-blocks/core/cdk` (BlocksStack,
+ * - `cdk`: intentionally a superset — it re-exports `@aws-cdk-blocks/core/cdk` (BlocksStack,
  *   BlocksBackend, registerConfig, synthGuard, …) on top of the BB surface.
- * - `browser`: intentionally `export {}` — browser code imports `@aws-blocks/blocks/client`.
+ * - `browser`: intentionally `export {}` — browser code imports `aws-cdk-blocks/client`.
  */
 const UMBRELLA_POLICY: Record<Condition, Policy> = { 'aws-runtime': 'equal', cdk: 'superset', browser: 'skip' };
 
@@ -107,28 +107,7 @@ type KnownGap =
  * The single allowlist of known parity gaps. Shrink it; never grow it without a reason.
  * A stale entry (the gap is gone, or the package no longer exists) fails the test.
  */
-const KNOWN_GAPS: readonly KnownGap[] = [
-	// ── Real gaps whose fix is not a trivially-safe re-export. ──
-	{
-		pkg: '@aws-blocks/bb-data',
-		condition: 'browser',
-		kind: 'missing',
-		symbols: ['PgClientEngine', 'RLSEnabledDatabase', 'createKyselyAdapter', 'sql'],
-		reason:
-			"Server-only: re-exporting would pull `pg` and '@aws-blocks/data-common' (node:fs migrations, " +
-			'PGlite) into browser bundles. Needs purpose-built browser stubs (`sql` is a tagged template ' +
-			'with helper properties) — follow-up, not a re-export.',
-	},
-	{
-		pkg: '@aws-blocks/bb-distributed-data',
-		condition: 'browser',
-		kind: 'missing',
-		symbols: ['createKyselyAdapter', 'sql'],
-		reason:
-			"Server-only: re-exporting would pull '@aws-blocks/data-common' (node:fs migrations, PGlite) " +
-			'into browser bundles. Needs purpose-built browser stubs — follow-up, not a re-export.',
-	},
-];
+const KNOWN_GAPS: readonly KnownGap[] = [];
 
 // ── Discovery ───────────────────────────────────────────────────────────────
 
@@ -249,17 +228,16 @@ const packages = discoverPackages();
 test('discovery sanity check', () => {
 	assert.ok(packages.length >= 8, `Expected ≥8 BB packages, found ${packages.length}: ${packages.join(', ')}`);
 	for (const expected of [
-		'@aws-blocks/bb-kv-store',
-		'@aws-blocks/bb-distributed-table',
-		'@aws-blocks/bb-data',
-		'@aws-blocks/auth-common',
+		'@aws-cdk-blocks/bb-kv-store',
+		'@aws-cdk-blocks/bb-database',
+		'@aws-cdk-blocks/auth-common',
 	]) {
 		assert.ok(packages.includes(expected), `Expected to discover ${expected}`);
 	}
 });
 
 test('KNOWN_GAPS only names checked packages', () => {
-	const checked = new Set([...packages, '@aws-blocks/blocks']);
+	const checked = new Set([...packages, 'aws-cdk-blocks']);
 	const stale = [...new Set(KNOWN_GAPS.map((g) => g.pkg))].filter((p) => !checked.has(p));
 	assert.deepStrictEqual(stale, [], `KNOWN_GAPS names packages that are no longer checked: ${stale.join(', ')}`);
 });
@@ -269,13 +247,13 @@ test('KNOWN_GAPS only names checked packages', () => {
 for (const condition of CONDITIONS) {
 	const policy = UMBRELLA_POLICY[condition];
 	if (policy === 'skip') {
-		test(`@aws-blocks/blocks: ${condition} exports`, {
+		test(`aws-cdk-blocks: ${condition} exports`, {
 			skip: 'intentionally a different surface (see UMBRELLA_POLICY)',
 		});
 		continue;
 	}
-	test(`@aws-blocks/blocks: ${condition} exports ${policy} default`, () => {
-		assertParity('@aws-blocks/blocks', condition, policy);
+	test(`aws-cdk-blocks: ${condition} exports ${policy} default`, () => {
+		assertParity('aws-cdk-blocks', condition, policy);
 	});
 }
 
@@ -323,7 +301,7 @@ const serverConditions: ServerCondition[] = ['aws-runtime', 'cdk'];
 test('bb-* discovery floor', () => {
 	// The browser checks below cover every bb-* package, so a floor keeps the set
 	// from shrinking quietly (e.g. if a directory is renamed out of the bb- prefix).
-	assert.ok(buildingBlocks.length >= 21, `Expected ≥21 bb-* packages, found ${buildingBlocks.length}`);
+	assert.ok(buildingBlocks.length >= 19, `Expected ≥19 bb-* packages, found ${buildingBlocks.length}`);
 });
 
 // ── BB packages: browser (auto-discovered) ──────────────────────────────────
@@ -521,8 +499,8 @@ for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 // throwing, still passes the parity test above. Under cdk, calling a runtime-only
 // instance method must throw `synthGuard`'s error. Skipped:
 // - statics: they are synth-time helpers (`fromExisting()`, `fromKmsKey()`, ...);
-// - classes the cdk entry re-exports unchanged from the runtime (e.g. bb-data's
-//   `PgClientEngine`): same declaration as the default entry, so not a construct;
+// - classes the cdk entry re-exports unchanged from the runtime:
+//   same declaration as the default entry, so not a construct;
 // - methods the construct inherits from outside its package (core's `Scope`);
 // - SYNTH_SAFE_METHODS below.
 
@@ -530,6 +508,8 @@ for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 const SYNTH_SAFE_METHODS = new Set([
 	// Synth-time wiring: `createApi()` builds the RPC namespace the backend module exports.
 	'Auth.prototype.createApi',
+	// Synth-time wiring: `createOidcApi()` builds the native OIDC client's RPC namespace, like `createApi()`.
+	'Auth.prototype.createOidcApi',
 	// Synth-time wiring: `protect()` builds the RPC namespace the backend module exports
 	// (its methods are `synthGuard`ed; see the bb-auth CDK test).
 	'Auth.prototype.protect',

@@ -23,7 +23,7 @@ concurrency:
 jobs:
   revisions:
     # Run the reviewed controller from main, never a PR-controlled privileged workflow.
-    if: github.repository == 'aws-devtools-labs/aws-blocks' && github.ref == 'refs/heads/main'
+    if: github.repository == 'aws/cdk-blocks' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -64,11 +64,21 @@ jobs:
             core.setOutput('candidate', pr.head.sha);
             core.setOutput('baseline', comparison.merge_base_commit.sha);
             core.setOutput('source_repository', pr.head.repo.full_name);
+            // From this job's checkout of the dispatching main commit, not the PR. It escapes the
+            // PR-controlled file names; scripts/ci/harbor-approval-gate.test.mjs runs this script.
+            const { pathToFileURL } = await import('node:url');
+            const { changedFilesSummary } = await import(pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/scripts/harbor-bench/changed-files.mjs`).href);
+            const listing = changedFilesSummary(comparison.files ?? [], { total: pr.changed_files });
             await core.summary.addHeading('Requested Harbor evaluation')
               .addTable([['PR', 'Candidate', 'Baseline', 'Trials per arm'],
                 [value, pr.head.sha, comparison.merge_base_commit.sha, process.env.TRIALS]])
               .addRaw('Optional and non-required. Review these exact revisions before approving model access. '
-                + 'A new dispatch for this PR cancels this run.').write();
+                + 'A new dispatch for this PR cancels this run.', true)
+              .addHeading('Changed files', 3)
+              .addRaw(listing.note, true)
+              .addTable(listing.rows)
+              .addRaw(listing.footer, true).write();
 
   packages:
     needs: revisions
@@ -166,8 +176,12 @@ jobs:
       WORK: run-${{ matrix.arm }}-${{ matrix.trial }}
       # Lifetime of the Bedrock session the agent can read. The run step took at most 1,125 s
       # (p95 882 s) over 284 trials; 2,700 s is three times the p95 and leaves room for Bedrock
-      # throttling at higher trial counts. run.py stops Harbor at the deadline and reports the
-      # trial as an infrastructure error. scripts/ci/harbor-credentials.test.mjs keeps it 900-3600.
+      # throttling at higher trial counts. The session starts right before the run step, and that
+      # step's deadline is the session: run.py stops Harbor at it and reports the trial as an
+      # infrastructure error, and the step's timeout-minutes stops the step about 2 minutes later
+      # (the test allows at most 180 s).
+      # Ending early does not revoke the session; it stays valid until it expires.
+      # scripts/ci/harbor-credentials.test.mjs keeps it 900-3600 and tied to the run step.
       HARBOR_SESSION_SECONDS: 2700
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -210,6 +224,8 @@ jobs:
             {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-5-5","arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5"]}]}
       - name: Run three phases in one Harbor container and Claude session
         id: run
+        # HARBOR_SESSION_SECONDS (45 min) plus 2 min for run.py to stop Harbor and write the result.
+        timeout-minutes: 47
         env:
           CREDENTIALS_EXPIRE_AT: ${{ steps.deadline.outputs.expire_at }}
         run: python scripts/harbor-bench/run.py "$WORK" --credentials-expire-at "$CREDENTIALS_EXPIRE_AT"
@@ -271,7 +287,8 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_TRACES_ROLE_ARN }}
           aws-region: us-east-1
-          role-duration-seconds: 3600
+          # The STS minimum: this session only uploads one trace and one result.
+          role-duration-seconds: 900
           role-session-name: harbor-traces-${{ github.run_id }}-${{ matrix.arm }}-${{ matrix.trial }}
           mask-aws-account-id: true
           unset-current-credentials: true

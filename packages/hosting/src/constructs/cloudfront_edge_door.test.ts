@@ -1,10 +1,13 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Annotations as Annotations_, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Code, Function as LambdaFunction, FunctionUrlAuthType, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
@@ -25,7 +28,10 @@ const plan: HostingPlan = {
 
 /** The composable path: an `AlbConstruct` locked to CloudFront, fronted by `cloudFrontEdgeDoor`. */
 const compose = (id: string, opts: { internal: boolean; https: boolean }) => {
-  const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-west-2' } });
+  // A public router over plain HTTP is a sandbox-only setup (production fails synth).
+  const sandbox = !opts.internal && !opts.https;
+  const app = new App(sandbox ? { context: { sandboxMode: 'true' } } : {});
+  const stack = new Stack(app, id, { env: { account: '111111111111', region: 'us-west-2' } });
   const bucket = new Bucket(stack, 'Assets');
   const vpc = new Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
   const certificate = opts.https
@@ -46,7 +52,7 @@ const compose = (id: string, opts: { internal: boolean; https: boolean }) => {
     plan,
     bucket,
     staticDir: '.',
-    api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' },
+    api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' },
   });
   buildFrontDoor(
     stack,
@@ -129,7 +135,7 @@ describe('cloudFrontEdgeDoor — an HTTPS router at its own domain', () => {
         plan,
         bucket,
         staticDir: '.',
-        api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' },
+        api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' },
       });
       buildFrontDoor(stack, cloudFrontEdgeDoor, { ...input, upstream: { service: 'alb', url: alb.url, originHandle: alb.originHandle } }, { wiringCheck: false });
       const t = Template.fromStack(stack);
@@ -173,7 +179,7 @@ const edgeFor = (
     staticDir: opts.staticDir ?? '.',
     ...(server ? { server: { fn: server, streaming: false } } : {}),
     ...(image ? { image: { fn: image, url: image.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM }) } } : {}),
-    api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', paths: opts.apiPaths },
+    api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api', paths: opts.apiPaths },
   });
   buildFrontDoor(
     stack,
@@ -182,8 +188,8 @@ const edgeFor = (
       ...input,
       upstream: {
         service: 'alb',
-        url: 'http://router.example.com',
-        originHandle: { domainName: 'router.example.com', protocol: 'http', customHeaders: { 'x-blocks-origin-verify': 'v' } },
+        url: 'https://router.example.com',
+        originHandle: { domainName: 'router.example.com', protocol: 'https', customHeaders: { 'x-blocks-origin-verify': 'v' } },
       },
     },
     { wiringCheck: false },
@@ -331,7 +337,9 @@ describe('cloudFrontEdgeDoor — the router default of a site without a server',
   // and the static files reach it there: nothing per-visitor, so no cookies in its key.
   it('keys on no cookies past the behavior budget; with a server it keeps the cookie-keyed policy', () => {
     const synth = (withServer: boolean) => {
-      const stack = new Stack(new App(), `Budget${withServer}`, { env: { account: '111111111111', region: 'us-west-2' } });
+      // A public router over plain HTTP: a sandbox deploy (production fails synth).
+      const app = new App({ context: { sandboxMode: 'true' } });
+      const stack = new Stack(app, `Budget${withServer}`, { env: { account: '111111111111', region: 'us-west-2' } });
       const bucket = new Bucket(stack, 'Assets');
       const alb = new AlbConstruct(stack, 'Router', { plan, bucket, restrictToCloudFront: true });
       const server = withServer
@@ -343,7 +351,7 @@ describe('cloudFrontEdgeDoor — the router default of a site without a server',
         staticDir: '.',
         ...(server ? { server: { fn: server, url: server.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM }), streaming: false } } : {}),
         api: {
-          url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api',
+          url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api',
           paths: Array.from({ length: 30 }, (_, i) => `/hook${i}/*`),
         },
       });
@@ -359,3 +367,129 @@ describe('cloudFrontEdgeDoor — the router default of a site without a server',
   });
 });
 
+describe('cloudFrontEdgeDoor — the origin-verify secret never crosses a plain-HTTP public hop', () => {
+  const VERIFY = 'x-blocks-origin-verify';
+  /**
+   * Build the edge over a stand-in router handle; `sandbox` sets the sandbox deploy's `sandboxMode` context,
+   * `allowPlainHttp` the stacked door's opt-out.
+   */
+  const build = (
+    id: string,
+    handle: { protocol: 'http' | 'https'; private?: boolean; customHeaders?: Record<string, string> },
+    sandbox = false,
+    allowPlainHttp?: boolean,
+  ) => {
+    const app = new App(sandbox ? { context: { sandboxMode: 'true' } } : {});
+    const stack = new Stack(app, id, { env: { account: '111111111111', region: 'us-east-1' } });
+    const bucket = new Bucket(stack, 'Assets');
+    const vpc = handle.private ? new Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 }) : undefined;
+    const alb = vpc
+      ? new AlbConstruct(stack, 'Router', { plan, bucket, vpc, internal: true, restrictToCloudFront: true })
+      : undefined;
+    const input = buildDoorInput({
+      plan,
+      bucket,
+      staticDir: '.',
+      api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api' },
+    });
+    buildFrontDoor(
+      stack,
+      cloudFrontEdgeDoor,
+      {
+        ...input,
+        upstream: alb
+          ? { service: 'alb', url: alb.url, originHandle: alb.originHandle }
+          : {
+              service: 'alb',
+              url: `${handle.protocol}://router.example.com`,
+              originHandle: {
+                domainName: 'router.example.com',
+                protocol: handle.protocol,
+                customHeaders: handle.customHeaders ?? { [VERIFY]: 'v' },
+              },
+            },
+        ...(allowPlainHttp === undefined ? {} : { allowPlainHttp }),
+      },
+      { wiringCheck: false },
+    );
+    return stack;
+  };
+  const sendsSecret = (stack: Stack): boolean => {
+    const t = Template.fromStack(stack);
+    const json = JSON.stringify([
+      ...Object.values(t.findResources('AWS::CloudFront::Distribution')),
+      ...Object.values(t.findResources('AWS::CloudFront::VpcOrigin')),
+    ]);
+    return json.includes(VERIFY);
+  };
+  const plainHttpWarnings = (stack: Stack) =>
+    Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('OriginSecretOverPlainHttp')).length;
+
+  it('a public router over plain HTTP fails synth outside a sandbox, so the secret is never sent', () => {
+    assert.throws(
+      () => build('PlainHttpProd', { protocol: 'http' }),
+      (e: Error & { resolution?: string }) =>
+        e.name === 'OriginSecretOverPlainHttpError' &&
+        /x-blocks-origin-verify/.test(e.message) &&
+        /certificate/.test(e.resolution ?? '') &&
+        /internal: true/.test(e.resolution ?? ''),
+    );
+  });
+
+  it('`allowPlainHttp: true` outside a sandbox sends the secret over plain HTTP, with an acknowledgeable production warning', () => {
+    const ID = '@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction';
+    const allowed = (acknowledge: boolean) => {
+      const stack = build(acknowledge ? 'AllowedAck' : 'Allowed', { protocol: 'http' }, false, true);
+      if (acknowledge) Annotations_.of(stack).acknowledgeWarning(ID);
+      return { stack, found: Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction')) };
+    };
+    const { stack, found } = allowed(false);
+    assert.equal(sendsSecret(stack), true, 'the router keeps admitting the edge');
+    assert.equal(plainHttpWarnings(stack), 0, 'not the sandbox warning');
+    assert.equal(found.length, 1);
+    const text = JSON.stringify(found[0].entry.data);
+    assert.match(text, /x-blocks-origin-verify/);
+    assert.match(text, /origin secret crosses the edge → router hop in cleartext/);
+    assert.match(text, /`allowPlainHttp: true`/);
+    assert.match(text, /trusted/);
+    assert.match(text, /Annotations\.of\(stack\)\.acknowledgeWarning\('@aws-cdk-blocks\/hosting:PlainHttpAllowedInProduction'\)/);
+    assert.equal(allowed(true).found.length, 0, 'acknowledged on the stack');
+  });
+
+  it('`allowPlainHttp: true` in a sandbox changes nothing: the sandbox warning only', () => {
+    const stack = build('AllowedSandbox', { protocol: 'http' }, true, true);
+    assert.equal(plainHttpWarnings(stack), 1);
+    assert.equal(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpAllowedInProduction')).length, 0);
+  });
+
+  it('a sandbox deploy over plain HTTP still synthesizes, and warns', () => {
+    const stack = build('PlainHttpSandbox', { protocol: 'http' }, true);
+    assert.equal(sendsSecret(stack), true, 'the router keeps admitting the sandbox edge');
+    assert.equal(plainHttpWarnings(stack), 1);
+  });
+
+  it('a public router over HTTPS gets the secret as an https-only origin header, with no warning', () => {
+    const stack = build('HttpsProd', { protocol: 'https' });
+    const dist = Object.values(Template.fromStack(stack).findResources('AWS::CloudFront::Distribution'))[0];
+    const router = (dist.Properties.DistributionConfig.Origins as Array<{
+      CustomOriginConfig?: { OriginProtocolPolicy: string };
+      OriginCustomHeaders?: Array<{ HeaderName: string; HeaderValue: string }>;
+    }>).find((o) => o.CustomOriginConfig);
+    assert.equal(router?.CustomOriginConfig?.OriginProtocolPolicy, 'https-only');
+    assert.deepEqual(router?.OriginCustomHeaders, [{ HeaderName: VERIFY, HeaderValue: 'v' }]);
+    assert.equal(plainHttpWarnings(stack), 0);
+  });
+
+  it('an upstream that requires no headers synthesizes over plain HTTP outside a sandbox, with no warning', () => {
+    // A `custom` router door may hand over an empty header map: there is no secret to protect.
+    const stack = build('NoHeadersProd', { protocol: 'http', customHeaders: {} });
+    assert.equal(sendsSecret(stack), false);
+    assert.equal(plainHttpWarnings(stack), 0);
+  });
+
+  it('an internal router over plain HTTP (a VPC origin, on the AWS network) gets the secret, with no warning', () => {
+    const stack = build('InternalHttpProd', { protocol: 'http', private: true });
+    assert.equal(sendsSecret(stack), true);
+    assert.equal(plainHttpWarnings(stack), 0);
+  });
+});

@@ -116,7 +116,7 @@ describe('buildDoctorChecks — local dev server', () => {
 	it('reports the URL, port and discovered namespaces when up', () => {
 		const check = byId(buildDoctorChecks(input()), 'local-dev-server');
 		assert.match(check.detail, /running at http:\/\/localhost:3000/);
-		assert.match(check.detail, /port 3000 from aws-blocks\/scripts\/server\.ts/);
+		assert.match(check.detail, /port 3000 from cdk-blocks\/scripts\/server\.ts/);
 		assert.match(check.detail, /api, admin/);
 	});
 
@@ -125,12 +125,12 @@ describe('buildDoctorChecks — local dev server', () => {
 			buildDoctorChecks(input({ localDevServer: { ...healthyServer, portSource: 'default' } })),
 			'local-dev-server',
 		);
-		assert.match(check.detail, /not discovered from aws-blocks\/scripts\/server\.ts/);
+		assert.match(check.detail, /not discovered from cdk-blocks\/scripts\/server\.ts/);
 	});
 });
 
 describe('buildDoctorChecks — bb-data', () => {
-	it('warns with the generate-data remediation when .bb-data is absent', () => {
+	it('warns with the generate-data remediation when .cdk-blocks/local/data is absent', () => {
 		const checks = buildDoctorChecks(input({ localDevServer: { ...healthyServer, bbDataPresent: false } }));
 		const check = byId(checks, 'bb-data');
 		assert.strictEqual(check.status, 'warn');
@@ -342,9 +342,9 @@ describe('runDoctor', () => {
 
 	function makeProject(): string {
 		tmpDir = join(tmpdir(), `admin-ui-doctor-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'temp-doctor-app' }));
-		writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'temp-doctor-app-abc' }));
+		writeFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'temp-doctor-app-abc' }));
 		return tmpDir;
 	}
 

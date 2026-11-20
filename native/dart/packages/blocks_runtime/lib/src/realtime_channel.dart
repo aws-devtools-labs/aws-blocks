@@ -1,25 +1,48 @@
-import 'dart:async';
-import 'dart:convert';
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
 
+import 'dart:async';
+
+import 'realtime_exception.dart';
 import 'transferable_descriptor.dart';
 import 'web_socket_pool.dart';
 
 /// A live WebSocket subscription that produces a typed [Stream] of messages.
-class RealtimeChannel<T> {
-  /// Shared pool across all channel instances for connection reuse.
-  static final WebSocketPool _pool = WebSocketPool();
-
+///
+/// A subscription's stream closes normally only when the app ends it, by
+/// cancelling the stream subscription or calling [close]. Every other end
+/// emits one [RealtimeException], then closes the stream:
+///
+/// - [RealtimeSubscriptionEndedException] when the server ends or refuses this
+///   channel's subscription, for example when the channel token expires
+///   (`code` `token_expired`, about an hour after the channel was issued).
+/// - [RealtimeConnectionException] when the WebSocket fails or closes.
+///
+/// The SDK doesn't renew or reconnect by itself. To keep listening, call the
+/// API method that returned the channel again and subscribe to the new
+/// handle:
+///
+/// ```dart
+/// Future<void> follow(String room) async {
+///   final channel = await blocks.api.realtimeGetChannel(channel: room);
+///   try {
+///     await for (final cursor in channel.subscribe()) {
+///       draw(cursor);
+///     }
+///   } on RealtimeSubscriptionEndedException catch (e) {
+///     if (e.code == 'token_expired') return follow(room);
+///     rethrow;
+///   }
+/// }
+/// ```
+final class RealtimeChannel<T> {
   final String channel;
   final String wsUrl;
   final String? connectToken;
   final String token;
   final T Function(Object? payload) _decode;
-
-  /// The descriptor this channel was hydrated from, as [toJson] returns it.
-  final Map<String, dynamic> _descriptor;
   bool _closed = false;
-  bool _subscribed = false;
-  StreamController<T>? _controller;
+  final Set<_Subscription<T>> _subscriptions = {};
 
   RealtimeChannel._({
     required this.channel,
@@ -27,9 +50,7 @@ class RealtimeChannel<T> {
     this.connectToken,
     required this.token,
     required T Function(Object? payload) decode,
-    required Map<String, dynamic> descriptor,
-  }) : _decode = decode,
-       _descriptor = descriptor;
+  }) : _decode = decode;
 
   /// Hydrates a RealtimeChannel from a JSON descriptor.
   ///
@@ -56,33 +77,27 @@ class RealtimeChannel<T> {
   ///   (payload) => (payload as List<dynamic>).cast<String>(),
   /// );
   /// ```
+  ///
+  /// Throws an `InvalidDescriptorException` when [descriptor] has no string
+  /// `channel`, `wsUrl` or `token`.
   static RealtimeChannel<T> fromJsonValue<T>(
     Map<String, dynamic> descriptor,
     T Function(Object? payload) decode,
   ) {
+    String field(String name) => requireDescriptorField<String>(
+      descriptor,
+      name,
+      tag: 'realtime/channel',
+      subject: 'RealtimeChannel',
+    );
     return RealtimeChannel._(
-      channel: descriptor['channel'] as String,
-      wsUrl: descriptor['wsUrl'] as String,
+      channel: field('channel'),
+      wsUrl: field('wsUrl'),
       connectToken: descriptor['connectToken'] as String?,
-      token: descriptor['token'] as String,
+      token: field('token'),
       decode: decode,
-      descriptor: descriptor,
     );
   }
-
-  /// This channel's descriptor, as the server's `toJSON()` sent it and
-  /// [fromJson] read it: `{"__blocks": "realtime/channel", "channel",
-  /// "wsUrl", "connectToken"?, "token"}`, with any other key it held. A
-  /// generated client sends a channel parameter, or a channel inside a model
-  /// it sends, this way; `jsonEncode` calls it too.
-  ///
-  /// ```dart
-  /// final body = jsonEncode({'feed': channel.toJson()});
-  /// ```
-  ///
-  /// Returns a copy, so changing it doesn't change this channel.
-  Map<String, dynamic> toJson() =>
-      transferableDescriptor('realtime/channel', _descriptor);
 
   /// Builds the WebSocket URL, appending connectToken as query param for AWS.
   String get _connectionUrl {
@@ -94,52 +109,83 @@ class RealtimeChannel<T> {
   }
 
   /// Opens the WebSocket, subscribes, and returns a typed Stream.
+  ///
+  /// Returns at once, without waiting for the server to confirm the
+  /// subscription, so a message published before the server confirms can be
+  /// missed. A refused subscribe ends the stream with a
+  /// [RealtimeSubscriptionEndedException].
+  ///
+  /// Subscriptions to channels on the same WebSocket URL share one socket,
+  /// which sends `{"action":"ping"}` every 9 minutes while it has a
+  /// subscription. The ping keeps the socket open and is when the server
+  /// re-checks each subscription's token.
+  ///
+  /// Throws a [RealtimeChannelClosedException] when the channel is closed.
+  /// When the WebSocket connection fails, the stream emits a
+  /// [RealtimeConnectionException] whose `cause` is the WebSocket client's
+  /// error. A message whose payload fails to decode emits the decoder's error
+  /// (such as a `TypeError`), then the stream closes.
   Stream<T> subscribe() {
-    if (_closed) throw StateError('Channel is closed');
+    if (_closed) throw const RealtimeChannelClosedException();
 
-    final url = _connectionUrl;
-    final ws = _pool.acquire(url);
-    _subscribed = true;
     final controller = StreamController<T>();
-    _controller = controller;
-
-    // Send subscribe message
-    ws.sink.add(
-      jsonEncode({'action': 'subscribe', 'channel': channel, 'token': token}),
-    );
-
-    final subscription = ws.stream.listen(
-      (data) {
-        // A frame that fails to decode is an error on the stream, which stays open.
+    final connection = WebSocketPool.shared.acquire(_connectionUrl);
+    late final _Subscription<T> subscription;
+    final subscriber = RealtimeSubscriber(
+      channel: channel,
+      onMessage: (payload) {
+        final T value;
         try {
-          final json = jsonDecode(data as String) as Map<String, dynamic>;
-          if (json['type'] != 'message') return;
-          // AWS uses 'data', mock uses 'payload'
-          final Object? payload = json['data'] ?? json['payload'];
-          controller.add(_decode(payload));
+          value = _decode(payload);
         } on Object catch (e, st) {
-          controller.addError(e, st);
+          subscription.end(e, st);
+          return;
         }
+        controller.add(value);
       },
-      onError: controller.addError,
-      onDone: () => controller.close(),
+      onEnd: (error) => subscription.end(error, StackTrace.current),
     );
-
-    controller.onCancel = () {
-      subscription.cancel();
-      _pool.release(url);
-    };
-
+    subscription = _Subscription(this, connection, subscriber, controller);
+    _subscriptions.add(subscription);
+    controller.onCancel = subscription.cancel;
+    connection.subscribe(subscriber, token);
     return controller.stream;
   }
 
   /// Closes the channel and releases the pooled connection.
+  ///
+  /// Every active subscription's stream closes normally, and a later
+  /// [subscribe] throws a [RealtimeChannelClosedException].
   void close() {
     if (_closed) return;
     _closed = true;
-    if (_subscribed) {
-      _pool.release(_connectionUrl);
+    for (final s in [..._subscriptions]) {
+      s.cancel();
+      s.controller.close().ignore();
     }
-    _controller?.close();
+  }
+}
+
+/// One `subscribe()` call's stream and its place on a pooled socket.
+class _Subscription<T> {
+  _Subscription(this.owner, this.connection, this.subscriber, this.controller);
+
+  final RealtimeChannel<T> owner;
+  final PooledConnection connection;
+  final RealtimeSubscriber subscriber;
+  final StreamController<T> controller;
+
+  /// Leaves the socket. Safe to call more than once.
+  void cancel() {
+    if (!owner._subscriptions.remove(this)) return;
+    connection.remove(subscriber);
+  }
+
+  /// Emits [error] and closes the stream.
+  void end(Object error, StackTrace stackTrace) {
+    cancel();
+    if (controller.isClosed) return;
+    controller.addError(error, stackTrace);
+    controller.close().ignore();
   }
 }

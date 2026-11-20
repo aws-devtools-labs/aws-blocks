@@ -1,5 +1,5 @@
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Scope } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Scope } from '@aws-cdk-blocks/core';
 import {
 	Auth,
 	AuthErrors,
@@ -7,7 +7,7 @@ import {
 	github,
 	relayOrigin,
 	stubIdp,
-} from '@aws-blocks/bb-auth';
+} from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('app');
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
@@ -55,7 +55,7 @@ export const auth = new Auth(scope, 'oidc-auth', {
 	},
 	allowBearerAuth: true,
 	redirects: {
-		callbackPath: '/aws-blocks/auth/callback',
+		callbackPath: '/cdk-blocks/auth/callback',
 		postSignInPath: '/home',
 		allowedRelayOrigins: [relayOrigin('myapp://auth')],
 	},

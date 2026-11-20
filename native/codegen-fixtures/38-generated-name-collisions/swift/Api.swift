@@ -17,7 +17,7 @@ public final nonisolated class A: Sendable {
     public func b_ping() async throws -> String {
         let request = BlocksRequest(method: "a.b.ping", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for a.b.ping") }
+        guard let result else { throw TransportError(message: "Unexpected null result for a.b.ping") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 }
@@ -41,7 +41,7 @@ public final nonisolated class Api: Sendable {
         if let json { _params.append(json) }
         let request_2 = BlocksRequest(method: "api.send", params: _params, id: BlocksRequest.nextId())
         let result = try await client.execute(request_2)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.send") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.send") }
         return try JSONDecoder().decode(Send.Result.self, from: result)
     }
 
@@ -49,7 +49,7 @@ public final nonisolated class Api: Sendable {
     public func getProfile(profile: Profile) async throws -> Profile {
         let request = BlocksRequest(method: "api.getProfile", params: [profile], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getProfile") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getProfile") }
         return try JSONDecoder().decode(Profile.self, from: result)
     }
 
@@ -57,7 +57,7 @@ public final nonisolated class Api: Sendable {
     public func one() async throws -> One.Result {
         let request = BlocksRequest(method: "api.one", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.one") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.one") }
         return try JSONDecoder().decode(One.Result.self, from: result)
     }
 
@@ -65,7 +65,7 @@ public final nonisolated class Api: Sendable {
     public func two() async throws -> Two.Result {
         let request = BlocksRequest(method: "api.two", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.two") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.two") }
         return try JSONDecoder().decode(Two.Result.self, from: result)
     }
 
@@ -73,7 +73,7 @@ public final nonisolated class Api: Sendable {
     public func relay(client: String) async throws -> String {
         let request = BlocksRequest(method: "api.relay", params: [client], id: BlocksRequest.nextId())
         let result = try await self.client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.relay") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.relay") }
         return try JSONDecoder().decode(String.self, from: result)
     }
 
@@ -81,7 +81,7 @@ public final nonisolated class Api: Sendable {
     public func putBag(bag: Bag) async throws -> Bag {
         let request = BlocksRequest(method: "api.putBag", params: [bag], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.putBag") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.putBag") }
         return try JSONDecoder().decode(Bag.self, from: result)
     }
 
@@ -89,13 +89,13 @@ public final nonisolated class Api: Sendable {
     public func getWeird(weird: Weird) async throws -> Weird {
         let request = BlocksRequest(method: "api.getWeird", params: [weird], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getWeird") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getWeird") }
         return try JSONDecoder().decode(Weird.self, from: result)
     }
 
     public enum Send {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let sent: String
 
             public init(sent: String) {
@@ -106,7 +106,7 @@ public final nonisolated class Api: Sendable {
 
     public enum One {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let a: String
 
             public init(a: String) {
@@ -117,7 +117,7 @@ public final nonisolated class Api: Sendable {
 
     public enum Two {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let b: Double
 
             public init(b: Double) {
@@ -162,5 +162,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

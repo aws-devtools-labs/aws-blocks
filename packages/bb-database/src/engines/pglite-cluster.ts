@@ -3,16 +3,19 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { initializePgliteWithRetry, type TransactionHandle } from '@aws-blocks/data-common/core';
-import { closeOnProcessExit, pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
+import { join, sep } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { quoteIdent, SESSION_TRANSACTION_WAIT_MS } from '../constants.js';
+import { LEGACY_MOCK_DATA_DIR, MOCK_DATA_DIR } from '@aws-cdk-blocks/core/bb-utils';
+import type { TransactionHandle } from '../common/engine.js';
+import { initializePgliteWithRetry } from '../common/pglite-init.js';
+import { closeOnProcessExit, pgliteUnrefTimersExtension } from '../common/pglite-process.js';
+import { CLAIMS_SETTING, LOCAL_APP_ROLE, NO_CLAIMS, quoteIdent, SESSION_TRANSACTION_WAIT_MS } from '../constants.js';
 import { ASYNC_DDL } from '../dialect/validation.js';
 import { sessionTransactionOpen, translated, translatePgError } from '../errors.js';
 import { currentTransactionHandle } from '../runtime/tx-scope.js';
 import type { ClusterType } from '../types.js';
 import {
+	CountedEngine,
 	type CountedRows,
 	EngineTransaction,
 	isSettled,
@@ -37,7 +40,16 @@ CREATE OR REPLACE VIEW sys.jobs AS
          NULL::oid AS class_id, NULL::oid AS object_id, NULL::text AS object_name,
          NULL::timestamptz AS start_time, NULL::timestamptz AS update_time
   WHERE false;
+GRANT USAGE ON SCHEMA sys TO PUBLIC;
+GRANT SELECT ON sys.jobs TO PUBLIC;
 `;
+
+// PGlite's own user, a superuser: the stand-in for the cluster admin, which runs the migrations.
+const ADMIN_ROLE = 'postgres';
+
+// The stand-in for the deployed app role: a plain role that gets the grants the migration Lambda issues, so
+// PostgreSQL refuses locally what it refuses on AWS (DDL, the migration ledger, rows a policy hides).
+const APP_ROLE_SETUP = `DO $$ BEGIN CREATE ROLE ${quoteIdent(LOCAL_APP_ROLE)}; EXCEPTION WHEN duplicate_object THEN NULL; END $$`;
 
 const PGLITE_INITIALIZED_DATA_DIR_ENTRIES = ['PG_VERSION', 'base', 'global', 'global/pg_control'];
 const PGLITE_DATA_DIR_MARKERS = [
@@ -77,6 +89,7 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
 	const looksLikePglite = entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry));
 	const hasInitializedChild = entries.some((entry) => hasInitializedPgliteDataDir(join(dataDir, entry)));
 	if (!looksLikePglite || hasInitializedChild) return;
+	assertNotAHalfCopy(dataDir);
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const corruptDataDir = `${dataDir}.corrupt-${timestamp}-${process.pid}-${randomUUID().slice(0, 8)}`;
 	renameSync(dataDir, corruptDataDir);
@@ -84,9 +97,38 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
 	console.log(`[bb-database] Moved incomplete PGlite data directory to ${corruptDataDir}; created a fresh one.`);
 }
 
+// `dataDir` before the data directory moved under `.cdk-blocks/`, or undefined when it is not under it at all.
+function legacyCounterpart(dataDir: string): string | undefined {
+	const consolidated = join(process.cwd(), MOCK_DATA_DIR);
+	if (!dataDir.startsWith(consolidated + sep)) return undefined;
+	return join(process.cwd(), LEGACY_MOCK_DATA_DIR, dataDir.slice(consolidated.length + 1));
+}
+
+// A carry-over that did not finish must fail rather than be reset to an empty database: an empty one looks like
+// a fresh project, so the next write would start a second copy of rows the project already had.
+//
+// REACHABILITY. In the carry-over path this is now defence in depth, not the first line: every caller resolves
+// `dataDir` through `getMockDataDir`, whose copy fills in whatever the new directory lacks and which records the
+// unit only AFTER that copy returns, so an interrupted copy is simply retried on the next call and never reaches
+// here looking initialized-but-partial. What does still reach here is a directory a PERSON made partial — a
+// hand-copied `.bb-data/<id>/pglite`, an interrupted `cp -r`, or a restore from a partial backup — which is the
+// case this refuses. Verified by `local-data-carry-over.test.ts`, which exercises both the real
+// `getMockDataDir` path (self-healing) and a hand-made partial copy (refused).
+function assertNotAHalfCopy(dataDir: string): void {
+	const legacy = legacyCounterpart(dataDir);
+	if (legacy === undefined || !hasInitializedPgliteDataDir(legacy)) return;
+	throw new Error(
+		`The local database copied from ${legacy} to ${dataDir} is incomplete: it is missing one of ` +
+			`${PGLITE_INITIALIZED_DATA_DIR_ENTRIES.join(', ')}. ${legacy} is untouched, so delete ${dataDir} ` +
+			'and run again rather than starting on an empty database.',
+	);
+}
+
 interface Savepoint {
 	readonly parent: ClusterTransaction;
 	readonly name: string;
+	/** The enclosing transaction's claims, put back at RELEASE (`setAsideClaims`). */
+	readonly claims?: string;
 }
 
 // Settling the handle releases the mutex exactly once. A transaction begun inside another block's open
@@ -96,6 +138,8 @@ class ClusterTransaction extends EngineTransaction {
 
 	constructor(
 		readonly owner: SchemaEngine,
+		/** The session's user for this transaction's statements. */
+		readonly role: string,
 		readonly release: () => void,
 		readonly savepoint?: Savepoint,
 	) {
@@ -142,10 +186,11 @@ class Mutex {
 	}
 }
 
-// PGlite has one session: each block's statements switch `search_path` to its schema under a mutex, held
-// for one auto-commit statement or one BEGIN … COMMIT. A block's own statements inside its transaction()
-// callback never reach the mutex: DatabaseCore routes them to the in-transaction methods. Another block's
-// statements inside that callback cannot wait for the mutex either; they nest in the open transaction.
+// PGlite has one session: each block's statements switch `search_path` to its schema and the session's user
+// to the app role (the admin for a migration run) under a mutex, held for one auto-commit statement or one
+// BEGIN … COMMIT. A block's own statements inside its transaction() callback never reach the mutex:
+// DatabaseCore routes them to the in-transaction methods. Another block's statements inside that callback
+// cannot wait for the mutex either; they nest in the open transaction.
 class PgliteCluster {
 	private db: PGlite;
 	private closed = false;
@@ -158,6 +203,7 @@ class PgliteCluster {
 	private ready?: Promise<PGlite>;
 	private readonly mutex = new Mutex();
 	private currentSchema?: string;
+	private currentRole?: string;
 	/** The top-level transaction that holds the mutex. */
 	holder?: ClusterTransaction;
 
@@ -181,7 +227,7 @@ class PgliteCluster {
 		this.cancelExitClose = undefined;
 		if (this.closed || this.exitClosing) return;
 		this.ready = undefined;
-		this.currentSchema = undefined;
+		this.forgetSession();
 		this.exitClosing = this.db.close().catch(() => {});
 		await this.exitClosing;
 	}
@@ -210,6 +256,10 @@ class PgliteCluster {
 				this.db = db;
 				// DSQL's `sys` schema exists on a DSQL cluster only; an Aurora block that queries it fails locally too.
 				if (this.kind === 'dsql') await db.exec(SYS_SCHEMA_STUB);
+				await db.exec(APP_ROLE_SETUP);
+				// As a deployed aurora connection has it (pg-engine.ts): what a statement with no user sees.
+				if (this.kind === 'aurora')
+					await db.exec(`SELECT set_config('${CLAIMS_SETTING}', '${NO_CLAIMS}', false)`);
 				return db;
 			})
 			.catch((error) => {
@@ -228,19 +278,44 @@ class PgliteCluster {
 		return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
 	}
 
-	async useSchema(schema: string): Promise<void> {
-		if (this.currentSchema === schema) return;
-		await this.raw(`SET search_path TO ${quoteIdent(schema)}`);
-		this.currentSchema = schema;
+	/** Points the session at `schema`, with `role` as its user. */
+	async useSession(schema: string, role: string): Promise<void> {
+		if (this.currentSchema !== schema) {
+			await this.raw(`SET search_path TO ${quoteIdent(schema)}`);
+			this.currentSchema = schema;
+		}
+		if (this.currentRole !== role) {
+			// Always by name: RESET SESSION AUTHORIZATION does not return a PGlite session to its own user.
+			await this.raw(`SET SESSION AUTHORIZATION ${quoteIdent(role)}`);
+			this.currentRole = role;
+		}
 	}
 
-	forgetSchema(): void {
+	forgetSession(): void {
 		this.currentSchema = undefined;
+		this.currentRole = undefined;
 	}
 
-	/** The schema the session is back at after a top-level ROLLBACK: the SET ran before BEGIN, so it survives. */
-	restoreSchema(schema: string): void {
+	/** What the session is back at after a top-level ROLLBACK: the SETs ran before BEGIN, so they survive. */
+	restoreSession(schema: string, role: string): void {
 		this.currentSchema = schema;
+		this.currentRole = role;
+	}
+
+	// On AWS a nested call runs on its own connection, which carries no user. Here it is a savepoint of the
+	// enclosing transaction, so that transaction's claims are set aside for it and put back before its RELEASE:
+	// a transaction-local setting made inside a savepoint outlives the RELEASE.
+	async setAsideClaims(): Promise<string | undefined> {
+		if (this.kind !== 'aurora') return undefined;
+		const { rows } = await this.raw<{ claims: string | null }>(
+			`SELECT current_setting('${CLAIMS_SETTING}', true) AS claims`,
+		);
+		await this.setClaims(NO_CLAIMS);
+		return rows[0]?.claims || NO_CLAIMS;
+	}
+
+	async setClaims(claims: string): Promise<void> {
+		await this.raw(`SELECT set_config('${CLAIMS_SETTING}', $1, true)`, [claims]);
 	}
 
 	acquire(): Promise<() => void> {
@@ -297,11 +372,35 @@ class PgliteCluster {
 
 const translate = translated('PgliteCluster');
 
-export class SchemaEngine implements RowCountingEngine {
+export class SchemaEngine extends CountedEngine implements RowCountingEngine {
+	private admin = false;
+
 	constructor(
 		readonly cluster: PgliteCluster,
 		readonly schema: string,
-	) {}
+	) {
+		super();
+	}
+
+	/** Inside {@link asAdmin}: the statements are a migration's or a test's setup, not the application's. */
+	get isAdmin(): boolean {
+		return this.admin;
+	}
+
+	private get role(): string {
+		return this.admin ? ADMIN_ROLE : LOCAL_APP_ROLE;
+	}
+
+	/** Runs `fn` with this engine's statements issued as the cluster admin, as a migration's are on AWS. */
+	async asAdmin<T>(fn: () => Promise<T>): Promise<T> {
+		const previous = this.admin;
+		this.admin = true;
+		try {
+			return await fn();
+		} finally {
+			this.admin = previous;
+		}
+	}
 
 	private enclosing(): ClusterTransaction | undefined {
 		return this.cluster.enclosingTransaction();
@@ -311,7 +410,7 @@ export class SchemaEngine implements RowCountingEngine {
 		if (this.enclosing()) return withTransaction(this, fn);
 		const release = await this.cluster.acquire();
 		try {
-			await this.cluster.useSchema(this.schema);
+			await this.cluster.useSession(this.schema, this.role);
 			return await fn();
 		} finally {
 			release();
@@ -327,35 +426,29 @@ export class SchemaEngine implements RowCountingEngine {
 		return translate(() => this.exclusive(() => this.counted<T>(sql, params)));
 	}
 
-	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCounted<T>(sql, params)).rows;
-	}
-
-	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCounted(sql, params)).rowCount };
-	}
-
 	async beginTransaction(): Promise<TransactionHandle> {
+		const role = this.role;
 		const parent = this.enclosing();
 		if (parent) {
 			const name = `bb_database_${++savepoints}`;
-			await translate(async () => {
+			const claims = await translate(async () => {
 				await this.cluster.raw(`SAVEPOINT ${name}`);
-				await this.cluster.useSchema(this.schema);
+				await this.cluster.useSession(this.schema, role);
+				return this.cluster.setAsideClaims();
 			});
-			return new ClusterTransaction(this, () => {}, { parent, name });
+			return new ClusterTransaction(this, role, () => {}, { parent, name, claims });
 		}
 		const release = await this.cluster.acquire();
 		try {
 			await translate(async () => {
-				await this.cluster.useSchema(this.schema);
+				await this.cluster.useSession(this.schema, role);
 				await this.cluster.raw('BEGIN');
 			});
 		} catch (e) {
 			release();
 			throw e;
 		}
-		const tx: ClusterTransaction = new ClusterTransaction(this, () => {
+		const tx: ClusterTransaction = new ClusterTransaction(this, role, () => {
 			this.cluster.holder = undefined;
 			release();
 		});
@@ -372,7 +465,7 @@ export class SchemaEngine implements RowCountingEngine {
 		try {
 			await translate(() => this.cluster.raw('COMMIT'));
 		} catch (e) {
-			this.cluster.restoreSchema(h.owner.schema);
+			this.cluster.restoreSession(h.owner.schema, h.role);
 			h.rolledBack();
 			throw e;
 		} finally {
@@ -388,15 +481,16 @@ export class SchemaEngine implements RowCountingEngine {
 		try {
 			await translate(() => this.cluster.raw('ROLLBACK'));
 		} finally {
-			this.cluster.restoreSchema(h.owner.schema);
+			this.cluster.restoreSession(h.owner.schema, h.role);
 			h.release();
 			h.rolledBack();
 		}
 	}
 
-	private async releaseSavepoint(h: ClusterTransaction, { parent, name }: Savepoint): Promise<void> {
+	private async releaseSavepoint(h: ClusterTransaction, { parent, name, claims }: Savepoint): Promise<void> {
 		try {
-			await this.cluster.useSchema(parent.owner.schema);
+			await this.cluster.useSession(parent.owner.schema, parent.role);
+			if (claims !== undefined) await this.cluster.setClaims(claims);
 			await this.cluster.raw(`RELEASE SAVEPOINT ${name}`);
 		} catch (e) {
 			// The savepoint was aborted by a statement error the callback swallowed: undo it, so the enclosing
@@ -407,13 +501,13 @@ export class SchemaEngine implements RowCountingEngine {
 		h.released();
 	}
 
-	// ROLLBACK TO undoes the SET search_path made after the savepoint along with everything else.
+	// ROLLBACK TO undoes the SETs made after the savepoint along with everything else.
 	private async rollbackToSavepoint(h: ClusterTransaction, { parent, name }: Savepoint): Promise<void> {
-		this.cluster.forgetSchema();
+		this.cluster.forgetSession();
 		try {
 			await translate(async () => {
 				await this.cluster.raw(`ROLLBACK TO SAVEPOINT ${name}`);
-				await this.cluster.useSchema(parent.owner.schema);
+				await this.cluster.useSession(parent.owner.schema, parent.role);
 			});
 		} finally {
 			h.rolledBack();
@@ -429,20 +523,11 @@ export class SchemaEngine implements RowCountingEngine {
 		return translate(() => this.counted<T>(sql, params));
 	}
 
-	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
-		return (await this.queryCountedInTransaction<T>(handle, sql, params)).rows;
-	}
-
-	async executeInTransaction(
-		handle: TransactionHandle,
-		sql: string,
-		params?: unknown[],
-	): Promise<{ rowCount: number }> {
-		return { rowCount: (await this.queryCountedInTransaction(handle, sql, params)).rowCount };
-	}
-
 	async destroy(): Promise<void> {}
 }
+
+/** The directory of a local cluster's PGlite database, under the data directory of the block or the cluster. */
+export const PGLITE_SUBDIR = 'pglite';
 
 const clusters = new Map<string, PgliteCluster>();
 

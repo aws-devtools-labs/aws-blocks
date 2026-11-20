@@ -105,7 +105,7 @@ export type UnreachedByProxies = {
 };
 
 /**
- * Warn at synth (`@aws-blocks/hosting:DoorRulesNotApplied`) naming exactly
+ * Warn at synth (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`) naming exactly
  * which of the app's rules a regional door's proxies can't apply: responses
  * the door routes straight to a function or the backend never pass through
  * the asset proxy or the API forwarder, so header rules and error pages don't
@@ -121,7 +121,7 @@ export const warnRulesNotApplied = (scope: IConstruct, what: UnreachedByProxies)
     const missed = [
       what.server ? 'server-rendered (SSR) responses' : undefined,
       what.image ? 'image-optimization responses' : undefined,
-      what.nativeApi ? 'API responses (`/aws-blocks/*` and raw routes)' : undefined,
+      what.nativeApi ? 'API responses (`/cdk-blocks/*` and raw routes)' : undefined,
     ].filter((m): m is string => m !== undefined);
     if (missed.length > 0) {
       notes.push(
@@ -138,7 +138,7 @@ export const warnRulesNotApplied = (scope: IConstruct, what: UnreachedByProxies)
   }
   if (notes.length === 0) return;
   Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:DoorRulesNotApplied',
+    '@aws-cdk-blocks/hosting:DoorRulesNotApplied',
     `${what.door} front door: ${notes.join('; ')}. The CloudFront door (or the stacked door's edge) applies them to every response.`,
   );
 };

@@ -211,7 +211,7 @@ export async function loadConfigToProcessEnv(): Promise<void> {
  * Re-read the config file from S3, bypassing the per-container cache, and
  * merge it into `process.env`. **Internal**: for Building Blocks that detect,
  * at request time, that the config they started with may be stale. Exported
- * from `@aws-blocks/core/internal`, not from the public entry points.
+ * from `@aws-cdk-blocks/core/internal`, not from the public entry points.
  *
  * Why it exists: the config file is uploaded by a deployment that is not
  * ordered before the compute update, and its object key does not change. During

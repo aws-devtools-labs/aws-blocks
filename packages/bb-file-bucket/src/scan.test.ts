@@ -9,13 +9,13 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync, existsSync, readdirSync } from 'node:fs';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { FileBucket } from './index.mock.js';
 
 const scope = new Scope('scn');
 
 beforeEach(() => {
-	const dir = '.bb-data';
+	const dir = '.cdk-blocks/local/data';
 	try {
 		if (existsSync(dir)) {
 			for (const entry of readdirSync(dir)) {
@@ -119,7 +119,7 @@ describe('scan: segregated on-disk layout', () => {
 		const bucket = new FileBucket(scope, 'scan-layout', { versioned: true });
 		await bucket.put('docs/report.pdf', 'pdf', { contentType: 'application/pdf' });
 
-		const base = `.bb-data/scn-scan-layout`;
+		const base = `.cdk-blocks/local/data/scn-scan-layout`;
 		// User content is byte-identical under content/
 		assert.ok(existsSync(`${base}/content/docs/report.pdf`), 'content/ should hold the file body');
 		// Metadata is segregated under meta/

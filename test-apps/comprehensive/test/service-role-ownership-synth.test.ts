@@ -15,6 +15,12 @@
  *
  * Lambda execution roles are left out: the check accepts them unconditioned,
  * so their ownership doesn't change its outcome.
+ *
+ * KMS key policies get the same check: every key whose policy names a service
+ * principal, with those statements' conditions removed, must fail synth and
+ * none may only warn. The fixture app adds a `Hosting` with monitoring, whose
+ * alarm topic key grants `cloudwatch.amazonaws.com`, so the key check always has
+ * at least one key to classify.
  */
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
@@ -37,10 +43,13 @@ describe('the service-principal trust check classifies every Building Block role
       encoding: 'utf8',
     });
     const line = out.trim().split('\n').at(-1) ?? '';
-    const { errors, warnings, serviceRoles } = JSON.parse(line) as {
+    const { errors, warnings, serviceRoles, keyErrors, keyWarnings, serviceKeys } = JSON.parse(line) as {
       errors: string[];
       warnings: string[];
       serviceRoles: string[];
+      keyErrors: string[];
+      keyWarnings: string[];
+      serviceKeys: string[];
     };
     const expected = serviceRoles.filter((path) => !ALLOWED_UNCONDITIONED.test(path)).sort();
     // The app has a KnowledgeBase, waiter providers and a CronJob, so a short
@@ -48,5 +57,11 @@ describe('the service-principal trust check classifies every Building Block role
     assert.ok(expected.length >= 3, `expected the full app's service roles, found ${expected.join(', ')}`);
     assert.deepStrictEqual(warnings, [], `roles classified as the app's:\n  ${warnings.join('\n  ')}`);
     assert.deepStrictEqual([...errors].sort(), expected);
+    assert.ok(
+      serviceKeys.some((path) => path.endsWith('/AlarmTopicKey/Resource')),
+      `expected Hosting's alarm topic key among the keys that name a service principal, found ${serviceKeys.join(', ')}`,
+    );
+    assert.deepStrictEqual(keyWarnings, [], `KMS keys classified as the app's:\n  ${keyWarnings.join('\n  ')}`);
+    assert.deepStrictEqual([...keyErrors].sort(), [...serviceKeys].sort());
   });
 });

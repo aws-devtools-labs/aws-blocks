@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
@@ -15,6 +18,7 @@ import {
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
   patchImageOptimizerForNext16,
+  patchImageOptimizerMissingSource,
   patchImageOptimizerSvgStatus,
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
@@ -1431,6 +1435,139 @@ void describe('patchImageOptimizerSvgStatus — disallowed type fails closed (is
         assert.equal(other.status, 500, 'generic error → 500');
       },
     );
+  });
+});
+
+void describe('patchImageOptimizerMissingSource — a missing source image is a 404, not a cached 500', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-missing-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeBundle = (contents: string): string => {
+    const dir = path.join(tmp, 'image-optimization-function');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundle = path.join(dir, 'index.mjs');
+    fs.writeFileSync(bundle, contents);
+    return bundle;
+  };
+
+  // The minified shapes from a real @opennextjs/aws 4.1.14 image-optimization
+  // bundle (3.10.x emits the same): the failure response, the download handler
+  // Next's optimizer calls for a local image, and the catch around the
+  // optimizer. `optimize` stands in for Next's `fetchInternalImage`, which
+  // re-throws ANY download error as `ImageError(500)`, so the S3 error is gone
+  // by the time the outer catch sees it.
+  const BUNDLE =
+    'function JK(e,t,r=500){if(En(e,r),t){let i=new S_(()=>{},async()=>{},t);i.writeHead(r,{Vary:"Accept","Cache-Control":"public,max-age=60,immutable"}),i.end(e)}' +
+    'return{type:"core",isBase64Encoded:!1,statusCode:r,headers:{Vary:"Accept","Cache-Control":"public,max-age=60,immutable"},body:cX(e)}}' +
+    'async function VRe(e,t,r){En("downloadHandler url",r);try{let s=await GRe.load(r.href);if(!s.body)throw new Error("Empty response body from the S3 request.")}' +
+    'catch(s){throw xl("Failed to download image",s),s}}' +
+    'async function HRe(e,t){try{return await optimize(VRe)}catch(s){return xl("Failed to optimize image",s),JK("Internal server error",t?.streamCreator)}}';
+
+  type Result = { statusCode: number; headers: Record<string, string>; body: string };
+  /** Runs the (patched) bundle with the S3 loader throwing `loadError` for every call. */
+  const run = (src: string, loadErrors: unknown[]): Promise<Result[]> => {
+    const harness = `
+      const En = () => {}; const xl = () => {}; const S_ = class {}; const cX = (m) => m;
+      let loadError;
+      const GRe = { load: async () => { throw loadError; } };
+      async function optimize(download) {
+        try { await download({}, {}, { href: '/missing.png' }); }
+        catch { const e = new Error('"url" parameter is valid but upstream response is invalid'); e.statusCode = 500; throw e; }
+      }
+      ${src}
+      return (async (errors) => {
+        const out = [];
+        for (const e of errors) { loadError = e; out.push(await HRe({}, {})); }
+        return out;
+      });
+    `;
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const fn = new Function(harness)() as (errors: unknown[]) => Promise<Result[]>;
+    return fn(loadErrors);
+  };
+  const runOne = async (src: string, loadError: unknown): Promise<Result> => {
+    const [res] = await run(src, [loadError]);
+    assert.ok(res, 'a response');
+    return res;
+  };
+  const s3Error = (name: string, message: string): Error => Object.assign(new Error(message), { name });
+  const patchAll = (): string => {
+    const bundle = writeBundle(BUNDLE);
+    // The order the adapter applies them in.
+    patchImageOptimizerSvgStatus(tmp);
+    patchImageOptimizerMissingSource(tmp);
+    return fs.readFileSync(bundle, 'utf-8');
+  };
+
+  void it('unpatched: a missing source image is a 500 the edge caches for 60 s', async () => {
+    const res = await runOne(BUNDLE, s3Error('NoSuchKey', 'The specified key does not exist.'));
+    assert.equal(res.statusCode, 500);
+    assert.equal(res.headers['Cache-Control'], 'public,max-age=60,immutable');
+  });
+
+  void it('returns 404 for an S3 NoSuchKey (the default `s3` loader)', async () => {
+    const res = await runOne(patchAll(), s3Error('NoSuchKey', 'The specified key does not exist.'));
+    assert.equal(res.statusCode, 404);
+    assert.equal(res.body, 'Not Found');
+  });
+
+  void it('returns 404 for the `s3-lite` loader, which throws "The specified key does not exist."', async () => {
+    const res = await runOne(patchAll(), s3Error('FatalError', 'The specified key does not exist.'));
+    assert.equal(res.statusCode, 404);
+  });
+
+  void it('keeps any other download failure a 500, now sent with no-store so the edge does not hold it', async () => {
+    const res = await runOne(patchAll(), s3Error('AccessDenied', 'Access Denied'));
+    assert.equal(res.statusCode, 500);
+    assert.equal(res.body, 'Internal server error');
+    assert.equal(res.headers['Cache-Control'], 'no-store');
+  });
+
+  void it('does not carry a missing image over to the next request', async () => {
+    const [missing, denied] = await run(patchAll(), [
+      s3Error('NoSuchKey', 'The specified key does not exist.'),
+      s3Error('AccessDenied', 'Access Denied'),
+    ]);
+    assert.equal(missing?.statusCode, 404);
+    assert.equal(denied?.statusCode, 500);
+  });
+
+  void it('keeps the 60 s Cache-Control on a 4xx (a missing image is cached as a 404)', async () => {
+    const res = await runOne(patchAll(), s3Error('NoSuchKey', 'The specified key does not exist.'));
+    assert.equal(res.headers['Cache-Control'], 'public,max-age=60,immutable');
+  });
+
+  void it('is idempotent — a second run changes nothing', () => {
+    const once = patchAll();
+    patchImageOptimizerMissingSource(tmp);
+    const twice = fs.readFileSync(path.join(tmp, 'image-optimization-function', 'index.mjs'), 'utf-8');
+    assert.equal(once, twice);
+  });
+
+  void it('returns silently when the image-optimization-function dir is absent', () => {
+    assert.doesNotThrow(() => patchImageOptimizerMissingSource(tmp));
+  });
+
+  void it('warns (does not throw) when neither shape is present', () => {
+    writeBundle('export const handler = async () => ({});\n');
+    const write = process.stderr.write.bind(process.stderr);
+    let logged = '';
+    process.stderr.write = (chunk: string | Uint8Array) => {
+      logged += String(chunk);
+      return true;
+    };
+    try {
+      assert.doesNotThrow(() => patchImageOptimizerMissingSource(tmp));
+    } finally {
+      process.stderr.write = write;
+    }
+    assert.match(logged, /patchImageOptimizerMissingSource/);
   });
 });
 

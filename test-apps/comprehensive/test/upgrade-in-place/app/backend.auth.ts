@@ -6,11 +6,11 @@
  * id, same block id, same API. The options are `backend.auth-cognito.ts.txt`'s
  * `{ groups: ['admins'] }` in `Auth`'s shape.
  *
- * Materialized as `aws-blocks/index.ts` in the PR checkout.
+ * Materialized as `cdk-blocks/index.ts` in the PR checkout.
  */
 
-import { Auth } from '@aws-blocks/bb-auth';
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
 

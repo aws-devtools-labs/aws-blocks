@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `cdk-blocks generate client` runs `blocks-generate-client`. In an app that does not
+ * `npm run generate-client` runs `blocks-generate-client`. In an app that does not
  * install `tsx` itself (pnpm, or npm without hoisting), it loads the worker with
- * the `tsx` that `@aws-blocks/blocks` depends on.
+ * the `tsx` that `aws-cdk-blocks` depends on.
  */
 
 import assert from 'node:assert';
@@ -24,9 +24,9 @@ describe('blocks-generate-client', () => {
 		const root = mkdtempSync(join(tmpdir(), 'blocks-generate-client-'));
 		try {
 			writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'no-tsx-app', type: 'module' }));
-			mkdirSync(join(root, 'aws-blocks'));
+			mkdirSync(join(root, 'cdk-blocks'));
 			writeFileSync(
-				join(root, 'aws-blocks', 'index.ts'),
+				join(root, 'cdk-blocks', 'index.ts'),
 				"export const api = { hello: async (): Promise<string> => 'hi' };\n",
 			);
 			const child = spawnSync(process.execPath, [generateClientCli], {
@@ -35,7 +35,7 @@ describe('blocks-generate-client', () => {
 				env: { ...process.env, NODE_OPTIONS: '' },
 			});
 			assert.strictEqual(child.status, 0, child.stderr);
-			assert.match(readFileSync(join(root, 'aws-blocks', 'client.js'), 'utf-8'), /export const api = /);
+			assert.match(readFileSync(join(root, 'cdk-blocks', 'client.js'), 'utf-8'), /export const api = /);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -47,8 +47,8 @@ async function withApp(backend: string, body: (root: string) => void | Promise<v
 	const root = mkdtempSync(join(tmpdir(), 'blocks-generate-client-'));
 	try {
 		writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'app', type: 'module' }));
-		mkdirSync(join(root, 'aws-blocks'));
-		writeFileSync(join(root, 'aws-blocks', 'index.ts'), backend);
+		mkdirSync(join(root, 'cdk-blocks'));
+		writeFileSync(join(root, 'cdk-blocks', 'index.ts'), backend);
 		await body(root);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -129,7 +129,7 @@ describe('blocks-generate-client output', () => {
 				assert.ok(Date.now() - started < 5000, 'it ended without waiting for the backend');
 				assert.deepStrictEqual({ code, ended }, { code: null, ended: signal });
 				assert.throws(() => process.kill(worker, 0), { code: 'ESRCH' }, 'the worker ended before the bin');
-				assert.strictEqual(existsSync(join(root, 'aws-blocks', 'client.js')), false);
+				assert.strictEqual(existsSync(join(root, 'cdk-blocks', 'client.js')), false);
 			});
 		});
 	}

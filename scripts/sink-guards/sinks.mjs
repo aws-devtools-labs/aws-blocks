@@ -90,7 +90,7 @@ function declarationInList(list, name) {
 function resolve(node, name) {
 	for (let scope = node.parent; scope; scope = scope.parent) {
 		if (ts.isFunctionLike(scope)) {
-			for (const p of scope.parameters ?? []) if (bindingNames(p.name).includes(name)) return { kind: 'other' };
+			for (const p of scope.parameters ?? []) if (bindingNames(p.name).includes(name)) return { kind: 'parameter', param: p };
 			if (scope.name && ts.isIdentifier(scope.name) && scope.name.text === name && !ts.isFunctionDeclaration(scope)) {
 				return { kind: 'function', fn: scope };
 			}
@@ -173,7 +173,7 @@ function calleeName(call) {
 	return undefined;
 }
 
-const BB_UTILS = /^@aws-blocks\/core\/bb-utils$/;
+const BB_UTILS = /^@aws-cdk-blocks\/core\/bb-utils$/;
 
 /** The module a namespace import binds `id` to (`import * as u from '…'`), if any. */
 function namespaceImportSource(id) {
@@ -189,7 +189,7 @@ function namespaceImportSource(id) {
  * `escapeRegExp`/`escapeRegex`/`escapeHtml`/`escapeAttr`/`esc` by name, which is
  * only sound because `findWeakEscapeHelpers` checks every declaration of those
  * names in the tree. So only a bare call (`esc(x)`) or a call on a namespace
- * import of `@aws-blocks/core/bb-utils` (`u.escapeHtml(x)`) counts: a method
+ * import of `@aws-cdk-blocks/core/bb-utils` (`u.escapeHtml(x)`) counts: a method
  * (`util.esc(x)`) can resolve to code the integrity check never sees.
  */
 function trustedCallName(call) {
@@ -210,6 +210,25 @@ function isInlineRegexEscape(call) {
 	if (!ts.isRegularExpressionLiteral(re) || !(ts.isStringLiteral(rep) && rep.text === '\\$&')) return false;
 	const m = /^\/\[(.*)\]\/g[a-z]*$/.exec(re.text);
 	return !!m && REGEX_META.every((c) => m[1].includes(c === '\\\\' ? '\\\\' : `\\${c}`) || m[1].includes(c));
+}
+
+/** A string-array parameter mapped through a locally declared regex escape helper, then joined with `|`. */
+function isEscapedAlternation(join) {
+	if (!ts.isPropertyAccessExpression(join.expression) || join.expression.name.text !== 'join') return false;
+	const [separator] = join.arguments;
+	if (join.arguments.length !== 1 || !ts.isStringLiteral(separator) || separator.text !== '|') return false;
+	const map = join.expression.expression;
+	if (!ts.isCallExpression(map) || !ts.isPropertyAccessExpression(map.expression) || map.expression.name.text !== 'map') return false;
+	const [escape] = map.arguments;
+	if (map.arguments.length !== 1 || !ts.isIdentifier(escape) || !REGEX_SAFE_CALLS.test(escape.text)) return false;
+	const helper = resolve(escape, escape.text)?.fn;
+	if (!helper || !ts.isFunctionDeclaration(helper)) return false;
+	// An arbitrary object's map method need not apply its callback to each item.
+	const words = map.expression.expression;
+	if (!ts.isIdentifier(words)) return false;
+	const param = resolve(words, words.text)?.param;
+	return !!param && ts.isIdentifier(param.name) && !!param.type &&
+		ts.isArrayTypeNode(param.type) && param.type.elementType.kind === ts.SyntaxKind.StringKeyword;
 }
 
 /**
@@ -285,7 +304,11 @@ export const REGEX_SAFE_CALLS = /^(?:escapeRegExp|escapeRegex)$/;
  */
 export function findRegexSinks(file, text) {
 	const sf = parseSource(file, text);
-	const ctx = { seen: new Set(), safeCalls: REGEX_SAFE_CALLS, inlineEscape: isInlineRegexEscape };
+	const ctx = {
+		seen: new Set(),
+		safeCalls: REGEX_SAFE_CALLS,
+		inlineEscape: (call) => isInlineRegexEscape(call) || isEscapedAlternation(call),
+	};
 	const found = [];
 	walk(sf, (node) => {
 		if (!(ts.isNewExpression(node) || ts.isCallExpression(node))) return;

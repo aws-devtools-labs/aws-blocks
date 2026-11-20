@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // The scaffolded AGENTS.md (resources/AGENTS.md) carries a polling snippet that
 // coding agents copy into generated apps. These tests pull that snippet out of
 // the doc, typecheck it against a stand-in for the generated `aws-blocks`
@@ -14,6 +17,12 @@ import ts from 'typescript';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const guidePath = join(__dirname, '..', 'resources', 'AGENTS.md');
 
+it('documents clean stdout for piped tasks and raw queries', () => {
+	const guide = readFileSync(guidePath, 'utf-8');
+	assert.ok(guide.includes('npm run -s docs KVStore | jq .'));
+	assert.ok(guide.includes('npm run -s whoami -- --query stacks.production'));
+});
+
 function pollSnippet(): string {
 	const guide = readFileSync(guidePath, 'utf-8');
 	const blocks = [...guide.matchAll(/```ts\n([\s\S]*?)```/g)].map((m) => m[1]);
@@ -24,15 +33,15 @@ function pollSnippet(): string {
 
 // The generated client types each method from the backend; this stands in for
 // an app whose backend defines `getDashboard(): Promise<{ open: number }>`.
-const CLIENT_DECLARATION = "declare module 'aws-blocks' {\n\texport const api: { getDashboard(): Promise<{ open: number }> };\n}\n";
+const CLIENT_DECLARATION = "declare module 'cdk-blocks' {\n\texport const api: { getDashboard(): Promise<{ open: number }> };\n}\n";
 
 describe('scaffolded AGENTS.md polling snippet', () => {
 	it('typechecks under strict settings against the typed client', () => {
 		const dir = mkdtempSync(join(tmpdir(), 'cba-poll-tsc-'));
 		try {
 			writeFileSync(join(dir, 'poll.ts'), pollSnippet());
-			writeFileSync(join(dir, 'aws-blocks.d.ts'), CLIENT_DECLARATION);
-			const program = ts.createProgram([join(dir, 'poll.ts'), join(dir, 'aws-blocks.d.ts')], {
+			writeFileSync(join(dir, 'cdk-blocks.d.ts'), CLIENT_DECLARATION);
+			const program = ts.createProgram([join(dir, 'poll.ts'), join(dir, 'cdk-blocks.d.ts')], {
 				strict: true,
 				noEmit: true,
 				target: ts.ScriptTarget.ES2022,
@@ -69,9 +78,9 @@ describe('scaffolded AGENTS.md polling snippet', () => {
 			dir = mkdtempSync(join(tmpdir(), 'cba-poll-run-'));
 			const js = ts.transpileModule(pollSnippet(), {
 				compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-			}).outputText.replace("from 'aws-blocks'", "from './aws-blocks.mjs'");
+			}).outputText.replace("from 'cdk-blocks'", "from './cdk-blocks.mjs'");
 			writeFileSync(join(dir, 'poll.mjs'), js);
-			writeFileSync(join(dir, 'aws-blocks.mjs'), 'export const api = { getDashboard: () => globalThis.__getDashboard() };\n');
+			writeFileSync(join(dir, 'cdk-blocks.mjs'), 'export const api = { getDashboard: () => globalThis.__getDashboard() };\n');
 			pollDashboard = (await import(pathToFileURL(join(dir, 'poll.mjs')).href)).pollDashboard;
 		});
 
@@ -159,5 +168,25 @@ describe('scaffolded AGENTS.md polling snippet', () => {
 			const gaps = startedAt.slice(1).map((t, i) => t - startedAt[i]);
 			assert.ok(gaps[gaps.length - 1] > gaps[0], `gaps should grow: ${gaps.join(', ')}`);
 		});
+	});
+});
+
+// A custom auth form that calls `authApi.setAuthState()` directly signs the
+// user in on the server but never fires `onAuthChange`, so the page stays on
+// the sign-in form. The guide must point custom forms at `submitAuthAction`.
+describe('scaffolded AGENTS.md auth guidance', () => {
+	const lines = readFileSync(guidePath, 'utf-8').split('\n');
+	const frontendPart = (name: string) => lines.find((line) => line.trimStart().startsWith(`- \`${name}(authApi`));
+
+	it('says which calls fire onAuthChange', () => {
+		const line = frontendPart('onAuthChange');
+		assert.ok(line, 'AGENTS.md documents onAuthChange');
+		assert.match(line, /submitAuthAction/);
+	});
+
+	it('documents submitAuthAction and warns that a direct setAuthState call notifies nothing', () => {
+		const line = frontendPart('submitAuthAction');
+		assert.ok(line, 'AGENTS.md documents submitAuthAction in the frontend auth parts');
+		assert.match(line, /`authApi\.setAuthState\(\)`[^.]*notifies nothing/);
 	});
 });

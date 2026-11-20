@@ -1,0 +1,63 @@
+{
+  "name": "blocks-auth-oidc-app",
+  "version": "0.1.0",
+  "type": "module",
+  "blocksTemplate": "auth-oidc",
+  "blocksTemplateDescription": "Vite + vanilla-DOM frontend with OpenID Connect (OIDC) sign-in end-to-end, local stub IdP for dev",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "cdk-blocks"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b --force",
+    "spec": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate spec",
+    "dev:server": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev",
+    "dev": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev",
+    "dev:stop": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev stop",
+    "sandbox": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox",
+    "sandbox:deploy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox deploy",
+    "sandbox:preview": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox preview",
+    "sandbox:destroy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox destroy",
+    "sandbox:console": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- sandbox console",
+    "cleanup": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- dev stop --all",
+    "prebuild": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client",
+    "build": "tsc -b --force && vite build",
+    "preview": "vite preview",
+    "deploy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- deploy",
+    "secret": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- secret",
+    "config": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- config",
+    "typegen": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate types",
+    "destroy": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- destroy",
+    "test:e2e": "tsx --tsconfig tsconfig.node.json -C browser --test-force-exit test/e2e.test.ts",
+    "docs": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs",
+    "docs:search": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --search",
+    "docs:api": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- docs --api",
+    "db": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- db",
+    "whoami": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- whoami",
+    "migrate": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- migrate",
+    "help": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- --help",
+    "generate-client": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client",
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
+  },
+  "blocks": {
+    "dev": {
+      "frontendPort": 3100
+    }
+  },
+  "dependencies": {
+    "aws-cdk-blocks": "*",
+    "@aws-cdk-blocks/hosting": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.5",
+    "tsx": "^4.23.15",
+    "esbuild": "^0.28.2",
+    "aws-cdk": "^2.1147.0",
+    "aws-cdk-lib": "^2.275.0",
+    "constructs": "^10.8.1"
+  }
+}

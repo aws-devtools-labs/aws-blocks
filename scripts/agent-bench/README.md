@@ -20,7 +20,7 @@ Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxi
    scaffolded; no dev server is running (the agent must not rely on or start one).
 3. **Build and test** — `npm run build`, then launch the dev server fresh and
    discover the port it binds by anchoring on the framework's startup banner
-   (`AWS Blocks local server running on http://localhost:<port>`) — no port
+   (`AWS CDK Blocks local server running on http://localhost:<port>`) — no port
    guessing — exported as `APP_BASE_URL`; then run the task's Playwright spec
    against it. Records build / dev-server / playwright / test signals. The script
    is a trusted supervisor; every process that runs the agent's app or its
@@ -45,7 +45,7 @@ Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxi
 6. **Upload source** — uploads the staged `bench-app` copy as
    `bench-source-<task>-<template>` for post-run auditing (deps/build output,
    VCS and anything credential-shaped — `node_modules`, `.git`, `dist`,
-   `.blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
+   `.cdk-blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
    - **6b. Upload trace** (best-effort) — the agent trace, run metrics and
      command log written by step 2; on a wall-clock timeout step 2 emits no
      trace, so nothing uploads
@@ -149,7 +149,7 @@ The boundary, outermost first:
      `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH`), node/TLS/proxy (`NODE_OPTIONS`,
      `NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`/`DIR`, `HTTP(S)_PROXY`,
      `NO_PROXY`, `ALL_PROXY`), `AWS_REGION`/`AWS_DEFAULT_REGION`, the framework's
-     `AWS_BLOCKS_DISABLE_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
+     `CDK_DISABLE_CLI_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
      `npm_config_*`, `PLAYWRIGHT_*` and `BLOCKS_*` prefixes. `PATH` keeps only
      system dirs and the harness's own node dir (both covered by the lockdown);
      `NODE_OPTIONS` keeps only flags that load no code.
@@ -215,11 +215,11 @@ dimensions* below — there is no per-task dimension to author.
 | `auth-notes` | `demo` | Auth (email + password, emailed sign-up code) + KVStore |
 | `file-gallery` | `bare` | FileBucket |
 | `async-word-counter` | `bare` | AsyncJob + KVStore |
-| `collab-presence-board` | `default` | Realtime + DistributedTable |
+| `collab-presence-board` | `default` | Realtime + KVStore (schema + key) |
 | `cognito-profile` | `auth` | Auth (email + password sign-up confirmed with an emailed code; profile + session) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
-| `oidc-dsql-notes` | `react` | Auth (`store: 'builtin'`, stub IdP) + DistributedDatabase |
+| `oidc-dsql-notes` | `react` | Auth (`store: 'builtin'`, stub IdP) + Database (Aurora DSQL) |
 | `email-digest` | `demo` | CronJob + EmailClient + KVStore |
 | `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 
@@ -310,7 +310,7 @@ every `*.spec.{ts,tsx,js,jsx,cjs,mjs}` CODE file are excluded from the copy, so
 the judge is blinded by ABSENCE — no `cat`/`grep`/`find` can reach a spec that
 physically isn't there — and a post-copy `find` (`4-judge.ts`
 `assertNoSpecLeak`) fails loudly if one ever leaks in. Framework-generated
-`*.spec.json` manifests (e.g. `aws-blocks/blocks.spec.json`, the OpenRPC
+`*.spec.json` manifests (e.g. `cdk-blocks/blocks.spec.json`, the OpenRPC
 contract) are deliberately NOT treated as leaks: they are build artifacts, not
 the bench objective.
 

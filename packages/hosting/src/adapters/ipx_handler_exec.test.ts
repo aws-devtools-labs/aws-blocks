@@ -23,7 +23,7 @@ import { IPX_LAMBDA_HANDLER_SOURCE } from './ipx_lambda_template.js';
 
 type LambdaResult = { statusCode: number; headers: Record<string, string>; body: string };
 type Handler = (event: unknown) => Promise<LambdaResult>;
-type Control = { s3Bytes: Uint8Array; remoteBytes: Uint8Array; outputType: string; lastPath?: string };
+type Control = { s3Bytes: Uint8Array; remoteBytes: Uint8Array; outputType: string; lastPath?: string; s3Missing?: boolean };
 
 const SVG = new TextEncoder().encode('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>');
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
@@ -44,6 +44,8 @@ export const createIPXWebServer = (ipx) => async (req) => {
   const storage = /^https?:/.test(id) ? ipx.httpStorage : ipx.storage;
   try {
     const data = await storage.getData(id.startsWith('http') ? id : '/' + id.replace(/^\\/+/, ''));
+    // As ipx@3.1.1: a storage that returns no data is IPX_RESOURCE_NOT_FOUND (404).
+    if (!data) return new Response('{"error":"IPX_RESOURCE_NOT_FOUND"}', { status: 404, headers: { 'content-type': 'application/json' } });
     return new Response(data, { status: 200, headers: { 'content-type': control.outputType } });
   } catch {
     return new Response('{"error":"ipx internal"}', { status: 500, headers: { 'content-type': 'application/json' } });
@@ -55,6 +57,7 @@ const STUB_S3 = `import { control } from '../../../control.mjs';
 export class GetObjectCommand { constructor(input) { this.input = input; } }
 export class S3Client {
   async send() {
+    if (control.s3Missing) throw Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' });
     return { Body: { transformToByteArray: async () => control.s3Bytes }, LastModified: new Date(0), ContentLength: control.s3Bytes.length };
   }
 }
@@ -137,6 +140,17 @@ void describe('generated IPX handler — SVG gate (executed, not string-matched)
     control.outputType = 'image/svg+xml';
     const res = await silenced(() => handler(event('logo')));
     assert.strictEqual(res.statusCode, 415);
+  });
+
+  void it('returns 404, not 500, when the source image is missing from S3 (NoSuchKey)', async () => {
+    const handler = await loadHandler(BASE_ENV);
+    control.s3Missing = true;
+    try {
+      const res = await silenced(() => handler(event('missing.png')));
+      assert.strictEqual(res.statusCode, 404);
+    } finally {
+      control.s3Missing = false;
+    }
   });
 
   void it('serves a raster image normally', async () => {

@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getScores() async throws -> [String: Double] {
         let request = BlocksRequest(method: "api.getScores", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getScores") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getScores") }
         return try JSONDecoder().decode([String: Double].self, from: result)
     }
 
@@ -25,13 +25,13 @@ public final nonisolated class Api: Sendable {
     public func signUp(input: SignUp.Input) async throws -> SignUp.Result {
         let request = BlocksRequest(method: "api.signUp", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.signUp") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.signUp") }
         return try JSONDecoder().decode(SignUp.Result.self, from: result)
     }
 
     public enum SignUp {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let password: String
             public let username: String
             public let attributes: [String: String]
@@ -75,7 +75,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
@@ -118,5 +118,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

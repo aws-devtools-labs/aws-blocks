@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -25,46 +28,46 @@ void main() {
     test('posts to the method\'s namespace path', () async {
       expect(
         await _requestedUrl(
-          'https://d123.cloudfront.net/aws-blocks/api',
+          'https://d123.cloudfront.net/cdk-blocks/api',
           'reports.build',
         ),
-        'https://d123.cloudfront.net/aws-blocks/api/reports',
+        'https://d123.cloudfront.net/cdk-blocks/api/reports',
       );
       expect(
         await _requestedUrl(
-          'https://a.example/prod/aws-blocks/api//',
+          'https://a.example/prod/cdk-blocks/api//',
           'reports.build',
         ),
-        'https://a.example/prod/aws-blocks/api/reports',
+        'https://a.example/prod/cdk-blocks/api/reports',
       );
     });
 
     test('only the first `.` separates the namespace', () async {
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', 'ns.a.b'),
-        'https://a.example/aws-blocks/api/ns',
+        await _requestedUrl('https://a.example/cdk-blocks/api', 'ns.a.b'),
+        'https://a.example/cdk-blocks/api/ns',
       );
     });
 
     test('sends path-safe characters as they are, encodes others', () async {
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', r'$ns.m'),
-        r'https://a.example/aws-blocks/api/$ns',
+        await _requestedUrl('https://a.example/cdk-blocks/api', r'$ns.m'),
+        r'https://a.example/cdk-blocks/api/$ns',
       );
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', 'café.m'),
-        'https://a.example/aws-blocks/api/caf%C3%A9',
+        await _requestedUrl('https://a.example/cdk-blocks/api', 'café.m'),
+        'https://a.example/cdk-blocks/api/caf%C3%A9',
       );
     });
 
     test('leaves the base URL for a method without namespace', () async {
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', 'greet'),
-        'https://a.example/aws-blocks/api',
+        await _requestedUrl('https://a.example/cdk-blocks/api', 'greet'),
+        'https://a.example/cdk-blocks/api',
       );
       expect(
-        await _requestedUrl('https://a.example/aws-blocks/api', '.greet'),
-        'https://a.example/aws-blocks/api',
+        await _requestedUrl('https://a.example/cdk-blocks/api', '.greet'),
+        'https://a.example/cdk-blocks/api',
       );
     });
   });
@@ -121,24 +124,20 @@ void main() {
         });
         for (final status in [401, 200]) {
           final client = BlocksClient(
-            baseUrl: 'http://test/aws-blocks/api',
+            baseUrl: 'http://test/cdk-blocks/api',
             client: MockClient((_) async => http.Response(body, status)),
           );
           await expectLater(
             client.call('api.authRequired', []),
             throwsA(
-              isA<BlocksRpcException>()
-                  .having((e) => e.code, 'code', 401)
+              isA<ApiException>()
+                  .having((e) => e.status, 'status', 401)
                   .having(
                     (e) => e.message,
                     'message',
                     'Authentication required',
                   )
-                  .having(
-                    (e) => (e.data as Map)['name'],
-                    'data.name',
-                    'NotAuthenticatedException',
-                  ),
+                  .having((e) => e.name, 'name', 'NotAuthenticatedException'),
             ),
             reason: 'HTTP $status',
           );
@@ -152,7 +151,7 @@ void main() {
         // Documented with `httpErrorStatus`: a non-idempotent method can run twice.
         var calls = 0;
         final client = BlocksClient(
-          baseUrl: 'http://test/aws-blocks/api',
+          baseUrl: 'http://test/cdk-blocks/api',
           client: MockClient((_) async {
             calls++;
             return http.Response(
@@ -168,7 +167,7 @@ void main() {
         );
         await expectLater(
           client.call('api.authRequired', []),
-          throwsA(isA<BlocksRpcException>().having((e) => e.code, 'code', 401)),
+          throwsA(isA<ApiException>().having((e) => e.status, 'status', 401)),
         );
         expect(calls, 2);
       },
@@ -227,9 +226,9 @@ void main() {
       final client = BlocksClient(baseUrl: 'http://test', client: mockClient);
       await client.call('test', {});
       expect(sentHeaders!['x-blocks-user-agent'], blocksUserAgentToken);
-    }, testOn: 'vm'); // Web omits the header by design.
+    });
 
-    test('throws BlocksRpcException on error response', () async {
+    test('throws ApiException on error response', () async {
       final mockClient = MockClient(
         (_) async => http.Response(
           jsonEncode({
@@ -244,8 +243,9 @@ void main() {
       expect(
         () => client.call('bad', {}),
         throwsA(
-          isA<BlocksRpcException>()
-              .having((e) => e.code, 'code', -32600)
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 500)
+              .having((e) => e.name, 'name', 'InvalidRequest')
               .having((e) => e.message, 'message', 'Invalid'),
         ),
       );
@@ -289,6 +289,35 @@ void main() {
       expect(sentHeaders!['cookie'], 'token=xyz');
     });
 
+    for (final token in ['token', null]) {
+      test(
+        'with an auth provider, sends the cookie and '
+        '${token == null ? 'no bearer token when it has none' : 'its bearer token'}',
+        () async {
+          final store = InMemorySessionStore()..setCookies('session=s1');
+          Map<String, String>? sentHeaders;
+          final client = BlocksClient(
+            baseUrl: 'http://test',
+            client: MockClient((req) async {
+              sentHeaders = req.headers;
+              return http.Response(
+                jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+                200,
+              );
+            }),
+            sessionStore: store,
+            authProvider: _TokenAuthProvider(token),
+          );
+          await client.call('test', {});
+          expect(sentHeaders!['cookie'], 'session=s1');
+          expect(
+            sentHeaders!['authorization'],
+            token == null ? isNull : 'Bearer $token',
+          );
+        },
+      );
+    }
+
     Future<String?> cookieSentTo(
       String baseUrl,
       InMemorySessionStore store,
@@ -320,42 +349,42 @@ void main() {
         ),
       );
       await BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
+        baseUrl: 'http://test/cdk-blocks/api',
         client: mockClient,
         sessionStore: store,
       ).call('test', {});
       expect(
-        await cookieSentTo('http://test/aws-blocks/api', store),
+        await cookieSentTo('http://test/cdk-blocks/api', store),
         'session=abc123',
       );
-      expect(await cookieSentTo('http://other/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('http://other/cdk-blocks/api', store), isNull);
     });
 
     test('sends a Secure cookie only over https', () async {
       final store = InMemorySessionStore()
         ..setCookies(
           'session=s; Path=/; Secure',
-          requestUri: Uri.parse('https://test/aws-blocks/api'),
+          requestUri: Uri.parse('https://test/cdk-blocks/api'),
         );
       expect(
-        await cookieSentTo('https://test/aws-blocks/api', store),
+        await cookieSentTo('https://test/cdk-blocks/api', store),
         'session=s',
       );
-      expect(await cookieSentTo('http://test/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('http://test/cdk-blocks/api', store), isNull);
     });
 
     test('sends a cookie only to paths under its Path', () async {
       final store = InMemorySessionStore()
         ..setCookies(
           'session=s; Path=/prod',
-          requestUri: Uri.parse('https://test/prod/aws-blocks/api'),
+          requestUri: Uri.parse('https://test/prod/cdk-blocks/api'),
         );
       expect(
-        await cookieSentTo('https://test/prod/aws-blocks/api', store),
+        await cookieSentTo('https://test/prod/cdk-blocks/api', store),
         'session=s',
       );
       expect(
-        await cookieSentTo('https://test/beta/aws-blocks/api', store),
+        await cookieSentTo('https://test/beta/cdk-blocks/api', store),
         isNull,
       );
     });
@@ -363,31 +392,31 @@ void main() {
     test('scopes cookies to the URL the response came from', () async {
       final store = InMemorySessionStore();
       final redirectingClient = _FinalUrlClient(
-        Uri.parse('https://final/next/aws-blocks/api'),
+        Uri.parse('https://final/next/cdk-blocks/api'),
         jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
         headers: {'set-cookie': 'session=abc123; HttpOnly'},
       );
       await BlocksClient(
-        baseUrl: 'https://test/aws-blocks/api',
+        baseUrl: 'https://test/cdk-blocks/api',
         client: redirectingClient,
         sessionStore: store,
       ).call('test', {});
       expect(
-        await cookieSentTo('https://final/next/aws-blocks/api', store),
+        await cookieSentTo('https://final/next/cdk-blocks/api', store),
         'session=abc123',
       );
       expect(
-        await cookieSentTo('https://final/other/aws-blocks/api', store),
+        await cookieSentTo('https://final/other/cdk-blocks/api', store),
         isNull,
       );
-      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('https://test/cdk-blocks/api', store), isNull);
     });
 
     test('drops a cookie the server expires', () async {
       final store = InMemorySessionStore()
         ..setCookies(
           'session=s; Path=/',
-          requestUri: Uri.parse('https://test/aws-blocks/api'),
+          requestUri: Uri.parse('https://test/cdk-blocks/api'),
         );
       final mockClient = MockClient(
         (req) async => http.Response(
@@ -398,14 +427,26 @@ void main() {
         ),
       );
       await BlocksClient(
-        baseUrl: 'https://test/aws-blocks/api',
+        baseUrl: 'https://test/cdk-blocks/api',
         client: mockClient,
         sessionStore: store,
       ).call('test', {});
       expect(store.cookies, isEmpty);
-      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+      expect(await cookieSentTo('https://test/cdk-blocks/api', store), isNull);
     });
   });
+}
+
+class _TokenAuthProvider implements AuthProvider {
+  _TokenAuthProvider(this.token);
+
+  final String? token;
+
+  @override
+  Future<String?> getAccessToken() async => token;
+
+  @override
+  Future<void> onAuthFailure() async {}
 }
 
 class _RefreshingAuthProvider implements AuthProvider {

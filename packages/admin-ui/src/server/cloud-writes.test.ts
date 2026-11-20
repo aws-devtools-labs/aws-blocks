@@ -19,11 +19,11 @@ import {
 
 function makeBlock(overrides: Partial<DiscoveredBlock> = {}): DiscoveredBlock {
 	return {
-		type: 'DistributedTable',
+		type: 'KVStore',
 		id: 'todos',
 		fullId: 'my-app-todos',
 		category: 'data',
-		file: 'aws-blocks/app.ts',
+		file: 'cdk-blocks/app.ts',
 		line: 12,
 		...overrides,
 	};

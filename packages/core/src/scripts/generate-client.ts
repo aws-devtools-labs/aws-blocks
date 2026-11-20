@@ -1,11 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { isManagedValue } from '@aws-blocks/hosting';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isApiNamespace, isScopeLike } from '../rpc-dispatch.js';
+import { isDispatchableExport } from '../rpc-dispatch.js';
 
 /**
  * Generate browser-safe client code from backend exports.
@@ -36,36 +35,24 @@ export async function generateClientCode(foundationPath: string): Promise<string
 	const lines: string[] = [];
 	const namespaceNames: string[] = [];
 
-	imports.add(`import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';`);
+	imports.add(`import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from 'aws-cdk-blocks/client';`);
 
 	for (const specifier of middleware) {
 		imports.add(`import '${specifier}';`);
 	}
 
-	// Emit ApiNamespace proxy exports
+	// Emit an ApiNamespace proxy for every export the RPC dispatcher would serve,
+	// using the dispatcher's own predicate so the server never serves a namespace
+	// the client has no proxy for (and vice versa). It skips `_`-private exports,
+	// Building Block (`Scope`) instances, `secret()`/`config()` markers, and
+	// server-only functions (an `auth.admin` method exported on its own); an
+	// ApiNamespace or any other exported function/object gets a proxy. The
+	// server-only set is filled while the backend module above loads, so it is
+	// complete by the time this loop runs.
 	for (const [name, value] of Object.entries(backend)) {
-		if (name.startsWith('_')) continue;
-
-		if (isApiNamespace(value)) {
-			lines.push(`export const ${name} = __BLOCKS_ApiNamespaceClient__('${name}');`);
-			namespaceNames.push(name);
-			continue;
-		}
-
-		// Fallback: any exported function/object that isn't a Scope gets a proxy.
-		// Same Scope test the RPC dispatcher uses, so the server never serves a
-		// namespace the client has no proxy for (and vice versa).
-		if (isScopeLike(value)) continue;
-
-		// A secret()/config() marker is a deferred value, not an API — skip it, or
-		// `export const k = secret('K')` in index.ts would become a bogus HTTP namespace.
-		if (isManagedValue(value)) continue;
-
-		// Fallback: any exported function/object gets an ApiNamespace proxy.
-		if ((typeof value === 'function' || typeof value === 'object') && value !== null) {
-			lines.push(`export const ${name} = __BLOCKS_ApiNamespaceClient__('${name}');`);
-			namespaceNames.push(name);
-		}
+		if (!isDispatchableExport(name, value)) continue;
+		lines.push(`export const ${name} = __BLOCKS_ApiNamespaceClient__('${name}');`);
+		namespaceNames.push(name);
 	}
 
 	// Emit generateClient — creates new ApiNamespaceClient instances with the given
@@ -87,7 +74,7 @@ export async function generateClientCode(foundationPath: string): Promise<string
 }
 
 /**
- * Generate client code and write it to the aws-blocks subpackage.
+ * Generate client code and write it to the cdk-blocks subpackage.
  */
 export async function writeClientCode(foundationPath: string, outputPath: string): Promise<void> {
 	const code = await generateClientCode(foundationPath);

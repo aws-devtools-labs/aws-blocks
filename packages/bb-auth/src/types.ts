@@ -8,15 +8,15 @@
  * values (no `const`, `function` or `class`), so every entry point — mock,
  * AWS, CDK and browser — can re-export it without pulling in runtime code.
  *
- * Status: published as `@aws-blocks/bb-auth` and exported from the
- * `@aws-blocks/blocks` umbrella. The option groups and the gated method surface
+ * Status: published as `@aws-cdk-blocks/bb-auth` and exported from the
+ * `aws-cdk-blocks` umbrella. The option groups and the gated method surface
  * below are the contract the runtime layers implement. `types-test.ts` is the compile-time proof
  * that the mode gates work and that `Auth<O>` stays covariant in `O`.
  */
 
-import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-blocks/core';
+import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-cdk-blocks/auth-common';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
@@ -194,7 +194,7 @@ export interface AuthCommonOptions {
 	/** Session cookie and server-side session record behaviour. */
 	session?: SessionOptions;
 
-	/** HTTP paths for the federated redirect flow. All must sit under `/aws-blocks/auth/`. */
+	/** HTTP paths for the federated redirect flow. They must sit under `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	redirects?: RedirectOptions;
 
 	/**
@@ -223,6 +223,12 @@ export interface AuthCommonOptions {
 	 * `BlocksPresets.sandbox` destroys). Set `'retain'` explicitly for any pool
 	 * holding real users.
 	 *
+	 * The session table has one setting for removal and deletion protection
+	 * (`KVStore`'s `protection`). When this option or `deletionProtection` is
+	 * set, the table is retained and protected if deletion protection resolves
+	 * to on, retained if it resolves to off with `'retain'`, and deleted with
+	 * the stack if it resolves to off with `'destroy'`.
+	 *
 	 * @default the stack's `defaults.removalPolicy`
 	 */
 	removalPolicy?: 'destroy' | 'retain';
@@ -236,12 +242,47 @@ export interface AuthCommonOptions {
 	 * Changing an already-protected pool to `false` deactivates its protection on
 	 * the next deploy.
 	 *
+	 * On the session table, deletion protection also retains the table when the
+	 * block leaves the stack (see `removalPolicy`).
+	 *
 	 * @default the stack's `defaults.deletionProtection`
 	 */
 	deletionProtection?: boolean;
 
 	/** Optional logger. When omitted, a default `Logger` at `error` level is created. */
 	logger?: ChildLogger;
+
+	/**
+	 * Write an audit record for each session lifecycle event, so you can see
+	 * and alarm on auth activity. Off by default.
+	 *
+	 * - `true` writes them through a dedicated `info`-level `Logger`: one JSON
+	 *   line per event in the function's CloudWatch log group, whatever level
+	 *   `logger` is set to.
+	 * - A `ChildLogger` sends them to that logger instead, at `info`. It must
+	 *   accept `info`: a logger set to `warn` or `error` drops every record
+	 *   without an error.
+	 *
+	 * Each record's message is its `event`, and its fields are an
+	 * {@link AuthAuditRecord}: `auth.session.issued`, `auth.signin.failed`
+	 * (an email + password sign-in or challenge answer, a federated callback, a
+	 * `validateUser` or `onSignIn` rejection, or an insecure-transport refusal),
+	 * `auth.signout` and `auth.sessions.revoked` (a password reset or
+	 * `admin.revokeUserSessions` ending all the user's sessions; `deleteUser`
+	 * ending the current one). A record never holds a password, code, token,
+	 * session id, email or error message. It identifies the user by `sub`,
+	 * which on a Cognito-store session is the id CloudTrail records; a
+	 * password-reset record carries the pool `username` instead. Writing a
+	 * record is best-effort: an error from the logger never changes the result,
+	 * and the first one is logged once as a `warn`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const auth = new Auth(scope, 'auth', { audit: true });
+	 * // CloudWatch metric filter for failed sign-ins: { $.event = "auth.signin.failed" }
+	 * ```
+	 */
+	audit?: boolean | ChildLogger;
 
 	/**
 	 * @deprecated Replaced by `providers`: move each entry there, keyed as
@@ -367,7 +408,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 	 *
 	 * What is accepted (the same as `AuthOIDC`, so the native SDKs work
 	 * unchanged): a directly federated OIDC provider's JWT access token — the
-	 * one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/refresh`
+	 * one `/cdk-blocks/auth/exchange` returns and `/cdk-blocks/auth/refresh`
 	 * renews — verified against the provider's JWKS (issuer, audience = its
 	 * client id, expiry); or, for a user-pool user, the Cognito access token.
 	 * The session cookie takes precedence when a request carries both. A token
@@ -509,8 +550,8 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	/**
 	 * Accept `Authorization: Bearer <access token>` in addition to the session
 	 * cookie, for native and CLI clients that cannot hold a cookie: the
-	 * provider's JWT access token that `/aws-blocks/auth/exchange` returns and
-	 * `/aws-blocks/auth/refresh` renews, verified against the provider's JWKS
+	 * provider's JWT access token that `/cdk-blocks/auth/exchange` returns and
+	 * `/cdk-blocks/auth/refresh` renews, verified against the provider's JWKS
 	 * (issuer, audience = its client id, expiry). See
 	 * {@link CognitoAuthOptions.allowBearerAuth} for the details. The object
 	 * form (extra Cognito app clients) needs `store: 'cognito'`.
@@ -763,7 +804,7 @@ export interface AppSettingRef {
  * deploy again to re-register the provider with it. For a directly federated
  * provider the value is read at request time through the `Secret` itself.
  * Locally, the value comes from the `Secret`'s local store
- * (`.bb-data/settings.json`).
+ * (`.cdk-blocks/local/data/settings.json`).
  */
 export interface SecretRef {
 	/** The `Secret`'s scoped id. */
@@ -1099,7 +1140,7 @@ export type OnStubAuthorize = (req: StubAuthorizeRequest) => StubUser | undefine
 export interface StubIdpSettings {
 	/**
 	 * The local identity directory for the account picker and `onAuthorize`.
-	 * When set (and non-empty) it wins over a `.bb-data/<fullId>/users.json`
+	 * When set (and non-empty) it wins over a `.cdk-blocks/local/data/<fullId>/users.json`
 	 * fixture, which in turn wins over the single built-in default user.
 	 */
 	users?: readonly StubUser[];
@@ -1110,7 +1151,7 @@ export interface StubIdpSettings {
 /**
  * A provider served by the built-in **stub IdP** — a real, local OIDC
  * provider (ES256-signed ID tokens, discovery, JWKS, PKCE S256) mounted on the
- * dev server under `/aws-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
+ * dev server under `/cdk-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
  * and put it in a `store: 'builtin'` block's `providers`.
  *
  * Local development and sandbox deployments only: in `npm run dev` it gives
@@ -1122,8 +1163,7 @@ export interface StubIdpSettings {
  * URL.
  *
  * In a sandbox, the issuer is the API Gateway's own HTTPS URL plus
- * `/aws-blocks/auth/idp/<id>`, the same value `AuthOIDC`'s deployed stub used,
- * so `userId`s carry over. A sandbox stub signs users in **without
+ * `/cdk-blocks/auth/idp/<id>`. A sandbox stub signs users in **without
  * credentials** — see `stubIdp()`.
  */
 export interface StubProvider extends Omit<DirectOidcProvider, 'type'> {
@@ -1268,6 +1308,24 @@ export interface UserAttribute {
 	mutable?: boolean;
 	/** Whether the attribute is required at sign-up. @default false */
 	required?: boolean;
+	/**
+	 * Whether end users may set this attribute themselves: at self sign-up,
+	 * through `updateUserAttributes`, and in the new-password step of
+	 * `confirmSignIn`. @default true
+	 *
+	 * Set `false` for any attribute your app uses for authorization (a role,
+	 * a tenant id, a plan tier). The block's app clients then leave it out of
+	 * their write attributes, so Cognito refuses an end-user write, and `Auth`
+	 * rejects one with `NotAuthorizedException` before calling Cognito,
+	 * locally too. Set it server-side instead: `admin.createUser` for a new
+	 * user, `admin.updateUserAttributes` for one who already exists. Can't be combined with
+	 * `required: true`, which has no effect on a custom attribute.
+	 *
+	 * A provider's `attributeMapping` can't map onto it (refused at
+	 * construction): the mapping would write the provider's claim on every
+	 * federated sign-in, replacing a value set server-side.
+	 */
+	userWritable?: boolean;
 }
 
 /** Settings for {@link CognitoAuthOptions.users}. */
@@ -1305,8 +1363,8 @@ export interface UserPoolOptions {
 	 * values; anything else is rejected with `InvalidParameterException`, by
 	 * the local runtime as by Cognito.
 	 *
-	 * ⚠️ **Not a profile database.** Keep profile data in `KVStore` or
-	 * `DistributedTable`, keyed on `user.userSub`.
+	 * ⚠️ **Not a profile database.** Keep profile data in a `KVStore`, keyed
+	 * on `user.userSub`.
 	 */
 	attributes?: readonly UserAttribute[];
 
@@ -1382,8 +1440,53 @@ export interface UserPoolOptions {
 
 /** Settings for {@link AuthCommonOptions.session}. */
 export interface SessionOptions {
-	/** Session record and cookie lifetime, in seconds. @default 34_560_000 (400 days) */
+	/**
+	 * Session record and cookie lifetime, in seconds. Every refresh re-stamps
+	 * it, so it is how long a session may sit unused. A session also ends when
+	 * its Cognito refresh token does ({@link SessionOptions.refreshTokenValiditySeconds}),
+	 * which is counted from sign-in.
+	 *
+	 * @default 2_592_000 (30 days; it was 400 days before)
+	 */
 	ttlSeconds?: number;
+	/**
+	 * Lifetime of the Cognito access token on the app clients this block
+	 * creates, in seconds: a whole number of minutes from 300 to 86_400. The
+	 * session refreshes it behind the scenes. Not available with `userPool`:
+	 * set it on your pool's own app client.
+	 *
+	 * @default 3600 (1 hour)
+	 */
+	accessTokenValiditySeconds?: number;
+	/** Lifetime of the Cognito ID token; same rules as `accessTokenValiditySeconds`. @default 3600 (1 hour) */
+	idTokenValiditySeconds?: number;
+	/**
+	 * Lifetime of the Cognito refresh token, in seconds: a whole number of
+	 * minutes from 3600 to 315_360_000 (10 years). It is the **absolute** limit
+	 * of a session: counted from sign-in, and neither a refresh nor rotation
+	 * extends it, so the user signs in again once it ends however recently they
+	 * were active. `ttlSeconds` is the idle limit. Must be at least the access
+	 * and ID token lifetimes.
+	 *
+	 * @default `ttlSeconds` (30 days)
+	 */
+	refreshTokenValiditySeconds?: number;
+	/**
+	 * Rotate the refresh token on every refresh: Cognito issues a new one and
+	 * revokes the previous one (after a 10-second grace period for a concurrent
+	 * retry), so a stolen refresh token stops working once the real session
+	 * refreshes. The block stores the new token itself.
+	 *
+	 * Cognito does not allow the `REFRESH_TOKEN_AUTH` flow on a client with
+	 * rotation on, so the clients lose that flow and the block refreshes with
+	 * `GetTokensFromRefreshToken`, which accepts the refresh tokens of existing
+	 * sessions. Another app that refreshes against the same client with
+	 * `REFRESH_TOKEN_AUTH` must switch to `GetTokensFromRefreshToken`, or set
+	 * this to `false`. Turning it off is an in-place update too.
+	 *
+	 * @default true
+	 */
+	refreshTokenRotation?: boolean;
 	/**
 	 * Set `true` only when the frontend and the API are on different registrable
 	 * domains. Switches the cookie to `SameSite=None; Secure; Partitioned`.
@@ -1404,9 +1507,9 @@ export interface SessionOptions {
 
 /** Settings for {@link AuthCommonOptions.redirects}. */
 export interface RedirectOptions {
-	/** @default '/aws-blocks/auth/callback' — must start with `/aws-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/callback' — must start with `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	callbackPath?: string;
-	/** @default '/aws-blocks/auth/signout' — must start with `/aws-blocks/auth/`. */
+	/** @default '/cdk-blocks/auth/signout' — must start with `/cdk-blocks/auth/` or its legacy `/aws-blocks/auth/` alias. */
 	signOutPath?: string;
 	/** Where the browser lands after a successful federated sign-in. @default '/' */
 	postSignInPath?: string;
@@ -1427,7 +1530,7 @@ export interface RedirectOptions {
 	postSignOutPath?: string;
 	/**
 	 * Origins a native or CLI client's relay sign-in may redirect back to
-	 * (`POST /aws-blocks/auth/authorize-params/<id>` with `relayTo`), each built
+	 * (`POST /cdk-blocks/auth/authorize-params/<id>` with `relayTo`), each built
 	 * with `relayOrigin()`. Loopback (`http://127.0.0.1`, `http://[::1]`, any
 	 * port) and the API's own origin are always allowed.
 	 *
@@ -1957,7 +2060,7 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O
  * `getAuthState()`'s `actions`: `` `signIn:${id}` `` for each configured
  * provider id (`never` when there is none; `` `signIn:${string}` `` for the
  * wide `AuthOptions`). The action carries a `url`; the client navigates to it
- * rather than calling `setAuthState`. Narrows `@aws-blocks/bb-auth/ui`'s
+ * rather than calling `setAuthState`. Narrows `@aws-cdk-blocks/bb-auth/ui`'s
  * `AuthFederatedActionName` to this block's providers.
  *
  * @example
@@ -1981,8 +2084,8 @@ export type FederatedActionNameOf<O extends AuthOptions> = `signIn:${ProviderIdO
  *
  * @example
  * ```typescript
- * import { onAuthChange } from '@aws-blocks/bb-auth/ui';
- * import { authApi } from 'aws-blocks';
+ * import { onAuthChange } from '@aws-cdk-blocks/bb-auth/ui';
+ * import { authApi } from 'cdk-blocks';
  *
  * onAuthChange(authApi, (user) => {
  *   const isAdmin = user?.groups.includes('admins') ?? false; // groups typed by users.groups
@@ -2009,6 +2112,96 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
  * over {@link AuthActionInputOf}, returning {@link AuthStateUser} users.
  */
 export type AuthStateApiOf<O extends AuthOptions> = AuthStateApi<AuthActionInputOf<O>, AuthStateUser<O>>;
+
+/** One provider's public authorize parameters, as `<base>/authorize-params/<id>` returns them. */
+export interface OidcProviderConfig {
+	/** The IdP's (or managed login's) authorization endpoint. */
+	authorizeUrl: string;
+	/** The client id the native client sends to the authorization endpoint. */
+	clientId: string;
+	/** The scopes to request. */
+	scopes: string[];
+	/** The provider kind on the wire: `'oidc-custom'`, `'oauth2-custom'`, `'stub'` or the managed-login kind. */
+	kind: string;
+}
+
+/**
+ * The `oidc/client` descriptor `getClient()` sends: the block's sign-in
+ * routes and the providers a native client can sign in with. The Swift,
+ * Kotlin and Dart SDKs hydrate it into their OIDC client, which the
+ * generated clients type by `P`.
+ */
+export interface OidcClientDescriptor<P extends string = string> {
+	/** The transferable tag the native SDKs hydrate. */
+	__blocks: 'oidc/client';
+	/** The providers a native client can sign in with here, in the block's provider order. */
+	providers: P[];
+	/** Each listed provider's authorize parameters, keyed by provider id. */
+	providerConfigs: Record<string, OidcProviderConfig>;
+	/** `redirects.callbackPath`: the IdP returns here, and a relay sign-in's `redirect_uri`. */
+	callbackPath: string;
+	/** `<base>/exchange`: code to session cookie. */
+	exchangePath: string;
+	/** `redirects.signOutPath`. */
+	signOutPath: string;
+	/** `<base>/signin`: the server-initiated sign-in routes (`<base>/signin/<id>`). */
+	signInBasePath: string;
+	/** `<base>/authorize-params`: the relay sign-in's parameters (`<base>/authorize-params/<id>`). */
+	authorizeParamsBasePath: string;
+	/** `<base>/session`: `{ user }` for a valid session cookie, else 401. What a native app restores on launch from. */
+	sessionPath: string;
+	/** `<base>/exchange/refresh`: renews bearer tokens from `{ refreshToken }`. Served only with `allowBearerAuth`. */
+	refreshPath: string;
+	/**
+	 * The name of the session cookie `/exchange` sets for this block (`auth_<fullId>`). A native client that
+	 * signs out locally after a failed sign-out removes only this cookie, so another block's session survives.
+	 * Always sent by this block; optional so a client reading an older backend's descriptor still works.
+	 */
+	sessionCookieName?: string;
+}
+
+/**
+ * What `getClient()` returns. On the server it serializes to its
+ * {@link OidcClientDescriptor}; a native SDK turns that into a live OIDC
+ * client whose `signIn` takes only `P`. A browser receives the plain
+ * descriptor: for a web frontend use `createAuthClient()` from
+ * `@aws-cdk-blocks/bb-auth/browser-client` instead.
+ */
+export interface OidcClientHandle<P extends string = string> {
+	/** See {@link OidcClientDescriptor.providers}. */
+	readonly providers: P[];
+	/** See {@link OidcClientDescriptor.providerConfigs}. */
+	readonly providerConfigs: Record<string, OidcProviderConfig>;
+	/** See {@link OidcClientDescriptor.callbackPath}. */
+	readonly callbackPath: string;
+	/** See {@link OidcClientDescriptor.exchangePath}. */
+	readonly exchangePath: string;
+	/** See {@link OidcClientDescriptor.signOutPath}. */
+	readonly signOutPath: string;
+	/** See {@link OidcClientDescriptor.signInBasePath}. */
+	readonly signInBasePath: string;
+	/** See {@link OidcClientDescriptor.authorizeParamsBasePath}. */
+	readonly authorizeParamsBasePath: string;
+	/** See {@link OidcClientDescriptor.sessionPath}. */
+	readonly sessionPath: string;
+	/** See {@link OidcClientDescriptor.refreshPath}. */
+	readonly refreshPath: string;
+	/** See {@link OidcClientDescriptor.sessionCookieName}. */
+	readonly sessionCookieName?: string;
+	/** @internal Transferable serialization. */
+	toJSON(): OidcClientDescriptor<P>;
+}
+
+/**
+ * The `createOidcApi()` surface of an `Auth` with options `O`: one method,
+ * `getClient()`, typed by the block's provider ids. Generic in `O` itself (not
+ * in the provider ids) so `Auth` stays a supertype of every configured
+ * instance, as the options-literal projections above require.
+ */
+export interface OidcClientApiOf<O extends AuthOptions> {
+	/** This block's OIDC client for the native SDKs, typed by its provider ids. */
+	getClient(): Promise<OidcClientHandle<ProviderIdOf<O>>>;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Users and sessions
@@ -2501,7 +2694,7 @@ export type CodeDeliveryFn = (username: string, code: string, purpose: CodeDeliv
  *
  * The default entry's `Auth` accepts these; the AWS runtime ignores them
  * (Cognito delivers codes itself). Locally, every code is also written to
- * `.bb-data/<fullId>/last-code.json`.
+ * `.cdk-blocks/local/data/<fullId>/last-code.json`.
  *
  * Both fields belong to the user pool, so only the Cognito arm
  * ({@link CognitoAuthMockOptions}) has them.
@@ -2529,7 +2722,7 @@ export interface CognitoAuthMockOptions extends CognitoAuthOptions {
 	 * - `'rfc6238'` — the code must be the shared secret's RFC 6238 code
 	 *   (HMAC-SHA-1, 6 digits, 30 s steps, one step of clock skew either way),
 	 *   as Cognito and authenticator apps compute it. Compute one in a test
-	 *   with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils`.
+	 *   with `totpCodeFor(sharedSecret)` from `aws-cdk-blocks/utils`.
 	 *   Catches a wrong secret or `otpauth://` URI locally instead of only on a
 	 *   deployed pool.
 	 *
@@ -2735,6 +2928,25 @@ export interface LifecycleAdmin<O extends AuthOptions = AuthOptions> {
 		username: string,
 		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle', [init?: AdminCreateInit<O>]>
 	): Promise<AdminUser<O>>;
+	/**
+	 * Set attributes on an existing user (`AdminUpdateUserAttributes`). The
+	 * server-side way to give a user a `userWritable: false` attribute (a role,
+	 * a tenant id, a plan tier) after they signed up; IAM-authorized, so it may
+	 * also mark an email / phone verified. Names are bare or `custom:`-prefixed,
+	 * as in `createUser`. A changed email / phone is unverified unless the same
+	 * call sets its `*_verified` flag (Cognito then sends a verification code;
+	 * the local runtime sends none). An empty `attributes` makes no call.
+	 *
+	 * @throws {ApiError} 404 `UserNotFoundException` when `username` does not exist.
+	 * @throws {ApiError} 400 `InvalidParameterException` for an attribute the pool does not have, a non-string or
+	 *   over-long value, or an immutable attribute.
+	 * @throws {ApiError} 400 `AliasExistsException` when the email / phone is another user's sign-in alias.
+	 */
+	updateUserAttributes(
+		username: string,
+		attributes: Partial<Record<AttrOf<O>, string>>,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>
+	): Promise<void>;
 	/** Delete `username` from the pool. Their existing sessions end at the next refresh. */
 	deleteUser(username: string, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>): Promise<void>;
 	/** Disable `username`: sign-in is refused and existing sessions end at the next refresh. */
@@ -2827,6 +3039,11 @@ export type AdminDisabled = {
 	): never;
 	listUsersInGroup(group: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
 	createUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	updateUserAttributes(
+		username: string,
+		attributes: unknown,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
 	deleteUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
 	disableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
 	enableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
@@ -2875,6 +3092,11 @@ export type AdminDisabledOnBuiltin = {
 	listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	updateUserAttributes(
+		username: string,
+		attributes: unknown,
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin
+	): never;
 	deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
@@ -3168,6 +3390,13 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	 * `setAuthState` takes only the actions these options allow ({@link AuthActionInputOf}).
 	 */
 	createApi(): AuthStateApiOf<O>;
+
+	/**
+	 * The native SDKs' OIDC client: one RPC method, `getClient()`, returning
+	 * the `oidc/client` transferable the Swift, Kotlin and Dart SDKs hydrate
+	 * into an OIDC client typed by this block's provider ids.
+	 */
+	createOidcApi(): OidcClientApiOf<O>;
 
 	/**
 	 * Define an API namespace that is deny by default: its `methods` run only
@@ -3547,7 +3776,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Browser redirect client (`@aws-blocks/bb-auth/browser-client`)
+// Browser redirect client (`@aws-cdk-blocks/bb-auth/browser-client`)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -3622,16 +3851,16 @@ export interface AuthClientEnvironment {
 /** Options for {@link createAuthClient}. */
 export interface AuthClientOptions {
 	/**
-	 * Where the `Auth` block's routes (`/aws-blocks/auth/*`) are served: the
+	 * Where the `Auth` block's routes (`/cdk-blocks/auth/*`) are served: the
 	 * API's origin, plus the API Gateway stage when you call the gateway URL
 	 * directly. For example `'https://api.example.com'` or
 	 * `'https://abc123.execute-api.us-east-1.amazonaws.com/prod'`. Defaults to
 	 * the page's own origin.
 	 */
 	baseUrl?: string;
-	/** The block's `redirects.callbackPath`. @default '/aws-blocks/auth/callback' */
+	/** The block's `redirects.callbackPath`. @default '/cdk-blocks/auth/callback' */
 	callbackPath?: string;
-	/** The block's `redirects.signOutPath`. @default '/aws-blocks/auth/signout' */
+	/** The block's `redirects.signOutPath`. @default '/cdk-blocks/auth/signout' */
 	signOutPath?: string;
 	/**
 	 * Where the provider's answer returns in this app: the page that calls
@@ -3647,7 +3876,7 @@ export interface AuthClientOptions {
 /**
  * Redirect sign-in for a web frontend on another origin than the `Auth`
  * block's API. Created by `createAuthClient()` from
- * `@aws-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
+ * `@aws-cdk-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
  */
 export interface AuthClient<P extends string = string> {
 	/**
@@ -3687,4 +3916,51 @@ export interface AuthClient<P extends string = string> {
 	 * to the provider's logout URL when there is one (see {@link SignOutResult}).
 	 */
 	signOut(options?: { endProviderSession?: boolean }): Promise<SignOutResult>;
+}
+
+/**
+ * The fields of one audit record (the `audit` option). A record is written
+ * as one log line whose message is its `event`, so a CloudWatch metric filter
+ * such as `{ $.event = "auth.signin.failed" }` counts it.
+ */
+export interface AuthAuditRecord {
+	/** What happened. */
+	event: 'auth.session.issued' | 'auth.signin.failed' | 'auth.signout' | 'auth.sessions.revoked';
+	/** The `Auth` block's `fullId`, so two blocks in one app can be told apart. */
+	block: string;
+	/** How the user signed in: `'password'` or the provider id. Absent when unknown. */
+	provider?: string;
+	/**
+	 * The user's id: the Cognito `sub`, or `<issuer>:<sub>` for a direct-federated
+	 * session (which CloudTrail never records). Absent when the event does not
+	 * know the user, such as a failed password sign-in, or when an admin revoke
+	 * could not look the user up.
+	 */
+	sub?: string;
+	/**
+	 * The pool username, only on a password-reset `auth.sessions.revoked` record:
+	 * the `cognito:username` the reset's sessions are keyed by (never the email
+	 * the user typed).
+	 */
+	username?: string;
+	/**
+	 * - `'success'`: the event completed (a session issued, ended or revoked).
+	 * - `'failure'`: a sign-in was refused; always on `auth.signin.failed`.
+	 * - `'incomplete'`: ending sessions failed part-way, so some may still be
+	 *   valid: a `signOut` that could not delete the server-side session, or an
+	 *   `auth.sessions.revoked` whose revocation threw (with `error`).
+	 */
+	outcome: 'success' | 'failure' | 'incomplete';
+	/**
+	 * Why: on `auth.signin.failed`, `'challenge'` (a wrong MFA, email or SMS code),
+	 * `'provider'` (the callback failed), `'validate-user'`, `'on-sign-in'` or
+	 * `'insecure-transport'` (refused because the session cookie could not be
+	 * sent securely); absent for a refused password. On `auth.sessions.revoked`,
+	 * `'password-reset'` or `'admin'` (every session of the user) or
+	 * `'account-deleted'` (the current session; the user's others end on their
+	 * next request, without a record).
+	 */
+	reason?: string;
+	/** The error name of a failure, such as `NotAuthorizedException`. Never its message. */
+	error?: string;
 }

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Test for compile-fixture-goldens.sh. Run from anywhere. macOS only (the
 # script compiles BlocksRuntime with `xcrun swiftc`); CI runs it in the macOS
 # `fixture-goldens` job.
@@ -81,10 +84,38 @@ if bash "$COMPILE" "$AVAIL" > /dev/null 2>&1; then
   fail "Case 5: an API unavailable on macOS 13 should fail"
 fi
 
+# --- Case 5b: a golden compiles in Swift 6 mode, so a Sendable it can't keep fails ---
+SENDABLE="$WORK/sendable"
+golden "$SENDABLE" 01-wrong-sendable 'public final class Box { public var count = 0 }
+public struct Holder: Sendable { public let box: Box }'
+if out="$(bash "$COMPILE" "$SENDABLE" 2>&1)"; then
+  fail "Case 5b: a struct claiming Sendable over a mutable class should fail: $out"
+fi
+case "$out" in *"FAIL: 1 of 1 Swift fixture golden(s) don't compile: 01-wrong-sendable"*) ;; *) fail "Case 5b: unexpected summary: $out" ;; esac
+# The diagnostic's wording and case vary by Swift version (`non-Sendable` / `non-sendable`), so match either form.
+printf '%s' "$out" | grep -qiE "non-sendable type 'Box'|does not conform to the 'Sendable' protocol" \
+  || fail "Case 5b: the Sendable error should be reported: $out"
+
 # --- Case 6: no goldens is an error, not a vacuous pass ---
 mkdir -p "$WORK/empty"
 if bash "$COMPILE" "$WORK/empty" > /dev/null 2>&1; then
   fail "Case 6: an empty fixtures directory should fail"
 fi
+
+# --- Case 7: an expected codegen error is skipped, not compiled or counted ---
+REFUSED="$WORK/refused"
+golden "$REFUSED" 01-ok 'public let answer = 42'
+mkdir -p "$REFUSED/02-refused/swift"
+printf 'not Swift\n' > "$REFUSED/02-refused/swift/codegen-error.txt"
+out="$(bash "$COMPILE" "$REFUSED" 2>&1)" || fail "Case 7: an expected codegen error should pass: $out"
+case "$out" in *"OK: 1 Swift fixture golden(s) compile"*) ;; *) fail "Case 7: unexpected output: $out" ;; esac
+case "$out" in *"Skipped 1 fixture(s) whose Swift golden is an expected codegen-error.txt"*) ;; *) fail "Case 7: the skip should be reported: $out" ;; esac
+
+# --- Case 8: a fixture with both Api.swift and a codegen error fails ---
+golden "$REFUSED" 02-refused 'public let answer = 42'
+if out="$(bash "$COMPILE" "$REFUSED" 2>&1)"; then
+  fail "Case 8: Api.swift beside codegen-error.txt should fail the run: $out"
+fi
+case "$out" in *"has both Api.swift and codegen-error.txt"*) ;; *) fail "Case 8: unexpected output: $out" ;; esac
 
 echo "PASS: compile-fixture-goldens.sh"

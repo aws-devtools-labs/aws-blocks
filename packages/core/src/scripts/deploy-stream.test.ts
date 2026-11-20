@@ -105,6 +105,15 @@ describe('decideSignalResponse — a converging deploy is not abandoned by one s
     assert.strictEqual(action, 'abort');
     assert.match(message, /Interrupted/);
   });
+
+  it('names a destroy as a destroy, with the same policy', () => {
+    const first = decideSignalResponse('SIGTERM', null, SIGNAL_COALESCE_MS, 'destroy');
+    assert.strictEqual(first.action, 'defer');
+    assert.match(first.message, /Ignoring SIGTERM: the destroy is still running.*the stack deletion continues server-side/);
+    const second = decideSignalResponse('SIGTERM', SIGNAL_COALESCE_MS + 1, SIGNAL_COALESCE_MS, 'destroy');
+    assert.strictEqual(second.action, 'abort');
+    assert.match(second.message, /Received SIGTERM while destroying\. .*applying the stack deletion/);
+  });
 });
 
 // ── line assembly ───────────────────────────────────────────────────────────
@@ -181,7 +190,7 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[0], 'cdk');
     assert.strictEqual(args[1], 'deploy');
     assert.strictEqual(args[args.indexOf('--require-approval') + 1], 'never');
-    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.blocks-sandbox/outputs.production.json');
+    assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.cdk-blocks-sandbox/outputs.production.json');
     assert.strictEqual(args[args.indexOf('--context') + 1], 'projectRoot=/app');
   });
 });

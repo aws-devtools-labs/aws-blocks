@@ -1,4 +1,4 @@
-# @aws-blocks/bb-email-client
+# @aws-cdk-blocks/bb-email-client
 
 Transactional email sending via Amazon SES.
 
@@ -7,10 +7,10 @@ Transactional email sending via Amazon SES.
 ## Usage
 
 ```typescript
-import { EmailClient } from '@aws-blocks/bb-email-client';
+import { EmailClient } from '@aws-cdk-blocks/bb-email-client';
 
 const emailClient = new EmailClient(scope, 'notifications', {
-  fromAddress: 'noreply@example.com',
+  fromAddress: 'noreply@your-verified-domain.com', // an address on a domain verified in SES
   configurationSet: 'my-tracking-set', // optional
 });
 
@@ -44,7 +44,7 @@ damages your domain's reputation.
 Don't do this:
 
 ```typescript
-import type { EmailMessage } from '@aws-blocks/bb-email-client';
+import type { EmailMessage } from '@aws-cdk-blocks/bb-email-client';
 
 // ❌ Open relay: anyone on the internet chooses the recipient and the content
 export const api = new ApiNamespace(scope, 'api', () => ({
@@ -58,16 +58,17 @@ Instead, gate the method with `auth.requireAuth(context)` from an auth block, an
 message on the server so the caller can't choose the recipients or the content:
 
 ```typescript
-import { Scope, ApiNamespace, ApiError } from '@aws-blocks/core';
-import { Auth } from '@aws-blocks/bb-auth';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import { EmailClient } from '@aws-blocks/bb-email-client';
+import { Scope, ApiNamespace, ApiError } from '@aws-cdk-blocks/core';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { EmailClient } from '@aws-cdk-blocks/bb-email-client';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth');
 // App-owned profile data, keyed by the user's `userSub`. The app writes each user's address here.
 const profiles = new KVStore<{ email: string }>(scope, 'profiles');
-const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@example.com' });
+// fromAddress must be on a domain verified in SES (see "Reserved sender domains" below).
+const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@your-verified-domain.com' });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async sendMeASummary() {
@@ -84,10 +85,45 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-Authentication alone does not stop a signed-in user from sending a lot of mail. The block does
-not rate-limit callers, so if a gated method still sends on the caller's behalf, add your own
-per-user limit. `sendBatch()` takes at most `maxBatchSize` messages per call (default 100), which
-bounds what a single request can send but not how many requests a caller makes.
+Authentication alone does not stop a signed-in user from sending a lot of mail. `sendBatch()` takes
+at most `maxBatchSize` messages per call (default 100), which bounds what a single request can send
+but not how many requests a caller makes. The block does not rate-limit callers, by design: only
+your method knows who the caller is, so only your method can decide what a limit is keyed on. If a
+gated method still sends on the caller's behalf, add your own per-user limit. If you skip it, the
+cost lands on your AWS account. Mail goes out under your own verified SES identity, so the
+resulting bounces and complaints count against your domain's reputation, and SES can put your
+account under review, pause its sending, or suspend it.
+
+One way to add the limit is a per-user counter in a `KVStore` with TTL turned on. Key the counter
+by user and time window, so each window starts on a fresh key and the old one expires on its own,
+and update it with a conditional `put`, so two concurrent requests can't both take the last slot:
+
+```typescript
+const MAX_SENDS_PER_HOUR = 10;
+// `ttl: true` lets each window's counter expire once the window is over.
+const sendCounts = new KVStore<number>(scope, 'send-counts', { ttl: true });
+
+async function takeSendSlot(userSub: string): Promise<void> {
+  const windowStart = Math.floor(Date.now() / 3_600_000) * 3600; // start of this hour, epoch seconds
+  const windowEnd = windowStart + 3600;
+  const key = `${userSub}:${windowStart}`;
+  // A strongly consistent read sees the latest count, so fewer requests lose a race below.
+  const count = await sendCounts.get(key, { consistentRead: true });
+  if (count !== null && count >= MAX_SENDS_PER_HOUR) {
+    throw new ApiError('Too many emails. Try again later.', 429);
+  }
+  // Create the counter, or bump it only if no other request changed it since the read.
+  // The request that loses a race gets KVStoreErrors.ConditionalCheckFailed (HTTP 409) and sends nothing.
+  await sendCounts.put(
+    key,
+    (count ?? 0) + 1,
+    count === null ? { ifNotExists: true, expiresAt: windowEnd } : { ifValueEquals: count, expiresAt: windowEnd },
+  );
+}
+```
+
+Call `await takeSendSlot(user.userSub)` right after `auth.requireAuth(context)` in the method above,
+before `emailClient.send()`.
 
 ## API
 
@@ -99,6 +135,24 @@ bounds what a single request can send but not how many requests a caller makes.
 | `replyTo` | `string[]` | ❌ | Reply-to addresses |
 | `configurationSet` | `string` | ❌ | SES configuration set name |
 | `maxBatchSize` | `number` | ❌ | Most messages one `sendBatch()` call accepts (positive integer, default `100`). An invalid value throws `InvalidInputException` from the constructor, and at synth |
+
+#### Reserved sender domains
+
+`fromAddress` must be on a domain SES can verify. A sender on a reserved domain
+(`example.com`, `example.net`, `example.org` and their subdomains, or anything under
+`.test`, `.example`, `.invalid` or `.localhost`, per RFC 2606 and RFC 6761) can never be
+verified, so every send from it fails with `DomainNotVerifiedException` once deployed.
+Synth flags it with the warning `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, in
+sandbox and production alike; a `replyTo` address on such a domain gets
+`@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`. They are warnings, not errors: the
+app still synthesizes and deploys, and the local mock still accepts the address. If the
+sender is deliberate (for example a stack that never sends), acknowledge it:
+
+```typescript
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-email-client:UnverifiableSender');
+```
 
 ### `emailClient.send(message): Promise<SendResult>`
 
@@ -158,16 +212,20 @@ calling SES:
   (`Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`). The address is checked as
   given: surrounding whitespace and control characters are rejected;
 - at most 50 recipients per message (To + CC + BCC combined);
+- the subject must be a single line: CR, LF and other control characters (C0, DEL, C1, U+2028
+  and U+2029) are rejected, not stripped. Remove line breaks from a subject built from user
+  input before sending;
 - at most 40 MB per message.
 
-A malformed address or too many recipients throws `InvalidInputException`; an oversized message
+A malformed address, too many recipients or a control character in the subject throws
+`InvalidInputException`; an oversized message
 throws `EmailSendFailedException`. In `sendBatch()` the message is marked `failed` instead.
 
 ## Error Handling
 
 ```typescript
-import { EmailErrors } from '@aws-blocks/bb-email-client';
-import { isBlocksError } from '@aws-blocks/core';
+import { EmailErrors } from '@aws-cdk-blocks/bb-email-client';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 
 try {
   await emailClient.send({ to: 'user@example.com', subject: 'Hi', body: 'Hello' });
@@ -203,7 +261,7 @@ In local dev mode (`npm run dev`), emails are:
     Body:      ...
     HTML:      ...   (only when html is set)
   ```
-- Persisted to `.bb-data/{fullId}/emails.json` for inspection
+- Persisted to `.cdk-blocks/local/data/{fullId}/emails.json` for inspection
 - Validated with the same checks as the deployed client, so an address or message rejected locally is rejected the same way when deployed
 
 ## Package Export Conditions

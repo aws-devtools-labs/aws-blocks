@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
@@ -94,12 +97,12 @@ class OptionalParameterPositionTest : FunSpec({
         val source = api(req("a"), opt("b"))
         source shouldContain
             "val args: List<JsonElement> = if (b != null) listOf(JsonPrimitive(a), JsonPrimitive(b)) else listOf(JsonPrimitive(a))"
-        source shouldNotContain "JsonNull"
+        source shouldNotContain "else JsonNull"
     }
 
     test("a single optional parameter is unchanged") {
         val source = api(opt("a"))
         source shouldContain "val args: List<JsonElement> = if (a != null) listOf(JsonPrimitive(a)) else listOf()"
-        source shouldNotContain "JsonNull"
+        source shouldNotContain "else JsonNull"
     }
 })

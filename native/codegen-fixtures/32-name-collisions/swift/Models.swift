@@ -1,7 +1,8 @@
 import Foundation
+import BlocksRuntime
 
 
-public nonisolated struct Cart: Codable {
+public nonisolated struct Cart: Codable, Sendable {
     public let id: String
     public let item: Item
     public let items: [Items]
@@ -16,7 +17,7 @@ public nonisolated struct Cart: Codable {
         self.tagsValue = tagsValue
     }
 
-    public nonisolated struct Item: Codable {
+    public nonisolated struct Item: Codable, Sendable {
         public let sku: String
 
         public init(sku: String) {
@@ -24,7 +25,7 @@ public nonisolated struct Cart: Codable {
         }
     }
 
-    public nonisolated struct Items: Codable {
+    public nonisolated struct Items: Codable, Sendable {
         public let qty: Double
         public let sku: String
 
@@ -34,7 +35,7 @@ public nonisolated struct Cart: Codable {
         }
     }
 
-    public nonisolated struct TagsValue_2: Codable {
+    public nonisolated struct TagsValue_2: Codable, Sendable {
         public let label: String
 
         public init(label: String) {
@@ -42,7 +43,7 @@ public nonisolated struct Cart: Codable {
         }
     }
 
-    public nonisolated struct TagsValue: Codable {
+    public nonisolated struct TagsValue: Codable, Sendable {
         public let weight: Double
 
         public init(weight: Double) {
@@ -51,35 +52,179 @@ public nonisolated struct Cart: Codable {
     }
 }
 
-public nonisolated enum Kind: String, Codable {
+public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {
     case x
     case y
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "x": self = .x
+        case "y": self = .y
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .x: return "x"
+        case .y: return "y"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.x, .x): return true
+        case (.y, .y): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .x: hasher.combine(0)
+        case .y: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
-public nonisolated enum Status: String, Codable {
+public nonisolated enum OrderStatus: RawRepresentable, Codable, Hashable, Sendable {
     case pending
     case shipped
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "pending": self = .pending
+        case "shipped": self = .shipped
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .pending: return "pending"
+        case .shipped: return "shipped"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.pending, .pending): return true
+        case (.shipped, .shipped): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .pending: hasher.combine(0)
+        case .shipped: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
-public nonisolated struct Order: Codable {
-    public let status: Status
+public nonisolated struct Order: Codable, Sendable {
+    public let status: OrderStatus
 
-    public init(status: Status) {
+    public init(status: OrderStatus) {
         self.status = status
     }
 }
 
-public nonisolated enum TicketKind: String, Codable {
+public nonisolated enum TicketKind: RawRepresentable, Codable, Hashable, Sendable {
     case bug
     case task
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "bug": self = .bug
+        case "task": self = .task
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .bug: return "bug"
+        case .task: return "task"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.bug, .bug): return true
+        case (.task, .task): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .bug: hasher.combine(0)
+        case .task: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
-public nonisolated enum Kinds: String, Codable {
+public nonisolated enum TicketKinds: RawRepresentable, Codable, Hashable, Sendable {
     case urgent
     case later
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "urgent": self = .urgent
+        case "later": self = .later
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .urgent: return "urgent"
+        case .later: return "later"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.urgent, .urgent): return true
+        case (.later, .later): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .urgent: hasher.combine(0)
+        case .later: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
-public nonisolated struct Text: Codable {
+public nonisolated struct Text: Codable, Sendable {
     public let body: String
 
     public init(body: String) {
@@ -87,7 +232,7 @@ public nonisolated struct Text: Codable {
     }
 }
 
-public nonisolated struct Count: Codable {
+public nonisolated struct Count: Codable, Sendable {
     public let total: Double
 
     public init(total: Double) {
@@ -95,24 +240,34 @@ public nonisolated struct Count: Codable {
     }
 }
 
-public nonisolated enum Payload: Codable {
+public nonisolated enum TicketPayload: Codable, Sendable {
     case text(Text)
     case count(Count)
+    case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
         case `type`
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .text(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("text", forKey: .`type`)
             try params.encode(to: encoder)
         case .count(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("count", forKey: .`type`)
             try params.encode(to: encoder)
+        case .unknown(let value):
+            try value.encode(to: encoder)
         }
+    }
+
+    public var unknownDiscriminator: String? {
+        guard case .unknown(.dictionary(let object)) = self,
+              case .string(let tag)? = object["type"] else { return nil }
+        return tag
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,12 +277,12 @@ public nonisolated enum Payload: Codable {
         case "text": self = .text(try Text(from: decoder))
         case "count": self = .count(try Count(from: decoder))
         default:
-            throw DecodingError.dataCorruptedError(forKey: .`type`, in: container, debugDescription: "Unknown value: \(disc)")
+            self = .unknown(try JSONValue(from: decoder))
         }
     }
 }
 
-public nonisolated struct Plain: Codable {
+public nonisolated struct Plain: Codable, Sendable {
     public let raw: String
 
     public init(raw: String) {
@@ -135,7 +290,7 @@ public nonisolated struct Plain: Codable {
     }
 }
 
-public nonisolated struct Rich: Codable {
+public nonisolated struct Rich: Codable, Sendable {
     public let html: String
 
     public init(html: String) {
@@ -143,24 +298,34 @@ public nonisolated struct Rich: Codable {
     }
 }
 
-public nonisolated enum Payloads: Codable {
+public nonisolated enum TicketPayloads: Codable, Sendable {
     case plain(Plain)
     case rich(Rich)
+    case unknown(JSONValue)
 
     enum CodingKeys: String, CodingKey {
         case format
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .plain(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("plain", forKey: .format)
             try params.encode(to: encoder)
         case .rich(let params):
+            var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("rich", forKey: .format)
             try params.encode(to: encoder)
+        case .unknown(let value):
+            try value.encode(to: encoder)
         }
+    }
+
+    public var unknownDiscriminator: String? {
+        guard case .unknown(.dictionary(let object)) = self,
+              case .string(let tag)? = object["format"] else { return nil }
+        return tag
     }
 
     public init(from decoder: Decoder) throws {
@@ -170,24 +335,60 @@ public nonisolated enum Payloads: Codable {
         case "plain": self = .plain(try Plain(from: decoder))
         case "rich": self = .rich(try Rich(from: decoder))
         default:
-            throw DecodingError.dataCorruptedError(forKey: .format, in: container, debugDescription: "Unknown value: \(disc)")
+            self = .unknown(try JSONValue(from: decoder))
         }
     }
 }
 
-public nonisolated enum TicketStatus: String, Codable {
+public nonisolated enum TicketStatus: RawRepresentable, Codable, Hashable, Sendable {
     case open
     case closed
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "open": self = .open
+        case "closed": self = .closed
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .open: return "open"
+        case .closed: return "closed"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.open, .open): return true
+        case (.closed, .closed): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .open: hasher.combine(0)
+        case .closed: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
-public nonisolated struct Ticket: Codable {
+public nonisolated struct Ticket: Codable, Sendable {
     public let kind: TicketKind
-    public let kinds: [Kinds]
-    public let payload: Payload
-    public let payloads: [Payloads]
+    public let kinds: [TicketKinds]
+    public let payload: TicketPayload
+    public let payloads: [TicketPayloads]
     public let status: TicketStatus
 
-    public init(kind: TicketKind, kinds: [Kinds], payload: Payload, payloads: [Payloads], status: TicketStatus) {
+    public init(kind: TicketKind, kinds: [TicketKinds], payload: TicketPayload, payloads: [TicketPayloads], status: TicketStatus) {
         self.kind = kind
         self.kinds = kinds
         self.payload = payload

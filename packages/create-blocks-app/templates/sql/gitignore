@@ -1,11 +1,12 @@
 dist
 node_modules
 build-temp
-.blocks-sandbox
-cdk.out/
-aws-blocks/client.js
-aws-blocks/blocks.spec.json
+.cdk-blocks-sandbox
+.cdk-blocks/local/
 .bb-data/
+cdk.out/
+cdk-blocks/client.js
+cdk-blocks/blocks.spec.json
 
 # Secrets and key material — never commit
 .env

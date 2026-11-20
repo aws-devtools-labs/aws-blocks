@@ -5,7 +5,7 @@ This folder contains a TypeScript backend and a Swift iOS app that demonstrates 
 ## Features
 
 - **Authentication** — email + password sign-up (confirmed with an emailed code) and sign-in via `Auth`
-- **Todo List** — CRUD with priority, sorting by index (DistributedTable)
+- **Todo List** — CRUD with priority, sorting by index (KVStore with a `schema` and a `key`)
 - **Realtime Cursors** — collaborative cursor tracking (Realtime pub/sub)
 - **File Storage** — upload/download via presigned URLs (FileBucket)
 - **KV Store** — simple key-value get/set
@@ -36,12 +36,12 @@ cd typescript-demo
 npm run spec
 ```
 
-This produces `typescript-demo/aws-blocks/blocks.spec.json`.
+This produces `typescript-demo/cdk-blocks/blocks.spec.json`.
 
 ## 3. Copy the Spec to the Swift Demo
 
 ```bash
-cp typescript-demo/aws-blocks/blocks.spec.json swift-demo/blocks.spec.json
+cp typescript-demo/cdk-blocks/blocks.spec.json swift-demo/blocks.spec.json
 ```
 
 ## 4. Generate Swift Code
@@ -51,13 +51,13 @@ cp typescript-demo/aws-blocks/blocks.spec.json swift-demo/blocks.spec.json
 From `native/swift/`:
 
 ```bash
-swift run swift-code-generator Demo/typescript-demo/aws-blocks/blocks.spec.json Demo/swift-demo/Generated
+swift run swift-code-generator Demo/typescript-demo/cdk-blocks/blocks.spec.json Demo/swift-demo/Generated
 ```
 
 ### Option B: Command Plugin (Xcode)
 
 1. Open `swift-demo/BlocksDemo.xcodeproj` in Xcode
-2. Right-click the `aws-blocks-swift` package in the Project Navigator
+2. Right-click the `cdk-blocks-swift` package in the Project Navigator
 3. Select "generate-code-from-blocks-spec"
 4. Add the `Generated/` folder to your target (first time only)
 
@@ -79,8 +79,8 @@ Or add it in `Package.swift`:
 ```swift
 .target(
     name: "MyApp",
-    dependencies: [.product(name: "BlocksRuntime", package: "aws-blocks-swift")],
-    plugins: [.plugin(name: "BlocksCodegenBuildPlugin", package: "aws-blocks-swift")]
+    dependencies: [.product(name: "BlocksRuntime", package: "cdk-blocks-swift")],
+    plugins: [.plugin(name: "BlocksCodegenBuildPlugin", package: "cdk-blocks-swift")]
 )
 ```
 
@@ -107,7 +107,7 @@ swift test
 ```
 Demo/
 ├── typescript-demo/          # Backend (Node.js + Blocks)
-│   ├── aws-blocks/
+│   ├── cdk-blocks/
 │   │   ├── index.ts          # API definitions (Building Blocks)
 │   │   └── blocks.spec.json  # Generated OpenRPC spec
 │   ├── src/

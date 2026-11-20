@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin
 
 import io.kotest.matchers.nulls.shouldBeNull
@@ -54,6 +57,15 @@ class HttpClientFactoryTest {
 
         timeouts.socketTimeoutMillis shouldBe 500
         timeouts.connectTimeoutMillis shouldBe DEFAULT_CONNECT_TIMEOUT_MILLIS
+    }
+
+    @Test
+    fun `a client exposes the cookie jar it was given and none without one`() {
+        val jar = AcceptAllCookiesStorage()
+        val engine = MockEngine { respond("{}") }
+
+        defaultHttpClient(engine, jar).attributes.getOrNull(CookieJarKey) shouldBe jar
+        defaultHttpClient(engine).attributes.getOrNull(CookieJarKey).shouldBeNull()
     }
 
     @Test

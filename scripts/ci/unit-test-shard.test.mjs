@@ -127,8 +127,8 @@ describe('unit-test-shard.mjs', () => {
 
 	// The probe check in local-unit fails when no shard runs it; this catches a
 	// rename before CI does.
-	it('runs @aws-blocks/core, which holds the real-CDK probe', () => {
-		assert.ok(all.includes('@aws-blocks/core'));
+	it('runs @aws-cdk-blocks/core, which holds the real-CDK probe', () => {
+		assert.ok(all.includes('@aws-cdk-blocks/core'));
 	});
 
 	for (const args of [[], ['0', '3'], ['4', '3'], ['1'], ['a', '3'], ['1', '999']]) {

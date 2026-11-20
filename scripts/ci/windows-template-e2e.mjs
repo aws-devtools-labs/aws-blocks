@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Windows E2E driver: scaffold the `backend` template from a local registry
 // (packed off this repo) and run the real user commands — `npm run dev`,
 // `npm run sandbox` (+destroy), `npm run deploy` (+destroy). Readiness is keyed
@@ -64,10 +67,10 @@ async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
 }
 
 /** Origin (scheme://host:port) the dev server bound, read from the config file
- * it writes (`.blocks-sandbox/config.json` -> apiUrl). null until present. */
+ * it writes (`.cdk-blocks-sandbox/config.json` -> apiUrl). null until present. */
 function devOrigin(appDir) {
   try {
-    const cfg = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'config.json'), 'utf-8'));
+    const cfg = JSON.parse(readFileSync(join(appDir, '.cdk-blocks-sandbox', 'config.json'), 'utf-8'));
     return cfg.apiUrl ? new URL(cfg.apiUrl).origin : null;
   } catch { return null; }
 }
@@ -82,7 +85,10 @@ async function main() {
   const baseTmp = process.env.RUNNER_TEMP || tmpdir();
   const work = mkdtempSync(join(baseTmp, 'bb-win-e2e-'));
   const userNpmrc = join(work, '.npmrc');
-  writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY}\n`);
+  // The default registry, not a scope line: npm resolves a registry per scope,
+  // so `@aws-cdk-blocks:registry=` cannot route the unscoped `aws-cdk-blocks`
+  // umbrella. See scripts/ci/templates-e2e.mjs for the full rationale.
+  writeFileSync(userNpmrc, `registry=${REGISTRY}\n`);
   // This harness is test traffic, not real usage; suppress CLI telemetry so a
   // local run (no CI env var set) is not counted as a real user. See the
   // cross-platform driver templates-e2e.mjs for the full rationale.
@@ -90,12 +96,12 @@ async function main() {
     ...process.env,
     NPM_CONFIG_USERCONFIG: userNpmrc,
     npm_config_cache: join(work, '.npm-cache'),
-    AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+    CDK_DISABLE_CLI_TELEMETRY: '1',
   };
 
-  run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });
+  run('npm', ['install', '@aws-cdk-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
-  // The app name becomes the stack-name prefix (.blocks/config.json stackId).
+  // The app name becomes the stack-name prefix (.cdk-blocks/config.json stackId).
   // Keep it under `bb-test-`: the CI role can only delete stacks with the test
   // prefixes, so cleanup-stacks.yml can reclaim a stack a failed run leaves.
   const app = join(work, 'bb-test-win');
@@ -104,14 +110,14 @@ async function main() {
   // The prefix alone isn't enough: cleanup-stacks.yml only deletes a `bb-test-*`
   // stack whose `blocks:purpose` tag is an e2e marker. Tag the scaffold so a
   // stack a failed teardown leaves behind is reclaimed instead of skipped.
-  addPurposeTag(join(app, 'aws-blocks', 'index.cdk.ts'), WINDOWS_E2E_PURPOSE);
+  addPurposeTag(join(app, 'cdk-blocks', 'index.cdk.ts'), WINDOWS_E2E_PURPOSE);
 
   const inApp = { cwd: app, env };
   // The production preset retains the config access-log bucket on destroy (by
   // design, for customers). Make the production deploy below fully deletable,
   // keeping its other defaults, so this CI stack leaves nothing behind. Done up
   // front so a template change fails the run before anything is deployed.
-  makeProductionDeployDisposable(join(app, 'aws-blocks', 'index.cdk.ts'));
+  makeProductionDeployDisposable(join(app, 'cdk-blocks', 'index.cdk.ts'));
 
   // Phase 1: dev — ready when config.json's bound port answers HTTP.
   {
@@ -124,7 +130,7 @@ async function main() {
   }
 
   // Phase 2: sandbox — ready when CDK writes the outputs file (before watch).
-  const sandboxOutputs = join(app, '.blocks-sandbox', 'outputs.json');
+  const sandboxOutputs = join(app, '.cdk-blocks-sandbox', 'outputs.json');
   rmSync(sandboxOutputs, { force: true });
   try {
     const sb = await startUntilReady('npm', ['run', 'sandbox'], inApp, () => existsSync(sandboxOutputs), 30 * 60_000);
@@ -139,7 +145,7 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    // `cdk-blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
+    // `npm run destroy` asks for confirmation; this run has no terminal, so it needs --yes.
     teardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
   }
 

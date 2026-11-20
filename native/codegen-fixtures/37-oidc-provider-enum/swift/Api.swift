@@ -17,9 +17,9 @@ public final nonisolated class Auth: Sendable {
     public func getClient() async throws -> OIDCClient<GetClient.Provider> {
         let request = BlocksRequest(method: "auth.getClient", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for auth.getClient") }
+        guard let result else { throw TransportError(message: "Unexpected null result for auth.getClient") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw RPCError(message: "Invalid OIDC client descriptor for auth.getClient")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc/client", missingField: "__blocks")
         }
         return try OIDCClient<GetClient.Provider>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
     }
@@ -52,9 +52,9 @@ public final nonisolated class LegacyAuth: Sendable {
     public func getClient() async throws -> OIDCClient<String> {
         let request = BlocksRequest(method: "legacyAuth.getClient", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for legacyAuth.getClient") }
+        guard let result else { throw TransportError(message: "Unexpected null result for legacyAuth.getClient") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
-            throw RPCError(message: "Invalid OIDC client descriptor for legacyAuth.getClient")
+            throw TransferableError.invalidDescriptor(blocksType: "oidc/client", missingField: "__blocks")
         }
         return try OIDCClient<String>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
     }
@@ -95,5 +95,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

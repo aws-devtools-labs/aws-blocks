@@ -3,9 +3,9 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
-import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType, authApi as authApiType } from 'aws-blocks';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { getLastAuthCode, installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
+import type { api as apiType, authApi as authApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -20,6 +20,10 @@ let authApi: typeof authApiType;
 const creds = { username: `orders-user-${Date.now()}@example.com`, password: 'TestPass123!' };
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (the deployed API URL without /cdk-blocks/api). The client resolves BLOCKS_API_URL first, so
+// a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // Every line the dev server writes, when this file started it. Logger and
@@ -37,8 +41,22 @@ function collectLines(stream: NodeJS.ReadableStream | null) {
   });
 }
 
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
 test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -49,24 +67,20 @@ test.before(async () => {
     collectLines(server.stdout);
     collectLines(server.stderr);
     server.unref();
-    await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
+
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/cdk-blocks/api`;
+
+  // Import the client only once the server answers: the dev server regenerates
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  const mod = await import('cdk-blocks');
   api = mod.api;
   authApi = mod.authApi;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -80,7 +94,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -123,15 +137,15 @@ async function waitForRecord(predicate: (record: Record<string, unknown>) => boo
   for (let i = 0; i < 25; i++) {
     const [record] = jsonRecords(predicate);
     if (record) return record;
-    await setTimeout(200);
+    await sleep(200);
   }
   return undefined;
 }
 
-// The Tracer mock keeps its traces in .bb-data/<tracer id>/traces.json, under
+// The Tracer mock keeps its traces in .cdk-blocks/local/data/<tracer id>/traces.json, under
 // the dev server's working directory: this app's directory.
 function savedTraces() {
-  const root = join(process.cwd(), '.bb-data');
+  const root = join(process.cwd(), '.cdk-blocks/local/data');
   if (!existsSync(root)) return [];
   return readdirSync(root).flatMap((dir) => {
     const file = join(root, dir, 'traces.json');
@@ -150,7 +164,7 @@ function savedTraces() {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `placeOrder` with your own methods.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -177,7 +191,7 @@ test('placeOrder returns an order id and the trace id', async () => {
   assert.ok(order.traceId, 'traceId should be set: the Tracer samples every request by default');
 });
 
-test('Tracer: the placeOrder segment is saved with its annotation', async () => {
+test('Tracer: the placeOrder segment is saved with its annotation', { skip: testUrl && 'reads the local Tracer mock, so it needs a dev server' }, async () => {
   const trace = savedTraces().find((t) => t.traceId === order.traceId);
   assert.ok(trace, `no saved trace with traceId ${order.traceId}`);
   assert.strictEqual(trace.segment, 'placeOrder');
@@ -204,12 +218,11 @@ test('Metrics: OrdersPlaced is written as an EMF record', async (t) => {
   assert.deepStrictEqual(directive.Metrics.map((m) => [m.Name, m.Unit]), [['OrdersPlaced', 'Count']]);
 });
 
-// The Dashboard is a CloudWatch resource, so locally its route explains where
-// the local observability data is instead of redirecting.
-test('Dashboard: its route answers locally with a cloud-only notice', async () => {
-  const response = await fetch(`http://localhost:${serverPort}/aws-blocks/dashboard`, { redirect: 'manual' });
-  assert.strictEqual(response.status, 503);
-  const body: { message?: string; localObservability?: Record<string, string> } = await response.json();
-  assert.match(body.message ?? '', /cloud-only/);
-  assert.ok(body.localObservability?.logs, 'expected a pointer to the local logs');
+test('Dashboard: the dev server shows local observability without a deployment', { skip: testUrl && 'needs a local dev server' }, async () => {
+  const response = await fetch(`http://localhost:${serverPort}/cdk-blocks/dashboard`, { redirect: 'manual' });
+  assert.strictEqual(response.status, 200);
+  assert.match(response.headers.get('content-type') ?? '', /text\/html/);
+  const page = await response.text();
+  assert.match(page, /My App/);
+  assert.match(page, /OrdersPlaced/);
 });

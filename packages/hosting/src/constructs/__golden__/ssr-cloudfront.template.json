@@ -1661,9 +1661,31 @@
                 "kms:GenerateDataKey*"
               ],
               "Condition": {
-                "StringEqualsIfExists": {
+                "StringEquals": {
                   "aws:SourceAccount": {
                     "Ref": "AWS::AccountId"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:",
+                        {
+                          "Ref": "AWS::Partition"
+                        },
+                        ":cloudwatch:",
+                        {
+                          "Ref": "AWS::Region"
+                        },
+                        ":",
+                        {
+                          "Ref": "AWS::AccountId"
+                        },
+                        ":alarm:*"
+                      ]
+                    ]
                   }
                 }
               },

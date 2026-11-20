@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin.oidc
 
 import kotlinx.serialization.Serializable
@@ -12,6 +15,13 @@ data class OidcClientConfig(
     val signInBasePath: String,
     val authorizeParamsBasePath: String,
     val callbackPath: String,
+    /** Where [OidcClient.restore] reads the session. Absent, it is derived from [callbackPath]. */
+    val sessionPath: String? = null,
+    /**
+     * The name of the block's session cookie, which a local sign-out removes. Absent (an older
+     * backend), a local sign-out leaves the cookie jar to the backend's `Set-Cookie`.
+     */
+    val sessionCookieName: String? = null,
     @Transient val relayTo: String = ""
 )
 

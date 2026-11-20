@@ -1,7 +1,7 @@
-.blocks-sandbox/
+.cdk-blocks-sandbox/
 cdk.out/
 node_modules/
 dist/
 .env
-aws-blocks/client.js
-.bb-data/
+cdk-blocks/client.js
+.cdk-blocks/local/data/

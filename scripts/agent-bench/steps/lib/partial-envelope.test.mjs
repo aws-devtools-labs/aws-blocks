@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for the builder's incremental partial-envelope checkpoint (partial-envelope.mjs) — fix
 // (2) for #183. Prove the round-trip without importing 2-agent-run.ts: the envelope has the
 // non-terminal shape, the atomic write survives read-back, and the cell classifies as an EXCLUDED

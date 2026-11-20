@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
@@ -98,7 +101,7 @@ class SchemaUnionVariantTypeTest : FunSpec({
         )
         source shouldContain "public data class A(\n      public val status: Status,\n    ) : Event()"
         source shouldContain "public data class B(\n      public val status: Status_2,\n    ) : Event()"
-        source shouldContain "public enum class Status_2 {"
+        source shouldContain "public sealed class Status_2 {"
     }
 
     test("a differing payload's own nested types nest under its renamed type") {

@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getBoard() async throws -> Board {
         let request = BlocksRequest(method: "api.getBoard", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getBoard") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getBoard") }
         return try JSONDecoder().decode(Board.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func saveLayout(layout: Layout) async throws -> Layout {
         let request = BlocksRequest(method: "api.saveLayout", params: [layout], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.saveLayout") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.saveLayout") }
         return try JSONDecoder().decode(Layout.self, from: result)
     }
 
@@ -35,7 +35,7 @@ public final nonisolated class Api: Sendable {
         if let levels { _params.append(levels) }
         let request = BlocksRequest(method: "api.groupNotes", params: _params, id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.groupNotes") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.groupNotes") }
         return try JSONDecoder().decode([String: [Note]].self, from: result)
     }
 
@@ -43,7 +43,7 @@ public final nonisolated class Api: Sendable {
     public func listFeeds() async throws -> [RealtimeChannel<Note>] {
         let request = BlocksRequest(method: "api.listFeeds", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.listFeeds") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.listFeeds") }
         return try JSONDecoder().decode([RealtimeChannel<Note>].self, from: result)
     }
 
@@ -51,7 +51,7 @@ public final nonisolated class Api: Sendable {
     public func getLoginMenu() async throws -> LoginMenu {
         let request = BlocksRequest(method: "api.getLoginMenu", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getLoginMenu") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getLoginMenu") }
         return try client.makeDecoder().decode(LoginMenu.self, from: result)
     }
 }
@@ -89,5 +89,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The `.bb-data` pair-key format, in one place.
+ * The `.cdk-blocks/local/data` pair-key format, in one place.
  *
  * A local store's `data.json` is `[[serializedKey, item], …]`, where the dev
  * server writes the key as `JSON.stringify([pkValue, skValue?])` in key order.

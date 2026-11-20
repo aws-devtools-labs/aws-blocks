@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Regression tests for the agent-bench shell layer (runShell / WorkspaceSandbox in run-shell.ts) and
 // the judge's spec-leak `find`. Most don't import the TS directly (the step modules self-execute and
 // there's no TS loader under bare `node --test`), so they pin the platform SEMANTICS the fixes rely
@@ -119,13 +122,13 @@ describe('agent-bench judge spec-leak detection', () => {
 	it('flags test-spec CODE files + bench-tests/ but NOT the framework blocks.spec.json', () => {
 		const dir = mkdtempSync(join(tmpdir(), 'bench-leak-'));
 		try {
-			mkdirSync(join(dir, 'aws-blocks'), { recursive: true });
+			mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
 			mkdirSync(join(dir, 'bench-tests'), { recursive: true });
 			mkdirSync(join(dir, 'src'), { recursive: true });
 			writeFileSync(join(dir, 'src', 'foo.spec.ts'), '');
 			writeFileSync(join(dir, 'src', 'bar.spec.tsx'), '');
 			writeFileSync(join(dir, 'src', 'util.spec.cjs'), '');
-			writeFileSync(join(dir, 'aws-blocks', 'blocks.spec.json'), '{}');
+			writeFileSync(join(dir, 'cdk-blocks', 'blocks.spec.json'), '{}');
 			writeFileSync(join(dir, 'bench-tests', 'e2e.spec.ts'), '');
 			writeFileSync(join(dir, 'src', 'app.ts'), '');
 
@@ -369,7 +372,7 @@ describe('agent-bench shell runner — credential isolation + command log', () =
 		NPM_CONFIG_FETCH_RETRIES: '5',
 		LANG: 'C.UTF-8',
 		AWS_REGION: 'us-east-1',
-		AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+		CDK_DISABLE_CLI_TELEMETRY: '1',
 	};
 	const MODES = {
 		// the agent user via sudo+runuser (CI vars kept: isolation is what CI requires)

@@ -12,7 +12,7 @@ situation:
 | # | Pattern | One-liner |
 |---|---|---|
 | 1 | **CDK in Blocks** | Bring your own CDK resource (or whole stack) and wire it to the Blocks runtime via `executionRole` (IAM) and `registerConfig` (config) |
-| 2 | **`fromExisting` on a BB** | Point a Blocks BB at a pre-deployed AWS resource (DynamoDB table, S3 bucket, RDS, Cognito) — keeps mocks, skips provisioning |
+| 2 | **`fromExisting` on a BB** | Point a Blocks BB at a pre-deployed AWS resource (DynamoDB table, S3 bucket, Cognito) — keeps mocks, skips provisioning |
 | 3 | **Custom BB** | Author your own Building Block inside your monorepo (or publish to npm) when no first-party BB exists |
 | 4 | **Vendorize** | Eject a first-party BB's source into `vendor/` and own it outright |
 
@@ -40,7 +40,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 - You want mockable tests without stubbing AWS SDK calls — *unless* local mocking isn't required for this resource, or you're comfortable detecting local dev mode and writing your own mocks
 
 **✅ Use Pattern 2 (`fromExisting`) when:**
-- The resource type already has a Blocks BB (`KVStore`, `DistributedTable`, `FileBucket`, `Database`, `Auth`)
+- The resource type already has a Blocks BB with a `fromExisting` factory (`KVStore`, `FileBucket`, `Auth`)
 - You want to apply the runtime logic from an existing Blocks BB to a resource created outside of Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
 
 **❌ Don't use Pattern 2 (`fromExisting`) when:**
@@ -102,12 +102,12 @@ There is no `BB-queue` today. Your account already has an SQS queue
 provisioned by another stack. You want `api.enqueue(payload)` to drop a message
 onto it.
 
-**`aws-blocks/index.cdk.ts`**
+**`cdk-blocks/index.cdk.ts`**
 
 ```ts
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksStack, registerConfig } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, registerConfig } from 'aws-cdk-blocks/cdk';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -127,10 +127,10 @@ externalQueue.grantSendMessages(blocksStack.executionRole);
 registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 ```
 
-**`aws-blocks/index.ts`** (your runtime layer)
+**`cdk-blocks/index.ts`** (your runtime layer)
 
 ```ts
-import { Scope, ApiNamespace } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace } from 'aws-cdk-blocks';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
 const scope = new Scope('my-app');
@@ -158,7 +158,7 @@ operate.
 // my-existing-stack.ts
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksBackend } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend } from 'aws-cdk-blocks/cdk';
 import { join } from 'node:path';
 
 export class MyApiStack extends cdk.Stack {
@@ -170,8 +170,8 @@ export class MyApiStack extends cdk.Stack {
 
     // Drop Blocks into this stack as a single Construct.
     const blocks = await BlocksBackend.create(this, 'BlocksApi', {
-      backendHandlerPath: join(__dirname, 'aws-blocks/index.handler.ts'),
-      backendCDKPath: join(__dirname, 'aws-blocks/index.ts'),
+      backendHandlerPath: join(__dirname, 'cdk-blocks/index.handler.ts'),
+      backendCDKPath: join(__dirname, 'cdk-blocks/index.ts'),
     });
 
     // Same .executionRole / .apiUrl / .gateway as BlocksStack — wire normally.
@@ -232,10 +232,8 @@ Today this is supported by:
 
 | BB | Factory | Wraps |
 |---|---|---|
-| `KVStore` | `KVStore.fromExisting(tableName)` | Existing DynamoDB table |
-| `DistributedTable` | `DistributedTable.fromExisting(tableName)` | Existing DynamoDB table (skips GSI provisioning — customer owns indexes) |
+| `KVStore` | `KVStore.fromExisting(tableName)` with a matching `key` option | Existing DynamoDB table (skips GSI provisioning — customer owns indexes and TTL) |
 | `FileBucket` | `FileBucket.fromExisting(bucketName)` | Existing S3 bucket |
-| `Database` | `fromExisting({ ... })` (from `@aws-blocks/bb-data`) | Existing RDS instance |
 | `Auth` | `Auth.fromExisting(userPoolId, clientId?)`, passed as the `userPool` option | Existing Cognito User Pool |
 
 ### Example: KVStore over a legacy DynamoDB table
@@ -258,18 +256,28 @@ registerConfig(blocksStack, 'LEGACY_SESSIONS_TABLE', LEGACY_TABLE); // runtime
 
 ```ts
 // index.ts
-import { Scope, KVStore, ApiNamespace } from '@aws-blocks/blocks';
+import { Scope, KVStore, ApiNamespace } from 'aws-cdk-blocks';
+import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
+// `key` names the key attributes of the existing table (here: partition key `token`).
 const sessions = new KVStore(scope, 'sessions', {
+  schema: z.object({ token: z.string(), userId: z.string() }),
+  key: { partitionKey: 'token' },
   table: KVStore.fromExisting(process.env.LEGACY_SESSIONS_TABLE!),
 });
 
 export const api = new ApiNamespace(scope, 'api', () => ({
-  getSession: (token: string) => sessions.get(token),
+  getSession: (token: string) => sessions.get({ token }),
 }));
 ```
+
+Pass the `key` that matches the key schema of the existing table, and a `schema`
+for its items. `KVStore` reads and writes each top-level field of an item as one
+attribute, so it works with a table that another system filled. Without `key`,
+the block uses its own string partition key `_bkv_pk`, which only a table that
+a `KVStore` created has.
 
 > **IAM is handled for you.** When you pass `fromExisting(...)`, the BB still
 > calls `grantReadWriteData` / `grantReadWrite` on the bound resource and
@@ -332,8 +340,8 @@ and surfaces config with `registerConfig`:
 ```ts
 import { Duration } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerConfig } from '@aws-cdk-blocks/core/cdk';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 
 export interface QueueOptions {
   visibilityTimeoutSeconds?: number;
@@ -362,8 +370,8 @@ function envSafe(id: string) {
 **`src/index.aws.ts`** — the runtime client:
 
 ```ts
-import { Scope } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 
 export interface QueueOptions {
@@ -396,8 +404,8 @@ function envSafe(id: string) {
 since `default` provides `types` for the umbrella export condition):
 
 ```ts
-import { Scope } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 
 export interface QueueOptions {
   visibilityTimeoutSeconds?: number;
@@ -418,7 +426,7 @@ export class Queue extends Scope {
 ```
 
 **`package.json`** — the export conditions are the whole point. This shape
-matches Blocks' first-party BBs (e.g. `@aws-blocks/bb-kv-store`):
+matches Blocks' first-party BBs (e.g. `@aws-cdk-blocks/bb-kv-store`):
 
 ```json
 {
@@ -443,7 +451,7 @@ matches Blocks' first-party BBs (e.g. `@aws-blocks/bb-kv-store`):
 
 ```ts
 // index.ts
-import { Scope, ApiNamespace } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace } from 'aws-cdk-blocks';
 import { Queue } from '@my-app/bb-queue';
 
 const scope = new Scope('my-app');
@@ -471,7 +479,7 @@ In tests, you can read `work.sent` to assert what would have been delivered.
   that trusts an AWS service principal (other than Lambda) without an
   `aws:SourceAccount` or `aws:SourceArn` condition gets a synth warning, which
   you resolve or acknowledge as described in "Service-principal trust" in the
-  [`@aws-blocks/core` README](../../packages/core/README.md).
+  [`@aws-cdk-blocks/core` README](../../packages/core/README.md).
 
 For the canonical example of an in-tree BB that does this, see
 [`packages/bb-kv-store/src/index.cdk.ts`](../../packages/bb-kv-store/src/index.cdk.ts) —
@@ -522,7 +530,7 @@ accurate to what your BB actually implements rather than aspirational.
 - Document the BB's contract (options, methods, mock semantics) in a
   `README.md` — community BBs without docs don't get adopted.
 - Call `assertNotMockInDeployedEnv('<your-bb-name>')` (from
-  `@aws-blocks/core/bb-utils`) at the top level of your mock (`default`) entry,
+  `@aws-cdk-blocks/core/bb-utils`) at the top level of your mock (`default`) entry,
   so a deploy bundled without `aws-runtime` fails closed like the first-party BBs.
 - Keep the export-conditions exact:
   ```json
@@ -612,14 +620,14 @@ you need a different DynamoDB billing mode, or a different Cognito trigger —
 you can eject its full source into your project and own it outright.
 
 ```bash
-npm run vendorize -- @aws-blocks/bb-kv-store
+npm run vendorize -- @aws-cdk-blocks/bb-kv-store
 # or by Building Block name:
 npm run vendorize -- KVStore
 ```
 
 What this does:
 
-1. Copies `node_modules/@aws-blocks/bb-kv-store/src/` into `vendor/bb-kv-store/src/`.
+1. Copies `node_modules/@aws-cdk-blocks/bb-kv-store/src/` into `vendor/bb-kv-store/src/`.
 2. Generates a `vendor/bb-kv-store/package.json` with the same `name`, but with
    exports pointing at `./src/*.ts` instead of `./dist/*.js`.
 3. Adds `vendor/bb-kv-store` to your root `workspaces` array.
@@ -630,7 +638,7 @@ What this does:
 After vendorize, **your imports do not change**:
 
 ```ts
-import { KVStore } from '@aws-blocks/bb-kv-store';   // resolves to vendor/, not registry
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';   // resolves to vendor/, not registry
 ```
 
 Edit `vendor/bb-kv-store/src/index.cdk.ts` and your changes apply on the next
@@ -638,8 +646,8 @@ Edit `vendor/bb-kv-store/src/index.cdk.ts` and your changes apply on the next
 
 Some blocks also deploy helper Lambdas of their own: `Auth` (the user-pool
 immutability guard, and the identity-provider registration for
-Cognito-federated sign-in), `DistributedTable` (the GSI manager, for a table
-with indexes), and `Database` / `DistributedDatabase` (the migration runner).
+Cognito-federated sign-in), `KVStore` (the GSI manager, for a store
+with indexes), and `Database` (the migration runner).
 In a vendored copy these are bundled from `vendor/<package>/src/` at synth with
 your app's `esbuild`, so edits to those handlers deploy too.
 
@@ -677,8 +685,8 @@ without taking on a long-term maintenance fork.
 When a Building Block's typed API doesn't cover your use case, `getSdkIdentifiers()` gives you the raw AWS resource identifiers (table names, bucket names, pool IDs, etc.) to use with the AWS SDK directly. It works in both deployed and local-dev contexts.
 
 ```ts
-import { getSdkIdentifiers } from '@aws-blocks/blocks';
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { getSdkIdentifiers } from 'aws-cdk-blocks';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
@@ -696,7 +704,7 @@ const { Items } = await docClient.send(new QueryCommand({
 }));
 ```
 
-TypeScript autocomplete on the return value of `getSdkIdentifiers()` shows exactly which identifiers each BB exposes — no need to memorize them. The typed overloads are provided by `@aws-blocks/blocks`; the base untyped version in `@aws-blocks/core` returns `Record<string, string>`.
+TypeScript autocomplete on the return value of `getSdkIdentifiers()` shows exactly which identifiers each BB exposes — no need to memorize them. The typed overloads are provided by `aws-cdk-blocks`; the base untyped version in `@aws-cdk-blocks/core` returns `Record<string, string>`.
 
 ---
 
@@ -765,7 +773,7 @@ of them — one per CDK shape from Pattern 1:
 
 | Harness | What it covers |
 |---|---|
-| [`test-apps/extending-blocks-guide/`](../../test-apps/extending-blocks-guide) | Pattern 1 via standalone `BlocksStack`, Pattern 2 (KVStore + DistributedTable `fromExisting`), Pattern 3 (custom `bb-queue` BB). |
+| [`test-apps/extending-blocks-guide/`](../../test-apps/extending-blocks-guide) | Pattern 1 via standalone `BlocksStack`, Pattern 2 (`KVStore.fromExisting` over a legacy table), Pattern 3 (custom `bb-queue` BB). |
 | [`test-apps/extending-blocks-guide-blocksbackend/`](../../test-apps/extending-blocks-guide-blocksbackend) | Pattern 1 via `BlocksBackend.create(...)` dropped into a user-owned outer `cdk.Stack`. |
 | [`test-apps/comprehensive/test/vendorize.test.ts`](../../test-apps/comprehensive/test/vendorize.test.ts) | Pattern 4 (vendorize). |
 
@@ -787,8 +795,7 @@ CDK-level regression tests pin `fromExisting` and the `BlocksBackend` synth
 shape:
 
 ```bash
-npm test -w @aws-blocks/bb-kv-store
-npm test -w @aws-blocks/bb-file-bucket
-npm test -w @aws-blocks/bb-distributed-table
-npm test -w @aws-blocks/core    # includes BlocksBackend synth-shape tests
+npm test -w @aws-cdk-blocks/bb-kv-store
+npm test -w @aws-cdk-blocks/bb-file-bucket
+npm test -w @aws-cdk-blocks/core    # includes BlocksBackend synth-shape tests
 ```

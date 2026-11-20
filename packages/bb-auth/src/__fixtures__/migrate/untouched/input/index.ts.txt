@@ -1,5 +1,5 @@
-import { Auth, AuthErrors, isAuthError, stubIdp } from '@aws-blocks/blocks';
-import { Scope } from '@aws-blocks/blocks';
+import { Auth, AuthErrors, isAuthError, stubIdp } from 'aws-cdk-blocks';
+import { Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('app');
 export const auth = new Auth(scope, 'auth', {

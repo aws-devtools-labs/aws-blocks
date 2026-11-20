@@ -5,14 +5,18 @@ import assert from 'node:assert';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, test } from 'node:test';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { Secret, SecretErrors, type SecretOptions, type WritableSecret } from './index.mock.js';
 
 // Reset mock data between tests so state does not leak. The mock persists to
-// the shared `.bb-data/settings.json` under the current working directory.
-const BB_DATA = join(process.cwd(), '.bb-data');
+// the shared `.cdk-blocks/local/data/settings.json` under the current working directory.
+const BB_DATA = join(process.cwd(), '.cdk-blocks/local/data');
+// Also reset the pre-consolidation directory: `getMockDataDir` carries it
+// across on first use, so a stale one left by an older run would seed keys
+// into these assertions.
+const LEGACY_BB_DATA = join(process.cwd(), '.bb-data');
 
 function freshScope(): Scope {
 	return new Scope('test-app');
@@ -34,6 +38,7 @@ function writable<T = string>(
 
 beforeEach(() => {
 	rmSync(BB_DATA, { recursive: true, force: true });
+	rmSync(LEGACY_BB_DATA, { recursive: true, force: true });
 });
 
 describe('Secret (mock)', () => {
@@ -277,7 +282,7 @@ describe('Secret (mock)', () => {
 	describe('local storage (shared settings.json)', () => {
 		const SETTINGS = join(BB_DATA, 'settings.json');
 
-		test('values are stored in the shared .bb-data/settings.json', async () => {
+		test('values are stored in the shared .cdk-blocks/local/data/settings.json', async () => {
 			const secret = writable(freshScope(), 'api-key');
 			await secret.put('v1');
 			assert.ok(existsSync(SETTINGS), 'settings.json should exist after put()');

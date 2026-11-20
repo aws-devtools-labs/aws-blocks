@@ -20,7 +20,7 @@ import { before, describe, test } from 'node:test';
 import assert from 'node:assert';
 import { request } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+import { ApiNamespaceClient } from 'aws-cdk-blocks/client';
 import { METHOD_NOT_FOUND, requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
 type WhereAmI = {
@@ -142,7 +142,7 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
       const lambdaUrl = new URL(onLambda.requestUrl);
       assert.strictEqual(containerUrl.origin, lambdaUrl.origin, 'same scheme and host');
       // Same path shape (the route path, no stage), differing only in the namespace segment.
-      assert.match(lambdaUrl.pathname, /^\/aws-blocks\/api\/reports$/);
+      assert.match(lambdaUrl.pathname, /^\/cdk-blocks\/api\/reports$/);
       assert.strictEqual(containerUrl.pathname, lambdaUrl.pathname.replace(/\/reports$/, '/containerApi'));
     });
 
@@ -227,7 +227,7 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
     } else {
       test('a call to the bare endpoint runs on the default compute', async () => {
         // Raw HTTP callers, and native clients released before per-namespace paths,
-        // POST to the bare `/aws-blocks/api`: it dispatches by the body, on the
+        // POST to the bare `/cdk-blocks/api`: it dispatches by the body, on the
         // default (Lambda) compute, even for a container namespace.
         const reply = await rpcCall(ctx.apiUrl(), 'containerApi.whereAmI');
         const served = reply.result as WhereAmI;

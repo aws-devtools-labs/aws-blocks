@@ -1,7 +1,7 @@
 import Foundation
 
 
-public nonisolated struct User: Codable {
+public nonisolated struct User: Codable, Sendable {
     public let email: String
     public let id: String
     public let name: String

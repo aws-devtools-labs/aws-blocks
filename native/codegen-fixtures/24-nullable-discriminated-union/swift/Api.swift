@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func updateAttributes(attributes: [String: String]) async throws -> [String: UpdateAttributes.ResultValue?] {
         let request = BlocksRequest(method: "api.updateAttributes", params: [attributes], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.updateAttributes") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.updateAttributes") }
         return try JSONDecoder().decode([String: UpdateAttributes.ResultValue?].self, from: result)
     }
 
@@ -31,14 +31,14 @@ public final nonisolated class Api: Sendable {
 
     public enum UpdateAttributes {
 
-        public struct IsUpdatedFalse: Codable {
+        public struct IsUpdatedFalse: Codable, Sendable {
             public let nextStep: NextStep
 
             public init(nextStep: NextStep) {
                 self.nextStep = nextStep
             }
 
-            public struct NextStep: Codable {
+            public struct NextStep: Codable, Sendable {
                 public let destination: String
                 public let name: String
 
@@ -49,7 +49,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum ResultValue: Codable {
+        public enum ResultValue: Codable, Sendable {
             case isUpdatedTrue
             case isUpdatedFalse(IsUpdatedFalse)
 
@@ -81,7 +81,7 @@ public final nonisolated class Api: Sendable {
 
     public enum GetNotification {
 
-        public struct Email: Codable {
+        public struct Email: Codable, Sendable {
             public let body: String
             public let subject: String
 
@@ -91,7 +91,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Sms: Codable {
+        public struct Sms: Codable, Sendable {
             public let message: String
 
             public init(message: String) {
@@ -99,24 +99,34 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public enum Result: Codable {
+        public enum Result: Codable, Sendable {
             case email(Email)
             case sms(Sms)
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case `type`
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .email(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("email", forKey: .`type`)
                     try params.encode(to: encoder)
                 case .sms(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("sms", forKey: .`type`)
                     try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
+            }
+
+            public var unknownDiscriminator: String? {
+                guard case .unknown(.dictionary(let object)) = self,
+                      case .string(let tag)? = object["type"] else { return nil }
+                return tag
             }
 
             public init(from decoder: Decoder) throws {
@@ -126,7 +136,7 @@ public final nonisolated class Api: Sendable {
                 case "email": self = .email(try Email(from: decoder))
                 case "sms": self = .sms(try Sms(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .`type`, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }
@@ -166,5 +176,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

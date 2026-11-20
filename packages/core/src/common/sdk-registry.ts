@@ -9,7 +9,7 @@
  * {@link getSdkIdentifiers} to interact with BB-managed resources using the raw AWS SDK.
  *
  * This module serves a complementary role to `mock-data.ts`:
- * - `mock-data.ts` → provides local file paths for mock persistence (`.bb-data/`)
+ * - `mock-data.ts` → provides local file paths for mock persistence (`.cdk-blocks/local/data/`)
  * - `sdk-registry.ts` → provides AWS resource identifiers for SDK access
  *
  * Together, these two modules form the runtime discovery layer — `mock-data.ts` for
@@ -44,7 +44,7 @@ const registry = new Map<string, ResourceEntry>();
  * registerSdkIdentifiers(this.fullId, { tableName: 'myapp-users' });
  * ```
  */
-export function registerSdkIdentifiers(fullId: string, identifiers: ResourceEntry): void {
+export function registerSdkIdentifiers(fullId: string, identifiers: Record<string, string>): void {
   registry.set(fullId, { ...registry.get(fullId), ...identifiers });
 }
 
@@ -53,15 +53,15 @@ export function registerSdkIdentifiers(fullId: string, identifiers: ResourceEntr
  *
  * This is the base (untyped) version that returns `Record<string, string>`.
  * For full type safety with per-BB return types, import the overloaded
- * `getSdkIdentifiers` from `@aws-blocks/blocks` instead.
+ * `getSdkIdentifiers` from `aws-cdk-blocks` instead.
  *
  * @param bb - Any object with a `fullId` property (typically a Building Block instance).
  * @returns A record of the BB's registered resource identifiers.
  *
  * @example
  * ```typescript
- * import { getSdkIdentifiers } from '@aws-blocks/blocks';
- * import { KVStore } from '@aws-blocks/bb-kv-store';
+ * import { getSdkIdentifiers } from 'aws-cdk-blocks';
+ * import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
  * import { DynamoDBClient, QueryCommand } from '@aws-sdk/client-dynamodb';
  *
  * const store = new KVStore(scope, 'users', {});
@@ -80,8 +80,8 @@ export function registerSdkIdentifiers(fullId: string, identifiers: ResourceEntr
  *
  * @example
  * ```typescript
- * import { getSdkIdentifiers } from '@aws-blocks/blocks';
- * import { FileBucket } from '@aws-blocks/bb-file-bucket';
+ * import { getSdkIdentifiers } from 'aws-cdk-blocks';
+ * import { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
  * import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
  * import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
  *
@@ -112,7 +112,7 @@ export function getSdkIdentifiers(bb: { fullId: string }): Record<string, string
  *
  * @example
  * ```typescript
- * import { getAllSdkIdentifiers } from '@aws-blocks/core';
+ * import { getAllSdkIdentifiers } from '@aws-cdk-blocks/core';
  *
  * // Log all registered identifiers for debugging
  * for (const [fullId, ids] of getAllSdkIdentifiers()) {
@@ -124,7 +124,7 @@ export function getSdkIdentifiers(bb: { fullId: string }): Record<string, string
  * //   myapp-auth: { userPoolId: 'us-east-1_abc', clientId: '123abc' }
  * ```
  */
-export function getAllSdkIdentifiers(): ReadonlyMap<string, ResourceEntry> {
+export function getAllSdkIdentifiers(): ReadonlyMap<string, Record<string, string>> {
   return new Map(registry);
 }
 
@@ -137,7 +137,7 @@ export function getAllSdkIdentifiers(): ReadonlyMap<string, ResourceEntry> {
  *
  * @example
  * ```typescript
- * import { _resetSdkRegistry } from '@aws-blocks/core';
+ * import { _resetSdkRegistry } from '@aws-cdk-blocks/core';
  * import { afterEach } from 'node:test';
  *
  * afterEach(() => {

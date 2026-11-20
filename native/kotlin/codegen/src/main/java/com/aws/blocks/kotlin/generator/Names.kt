@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin.generator
 
 import com.squareup.kotlinpoet.ClassName
@@ -47,6 +50,7 @@ object ClassNames {
     val anyProvider = ClassName("com.aws.blocks.kotlin.oidc", "AnyProvider")
     val realtimeChannel = ClassName("com.aws.blocks.kotlin.realtime", "RealtimeChannel")
     val unknownTransferable = ClassName("com.aws.blocks.kotlin", "UnknownTransferable")
+    val transportException = ClassName("com.aws.blocks.kotlin.exceptions", "TransportException")
 }
 
 object MemberNames {

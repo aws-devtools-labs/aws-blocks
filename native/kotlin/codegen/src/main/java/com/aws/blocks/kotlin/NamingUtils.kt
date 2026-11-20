@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin
 
 object NamingUtils {
@@ -15,6 +18,20 @@ object NamingUtils {
      */
     fun isDeclarable(name: String): Boolean =
         name.isNotEmpty() && name.none { it in UNESCAPABLE_CHARACTERS || it.isISOControl() }
+
+    /**
+     * Characters Windows rejects in a file name that [isDeclarable] admits. A type's name is the
+     * name of its class file (`Ns$Input$Cre"ate.class`), so a type can't be named with one.
+     */
+    private val FILE_NAME_UNSAFE_CHARACTERS = setOf('"', '*', '?', '|')
+
+    /**
+     * Whether Kotlin can declare a type named [name]: [isDeclarable], and also a valid file name on
+     * every platform, since the compiler writes each class to a file of that name. Windows rejects
+     * the characters in [FILE_NAME_UNSAFE_CHARACTERS] and drops a trailing space.
+     */
+    private fun isDeclarableTypeName(name: String): Boolean =
+        isDeclarable(name) && name.none { it in FILE_NAME_UNSAFE_CHARACTERS } && !name.endsWith(' ')
 
     /** The runs of letters and digits in [name] (`back\slash` -> `back`, `slash`). */
     private fun words(name: String): List<String> = name.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
@@ -54,13 +71,13 @@ object NamingUtils {
             .joinToString("") { if (it.isEmpty()) "" else it[0].uppercaseChar() + it.substring(1) }
 
     /**
-     * [name] in PascalCase, split at `_` and `-`. A result Kotlin can't declare ([isDeclarable]:
-     * `Back\slash`, `A.b`, an empty name) is built from [name]'s words instead (`BackSlash`, `AB`),
+     * [name] in PascalCase, split at `_` and `-`. A result Kotlin can't declare as a type
+     * ([isDeclarableTypeName]: `Back\slash`, `A.b`, `Cre"ate`, an empty name) is built from [name]'s words instead (`BackSlash`, `AB`),
      * or is `Unnamed` when [name] has none.
      */
     fun toPascalCase(name: String): String {
         val pascal = pascalCase(name.split(Regex("[_\\-]")))
-        if (isDeclarable(pascal)) return pascal
+        if (isDeclarableTypeName(pascal)) return pascal
         return pascalCase(words(name)).ifEmpty { "Unnamed" }
     }
 

@@ -4,7 +4,7 @@ A single application configuration value backed by SSM Parameter Store.
 
 **When to use:** You need a non-sensitive configuration value (feature flag, API URL, threshold) stored as a single SSM parameter. Each `AppSetting` instance maps to exactly one parameter.
 
-**When NOT to use:** For a production secret (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md) — it is the recommended home for credentials that protect a production app, [in line with AWS guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html). `AppSetting` with `secret: true` does encrypt the value at rest and is free, so it is a fine fallback for a *low-value* secret in a prototype — but it is not the recommended place for production secrets. If you need structured key-value data with conditional writes and queries, use `KVStore` or `DistributedTable`.
+**When NOT to use:** For a production secret (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md) — it is the recommended home for credentials that protect a production app, [in line with AWS guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html). `AppSetting` with `secret: true` does encrypt the value at rest and is free, so it is a fine fallback for a *low-value* secret in a prototype — but it is not the recommended place for production secrets. If you need structured key-value data with conditional writes and queries, use `KVStore`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -58,8 +58,8 @@ For example, `Auth` reads both when an `AppSetting` is passed as an identity pro
 ### Error Handling
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { AppSettingErrors } from '@aws-blocks/bb-app-setting';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { AppSettingErrors } from '@aws-cdk-blocks/bb-app-setting';
 
 try {
   await setting.put(value);
@@ -169,7 +169,7 @@ These are enforced at CDK synth time and in local development (the mock rejects 
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/settings/{fullId}/value.json` across dev server restarts. Wipe with `rm -rf .bb-data`. Secrets generate a random value locally (no KMS encryption in mock mode).
+Mock data persists to disk in the shared `.cdk-blocks/local/data/settings.json`, keyed by the setting's `fullId` (the file `Secret` uses too), across dev server restarts. Wipe with `rm -rf .cdk-blocks/local/data .bb-data`. Secrets generate a random value locally (no KMS encryption in mock mode).
 
 
 

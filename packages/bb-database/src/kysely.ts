@@ -108,12 +108,15 @@ class DatabaseDriver implements Driver {
  * statement, so it is safe during CDK synth. Streaming (`.stream()`) is not supported. `destroy()` on the
  * Kysely instance does not close the block's connections.
  *
- * @param db - The `Database` whose schema and cluster the statements use
+ * Pass the result of `db.asUser(user)` instead of the block and every Kysely statement, in a
+ * transaction or not, runs as that user.
+ *
+ * @param db - The `Database`, or the `ScopedDatabase` from `db.asUser()`, whose schema and cluster the statements use
  * @throws {DatabaseErrors.QueryFailed} From a statement, as `query()` on the block does
  *
  * @example
  * import { type Generated, Kysely } from 'kysely';
- * import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
+ * import { DatabaseDialect } from '@aws-cdk-blocks/bb-database/kysely';
  *
  * interface Tables {
  *   orders: { id: Generated<number>; customer_id: string; total: number };

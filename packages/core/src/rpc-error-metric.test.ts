@@ -5,7 +5,7 @@
  * A failed RPC call reaches the client as a JSON-RPC error envelope in an HTTP
  * 200 response, so Lambda's `Errors` metric never counts it. These tests drive
  * the real Lambda handler and check that each failed call writes exactly one
- * EMF line for the `AWSBlocks` / `RpcErrors` metric, and a successful call none.
+ * EMF line for the `CDKBlocks` / `RpcErrors` metric, and a successful call none.
  */
 import assert from 'node:assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -58,7 +58,7 @@ const backend = {
 function rpcEvent(method: string) {
 	return {
 		httpMethod: 'POST',
-		path: '/aws-blocks/api',
+		path: '/cdk-blocks/api',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ jsonrpc: '2.0', method, params: [], id: 1 }),
 		isBase64Encoded: false,
@@ -122,7 +122,7 @@ describe('RpcErrors metric (Lambda)', () => {
 		assert.strictEqual(emf.length, 1);
 		const [line] = emf;
 		const [directive] = line._aws.CloudWatchMetrics;
-		assert.strictEqual(directive.Namespace, 'AWSBlocks');
+		assert.strictEqual(directive.Namespace, 'CDKBlocks');
 		assert.deepStrictEqual(directive.Dimensions, [['FunctionName', 'StatusClass']]);
 		assert.deepStrictEqual(directive.Metrics.map((m) => m.Name), ['RpcErrors']);
 		assert.strictEqual(line.RpcErrors, 1);

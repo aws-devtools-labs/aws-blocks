@@ -10,9 +10,9 @@ reference), see the [`auth-common` README](../auth-common/README.md). This guide
 assumes you've read it.
 
 The components are the same whichever auth Building Block backs them, and the
-same functions whichever path you import them from: `@aws-blocks/blocks/ui` (what
-apps normally install), `@aws-blocks/auth-common/ui`, or, for `Auth`,
-`@aws-blocks/bb-auth/ui`, which adds the typed `authOverrides()` helper.
+same functions whichever path you import them from: `aws-cdk-blocks/ui` (what
+apps normally install), `@aws-cdk-blocks/auth-common/ui`, or, for `Auth`,
+`@aws-cdk-blocks/bb-auth/ui`, which adds the typed `authOverrides()` helper.
 
 If you're here to write e2e tests rather than restyle anything, skip to
 [Test hooks](#test-hooks) — the built-in components ship a stable `data-testid`
@@ -58,8 +58,8 @@ Pass an `AuthenticatorOptions` as the second argument. The state machine runs
 unchanged. You're only adjusting how each action renders.
 
 ```typescript
-import { Authenticator } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
+import { Authenticator } from '@aws-cdk-blocks/auth-common/ui';
+import { authApi } from 'cdk-blocks';
 
 document.body.appendChild(Authenticator(authApi, {
   // Drop whole actions. Invite-only? Hide signUp. Names match AuthAction.name.
@@ -84,7 +84,7 @@ document.body.appendChild(Authenticator(authApi, {
 ```
 
 On an `Auth` backend, wrap the options in `authOverrides()` from
-`@aws-blocks/bb-auth/ui`. It returns the same object, but checks action, next-step,
+`@aws-cdk-blocks/bb-auth/ui`. It returns the same object, but checks action, next-step,
 state and field names at compile time, so `actions.signIn.fields.emial` is an
 error instead of a silent no-op.
 
@@ -186,8 +186,8 @@ rendering. You call `getAuthState()` once, render, and submit with
 `auth.createApi()`.
 
 ```typescript
-import { submitAuthAction } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { submitAuthAction } from 'aws-cdk-blocks/ui';
+import { authApi } from 'cdk-blocks';
 
 async function renderAuth(root: HTMLElement, showError: (message?: string) => void) {
   const state = await authApi.getAuthState();
@@ -247,8 +247,8 @@ included:
 
 ```tsx
 import { useSyncExternalStore } from 'react';
-import { getAuthStateSnapshot, submitAuthAction, subscribeAuthState } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { getAuthStateSnapshot, submitAuthAction, subscribeAuthState } from 'aws-cdk-blocks/ui';
+import { authApi } from 'cdk-blocks';
 
 const subscribe = (cb: () => void) => subscribeAuthState(authApi, cb);
 const getSnapshot = () => getAuthStateSnapshot(authApi);
@@ -267,12 +267,16 @@ export function SignOutButton() {
 
 `setAuthState` takes a single discriminated object: `action` selects the
 variant, the remaining keys are that action's fields. Because the variants are
-typed (`AuthActionInput` in `@aws-blocks/auth-common`), passing the wrong fields
+typed (`AuthActionInput` in `@aws-cdk-blocks/auth-common`), passing the wrong fields
 for an action is a compile error. Submit `{ action: 'signIn', username, password }`
 and TypeScript checks the shape. `submitAuthAction` takes the same `AuthActionInput`. The
 `<Authenticator>` widens to this type at one boundary because it builds payloads
 from runtime `action.fields`; a hand-written caller that knows its action name
 gets full narrowing.
+
+A hand-written call with a literal action name needs no cast:
+`submitAuthAction(authApi, { action: 'signOut' })` type-checks as-is. Don't add
+`as any`; it throws away that check.
 
 `auth.createApi()` also narrows the input to what the block's options allow
 (`AuthActionInputOf<O>`). The password actions need email + password, the
@@ -395,8 +399,8 @@ change who is signed in, and a mounted `Authenticator` keeps its signed-in card.
 No QR library ships with the block; pass `renderQrCode` to draw one:
 
 ```typescript
-import { MfaSettings } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { MfaSettings } from 'aws-cdk-blocks/ui';
+import { authApi } from 'cdk-blocks';
 
 declare function qrCodeDataUrl(text: string): string; // from your QR library
 

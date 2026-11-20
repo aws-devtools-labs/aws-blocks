@@ -31,11 +31,17 @@ public struct SwiftCodeGenerator {
     private(set) var nestedTypesByName: [String: [NestedTypeNode]] = [:]
     /// Component schemas by type name, to follow a `typeReference` when walking a type.
     private(set) var typesByName: [String: ResolvedType] = [:]
+    /// The generated types that can't be `Sendable`, by scope (see SwiftCodeGenerator+Sendable.swift).
+    private(set) var sendable = SendableAnalysis()
+    /// The scope declarations are being emitted in, for `sendable`.
+    let emissionScope = EmissionScope()
     let declaredBindings: [String: DeclaredTransferableBinding]
     /// Unconditional once a module is declared: the generator cannot know a
     /// customer package's export list.
     let runtimePrefix: String
     let declaredNames = DeclaredNames()
+    /// Whether the enums emitted now are open (see `SwiftCodeGenerator+OpenEnums.swift`).
+    let openEnums = OpenEnumScope()
 
     public init() {
         self.init(declaredBindings: [:], runtimePrefix: "")
@@ -51,11 +57,11 @@ public struct SwiftCodeGenerator {
     /// or `CodegenError` (a component schema with a constraint throws it from its init). `ModelsRuntimeImportTests`
     /// checks the list against the runtime's sources.
     static let blocksRuntimeTypeNames: Set<String> = [
-        "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
-        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileBucketError", "FileDownloadHandle", "FileUploadHandle",
+        "ApiError", "AuthProvider", "BlocksArrayParams", "BlocksClient", "BlocksError", "BlocksRequest", "BlocksServer",
+        "BrowserLauncher", "ClientClosedError", "CodegenError", "FileDownloadHandle", "FileTransferError", "FileUploadHandle",
         "InMemoryTokenStore", "JSONValue", "OIDCAuthState", "OIDCClient", "OIDCError", "OIDCProviderConfig", "OIDCProviderName", "OIDCUser",
-        "RawRouteError", "RealtimeChannel", "RealtimeError", "RPCError", "TokenStore", "UnknownTransferable",
-        "WebSocketConnection", "WebSocketDelegate"
+        "RealtimeChannel", "RealtimeError", "TokenStore", "TransferableError", "TransportError", "UnknownTransferable",
+        "WebAuthenticationSessionLauncher", "WebSocketConnection", "WebSocketDelegate"
     ]
 
     public func generate(from model: CodegenModel) throws -> GeneratedSources {
@@ -71,6 +77,9 @@ public struct SwiftCodeGenerator {
             model.typeDefinitions.map { ($0.name, $0.type) },
             uniquingKeysWith: { first, _ in first }
         )
+        generator.sendable = Self.sendableAnalysis(in: model)
+        try generator.rejectTransferableParameters(model)
+        generator.openEnums.openTypeNames = generator.openTypeNames(model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -106,6 +115,7 @@ public struct SwiftCodeGenerator {
         for typeDef in model.typeDefinitions {
             emitType(typeDef.type, name: typeDef.name, lines: &modelLines, emitted: &emittedTypes)
         }
+        let sharedTypes = emitSharedTypes(model, lines: &modelLines)
 
         // Build per-operation qualified-name lookup from nested types.
         // Types nest inside operation enums inside the class, so the qualified
@@ -121,6 +131,11 @@ public struct SwiftCodeGenerator {
                 // Level by level, and the shallowest type keeps a name: the signature names the operation's
                 // own types (`Swap.Item`), not a same-named type nested deeper (`Swap.Result.Item`).
                 var nameMap: [String: String] = [:]
+                // A shared parameter type (`AuthActionInput`) is named as itself, even beside a deeper nested type
+                // of that name (`Place.Result.Figure`).
+                for alias in operation.sharedTypeAliases {
+                    nameMap[alias.target] = alias.target
+                }
                 var level = operation.nestedTypes.map { (node: $0, path: "\(opName).\($0.name)") }
                 while !level.isEmpty {
                     for entry in level where nameMap[entry.node.name] == nil {
@@ -139,7 +154,7 @@ public struct SwiftCodeGenerator {
 
         // Diagnostics are emitted here (not in the builder) so the model name uses
         // the same `operationQualifiedNames` authority that drives emission.
-        var warnings: [String] = model.nativeCatalogWarnings
+        var warnings: [String] = model.nativeCatalogWarnings + model.namingWarnings
 
         // Default server name for init parameter default
         let serverNames = serverPropertyNames(model.servers)
@@ -152,6 +167,7 @@ public struct SwiftCodeGenerator {
                 topLevelNames.formUnion(variants.map(\.name))
             }
         }
+        topLevelNames.formUnion(model.sharedTypes.map(\.name))
         let classNames = apiClassNames(model.apiNamespaces, topLevelNames: topLevelNames)
         let entryPoint = entryPointNames(for: model.apiNamespaces, classNames: classNames)
         warnings += entryPoint.warnings
@@ -186,11 +202,11 @@ public struct SwiftCodeGenerator {
             }
 
             // Emit nested types as operation enums inside the class
-            for operation in namespace.operations where !operation.nestedTypes.isEmpty || oidcProviderEnum(operation) != nil {
+            for operation in namespace.operations where operation.declaresNestedTypes || oidcProviderEnum(operation) != nil {
                 apiLines.append("")
                 emitOperationEnum(
                     operation: operation, name: memberNames.enums[operation.name] ?? specTypeName(operation.name),
-                    namespace: namespace.name, indent: "    ", lines: &apiLines
+                    namespace: namespace.name, shared: sharedTypes, indent: "    ", lines: &apiLines
                 )
             }
 
@@ -220,7 +236,7 @@ public struct SwiftCodeGenerator {
         }
 
         // Only include models file content if there are actual type definitions
-        let hasTypes = !model.typeDefinitions.isEmpty
+        let hasTypes = !model.typeDefinitions.isEmpty || !model.sharedTypes.isEmpty
         let modelsContent = hasTypes ? modelLines.joined(separator: "\n") : ""
         let apiContent = apiLines.joined(separator: "\n")
         return GeneratedSources(models: modelsContent, api: apiContent, warnings: warnings)
@@ -228,18 +244,7 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Nested Type Emission
 
-    private func emitOperationEnum(
-        operation: Operation, name opName: String, namespace: String, indent: String, lines: inout [String]
-    ) {
-        emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
-        for node in operation.nestedTypes {
-            emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
-        }
-        emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
-        lines.append("\(indent)}")
-    }
-
-    private func emitNestedTypeNode(_ node: NestedTypeNode, indent: String, lines: inout [String]) {
+    func emitNestedTypeNode(_ node: NestedTypeNode, indent: String, lines: inout [String]) {
         switch node.type {
         case .record(_, let fields, let additionalPropertiesType, let embeddedUnion):
             emitNestedRecordStruct(
@@ -250,9 +255,9 @@ public struct SwiftCodeGenerator {
             )
         case .enum(_, let values):
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable {", lines: &lines)
-            lines.append(contentsOf: enumCaseLines(values, indent: indent + "    "))
-            lines.append("\(indent)}")
+            let enumLines = enumDeclarationLines(name: node.name, values: values, declaration: "public enum", indent: indent)
+            emitDeclaration(node.name, line: enumLines[0], lines: &lines)
+            lines.append(contentsOf: enumLines.dropFirst())
         case .union(_, let variants, let discriminator):
             emitNestedUnion(name: node.name, variants: variants, discriminator: discriminator, children: node.children, indent: indent, lines: &lines)
         default:
@@ -266,7 +271,8 @@ public struct SwiftCodeGenerator {
     ) {
         let fields = fields.filter { !isVoidType($0.type) }
         lines.append("")
-        emitDeclaration(name, line: "\(indent)public struct \(name): Codable {", lines: &lines)
+        let conformances = valueConformances(recordStored(fields, additionalPropertiesType, embeddedUnion))
+        emitDeclaration(name, line: "\(indent)public struct \(name): \(conformances) {", lines: &lines)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -318,7 +324,11 @@ public struct SwiftCodeGenerator {
 
         // Emit embedded union as a nested type
         if let embedded = embeddedUnion, case .union(let unionName, let variants, let disc) = embedded {
-            emitNestedUnion(name: unionName, variants: variants, discriminator: disc, children: [], indent: indent + "    ", lines: &lines)
+            // An embedded union shares this arm's JSON object, so it stays closed.
+            emitNestedUnion(
+                name: unionName, variants: variants, discriminator: disc, children: [], embedded: true,
+                indent: indent + "    ", lines: &lines
+            )
             // Emit merged Codable for embedded union support
             lines.append("")
             let embeddedName = embeddedPropertyName(fields)
@@ -401,50 +411,67 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)}")
     }
 
-    private func emitNestedUnion(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode], indent: String, lines: inout [String]) {
-        // Emit variant structs before the enum
-        for variant in variants {
-            guard !variant.fields.isEmpty
-                    || variant.additionalPropertiesType != nil
-                    || variant.embeddedUnion != nil
-                    || !variant.nestedTypes.isEmpty else { continue }
-            if variant.payloadTypeName != nil || variant.valueType != nil { continue }
-            emitNestedRecordStruct(
-                name: variant.name, fields: variant.fields,
-                additionalPropertiesType: variant.additionalPropertiesType,
-                embeddedUnion: variant.embeddedUnion,
-                children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                indent: indent, lines: &lines
-            )
-        }
-
-        // A value arm's own types (the element of `[{…}]`, an enum arm) are declared beside the enum, like the
-        // variant structs.
-        for variant in variants where variant.valueType != nil {
-            for node in valueArmTypes(variant) {
-                emitNestedTypeNode(node, indent: indent, lines: &lines)
+    /// Emits a union with the types it declares for its variants (their structs, a value arm's own types) beside
+    /// it, or, for a shared top-level union (`sharedTopLevel`), nested inside it (`AuthActionInput.SignIn`).
+    func emitNestedUnion(
+        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode],
+        embedded: Bool = false, indent: String, lines: inout [String], sharedTopLevel: Bool = false
+    ) {
+        let memberIndent = sharedTopLevel ? indent + "    " : indent
+        var memberLines: [String] = []
+        // Variant structs, and a value arm's own types (the element of `[{…}]`, an enum arm) beside them. Without a
+        // discriminator the arms are tried in turn, so their types are closed.
+        openEnums.with(open: openEnums.isOpen && discriminator != nil) {
+            for variant in variants where declaresVariantStruct(variant) {
+                emitNestedRecordStruct(
+                    name: variant.name, fields: variant.fields,
+                    additionalPropertiesType: variant.additionalPropertiesType,
+                    embeddedUnion: variant.embeddedUnion,
+                    children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
+                    indent: memberIndent, lines: &memberLines
+                )
+            }
+            for variant in variants where variant.valueType != nil {
+                for node in valueArmTypes(variant) {
+                    emitValueArmType(node) { emitNestedTypeNode(node, indent: memberIndent, lines: &memberLines) }
+                }
             }
         }
+        if !sharedTopLevel { lines.append(contentsOf: memberLines) }
 
         lines.append("")
-        emitDeclaration(name, line: "\(indent)public enum \(name): Codable {", lines: &lines)
-        lines.append(contentsOf: unionCaseLines(variants, indent: indent))
+        let declaration = sharedTopLevel ? "public nonisolated enum" : "public enum"
+        let conformances = valueConformances([.union(name: name, variants: variants, discriminator: discriminator)])
+        emitDeclaration(name, line: "\(indent)\(declaration) \(name): \(conformances) {", lines: &lines)
+        let unknownCase = embedded ? nil : openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
+        lines.append(contentsOf: unionCaseLines(variants, indent: indent, unknownCase: unknownCase))
         if let disc = discriminator {
-            emitDiscriminatedCoding(name: name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
+            emitDiscriminatedCoding(
+                name: name, variants: variants, discriminator: disc, unknownCase: unknownCase, indent: indent, lines: &lines
+            )
         } else {
             emitTransparentUnionCoding(name: name, variants: variants, indent: indent, lines: &lines)
+        }
+        if sharedTopLevel {
+            lines.append(contentsOf: memberLines)
+            for child in children {
+                emitNestedTypeNode(child, indent: memberIndent, lines: &lines)
+            }
         }
         lines.append("\(indent)}")
 
         // Emit children
-        for child in children {
-            emitNestedTypeNode(child, indent: indent + "    ", lines: &lines)
+        if !sharedTopLevel {
+            for child in children {
+                emitNestedTypeNode(child, indent: indent + "    ", lines: &lines)
+            }
         }
     }
 
     // Internal-discriminator unions only: `emitType` routes the others to `emitTransparentUnionCoding`.
     private func emitDiscriminatedCoding(
-        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, indent: String = "", lines: inout [String]
+        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, unknownCase: String? = nil,
+        indent: String = "", lines: inout [String]
     ) {
         let discKey = escapedSwiftName(discriminator.fieldName)
         // A value arm (`string`) or a literal arm has no discriminator and encodes as a bare JSON value, so with
@@ -463,7 +490,9 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)    }")
         lines.append("")
         lines.append("\(indent)    public func encode(to encoder: Encoder) throws {")
-        if valueVariants.isEmpty {
+        // An unknown arm encodes as its whole object, so then each known case opens its own container.
+        let containerPerCase = !valueVariants.isEmpty || unknownCase != nil
+        if !containerPerCase {
             lines.append("\(indent)        \(openContainer)")
         }
         lines.append("\(indent)        switch self {")
@@ -471,7 +500,7 @@ public struct SwiftCodeGenerator {
             if let discVal = variant.discriminatorValue {
                 let hasPayload = unionCasePayload(variant) != nil
                 lines.append("\(indent)        case .\(unionCaseName(variant))\(hasPayload ? "(let params)" : ""):")
-                if !valueVariants.isEmpty {
+                if containerPerCase {
                     lines.append("\(indent)            \(openContainer)")
                 }
                 lines.append("\(indent)            try container.encode(\(tagLiteral(discVal)), forKey: .\(discKey))")
@@ -488,8 +517,22 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)            try container.encode(value)")
             }
         }
+        if let unknownCase {
+            lines.append("\(indent)        case .\(unknownCase)(let value):")
+            lines.append("\(indent)            try value.encode(to: encoder)")
+        }
         lines.append("\(indent)        }")
         lines.append("\(indent)    }")
+        if let unknownCase {
+            // The tag of an arm the client doesn't know, as Dart's `XUnknown.discriminator` and Kotlin's
+            // `X.Unknown.discriminator` give it.
+            lines.append("")
+            lines.append("\(indent)    public var unknownDiscriminator: String? {")
+            lines.append("\(indent)        guard case .\(unknownCase)(.dictionary(let object)) = self,")
+            lines.append("\(indent)              case .string(let tag)? = object[\"\(swiftStringContent(discriminator.fieldName))\"] else { return nil }")
+            lines.append("\(indent)        return tag")
+            lines.append("\(indent)    }")
+        }
         lines.append("")
         lines.append("\(indent)    public init(from decoder: Decoder) throws {")
         // A map or a transferable arm decodes from an object too, so it's tried only when the discriminator is
@@ -543,7 +586,10 @@ public struct SwiftCodeGenerator {
             }
         }
         // A boolean discriminator with both values is exhaustive; a `default` would never run (a warning).
-        if !(discriminator.kind == .boolean && Set(tagOrder) == ["true", "false"]) {
+        if let unknownCase {
+            lines.append("\(indent)        default:")
+            lines.append("\(indent)            self = .\(unknownCase)(try \(runtimePrefix)JSONValue(from: decoder))")
+        } else if !(discriminator.kind == .boolean && Set(tagOrder) == ["true", "false"]) {
             let defErr = "Unknown value: \\(disc)"
             lines.append("\(indent)        default:")
             lines.append(
@@ -592,7 +638,9 @@ public struct SwiftCodeGenerator {
         let fieldless = variants.first { unionCasePayload($0) == nil && $0.literal == nil }
         // With a fieldless fallback, a variant's decoding error is never thrown, so it isn't kept; nor is it when
         // only literal arms are tried, which have no error to keep.
-        let keepsLastError = fieldless == nil && variants.contains { unionCasePayload($0) != nil }
+        // An open enum arm is tried with `try?` (see below), so it keeps no error either.
+        let keepsLastError = fieldless == nil
+            && variants.contains { unionCasePayload($0) != nil && $0.literal == nil && openEnumArmValues($0) == nil }
         if keepsLastError {
             lines.append("\(indent)        var lastError: Error?")
         }
@@ -606,8 +654,10 @@ public struct SwiftCodeGenerator {
             let decode = variant.valueType != nil
                 ? "decoder.singleValueContainer().decode(\(payload).self)"
                 : "\(payload)(from: decoder)"
-            if fieldless != nil {
-                lines.append("\(indent)        if let value = try? \(decode) {")
+            // An open enum arm accepts only a value it knows; any other string tries the next arm.
+            let known = openEnumArmValues(variant).map(knownValueCondition)
+            if fieldless != nil || known != nil {
+                lines.append("\(indent)        if let value = try? \(decode)\(known.map { ", \($0)" } ?? "") {")
                 lines.append("\(indent)            self = .\(caseName)(value)")
                 lines.append("\(indent)            return")
                 lines.append("\(indent)        }")
@@ -669,20 +719,33 @@ public struct SwiftCodeGenerator {
     }
 
     /// The `case` lines of a union's enum.
-    private func unionCaseLines(_ variants: [UnionVariant], indent: String) -> [String] {
-        variants.map { variant in
+    /// With `unknownCase`, the union is open and gets that case for an arm the client was generated without.
+    private func unionCaseLines(_ variants: [UnionVariant], indent: String, unknownCase: String? = nil) -> [String] {
+        let cases = variants.map { variant in
             let caseName = unionCaseName(variant)
             if let payload = unionCasePayload(variant) {
                 return "\(indent)    case \(caseName)(\(payload))"
             }
             return "\(indent)    case \(caseName)"
         }
+        guard let unknownCase else { return cases }
+        return cases + [
+            "\(indent)    case \(unknownCase)(\(runtimePrefix)JSONValue)"
+        ]
     }
 
     // MARK: - Type Emission
 
     func emitType(_ type: ResolvedType, name: String, lines: inout [String], emitted: inout Set<String>) {
         guard !emitted.contains(name) else { return }
+        // A component schema is open when a result reaches it; a type emitted on another's behalf (a union's
+        // variant struct, a dependent type) is open when that one is.
+        if typesByName[name] != nil, openEnums.openTypeNames.contains(name) != openEnums.isOpen {
+            openEnums.with(open: openEnums.openTypeNames.contains(name)) {
+                emitType(type, name: name, lines: &lines, emitted: &emitted)
+            }
+            return
+        }
 
         switch type {
         case .record(_, let fields, let additionalPropertiesType, let embeddedUnion):
@@ -698,7 +761,7 @@ public struct SwiftCodeGenerator {
                 emitDependentTypes(addPropsType, emitted: &emitted, lines: &lines)
             }
             if let embedded = embeddedUnion {
-                emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+                emitEmbeddedUnion(embedded, emitted: &emitted, lines: &lines)
             }
             emitRecordStruct(
                 name: name, fields: fields, additionalPropertiesType: additionalPropertiesType,
@@ -708,63 +771,74 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable {", lines: &lines)
-            lines.append(contentsOf: enumCaseLines(values, indent: "    "))
-            lines.append("}")
+            let enumLines = enumDeclarationLines(
+                name: name, values: values, declaration: "public nonisolated enum", indent: ""
+            )
+            emitDeclaration(name, line: enumLines[0], lines: &lines)
+            lines.append(contentsOf: enumLines.dropFirst())
 
         case .union(_, let variants, let discriminator):
             emitted.insert(name)
+            let embedded = openEnums.takeEmbeddedUnion()
             // Emit variant structs BEFORE the enum (flat, not nested). When
             // the variant name is already a known type (because the spec
             // referenced an existing component schema for that variant), we
             // reuse that type directly instead of synthesizing a new one.
-            for variant in variants {
-                // A variant needs a synthesized struct when it has fields,
-                // additionalProperties, OR an embeddedUnion (regrouped arm
-                // with an inner discriminated alternative).
-                guard !variant.fields.isEmpty
-                        || variant.additionalPropertiesType != nil
-                        || variant.embeddedUnion != nil else { continue }
-                if variant.payloadTypeName != nil { continue }
-                if emitted.contains(variant.name) { continue }
-                for field in variant.fields {
-                    emitDependentTypes(field.type, emitted: &emitted, lines: &lines)
+            // Without a discriminator the arms are tried in turn, so their types are closed.
+            openEnums.with(open: openEnums.isOpen && discriminator != nil) {
+                for variant in variants {
+                    // A variant needs a synthesized struct when it has fields,
+                    // additionalProperties, OR an embeddedUnion (regrouped arm
+                    // with an inner discriminated alternative).
+                    guard !variant.fields.isEmpty
+                            || variant.additionalPropertiesType != nil
+                            || variant.embeddedUnion != nil else { continue }
+                    if variant.payloadTypeName != nil { continue }
+                    if emitted.contains(variant.name) { continue }
+                    for field in variant.fields {
+                        emitDependentTypes(field.type, emitted: &emitted, lines: &lines)
+                    }
+                    if let addPropsType = variant.additionalPropertiesType {
+                        emitDependentTypes(addPropsType, emitted: &emitted, lines: &lines)
+                    }
+                    if let embedded = variant.embeddedUnion {
+                        emitEmbeddedUnion(embedded, emitted: &emitted, lines: &lines)
+                    }
+                    emitted.insert(variant.name)
+                    emitRecordStruct(
+                        name: variant.name,
+                        fields: variant.fields,
+                        additionalPropertiesType: variant.additionalPropertiesType,
+                        embeddedUnion: variant.embeddedUnion,
+                        children: variant.nestedTypes,
+                        excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
+                        lines: &lines
+                    )
                 }
-                if let addPropsType = variant.additionalPropertiesType {
-                    emitDependentTypes(addPropsType, emitted: &emitted, lines: &lines)
-                }
-                if let embedded = variant.embeddedUnion {
-                    emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
-                }
-                emitted.insert(variant.name)
-                emitRecordStruct(
-                    name: variant.name,
-                    fields: variant.fields,
-                    additionalPropertiesType: variant.additionalPropertiesType,
-                    embeddedUnion: variant.embeddedUnion,
-                    children: variant.nestedTypes,
-                    excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                    lines: &lines
-                )
-            }
-            // A value arm's own types (the element of `[{…}]`) are declared beside the enum, like the variant structs.
-            for variant in variants {
-                guard let valueType = variant.valueType else { continue }
-                emitDependentTypes(valueType, emitted: &emitted, lines: &lines)
-                for node in variant.nestedTypes {
-                    emitSchemaNestedType(node, indent: "", lines: &lines)
+                // A value arm's own types (the element of `[{…}]`) are declared beside the enum, like the variant
+                // structs.
+                for variant in variants {
+                    guard let valueType = variant.valueType else { continue }
+                    emitDependentTypes(valueType, emitted: &emitted, lines: &lines)
+                    for node in variant.nestedTypes {
+                        emitSchemaNestedType(node, indent: "", lines: &lines)
+                    }
                 }
             }
             var body: [String] = []
             body.append("")
-            emitDeclaration(name, line: "public nonisolated enum \(name): Codable {", lines: &body)
-            body.append(contentsOf: unionCaseLines(variants, indent: ""))
+            let conformances = valueConformances([.union(name: name, variants: variants, discriminator: discriminator)])
+            emitDeclaration(name, line: "public nonisolated enum \(name): \(conformances) {", lines: &body)
+            let unknownCase = embedded ? nil : openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
+            body.append(contentsOf: unionCaseLines(variants, indent: "", unknownCase: unknownCase))
             // Internal-discriminator union: write the discriminator at JSON
             // top level alongside the payload.
             // Discriminator-less anonymous oneOf: encode/decode transparently
             // (no envelope) — try each variant in order on decode.
             if let disc = discriminator {
-                emitDiscriminatedCoding(name: name, variants: variants, discriminator: disc, lines: &body)
+                emitDiscriminatedCoding(
+                    name: name, variants: variants, discriminator: disc, unknownCase: unknownCase, lines: &body
+                )
             } else {
                 emitTransparentUnionCoding(name: name, variants: variants, lines: &body)
             }
@@ -817,7 +891,8 @@ public struct SwiftCodeGenerator {
         let fields = fields.filter { !isVoidType($0.type) }
         var body: [String] = []
         body.append("")
-        emitDeclaration(name, line: "public nonisolated struct \(name): Codable {", lines: &body)
+        let conformances = valueConformances(recordStored(fields, additionalPropertiesType, embeddedUnion))
+        emitDeclaration(name, line: "public nonisolated struct \(name): \(conformances) {", lines: &body)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -1375,13 +1450,13 @@ public struct SwiftCodeGenerator {
         // An optional (nullable) transferable result returns nil for a null body; every other result throws.
         let nullResult = transferable?.optional == true
             ? "guard let \(result) else { return nil }"
-            : "guard let \(result) else { throw \(runtimePrefix)RPCError(message: \"Unexpected null result for \(methodLiteral)\") }"
+            : "guard let \(result) else { throw \(runtimePrefix)TransportError(message: \"Unexpected null result for \(methodLiteral)\") }"
         if isTransferable {
             // Hydrate transferable from the raw JSON descriptor
             if let transferable {
                 lines.append(contentsOf: transferableResultLines(
                     transferable.type, operation: operation, names: names, messageType: messageType,
-                    nullResult: nullResult, methodLiteral: methodLiteral
+                    nullResult: nullResult
                 ))
             }
         } else if discardsResult {
@@ -1423,6 +1498,13 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Swift Type Name Resolution
 
+    /// Pre-emits a hybrid arm's embedded union, which stays closed: it shares the arm's JSON object.
+    private func emitEmbeddedUnion(_ embedded: ResolvedType, emitted: inout Set<String>, lines: inout [String]) {
+        openEnums.embeddedUnion = true
+        emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+        openEnums.embeddedUnion = false
+    }
+
     /// Pre-emits any types that a given type depends on (ensures they're defined before use).
     private func emitDependentTypes(_ type: ResolvedType, emitted: inout Set<String>, lines: inout [String]) {
         switch type {
@@ -1431,7 +1513,7 @@ public struct SwiftCodeGenerator {
                 emitType(type, name: name, lines: &lines, emitted: &emitted)
             }
             if let embedded = embeddedUnion {
-                emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
+                emitEmbeddedUnion(embedded, emitted: &emitted, lines: &lines)
             }
         case .enum(let name, _):
             if !emitted.contains(name) {
@@ -1556,30 +1638,38 @@ private extension SwiftCodeGenerator {
                 embeddedUnion: embeddedUnion, children: node.children, indent: indent, lines: &lines
             )
         case .union(_, let variants, let discriminator):
-            for variant in variants {
-                guard !variant.fields.isEmpty
-                        || variant.additionalPropertiesType != nil
-                        || variant.embeddedUnion != nil else { continue }
-                if variant.payloadTypeName != nil { continue }
-                emitRecordStruct(
-                    name: variant.name, fields: variant.fields,
-                    additionalPropertiesType: variant.additionalPropertiesType, embeddedUnion: variant.embeddedUnion,
-                    children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
-                    indent: indent, lines: &lines
-                )
-            }
-            // A value arm's own types (the element of `[{…}]`, an enum arm's enum) are declared beside the enum,
-            // like the variant structs.
-            for variant in variants where variant.valueType != nil {
-                for node in valueArmTypes(variant) {
-                    emitSchemaNestedType(node, indent: indent, lines: &lines)
+            // Without a discriminator the arms are tried in turn, so their types are closed.
+            openEnums.with(open: openEnums.isOpen && discriminator != nil) {
+                for variant in variants {
+                    guard !variant.fields.isEmpty
+                            || variant.additionalPropertiesType != nil
+                            || variant.embeddedUnion != nil else { continue }
+                    if variant.payloadTypeName != nil { continue }
+                    emitRecordStruct(
+                        name: variant.name, fields: variant.fields,
+                        additionalPropertiesType: variant.additionalPropertiesType, embeddedUnion: variant.embeddedUnion,
+                        children: variant.nestedTypes, excludedKeys: discriminator.map { [$0.fieldName] } ?? [],
+                        indent: indent, lines: &lines
+                    )
+                }
+                // A value arm's own types (the element of `[{…}]`, an enum arm's enum) are declared beside the enum,
+                // like the variant structs.
+                for variant in variants where variant.valueType != nil {
+                    for node in valueArmTypes(variant) {
+                        emitValueArmType(node) { emitSchemaNestedType(node, indent: indent, lines: &lines) }
+                    }
                 }
             }
             lines.append("")
-            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): Codable {", lines: &lines)
-            lines.append(contentsOf: unionCaseLines(variants, indent: indent))
+            let conformances = valueConformances([node.type])
+            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): \(conformances) {", lines: &lines)
+            let unknownCase = openUnionCaseName(name: node.name, variants: variants, discriminator: discriminator)
+            lines.append(contentsOf: unionCaseLines(variants, indent: indent, unknownCase: unknownCase))
             if let disc = discriminator {
-                emitDiscriminatedCoding(name: node.name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
+                emitDiscriminatedCoding(
+                    name: node.name, variants: variants, discriminator: disc, unknownCase: unknownCase,
+                    indent: indent, lines: &lines
+                )
             } else {
                 emitTransparentUnionCoding(name: node.name, variants: variants, indent: indent, lines: &lines)
             }

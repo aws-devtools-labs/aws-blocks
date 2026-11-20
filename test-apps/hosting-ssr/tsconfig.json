@@ -19,6 +19,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "aws-blocks", "test", ".blocks/**/*.d.ts", "next-env.d.ts", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
+  "include": ["src", "cdk-blocks", "test", ".cdk-blocks/**/*.d.ts", "next-env.d.ts", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
   "exclude": ["node_modules"]
 }

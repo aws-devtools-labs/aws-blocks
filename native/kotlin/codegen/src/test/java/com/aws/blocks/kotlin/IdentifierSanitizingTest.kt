@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
@@ -62,6 +65,15 @@ private fun generate(methods: List<String>, schemas: Map<String, String> = empty
  */
 class IdentifierSanitizingTest : FunSpec({
 
+    test("a type name holding a character Windows rejects in a file name is built from its words") {
+        NamingUtils.toPascalCase("cre\"ate") shouldBe "CreAte"
+        NamingUtils.toPascalCase("a*b") shouldBe "AB"
+        NamingUtils.toPascalCase("a?b") shouldBe "AB"
+        NamingUtils.toPascalCase("a|b") shouldBe "AB"
+        NamingUtils.toPascalCase("trailing ") shouldBe "Trailing"
+        NamingUtils.toPascalCase("create$") shouldBe "Create$"
+    }
+
     test("a property key with a backslash is sanitized and keeps its wire name") {
         val types = generate(
             listOf(method("api.get", result = ref("Weird"))),
@@ -100,8 +112,9 @@ class IdentifierSanitizingTest : FunSpec({
     test("enum values and discriminator values that can't be declared are sanitized") {
         val union = """{ "oneOf": [ ${obj("kind" to enumOf("x.y"), "v" to STRING)}, ${obj("kind" to enumOf("p\\q"), "w" to STRING)} ] }"""
         val source = generate(listOf(method("api.get", result = obj("level" to enumOf("a.b", "c\\d", "ok"), "pick" to union)))).getValue("Api")
-        source shouldContain "@SerialName(\"a.b\")\n        AB,"
-        source shouldContain "@SerialName(\"c\\\\d\")\n        CD,"
+        // `level` is a result, so its enum is open: each constant carries its wire value.
+        source shouldContain "public data object AB : Level() {\n          override val `value`: String = \"a.b\""
+        source shouldContain "public data object CD : Level() {\n          override val `value`: String = \"c\\\\d\""
         source shouldContain "@SerialName(\"x.y\")\n        public data class XY("
         source shouldContain "@SerialName(\"p\\\\q\")\n        public data class PQ("
     }

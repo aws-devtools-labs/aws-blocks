@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Construct } from 'constructs';
@@ -17,7 +20,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 //
 // Why not NodejsFunction: it re-bundles `entry` at SYNTH time and requires the
 // entry to sit under a `projectRoot` that also has a lockfile. That only holds
-// inside this monorepo — once @aws-blocks/hosting is installed from npm this
+// inside this monorepo — once @aws-cdk-blocks/hosting is installed from npm this
 // file lives under the consumer's `node_modules/`, projectRoot resolves into
 // `node_modules/` (no package-lock), and synth fails with PathNotUnderRoot.
 // Pre-bundling removes that dependency entirely: the consumer ships a ready

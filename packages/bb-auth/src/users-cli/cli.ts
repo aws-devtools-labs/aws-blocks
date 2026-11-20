@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `npx @aws-blocks/bb-auth users <command>` — put users in the groups an
+ * `npx @aws-cdk-blocks/bb-auth users <command>` — put users in the groups an
  * `Auth` block declares (`users.groups`), locally or on a deployed stack.
  * The supported way to make the first admin.
  *
  * - Locally (no `--stage` / `--stack`) it edits the local pool,
- *   `.bb-data/<fullId>/state.json`, and refuses while the dev server runs (it
+ *   `.cdk-blocks/local/data/<fullId>/state.json`, and refuses while the dev server runs (it
  *   would write its in-memory copy back over the change).
  * - With `--stage sandbox|prod` (or `--stack <name>`) it calls Cognito on the
  *   pool the block owns in that stack, with the caller's AWS credentials
@@ -31,7 +31,7 @@ import type { DeployedClients } from './deployed.js';
 import { localTarget, runningDevServers, selectLocalPool } from './local.js';
 import { type PoolTarget, type ResolvedUser, type UserSelector, UsersCliError } from './target.js';
 
-export const USERS_USAGE = `Usage: npx @aws-blocks/bb-auth users <command> [options]
+export const USERS_USAGE = `Usage: npx @aws-cdk-blocks/bb-auth users <command> [options]
 
 Manage the group membership of an Auth block's users (users.groups).
 
@@ -48,7 +48,7 @@ Options:
   --username <name>  The user with exactly this username (instead of <user>).
   --email <addr>     The user whose verified email this is (instead of <user>).
   --block <id>       The Auth block (its id or full id), when the app has more than one.
-  --stage <name>     A deployed stage: sandbox or prod. Default: the local pool in .bb-data/.
+  --stage <name>     A deployed stage: sandbox or prod. Default: the local pool in .cdk-blocks/local/data/.
   --stack <name>     A deployed CloudFormation stack, by name (instead of --stage).
   --profile <name>   AWS profile for a deployed stage (default: the SDK's, e.g. AWS_PROFILE).
   --region <name>    AWS Region for a deployed stage (default: the SDK's, e.g. AWS_REGION).
@@ -58,12 +58,12 @@ Options:
 The group must be one the block declares (users.groups). On a deployed stage
 that is read from the stack. Locally it is a group the local pool holds: the
 pool adds each declared group when the backend loads and never removes one, so
-a group since dropped from users.groups is still accepted until .bb-data/ is
+a group since dropped from users.groups is still accepted until .cdk-blocks/local/data/ is
 reset. The pool line shows the AWS account and Region of a deployed pool.
 
 Examples:
-  npx @aws-blocks/bb-auth users add-to-group you@example.com admin
-  npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes`;
+  npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin
+  npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes`;
 
 type Command = 'add-to-group' | 'remove-from-group' | 'list-groups';
 const COMMANDS: readonly Command[] = ['add-to-group', 'remove-from-group', 'list-groups'];
@@ -170,7 +170,7 @@ export function parseUsersArgs(argv: readonly string[]): UsersArgs {
  * this machine's sandbox, `<stackId>-<sandboxId>`.
  */
 export async function stackNameForStage(stage: string, cwd: string): Promise<string> {
-	const { getStackName } = await import('@aws-blocks/core/scripts');
+	const { getStackName } = await import('@aws-cdk-blocks/core/scripts');
 	const projectRoot = resolve(cwd);
 	if (stage === 'prod' || stage === 'production') {
 		try {
@@ -181,9 +181,9 @@ export async function stackNameForStage(stage: string, cwd: string): Promise<str
 	}
 	if (stage === 'sandbox') {
 		// getStackName would create a sandbox id: there is no sandbox to manage without one.
-		if (!existsSync(join(projectRoot, '.blocks-sandbox', 'sandbox-id.txt'))) {
+		if (!existsSync(join(projectRoot, '.cdk-blocks-sandbox', 'sandbox-id.txt'))) {
 			throw new UsersCliError(
-				'No sandbox for this checkout (.blocks-sandbox/sandbox-id.txt is missing): deploy one with `npm run sandbox`, or pass --stack <name>.',
+				'No sandbox for this checkout (.cdk-blocks-sandbox/sandbox-id.txt is missing): deploy one with `npm run sandbox`, or pass --stack <name>.',
 			);
 		}
 		try {

@@ -34,7 +34,7 @@ public final class FileDownloadHandle: Sendable {
     /// Expected shape: `{ "url": "https://s3.../presigned-url" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileDownloadHandle {
         guard let url = json["url"] as? String else {
-            throw FileBucketError.invalidURL("missing 'url' in descriptor")
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/download", missingField: "url")
         }
         return FileDownloadHandle(url: url)
     }
@@ -52,12 +52,10 @@ public final class FileDownloadHandle: Sendable {
         self.init(url: try container.decode(String.self, forKey: .url))
     }
 
-    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
-    /// `{ "__blocks": "file-bucket/download", "url" }`.
+    /// Always throws `EncodingError.invalidValue`: transferables are read-only. The conformance exists so a
+    /// generated `Codable` model that holds a handle compiles.
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DescriptorKeys.self)
-        try container.encode("file-bucket/download", forKey: .blocksType)
-        try container.encode(url, forKey: .url)
+        throw TransferableDescriptor.readOnly(self, tag: "file-bucket/download", encoder: encoder)
     }
 
     /// Returns the presigned download URL.
@@ -66,50 +64,70 @@ public final class FileDownloadHandle: Sendable {
     /// Downloads the file content into memory.
     ///
     /// - Returns: The file content as `Data`.
-    /// - Throws: `FileBucketError.downloadFailed` on HTTP errors or network failures.
+    /// - Throws: `FileTransferError` on HTTP errors or network failures, carrying the HTTP status in
+    ///   `statusCode`; `TransferableError` if the handle's URL cannot be parsed.
     public func download() async throws -> Data {
         guard let requestURL = URL(string: url) else {
-            throw FileBucketError.invalidURL(url)
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/download", missingField: "url")
         }
 
         do {
             let (data, response) = try await session.data(from: requestURL)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw FileBucketError.downloadFailed("Invalid response", nil)
+                throw FileTransferError(message: "Download failed: invalid response")
             }
 
             guard (200 ..< 300).contains(httpResponse.statusCode) else {
-                throw FileBucketError.downloadFailed("HTTP \(httpResponse.statusCode)", nil)
+                throw FileTransferError(
+                    message: "Download failed: HTTP \(httpResponse.statusCode)",
+                    statusCode: httpResponse.statusCode
+                )
             }
 
-            logger.debug("Downloaded \(data.count) bytes from \(requestURL)")
+            // The presigned URL's query string is its credential, so only scheme, host and path are logged.
+            logger.debug("Downloaded \(data.count) bytes from \(requestURL.redactedForLogging)")
             return data
-        } catch let error as FileBucketError {
+        } catch let error as FileTransferError {
             throw error
+        } catch let error as TransferableError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            // A cancelled calling task, as `SessionGate.send` reports it.
+            throw CancellationError()
         } catch {
-            throw FileBucketError.downloadFailed(error.localizedDescription, error)
+            throw FileTransferError(
+                message: "Download failed: \(error.localizedDescription)",
+                statusCode: nil,
+                underlyingError: error
+            )
         }
     }
 
     /// Downloads the file content directly to a file on disk.
     ///
     /// - Parameter fileURL: The local file URL to write to.
-    /// - Throws: `FileBucketError.downloadFailed` on HTTP errors or network failures.
+    /// - Throws: `FileTransferError` on HTTP errors or network failures, carrying the HTTP status in
+    ///   `statusCode`; `TransferableError` if the handle's URL cannot be parsed.
     public func downloadTo(fileURL: URL) async throws {
         guard let requestURL = URL(string: url) else {
-            throw FileBucketError.invalidURL(url)
+            throw TransferableError.invalidDescriptor(blocksType: "file-bucket/download", missingField: "url")
         }
 
         do {
             let (tempURL, response) = try await session.download(from: requestURL)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw FileBucketError.downloadFailed("Invalid response", nil)
+                throw FileTransferError(message: "Download failed: invalid response")
             }
 
             guard (200 ..< 300).contains(httpResponse.statusCode) else {
-                throw FileBucketError.downloadFailed("HTTP \(httpResponse.statusCode)", nil)
+                throw FileTransferError(
+                    message: "Download failed: HTTP \(httpResponse.statusCode)",
+                    statusCode: httpResponse.statusCode
+                )
             }
 
             // Move temp file to destination
@@ -120,10 +138,21 @@ public final class FileDownloadHandle: Sendable {
             try fileManager.moveItem(at: tempURL, to: fileURL)
 
             logger.debug("Downloaded to \(fileURL.path)")
-        } catch let error as FileBucketError {
+        } catch let error as FileTransferError {
             throw error
+        } catch let error as TransferableError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            // A cancelled calling task, as `SessionGate.send` reports it.
+            throw CancellationError()
         } catch {
-            throw FileBucketError.downloadFailed(error.localizedDescription, error)
+            throw FileTransferError(
+                message: "Download failed: \(error.localizedDescription)",
+                statusCode: nil,
+                underlyingError: error
+            )
         }
     }
 }

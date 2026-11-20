@@ -18,7 +18,7 @@ function entry(overrides: Partial<SettingEntry> = {}): SettingEntry {
 	return {
 		fullId: 'shop-flag',
 		id: 'flag',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 3,
 		address: '/shop-flag',
 		presence: 'present',
@@ -158,16 +158,16 @@ describe('refusalIsFixableHere', () => {
 describe('groupByFile', () => {
 	it('keeps declaration order within and across files', () => {
 		const grouped = groupByFile([
-			entry({ fullId: 'a', file: 'aws-blocks/index.ts' }),
-			entry({ fullId: 'b', file: 'aws-blocks/other.ts' }),
-			entry({ fullId: 'c', file: 'aws-blocks/index.ts' }),
+			entry({ fullId: 'a', file: 'cdk-blocks/index.ts' }),
+			entry({ fullId: 'b', file: 'cdk-blocks/other.ts' }),
+			entry({ fullId: 'c', file: 'cdk-blocks/index.ts' }),
 		]);
 
 		assert.deepEqual(
 			grouped.map((group) => [group.file, group.entries.map((item) => item.fullId)]),
 			[
-				['aws-blocks/index.ts', ['a', 'c']],
-				['aws-blocks/other.ts', ['b']],
+				['cdk-blocks/index.ts', ['a', 'c']],
+				['cdk-blocks/other.ts', ['b']],
 			],
 		);
 	});

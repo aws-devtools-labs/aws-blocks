@@ -130,10 +130,13 @@ describe('the default 404 page behind every front door', () => {
   });
 
   it("the stacked door's router uploads the default page and the edge serves it at its key", () => {
-    const stack = new Stack(new App(), 'D404Stacked', { env: { account: '111111111111', region: 'us-west-2' } });
+    // A public router over plain HTTP: a sandbox-only setup (production fails synth).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'D404Stacked', {
+      env: { account: '111111111111', region: 'us-west-2' },
+    });
     const hosting = new HostingConstruct(stack, 'Hosting', { manifest: mpa(), frontDoor: { kind: 'stackedRouter' } });
     assert.deepEqual(hosting.doorInput.app.errorPages, { notFound: NOT_FOUND_PAGE_KEY });
-    // The edge, built on the router's DoorInput as `@aws-blocks/core`'s `Hosting` builds it.
+    // The edge, built on the router's DoorInput as `@aws-cdk-blocks/core`'s `Hosting` builds it.
     const router = hosting.frontDoor;
     buildFrontDoor(
       stack,

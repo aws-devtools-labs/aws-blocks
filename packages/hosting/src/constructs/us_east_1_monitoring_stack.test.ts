@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * UsEast1MonitoringStack — off-region CloudFront alarm support stack (issue #481).
  *
@@ -29,6 +32,26 @@ void describe('UsEast1MonitoringStack', () => {
     template.resourceCountIs('AWS::KMS::Key', 1);
     template.hasResourceProperties('AWS::SNS::Topic', {
       KmsMasterKeyId: Match.anyValue(),
+    });
+  });
+
+  void it("scopes its key's CloudWatch grant to this account's us-east-1 alarms", () => {
+    build().hasResourceProperties('AWS::KMS::Key', {
+      KeyPolicy: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Principal: { Service: 'cloudwatch.amazonaws.com' },
+            Condition: {
+              StringEquals: { 'aws:SourceAccount': '123456789012' },
+              ArnLike: {
+                'aws:SourceArn': {
+                  'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':cloudwatch:us-east-1:123456789012:alarm:*']],
+                },
+              },
+            },
+          }),
+        ]),
+      },
     });
   });
 
@@ -88,7 +111,7 @@ void describe('UsEast1MonitoringStack', () => {
     Annotations.fromStack(stack).hasWarning(
       '/CfMon',
       Match.stringLikeRegexp(
-        '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
       ),
     );
   });
@@ -103,7 +126,7 @@ void describe('UsEast1MonitoringStack', () => {
     Annotations.fromStack(stack).hasNoWarning(
       '/CfMon',
       Match.stringLikeRegexp(
-        '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
       ),
     );
   });

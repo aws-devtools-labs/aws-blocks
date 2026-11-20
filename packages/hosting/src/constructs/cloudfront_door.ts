@@ -11,7 +11,7 @@
  * It reads those settings from an internal extra, `cdnProps` — the exact
  * {@link CdnConstruct} props `HostingConstruct` assembled from the app (the
  * same settings a bring-your-own door finds in `input.features`). The same-origin
- * API behaviors (`/aws-blocks/*`, sign-in, raw routes) are added onto the
+ * API behaviors (`/cdk-blocks/*`, sign-in, raw routes) are added onto the
  * distribution afterwards by the Blocks layer, and the CloudFront alarms by the
  * `HostingConstruct`'s monitoring.
  */
@@ -39,7 +39,12 @@ export const cloudFrontDoor = defineFrontDoor<CloudFrontDoorInput, CloudFrontDoo
   service: 'cloudfront',
 
   build(scope: Construct, input) {
-    const cdn = new CdnConstruct(scope, 'Cdn', input.cdnProps);
+    const cdn = new CdnConstruct(scope, 'Cdn', {
+      ...input.cdnProps,
+      // The server as built: a buffered Lambda handler is integrated without
+      // streaming (as on the API Gateway REST door).
+      serverStreaming: input.origins.server?.streaming ?? true,
+    });
     return {
       url: cdn.distributionUrl,
       originHandle: { domainName: cdn.distribution.distributionDomainName, protocol: 'https' },

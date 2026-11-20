@@ -68,7 +68,7 @@ describe('parseArgv', () => {
 		assert.deepStrictEqual(parseArgv(['generate', 'client', 'in.ts', '--']).positionals, ['in.ts']);
 		assert.deepStrictEqual(parseArgv(['--', 'whoami']).command?.path, ['whoami']);
 		// Passthrough commands still forward everything, `--` included.
-		assert.deepStrictEqual(parseArgv(['db', 'migrate', '--', '--x']).passthrough, ['migrate', '--', '--x']);
+		assert.deepStrictEqual(parseArgv(['config', 'set', 'K', '--', '--x']).passthrough, ['set', 'K', '--', '--x']);
 	});
 
 	it('rejects an unknown command with a suggestion', () => {
@@ -86,7 +86,7 @@ describe('parseArgv', () => {
 	});
 
 	it('rejects an unknown flag with a suggestion', () => {
-		usageError(['destroy', '--yse'], /unknown option "--yse" for "cdk-blocks destroy"\. Did you mean "--yes"\?/);
+		usageError(['destroy', '--yse'], /unknown option "--yse" for "npm run destroy"\. Did you mean "--yes"\?/);
 		usageError(['--prfile', 'x', 'deploy'], /unknown option "--prfile"\. Did you mean "--profile"\?/);
 		usageError(['dev', '-z'], /unknown option "-z"/);
 	});
@@ -98,8 +98,24 @@ describe('parseArgv', () => {
 		usageError(['--output', 'yaml', 'whoami'], /--output must be "text" or "json"/);
 		usageError(
 			['dev', '--output', 'json'],
-			/^--output json is not supported for "cdk-blocks dev": it prints text only\.$/,
+			/^--output json is not supported for "npm run dev": it prints text only\.$/,
 		);
+	});
+
+	it("reads docs' --section before another option as a bare --section, and only docs' --section", () => {
+		const search = parseArgv(['docs', 'core', '--section', '--search', 'withAuth']);
+		assert.strictEqual(search.flags.toc, true);
+		assert.strictEqual(search.flags.search, 'withAuth');
+		assert.strictEqual(search.flags.section, undefined);
+		assert.deepStrictEqual(search.positionals, ['core']);
+		const api = parseArgv(['docs', 'KVStore', '--section', '--api', '--section', 'queries']);
+		assert.strictEqual(api.flags.toc, true);
+		assert.strictEqual(api.flags.api, true);
+		assert.deepStrictEqual(api.flags.section, ['queries']);
+		// A negative number is still a value, and any other option that needs one still errors without it.
+		assert.deepStrictEqual(parseArgv(['docs', 'core', '--section', '-1']).flags.section, ['-1']);
+		usageError(['docs', 'core', '--search', '--section'], /option --search needs a value/);
+		usageError(['dev', '--port', '--host', 'x'], /option --port needs a value/);
 	});
 
 	it('rejects missing and unexpected arguments', () => {
@@ -145,7 +161,7 @@ describe('parseArgv', () => {
 	it('forwards everything after a passthrough command verbatim', () => {
 		const argv = ['set', 'KEY', '--stage', 'prod', '--value-stdin', '--', '-x'];
 		assert.deepStrictEqual(parseArgv(['secret', ...argv]).passthrough, argv);
-		const help = parseArgv(['db', '--help']);
+		const help = parseArgv(['secret', '--help']);
 		assert.strictEqual(help.globals.help, true);
 		assert.deepStrictEqual(help.passthrough, []);
 		assert.strictEqual(help.helpVerb, undefined);
@@ -153,12 +169,14 @@ describe('parseArgv', () => {
 
 	it('turns --help anywhere after a passthrough command into help, keeping only the verb', () => {
 		for (const [argv, verb] of [
+			[['config', 'list', '--help'], 'list'],
+			[['secret', 'set', 'KEY', '-h'], 'set'],
 			[['db', 'status', '--help'], 'status'],
-			[['db', 'pull', './out', '-h'], 'pull'],
+			[['db', 'migrate', './migrations', '-h'], 'migrate'],
 			[['config', 'remove', 'KEY', '--help'], 'remove'],
 			[['secret', '--stage', 'prod', 'remove', 'KEY', '--force', '--yes', '--help'], 'remove'],
-			[['vendorize', '@aws-blocks/bb-kv-store', '--help'], undefined],
-			[['db', 'drop', 'x', '--help'], undefined],
+			[['vendorize', '@aws-cdk-blocks/bb-kv-store', '--help'], undefined],
+			[['config', 'drop', 'x', '--help'], undefined],
 		] as const) {
 			const parsed = parseArgv(argv);
 			assert.strictEqual(parsed.globals.help, true, argv.join(' '));
@@ -191,20 +209,23 @@ describe('parseArgv', () => {
 		assert.strictEqual(secret.globals.noInput, true);
 		assert.strictEqual(secret.globals.profile, undefined);
 		// The tool's own options stay, with their values, even next to a global one.
-		const db = parseArgv(['db', 'migrate', 'dir', '--stage', 'prod', '--debug', '--url=postgres://x', '-x']);
-		assert.deepStrictEqual(db.passthrough, ['migrate', 'dir', '--stage', 'prod', '--url=postgres://x', '-x']);
+		const own = parseArgv(['config', 'set', 'K', 'v', '--stage', 'prod', '--debug', '--prefix=/p', '-x']);
+		assert.deepStrictEqual(own.passthrough, ['set', 'K', 'v', '--stage', 'prod', '--prefix=/p', '-x']);
+		assert.strictEqual(own.globals.debug, true);
+		const db = parseArgv(['db', 'migrate', 'dir', '--stage', 'prod', '--debug', '--types=gen/types.ts', '-x']);
+		assert.deepStrictEqual(db.passthrough, ['migrate', 'dir', '--stage', 'prod', '--types=gen/types.ts', '-x']);
 		assert.strictEqual(db.globals.debug, true);
-		usageError(['secret', 'list', '--output', 'json'], /^--output json is not supported for "cdk-blocks secret"/);
-		usageError(['config', 'list', '--query', 'keys'], /^--query is not supported for "cdk-blocks config"/);
-		usageError(['telemetry', '--output', 'json'], /^--output json is not supported for "cdk-blocks telemetry"/);
-		usageError(['--output', 'json', 'telemetry'], /^--output json is not supported for "cdk-blocks telemetry"/);
+		usageError(['secret', 'list', '--output', 'json'], /^--output json is not supported for "npm run secret"/);
+		usageError(['config', 'list', '--query', 'keys'], /^--query is not supported for "npm run config"/);
+		usageError(['config', '--output', 'json'], /^--output json is not supported for "npm run config"/);
+		usageError(['--output', 'json', 'config'], /^--output json is not supported for "npm run config"/);
+		usageError(['config', 'list', '--profile'], /option --profile needs a value/);
 		usageError(['db', 'status', '--profile'], /option --profile needs a value/);
 	});
 
 	it('prints the version for --version after any command, and runs nothing', () => {
 		for (const argv of [
 			['generate', 'client', '--version', 'a', 'b', 'c'],
-			['db', '--version'],
 			['secret', '--version'],
 			['config', 'set', 'K', '--version'],
 			['vendorize', '--version'],
@@ -227,7 +248,7 @@ describe('parseArgv', () => {
 		// A command option in the middle: name the subcommand, never suggest what was just rejected.
 		usageError(
 			['dev', '--port', '41401', 'stop'],
-			/^"stop" must follow "cdk-blocks dev" directly: put the options of "cdk-blocks dev stop" after the whole command\.$/,
+			/^"stop" must follow "npm run dev" directly: put the options of "npm run dev:stop" after the whole command\.$/,
 		);
 		// Its help names the same subcommand as the run.
 		const stopHelp = parseArgv(['dev', '--port', '41401', 'stop', '-h']);
@@ -282,7 +303,7 @@ describe('parseArgv', () => {
 		assert.strictEqual(parseArgv(['--help', '--output', 'json']).globals.help, true);
 	});
 
-	it('checks a cdk-blocks migrate --query path against its result, scripts by any name', () => {
+	it('checks a npm run migrate -- --query path against its result, scripts by any name', () => {
 		for (const path of ['kept.0.reason', 'scriptsRewritten.dev.to', 'devConfig.frontendPort', 'removed.1']) {
 			assert.strictEqual(parseArgv(['migrate', '--query', path]).globals.query, path);
 		}
@@ -290,7 +311,7 @@ describe('parseArgv', () => {
 		usageError(['migrate', '--query', 'scriptsRewritten.dev.too'], /Fields of scriptsRewritten\.dev: from, to\.$/);
 		usageError(
 			['migrate', '--query', 'devConfig.prt'],
-			/Fields of devConfig: port, frontendCommand, frontendPort, frontend\.$/,
+			/Fields of devConfig: port, frontendCommand, frontendPort, frontend, generateClient\.$/,
 		);
 	});
 });
@@ -308,12 +329,15 @@ describe('usage errors through main', () => {
 		const run = await runCli(['deplyo'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 2);
 		assert.strictEqual(run.stdout, '');
-		assert.match(run.stderr, /^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: npx --no -- cdk-blocks --help\n$/);
+		assert.match(
+			run.stderr,
+			/^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: npm run help\n$/,
+		);
 	});
 
 	it('exits 2 for a command group without a subcommand', async () => {
 		const run = await runCli(['generate'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 2);
-		assert.match(run.stderr, /generate client/);
+		assert.match(run.stderr, /generate-client/);
 	});
 });

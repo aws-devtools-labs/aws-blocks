@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it, beforeEach, afterEach, type TestContext } from 'node:test';
 import assert from 'node:assert';
 import { createServer } from 'node:http';
@@ -6,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { isDisableValue, isTelemetryEnabled } from './consent.js';
+import { isTelemetryEnabled } from './consent.js';
 import { detectOS, detectNodeVersion, detectPackageManager, detectAgent, collectEnvironment } from './environment.js';
 import { trackCommand, classifyError } from './trackCommand.js';
 import { buildAndSendEvent, buildEvent, sendEvent, getTelemetryFilePath } from './client.js';
@@ -16,21 +19,10 @@ import type { BlocksTelemetryEvent } from './types.js';
 import { Scope, OFFICIAL_BB_NAMES } from '../common/index.js';
 import type { ScopeParent } from '../common/index.js';
 
+// Prevent an inherited CDK telemetry opt-out from disabling enabled-path tests.
+delete process.env.CDK_DISABLE_CLI_TELEMETRY;
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-function writeTelemetryConfig(dir: string, enabled: boolean): void {
-  mkdirSync(join(dir, '.blocks'), { recursive: true });
-  writeFileSync(join(dir, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled } }));
-}
-
-interface DisableValueCase {
-  value: string | null;
-  expected: boolean;
-}
-
-const { cases }: { cases: DisableValueCase[] } = JSON.parse(
-  readFileSync(new URL('../../src/telemetry/disable-value-cases.test.json', import.meta.url), 'utf-8'),
-);
 
 const DEAD_ENDPOINT = 'http://127.0.0.1:1/noop';
 
@@ -87,248 +79,12 @@ function spawnTelemetryChild(
       ...process.env,
       HOME: options.home,
       USERPROFILE: options.home,
-      AWS_BLOCKS_DISABLE_TELEMETRY: options.disable ?? '',
+      CDK_DISABLE_CLI_TELEMETRY: options.disable ?? '',
       BLOCKS_TELEMETRY_ENDPOINT: DEAD_ENDPOINT,
       ...options.env,
     },
   });
 }
-
-describe('telemetry/isDisableValue (shared case table)', () => {
-  it('loads the shared case table', () => {
-    assert.ok(cases.length > 10, `expected the shared disable-value cases, got ${cases.length}`);
-  });
-
-  for (const testCase of cases) {
-    it(`${JSON.stringify(testCase.value)} → ${testCase.expected}`, () => {
-      assert.strictEqual(isDisableValue(testCase.value ?? undefined), testCase.expected);
-    });
-  }
-});
-
-describe('telemetry/consent', () => {
-  const originalEnv = { ...process.env };
-  const originalCwd = process.cwd();
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-    process.chdir(originalCwd);
-  });
-
-  it('returns false when AWS_BLOCKS_DISABLE_TELEMETRY=1', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-    delete process.env.CI;
-    assert.strictEqual(isTelemetryEnabled(), false);
-  });
-
-  for (const value of ['true', 'TRUE', 'yes', ' true ']) {
-    it(`returns false when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
-      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = value;
-      delete process.env.CI;
-      assert.strictEqual(isTelemetryEnabled(), false);
-    });
-  }
-
-  // Driven in a child process: afterEach replaces `process.env`, severing HOME.
-  const CONSENT_CHILD = `
-  const [moduleUrl] = process.argv.slice(1);
-  const { isTelemetryEnabled } = await import(moduleUrl);
-  process.stdout.write(String(isTelemetryEnabled()));
-  `;
-
-  for (const value of ['0', 'false', '']) {
-    it(`stays enabled when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
-      const home = mkdtempSync(join(tmpdir(), 'blocks-consent-home-'));
-      const consentUrl = new URL('./consent.js', import.meta.url).href;
-
-      const result = spawnSync(process.execPath, ['--input-type=module', '-e', CONSENT_CHILD, consentUrl], {
-        encoding: 'utf-8',
-        cwd: home,
-        timeout: 30_000,
-        env: { HOME: home, USERPROFILE: home, AWS_BLOCKS_DISABLE_TELEMETRY: value, PATH: process.env.PATH ?? '' },
-      });
-
-      assert.strictEqual(result.status, 0, result.stderr);
-      assert.strictEqual(result.stdout, 'true');
-
-      rmSync(home, { recursive: true, force: true });
-    });
-  }
-
-  it('returns true in CI (CI does not suppress telemetry)', () => {
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    process.env.CI = 'true';
-    const tmp = join(tmpdir(), `blocks-test-${Date.now()}`);
-    mkdirSync(tmp, { recursive: true });
-    process.chdir(tmp);
-    assert.strictEqual(isTelemetryEnabled(), true);
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  describe('global × project precedence (shared case table)', () => {
-    interface PrecedenceCase {
-      name: string;
-      global: boolean | null;
-      project: boolean | null;
-      expected: boolean;
-    }
-
-    const { cases }: { cases: PrecedenceCase[] } = JSON.parse(
-      readFileSync(new URL('../../src/telemetry/consent-precedence-cases.test.json', import.meta.url), 'utf-8'),
-    );
-
-    it('pins the shared case table contents', () => {
-      assert.deepStrictEqual(
-        cases.map((c) => [c.name, c.global, c.project, c.expected]),
-        [
-          ['no config either side', null, null, true],
-          ['project enables, no global', null, true, true],
-          ['project disables, no global', null, false, false],
-          ['global enables, no project', true, null, true],
-          ['both enable', true, true, true],
-          ['project disables over a global enable', true, false, false],
-          ['global disables, no project', false, null, false],
-          ['project cannot re-enable a global disable', false, true, false],
-          ['both disable', false, false, false],
-        ],
-      );
-    });
-
-    for (const testCase of cases) {
-      it(testCase.name, () => {
-        const home = mkdtempSync(join(tmpdir(), 'blocks-precedence-home-'));
-        const project = mkdtempSync(join(tmpdir(), 'blocks-precedence-proj-'));
-        if (testCase.global !== null) writeTelemetryConfig(home, testCase.global);
-        if (testCase.project !== null) writeTelemetryConfig(project, testCase.project);
-
-        const consentUrl = new URL('./consent.js', import.meta.url).href;
-        const result = spawnSync(process.execPath, ['--input-type=module', '-e', CONSENT_CHILD, consentUrl], {
-          encoding: 'utf-8',
-          cwd: project,
-          timeout: 30_000,
-          env: { HOME: home, USERPROFILE: home, AWS_BLOCKS_DISABLE_TELEMETRY: '', CI: '', PATH: process.env.PATH ?? '' },
-        });
-
-        assert.strictEqual(result.status, 0, result.stderr);
-        assert.strictEqual(result.stdout, String(testCase.expected));
-
-        rmSync(home, { recursive: true, force: true });
-        rmSync(project, { recursive: true, force: true });
-      });
-    }
-
-    const EMIT_CHILD = `
-    const [moduleUrl] = process.argv.slice(1);
-    const { buildAndSendEvent } = await import(moduleUrl);
-    buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
-    `;
-
-    /**
-     * Emits one event from a child process and returns how many requests the
-     * collector received. With `expectRequest`, waits for delivery; otherwise
-     * observes a fixed 1 s window to show nothing arrives.
-     */
-    async function countHttpRequests(
-      t: TestContext,
-      options: { global?: boolean; project?: boolean },
-      expectRequest: boolean,
-    ): Promise<number> {
-      const home = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-home-'));
-      const project = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-proj-'));
-      t.after(() => {
-        rmSync(home, { recursive: true, force: true });
-        rmSync(project, { recursive: true, force: true });
-      });
-      const collector = await startCollector(t);
-      if (options.global !== undefined) writeTelemetryConfig(home, options.global);
-      if (options.project !== undefined) writeTelemetryConfig(project, options.project);
-
-      const clientUrl = new URL('./client.js', import.meta.url).href;
-      const result = spawnSync(process.execPath, ['--input-type=module', '-e', EMIT_CHILD, clientUrl], {
-        encoding: 'utf-8',
-        cwd: project,
-        timeout: 30_000,
-        env: {
-          HOME: home,
-          USERPROFILE: home,
-          AWS_BLOCKS_DISABLE_TELEMETRY: '',
-          CI: '',
-          PATH: process.env.PATH ?? '',
-          BLOCKS_TELEMETRY_ENDPOINT: collector.endpoint,
-        },
-      });
-      assert.strictEqual(result.status, 0, result.stderr);
-
-      if (expectRequest) {
-        await collector.delivered;
-      } else {
-        await new Promise((r) => setTimeout(r, 1_000));
-      }
-      return collector.received.length;
-    }
-
-    it('sends an HTTP request when only the project config enables (positive control)', DELIVERY_TIMEOUT, async (t) => {
-      assert.strictEqual(await countHttpRequests(t, { project: true }, true), 1);
-    });
-
-    it('sends no HTTP request when the global config disables and the project config enables', async (t) => {
-      assert.strictEqual(await countHttpRequests(t, { global: false, project: true }, false), 0);
-    });
-  });
-
-  it('returns true in CI when project config explicitly enables telemetry', () => {
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    process.env.CI = 'true';
-    const tmp = join(tmpdir(), `blocks-test-${Date.now()}`);
-    mkdirSync(join(tmp, '.blocks'), { recursive: true });
-    writeFileSync(join(tmp, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: true } }));
-    process.chdir(tmp);
-    assert.strictEqual(isTelemetryEnabled(), true); // CI + config enabled = true
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it('returns false in CI when project config explicitly disables telemetry', () => {
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    process.env.CI = 'true';
-    const tmp = join(tmpdir(), `blocks-test-${Date.now()}`);
-    mkdirSync(join(tmp, '.blocks'), { recursive: true });
-    writeFileSync(join(tmp, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: false } }));
-    process.chdir(tmp);
-    assert.strictEqual(isTelemetryEnabled(), false); // config disable still works in CI
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it('returns false when per-project config disables telemetry', () => {
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    delete process.env.CI;
-    delete process.env.CONTINUOUS_INTEGRATION;
-    delete process.env.BUILD_NUMBER;
-    delete process.env.CODEBUILD_BUILD_ID;
-    delete process.env.GITHUB_ACTIONS;
-    delete process.env.GITLAB_CI;
-    delete process.env.CIRCLECI;
-    delete process.env.JENKINS_URL;
-    delete process.env.TF_BUILD;
-    delete process.env.BITBUCKET_BUILD_NUMBER;
-    delete process.env.BUILDKITE;
-    const tmp = join(tmpdir(), `blocks-test-${Date.now()}`);
-    mkdirSync(join(tmp, '.blocks'), { recursive: true });
-    writeFileSync(join(tmp, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: false } }));
-    process.chdir(tmp);
-    assert.strictEqual(isTelemetryEnabled(), false);
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it('env var disables even when config enables', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-    const tmp = join(tmpdir(), `blocks-test-${Date.now()}`);
-    mkdirSync(join(tmp, '.blocks'), { recursive: true });
-    writeFileSync(join(tmp, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: true } }));
-    process.chdir(tmp);
-    assert.strictEqual(isTelemetryEnabled(), false);
-    rmSync(tmp, { recursive: true, force: true });
-  });
-});
 
 describe('telemetry/opt-out persists no identifiers even with --telemetry-file', () => {
   // Driven in a child process: the id helpers write to the real HOME and cwd.
@@ -340,11 +96,8 @@ describe('telemetry/opt-out persists no identifiers even with --telemetry-file',
 
   const moduleUrl = new URL('./client.js', import.meta.url).href;
 
-  const disableValues = cases.filter(c => c.expected && c.value !== null).map(c => c.value as string);
-
-  it('pins the shared disable values', () => {
-    assert.deepStrictEqual(disableValues, ['1', 'true', 'TRUE', 'yes', 'YES', ' true ', ' 1 ']);
-  });
+  // CDK matches its variable case-sensitively and untrimmed, so these two are the whole set.
+  const disableValues = ['1', 'true'];
 
   it('writes the identifiers and the file when telemetry is enabled', () => {
     const home = mkdtempSync(join(tmpdir(), 'blocks-optin-home-'));
@@ -359,8 +112,8 @@ describe('telemetry/opt-out persists no identifiers even with --telemetry-file',
 
     try {
       assert.strictEqual(result.status, 0, result.stderr);
-      assert.ok(existsSync(join(home, '.blocks', 'telemetry', 'installation-id')), 'installation-id must be written');
-      assert.ok(existsSync(join(project, '.blocks', 'config.json')), 'project config.json must be written');
+      assert.ok(existsSync(join(home, '.cdk-blocks', 'telemetry', 'installation-id')), 'installation-id must be written');
+      assert.ok(existsSync(join(project, '.cdk-blocks', 'config.json')), 'project config.json must be written');
       assert.ok(existsSync(telemetryFile), '--telemetry-file must be written');
       assert.strictEqual(JSON.parse(readFileSync(telemetryFile, 'utf-8')).length, 1);
     } finally {
@@ -371,7 +124,7 @@ describe('telemetry/opt-out persists no identifiers even with --telemetry-file',
   });
 
   for (const value of disableValues) {
-    it(`writes no identifiers and sends nothing when AWS_BLOCKS_DISABLE_TELEMETRY=${JSON.stringify(value)}`, () => {
+    it(`writes no identifiers and sends nothing when CDK_DISABLE_CLI_TELEMETRY=${JSON.stringify(value)}`, () => {
       const home = mkdtempSync(join(tmpdir(), 'blocks-optout-home-'));
       const project = mkdtempSync(join(tmpdir(), 'blocks-optout-proj-'));
       const sink = mkdtempSync(join(tmpdir(), 'blocks-optout-sink-'));
@@ -386,12 +139,12 @@ describe('telemetry/opt-out persists no identifiers even with --telemetry-file',
 
       try {
         assert.strictEqual(result.status, 0, result.stderr);
-        const idFile = join(home, '.blocks', 'telemetry', 'installation-id');
+        const idFile = join(home, '.cdk-blocks', 'telemetry', 'installation-id');
         assert.ok(!existsSync(idFile), 'installation-id must not be written');
-        assert.ok(!existsSync(join(project, '.blocks', 'config.json')), 'project config.json must not be written');
+        assert.ok(!existsSync(join(project, '.cdk-blocks', 'config.json')), 'project config.json must not be written');
         assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
         assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
-        assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
+        assert.ok(!result.stderr.includes('AWS CDK Blocks collects usage data'), 'no first-run notice');
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(project, { recursive: true, force: true });
@@ -416,9 +169,7 @@ describe('telemetry/trackCommand honors a mid-run opt-out', () => {
     const [moduleUrl] = process.argv.slice(1);
     const { trackCommand } = await import(moduleUrl);
     await trackCommand('deploy', async () => {
-      const d = join(homedir(), '.blocks');
-      mkdirSync(d, { recursive: true });
-      writeFileSync(join(d, 'config.json'), JSON.stringify({ telemetry: { enabled: false } }));
+      writeFileSync(join(process.cwd(), 'cdk.context.json'), JSON.stringify({ 'cli-telemetry': false }));
     });
     `;
 
@@ -431,11 +182,11 @@ describe('telemetry/trackCommand honors a mid-run opt-out', () => {
     try {
       assert.strictEqual(result.status, 0, result.stderr);
       assert.ok(
-        !existsSync(join(home, '.blocks', 'telemetry', 'installation-id')),
+        !existsSync(join(home, '.cdk-blocks', 'telemetry', 'installation-id')),
         'installation-id must not be written',
       );
       assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
-      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
+      assert.ok(!result.stderr.includes('AWS CDK Blocks collects usage data'), 'no first-run notice');
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(project, { recursive: true, force: true });
@@ -697,7 +448,7 @@ describe('telemetry/trackCommand', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
   });
 
   afterEach(() => {
@@ -718,7 +469,7 @@ describe('telemetry/trackCommand', () => {
   });
 
   it('executes the function when telemetry is enabled (with no endpoint)', async () => {
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -743,7 +494,7 @@ describe('telemetry/client', () => {
     t.after(() => { process.env = { ...originalEnv }; });
     const { received, delivered, endpoint } = await startCollector(t);
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -779,7 +530,7 @@ describe('telemetry/client', () => {
     t.after(() => { process.env = { ...originalEnv }; });
     const { received, endpoint } = await startCollector(t);
 
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
     process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 500 });
@@ -920,7 +671,7 @@ describe('telemetry/trackCommand integration', () => {
   it('sends telemetry event matching server schema on successful command', DELIVERY_TIMEOUT, async (t) => {
     const { received, delivered, endpoint } = await startCollector(t);
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -966,7 +717,7 @@ describe('telemetry/trackCommand integration', () => {
   it('sends telemetry event with error info on failure', DELIVERY_TIMEOUT, async (t) => {
     const { received, delivered, endpoint } = await startCollector(t);
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1001,7 +752,7 @@ describe('telemetry/trackCommand integration', () => {
   it('includes product and counters when options provided', DELIVERY_TIMEOUT, async (t) => {
     const { received, delivered, endpoint } = await startCollector(t);
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1055,8 +806,8 @@ describe('telemetry/identifiers first-run notice', () => {
       cwd: __dirname,
     });
 
-    assert.ok(result.stderr.includes('AWS Blocks collects usage data to improve the product.'));
-    assert.ok(result.stderr.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'));
+    assert.ok(result.stderr.includes('AWS CDK Blocks collects usage data to improve the product.'));
+    assert.ok(result.stderr.includes('CDK_DISABLE_CLI_TELEMETRY=1'));
     assert.ok(result.stdout.trim().length > 0, 'Should output an installation ID');
 
     rmSync(tmp, { recursive: true, force: true });
@@ -1098,19 +849,18 @@ describe('telemetry/identifiers first-run notice', () => {
     assert.match(notice, /names and versions of the official Building Blocks the app uses, how many Building Blocks it uses/);
     assert.match(notice, /custom Building Block names are never sent/);
     assert.match(notice, /never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code/);
-    // Opt-outs that work from any directory, and the scope of the commands without --global.
-    assert.ok(notice.includes('export AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
-    assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable --global'), notice);
-    assert.ok(notice.includes('npx --no -- blocks-telemetry --disable --global'), notice);
-    assert.doesNotMatch(notice, /npx blocks-telemetry/, 'an unscoped npx name could resolve to a package from the registry');
-    assert.match(notice, /Without --global, these commands opt out the current app only\./);
+    // The opt-out is CDK's, and the notice points at CDK's own documentation for it.
+    assert.ok(notice.includes('cdk cli-telemetry --disable'), notice);
+    assert.ok(notice.includes('export CDK_DISABLE_CLI_TELEMETRY=1'), notice);
+    assert.ok(notice.includes('https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out'), notice);
+    assert.doesNotMatch(notice, /AWS_BLOCKS_DISABLE_TELEMETRY|blocks-telemetry/, 'the Blocks opt-out is gone');
 
     rmSync(tmp, { recursive: true, force: true });
   });
 
   it('does NOT print first-run notice when installation-id file already exists', () => {
     const tmp = join(tmpdir(), `blocks-test-nonotice-${Date.now()}`);
-    const telemetryDir = join(tmp, '.blocks', 'telemetry');
+    const telemetryDir = join(tmp, '.cdk-blocks', 'telemetry');
     mkdirSync(telemetryDir, { recursive: true });
     const existingId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     writeFileSync(join(telemetryDir, 'installation-id'), existingId, 'utf-8');
@@ -1171,7 +921,7 @@ describe('telemetry/--telemetry-file flag', () => {
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1206,7 +956,7 @@ describe('telemetry/--telemetry-file flag', () => {
   it('does not write file when telemetry is disabled', () => {
     const filePath = join(tmpdir(), `blocks-telemetry-disabled-${Date.now()}`, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
     process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
@@ -1223,7 +973,7 @@ describe('telemetry/--telemetry-file flag', () => {
     const filePath = join(tmp, 'nested', 'deep', 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1255,7 +1005,7 @@ describe('telemetry/--telemetry-file flag', () => {
 
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1286,7 +1036,7 @@ describe('telemetry/--telemetry-file flag', () => {
     t.after(() => rmSync(tmp, { recursive: true, force: true }));
     const { received, delivered, endpoint } = await startCollector(t);
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1320,7 +1070,7 @@ describe('telemetry/--telemetry-file flag', () => {
     t.after(() => rmSync(tmp, { recursive: true, force: true }));
     const { received, endpoint } = await startCollector(t);
 
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
     process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 300 });
@@ -1332,10 +1082,10 @@ describe('telemetry/--telemetry-file flag', () => {
     assert.strictEqual(received.length, 0, 'HTTP should NOT be sent when telemetry is disabled');
   });
 
-  it('does not write file when telemetry is disabled via project config', () => {
+  it('does not write file when the CDK project context disables telemetry', () => {
     const filePath = join(tmpdir(), `blocks-telemetry-config-disabled-${Date.now()}`, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1349,56 +1099,49 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.BUILDKITE;
     process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
 
-    const configDir = join(process.cwd(), '.blocks');
-    const configPath = join(configDir, 'config.json');
+    // What `cdk cli-telemetry --disable` records for one app.
+    const configPath = join(process.cwd(), 'cdk.context.json');
     const had = existsSync(configPath);
     const original = had ? readFileSync(configPath, 'utf-8') : null;
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ telemetry: { enabled: false } }));
+    writeFileSync(configPath, JSON.stringify({ 'cli-telemetry': false }));
 
     try {
       buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
-      assert.ok(!existsSync(filePath), 'File must not be written when project config disables telemetry');
+      assert.ok(!existsSync(filePath), 'File must not be written when the CDK project context disables telemetry');
     } finally {
       // Restore first: a throwing rmSync must not skip it and leave telemetry disabled.
       if (original !== null) writeFileSync(configPath, original);
-      else rmSync(configDir, { recursive: true, force: true });
+      else rmSync(configPath, { force: true });
       rmSync(dirname(filePath), { recursive: true, force: true });
     }
   });
-  it('does not write file when telemetry is disabled via global config', () => {
-    const filePath = join(tmpdir(), `blocks-telemetry-global-disabled-${Date.now()}`, 'events.json');
-    process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    delete process.env.CI;
-    delete process.env.CONTINUOUS_INTEGRATION;
-    delete process.env.BUILD_NUMBER;
-    delete process.env.CODEBUILD_BUILD_ID;
-    delete process.env.GITHUB_ACTIONS;
-    delete process.env.GITLAB_CI;
-    delete process.env.CIRCLECI;
-    delete process.env.JENKINS_URL;
-    delete process.env.TF_BUILD;
-    delete process.env.BITBUCKET_BUILD_NUMBER;
-    delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
+  it('does not write file when the CDK user config disables telemetry', () => {
+    // Driven in a child process: the resolver reads `~/.cdk.json`, and `os.homedir()`
+    // reads the native environment, so HOME can only be redirected at spawn time.
+    const script = `
+      const [moduleUrl] = process.argv.slice(1);
+      const { buildAndSendEvent } = await import(moduleUrl);
+      buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
+      `;
+    const home = mkdtempSync(join(tmpdir(), 'blocks-global-disabled-home-'));
+    const project = mkdtempSync(join(tmpdir(), 'blocks-global-disabled-proj-'));
+    const sink = mkdtempSync(join(tmpdir(), 'blocks-global-disabled-sink-'));
+    const telemetryFile = join(sink, 'events.json');
+    writeFileSync(join(home, '.cdk.json'), JSON.stringify({ context: { 'cli-telemetry': false } }));
 
-    // Use homedir() to find the actual global config path (os.homedir reads
-    // from native env, not the plain-object process.env that afterEach installs).
-    const globalConfigDir = join(homedir(), '.blocks');
-    const globalConfigPath = join(globalConfigDir, 'config.json');
-    const hadConfig = existsSync(globalConfigPath);
-    const originalConfig = hadConfig ? readFileSync(globalConfigPath, 'utf-8') : null;
-    mkdirSync(globalConfigDir, { recursive: true });
-    writeFileSync(globalConfigPath, JSON.stringify({ telemetry: { enabled: false } }));
+    const result = spawnTelemetryChild(
+      script,
+      [new URL('./client.js', import.meta.url).href, `--telemetry-file=${telemetryFile}`],
+      { cwd: project, home },
+    );
 
     try {
-      buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
-      assert.ok(!existsSync(filePath), 'File must not be written when global config disables telemetry');
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.ok(!existsSync(telemetryFile), 'File must not be written when the CDK user config disables telemetry');
     } finally {
-      if (originalConfig !== null) writeFileSync(globalConfigPath, originalConfig);
-      else rmSync(globalConfigPath, { force: true });
-      rmSync(dirname(filePath), { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+      rmSync(sink, { recursive: true, force: true });
     }
   });
 
@@ -1490,7 +1233,7 @@ describe('telemetry/--telemetry-file flag', () => {
     // Consented, because D-018 means an opted-out run writes no file to append to.
     const result = spawnTelemetryChild(script, [new URL('./client.js', import.meta.url).href], {
       // A temp cwd, not __dirname: a consented run persists a project id into
-      // <cwd>/.blocks/config.json, and `files: ["dist"]` would ship it in the tarball.
+      // <cwd>/.cdk-blocks/config.json, and `files: ["dist"]` would ship it in the tarball.
       cwd: spawnCwd,
       home: spawnHome,
       timeout: 20_000,
@@ -1834,7 +1577,7 @@ describe('telemetry/buildAndSendEvent with Scope registry', () => {
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;
@@ -1869,7 +1612,7 @@ describe('telemetry/buildAndSendEvent with Scope registry', () => {
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
 
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
     delete process.env.BUILD_NUMBER;

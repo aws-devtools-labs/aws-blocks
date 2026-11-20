@@ -22,7 +22,7 @@ if (!process.argv[2]) {
 const appDir = resolve(process.argv[2]);
 
 const hostingUrl = (): string => {
-  const outputs = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
+  const outputs = JSON.parse(readFileSync(join(appDir, '.cdk-blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
     string,
     Record<string, string>
   >;
@@ -55,8 +55,8 @@ for (let attempt = 1; attempt <= 10 && before === undefined; attempt++) {
 }
 if (before === undefined) throw new Error('could not read the build id the e2e suite left serving');
 process.chdir(appDir);
-const { startSandbox } = await import('@aws-blocks/blocks/scripts');
-await startSandbox({ backendPath: join(appDir, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
+const { startSandbox } = await import('aws-cdk-blocks/scripts');
+await startSandbox({ backendPath: join(appDir, 'cdk-blocks', 'index.cdk.ts'), deployOnly: true });
 const url = hostingUrl();
 
 let last = 'no response';
@@ -67,7 +67,7 @@ for (let attempt = 1; attempt <= 20 && !ok; attempt++) {
   const html = home ? await home.text() : '';
   const script = html.match(/\/assets\/[^"']+\.js/)?.[0];
   const asset = script ? await tryFetch(`${url}${script}`) : undefined;
-  const rpc = await tryFetch(`${url}/aws-blocks/api`, {
+  const rpc = await tryFetch(`${url}/cdk-blocks/api`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'api.getPublicStats', params: [] }),

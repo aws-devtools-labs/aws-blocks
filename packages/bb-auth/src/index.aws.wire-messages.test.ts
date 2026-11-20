@@ -23,9 +23,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
-import { ApiError } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { INCORRECT_CREDENTIALS_MESSAGE, WRONG_CODE_MESSAGE } from './enumeration.js';
 import {
 	ACCESS_DENIED_MESSAGE,
@@ -45,8 +45,8 @@ import {
 } from './test-support/aws-harness.js';
 import type { AuthOptions } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** `createApi()` returns a context-bound callable; narrow it to the public surface. */
 function apiFor<O extends AuthOptions>(auth: Auth<O>, ctx: BlocksContext): AuthStateApi {
@@ -121,7 +121,7 @@ const PATHS: Path[] = [
 	},
 	{
 		label: 'session refresh',
-		command: 'InitiateAuthCommand',
+		command: 'GetTokensFromRefreshTokenCommand',
 		run: (h, b) => b.request((c) => h.auth.requireAuth(c)),
 		setup: async (h, b) => {
 			await signInAs(h, b, 'alice', h.idp.authResult('alice', { accessExpIn: -60 }));

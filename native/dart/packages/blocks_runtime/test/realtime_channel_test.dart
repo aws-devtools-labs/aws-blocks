@@ -1,10 +1,15 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 @TestOn('vm')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:blocks_runtime/blocks_runtime.dart';
+import 'package:blocks_runtime/src/web_socket_pool.dart';
 import 'package:test/test.dart';
 
 /// A local WebSocket server that answers each `subscribe` with one `message`
@@ -82,30 +87,123 @@ void main() {
       ]);
     });
 
+    test('a payload that fails to decode ends the stream', () async {
+      final url = await _serve([
+        {
+          'data': {'count': 1},
+        },
+        {
+          'data': {'text': 'ok'},
+        },
+      ]);
+      final channel = RealtimeChannel.fromJson(
+        _descriptor(url),
+        (json) => json['text'] as String,
+      );
+      addTearDown(channel.close);
+
+      final events = <Object>[];
+      await channel.subscribe().handleError(events.add).forEach(events.add);
+      expect(events, [isA<TypeError>()]);
+    });
+
     test(
-      'a payload that fails to decode is a stream error, not a crash',
+      'a refused subscribe ends the stream with SubscriptionEnded',
       () async {
-        final url = await _serve([
-          {
-            'data': {'count': 1},
-          },
-          {
-            'data': {'text': 'ok'},
-          },
-        ]);
-        final channel = RealtimeChannel.fromJson(
-          _descriptor(url),
-          (json) => json['text'] as String,
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((req) async {
+          final ws = await WebSocketTransformer.upgrade(req);
+          addTearDown(ws.close);
+          ws.listen((data) {
+            final msg = jsonDecode(data as String) as Map<String, dynamic>;
+            ws.add(
+              jsonEncode({
+                'type': 'error',
+                'channel': msg['channel'],
+                'message': 'Unauthorized: invalid or expired token',
+              }),
+            );
+          });
+        });
+        final channel = RealtimeChannel.fromJsonValue(
+          _descriptor('ws://127.0.0.1:${server.port}/'),
+          (payload) => payload,
         );
         addTearDown(channel.close);
 
-        final events = <Object>[];
+        final errors = <Object>[];
+        await channel.subscribe().handleError(errors.add).drain<void>();
+        expect(errors, [
+          isA<RealtimeSubscriptionEndedException>()
+              .having((e) => e.channel, 'channel', 'room')
+              .having((e) => e.code, 'code', isNull),
+        ]);
+      },
+    );
+
+    test(
+      'a server close ends the stream with RealtimeConnectionException',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((req) async {
+          final ws = await WebSocketTransformer.upgrade(req);
+          ws.listen((_) => ws.close(1001, 'Going away'));
+        });
+        final channel = RealtimeChannel.fromJsonValue(
+          _descriptor('ws://127.0.0.1:${server.port}/'),
+          (payload) => payload,
+        );
+        addTearDown(channel.close);
+
+        final errors = <Object>[];
+        await channel.subscribe().handleError(errors.add).drain<void>();
+        expect(errors, [
+          isA<RealtimeConnectionException>().having(
+            (e) => e.message,
+            'message',
+            contains('1001'),
+          ),
+        ]);
+      },
+    );
+
+    test(
+      'a server that never answers the upgrade times out and is released',
+      () async {
+        // Accepts TCP and reads the upgrade request, but never replies.
+        final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(server.close);
+        final released = Completer<void>();
+        server.listen((socket) {
+          addTearDown(socket.destroy);
+          socket.listen(
+            (_) {},
+            onDone: () => released.complete(),
+            onError: (Object _) => released.complete(),
+          );
+        });
+        final previous = WebSocketPool.shared;
+        WebSocketPool.shared = WebSocketPool(
+          handshakeTimeout: const Duration(milliseconds: 300),
+        );
+        addTearDown(() => WebSocketPool.shared = previous);
+        final channel = RealtimeChannel.fromJsonValue(
+          _descriptor('ws://127.0.0.1:${server.port}/'),
+          (payload) => payload,
+        );
+        addTearDown(channel.close);
+
+        final errors = <Object>[];
         await channel
             .subscribe()
-            .handleError(events.add)
-            .take(1)
-            .forEach(events.add);
-        expect(events, [isA<TypeError>(), 'ok']);
+            .handleError(errors.add)
+            .drain<void>()
+            .timeout(const Duration(seconds: 5));
+        expect(errors, [isA<RealtimeConnectionException>()]);
+        // The client dropped the pending connection.
+        await released.future.timeout(const Duration(seconds: 5));
       },
     );
 

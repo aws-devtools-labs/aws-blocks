@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, blocksError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, blocksError } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -16,10 +16,10 @@ import type {
 } from './types.js';
 import { AsyncJobErrors } from './errors.js';
 import { JobStatusTracker, statusNotTrackedError } from './status.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import { assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-async-job');

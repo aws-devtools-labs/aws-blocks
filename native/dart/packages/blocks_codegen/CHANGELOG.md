@@ -1,12 +1,152 @@
 ## Unreleased
 
-- **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
+### Breaking
+
+- A generated client re-exports the runtime's error types, `ApiException`,
+  `BlocksException`, `ClientClosedException`, `TransportException` and
+  `isBlocksError`, instead of `BlocksRpcException`, which `blocks_runtime`
+  renames `ApiException`. A client whose spec uses a transferable also
+  re-exports `FileTransferException`, `RealtimeException`,
+  `RealtimeChannelClosedException`, `RealtimeConnectionException`,
+  `TransferableException` and `InvalidDescriptorException`. Code that catches
+  `BlocksRpcException` through the generated client no longer compiles; catch
+  `ApiException`, and match its `name` with `isBlocksError`.
+- For a spec that names an OIDC client's providers: a method
+  whose direct or optional result is an `oidc/client` with a string enum in
+  `x-blocks-type-args[0]` now generates an enum of those providers,
+  `<Api class><Method>Provider` (`AuthApiGetClientProvider` for
+  `auth.getClient`; a method name with separators is PascalCased, so
+  `auth.get_client` gives the same), implementing `OidcProvider`, and
+  returns `TypedOidcClient<AuthApiGetClientProvider>` instead of
+  `OidcClient`, so its `signInDirect`, `signIn` and `exchange` take only that
+  method's own providers and a typo doesn't compile. This matches the Kotlin
+  and Swift clients. An `Auth` block's `createOidcApi().getClient()` names
+  its providers, so this reaches every app that calls `createOidcApi()`.
+  Two things that compiled before no longer do:
+  - Passing a provider name to the result:
+    `final oidc = await blocks.auth.getClient(); oidc.signIn('google', …)`.
+    Pass the generated value, `oidc.signIn(AuthApiGetClientProvider.google, …)`,
+    or `AuthApiGetClientProvider.fromProviderName(name)` for a name known
+    only at runtime.
+  - Overriding the generated method with its old return type, as a test
+    fake might: `Future<OidcClient> getClient()`. Return
+    `Future<TypedOidcClient<AuthApiGetClientProvider>>`, wrapping the client
+    as `TypedOidcClient<AuthApiGetClientProvider>(client)`.
+  - Using an app type named `OidcProvider` or `TypedOidcClient` in a file
+    that also imports the generated client, which now re-exports the
+    runtime's: the name is `ambiguous_import`. Hide it on one import
+    (`import 'blocks.dart' hide OidcProvider;`) or prefix one.
+
+  `TypedOidcClient` is an `OidcClient`, so code that stores the result in an
+  `OidcClient`, passes it to one, or assigns the method to a
+  `Future<OidcClient> Function()` keeps compiling, and takes names there.
+
+  A provider name that isn't an identifier is camel-cased like an enum value
+  and keeps its name (`login.gov` is `loginGov`, with `providerName`
+  `'login.gov'`); a repeated name is generated once, and two that reduce to
+  one identifier are told apart with a warning. When the library already
+  declares the enum's name, it is `<Api class><Method>ResultProvider` and the
+  codegen warns.
+- Generated clients no longer send a realtime channel, a file
+  handle or an OIDC client back to the server, which 0.2.0 added. A method
+  with a transferable parameter (direct, optional, nullable, in a list, map
+  or tuple, or held by a model at any depth) is a generation error naming the
+  method and parameter, as in Kotlin, because `blocks_runtime`'s
+  transferables no longer have `toJson()` and the server never turns such a
+  value back into a live object. Pass the plain values the method needs
+  instead. Decoding transferables, including inside models, lists, maps and
+  realtime messages, is unchanged.
+- A transferable model field is passed through again instead of being
+  encoded with the `toJson()` that `blocks_runtime` removes.
+
+- A namespace whose export name already ends in `Api` no longer gets a second
+  `Api` on its generated class, matching the Kotlin and Swift clients. The
+  class for `oidcAuthApi` is `OidcAuthApi` (was `OidcAuthApiApi`), its provider
+  enum is `OidcAuthApiGetClientProvider` (was
+  `OidcAuthApiApiGetClientProvider`), and `api` is `Api` (was `ApiApi`). Rename
+  those references in your app; the `Blocks` field names (`blocks.oidcAuthApi`)
+  are unchanged. Two exports that would now share a class, such as `oidcAuth`
+  and `oidcAuthApi` (both `OidcAuthApi`), are a generation error naming both;
+  rename one of them.
+- A union with a string discriminator that a response can
+  carry is now open, so an arm a newer backend adds no longer makes decoding
+  throw `ArgumentError`. An object whose discriminator names no arm decodes
+  to `XUnknown`, whose `json` is the object as sent and whose
+  `discriminator` is its tag; `json` is unmodifiable at every depth and
+  `toJson()` returns a copy of it, so it round-trips. When another type of the
+  library is already named `XUnknown`, the fallback is `XUnknown$`. An object
+  with no discriminator, or one that isn't a string, still throws. An
+  exhaustive `switch` over `X` needs an `XUnknown()` case. Unions only
+  parameters use, unions with a boolean discriminator and a union embedded in
+  a hybrid arm stay closed.
+- A string enum that a response can carry is now open, so a
+  value a newer backend adds no longer makes decoding throw. Such an enum
+  `X` (reachable from a method result, at any depth) is a sealed class:
+  its known values are the constants of the enum `XKnown`, which `X.a` and
+  `X.values` still name, and any other value decodes to `XUnknown`, whose
+  `value` is the string as sent. `toJson()` writes that string back, so an
+  unknown value round-trips. When another type of the library is already
+  named `XKnown` or `XUnknown`, that class takes a trailing `$` (`XKnown$`,
+  `XUnknown$`). An exhaustive `switch` over `X` needs an `XUnknown()` case.
+  `name` and `index` are on `XKnown` only; `X.values.byName` still works,
+  since `X.values` is `XKnown.values`. An enum that only parameters use stays
+  a closed Dart enum.
+- The input of every `Auth` namespace's `setAuthState` is now
+  the class `AuthActionInput`, named after the spec's `x-blocks-type-name`.
+  It used to be named after the first `Auth` namespace in the spec
+  (`AuthBasicApiSetAuthStateInput`), so adding or renaming an `Auth` block
+  renamed it. The old name stays as a deprecated typedef of
+  `AuthActionInput`, so existing code compiles with a deprecation warning.
+  Any parameter union the spec names this way takes the name, unless another
+  generated type already has it. Its arm classes and the types nested in them
+  keep their names (`SignInInput`, and `StartInput` for a union named
+  `Command`), so only the union's own name changes. When distinct unions are
+  given one name, the one whose `<namespace>.<method>` and parameter sort
+  first takes it and the others keep their old names, whatever their order in
+  the spec.
+
+### Other changes
+
+- The generated client re-exports `RealtimeSubscriptionEndedException` with
+  the other realtime errors.
+- The generated `Blocks` class has a `close()` that closes its
+  `BlocksClient`, as the Kotlin client's `Blocks` does. A call after it
+  throws `ClientClosedException`, and so does a call of an `OidcClient` that
+  one of its calls returned. A namespace named `close` gets the field
+  `close$`, as one named after an `Object` member does.
+- **Requires the `blocks_runtime` release with this change.**
+- A spec that names no providers, and an OIDC client inside a model, list,
+  map or parameter, are still a plain `OidcClient`, unchanged.
+- A generated client with a typed OIDC result also re-exports
+  `TypedOidcClient` and `OidcProvider`, and escapes a spec type or member
+  named like one of them (`OidcProvider$`). Any other client, including one
+  whose OIDC clients are all untyped, re-exports and reserves neither.
+- A declared native binding whose export is named `TypedOidcClient` or
+  `OidcProvider` is a generation error, as for every other public
+  `blocks_runtime` type, because the generated library imports the runtime
+  wholesale and the name would be ambiguous.
+- A declared native binding whose Dart type is named `FileTokenStore` is
+  rejected, as for every other type `blocks_runtime` exports, because the
+  runtime now exports a class of that name.
+
+## 0.2.0
+
+- Fix two arms of one union whose discriminator values generate the same
+  class name (`Foo` and `foo`) being declared as one class twice, which did not
+  compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as
+  an arm named like another type already does.
+- Accept `build` 5, which `build_runner` 2.17.1 requires; `build` 5.0.0 is the
+  retracted 4.1.0 republished as a major, and only packages that
+  implement `BuildStep` are affected
+  ([dart-lang/build#5223](https://github.com/dart-lang/build/issues/5223)).
+  `build` 4 stays accepted, so consumers on `mockito` or other `build <5`
+  packages still resolve.
+- **Requires `blocks_runtime` 0.2.0.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
   `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a
   list-typed `BlocksClient.call`), and each generated library's header now
-  names the minimum runtime. Release note: raise the `blocks_runtime`
-  constraint in this package's `pubspec.yaml` to `^0.1.5` in the same change
-  that publishes `blocks_runtime` 0.1.5.
+  names the minimum runtime. The `blocks_runtime` constraint in this
+  package's `pubspec.yaml` is `^0.2.0` to match.
 - Fix two results that each hold a realtime channel with a different message
   type (`{channel: RealtimeChannel<{text}>}` and
   `{channel: RealtimeChannel<{count}>}`) being merged into one model, so the

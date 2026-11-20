@@ -99,7 +99,7 @@ function deployedApps() {
 		}
 	};
 	visit(workflows);
-	return [...apps].filter((app) => existsSync(join(ROOT, 'test-apps', app, 'aws-blocks', 'index.cdk.ts'))).sort();
+	return [...apps].filter((app) => existsSync(join(ROOT, 'test-apps', app, 'cdk-blocks', 'index.cdk.ts'))).sort();
 }
 
 describe('cleanup prefixes', () => {
@@ -135,7 +135,7 @@ describe('deployed test apps', () => {
 	});
 
 	for (const app of apps) {
-		const file = `test-apps/${app}/aws-blocks/index.cdk.ts`;
+		const file = `test-apps/${app}/cdk-blocks/index.cdk.ts`;
 		const src = read(file);
 
 		if (app in NOT_STANDALONE) {
@@ -190,7 +190,7 @@ describe('pr-checks.yml e2e-compute-smoke', () => {
 	const steps = job.slice(job.indexOf('    steps:\n')).split(/^(?=      - )/m).slice(1);
 	const ifOf = (step) => step.match(/^ {8}if: (.+)$/m)?.[1];
 	const minutes = (step) => Number(step.match(/timeout-minutes: (\d+)/)?.[1]);
-	const guard = "always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''";
+	const guard = "always() && hashFiles('test-apps/compute-smoke/.cdk-blocks-sandbox/sandbox-id.txt') != ''";
 
 	it('ends with a bounded always() teardown of the stacks it deployed', () => {
 		const [refresh, teardown] = steps.slice(-2);
@@ -212,7 +212,7 @@ describe('pr-checks.yml e2e-compute-smoke', () => {
 	});
 
 	it('names every stack with the sandbox id the teardown matches', () => {
-		const src = read('test-apps/compute-smoke/aws-blocks/index.cdk.ts');
+		const src = read('test-apps/compute-smoke/cdk-blocks/index.cdk.ts');
 		assert.match(src, /const id = getSandboxId\(projectRoot\);/);
 		const m = src.match(/const stackName =([\s\S]*?);\n/);
 		// One top-level literal per mode (sandbox, production), each with ${id}.
@@ -226,8 +226,8 @@ describe('pr-checks.yml e2e-compute-smoke', () => {
 	// bucket names at 63 characters, so a long PR number or attempt would fail
 	// the synth.
 	it('keeps the longest stack name within the bucket-name limit', () => {
-		const src = read('test-apps/compute-smoke/aws-blocks/index.cdk.ts');
-		const app = read('test-apps/compute-smoke/aws-blocks/index.ts');
+		const src = read('test-apps/compute-smoke/cdk-blocks/index.cdk.ts');
+		const app = read('test-apps/compute-smoke/cdk-blocks/index.ts');
 		assert.match(app, /new Scope\('compute'\)/);
 		assert.match(app, /new FileBucket\(scope, 'artifacts'\)/);
 		assert.match(src, /const MAX_STACK_NAME_LENGTH = 63 - '-compute-artifacts'\.length;/);
@@ -275,7 +275,7 @@ describe('pr-checks.yml e2e-compute-smoke', () => {
 		}
 		const credentials = steps.findIndex((s) => s.includes('uses: ./.github/actions/e2e-aws-credentials'));
 		assert.ok(credentials < wait, 'the wait must come after the credentials step');
-		const src = read('test-apps/compute-smoke/aws-blocks/index.cdk.ts');
+		const src = read('test-apps/compute-smoke/cdk-blocks/index.cdk.ts');
 		const prefix = steps[wait].match(/starts_with\(StackName, '([^']+)'\)/)?.[1];
 		assert.ok(prefix, 'the wait must filter stacks with starts_with(StackName, ...)');
 		// Exactly the app's own prefix: a wider one would wait on other suites' stacks.

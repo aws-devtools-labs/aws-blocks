@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Construct } from 'constructs';
 import { Annotations, Stack, Token } from 'aws-cdk-lib';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
@@ -36,7 +39,7 @@ import { HostingError } from '../hosting_error.js';
  * throws {@link HostingError} `LoggingV2RegionError` unless
  * `skipRegionValidation` is set. When the stack region is an unresolved token
  * (an environment-agnostic stack) the check can't run at synth, so a
- * `@aws-blocks/hosting:LoggingV2RegionUnresolved` warning is emitted instead.
+ * `@aws-cdk-blocks/hosting:LoggingV2RegionUnresolved` warning is emitted instead.
  */
 
 /** Delivered log record formats supported by CloudFront standard logging v2. */
@@ -122,7 +125,7 @@ export const wireStandardLoggingV2 = (
   if (!skipRegionValidation) {
     if (Token.isUnresolved(stack.region)) {
       Annotations.of(scope).addWarningV2(
-        '@aws-blocks/hosting:LoggingV2RegionUnresolved',
+        '@aws-cdk-blocks/hosting:LoggingV2RegionUnresolved',
         `CloudFront standard logging v2 requires the stack to be deployed to ${CLOUDFRONT_DELIVERY_REGION} (the delivery source Region for the global CloudFront service), but this stack's Region is not known at synth time. ` +
           `Deployment fails if the stack lands in any other Region. Set the stack's \`env.region\` to ${CLOUDFRONT_DELIVERY_REGION} or use v1 logging (\`logging: { version: 'v1' }\`).`,
       );

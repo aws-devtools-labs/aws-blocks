@@ -10,7 +10,9 @@
  * `AuthCognito` golden fixture.
  */
 
+import assert from 'node:assert';
 import { cognitoConfigKeys, sessionCookieName } from '../cdk/contract.js';
+import { SESSION_STORE_ID } from '../session-store-id.js';
 import { type CdkSynthResult, type CfnTemplateJson, synthUnderCdkConditions } from './cdk-synth.js';
 
 /** The construct whose subtree is the block's (a `BlocksStack` id + the block id). */
@@ -23,6 +25,16 @@ export const BLOCK_PATH_PREFIX = 'TestStack/auth/';
  * HMAC secret included, signing every user out.
  */
 export const SHARED_LOGICAL_IDS = ['BlocksSecretsBulk'];
+
+/**
+ * The logical id of `AuthCognito`'s sessions table in the golden fixture (child
+ * id `sessions`). `Auth` has no resource under it: its session store is a new
+ * table under the child id `session-store`.
+ */
+export const LEGACY_SESSIONS_LOGICAL_ID = 'authsessionstable46C26735';
+
+/** The construct path of `Auth`'s session store table. */
+export const SESSION_STORE_TABLE_PATH = `${BLOCK_PATH_PREFIX}${SESSION_STORE_ID}/table/Resource`;
 
 export interface PinnedResource {
 	Type: string;
@@ -90,21 +102,29 @@ export interface SynthesizedAuth extends CdkSynthResult {
  * Synth `construct` (an expression building the block with id `auth` on `stack`;
  * `Auth` and `AppSetting` are in scope, plus anything `extraImports` brings in)
  * and extract its identity.
+ *
+ * `secretsStore` defaults to `'ssm'`: the identity this harness extracts is
+ * compared with `AuthCognito`'s frozen fixtures, and `'ssm'` is the
+ * configuration under which an `AuthCognito` app keeps its `session-secret`
+ * parameter (and so its signed-in users) when it switches to `Auth`. Pass
+ * `'secrets-manager'` to synthesize the production preset's own store.
  */
 export function synthIdentity(
 	construct: string,
 	preset?: 'sandbox' | 'production',
 	extraImports: readonly string[] = [],
+	secretsStore: 'ssm' | 'secrets-manager' = 'ssm',
 ): SynthesizedAuth {
 	const result = synthUnderCdkConditions({
 		imports: [
-			"import { Auth } from '@aws-blocks/bb-auth';",
+			"import { Auth } from '@aws-cdk-blocks/bb-auth';",
 			// For provider secrets, which must be real `secret: true` AppSettings.
-			"import { AppSetting } from '@aws-blocks/bb-app-setting';",
+			"import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';",
 			...extraImports,
 		].join('\n'),
 		build: `const auth = ${construct};\nreport.fullId = auth.fullId;`,
 		preset,
+		secretsStore,
 	});
 	const fullId = String(result.report.fullId);
 	const pools = Object.values(result.template.Resources).filter((r) => r.Type === 'AWS::Cognito::UserPool');
@@ -173,4 +193,39 @@ export function diffIdentity(expected: VariantIdentity, actual: VariantIdentity)
 /** The `BLOCKS_AUTH_COGNITO_*` keys for `fullId`, sorted — what `Auth` registers when a pool exists. */
 export function expectedConfigKeys(fullId: string): string[] {
 	return Object.values(cognitoConfigKeys(fullId)).sort();
+}
+
+/** The logical id of the session store table in a synthesized `Auth` identity: the one resource at {@link SESSION_STORE_TABLE_PATH}. */
+export function sessionStoreIdOf(actual: VariantIdentity): string {
+	const ids = Object.keys(actual.resources).filter((id) => actual.resources[id].path === SESSION_STORE_TABLE_PATH);
+	assert.strictEqual(
+		ids.length,
+		1,
+		`expected exactly one resource at ${SESSION_STORE_TABLE_PATH}, found ${ids.length}`,
+	);
+	return ids[0];
+}
+
+/**
+ * A pinned `AuthCognito` identity as `Auth` must reproduce it: every resource
+ * and config key of the fixture, except the sessions table. In its place
+ * `Auth` has its session store: one `AWS::DynamoDB::Table` under the child id
+ * `session-store`, named `<fullId>-session-store`. The logical id of that
+ * table is read from `actual` (it is a hash of the path); its type, path and
+ * name are fixed here. The fixture itself is never edited.
+ */
+export function expectedAuthIdentity(pinned: VariantIdentity, actual: VariantIdentity): VariantIdentity {
+	const { [LEGACY_SESSIONS_LOGICAL_ID]: legacy, ...kept } = pinned.resources;
+	assert.ok(legacy, `the fixture pins the sessions table ${LEGACY_SESSIONS_LOGICAL_ID}`);
+	return {
+		...pinned,
+		resources: {
+			...kept,
+			[sessionStoreIdOf(actual)]: {
+				Type: 'AWS::DynamoDB::Table',
+				path: SESSION_STORE_TABLE_PATH,
+				physicalName: `${pinned.fullId}-${SESSION_STORE_ID}`,
+			},
+		},
+	};
 }

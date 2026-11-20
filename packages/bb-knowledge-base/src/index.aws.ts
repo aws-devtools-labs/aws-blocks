@@ -13,8 +13,8 @@ import {
 	GetIngestionJobCommand,
 	type IngestionJobSummary,
 } from '@aws-sdk/client-bedrock-agent';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type {
 	KnowledgeBaseOptions,
 	RetrieveOptions,
@@ -30,8 +30,8 @@ import { blocksError, KnowledgeBaseErrors } from './errors.js';
 import { createAgentTool } from './agent-tool.js';
 import { normalizeMaxResults } from './normalize.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 export type {
 	KnowledgeBaseOptions,
@@ -251,7 +251,7 @@ function buildFilter(filter?: MetadataFilter): RetrievalFilter | undefined {
  *
  * **When NOT to use:** If you need structured key-value lookups, use `KVStore`.
  * If you need relational queries, use `Database`. If you need full-text keyword
- * search with DynamoDB indexes, use `DistributedTable`.
+ * search with DynamoDB indexes, use `KVStore` with a `schema` and `indexes`.
  *
  * **Best practices:**
  * - Organize documents in subfolders to auto-populate `folder` metadata for filtering

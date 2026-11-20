@@ -15,9 +15,9 @@ import { createHmac } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { get as httpGet } from 'node:http';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import type { AuthState } from '@aws-blocks/auth-common';
-import { ApiError, clearRouteRegistry, getRegisteredRoutes, RawRoute } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import type { AuthState } from '@aws-cdk-blocks/auth-common';
+import { ApiError, clearRouteRegistry, getRegisteredRoutes, RawRoute } from '@aws-cdk-blocks/core';
+import { getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { AuthErrors } from './errors.js';
 import { Auth, github, relayOrigin, stubIdp } from './index.mock.js';
 import { validateRelay } from './relay.js';
@@ -44,14 +44,15 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /**
  * Every configured kind of provider, in the two blocks an app needs for them:
  * the user pool's (federated through the hosted UI) on the default route base,
- * and a `'builtin'` one (federated directly) on its own, `/aws-blocks/auth/sso`.
+ * and a `'builtin'` one (federated directly) on its own, `/cdk-blocks/auth/sso`.
  */
 function mixedPool(): CognitoAuthOptions {
 	return {
@@ -76,7 +77,7 @@ function mixedDirect(): BuiltinAuthOptions {
 			gh: github({ clientId: 'gh-client', clientSecret: secret }),
 			'my idp': { type: 'oidc', issuer: idp.issuer, clientId: 'okta-client' },
 		},
-		redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+		redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' },
 	};
 }
 
@@ -106,27 +107,27 @@ describe('route table', () => {
 			`POST ${base}/exchange/refresh`,
 		];
 		const stub = [
-			'GET /aws-blocks/auth/idp/corp/.well-known/openid-configuration',
-			'GET /aws-blocks/auth/idp/corp/jwks.json',
-			'GET /aws-blocks/auth/idp/corp/authorize',
-			'POST /aws-blocks/auth/idp/corp/authorize',
-			'POST /aws-blocks/auth/idp/corp/token',
-			'GET /aws-blocks/auth/idp/corp/userinfo',
-			'POST /aws-blocks/auth/idp/corp/revoke',
-			'GET /aws-blocks/auth/idp/corp/logout',
+			'GET /cdk-blocks/auth/idp/corp/.well-known/openid-configuration',
+			'GET /cdk-blocks/auth/idp/corp/jwks.json',
+			'GET /cdk-blocks/auth/idp/corp/authorize',
+			'POST /cdk-blocks/auth/idp/corp/authorize',
+			'POST /cdk-blocks/auth/idp/corp/token',
+			'GET /cdk-blocks/auth/idp/corp/userinfo',
+			'POST /cdk-blocks/auth/idp/corp/revoke',
+			'GET /cdk-blocks/auth/idp/corp/logout',
 		];
 		const expected = [
-			...perBlock('/aws-blocks/auth'),
-			...['google', 'entra', 'acme'].flatMap(perProvider('/aws-blocks/auth')),
-			...perBlock('/aws-blocks/auth/sso'),
-			...['corp', 'okta', 'gh', 'my%20idp'].flatMap(perProvider('/aws-blocks/auth/sso')),
+			...perBlock('/cdk-blocks/auth'),
+			...['google', 'entra', 'acme'].flatMap(perProvider('/cdk-blocks/auth')),
+			...perBlock('/cdk-blocks/auth/sso'),
+			...['corp', 'okta', 'gh', 'my%20idp'].flatMap(perProvider('/cdk-blocks/auth/sso')),
 			...stub,
 		].sort();
 		assert.deepStrictEqual(table(), expected);
 		for (const r of getRegisteredRoutes()) {
 			assert.ok(!r.path.includes('*') && !r.path.includes('{'), `no wildcard or path parameter: ${r.path}`);
 			assert.notStrictEqual(r.path, '/');
-			assert.ok(r.path.startsWith('/aws-blocks/auth/'), r.path);
+			assert.ok(r.path.startsWith('/cdk-blocks/auth/'), r.path);
 		}
 	});
 
@@ -135,13 +136,13 @@ describe('route table', () => {
 		new AwsAuth(unique(), 'auth', mixedPool());
 		new AwsAuth(unique(), 'sso', mixedDirect());
 		const paths = table();
-		assert.ok(!paths.some((p) => p.includes('/aws-blocks/auth/idp/')), 'no stub routes when deployed');
+		assert.ok(!paths.some((p) => p.includes('/cdk-blocks/auth/idp/')), 'no stub routes when deployed');
 		assert.ok(
-			paths.includes('GET /aws-blocks/auth/sso/signin/corp'),
+			paths.includes('GET /cdk-blocks/auth/sso/signin/corp'),
 			'the stub provider still answers (with a 501)',
 		);
-		assert.ok(paths.includes('GET /aws-blocks/auth/callback'));
-		assert.ok(paths.includes('GET /aws-blocks/auth/sso/callback'));
+		assert.ok(paths.includes('GET /cdk-blocks/auth/callback'));
+		assert.ok(paths.includes('GET /cdk-blocks/auth/sso/callback'));
 	});
 
 	test('refresh routes only with allowBearerAuth; no routes at all without a provider', () => {
@@ -152,21 +153,37 @@ describe('route table', () => {
 		assert.deepStrictEqual(table(), []);
 	});
 
-	test('a custom callbackPath moves the whole flow; a path outside /aws-blocks/auth/ is refused', () => {
+	test('a legacy /aws-blocks/auth/ callbackPath is still accepted and mounted under the canonical prefix', () => {
 		new Auth(unique(), 'auth', {
 			store: 'builtin',
 			providers: { corp: stubIdp() },
-			redirects: { callbackPath: '/aws-blocks/auth/real/callback', signOutPath: '/aws-blocks/auth/real/signout' },
+			redirects: { callbackPath: '/aws-blocks/auth/callback', signOutPath: '/aws-blocks/auth/signout' },
 		});
 		const paths = table();
 		for (const p of [
-			'GET /aws-blocks/auth/real/callback',
-			'GET /aws-blocks/auth/real/signin/corp',
-			'POST /aws-blocks/auth/real/exchange',
-			'POST /aws-blocks/auth/real/authorize-params/corp',
-			'POST /aws-blocks/auth/real/signout',
-			'GET /aws-blocks/auth/real/signout',
-			'GET /aws-blocks/auth/real/session',
+			'GET /cdk-blocks/auth/callback',
+			'GET /cdk-blocks/auth/signin/corp',
+			'POST /cdk-blocks/auth/signout',
+		]) {
+			assert.ok(paths.includes(p), p);
+		}
+	});
+
+	test('a custom callbackPath moves the whole flow; a path outside /cdk-blocks/auth/ is refused', () => {
+		new Auth(unique(), 'auth', {
+			store: 'builtin',
+			providers: { corp: stubIdp() },
+			redirects: { callbackPath: '/cdk-blocks/auth/real/callback', signOutPath: '/cdk-blocks/auth/real/signout' },
+		});
+		const paths = table();
+		for (const p of [
+			'GET /cdk-blocks/auth/real/callback',
+			'GET /cdk-blocks/auth/real/signin/corp',
+			'POST /cdk-blocks/auth/real/exchange',
+			'POST /cdk-blocks/auth/real/authorize-params/corp',
+			'POST /cdk-blocks/auth/real/signout',
+			'GET /cdk-blocks/auth/real/signout',
+			'GET /cdk-blocks/auth/real/session',
 		]) {
 			assert.ok(paths.includes(p), p);
 		}
@@ -178,7 +195,7 @@ describe('route table', () => {
 					providers: { corp: stubIdp() },
 					redirects: { callbackPath: '/auth/callback' },
 				}),
-			/must be a path under '\/aws-blocks\/auth\/'/,
+			/must be a path under '\/cdk-blocks\/auth\/'/,
 		);
 	});
 	test('two blocks with providers on the default paths: the second names both blocks and the redirects to set', () => {
@@ -194,7 +211,7 @@ describe('route table', () => {
 			(e: Error) => {
 				assert.match(e.message, /^Auth 'partners': .* already mounted by Auth 'sso'\./);
 				assert.match(e.message, /`redirects\.callbackPath` and `redirects\.signOutPath`/);
-				assert.match(e.message, /callbackPath: '\/aws-blocks\/auth\/partners\/callback'/);
+				assert.match(e.message, /callbackPath: '\/cdk-blocks\/auth\/partners\/callback'/);
 				return true;
 			},
 		);
@@ -202,8 +219,8 @@ describe('route table', () => {
 			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'c' } },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/partners2/callback',
-				signOutPath: '/aws-blocks/auth/partners2/signout',
+				callbackPath: '/cdk-blocks/auth/partners2/callback',
+				signOutPath: '/cdk-blocks/auth/partners2/signout',
 			},
 		});
 
@@ -212,7 +229,7 @@ describe('route table', () => {
 		const fresh = unique();
 		new RawRoute(fresh, 'app-callback', {
 			method: 'GET',
-			path: '/aws-blocks/auth/callback',
+			path: '/cdk-blocks/auth/callback',
 			handler: async () => {},
 		});
 		assert.throws(
@@ -258,7 +275,7 @@ describe('relay state envelope — the native SDKs’ wire format', () => {
 
 	test('relay validation (AuthOIDC’s rules and reasons)', () => {
 		const allowList = [relayOrigin('myapp://auth')];
-		const same = new URL('https://api.example.com/aws-blocks/auth/authorize-params/x');
+		const same = new URL('https://api.example.com/cdk-blocks/auth/authorize-params/x');
 		const v = (uri: string) => validateRelay(uri, { allowList, sameOrigin: same });
 		assert.deepStrictEqual(v('http://127.0.0.1:5000/cb'), { allowed: true });
 		assert.deepStrictEqual(v('http://[::1]:5000/cb'), { allowed: true });
@@ -285,7 +302,7 @@ describe('callback dispatch — each transport and wire error code', () => {
 	}
 
 	async function callback(query: Record<string, string>) {
-		const res = await fetch(`${server.origin}/aws-blocks/auth/callback?${new URLSearchParams(query)}`, {
+		const res = await fetch(`${server.origin}/cdk-blocks/auth/callback?${new URLSearchParams(query)}`, {
 			redirect: 'manual',
 		});
 		return res;
@@ -310,7 +327,7 @@ describe('callback dispatch — each transport and wire error code', () => {
 		const { auth, key } = stubAuth();
 		const state = encodeState({ v: 1, csrf: 'c'.repeat(32), relay: 'myapp://auth/cb' }, key);
 		const res = await fetch(
-			`${server.origin}/aws-blocks/auth/callback?${new URLSearchParams({ code: 'k', state })}`,
+			`${server.origin}/cdk-blocks/auth/callback?${new URLSearchParams({ code: 'k', state })}`,
 			{
 				redirect: 'manual',
 				headers: { cookie: `authpending_${auth.fullId}=v1.stale.cookie` },
@@ -322,7 +339,7 @@ describe('callback dispatch — each transport and wire error code', () => {
 
 	test('POST /exchange accepts JSON only (no cross-site form can reach it: login CSRF)', async () => {
 		stubAuth();
-		const res = await fetch(`${server.origin}/aws-blocks/auth/exchange`, {
+		const res = await fetch(`${server.origin}/cdk-blocks/auth/exchange`, {
 			method: 'POST',
 			headers: { 'content-type': 'text/plain' },
 			body: JSON.stringify({
@@ -361,14 +378,14 @@ describe('callback dispatch — each transport and wire error code', () => {
 		for (const extra of extras) {
 			// The victim's browser holds a pending sign-in …
 			const browser = new TestBrowser();
-			assert.strictEqual((await browser.fetch(`${server.origin}/aws-blocks/auth/signin/corp`)).status, 302);
+			assert.strictEqual((await browser.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`)).status, 302);
 			// … and follows the attacker's link.
 			const query = new URLSearchParams({
 				error: 'access_denied',
 				error_description: `PreSignUp failed with error ${forged}.`,
 				...extra,
 			});
-			const res = await browser.fetch(`${server.origin}/aws-blocks/auth/callback?${query}`);
+			const res = await browser.fetch(`${server.origin}/cdk-blocks/auth/callback?${query}`);
 			const body = await errorBody(res);
 			assert.strictEqual(body.name, AuthErrors.InvalidState, JSON.stringify(extra));
 			assert.ok(!JSON.stringify(body).includes('+1-555'), 'no attacker text');
@@ -424,7 +441,7 @@ describe('callback dispatch — each transport and wire error code', () => {
 	test('authorize-params POST: csrf and relayTo are validated (invalid_relay body shape)', async () => {
 		stubAuth();
 		const post = (body: unknown) =>
-			fetch(`${server.origin}/aws-blocks/auth/authorize-params/corp`, {
+			fetch(`${server.origin}/cdk-blocks/auth/authorize-params/corp`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
@@ -463,7 +480,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		new Auth(unique(), 'sso', mixedDirect());
 		const signInAt = (base: string) => (id: string) =>
 			fetch(`${server.origin}${base}/signin/${encodeURIComponent(id)}`, { redirect: 'manual' });
-		const signIn = signInAt('/aws-blocks/auth/sso');
+		const signIn = signInAt('/cdk-blocks/auth/sso');
 
 		const okta = await signIn('okta');
 		assert.strictEqual(okta.status, 302);
@@ -473,7 +490,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 
 		const corp = await signIn('corp');
 		assert.strictEqual(corp.status, 302);
-		assert.ok(location(corp, server.origin).startsWith(`${server.origin}/aws-blocks/auth/idp/corp/authorize?`));
+		assert.ok(location(corp, server.origin).startsWith(`${server.origin}/cdk-blocks/auth/idp/corp/authorize?`));
 
 		const gh = await signIn('gh');
 		assert.strictEqual(gh.status, 302);
@@ -482,7 +499,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		assert.strictEqual(ghUrl.searchParams.get('code_challenge_method'), 'S256');
 
 		for (const id of ['google', 'entra', 'acme']) {
-			const res = await signInAt('/aws-blocks/auth')(id);
+			const res = await signInAt('/cdk-blocks/auth')(id);
 			assert.strictEqual(res.status, 501, `${id}: never a 404`);
 			const body = await res.json();
 			assert.strictEqual(body.name, AuthErrors.ProviderUnavailable);
@@ -504,13 +521,13 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		assert.deepStrictEqual(
 			{ ...pool.urls, ...direct.urls },
 			{
-				'signIn:google': '/aws-blocks/auth/signin/google',
-				'signIn:corp': '/aws-blocks/auth/sso/signin/corp',
-				'signIn:okta': '/aws-blocks/auth/sso/signin/okta',
-				'signIn:gh': '/aws-blocks/auth/sso/signin/gh',
-				'signIn:entra': '/aws-blocks/auth/signin/entra',
-				'signIn:my idp': '/aws-blocks/auth/sso/signin/my%20idp',
-				'signIn:acme': '/aws-blocks/auth/signin/acme',
+				'signIn:google': '/cdk-blocks/auth/signin/google',
+				'signIn:corp': '/cdk-blocks/auth/sso/signin/corp',
+				'signIn:okta': '/cdk-blocks/auth/sso/signin/okta',
+				'signIn:gh': '/cdk-blocks/auth/sso/signin/gh',
+				'signIn:entra': '/cdk-blocks/auth/signin/entra',
+				'signIn:my idp': '/cdk-blocks/auth/sso/signin/my%20idp',
+				'signIn:acme': '/cdk-blocks/auth/signin/acme',
 			},
 		);
 		assert.deepStrictEqual(Object.keys(pool.urls).sort(), ['signIn:acme', 'signIn:entra', 'signIn:google']);
@@ -547,7 +564,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 					body: null,
 					json: async () => ({}),
 					text: async () => '',
-					url: new URL(`${server.origin}/aws-blocks/api`),
+					url: new URL(`${server.origin}/cdk-blocks/api`),
 					params: {},
 				},
 				response: { headers: new Headers(), status: 200, send: () => {} },
@@ -562,7 +579,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 	test('mock: a browser navigating to a hosted-UI sign-in route gets an HTML page, an API client the JSON', async () => {
 		new Auth(unique(), 'auth', mixedPool());
 		new Auth(unique(), 'sso', mixedDirect());
-		const url = `${server.origin}/aws-blocks/auth/signin/google`;
+		const url = `${server.origin}/cdk-blocks/auth/signin/google`;
 		// Node's `fetch` replaces `Sec-Fetch-Mode`, so a navigation is sent with `node:http`.
 		const navigate = (headers: Record<string, string>, target = url) =>
 			new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }>(
@@ -609,7 +626,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 			assert.strictEqual(JSON.parse(asked.body).name, AuthErrors.ProviderUnavailable);
 		}
 		// A provider that works offline still redirects a browser.
-		const okta = await fetch(`${server.origin}/aws-blocks/auth/sso/signin/okta`, {
+		const okta = await fetch(`${server.origin}/cdk-blocks/auth/sso/signin/okta`, {
 			redirect: 'manual',
 			headers: { accept: 'text/html' },
 		});
@@ -622,7 +639,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 			emailPassword: false,
 			providers: { [hostile]: { type: 'saml', metadataUrl: 'https://idp.example.com/metadata.xml' } },
 		});
-		const page = await fetch(`${server.origin}/aws-blocks/auth/signin/${encodeURIComponent(hostile)}`, {
+		const page = await fetch(`${server.origin}/cdk-blocks/auth/signin/${encodeURIComponent(hostile)}`, {
 			redirect: 'manual',
 			headers: { accept: 'text/html' },
 		});
@@ -648,12 +665,12 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		const { Auth: AwsAuth } = await import('./index.aws.js');
 		new AwsAuth(unique(), 'auth', mixedPool());
 		new AwsAuth(unique(), 'sso', mixedDirect());
-		const corp = await fetch(`${server.origin}/aws-blocks/auth/sso/signin/corp`, { redirect: 'manual' });
+		const corp = await fetch(`${server.origin}/cdk-blocks/auth/sso/signin/corp`, { redirect: 'manual' });
 		assert.strictEqual(corp.status, 501);
 		assert.match((await corp.json()).error, /runs only in local development/);
 		// The hosted-UI engine is wired; with no deployed domain / client it
 		// refuses (federation-hosted-ui.test.ts covers the configured flow).
-		const google = await fetch(`${server.origin}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
+		const google = await fetch(`${server.origin}/cdk-blocks/auth/signin/google`, { redirect: 'manual' });
 		assert.strictEqual(google.status, 500);
 		const body = await google.json();
 		assert.strictEqual(body.name, AuthErrors.ProviderUnavailable);
@@ -662,7 +679,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 
 	test('GET session: 401 NotAuthenticatedException without a session (the browser redirect client)', async () => {
 		new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
-		const res = await fetch(`${server.origin}/aws-blocks/auth/session`);
+		const res = await fetch(`${server.origin}/cdk-blocks/auth/session`);
 		assert.strictEqual(res.status, 401);
 		assert.strictEqual(res.headers.get('cache-control'), 'no-store');
 		assert.deepStrictEqual(await res.json(), { error: 'Not signed in', name: AuthErrors.NotAuthenticated });
@@ -671,9 +688,9 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 	test('POST sign-out: 204 for the native SDKs; `?format=json` answers 200 with the body the browser can read', async () => {
 		new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
 		const json = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
-		const native = await fetch(`${server.origin}/aws-blocks/auth/signout`, { ...json, redirect: 'manual' });
+		const native = await fetch(`${server.origin}/cdk-blocks/auth/signout`, { ...json, redirect: 'manual' });
 		assert.strictEqual(native.status, 204, 'the native contract is unchanged');
-		const browser = await fetch(`${server.origin}/aws-blocks/auth/signout?format=json`, json);
+		const browser = await fetch(`${server.origin}/cdk-blocks/auth/signout?format=json`, json);
 		assert.strictEqual(browser.status, 200);
 		assert.deepStrictEqual(await browser.json(), {}, 'no provider session to end without a sign-in');
 	});
@@ -686,10 +703,14 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 			throw incomplete;
 		});
 		const json = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
-		for (const path of ['/aws-blocks/auth/signout', '/aws-blocks/auth/signout?format=json']) {
+		for (const path of ['/cdk-blocks/auth/signout', '/cdk-blocks/auth/signout?format=json']) {
 			const res = await fetch(`${server.origin}${path}`, { ...json, redirect: 'manual' });
 			assert.strictEqual(res.status, 503, path);
-			assert.deepStrictEqual(await res.json(), { error: incomplete.message, name: AuthErrors.SignOutIncomplete }, path);
+			assert.deepStrictEqual(
+				await res.json(),
+				{ error: incomplete.message, name: AuthErrors.SignOutIncomplete },
+				path,
+			);
 		}
 	});
 
@@ -699,7 +720,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/bye' },
 		});
-		const res = await fetch(`${server.origin}/aws-blocks/auth/signout`, { redirect: 'manual' });
+		const res = await fetch(`${server.origin}/cdk-blocks/auth/signout`, { redirect: 'manual' });
 		assert.strictEqual(res.status, 302);
 		assert.strictEqual(res.headers.get('location'), '/bye');
 		assert.deepStrictEqual(res.headers.getSetCookie(), [], 'no cookie is touched');
@@ -714,12 +735,23 @@ describe("relay re-check: a same-origin relay survives a callback on another of 
 	});
 
 	test('validateRelay allows an HTTPS relay to any host in backendHosts, exact or a wildcard subdomain', () => {
-		const opts = { allowList: [], sameOrigin: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/auth/callback') };
+		const opts = {
+			allowList: [],
+			sameOrigin: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/cdk-blocks/auth/callback'),
+		};
 		const backendHosts = ['d111.cloudfront.net', '*.example.com'];
-		assert.deepStrictEqual(validateRelay('https://d111.cloudfront.net/done', { ...opts, backendHosts }), { allowed: true });
-		assert.deepStrictEqual(validateRelay('https://app.eu.example.com/done', { ...opts, backendHosts }), { allowed: true });
+		assert.deepStrictEqual(validateRelay('https://d111.cloudfront.net/done', { ...opts, backendHosts }), {
+			allowed: true,
+		});
+		assert.deepStrictEqual(validateRelay('https://app.eu.example.com/done', { ...opts, backendHosts }), {
+			allowed: true,
+		});
 		// The wildcard covers subdomains, not the apex; a port or plain HTTP is not a served host.
-		for (const relay of ['https://example.com/done', 'https://d111.cloudfront.net:8443/done', 'https://other.net/done']) {
+		for (const relay of [
+			'https://example.com/done',
+			'https://d111.cloudfront.net:8443/done',
+			'https://other.net/done',
+		]) {
 			assert.strictEqual(validateRelay(relay, { ...opts, backendHosts }).allowed, false, relay);
 		}
 		// Without backendHosts, only the callback's own origin is same-origin.
@@ -730,10 +762,16 @@ describe("relay re-check: a same-origin relay survives a callback on another of 
 		const { backendHostsFor } = await import('./relay.js');
 		process.env.BLOCKS_PUBLIC_HOSTS = 'D111.cloudfront.net, *.example.com,';
 		const gateway = 'abc123.execute-api.us-east-1.amazonaws.com';
-		const https = { url: new URL(`https://${gateway}/aws-blocks/auth/callback`), headers: new Headers({ host: gateway }) };
+		const https = {
+			url: new URL(`https://${gateway}/cdk-blocks/auth/callback`),
+			headers: new Headers({ host: gateway }),
+		};
 		assert.deepStrictEqual(backendHostsFor(https), ['d111.cloudfront.net', '*.example.com', gateway]);
 		// Local dev: the client picks Host, so it never counts.
-		const local = { url: new URL('http://localhost:3000/aws-blocks/auth/callback'), headers: new Headers({ host: gateway }) };
+		const local = {
+			url: new URL('http://localhost:3000/cdk-blocks/auth/callback'),
+			headers: new Headers({ host: gateway }),
+		};
 		assert.deepStrictEqual(backendHostsFor(local), ['d111.cloudfront.net', '*.example.com']);
 	});
 });

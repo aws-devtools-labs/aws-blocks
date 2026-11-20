@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { pathToFileURL } from 'node:url';
-import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
+import { __PIPELINE_STAGE_SCOPE__ } from '@aws-cdk-blocks/pipeline';
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
@@ -42,6 +42,8 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
+import { claimScopeFullId, type ScopeFullIdClaims } from '../common/scope-fullid-claims.js';
+import { ensureResourceNameCheck } from './resource-name-check.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
@@ -62,6 +64,8 @@ export {
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
+	BLOCKS_APP_TAG_KEY,
+	type BlocksAppIdentity,
 	type BlocksDefaults,
 	BlocksPresets,
 	type BlocksSecretsStore,
@@ -87,7 +91,7 @@ export type { BlocksVpcOptions, SubnetRole, VpcContext, VpcRequirements } from '
 
 /**
  * Core's `create()` props: the public {@link BlocksStackProps} plus the required
- * `defaultComputeFactory`. The umbrella (`@aws-blocks/blocks`) supplies the
+ * `defaultComputeFactory`. The umbrella (`aws-cdk-blocks`) supplies the
  * factory (which builds a `LambdaCompute`) by spreading it onto the customer's
  * props; customers use {@link BlocksStackProps} and never set the factory.
  *
@@ -97,7 +101,7 @@ export type { BlocksVpcOptions, SubnetRole, VpcContext, VpcRequirements } from '
  * @internal
  */
 export interface CoreBlocksStackProps extends BlocksStackProps {
-	/** Builds the stack's default compute. Injected by `@aws-blocks/blocks`. */
+	/** Builds the stack's default compute. Injected by `aws-cdk-blocks`. */
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
@@ -178,7 +182,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	}
 	/**
 	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
-	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * `/cdk-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
 	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
 	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
 	 * deploy-time value works. The stack's `ApiUrl` output is this value.
@@ -231,7 +235,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Initialize VPC context before the default compute is created and before
 		// BBs are constructed, so both can discover it: the default compute
 		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
-		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
+		// the VPC, and BBs read it to co-locate their resources.
 		if (this._vpcOptions) {
 			initializeVpc(this, this._vpcOptions);
 		}
@@ -258,7 +262,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Lambda function (the shared gateway's target), and a block reading
 		// `this.compute` in its constructor (during that import) must resolve to
 		// it. The factory is supplied by the umbrella
-		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+		// aws-cdk-blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		stack._defaultCompute = props.defaultComputeFactory(stack);
 		// file:// URL (not a raw path) so the cache-busting query works on Windows,
@@ -364,6 +368,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 /** Per backend root: Lambda event key → the `fullId` of the block that claimed it at synth. */
 const LAMBDA_EVENT_HANDLER_CLAIMS = Symbol.for('blocks:LambdaEventHandlerClaims');
 
+/** Per backend root: which scope path claimed each `fullId` at synth. See `../common/scope-fullid-claims.ts`. */
+const SCOPE_FULLID_CLAIMS = Symbol.for('blocks:ScopeFullIdClaims');
+
 export class Scope extends Construct {
 	public readonly id: string;
 	public readonly parent: ScopeParent;
@@ -389,12 +396,45 @@ export class Scope extends Construct {
 	 */
 	_compute?: ComputeBase;
 
+	/**
+	 * Adds a synth warning (`blocks:scope:fullIdCollision`) when a different scope
+	 * path on the same backend root already resolves to the same `fullId`: ids are
+	 * joined with `-`, so `'user-service' > 'sessions'` and `'user' >
+	 * 'service-sessions'` collide and would get resources with one physical name.
+	 * A future release will make this a synth error.
+	 *
+	 * The id is also part of the physical name of each resource created under
+	 * this scope (`fullId` joins the ids and does not escape them), and each
+	 * service accepts its own characters. Lowercase letters, digits and hyphens
+	 * are accepted in every name. `cdk synth` fails when a resource under a scope
+	 * has a name its service rejects, naming the id, the characters and what the
+	 * service accepts: `new Scope('@acme/shop')` with a `KVStore` under it fails,
+	 * because a DynamoDB table name allows only letters, digits, `_`, `.` and `-`.
+	 * The id is not rejected when the scope is constructed: the same id deploys
+	 * when the blocks under it name nothing from it, or name only resources that
+	 * accept it.
+	 *
+	 * @param id - This scope's construct id, unique among its siblings. Use
+	 *   lowercase letters, digits and hyphens.
+	 * @param options - Parent scope, Building Block metadata and compute.
+	 */
 	constructor(id: string, options?: ScopeOptions) {
 		const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
 		super(parent, id);
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
+		// computeScopeFullId, not this.fullId: a subclass getter may read fields it has not set yet.
+		const claims = getOrCreateOnRoot(
+			this,
+			SCOPE_FULLID_CLAIMS,
+			(): ScopeFullIdClaims => ({ owners: new Map(), collided: new Set() }),
+		);
+		const collision = claimScopeFullId(claims, this, computeScopeFullId(this));
+		if (collision) cdk.Annotations.of(this).addWarningV2('blocks:scope:fullIdCollision', collision);
+		// The names derived from this id are only known once the blocks under it
+		// exist, so they are checked when the tree is validated at synth.
+		ensureResourceNameCheck(this);
 		// An official Building Block (its `bbName` is one of OFFICIAL_BB_NAMES) marks
 		// the roles it creates as AWS Blocks' own for the service-principal trust
 		// check (see isAppOwnedRole in blocks-roles.ts). A plain `new Scope(...)`

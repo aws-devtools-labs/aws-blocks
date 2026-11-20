@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin
 
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
@@ -134,8 +137,8 @@ class InlineObjectPropertyTest : FunSpec({
         val source = types(holder(""" "payload": ${obj(inner, "kind")} """, "payload"))
         source shouldContain "public val kind: Kind,"
         source shouldContain """
-            |    @Serializable
-            |    public enum class Kind {
+            |    @Serializable(with = Kind.Serializer::class)
+            |    public sealed class Kind {
         """.trimMargin()
     }
 

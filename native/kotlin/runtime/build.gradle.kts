@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kotlin.multiplatform)
@@ -58,6 +61,8 @@ kotlin {
 
         jvmMain.dependencies {
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.jna)
+            implementation(libs.jna.platform)
         }
 
         iosMain.dependencies {
@@ -98,4 +103,11 @@ val generateVersion by tasks.registering {
 
 kotlin.sourceSets.named("commonMain") {
     kotlin.srcDir(generateVersion.map { versionOutputDir })
+}
+
+// The golden source the code generator produces for spec names that are not identifiers.
+// Compiling it here, against this runtime, checks that it is valid Kotlin, which the golden
+// comparison in :codegen:test does not. The golden is read in place so the two cannot drift.
+kotlin.sourceSets.named("jvmTest") {
+    kotlin.srcDir("../../codegen-fixtures/43-non-identifier-names/kotlin")
 }

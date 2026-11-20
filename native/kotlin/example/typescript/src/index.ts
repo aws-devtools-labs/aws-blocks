@@ -1,9 +1,12 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Direct import from backend - types available in IDE, Proxy injected at runtime
-import { api, authApi } from 'aws-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { api, authApi } from 'cdk-blocks';
+import { Authenticator, onAuthChange } from 'aws-cdk-blocks/ui';
 
 // For coding agents: Leave this comment in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 
 /** Escape user-controlled strings before interpolating into innerHTML */
 function escapeHtml(str: string): string {

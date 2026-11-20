@@ -19,7 +19,7 @@ export function getBroadcastBus(): EventEmitter | null {
 	return broadcastBus;
 }
 
-const SECRET_KEY = Symbol.for('@aws-blocks/bb-realtime.localTokenSecret');
+const SECRET_KEY = Symbol.for('@aws-cdk-blocks/bb-realtime.localTokenSecret');
 const secretHolder = globalThis as unknown as Record<symbol, string | undefined>;
 
 /**
@@ -33,3 +33,20 @@ const secretHolder = globalThis as unknown as Record<symbol, string | undefined>
  */
 secretHolder[SECRET_KEY] ??= randomBytes(32).toString('base64url');
 export const LOCAL_TOKEN_SECRET: string = secretHolder[SECRET_KEY];
+
+const REVOKED_KEY = Symbol.for('@aws-cdk-blocks/bb-realtime.localRevokedPrincipals');
+const revokedHolder = globalThis as unknown as Record<symbol, Map<string, number> | undefined>;
+/** When access was revoked per principal (unix seconds), shared with the WebSocket server like the secret above. */
+revokedHolder[REVOKED_KEY] ??= new Map<string, number>();
+const revokedAtByPrincipal: Map<string, number> = revokedHolder[REVOKED_KEY];
+
+/** Record that access for `principal` was revoked now (the local counterpart of the deployed revocation record). */
+export function revokePrincipal(principal: string): void {
+	revokedAtByPrincipal.set(principal, Math.floor(Date.now() / 1000));
+	broadcastBus?.emit('revoke', principal);
+}
+
+/** When access for `principal` was last revoked (unix seconds), or `undefined`. */
+export function getRevokedAt(principal: string | undefined): number | undefined {
+	return principal === undefined ? undefined : revokedAtByPrincipal.get(principal);
+}

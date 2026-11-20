@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { blocksError } from '@aws-blocks/core';
-import { DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common/core';
+import { blocksError } from '@aws-cdk-blocks/core';
+import { DOLLAR_QUOTE_TAG_RE } from '../common/split-statements.js';
 import { TRANSACTION_ROW_LIMIT, TRANSACTION_SIZE_LIMIT_BYTES } from '../constants.js';
 import { DatabaseErrors, DSQL_VALIDATION_ERROR_NAME } from '../errors.js';
 import { formatDiagnostic, type LintDiagnostic, lintSql } from './lint.js';

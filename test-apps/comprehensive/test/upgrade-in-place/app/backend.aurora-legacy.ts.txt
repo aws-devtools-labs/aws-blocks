@@ -1,0 +1,46 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Fixture of `upgrade-sql-blocks.ts --scenario aurora`: the same app on this checkout. The cluster of the
+// earlier block is a `LegacyDatabaseCluster` with the id of that block, and a `Database` with a new id runs on it.
+
+import { ApiNamespace, Database, LegacyDatabaseCluster, Scope, sql } from 'aws-cdk-blocks';
+
+const scope = new Scope('upgrade');
+const cluster = new LegacyDatabaseCluster(scope, 'main');
+const main = new Database(scope, 'main-db', { cluster, migrationsPath: './cdk-blocks/migrations' });
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async dump() {
+		return main.query<{ owner: string; name: string; balance: string }>(
+			sql`SELECT owner, name, balance::text AS balance FROM accounts ORDER BY owner, name`,
+		);
+	},
+
+	/** A write to a table of the release, in a transaction. */
+	async deposit(owner: string, name: string, amount: number) {
+		return main.transaction(async (tx) => {
+			await tx.execute(sql`UPDATE accounts SET balance = balance + ${amount} WHERE owner = ${owner} AND name = ${name}`);
+			const row = await tx.queryOne<{ balance: string }>(
+				sql`SELECT balance::text AS balance FROM accounts WHERE owner = ${owner} AND name = ${name}`,
+			);
+			return row?.balance ?? null;
+		});
+	},
+
+	/**
+	 * Two things that differ between the Data API and a connection: the count of a statement with RETURNING,
+	 * and a `$2` inside a string of a statement that has parameters.
+	 */
+	async probe() {
+		const { rowCount } = await main.execute(sql`UPDATE accounts SET balance = balance WHERE owner = ${'u1'} RETURNING name`);
+		const row = await main.queryOne<{ label: string; n: number }>(sql`SELECT 'Only $2 today' AS label, ${7}::int AS n`);
+		return { rowCount, label: row?.label ?? null, n: row?.n ?? null };
+	},
+
+	/** A write to and a read of the table that the new migration file creates. */
+	async addNote(id: string, body: string) {
+		await main.execute(sql`INSERT INTO notes (id, body) VALUES (${id}, ${body})`);
+		return main.query<{ id: string; body: string }>(sql`SELECT id, body FROM notes ORDER BY id`);
+	},
+}));

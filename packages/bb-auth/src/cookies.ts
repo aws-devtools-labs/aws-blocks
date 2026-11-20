@@ -27,9 +27,9 @@
  */
 
 import crypto from 'node:crypto';
-import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLocalDevRequest } from '@aws-blocks/auth-common/cookies';
-import type { BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLocalDevRequest } from '@aws-cdk-blocks/auth-common/cookies';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { sessionCookieName } from './cdk/contract.js';
 
 /**
@@ -43,14 +43,38 @@ import { sessionCookieName } from './cdk/contract.js';
  * behind an ALB with no TLS listener a `Secure` cookie would be dropped by the
  * browser, and the session with it. Every cookie this block sets (session,
  * auto-sign-in bridge, pending federated sign-in) is built here.
+ *
+ * Dropping `Secure` that way happens only in a sandbox deploy: outside one, a
+ * same-origin cookie over a plain-HTTP front door throws
+ * `AuthErrors.InsecureTransport` before any `Set-Cookie` line is written.
+ * Sign-in checks this with {@link assertSessionCookieTransport} before it
+ * stores anything, so a refused sign-in writes no session. A clearing cookie
+ * (`clearing: true`, `Max-Age=0`) carries no value and is never refused, so
+ * sign-out and account deletion still clear the cookie. A front door with
+ * `allowPlainHttp: true` (config `BLOCKS_ALLOW_PLAIN_HTTP`, registered by
+ * `Hosting`) opts out of the refusal: its cookies drop `Secure` as in a sandbox.
  */
-function cookieAttrsForRequest(ctx: BlocksContext, crossDomain: boolean): string {
+function cookieAttrsForRequest(ctx: BlocksContext, crossDomain: boolean, clearing = false): string {
 	const security = buildCookieSecurityAttrs({
 		crossDomain,
 		isLocalhost: isLocalDevRequest(ctx),
 		plainHttpOrigin: isInsecurePublicOrigin(),
+		clearing,
 	});
 	return `HttpOnly; ${security}; Path=/`;
+}
+
+/**
+ * Throw `AuthErrors.InsecureTransport` if this request could not be given a
+ * session cookie (a same-origin cookie over a plain-HTTP front door outside a
+ * sandbox deploy), without writing anything. Sign-in calls it before it stores
+ * a session, so a refused sign-in leaves no session row behind.
+ *
+ * @throws `AuthErrors.InsecureTransport` where {@link setSessionCookie} would.
+ * @internal
+ */
+export function assertSessionCookieTransport(ctx: BlocksContext, crossDomain: boolean): void {
+	cookieAttrsForRequest(ctx, crossDomain);
 }
 
 /**
@@ -169,7 +193,7 @@ export function setSessionCookie(
  */
 export function clearSessionCookie(ctx: BlocksContext, fullId: string, crossDomain = false): void {
 	const name = sessionCookieName(fullId);
-	putSetCookie(ctx, name, `${name}=; ${cookieAttrsForRequest(ctx, crossDomain)}; Max-Age=0`);
+	putSetCookie(ctx, name, `${name}=; ${cookieAttrsForRequest(ctx, crossDomain, true)}; Max-Age=0`);
 }
 
 /**
@@ -318,7 +342,7 @@ export function readAutoSignInCookie(ctx: BlocksContext, fullId: string): string
  */
 export function clearAutoSignInCookie(ctx: BlocksContext, fullId: string, crossDomain = false): void {
 	const name = autoSignInCookieName(fullId);
-	putSetCookie(ctx, name, `${name}=; ${cookieAttrsForRequest(ctx, crossDomain)}; Max-Age=0`);
+	putSetCookie(ctx, name, `${name}=; ${cookieAttrsForRequest(ctx, crossDomain, true)}; Max-Age=0`);
 }
 
 /**
@@ -366,5 +390,5 @@ export function readPendingAuthCookie(ctx: BlocksContext, fullId: string): strin
  */
 export function clearPendingAuthCookie(ctx: BlocksContext, fullId: string, crossDomain = false): void {
 	const name = pendingAuthCookieName(fullId);
-	putSetCookie(ctx, name, `${name}=; ${cookieAttrsForRequest(ctx, crossDomain)}; Max-Age=0`);
+	putSetCookie(ctx, name, `${name}=; ${cookieAttrsForRequest(ctx, crossDomain, true)}; Max-Age=0`);
 }

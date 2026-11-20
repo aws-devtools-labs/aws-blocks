@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Claude 2.1.296 result modelUsage is session-cumulative; streams are per invocation.
 
 Per-call input usage in a stream's assistant events is exact; per-call output_tokens there is a
@@ -38,7 +41,7 @@ def skill_use(text):
     uses = [(block.get('name'), json.dumps(block.get('input') or {})) for block in tool_uses(text)]
     if any(name == 'Skill' and 'aws-blocks' in inputs for name, inputs in uses):
         return 'skill_tool'
-    if any('aws-blocks/SKILL.md' in inputs for _, inputs in uses):
+    if any('cdk-blocks/SKILL.md' in inputs for _, inputs in uses):
         return 'file_read'
     return 'none'
 

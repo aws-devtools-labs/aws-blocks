@@ -1,11 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert';
-import { rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { after, beforeEach, describe, test } from 'node:test';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import { KnowledgeBase, KnowledgeBaseErrors } from './index.mock.js';
 
 const CORPUS = 'test-agent-tool-corpus';
@@ -20,8 +20,13 @@ function writeCorpus(): void {
 }
 
 function cleanup(): void {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
-	try { rmSync(join(process.cwd(), CORPUS), { recursive: true, force: true }); } catch {}
+	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
+		rmSync('.bb-data', { recursive: true, force: true });
+	} catch {}
+	try {
+		rmSync(join(process.cwd(), CORPUS), { recursive: true, force: true });
+	} catch {}
 }
 
 beforeEach(() => {
@@ -41,7 +46,10 @@ describe('asAgentTool()', () => {
 		assert.deepStrictEqual(Object.keys(tool.parameters.shape), ['query']);
 		assert.ok(tool.parameters.safeParse({ query: 'gold tier' }).success);
 		assert.ok(!tool.parameters.safeParse({ query: '' }).success, 'an empty query is rejected');
-		assert.ok(!tool.parameters.safeParse({ query: '   ' }).success, 'a whitespace-only query is rejected by the schema');
+		assert.ok(
+			!tool.parameters.safeParse({ query: '   ' }).success,
+			'a whitespace-only query is rejected by the schema',
+		);
 		// The model can't smuggle a filter in: unknown keys are stripped from the parsed input.
 		const parsed = tool.parameters.parse({ query: 'gold', filter: { folder: { equals: 'tenant-b' } } });
 		assert.deepStrictEqual(parsed, { query: 'gold' });
@@ -51,7 +59,10 @@ describe('asAgentTool()', () => {
 		const tool = newKb().asAgentTool<{ tenantId: string }>({
 			filter: (context) => ({ folder: { equals: context.tenantId } }),
 		});
-		const results = await tool.handler({ input: { query: 'gold tier pricing plan' }, context: { tenantId: 'tenant-a' } });
+		const results = await tool.handler({
+			input: { query: 'gold tier pricing plan' },
+			context: { tenantId: 'tenant-a' },
+		});
 		assert.ok(results.length > 0, 'expected a hit for tenant-a');
 		for (const r of results) {
 			assert.strictEqual(r.metadata.folder, 'tenant-a');
@@ -73,7 +84,10 @@ describe('asAgentTool()', () => {
 		const tool = newKb().asAgentTool<{ tenantId: string }>({
 			filter: async (context) => ({ folder: { equals: context.tenantId } }),
 		});
-		const results = await tool.handler({ input: { query: 'gold tier pricing plan' }, context: { tenantId: 'tenant-b' } });
+		const results = await tool.handler({
+			input: { query: 'gold tier pricing plan' },
+			context: { tenantId: 'tenant-b' },
+		});
 		assert.ok(results.length > 0 && results.every((r) => r.metadata.folder === 'tenant-b'));
 	});
 
@@ -98,8 +112,23 @@ describe('asAgentTool()', () => {
 		const kb = newKb();
 		let calls = 0;
 		const spy = kb.retrieve.bind(kb);
-		kb.retrieve = (...args) => { calls++; return spy(...args); };
-		const bad: unknown[] = [null, '', 0, false, {}, [], { folder: { equals: undefined } }, { folder: { equals: '' } }, { folder: {} }, { folder: 'tenant-a' }, { folder: null }];
+		kb.retrieve = (...args) => {
+			calls++;
+			return spy(...args);
+		};
+		const bad: unknown[] = [
+			null,
+			'',
+			0,
+			false,
+			{},
+			[],
+			{ folder: { equals: undefined } },
+			{ folder: { equals: '' } },
+			{ folder: {} },
+			{ folder: 'tenant-a' },
+			{ folder: null },
+		];
 		for (const value of bad) {
 			const tool = kb.asAgentTool({ filter: () => value as never });
 			await assert.rejects(
@@ -126,7 +155,10 @@ describe('asAgentTool()', () => {
 		const kb = newKb();
 		let seen: number | undefined;
 		const spy = kb.retrieve.bind(kb);
-		kb.retrieve = (query, options) => { seen = options?.maxResults; return spy(query, options); };
+		kb.retrieve = (query, options) => {
+			seen = options?.maxResults;
+			return spy(query, options);
+		};
 		const tool = kb.asAgentTool({ filter: () => undefined, maxResults: null as unknown as number });
 		await tool.handler({ input: { query: 'gold' }, context: {} });
 		assert.strictEqual(seen, 5);
@@ -154,6 +186,9 @@ describe('asAgentTool()', () => {
 
 	test('uses the knowledge base description in the default tool description, and lets you override it', () => {
 		assert.match(newKb('Product docs').asAgentTool({ filter: () => undefined }).description, /Product docs/);
-		assert.strictEqual(newKb().asAgentTool({ filter: () => undefined, description: 'Search FAQs' }).description, 'Search FAQs');
+		assert.strictEqual(
+			newKb().asAgentTool({ filter: () => undefined, description: 'Search FAQs' }).description,
+			'Search FAQs',
+		);
 	});
 });

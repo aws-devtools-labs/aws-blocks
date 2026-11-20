@@ -71,8 +71,8 @@
  * @internal
  */
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, Scope } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, Scope } from '@aws-cdk-blocks/core';
 import type { FederationRouteHost } from '../federation-routes.js';
 import type {
 	OidcProviderOptions,
@@ -494,6 +494,14 @@ export interface NativeAdminEngine {
 			clientMetadata?: Record<string, string>;
 		},
 	): Promise<NativeAdminUser>;
+	/**
+	 * `AdminUpdateUserAttributes`: write `attributes` (already prefixed) on an
+	 * existing user, IAM-authorized, so a `userWritable: false` attribute and the
+	 * verified flags may be written. Throw `UserNotFoundException` for an
+	 * unknown user, and `InvalidParameterException` for a name the pool's
+	 * schema does not have or an immutable attribute.
+	 */
+	updateUserAttributes(username: string, attributes: Record<string, string>): Promise<void>;
 	/** `AdminDeleteUser`. */
 	deleteUser(username: string): Promise<void>;
 	/** `AdminDisableUser`. */
@@ -592,7 +600,7 @@ export interface FederationEngine {
 	 * Build the authorize URL (the IdP's, or Cognito managed login's) and set
 	 * whatever pending-auth state the callback needs (PKCE verifier, nonce,
 	 * `state`) as a cookie on `context.response`. The `GET
-	 * /aws-blocks/auth/signin/<id>` route 302s to it.
+	 * /cdk-blocks/auth/signin/<id>` route 302s to it.
 	 *
 	 * @throws `ApiError` `ProviderUnavailableException` when the provider cannot be reached (e.g. discovery failed).
 	 */
@@ -636,7 +644,7 @@ export interface FederationEngine {
 
 	/**
 	 * Exchange a code the client obtained with its own PKCE (`POST
-	 * /aws-blocks/auth/exchange`) and verify the result exactly like
+	 * /cdk-blocks/auth/exchange`) and verify the result exactly like
 	 * {@link completeSignIn}.
 	 *
 	 * @throws `ApiError` `IdpErrorException` / `InvalidCallbackException`.
@@ -644,14 +652,14 @@ export interface FederationEngine {
 	exchangeCode?(context: BlocksContext, input: CodeExchangeInput): Promise<FederatedIdentity>;
 
 	/**
-	 * The public authorize parameters (`GET|POST /aws-blocks/auth/authorize-params/<id>`):
+	 * The public authorize parameters (`GET|POST /cdk-blocks/auth/authorize-params/<id>`):
 	 * never a secret.
 	 */
 	authorizeParams?(context: BlocksContext): Promise<PublicAuthorizeParams>;
 
 	/**
 	 * Refresh a native client's bearer tokens from a raw refresh token
-	 * (`POST /aws-blocks/auth/refresh`, only with `allowBearerAuth`). `null`
+	 * (`POST /cdk-blocks/auth/refresh`, only with `allowBearerAuth`). `null`
 	 * when the provider rejected the token.
 	 */
 	refreshBearer?(context: BlocksContext, refreshToken: string): Promise<BearerTokens | null>;
@@ -757,8 +765,9 @@ export interface BearerTokens {
 export interface AuthLayer {
 	/**
 	 * Where the session-signing secret comes from. AWS: the `session-secret`
-	 * `AppSetting` child (the same SSM parameter `AuthCognito` uses). Mock:
-	 * `.bb-data/<fullId>/state.json` (the same file `AuthCognito`'s mock uses).
+	 * framework key (Secrets Manager or SSM, per `defaults.secretsStore`; under
+	 * `'ssm'` the same SSM parameter `AuthCognito` uses). Mock:
+	 * `.cdk-blocks/local/data/<fullId>/state.json` (the same file `AuthCognito`'s mock uses).
 	 * Called once, in the constructor; the returned function is called per
 	 * request and should cache.
 	 */

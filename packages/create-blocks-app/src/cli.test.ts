@@ -1,25 +1,51 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it } from 'node:test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
+import { generateStackId, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
 
+const task = (args: string) => `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- ${args}`;
+
+// Tasks available both in a standalone app and alongside an Amplify-owned backend.
+const discoveryTasks = {
+  docs: 'docs', 'docs:api': 'docs --api', 'docs:search': 'docs --search',
+  help: '--help', whoami: 'whoami',
+};
+
+const standaloneTasks = {
+  ...discoveryTasks,
+  dev: 'dev', 'dev:stop': 'dev stop', cleanup: 'dev stop --all', sandbox: 'sandbox',
+  'sandbox:deploy': 'sandbox deploy', 'sandbox:destroy': 'sandbox destroy', 'sandbox:console': 'sandbox console',
+  deploy: 'deploy', destroy: 'destroy', secret: 'secret', config: 'config',
+  typegen: 'generate types', spec: 'generate spec', vendorize: 'vendorize',
+  db: 'db', migrate: 'migrate', 'generate-client': 'generate client',
+};
+
+function assertTasks(scripts: Record<string, string>, expected: Record<string, string>, label: string) {
+  for (const [name, args] of Object.entries(expected)) {
+    assert.strictEqual(scripts[name], task(args), `${label}: ${name}`);
+  }
+}
+
 /**
- * The dev server settings that `cdk-blocks dev` resolves for an app, from the built
- * `@aws-blocks/blocks` CLI in this repository: what the scaffolded `blocks.dev` does.
- * `flags` are the `cdk-blocks dev` options, for example `{ 'frontend-port': '41902' }`.
+ * The dev server settings resolved by the built `aws-cdk-blocks` package:
+ * what the scaffolded `blocks.dev` does. `flags` are the dev task's options,
+ * for example `{ 'frontend-port': '41902' }`.
  */
 async function resolvedDevConfig(
   root: string,
   flags: Record<string, string> = {},
 ): Promise<{ frontendCommand?: string; frontendPort?: number; port?: number; source: string }> {
-  // A runtime path, not a static import: `@aws-blocks/blocks` exports no `cli/config`, and
+  // A runtime path, not a static import: `aws-cdk-blocks` exports no `cli/config`, and
   // create-blocks-app does not depend on it, so the test loads the sibling package's build.
   const config = pathToFileURL(join(__dirname, '../../blocks/dist/cli/config.js')).href;
   const { resolveDevConfig } = await import(config);
@@ -36,7 +62,7 @@ function run(args: string[], cwd?: string, env?: Record<string, string>): { stdo
       // endpoint at a dead port so a regression cannot reach the production collector.
       env: {
         ...process.env,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        CDK_DISABLE_CLI_TELEMETRY: '1',
         BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
         ...env,
       },
@@ -57,7 +83,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, agent, cron, observability, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, auth-oidc, agent, cron, observability, amplify, demo/);
     assert.match(result.stdout, /Former names \(still accepted\): auth-cognito → auth/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
@@ -162,7 +188,7 @@ describe('create-blocks-app CLI argument parsing', () => {
       assert.match(result.stdout, /"auth-cognito" template is now called "auth"/);
       const pkg = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf-8'));
       assert.strictEqual(pkg.blocksTemplate, 'auth');
-      assert.match(readFileSync(join(targetDir, 'aws-blocks', 'index.ts'), 'utf-8'), /new Auth\(scope, 'auth'/);
+      assert.match(readFileSync(join(targetDir, 'cdk-blocks', 'index.ts'), 'utf-8'), /new Auth\(scope, 'auth'/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -200,8 +226,7 @@ describe('create-blocks-app template metadata', () => {
       const pkgPath = join(templatesDir, name, 'package.json');
       if (!existsSync(pkgPath)) continue;
       const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
-      // Keep this in step with the standard vendorize-script guard below:
-      // a template with a sandbox lifecycle is deployable and must expose build.
+      // A template with a sandbox lifecycle is deployable and must expose build.
       if (scripts.sandbox && (typeof scripts.build !== 'string' || scripts.build.length === 0)) {
         missing.push(name);
       }
@@ -209,58 +234,41 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, [], `Deployable templates missing "build": ${missing.join(', ')}`);
   });
 
-  it('every deployable template runs its lifecycle scripts through the cdk-blocks CLI', () => {
-    // The npm script names stay the same; each one is a thin alias of a `cdk-blocks`
-    // command, so no template ships aws-blocks/scripts/*.ts wrappers any more.
-    // `sandbox:deploy` is the one-shot variant of `sandbox` that CI uses, and
-    // `sandbox:preview` the one-shot deploy with a hosted preview.
-    const expected: Record<string, string> = {
-      dev: 'cdk-blocks dev',
-      'dev:server': 'cdk-blocks dev',
-      'dev:stop': 'cdk-blocks dev stop',
-      sandbox: 'cdk-blocks sandbox',
-      'sandbox:deploy': 'cdk-blocks sandbox deploy',
-      'sandbox:preview': 'cdk-blocks sandbox preview',
-      'sandbox:destroy': 'cdk-blocks sandbox destroy',
-      'sandbox:console': 'cdk-blocks sandbox console',
-      cleanup: 'cdk-blocks dev stop --all',
-      deploy: 'cdk-blocks deploy',
-      destroy: 'cdk-blocks destroy',
-      secret: 'cdk-blocks secret',
-      config: 'cdk-blocks config',
-      typegen: 'cdk-blocks generate types',
-      spec: 'cdk-blocks generate spec',
-      vendorize: 'cdk-blocks vendorize',
-      prebuild: 'cdk-blocks generate client',
-    };
+  it('every standalone template wires its npm tasks to the installed package runner', () => {
     const templatesDir = join(__dirname, '..', 'templates');
-    const problems: string[] = [];
+    const checked: string[] = [];
     for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const pkgPath = join(templatesDir, entry.name, 'package.json');
       if (!existsSync(pkgPath)) continue;
-      const scripts: Record<string, string> = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
-      if (!scripts.sandbox) continue;
-      for (const name of ['dev', 'dev:stop', 'sandbox', 'sandbox:deploy', 'sandbox:destroy', 'deploy', 'destroy', 'secret', 'config']) {
-        if (!(name in scripts)) problems.push(`${entry.name}: missing "${name}"`);
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (pkg.blocksTemplateOverlayOnly) continue;
+      const scripts: Record<string, string> = pkg.scripts ?? {};
+      assertTasks(scripts, { ...standaloneTasks, prebuild: 'generate client' }, entry.name);
+      if (pkg.blocks?.dev?.frontend !== false) {
+        assertTasks(scripts, { 'dev:server': 'dev', 'sandbox:preview': 'sandbox preview' }, entry.name);
       }
       for (const [name, value] of Object.entries(scripts)) {
-        if (name in expected && value !== expected[name]) {
-          problems.push(`${entry.name}: "${name}" should be "${expected[name]}", not "${value}"`);
-        }
-        if (value.includes('aws-blocks/scripts')) problems.push(`${entry.name}: "${name}" still runs ${value}`);
+        // Anchored so the legacy binary name is matched standalone: a `\b` alone matches
+        // inside `aws-cdk-blocks` (the `-` is a word boundary) and rejects the package.
+        // `(?!\/)` keeps the scaffolded `cdk-blocks/` folder legitimate; the second arm
+        // still bans the generated wrapper directory.
+        assert.doesNotMatch(
+          value,
+          /(?<![\w.-])cdk-blocks\b(?!\/)|(?<![\w.-])cdk-blocks\/scripts\//,
+          `${entry.name}: ${name}`,
+        );
       }
-      if (existsSync(join(templatesDir, entry.name, 'aws-blocks', 'scripts'))) {
-        problems.push(`${entry.name}: still ships aws-blocks/scripts/`);
-      }
+      assert.ok(!existsSync(join(templatesDir, entry.name, 'cdk-blocks', 'scripts')), entry.name);
+      checked.push(entry.name);
     }
-    assert.deepStrictEqual(problems, []);
+    assert.ok(checked.includes('default') && checked.includes('backend'), `checked: ${checked.join(', ')}`);
   });
 
   it('every deployable template sets its dev server in package.json "blocks.dev"', () => {
-    // `cdk-blocks dev` and the sandbox's dev server read these settings; they replace
-    // the options the removed aws-blocks/scripts/server.ts passed to startDevServer.
-    // No template sets `frontendCommand`: `cdk-blocks dev` builds it from the app's
+    // The dev task and sandbox dev server read these settings; they replace the
+    // options the removed cdk-blocks/scripts/server.ts passed to startDevServer.
+    // No template sets `frontendCommand`: the dev task builds it from the app's
     // `vite` or `next` dependency and the effective frontend port.
     const frontend = { frontendPort: 3100 };
     const expected: Record<string, unknown> = {
@@ -271,6 +279,7 @@ describe('create-blocks-app template metadata', () => {
       observability: { port: 3001, frontend: false },
       nextjs: frontend,
       auth: frontend,
+      'auth-oidc': frontend,
       agent: frontend,
       bare: frontend,
       default: frontend,
@@ -292,10 +301,10 @@ describe('create-blocks-app template metadata', () => {
   it('every frontend template starts its frontend dev server on the --frontend-port it is given', async () => {
     // A hard-coded `frontendCommand` would keep its own `--port 3100`, so the dev server
     // would proxy to the requested port while the frontend listened on another one.
-    const vite = (port: number) => `npx vite --port ${port} --strictPort`;
+    const vite = (port: number) => `npx vite --host 127.0.0.1 --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
-      nextjs: next, auth: vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
+      nextjs: next, auth: vite, 'auth-oidc': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     for (const [name, command] of Object.entries(commands)) {
@@ -319,6 +328,49 @@ describe('create-blocks-app template metadata', () => {
       if (!read) problems.push(`${entry.name}: does not read the port from package.json`);
       else if (Number(read[1]) !== port) problems.push(`${entry.name}: falls back to ${read[1]}, not ${port}`);
       if (/localhost:\d/.test(source)) problems.push(`${entry.name}: hard-codes a localhost port`);
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it('every template e2e test calls the dev server it reuses, or TEST_URL, never a URL a deploy recorded', () => {
+    // The Node client resolves BLOCKS_API_URL before it reads .cdk-blocks-sandbox/config.json. A test that
+    // left the choice to that file sent its sign-ups and writes to the stack a deploy had just recorded.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const pin = 'process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/cdk-blocks/api`;';
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
+      if (!entry.isDirectory() || !existsSync(testPath)) continue;
+      const source = readFileSync(testPath, 'utf-8');
+      // The awaited import loads the client; `let app: typeof import('cdk-blocks')` is only a type.
+      const load = source.indexOf("await import('cdk-blocks')");
+      if (load === -1) continue; // builds its own client from the server's URL (nextjs)
+      const pinned = source.indexOf(pin);
+      if (pinned === -1 || pinned > load) problems.push(`${entry.name}: does not set BLOCKS_API_URL before it loads the client`);
+      // A dev server that inherits BLOCKS_API_URL runs in sandbox mode, proxying to that URL (here: itself).
+      if (pinned !== -1 && pinned < source.indexOf("server = spawn('npm'")) {
+        problems.push(`${entry.name}: sets BLOCKS_API_URL before it starts the dev server, which then inherits it`);
+      }
+      if (!source.includes("const testUrl = process.env.TEST_URL?.replace(/\\/$/, '') || undefined;")) {
+        problems.push(`${entry.name}: does not read TEST_URL`);
+      }
+      if (!source.includes('if (!testUrl && !await isServerRunning(serverPort))')) {
+        problems.push(`${entry.name}: starts a dev server although TEST_URL names a deployed app`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it("every template's cdk watch ignores the generated cdk-blocks/client.js", () => {
+    // Deploy regenerates it; a running sandbox then started a watch synth, and the deploy failed
+    // on CDK's cdk.out lock (JW-02). The deployed backend does not use the browser client.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const cdkJson = join(templatesDir, entry.name, 'cdk.json');
+      if (!entry.isDirectory() || !existsSync(cdkJson)) continue;
+      const exclude: string[] = JSON.parse(readFileSync(cdkJson, 'utf-8')).watch?.exclude ?? [];
+      if (!exclude.includes('cdk-blocks/client.js')) problems.push(`${entry.name}: watch.exclude lacks cdk-blocks/client.js`);
     }
     assert.deepStrictEqual(problems, []);
   });
@@ -357,19 +409,21 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
-  it('AGENTS.md names the cdk-blocks db and cdk-blocks vendorize commands of the scaffolded app', () => {
+  it('AGENTS.md names where SQL migrations live and the database status and vendorize tasks of the scaffolded app', () => {
     const guide = readFileSync(join(__dirname, '..', 'resources', 'AGENTS.md'), 'utf-8');
-    assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations')), 'the sql template keeps aws-blocks/migrations');
-    assert.match(guide, /`npx --no -- cdk-blocks db migrate aws-blocks\/migrations`/);
-    assert.match(guide, /`npx --no -- cdk-blocks db status aws-blocks\/migrations`/);
-    assert.match(guide, /`npm run vendorize -- @aws-blocks\/[\w-]+`/);
+    // The Database block reads cdk-blocks/migrations/<block id>/; the sql template's block id is 'main'.
+    assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'cdk-blocks', 'migrations', 'main')), 'the sql template keeps cdk-blocks/migrations/main');
+    assert.match(guide, /`cdk-blocks\/migrations\/<block id>\/`/);
+    assert.match(guide, /`npm run db -- status --block <id>`/);
+    assert.doesNotMatch(guide, /npm run db (?:-- )?migrate\b/, 'the template applies migrations automatically');
+    assert.match(guide, /`npm run vendorize -- @aws-cdk-blocks\/[\w-]+`/);
   });
 
-  it('the backend README gives the dev server API URL with its /aws-blocks/api path', () => {
+  it('the backend README gives the dev server API URL with its /cdk-blocks/api path', () => {
     const readme = readFileSync(join(__dirname, '..', 'templates', 'backend', 'README.md'), 'utf-8');
     const row = readme.split('\n').find((line) => line.startsWith('| `npm run dev` |'));
     assert.ok(row, 'the process model table has an npm run dev row');
-    assert.match(row, /\| `http:\/\/localhost:3001\/aws-blocks\/api` \|$/);
+    assert.match(row, /\| `http:\/\/localhost:3001\/cdk-blocks\/api` \|$/);
   });
 
   it('nextjs template ignores what next build and the deploy write', () => {
@@ -378,14 +432,14 @@ describe('create-blocks-app template metadata', () => {
   });
 
   it('every template README says to commit the generated types before gating CI on typegen --check', () => {
-    // A fresh app has no .blocks/hosting-values.d.ts, so `npm run typegen -- --check` exits 1 until it is committed.
+    // A fresh app has no .cdk-blocks/hosting-values.d.ts, so `npm run typegen -- --check` exits 1 until it is committed.
     const templatesDir = join(__dirname, '..', 'templates');
     const problems: string[] = [];
     for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
       const readmePath = join(templatesDir, entry.name, 'README.md');
       if (!entry.isDirectory() || !existsSync(readmePath)) continue;
       for (const line of readFileSync(readmePath, 'utf-8').split('\n')) {
-        if (line.includes('--check') && !line.includes('commit `.blocks/hosting-values.d.ts`') && !line.includes('commit .blocks/hosting-values.d.ts')) {
+        if (line.includes('--check') && !line.includes('commit `.cdk-blocks/hosting-values.d.ts`') && !line.includes('commit .cdk-blocks/hosting-values.d.ts')) {
           problems.push(`${entry.name}: ${line.trim()}`);
         }
       }
@@ -423,10 +477,10 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(unwrapped, [], 'every <section> in page.tsx should wrap its content in <SectionBoundary>');
   });
 
-  it('the amplify overlay keeps only the generator the cdk-blocks CLI does not cover', () => {
-    // `cdk-blocks generate client` writes the standard client; the overlay's client
+  it('the amplify overlay keeps only its specialized client generator', () => {
+    // The generate-client task normally writes the standard client; the overlay's client
     // needs an Amplify preamble (auth middleware, API URL from amplify_outputs.json).
-    const scriptsDir = join(__dirname, '..', 'templates', 'amplify', 'aws-blocks', 'scripts');
+    const scriptsDir = join(__dirname, '..', 'templates', 'amplify', 'cdk-blocks', 'scripts');
     assert.deepStrictEqual(readdirSync(scriptsDir), ['generate-client.ts']);
   });
 });
@@ -440,8 +494,13 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected existing project/);
-      assert.match(result.stdout, /Created aws-blocks/);
-      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.bb-data\/$/m);
+      assert.match(result.stdout, /Created cdk-blocks/);
+      // The printed import must name the workspace package the scaffold declares.
+      assert.match(result.stdout, /import \{ api \} from 'cdk-blocks'/);
+      assert.doesNotMatch(result.stdout, /from 'aws-blocks'/);
+      // The whole of `local/`, so the mock data is covered before any block has run
+      // and written the self-ignoring marker inside it.
+      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.cdk-blocks\/local\/$/m);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -481,7 +540,7 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['.', '-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected existing project/);
-      assert.match(result.stdout, /Created aws-blocks/);
+      assert.match(result.stdout, /Created cdk-blocks/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -490,7 +549,7 @@ describe('create-blocks-app auto-detection', () => {
   it('detects Amplify Gen 2 project over plain project, and keeps its Blocks dev server backend-only', async () => {
     const tmpDir = join(__dirname, '../.test-autodetect-amplify');
     mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
-    // An Amplify app usually has its own frontend dependency, which `cdk-blocks dev` would otherwise start.
+    // An Amplify app usually has its own frontend dependency, which the dev task would otherwise start.
     writeFileSync(
       join(tmpDir, 'package.json'),
       JSON.stringify({ name: 'amplify-app', version: '1.0.0', devDependencies: { vite: '*', next: '*' } }),
@@ -500,27 +559,45 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected Amplify Gen 2 project/);
-      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.bb-data\/$/m);
+      // The whole of `local/`, so the mock data is covered before any block has run
+      // and written the self-ignoring marker inside it.
+      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.cdk-blocks\/local\/$/m);
       const packageJson = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-      const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');
-      const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
-      assert.strictEqual(packageJson.scripts['blocks:dev'], 'cdk-blocks dev');
-      assert.strictEqual(packageJson.scripts['blocks:stop'], 'cdk-blocks dev stop');
+      const generateClientPath = join(tmpDir, 'cdk-blocks', 'scripts', 'generate-client.ts');
+      const cognitoVerifierPath = join(tmpDir, 'cdk-blocks', 'cognito-verifier.ts');
+      assertTasks(packageJson.scripts, { ...discoveryTasks, db: 'db', migrate: 'migrate', 'blocks:dev': 'dev', 'blocks:stop': 'dev stop' }, 'amplify');
+      assert.strictEqual(packageJson.scripts.sandbox, 'cross-env NODE_OPTIONS="--conditions=cdk" AMPLIFY_SANDBOX=true npx ampx sandbox');
+      assert.strictEqual(packageJson.scripts['sandbox:delete'], 'cross-env NODE_OPTIONS="--conditions=cdk" npx ampx sandbox delete --yes');
+      assert.strictEqual(packageJson.scripts['blocks:generate-client'], 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx cdk-blocks/scripts/generate-client.ts');
+      assert.strictEqual(packageJson.scripts['generate-client'], packageJson.scripts['blocks:generate-client']);
+      for (const command of Object.values<string>(packageJson.scripts)) {
+        // In particular, an alias or prebuild must not replace the Cognito-aware client.
+        assert.doesNotMatch(command, /aws-cdk-blocks\/run.* -- (?:sandbox|deploy|destroy|generate client)(?: |$)/);
+      }
       // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
       // even with vite and next installed: the Amplify app runs its own frontend.
-      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false } });
+      // generateClient: false keeps the overlay's own cdk-blocks/client.js (Cognito token,
+      // amplify_outputs.json API URL) instead of the dev server's generic one.
+      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
       const dev = await resolvedDevConfig(tmpDir);
       assert.strictEqual(dev.frontendCommand, undefined);
       assert.strictEqual(dev.port, 3001);
-      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts')));
-      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
-      assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
-      assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
-      assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
-      assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
-      // Blocks-native migration step: the overlay's own `sandbox` script runs `ampx sandbox`.
-      assert.doesNotMatch(result.stdout, /Replace `npx ampx sandbox` with `npm run sandbox`/);
-      assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `cdk-blocks sandbox`/);
+      assert.ok(!existsSync(join(tmpDir, 'cdk-blocks', 'scripts', 'server.ts')));
+      assert.ok(!existsSync(join(tmpDir, 'cdk-blocks', 'scripts', 'stop.ts')));
+      assert.match(readFileSync(generateClientPath, 'utf-8'), /from 'aws-cdk-blocks\/scripts'/);
+      assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from 'aws-cdk-blocks'/);
+      assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-cdk-blocks\/core/);
+      assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-cdk-blocks\/core/);
+      // With `next` installed, the app's tsconfig.json checks cdk-blocks/ (next build ignores
+      // project references), so the backend gets no project of its own and the steps say so.
+      assert.ok(!existsSync(join(tmpDir, 'cdk-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
+      assert.match(result.stdout, /npm run sandbox\b/);
+      assert.match(result.stdout, /npm run blocks:dev\b/);
+      // The CLI name as a command, not the `.cdk-blocks*` directories or the `/cdk-blocks/` URL path the rebrand
+      // introduced: a next step must say `npm run <task>`, never invoke the binary.
+      assert.doesNotMatch(result.stdout, /(?<![\w.-])cdk-blocks\b(?![-/])/);
+      assert.ok(result.stdout.includes(task('sandbox')), result.stdout);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -533,7 +610,7 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run(['-y', '--skip-install', '--template', 'react'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const handler = readFileSync(join(tmpDir, 'aws-blocks', 'index.handler.ts'), 'utf-8');
+      const handler = readFileSync(join(tmpDir, 'cdk-blocks', 'index.handler.ts'), 'utf-8');
       assert.match(handler, /createLambdaHandler\(\(\) => import\('\.\/index\.js'\)\)/);
       assert.doesNotMatch(handler, /import \* as backend/);
     } finally {
@@ -552,7 +629,7 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      assert.match(result.stdout, /Created aws-blocks/);
+      assert.match(result.stdout, /Created cdk-blocks/);
       assert.match(result.stdout, /Modified package.json/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -598,7 +675,7 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([tmpDir, '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
       // A fresh Blocks app was scaffolded into the directory.
-      assert.ok(existsSync(join(tmpDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded');
+      assert.ok(existsSync(join(tmpDir, 'cdk-blocks')), 'expected cdk-blocks/ to be scaffolded');
       assert.ok(existsSync(join(tmpDir, 'package.json')), 'expected root package.json to be created');
       // The original seed file is preserved.
       assert.strictEqual(readFileSync(join(tmpDir, 'INSTRUCTIONS.md'), 'utf-8'), '# seed instructions');
@@ -666,30 +743,30 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run([tmpDir, '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
-      assert.ok(existsSync(join(tmpDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded');
+      assert.ok(existsSync(join(tmpDir, 'cdk-blocks')), 'expected cdk-blocks/ to be scaffolded');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
-  it('generates .blocks/config.json with stackId and uses getStackName in index.cdk.ts', () => {
+  it('generates .cdk-blocks/config.json with stackId and uses getStackName in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
+      const cdkContent = readFileSync(join(tmpDir, 'cdk-blocks', 'index.cdk.ts'), 'utf-8');
       assert.ok(
         !cdkContent.includes('my-blocks-stack'),
         'generated index.cdk.ts should not contain the static placeholder'
       );
       assert.ok(
         cdkContent.includes('getStackName'),
-        'generated index.cdk.ts should import getStackName from @aws-blocks/blocks/scripts'
+        'generated index.cdk.ts should import getStackName from aws-cdk-blocks/scripts'
       );
-      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.cdk-blocks/config.json should have a stackId');
       assert.ok(config.stackId.startsWith('my-cool-app-'), 'stackId should start with truncated app name');
       assert.strictEqual(config.stackId.length, 'my-cool-app-'.length + 6, 'stackId should have 6-char random suffix');
     } finally {
@@ -704,8 +781,8 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.cdk-blocks/config.json should have a stackId');
       // Name part (before the random suffix) should be at most 16 chars
       const parts = config.stackId.split('-');
       const suffix = parts.pop();
@@ -718,6 +795,36 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('a stackId derived from a name that starts with "aws" gets the app- prefix, in any letter case', () => {
+    const names: [name: string, expected: RegExp][] = [
+      ['aws-blocks-wt-cmp-bbdata', /^app-aws-blocks-w-[0-9a-f]{6}$/],
+      ['AWS-Thing', /^app-AWS-Thing-[0-9a-f]{6}$/],
+      ['Awsome', /^app-Awsome-[0-9a-f]{6}$/],
+      ['@aws/shop', /^app-aws-shop-[0-9a-f]{6}$/],
+      // Unchanged: the name does not start with "aws".
+      ['awesome-app', /^awesome-app-[0-9a-f]{6}$/],
+      ['my-aws-app', /^my-aws-app-[0-9a-f]{6}$/],
+      ['my-cool-app', /^my-cool-app-[0-9a-f]{6}$/],
+    ];
+    for (const [name, expected] of names) {
+      const stackId = generateStackId(name);
+      assert.match(stackId, expected, `${name} -> ${stackId}`);
+    }
+  });
+
+  it('a fresh app in a directory whose name starts with "aws" gets a stackId that does not', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'create-blocks-app-aws-name-'));
+    const appDir = join(parent, 'aws-blocks-wt-cmp-bbdata');
+    try {
+      const result = run([appDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(appDir, '.cdk-blocks', 'config.json'), 'utf-8'));
+      assert.match(config.stackId, /^app-aws-blocks-w-[0-9a-f]{6}$/);
+    } finally {
+      rmSync(parent, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('detects existing project when target dir is an explicit named directory', () => {
     const tmpDir = join(__dirname, '../.test-named-existing');
     mkdirSync(tmpDir, { recursive: true });
@@ -726,19 +833,59 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([tmpDir, '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected existing project/);
-      assert.match(result.stdout, /Created aws-blocks/);
+      assert.match(result.stdout, /Created cdk-blocks/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
-  it('generates .blocks/config.json with stackId and ships zod for fresh bare project scaffolding', () => {
+  it('routes scaffolded docs tasks through a hoisted Blocks package and returns JSON', () => {
+    const root = mkdtempSync(join(tmpdir(), 'blocks-hoisted-docs-'));
+    const app = join(root, 'apps', 'web');
+    try {
+      const result = run([app, '-y', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      // The umbrella is unscoped, so a hoisted copy sits directly in node_modules.
+      const hoisted = join(root, 'node_modules');
+      mkdirSync(hoisted, { recursive: true });
+      symlinkSync(join(__dirname, '../../blocks'), join(hoisted, 'aws-cdk-blocks'), 'junction');
+      const docs = (command: string) => JSON.parse(execSync(command, {
+        cwd: app, encoding: 'utf-8', timeout: 30_000,
+        // Same guard as run(): the scaffolded task calls trackCommand, so opt out and
+        // point the endpoint at a dead port so a regression cannot reach the collector.
+        env: {
+          ...process.env,
+          CDK_DISABLE_CLI_TELEMETRY: '1',
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
+        },
+      }));
+      // Parse stdout as-is: npm banners or text formatting would break a consumer's pipe.
+      const member = docs('npm run -s docs Auth.protect');
+      assert.strictEqual(member.kind, 'member');
+      assert.strictEqual(member.package, '@aws-cdk-blocks/bb-auth');
+      assert.match(member.declaration, /\bprotect\b/);
+
+      const api = docs('npm run -s docs:api KVStore');
+      assert.strictEqual(api.docs[0].doc, 'bb-kv-store/API.md');
+
+      const database = docs('npm run -s docs Database');
+      assert.strictEqual(database.docs[0].doc, 'bb-database/README.md');
+
+      const search = docs('npm run -s docs:search "conditional write"');
+      assert.strictEqual(search.term, 'conditional write');
+      assert.ok(search.hits.some((hit: { text: string }) => /conditional write/i.test(hit.text)));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('generates .cdk-blocks/config.json with stackId and ships zod for fresh bare project scaffolding', () => {
     const tmpDir = join(__dirname, '../.test-fresh-project-stackid');
     try {
       const result = run([tmpDir, '--template', 'bare', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.cdk-blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.cdk-blocks/config.json should have a stackId');
       assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
       assert.strictEqual(config.stackId.split('-').pop()!.length, 6, 'suffix should be 6 chars');
       // The bare template's commented examples import zod, so a fresh app must depend on it
@@ -759,8 +906,8 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       const guide = readFileSync(join(tmpDir, 'AGENTS.md'), 'utf-8');
       assert.doesNotMatch(guide, /localhost:3000/);
-      assert.match(guide, /curl -X POST http:\/\/localhost:3001\/aws-blocks\/api/);
-      assert.match(guide, /\(locally `http:\/\/localhost:3001\/aws-blocks\/api`\)/);
+      assert.match(guide, /curl -X POST http:\/\/localhost:3001\/cdk-blocks\/api/);
+      assert.match(guide, /\(locally `http:\/\/localhost:3001\/cdk-blocks\/api`\)/);
       assert.doesNotMatch(guide, /or frontend \(`src\/`\)/);
       assert.match(guide, /This app has no frontend/);
     } finally {
@@ -774,7 +921,7 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([tmpDir, '--template', 'bare', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
       const guide = readFileSync(join(tmpDir, 'AGENTS.md'), 'utf-8');
-      assert.match(guide, /curl -X POST http:\/\/localhost:3000\/aws-blocks\/api/);
+      assert.match(guide, /curl -X POST http:\/\/localhost:3000\/cdk-blocks\/api/);
       assert.match(guide, /or frontend \(`src\/`\)/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -786,7 +933,7 @@ describe('create-blocks-app auto-detection', () => {
     // copied: a Next.js project with the default (Vite) template still runs `next dev`.
     const projects: Record<string, { deps: Record<string, unknown>; command: string }> = {
       next: { deps: { dependencies: { next: '*' } }, command: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100' },
-      vite: { deps: { devDependencies: { vite: '*' } }, command: 'npx vite --port 3100 --strictPort' },
+      vite: { deps: { devDependencies: { vite: '*' } }, command: 'npx vite --host 127.0.0.1 --port 3100 --strictPort' },
     };
     for (const template of ['default', 'nextjs']) {
       for (const [framework, { deps, command }] of Object.entries(projects)) {
@@ -800,7 +947,7 @@ describe('create-blocks-app auto-detection', () => {
           assert.strictEqual(pkg.blocks, undefined, `${template} into ${framework}`);
           const dev = await resolvedDevConfig(tmpDir, { 'frontend-port': '41902' });
           assert.strictEqual(dev.frontendCommand, command.replace('3100', '41902'), `${template} into ${framework}`);
-          assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts')), 'no lifecycle wrappers are copied');
+          assert.ok(!existsSync(join(tmpDir, 'cdk-blocks', 'scripts')), 'no lifecycle wrappers are copied');
         } finally {
           rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
         }
@@ -838,7 +985,7 @@ describe('create-blocks-app auto-detection', () => {
         .some((file) => /from 'zod'/.test(readFileSync(join(dir, file), 'utf-8')));
     const checked: string[] = [];
     for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
-      const backendDir = join(templatesDir, entry.name, 'aws-blocks');
+      const backendDir = join(templatesDir, entry.name, 'cdk-blocks');
       if (!entry.isDirectory() || entry.name === 'amplify' || !existsSync(backendDir) || !importsZod(backendDir)) continue;
       const tmpDir = join(__dirname, `../.test-existing-zod-${entry.name}`);
       mkdirSync(tmpDir, { recursive: true });
@@ -857,6 +1004,62 @@ describe('create-blocks-app auto-detection', () => {
     assert.ok(checked.includes('default'), `checked: ${checked.join(', ')}`);
   });
 
+  it('gives an existing project the backend\'s own tsconfig and prints the reference steps, leaving its tsconfig alone', () => {
+    const backendTsconfig = readFileSync(join(__dirname, '..', 'templates', 'default', 'cdk-blocks', 'tsconfig.json'), 'utf-8');
+    // `default` ships cdk-blocks/tsconfig.json; `backend` does not, so the default template's is copied.
+    for (const template of ['default', 'backend']) {
+      const tmpDir = join(__dirname, `../.test-existing-tsconfig-${template}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+      const tsconfig = '{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }\n';
+      writeFileSync(join(tmpDir, 'tsconfig.json'), tsconfig);
+      try {
+        const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        assert.strictEqual(readFileSync(join(tmpDir, 'cdk-blocks', 'tsconfig.json'), 'utf-8'), backendTsconfig, template);
+        assert.strictEqual(readFileSync(join(tmpDir, 'tsconfig.json'), 'utf-8'), tsconfig, `${template}: the project's own tsconfig.json changed`);
+        assert.match(result.stdout, /"references": \[\{ "path": "\.\/cdk-blocks" \}\]/, template);
+        assert.match(result.stdout, /`tsc -b --force` instead of `tsc`/, template);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+  });
+
+  it('gives an existing Next.js project no backend tsconfig, since next build ignores project references', () => {
+    const tmpDir = join(__dirname, '../.test-existing-tsconfig-nextjs');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-next-app', version: '1.0.0', dependencies: { next: '*' } }));
+    try {
+      // `default` ships cdk-blocks/tsconfig.json; in a Next.js project nothing would build it, and
+      // esbuild and editors would read it instead of the app's tsconfig.json (and its "paths").
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.ok(existsSync(join(tmpDir, 'cdk-blocks', 'index.ts')));
+      assert.ok(!existsSync(join(tmpDir, 'cdk-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
+      assert.doesNotMatch(result.stdout, /"references"/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('gives an Amplify app without Next.js the default template\'s backend tsconfig', () => {
+    const tmpDir = join(__dirname, '../.test-amplify-tsconfig');
+    mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'amplify-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+    writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
+    try {
+      const result = run(['-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const expected = readFileSync(join(__dirname, '..', 'templates', 'default', 'cdk-blocks', 'tsconfig.json'), 'utf-8');
+      assert.strictEqual(readFileSync(join(tmpDir, 'cdk-blocks', 'tsconfig.json'), 'utf-8'), expected);
+      assert.match(result.stdout, /"references": \[\{ "path": "\.\/cdk-blocks" \}\]/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('defaults to the default template when no --template is given for an existing project', () => {
     const tmpDir = join(__dirname, '../.test-existing-default-template');
     mkdirSync(tmpDir, { recursive: true });
@@ -865,17 +1068,76 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['.', '-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.deepStrictEqual(
-        readFileSync(join(tmpDir, 'aws-blocks', 'index.ts'), 'utf-8'),
-        readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'index.ts'), 'utf-8'),
+        readFileSync(join(tmpDir, 'cdk-blocks', 'index.ts'), 'utf-8'),
+        readFileSync(join(__dirname, '..', 'templates', 'default', 'cdk-blocks', 'index.ts'), 'utf-8'),
       );
-      // The existing-project path must also wire the sanctioned stop command.
+      // The existing-project path adds the task surface without assuming a fresh manifest.
       const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-      assert.strictEqual(pkg.scripts['dev:server'], 'cdk-blocks dev');
-      assert.strictEqual(pkg.scripts['dev:stop'], 'cdk-blocks dev stop');
+      assertTasks(pkg.scripts, { ...standaloneTasks, 'dev:server': 'dev' }, 'existing project');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  for (const amplify of [false, true]) {
+    it(`preserves host scripts and advertises available tasks (${amplify ? 'Amplify' : 'existing project'})`, () => {
+      const dir = mkdtempSync(join(tmpdir(), 'blocks-task-collisions-'));
+      const dev = amplify ? 'blocks:dev' : 'dev:server';
+      const devAlias = amplify ? 'blocks:dev:2' : 'blocks:dev:server';
+      const hostScripts = {
+        sandbox: 'echo host sandbox', 'blocks:sandbox': 'echo host alternate sandbox',
+        [dev]: 'echo host dev', docs: 'echo host docs',
+        help: task('--help'), build: 'echo host build',
+        'pregenerate-client': 'echo host lifecycle hook',
+        'postblocks:generate-client': 'echo host fallback lifecycle hook',
+      };
+      const guide = '# Host instructions\nRun `npm run docs` for host docs.\n';
+      try {
+        writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'host', scripts: hostScripts }));
+        writeFileSync(join(dir, 'AGENTS.md'), guide);
+        if (amplify) {
+          mkdirSync(join(dir, 'amplify'));
+          writeFileSync(join(dir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
+        }
+        const result = run(['.', '-y', '--skip-install'], dir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        const { scripts } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'));
+        for (const [name, command] of Object.entries(hostScripts)) {
+          assert.strictEqual(scripts[name], command, name);
+        }
+        assert.strictEqual(readFileSync(join(dir, 'AGENTS.md'), 'utf-8'), guide);
+        assert.strictEqual(scripts['blocks:sandbox:2'], amplify
+          ? 'cross-env NODE_OPTIONS="--conditions=cdk" AMPLIFY_SANDBOX=true npx ampx sandbox'
+          : task('sandbox'));
+        assertTasks(scripts, { [devAlias]: 'dev', 'blocks:docs': 'docs' }, 'collision aliases');
+        assert.strictEqual(scripts['blocks:help'], undefined, 'an identical task keeps its original name');
+        assert.strictEqual(scripts['generate-client'], undefined, 'do not attach a host lifecycle hook');
+        assert.strictEqual(scripts['blocks:generate-client'], undefined, 'do not attach a hook to the fallback either');
+        const steps = result.stdout.split('Next steps:')[1];
+        assert.ok(steps, result.stdout);
+        const advertised = [...steps.matchAll(/\bnpm run ([\w:-]+)/g)].map((match) => match[1]);
+        assert.ok(advertised.includes('blocks:sandbox:2') && advertised.includes(devAlias), steps);
+        assert.ok(!advertised.includes('sandbox') && !advertised.includes(dev), steps);
+        if (amplify) {
+          assert.strictEqual(scripts['blocks:generate-client:2'], 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx cdk-blocks/scripts/generate-client.ts');
+          assert.ok(advertised.includes('blocks:generate-client:2'), steps);
+          assert.ok(!advertised.includes('generate-client') && !advertised.includes('blocks:generate-client'), steps);
+          const generator = readFileSync(join(dir, 'cdk-blocks', 'scripts', 'generate-client.ts'), 'utf-8');
+          assert.match(generator, /npm run blocks:generate-client:2(?=\s|`|$)/);
+          assert.doesNotMatch(generator, /npm run (?:blocks:)?generate-client(?=\s|`|$)/);
+          assert.match(steps, /replace the Amplify command in the `blocks:sandbox:2` script/);
+        } else {
+          assert.strictEqual(scripts['blocks:generate-client:2'], task('generate client'));
+          assert.ok(advertised.includes('blocks:docs'), steps);
+          const backend = readFileSync(join(dir, 'cdk-blocks', 'index.ts'), 'utf-8');
+          assert.match(backend, /npm run blocks:docs\b/);
+          assert.doesNotMatch(backend, /npm run docs\b/);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 
   it('keeps an existing project\'s own "blocks.dev" settings', () => {
     const tmpDir = join(__dirname, '../.test-existing-blocks-dev');
@@ -892,30 +1154,6 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('every deployable template ships the standard `vendorize` script', () => {
-    // Regression guard: the auth template (then named auth-cognito) was missing
-    // `vendorize` (all other deployable templates had it), so `npm run vendorize`
-    // didn't work in apps scaffolded from it. A template that can `sandbox`/`deploy`
-    // (i.e. has those lifecycle scripts) must also expose `vendorize` so users
-    // can inline a Block's source for customization.
-    const templatesDir = join(__dirname, '..', 'templates');
-    const templates = readdirSync(templatesDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    const missing: string[] = [];
-    for (const name of templates) {
-      const pkgPath = join(templatesDir, name, 'package.json');
-      if (!existsSync(pkgPath)) continue;
-      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
-      // Only deployable templates (those with a sandbox lifecycle) are expected
-      // to carry vendorize; e.g. the amplify template has no sandbox/deploy.
-      if (scripts.sandbox && scripts.vendorize !== 'cdk-blocks vendorize') {
-        missing.push(name);
-      }
-    }
-    assert.deepStrictEqual(missing, [], `Deployable templates missing "vendorize": ${missing.join(', ')}`);
-  });
-
   it('every template that constructs Auth creates an email, case-insensitive pool', () => {
     // `signInWith` and `caseSensitive` are fixed once a Cognito user pool exists,
     // so the shape new apps start with is permanent. Email sign-in, matched
@@ -925,13 +1163,15 @@ describe('create-blocks-app auto-detection', () => {
     const offenders: string[] = [];
     let checked = 0;
     for (const name of readdirSync(templatesDir)) {
-      const backend = join(templatesDir, name, 'aws-blocks', 'index.ts');
+      const backend = join(templatesDir, name, 'cdk-blocks', 'index.ts');
       if (!existsSync(backend)) continue;
       const source = readFileSync(backend, 'utf-8');
       // Live code, and the commented-out example in `bare` (`// const auth = …`).
       const construct =
         /^\s*(?:\/\/\s*)?const auth = new Auth\(scope, 'auth', \{([\s\S]*?)\n(?:\/\/ )?\}\);/m.exec(source);
       if (!construct) continue;
+      // A `store: 'builtin'` block creates no user pool, and rejects `users` options.
+      if (/store: 'builtin'/.test(construct[1])) continue;
       checked++;
       if (!/signInWith: \['email'\]/.test(construct[1]) || !/caseSensitive: false/.test(construct[1])) {
         offenders.push(name);
@@ -953,10 +1193,26 @@ describe('create-blocks-app auto-detection', () => {
         NPM_CONFIG_REGISTRY: 'http://127.0.0.1:9',
       });
       assert.strictEqual(result.exitCode, 0);
-      assert.match(result.stdout, /Blocks app created/);
+      assert.match(result.stdout, /AWS CDK Blocks app created/);
       assert.doesNotMatch(result.stdout, /Installing dependencies/);
       assert.match(result.stdout, /\n  npm install\n/);
       assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('rewrites @aws-cdk-blocks/* placeholders to file: paths when run from the monorepo', () => {
+    // The published-registry path (caret ranges) is covered by published-layout.test.ts.
+    const packagesDir = join(__dirname, '../..');
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-monorepo-file-'));
+    const targetDir = join(tmpDir, 'fresh-app');
+    try {
+      const result = run([targetDir, '--skip-install']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const pkg = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.dependencies['aws-cdk-blocks'], `file:${packagesDir}/blocks`);
+      assert.strictEqual(pkg.dependencies['@aws-cdk-blocks/hosting'], `file:${packagesDir}/hosting`);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -969,8 +1225,12 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([backend, '--template=backend', '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0, result.stderr);
       assert.ok(result.stdout.includes(`\n  cd '${backend}'\n`), result.stdout);
-      assert.match(result.stdout, /http:\/\/localhost:3001\/aws-blocks\/api/);
+      assert.match(result.stdout, /http:\/\/localhost:3001\/cdk-blocks\/api/);
       assert.doesNotMatch(result.stdout, /localhost:3000/);
+      assert.match(result.stdout, /npm run help\b/);
+      // The CLI name as a command, not the `.cdk-blocks*` directories or the `/cdk-blocks/` URL path the rebrand
+      // introduced: a next step must say `npm run <task>`, never invoke the binary.
+      assert.doesNotMatch(result.stdout, /(?<![\w.-])cdk-blocks\b(?![-/])/);
       const web = join(tmpDir, 'web');
       const frontend = run([web, '--template', 'bare', '-y', '--skip-install']);
       assert.strictEqual(frontend.exitCode, 0, frontend.stderr);
@@ -991,13 +1251,13 @@ describe('create-blocks-app auto-detection', () => {
       const result = run([join(tmpDir, 'app'), '-y'], undefined, { PATH: `${bin}:${process.env.PATH}` });
       assert.strictEqual(result.exitCode, 1, result.stdout);
       assert.match(result.stderr, /Error: Command failed: npm install/);
-      assert.doesNotMatch(result.stdout, /Blocks app created/);
+      assert.doesNotMatch(result.stdout, /AWS CDK Blocks app created/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
-  it('refuses to scaffold into an npm workspace that does not list the app\'s aws-blocks/ folder', () => {
+  it('refuses to scaffold into an npm workspace that does not list the app\'s cdk-blocks/ folder', () => {
     // npm installs a workspace's dependencies at the root and ignores the app's own nested
     // "workspaces": ["aws-blocks"], so the app could never import `aws-blocks`.
     const mono = mkdtempSync(join(tmpdir(), 'create-blocks-app-monorepo-'));
@@ -1008,7 +1268,7 @@ describe('create-blocks-app auto-detection', () => {
       const fresh = run(['apps/web', '-y', '--skip-install'], mono);
       assert.strictEqual(fresh.exitCode, 1, fresh.stdout);
       assert.match(fresh.stderr, /is a workspace of the npm workspace root/);
-      assert.ok(fresh.stderr.includes('"workspaces": ["apps/*", "apps/web/aws-blocks"]'), fresh.stderr);
+      assert.ok(fresh.stderr.includes('"workspaces": ["apps/*", "apps/web/cdk-blocks"]'), fresh.stderr);
       assert.ok(!existsSync(join(mono, 'apps', 'web')), 'nothing is written');
 
       // An existing workspace app is refused the same way, before any change.
@@ -1017,13 +1277,13 @@ describe('create-blocks-app auto-detection', () => {
       writeFileSync(join(mono, 'apps', 'site', 'package.json'), sitePkg);
       const existing = run(['apps/site', '-y', '--skip-install'], mono);
       assert.strictEqual(existing.exitCode, 1, existing.stdout);
-      assert.ok(existing.stderr.includes('"apps/site/aws-blocks"'), existing.stderr);
+      assert.ok(existing.stderr.includes('"apps/site/cdk-blocks"'), existing.stderr);
       assert.strictEqual(readFileSync(join(mono, 'apps', 'site', 'package.json'), 'utf-8'), sitePkg);
-      assert.ok(!existsSync(join(mono, 'apps', 'site', 'aws-blocks')));
+      assert.ok(!existsSync(join(mono, 'apps', 'site', 'cdk-blocks')));
 
-      // With the aws-blocks/ folder listed, it scaffolds and installs at the workspace root,
-      // the one place where npm links the app's aws-blocks/ workspace.
-      writeRoot(['apps/*', 'apps/web/aws-blocks']);
+      // With the cdk-blocks/ folder listed, it scaffolds and installs at the workspace root,
+      // the one place where npm links the app's cdk-blocks/ workspace.
+      writeRoot(['apps/*', 'apps/web/cdk-blocks']);
       const listed = run(['apps/web', '-y', '--skip-install'], mono);
       assert.strictEqual(listed.exitCode, 0, listed.stderr);
       assert.ok(listed.stdout.includes(`\n  (cd ${mono} && npm install)\n`), listed.stdout);
@@ -1056,11 +1316,11 @@ describe('create-blocks-app auto-detection', () => {
       writeRoot(['{apps,packages}/*']);
       const unlisted = run(['apps/web', '-y', '--skip-install'], mono);
       assert.strictEqual(unlisted.exitCode, 1, unlisted.stdout);
-      assert.ok(unlisted.stderr.includes('"workspaces": ["{apps,packages}/*", "apps/web/aws-blocks"]'), unlisted.stderr);
+      assert.ok(unlisted.stderr.includes('"workspaces": ["{apps,packages}/*", "apps/web/cdk-blocks"]'), unlisted.stderr);
       assert.ok(!existsSync(join(mono, 'apps', 'web')), 'nothing is written');
 
-      // With its aws-blocks/ folder listed by a brace glob too, it installs at the workspace root.
-      writeRoot(['{apps,packages}/*', '{apps,packages}/*/aws-blocks']);
+      // With its cdk-blocks/ folder listed by a brace glob too, it installs at the workspace root.
+      writeRoot(['{apps,packages}/*', '{apps,packages}/*/cdk-blocks']);
       const bin = join(mono, '.bin');
       mkdirSync(bin);
       writeFileSync(join(bin, 'npm'), `#!/bin/sh\npwd -P > ${JSON.stringify(join(mono, 'npm-cwd'))}\n`, { mode: 0o755 });
@@ -1088,7 +1348,7 @@ describe('create-blocks-app auto-detection', () => {
       // packages/core is still a workspace, so it is refused with the entry to add.
       const included = run(['packages/core', '-y', '--skip-install'], mono);
       assert.strictEqual(included.exitCode, 1, included.stdout);
-      assert.ok(included.stderr.includes('"workspaces": ["packages/*", "!packages/legacy", "apps/*", "packages/core/aws-blocks"]'), included.stderr);
+      assert.ok(included.stderr.includes('"workspaces": ["packages/*", "!packages/legacy", "apps/*", "packages/core/cdk-blocks"]'), included.stderr);
       assert.ok(!existsSync(join(mono, 'packages', 'core')), 'nothing is written');
     } finally {
       rmSync(mono, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -1168,7 +1428,7 @@ describe('create-blocks-app bin-symlink invocation', () => {
           // This spawn bypasses run(), so it needs the same telemetry guard.
           env: {
             ...process.env,
-            AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+            CDK_DISABLE_CLI_TELEMETRY: '1',
             BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/noop',
           },
         });
@@ -1177,7 +1437,7 @@ describe('create-blocks-app bin-symlink invocation', () => {
       }
       assert.strictEqual(exitCode, 0);
       // The guard let create() run through the symlink, so the scaffold happened.
-      assert.ok(existsSync(join(targetDir, 'aws-blocks')), 'expected aws-blocks/ to be scaffolded via the bin symlink');
+      assert.ok(existsSync(join(targetDir, 'cdk-blocks')), 'expected cdk-blocks/ to be scaffolded via the bin symlink');
       assert.ok(existsSync(join(targetDir, 'package.json')), 'expected package.json to be created via the bin symlink');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });

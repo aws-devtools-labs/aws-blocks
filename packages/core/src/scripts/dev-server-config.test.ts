@@ -2,25 +2,47 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildBlocksConfig, isBlocksConfigRequest } from './dev-server.js';
+import { buildBlocksConfig, buildServedBlocksConfig, isBlocksConfigRequest } from './dev-server.js';
 
 describe('buildBlocksConfig — client runtime config', () => {
   it('points the browser at the localhost front door RPC endpoint', () => {
     assert.deepStrictEqual(buildBlocksConfig(3000, false), {
-      apiUrl: 'http://localhost:3000/aws-blocks/api',
+      apiUrl: 'http://localhost:3000/cdk-blocks/api',
       environment: 'local',
     });
   });
 
   it('honors a custom port', () => {
-    assert.strictEqual(buildBlocksConfig(4000, false).apiUrl, 'http://localhost:4000/aws-blocks/api');
+    assert.strictEqual(buildBlocksConfig(4000, false).apiUrl, 'http://localhost:4000/cdk-blocks/api');
   });
 
   it('marks the environment as sandbox but keeps the localhost front door', () => {
     assert.deepStrictEqual(buildBlocksConfig(3000, true), {
-      apiUrl: 'http://localhost:3000/aws-blocks/api',
+      apiUrl: 'http://localhost:3000/cdk-blocks/api',
       environment: 'sandbox',
     });
+  });
+
+  it('points at the specific host the dev server binds, which localhost does not reach', () => {
+    assert.strictEqual(buildBlocksConfig(41083, false, '10.253.66.118').apiUrl, 'http://10.253.66.118:41083/cdk-blocks/api');
+    assert.strictEqual(buildBlocksConfig(3000, false, 'fd00::5').apiUrl, 'http://[fd00::5]:3000/cdk-blocks/api');
+    assert.strictEqual(buildBlocksConfig(3000, false, '0.0.0.0').apiUrl, 'http://localhost:3000/cdk-blocks/api');
+  });
+});
+
+describe('buildServedBlocksConfig — the config.json the dev server answers', () => {
+  it('serves the same-origin /cdk-blocks/api for an all-interfaces bind', () => {
+    // A browser loads such a server at any of the machine's addresses; localhost would be another origin.
+    for (const host of ['0.0.0.0', '::', '[::]']) {
+      assert.deepStrictEqual(buildServedBlocksConfig(41041, false, host), { apiUrl: '/cdk-blocks/api', environment: 'local' }, host);
+    }
+    assert.deepStrictEqual(buildServedBlocksConfig(41041, true, '0.0.0.0'), { apiUrl: '/cdk-blocks/api', environment: 'sandbox' });
+  });
+
+  it('serves the file config, an absolute URL, for any other bind', () => {
+    for (const host of [undefined, '127.0.0.1', '::1', 'localhost', '10.253.66.118', 'fd00::5']) {
+      assert.deepStrictEqual(buildServedBlocksConfig(41041, false, host), buildBlocksConfig(41041, false, host), String(host));
+    }
   });
 });
 
@@ -38,6 +60,6 @@ describe('isBlocksConfigRequest — reserved runtime-config path', () => {
     assert.strictEqual(isBlocksConfigRequest('GET', '/'), false);
     assert.strictEqual(isBlocksConfigRequest('GET', '/api/chat'), false);
     assert.strictEqual(isBlocksConfigRequest('GET', '/.blocks-sandbox/other.json'), false);
-    assert.strictEqual(isBlocksConfigRequest('GET', '/aws-blocks/api'), false);
+    assert.strictEqual(isBlocksConfigRequest('GET', '/cdk-blocks/api'), false);
   });
 });

@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import {
   buildSandboxCdkEnv,
@@ -18,13 +19,24 @@ import {
   previewRemovalWarning,
   PREVIEW_MODE_CONTEXT,
   findExpressUnsafeStacks,
-  quoteCdkAppPath,
   sandboxFailureRecoveryHint,
+  CDK_APP_ENTRY_ENV,
+  cdkAppCommand,
+  cdkAppEnv,
+  buildSandboxWatchSpawn,
   stacksWithExpressUnsafeResources,
+  sandboxDevServerExitCode,
+  assertNoRunningSandbox,
+  assertNoRunningDevServer,
+  startSandbox,
 } from './sandbox.js';
+import { claimDevSession, pidCommand } from './dev-pidfile.js';
 import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 import { OUTPUTS_FILE } from './deploy-outputs.js';
+
+// Prevent an inherited CDK telemetry opt-out from disabling enabled-path tests.
+delete process.env.CDK_DISABLE_CLI_TELEMETRY;
 
 /**
  * Return the value that follows `flag` in `args`, failing with a clear message
@@ -45,9 +57,8 @@ function valueAfter(args: string[], flag: string): string {
 
 describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
   const args = buildSandboxDeployArgs({
-    outDir: '.blocks-sandbox',
+    outDir: '.cdk-blocks-sandbox',
     projectRoot: '/app',
-    backendPath: 'aws-blocks/index.ts',
   });
 
   it('enables CloudFormation Express Mode via --express', () => {
@@ -72,13 +83,13 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
   it('keeps the non-interactive deploy contract and sandbox context', () => {
     assert.deepStrictEqual(args.slice(0, 4), ['exec', 'cdk', '--', 'deploy']);
     assert.strictEqual(valueAfter(args, '--require-approval'), 'never');
-    assert.strictEqual(valueAfter(args, '--outputs-file'), '.blocks-sandbox/outputs.json');
+    assert.strictEqual(valueAfter(args, '--outputs-file'), '.cdk-blocks-sandbox/outputs.json');
     assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
-    assert.strictEqual(valueAfter(args, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.ts')}`);
+    assert.strictEqual(valueAfter(args, '--app'), cdkAppCommand());
   });
 
   it('interpolates the provided outDir and projectRoot', () => {
-    const custom = buildSandboxDeployArgs({ outDir: 'out', projectRoot: '/other', backendPath: 'b.ts' });
+    const custom = buildSandboxDeployArgs({ outDir: 'out', projectRoot: '/other' });
     assert.strictEqual(valueAfter(custom, '--outputs-file'), 'out/outputs.json');
     assert.strictEqual(valueAfter(custom, '--context'), 'projectRoot=/other');
   });
@@ -110,35 +121,34 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
   });
 
   it('names the commands the user runs, when the caller passes them, aligned', () => {
-    const named = sandboxFailureRecoveryHint('cdk-blocks sandbox deploy', 'cdk-blocks sandbox destroy');
-    assert.match(named, /If the next `cdk-blocks sandbox deploy` reports/);
-    assert.match(named, /^ {5}cdk-blocks sandbox destroy {3}# tears/m);
-    assert.match(named, /^ {5}cdk-blocks sandbox deploy {4}# redeploy/m);
-    assert.doesNotMatch(named, /npm run/);
+    const named = sandboxFailureRecoveryHint('npm run sandbox:deploy', 'npm run sandbox:destroy');
+    assert.match(named, /If the next `npm run sandbox:deploy` reports/);
+    assert.match(named, /^ {5}npm run sandbox:destroy {3}# tears/m);
+    assert.match(named, /^ {5}npm run sandbox:deploy {4}# redeploy/m);
+    assert.doesNotMatch(named, /`npm run sandbox`/);
   });
 });
 
 describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => {
   it('drops --express (keeping --method direct, rollback on) when express is false', () => {
-    const args = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', backendPath: 'b.ts', express: false });
+    const args = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', express: false });
     assert.ok(!args.includes('--express'), `unexpected --express in: ${args.join(' ')}`);
     assert.strictEqual(valueAfter(args, '--method'), 'direct');
     assert.ok(!args.includes('--no-rollback'), 'rollback stays at its default (on)');
   });
 
   it('synthesizes once into <outDir>/cdk.out and deploys that assembly', () => {
-    const synth = buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'aws-blocks/index.cdk.ts' });
+    const synth = buildSandboxSynthArgs({ outDir: '.cdk-blocks-sandbox', projectRoot: '/app' });
     assert.deepStrictEqual(synth.slice(0, 4), ['exec', 'cdk', '--', 'synth']);
-    assert.strictEqual(valueAfter(synth, '--output'), '.blocks-sandbox/cdk.out');
+    assert.strictEqual(valueAfter(synth, '--output'), '.cdk-blocks-sandbox/cdk.out');
     assert.ok(synth.includes('sandboxMode=true'));
-    assert.strictEqual(valueAfter(synth, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.cdk.ts')}`);
+    assert.strictEqual(valueAfter(synth, '--app'), cdkAppCommand());
     const deploy = buildSandboxDeployArgs({
-      outDir: '.blocks-sandbox',
+      outDir: '.cdk-blocks-sandbox',
       projectRoot: '/app',
-      backendPath: 'aws-blocks/index.cdk.ts',
-      assemblyDir: '.blocks-sandbox/cdk.out',
+      assemblyDir: '.cdk-blocks-sandbox/cdk.out',
     });
-    assert.strictEqual(valueAfter(deploy, '--app'), '.blocks-sandbox/cdk.out', 'no second synth/framework build');
+    assert.strictEqual(valueAfter(deploy, '--app'), '.cdk-blocks-sandbox/cdk.out', 'no second synth/framework build');
   });
 
   it('finds stacks whose synthesized template has a Web Function endpoint', () => {
@@ -200,45 +210,39 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
   });
 
   function inCleanProject(): void {
-    // No .blocks/config.json, so consent falls back to the enabled default.
+    // No .cdk-blocks/config.json, so consent falls back to the enabled default.
     const tmp = join(tmpdir(), `sandbox-env-test-${Date.now()}`);
     mkdirSync(tmp, { recursive: true });
     process.chdir(tmp);
   }
 
   it('carries the framework sink path and the cdk resolution condition', () => {
-    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    delete process.env.CDK_DISABLE_CLI_TELEMETRY;
     inCleanProject();
 
-    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink', 'cdk-blocks/index.cdk.ts');
 
     assert.strictEqual(env[FRAMEWORK_SINK_ENV], '/tmp/blocks-framework-sink');
     assert.strictEqual(env.NODE_OPTIONS, '--conditions=cdk');
+    assert.strictEqual(env[CDK_APP_ENTRY_ENV], 'cdk-blocks/index.cdk.ts');
   });
 
   it('omits the sink when the user opted out, so nothing is written to disk', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.CDK_DISABLE_CLI_TELEMETRY = '1';
 
-    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink', 'cdk-blocks/index.cdk.ts');
 
     assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
   });
 });
 
-describe('quoteCdkAppPath', () => {
-  it('double-quotes on Windows, where cmd.exe keeps single quotes as part of the path', () => {
-    assert.strictEqual(
-      quoteCdkAppPath('D:\\a\\my app\\aws-blocks\\index.cdk.ts', 'win32'),
-      '"D:\\a\\my app\\aws-blocks\\index.cdk.ts"',
-    );
-  });
-
-  it('single-quotes on POSIX so a path with a space stays one argument', () => {
-    assert.strictEqual(quoteCdkAppPath('/tmp/my app/index.cdk.ts', 'linux'), "'/tmp/my app/index.cdk.ts'");
-  });
-
-  it('escapes a single quote inside a POSIX path', () => {
-    assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
+describe('sandboxDevServerExitCode', () => {
+  it('ends the sandbox with 0 when its dev server was stopped, and 1 when it failed', () => {
+    assert.strictEqual(sandboxDevServerExitCode(0, null), 0);
+    assert.strictEqual(sandboxDevServerExitCode(null, 'SIGTERM'), 0);
+    assert.strictEqual(sandboxDevServerExitCode(143, null), 0, 'the shell reports a SIGTERM as 128+15');
+    assert.strictEqual(sandboxDevServerExitCode(137, null), 0, 'dev stop SIGKILLs a hung tsx watch');
+    assert.strictEqual(sandboxDevServerExitCode(1, null), 1, 'a startup failure');
   });
 });
 
@@ -249,7 +253,7 @@ describe('buildDevServerSpawn', () => {
   // one string with no separate args.
   it('passes the default command as one shell string with no args', () => {
     assert.deepStrictEqual(buildDevServerSpawn(undefined), {
-      command: 'npx tsx watch aws-blocks/scripts/server.ts',
+      command: 'npx tsx watch cdk-blocks/scripts/server.ts',
       args: [],
     });
   });
@@ -264,7 +268,7 @@ describe('buildDevServerSpawn', () => {
 
 
 describe('buildSandboxDeployArgs — preview re-deploy hotswap', () => {
-  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
+  const base = { outDir: '.cdk-blocks-sandbox', projectRoot: '/proj', backendPath: 'cdk-blocks/index.cdk.ts' };
 
   it('adds --hotswap-fallback; the fallback CloudFormation deploy stays direct and in Express Mode', () => {
     const args = buildSandboxDeployArgs({ ...base, hotswap: true });
@@ -283,7 +287,7 @@ describe('buildSandboxDeployArgs — preview re-deploy hotswap', () => {
 });
 
 describe('buildSandboxWatchArgs — infrastructure changes are deployed, not skipped', () => {
-  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: '/proj/aws-blocks/index.cdk.ts' };
+  const base = { outDir: '.cdk-blocks-sandbox', projectRoot: '/proj', backendPath: '/proj/cdk-blocks/index.cdk.ts' };
 
   // `cdk watch` defaults to --hotswap, which ignores changes it can't hotswap
   // (a new Database or Realtime). The fallback deploys them in full instead.
@@ -301,7 +305,7 @@ describe('buildSandboxWatchArgs — infrastructure changes are deployed, not ski
 });
 
 describe('preview sandbox — the previewMode context', () => {
-  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
+  const base = { outDir: '.cdk-blocks-sandbox', projectRoot: '/proj', backendPath: 'cdk-blocks/index.cdk.ts' };
   const contexts = (args: string[]) => args.flatMap((a, i) => (args[i - 1] === '--context' ? [a] : []));
 
   it('synth and deploy both pass previewMode=true next to sandboxMode=true', () => {
@@ -331,14 +335,14 @@ describe('preview sandbox — the previewMode context', () => {
 describe('findHostingUrl — the URL a preview sandbox prints', () => {
   it('reads the Hosting construct output whatever its hash suffix, adding a scheme when missing', () => {
     assert.strictEqual(
-      findHostingUrl({ ApiUrl: 'https://api.example/prod/aws-blocks/api', HostingHostingUrlAB12CD34: 'https://abc.execute-api.us-west-2.amazonaws.com' }),
+      findHostingUrl({ ApiUrl: 'https://api.example/prod/cdk-blocks/api', HostingHostingUrlAB12CD34: 'https://abc.execute-api.us-west-2.amazonaws.com' }),
       'https://abc.execute-api.us-west-2.amazonaws.com',
     );
     assert.strictEqual(findHostingUrl({ HostingHostingUrl99: 'd111.cloudfront.net' }), 'https://d111.cloudfront.net');
   });
 
   it('is undefined for a backend-only sandbox', () => {
-    assert.strictEqual(findHostingUrl({ ApiUrl: 'https://api.example/prod/aws-blocks/api' }), undefined);
+    assert.strictEqual(findHostingUrl({ ApiUrl: 'https://api.example/prod/cdk-blocks/api' }), undefined);
   });
 });
 
@@ -356,7 +360,7 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
   };
   const withPreview = {
     'MyApp-sandbox-me': {
-      ApiUrl: 'https://api.example/prod/aws-blocks/api',
+      ApiUrl: 'https://api.example/prod/cdk-blocks/api',
       HostingHostingUrlAB12CD34: 'https://abc.execute-api.us-west-2.amazonaws.com',
     },
   };
@@ -369,18 +373,115 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
   });
 
   it('names the command that deploys a preview, when the launcher passes it', () => {
-    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npx --no -- cdk-blocks sandbox preview');
-    assert.match(warning ?? '', /Run npx --no -- cdk-blocks sandbox preview to keep it/);
-    assert.doesNotMatch(warning ?? '', /npm run/);
+    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npm run sandbox:preview -- --profile dev');
+    assert.match(warning ?? '', /Run npm run sandbox:preview -- --profile dev to keep it/);
+    assert.doesNotMatch(warning ?? '', /npm run sandbox:preview to keep it/);
   });
 
   it('is silent for a preview deploy, a backend-only stack, and no or an unreadable outputs file', () => {
     assert.strictEqual(previewRemovalWarning(outputsWith(withPreview), true), undefined);
     assert.strictEqual(
-      previewRemovalWarning(outputsWith({ 'MyApp-sandbox-me': { ApiUrl: 'https://api.example/prod/aws-blocks/api' } }), false),
+      previewRemovalWarning(outputsWith({ 'MyApp-sandbox-me': { ApiUrl: 'https://api.example/prod/cdk-blocks/api' } }), false),
       undefined,
     );
     assert.strictEqual(previewRemovalWarning(join(tmpdir(), 'no-such-dir', 'outputs.json'), false), undefined);
     assert.strictEqual(previewRemovalWarning(outputsWith('{not json'), false), undefined);
+  });
+});
+
+describe('cdkAppCommand — the --app command CDK runs through a shell', () => {
+  const awkward = "/work/sp ace/it's $HOME `id` %PATH% & app/cdk-blocks/index.cdk.ts";
+
+  it('names no path: the shell reads the entry from the environment', () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      assert.doesNotMatch(cdkAppCommand(platform), /cdk-blocks|index/, platform);
+    }
+    assert.strictEqual(cdkAppCommand('linux'), `npm exec tsx -- -C cdk "$${CDK_APP_ENTRY_ENV}"`);
+    assert.strictEqual(cdkAppCommand('win32'), `npm exec tsx -- -C cdk "%${CDK_APP_ENTRY_ENV}%"`);
+    assert.deepStrictEqual(cdkAppEnv(awkward), { [CDK_APP_ENTRY_ENV]: awkward });
+  });
+
+  it('passes a project path with a space, a quote, $, a backtick or % to tsx as one word', { skip: process.platform === 'win32' }, () => {
+    // Run the command through sh, as CDK does, and see what arrives.
+    const echoed = spawnSync('sh', ['-c', cdkAppCommand('linux').replace('npm exec tsx -- -C cdk', "printf '%s\\n'")], {
+      encoding: 'utf-8',
+      env: { ...process.env, ...cdkAppEnv(awkward) },
+    });
+    assert.strictEqual(echoed.stdout, `${awkward}\n`);
+  });
+
+  it('is used by synth, deploy (without an assembly) and watch, whose env carries the entry', () => {
+    const path = '/work/sp ace/cdk-blocks/index.cdk.ts';
+    const options = { outDir: '.cdk-blocks-sandbox', projectRoot: '/work/sp ace' };
+    assert.strictEqual(valueAfter(buildSandboxSynthArgs(options), '--app'), cdkAppCommand());
+    assert.strictEqual(valueAfter(buildSandboxDeployArgs(options), '--app'), cdkAppCommand());
+    assert.strictEqual(buildSandboxCdkEnv(undefined, path)[CDK_APP_ENTRY_ENV], path);
+    const watch = buildSandboxWatchSpawn({ ...options, backendPath: path });
+    assert.deepStrictEqual(watch.args.slice(0, 2), ['cdk', 'watch']);
+    assert.strictEqual(valueAfter(watch.args, '--app'), cdkAppCommand());
+    assert.strictEqual(watch.env[CDK_APP_ENTRY_ENV], path);
+    assert.strictEqual(watch.env.NODE_OPTIONS, '--conditions=cdk');
+  });
+
+  it("watches into the sandbox's own assembly directory, never the ./cdk.out a npm run deploy uses (JW-02)", () => {
+    const watch = buildSandboxWatchSpawn({ outDir: '.cdk-blocks-sandbox', projectRoot: '/app', backendPath: '/app/cdk-blocks/index.cdk.ts' });
+    assert.strictEqual(valueAfter(watch.args, '--output'), '.cdk-blocks-sandbox/cdk.out');
+    assert.strictEqual(valueAfter(buildSandboxSynthArgs({ outDir: '.cdk-blocks-sandbox', projectRoot: '/app' }), '--output'), '.cdk-blocks-sandbox/cdk.out');
+  });
+});
+
+describe('assertNoRunningSandbox — one sandbox session per app (JW-02)', () => {
+  it('refuses a sandbox deploy or destroy while the app runs npm run sandbox, naming it and how to stop it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'blocks-running-sandbox-'));
+    try {
+      mkdirSync(join(root, '.cdk-blocks-sandbox'));
+      // This process plays the sandbox, and its dev server (its record names our own command line).
+      const record = { pid: process.pid, ppid: 1, port: 41950, command: pidCommand(process.pid), sandbox: { pid: process.pid } };
+      writeFileSync(join(root, '.cdk-blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify(record));
+      assert.throws(
+        () => assertNoRunningSandbox(root, 'npm run sandbox:deploy'),
+        new RegExp(
+          `^Error: A \`npm run sandbox\` is running in this app \\(pid ${process.pid}, dev server on :41950\\).*` +
+            'npm run dev:stop -- --port 41950.*re-run `npm run sandbox:deploy`',
+        ),
+      );
+      // A plain npm run dev, or a session that has ended, is no reason to refuse.
+      writeFileSync(join(root, '.cdk-blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify({ ...record, sandbox: undefined }));
+      assertNoRunningSandbox(root, 'x');
+      writeFileSync(join(root, '.cdk-blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify({ ...record, sandbox: { pid: 4194301 } }));
+      assertNoRunningSandbox(root, 'x');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('assertNoRunningDevServer — a sandbox with a dev server beside npm run dev', () => {
+  it('refuses before the deploy while a npm run dev of the app is starting or running, on any port', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'blocks-running-dev-'));
+    const savedCwd = process.cwd();
+    // A `npm run dev` launcher that has claimed the app on :41960 and is still starting (this process plays it).
+    const session = claimDevSession(root, 41960);
+    try {
+      assert.ok(session.acquired);
+      const refusal = new RegExp(
+        `^Error: A dev server of this app is already starting on :41960 \\(pid ${process.pid}\\).*` +
+          'npm run dev:stop -- --port 41960.*re-run `npm run sandbox`',
+      );
+      assert.throws(() => assertNoRunningDevServer(root, 'npm run sandbox'), refusal);
+      // startSandbox refuses first, before the credential check, the synth or any cdk call.
+      process.chdir(root);
+      await assert.rejects(
+        startSandbox({ backendPath: 'cdk-blocks/index.cdk.ts', invocation: 'npm run sandbox' }),
+        refusal,
+      );
+      // The record of a session that has ended is no reason to refuse.
+      session.release();
+      assertNoRunningDevServer(root, 'x');
+    } finally {
+      process.chdir(savedCwd);
+      if (session.acquired) session.release();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -17,13 +17,13 @@ public final nonisolated class Api: Sendable {
     public func getProfile(userId: String) async throws -> GetProfile.Result {
         let request = BlocksRequest(method: "api.getProfile", params: [userId], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getProfile") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getProfile") }
         return try JSONDecoder().decode(GetProfile.Result.self, from: result)
     }
 
     public enum GetProfile {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let age: Int?
             public let bio: String?
             public let name: String
@@ -83,5 +83,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

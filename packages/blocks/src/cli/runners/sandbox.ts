@@ -2,25 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Runs with the `tsx` loader, started by `cdk-blocks sandbox`, `cdk-blocks sandbox deploy`
- * and `cdk-blocks sandbox preview`. After the first deploy, in every mode, it records
+ * Runs with the `tsx` loader, started by `npm run sandbox`, `npm run sandbox:deploy`
+ * and `npm run sandbox:preview`. After the first deploy, in every mode, it records
  * the outputs and the target it
  * deployed with (see `last-deploy.ts`): watch mode then keeps running, and every
  * redeploy it triggers rewrites `outputs.json` (a failed one can blank it), so
- * `cdk-blocks sandbox console` reads the record.
+ * `npm run sandbox:console` reads the record.
  */
 
-import * as core from '@aws-blocks/core/scripts';
+import * as core from '@aws-cdk-blocks/core/scripts';
 import { exitWithError } from './fail.js';
 import { recordLastDeploy } from './last-deploy.js';
 
 const options = JSON.parse(process.argv[2]) as core.SandboxOptions;
 const projectRoot = process.cwd();
 const invocation = options.preview
-	? 'cdk-blocks sandbox preview'
+	? 'npm run sandbox:preview'
 	: options.deployOnly
-		? 'cdk-blocks sandbox deploy'
-		: 'cdk-blocks sandbox';
+		? 'npm run sandbox:deploy'
+		: 'npm run sandbox';
 
 try {
 	await core.startSandbox({

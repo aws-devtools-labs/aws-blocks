@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 @file:OptIn(ExperimentalForeignApi::class)
 
 package com.aws.blocks.kotlin.oidc
@@ -29,7 +32,7 @@ internal class IosOidcLauncher : OidcPlatformLauncher {
     ): OidcRedirectSession {
         if (configuredRelayTo.isEmpty()) {
             error(
-                "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block " +
+                "OIDC is not configured. Add oidc { relayTo = \"...\" } to your cdkBlocks block " +
                     "to enable this method.",
             )
         }

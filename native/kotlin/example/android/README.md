@@ -1,6 +1,6 @@
 # Android Example App
 
-A native Android app demonstrating the AWS Blocks Kotlin plugin. It uses Jetpack Compose for its UI and exercises several block types against a shared backend spec.
+A native Android app demonstrating the AWS CDK Blocks Kotlin plugin. It uses Jetpack Compose for its UI and exercises several block types against a shared backend spec.
 
 ## Features Demonstrated
 
@@ -13,12 +13,12 @@ A native Android app demonstrating the AWS Blocks Kotlin plugin. It uses Jetpack
 
 ## Prerequisites
 
-From the `example/typescript/aws-blocks` directory, run the following to start the backend and generate the spec file:
+From the `example/typescript/cdk-blocks` directory, run the following to start the backend and generate the spec file:
 
 ```bash
 npm install
 npm run dev
-npx blocks-generate-spec
+npm run spec
 ```
 
 This produces the `blocks.spec.json` file that the Gradle plugin reads at build time.
@@ -54,8 +54,8 @@ app/src/main/java/com/aws/blocks/example/
 The app applies the `com.aws.blocks.kotlin` plugin and configures it in `app/build.gradle.kts`:
 
 ```kotlin
-awsBlocks {
-    apiSpec = rootProject.file("../typescript/aws-blocks/blocks.spec.json")
+cdkBlocks {
+    apiSpec = rootProject.file("../typescript/cdk-blocks/blocks.spec.json")
     packageName = "blocks.testapp"
     oidc {
         relayTo = "blocks.testapp://oidcRedirect"

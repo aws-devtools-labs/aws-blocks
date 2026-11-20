@@ -17,13 +17,13 @@ public final nonisolated class Api: Sendable {
     public func setScore(input: SetScore.Input) async throws -> SetScore.Result {
         let request = BlocksRequest(method: "api.setScore", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.setScore") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.setScore") }
         return try JSONDecoder().decode(SetScore.Result.self, from: result)
     }
 
     public enum SetScore {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let level: Int
             public let score: Double
             public let step: Double
@@ -38,7 +38,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
@@ -81,5 +81,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

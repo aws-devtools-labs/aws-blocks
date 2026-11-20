@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,13 +47,13 @@ describe('S3WebsiteConstruct — static/SPA', () => {
     });
   });
 
-  it('publishes the static dir, pruning what the build no longer ships, and EXCLUDES the .blocks-sandbox placeholder', () => {
+  it('publishes the static dir, pruning what the build no longer ships, and EXCLUDES the published placeholder and the private state directory', () => {
     // The build ships a placeholder .blocks-sandbox/config.json; the real config
     // is written by the separate BlocksConfigDeployment. An excluded key is
     // outside the deployment's filter, so prune never deletes the real config.
     t.hasResourceProperties('Custom::CDKBucketDeployment', {
       Prune: true,
-      Exclude: Match.arrayWith(['.blocks-sandbox/*', '*.html', '**/*.html']),
+      Exclude: Match.arrayWith(['.blocks-sandbox/*', '.cdk-blocks-sandbox/*', '*.html', '**/*.html']),
     });
     for (const d of Object.values(t.findResources('Custom::CDKBucketDeployment'))) {
       assert.equal(d.Properties.Prune, true);

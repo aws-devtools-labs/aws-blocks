@@ -5,7 +5,7 @@
  * The local (mock) user-pool engine — a port of `AuthCognito`'s mock behind
  * the {@link NativeEngine} contract. Runs fully offline: users, groups, codes,
  * challenges, MFA / TOTP, devices, passkeys and the admin surface live in
- * `.bb-data/<fullId>/state.json` (`native-mock-store.ts`, `AuthCognito`'s file
+ * `.cdk-blocks/local/data/<fullId>/state.json` (`native-mock-store.ts`, `AuthCognito`'s file
  * format, read as-is).
  *
  * Throws Cognito-shaped service errors (`serviceError`), never `ApiError`s for
@@ -24,8 +24,8 @@
  */
 
 import crypto from 'node:crypto';
-import { registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import { getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { selfSignUpEnabled } from '../cdk/contract.js';
 import {
 	DECOY_FIRST_FACTORS,
@@ -187,6 +187,7 @@ export class MockNativeEngine implements NativeEngine {
 		this.attributeSchema = new MockAttributeSchema({
 			...(opts.users?.attributes ? { attributes: opts.users.attributes } : {}),
 			externalPool: opts.userPool !== undefined,
+			log: host.log,
 		});
 		const fullId = host.scope.fullId;
 		this.store = new MockStore({
@@ -199,20 +200,37 @@ export class MockNativeEngine implements NativeEngine {
 			signInMode: this.signInMode,
 			caseSensitive: opts.users?.caseSensitive !== false,
 		});
-		this.admin = mockAdminEngine(this.store, (login, attrs, exists) => {
-			// `AdminCreateUser` validates the attributes against the pool's schema first.
-			this.attributeSchema.check(attrs, 'adminCreateUser');
-			const created = this.newUser(login, attrs, exists);
-			// Then an email / phone the admin marks verified must not be another
-			// user's verified alias: `Auth` sends no `ForceAliasCreation`, so
-			// Cognito answers `AliasExistsException`. On a username-attribute
-			// pool `newUser` has already refused one in use (`UsernameExistsException`).
-			for (const attr of this.signInMode.aliasAttributes) {
-				const value = created.attributes[attr];
-				if (value && created.attributes[`${attr}_verified`] === 'true') this.refuseAliasInUse(attr, value);
-			}
-			return created;
-		});
+		this.admin = mockAdminEngine(
+			this.store,
+			(login, attrs, exists) => {
+				// `AdminCreateUser` validates the attributes against the pool's schema first.
+				this.attributeSchema.check(attrs, 'adminCreateUser');
+				const created = this.newUser(login, attrs, exists);
+				// Then an email / phone the admin marks verified must not be another
+				// user's verified alias: `Auth` sends no `ForceAliasCreation`, so
+				// Cognito answers `AliasExistsException`. On a username-attribute
+				// pool `newUser` has already refused one in use (`UsernameExistsException`).
+				for (const attr of this.signInMode.aliasAttributes) {
+					const value = created.attributes[attr];
+					if (value && created.attributes[`${attr}_verified`] === 'true') this.refuseAliasInUse(attr, value);
+				}
+				return created;
+			},
+			(username, user, attrs) => {
+				// `AdminUpdateUserAttributes` checks the pool's schema (IAM-authorized:
+				// admin-only attributes and verified flags allowed), then that a new
+				// sign-in email / phone is not another user's.
+				this.attributeSchema.check(attrs, 'adminUpdate');
+				for (const attr of this.signInMode.usernameAttributes) {
+					const value = attrs[attr];
+					if (value && value !== user.attributes[attr]) this.refuseAliasInUse(attr, value, username);
+				}
+				for (const attr of this.signInMode.aliasAttributes) {
+					const value = attrs[attr] ?? user.attributes[attr];
+					if (value && attrs[`${attr}_verified`] === 'true') this.refuseAliasInUse(attr, value, username);
+				}
+			},
+		);
 		registerSdkIdentifiers(fullId, { userPoolId: `mock-pool-${fullId}`, clientId: `mock-client-${fullId}` });
 	}
 

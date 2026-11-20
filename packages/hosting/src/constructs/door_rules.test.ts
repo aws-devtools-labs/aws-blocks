@@ -8,7 +8,7 @@
  * - each redirect source reaches the asset proxy, which answers it with the
  *   CloudFront door's semantics (`asset_proxy.test.ts` runs that behavior);
  * - the proxies carry the app's rules and error pages;
- * - synth warns (`@aws-blocks/hosting:DoorRulesNotApplied`) naming exactly
+ * - synth warns (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`) naming exactly
  *   what the proxies can't reach: responses routed straight to the server, the
  *   image function or (on API Gateway) the backend.
  */
@@ -22,8 +22,8 @@ import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { DeployManifest } from '../manifest/types.js';
 import { doorCapabilitiesFor, HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
-const WARNING = '@aws-blocks/hosting:DoorRulesNotApplied';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
+const WARNING = '@aws-cdk-blocks/hosting:DoorRulesNotApplied';
 
 describe("regional doors apply the app's redirects, header rules and error pages", () => {
   let tmpDir: string;
@@ -72,7 +72,8 @@ describe("regional doors apply the app's redirects, header rules and error pages
     ...rules,
   });
   const synth = (manifest: DeployManifest, frontDoor: HostingConstructProps['frontDoor'], extra: Partial<HostingConstructProps> = {}) => {
-    const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
     new HostingConstruct(stack, 'Hosting', {
       manifest,
       frontDoor,
@@ -161,7 +162,8 @@ describe("regional doors apply the app's redirects, header rules and error pages
       redirects: [...rules.redirects, { source: '/docs/*.html', destination: '/guide/*', statusCode: 301 }],
     });
     const redirectWarnings = (frontDoor: HostingConstructProps['frontDoor'], manifest: DeployManifest, extra = {}) => {
-      const stack = new Stack(new App(), 'R', { env: { account: '111111111111', region: 'us-west-2' } });
+      // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+      const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'R', { env: { account: '111111111111', region: 'us-west-2' } });
       new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, ...extra });
       return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('RedirectNotExpressible'));
     };
@@ -187,7 +189,8 @@ describe("regional doors apply the app's redirects, header rules and error pages
       routes: [{ pattern: '/assets/*.js', target: 'static' }, ...ssr().routes],
     });
     const warned = (manifest: DeployManifest, frontDoor: HostingConstructProps['frontDoor'], id: string, extra = {}) => {
-      const stack = new Stack(new App(), 'Caps', { env: { account: '111111111111', region: 'us-west-2' } });
+      // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+      const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'Caps', { env: { account: '111111111111', region: 'us-west-2' } });
       new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, backendApi: { url: API_URL }, ...extra });
       return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(id)).length > 0;
     };

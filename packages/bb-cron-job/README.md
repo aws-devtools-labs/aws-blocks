@@ -1,4 +1,4 @@
-# @aws-blocks/bb-cron-job
+# @aws-cdk-blocks/bb-cron-job
 
 Scheduled task execution backed by EventBridge Scheduler and Lambda, or a container compute for long-running jobs.
 
@@ -23,8 +23,8 @@ Scheduled task execution backed by EventBridge Scheduler and Lambda, or a contai
 ## Quick Start
 
 ```typescript
-import { Scope } from '@aws-blocks/core';
-import { CronJob } from '@aws-blocks/bb-cron-job';
+import { Scope } from '@aws-cdk-blocks/core';
+import { CronJob } from '@aws-cdk-blocks/bb-cron-job';
 
 const scope = new Scope('my-app');
 
@@ -72,7 +72,7 @@ serverless `Compute` to give the job its own function, for example more memory
 or a longer timeout than the API's:
 
 ```typescript
-import { Compute, CronJob } from '@aws-blocks/blocks';
+import { Compute, CronJob } from 'aws-cdk-blocks';
 
 const reports = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 900 });
 
@@ -90,7 +90,7 @@ a container `Compute` for a job that runs longer, using the same `Compute`
 objects and `timeoutSeconds` option as `AsyncJob`:
 
 ```ts
-import { Compute } from '@aws-blocks/blocks';
+import { Compute } from 'aws-cdk-blocks';
 
 const worker = new Compute(scope, 'worker', {
   type: 'container',
@@ -126,7 +126,7 @@ container `AsyncJob`:
    one of its 3 attempts.
 
 A container inherited from the scope works the same way. Locally, every job
-runs in the dev server whatever its compute. See `@aws-blocks/bb-compute`.
+runs in the dev server whatever its compute. See `@aws-cdk-blocks/bb-compute`.
 
 ## Schedule Expressions
 
@@ -169,7 +169,7 @@ The handler receives a `CronJobEvent<T>` with:
 ## Error Constants
 
 ```typescript
-import { CronJobErrors } from '@aws-blocks/bb-cron-job';
+import { CronJobErrors } from '@aws-cdk-blocks/bb-cron-job';
 
 CronJobErrors.InvalidSchedule  // schedule expression is not a valid cron or rate format
 CronJobErrors.InvalidTimezone  // timezone string is not a valid IANA timezone
@@ -282,7 +282,8 @@ new CronJob<{ mode: string }>(scope, 'sync-daily', {
 
 In local dev mode, CronJob runs schedules in-process:
 
-- Rate schedules use `setInterval`
+- Rate schedules up to the timer limit (2^31-1 ms, about 24.8 days) use `setInterval`
+- Longer rate schedules wait in `setTimeout` steps toward an absolute fire time, fire, then schedule the first slot still in the future, so slots missed during a clock jump (for example sleep) are not run
 - Cron schedules calculate the next fire time with timezone support and use `setTimeout`
 - Console logs when the job fires: `[CronJob:{id}] triggered at {timestamp}`
 - When `enabled: false`, the schedule does not run automatically

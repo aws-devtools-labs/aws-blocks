@@ -7,20 +7,16 @@
  * with the hint the `Authenticator` shows next to its disabled button, and a
  * browser that navigates to the sign-in route anyway gets an explanatory HTML
  * page instead of raw JSON. Local only — the `auth-social` block is not
- * deployed (see `aws-blocks/index.ts`).
+ * deployed (see `cdk-blocks/index.ts`).
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import type { authSocialApi as authSocialApiType } from 'aws-blocks';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import type { authSocialApi as authSocialApiType } from 'cdk-blocks';
+import { testBaseUrl } from './api-url.js';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 const HINT = "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.";
 
@@ -34,7 +30,7 @@ export function authSocialLocalTests(getApi: () => typeof authSocialApiType) {
       const google = state.actions.find((a) => a.name === 'signIn:google');
       assert.ok(google, 'the Google action is still listed');
       assert.strictEqual(google.unavailable, HINT);
-      assert.strictEqual(google.url, '/aws-blocks/auth/social/signin/google');
+      assert.strictEqual(google.url, '/cdk-blocks/auth/social/signin/google');
       // Email + password stays usable on the same block.
       const signIn = state.actions.find((a) => a.name === 'signIn');
       assert.ok(signIn);
@@ -42,7 +38,7 @@ export function authSocialLocalTests(getApi: () => typeof authSocialApiType) {
     });
 
     test('the sign-in route answers a browser with an HTML page, an API client with the JSON error', async () => {
-      const url = `${getBaseUrl()}/aws-blocks/auth/social/signin/google`;
+      const url = `${getBaseUrl()}/cdk-blocks/auth/social/signin/google`;
       const page = await fetch(url, { redirect: 'manual', headers: { accept: 'text/html' } });
       assert.strictEqual(page.status, 501);
       assert.match(page.headers.get('content-type') ?? '', /^text\/html/);

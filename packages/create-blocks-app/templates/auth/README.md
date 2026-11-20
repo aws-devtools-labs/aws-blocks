@@ -1,13 +1,13 @@
 # Blocks Auth App
 
-A frontend on AWS Blocks that exercises the `Auth` Building Block end to end:
+A frontend on AWS CDK Blocks that exercises the `Auth` Building Block end to end:
 email + password sign-up confirmed by an emailed code, groups and role-gated
 methods, profile attributes, password change and sign-out everywhere. Backed by
 Amazon Cognito once deployed; fully local with `npm run dev`. Vite + vanilla DOM
 frontend.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template auth`
-> (`--template auth-cognito`, this template's former name, still works).
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template auth`
+> (`--template auth-cognito` is an alias for `auth`).
 
 ## Getting Started
 
@@ -30,7 +30,7 @@ emails the codes instead: the hook never runs there and `getLastCode` returns
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: Auth, KVStore, per-user todos, API |
+| `cdk-blocks/index.ts` | Backend: Auth, KVStore, per-user todos, API |
 | `src/index.ts` | Frontend: sign-up / sign-in flow and app UI |
 | `test/e2e.test.ts` | Tests exercising the public, protected and role-gated API |
 | `index.html` | HTML shell |
@@ -45,18 +45,26 @@ emails the codes instead: the hook never runs there and `getLastCode` returns
   `auth.requireRole(context, 'editors')` (see `editorsOnly` / `readersOnly`), a
   custom `department` attribute, and attribute update / verification methods
   (`updateEmail`, `confirmAttribute`, …).
+- **Optional MFA with an authenticator app** — `mfa: { mode: 'optional',
+  types: ['TOTP'] }`. A user who sets one up (the `setUpTotp` and
+  `verifyTotpSetup` actions of `authApi`) is asked for its 6-digit code at
+  sign-in; everyone else signs in with their password alone. Locally,
+  `totpVerification: 'rfc6238'` checks the codes as Cognito does, so a wrong
+  setup key fails in `npm run dev` too.
 - **Session management** — `changePassword`, `listDevices`,
   `forgetCurrentDevice`, `signOutEverywhere`.
 - **Deny by default** — `api` is defined with `auth.protect(scope, 'api', {
   public, methods })`: its `methods` run only after the session check, with the
   signed-in `user`, and a signed-out call to anything but a `public` method
   (`ping`, `getLastCode`) gets 401 `NotAuthenticatedException`.
-- **DistributedTable** — per-user todos keyed by `userSub` (stable for the
-  user's lifetime), in `auth.protect`'s `methods`.
+- **KVStore** — per-user todos keyed by `userSub` (stable for the
+  user's lifetime), in `auth.protect`'s `methods`. A `KVStore` with a `schema`
+  and a `key` stores records you list or query as a collection; a store fixes
+  its key when you create it.
 
 ⚠️ Decide `users.signInWith`, `users.caseSensitive`, required attributes and custom attributes before
 your first deploy: Cognito can't change them on an existing user pool. Full
-`Auth` docs: `node_modules/@aws-blocks/bb-auth/README.md`.
+`Auth` docs: `npm run docs Auth`.
 
 ## Commands
 
@@ -72,28 +80,27 @@ your first deploy: Cognito can't change them on an existing user pool. Full
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
 | `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
-| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
-| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
-| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+| `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
 
-Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
-`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
 The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ## Stack naming
 
 Your CloudFormation stack names are derived from the `stackId` in
-`.blocks/config.json`, generated at scaffold time from your project name plus a
+`.cdk-blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
-Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`
+Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
 (frontend). Test via `npm run test:e2e`.

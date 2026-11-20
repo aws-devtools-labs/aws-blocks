@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin.builder
 
 import com.aws.blocks.kotlin.NamingUtils
@@ -32,7 +35,7 @@ import kotlinx.serialization.json.booleanOrNull
 private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
 
 /** The path a Blocks backend serves RPC on. */
-private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
+private const val DEFAULT_RPC_PATH = "/cdk-blocks/api"
 
 /**
  * What a narrowed type argument resolves to until something names it: the values the spec permits,
@@ -68,11 +71,9 @@ class CodegenModelBuilder {
         val apiGroups = groupMethods(model.methods, collector)
 
         val servers = if (model.servers.isEmpty()) {
-            // The generator appends x-blocks-endpoint to every server URL, so the RPC path is only
-            // added here when the spec declares no endpoint of its own. Without it the fallback
-            // points at the origin, where the backend serves no RPC.
-            val path = if (model.endpoint == null) DEFAULT_RPC_PATH else ""
-            listOf(ServerDefinition("local", DEFAULT_LOCAL_ORIGIN + path))
+            // A spec's server URLs already carry the RPC path, so the fallback has to add it
+            // itself. Without it the fallback points at the origin, where the backend serves no RPC.
+            listOf(ServerDefinition("local", DEFAULT_LOCAL_ORIGIN + DEFAULT_RPC_PATH))
         } else {
             model.servers.map { ServerDefinition(it.name, it.url) }
         }
@@ -81,7 +82,6 @@ class CodegenModelBuilder {
             apiNamespaces = apiGroups,
             typeDefinitions = collector.typeDefinitions(),
             servers = servers,
-            endpoint = model.endpoint,
             nativeCatalogs = model.nativeCatalogs,
         )
     }

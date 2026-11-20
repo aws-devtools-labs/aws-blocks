@@ -16,13 +16,13 @@ Distributed tracing backed by AWS X-Ray.
 ## Installation
 
 ```bash
-npm install @aws-blocks/bb-tracer
+npm install @aws-cdk-blocks/bb-tracer
 ```
 
 ## Quick Usage
 
 ```typescript
-import { Tracer } from '@aws-blocks/bb-tracer';
+import { Tracer } from '@aws-cdk-blocks/bb-tracer';
 
 const tracer = new Tracer(scope, 'my-tracer');
 
@@ -84,7 +84,7 @@ The `segment` object passed to `startSegment`'s callback:
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/{fullId}/traces.json` across dev server restarts. Nested segments are stored as a tree (children array). Wipe with `rm -rf .bb-data`.
+Mock data persists to disk at `.cdk-blocks/local/data/{fullId}/traces.json` across dev server restarts. Nested segments are stored as a tree (children array). Wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 
 The mock records all traces locally with full timing, annotations, metadata, and error data — matching the shape of what X-Ray would capture in production.
 

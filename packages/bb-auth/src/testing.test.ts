@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `getLastAuthCode` (`@aws-blocks/bb-auth/testing`) against real local pools:
+ * `getLastAuthCode` (`@aws-cdk-blocks/bb-auth/testing`) against real local pools:
  * it finds the code wherever the block's data directory is, so renaming the
  * scope or the block does not break a test; it keeps working when another
  * user's code has overwritten `last-code.json`; and it says why when there is
@@ -18,8 +18,8 @@ import { Auth } from './index.mock.js';
 import { totpCode } from './engines/totp.js';
 import { getLastAuthCode, totpCodeFor } from './testing.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 let n = 0;

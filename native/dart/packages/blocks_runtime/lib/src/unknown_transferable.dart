@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_runtime/src/transferable_descriptor.dart';
 
 /// Fallback for a direct-result transferable whose tag has no runtime binding
@@ -12,7 +15,7 @@ class UnknownTransferable {
 
   UnknownTransferable._({required this.tag, required this.descriptor});
 
-  /// Throws a [FormatException] unless [json] is an object whose `__blocks` is
+  /// Throws a `TransferableException` unless [json] is an object whose `__blocks` is
   /// a non-empty string equal to [expectedTag].
   factory UnknownTransferable.fromJson(
     Object? json, {
@@ -25,10 +28,4 @@ class UnknownTransferable {
     );
     return UnknownTransferable._(tag: expectedTag, descriptor: descriptor);
   }
-
-  /// The raw [descriptor], as the server sent it. A generated client sends
-  /// an unbound transferable this way; `jsonEncode` calls it too.
-  ///
-  /// Returns a copy, so changing it doesn't change [descriptor].
-  Map<String, dynamic> toJson() => transferableDescriptor(tag, descriptor);
 }

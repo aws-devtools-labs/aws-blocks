@@ -1,3 +1,6 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Validate the requested trial count; print the GitHub Actions matrix as a JSON list."""
 import argparse
 import json

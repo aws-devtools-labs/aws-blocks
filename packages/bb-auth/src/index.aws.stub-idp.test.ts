@@ -23,7 +23,13 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, mock, test } from 'node:test';
-import { _resetConfigCache, ApiError, clearRouteRegistry, getRegisteredRoutes, preloadConfig } from '@aws-blocks/core';
+import {
+	_resetConfigCache,
+	ApiError,
+	clearRouteRegistry,
+	getRegisteredRoutes,
+	preloadConfig,
+} from '@aws-cdk-blocks/core';
 import { S3Client } from '@aws-sdk/client-s3';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import { stubIdpConfigKeys } from './cdk/contract.js';
@@ -49,6 +55,7 @@ beforeEach(() => {
 	// synth process sees what `BlocksStack.create` set): a sandbox by default here.
 	process.env.BLOCKS_DEPLOYMENT_TYPE = 'sandbox';
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 	gw = installFakeGateway();
 	rootId = `stubaws${process.pid}x${++n}`;
@@ -64,6 +71,7 @@ afterEach(() => {
 	_resetConfigCache();
 	gw.uninstall();
 	delete process.env[stubIdpConfigKeys(`${rootId}-auth`).API_URL];
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
 
@@ -77,11 +85,11 @@ function lambdaInstance() {
 	});
 }
 
-const issuer = () => `${gw.base}/aws-blocks/auth/idp/corp`;
+const issuer = () => `${gw.base}/cdk-blocks/auth/idp/corp`;
 
 /** Sign-in kickoff → the stub's authorize URL (and the browser now holds the pending cookie). */
 async function kickoff(b: TestBrowser): Promise<string> {
-	const start = await b.fetch(`${gw.base}/aws-blocks/auth/signin/corp`);
+	const start = await b.fetch(`${gw.base}/cdk-blocks/auth/signin/corp`);
 	assert.strictEqual(start.status, 302, `the sign-in route redirects to the stub, got ${start.status}`);
 	const authorize = location(start, gw.base);
 	assert.ok(authorize.startsWith(`${issuer()}/authorize?`), authorize);
@@ -99,7 +107,7 @@ async function pick(b: TestBrowser, authorize: string, sub: string): Promise<str
 	});
 	assert.strictEqual(submitted.status, 302);
 	const callback = location(submitted, gw.base);
-	assert.ok(callback.startsWith(`${gw.base}/aws-blocks/auth/callback?code=`), callback);
+	assert.ok(callback.startsWith(`${gw.base}/cdk-blocks/auth/callback?code=`), callback);
 	return callback;
 }
 
@@ -107,7 +115,7 @@ async function pick(b: TestBrowser, authorize: string, sub: string): Promise<str
 async function mintCode(sub: string) {
 	const verifier = 'v'.repeat(64);
 	// The app's own callback on the gateway: the stub's only registered redirect URI.
-	const redirectUri = `${gw.base}/aws-blocks/auth/callback`;
+	const redirectUri = `${gw.base}/cdk-blocks/auth/callback`;
 	const params = new URLSearchParams({
 		response_type: 'code',
 		client_id: 'stub-client-id',
@@ -157,7 +165,7 @@ async function loadDeployedConfig(config: Record<string, string>): Promise<void>
 /** No stub route is mounted, discovery is a 404, and sign-in is the actionable 501. */
 async function assertStubNotServed(): Promise<void> {
 	const auth = lambdaInstance();
-	const idpRoutes = getRegisteredRoutes().filter((r) => r.path.startsWith('/aws-blocks/auth/idp/'));
+	const idpRoutes = getRegisteredRoutes().filter((r) => r.path.startsWith('/cdk-blocks/auth/idp/'));
 	assert.deepStrictEqual(idpRoutes, [], 'no stub IdP routes outside a sandbox deployment');
 	const discovery = await fetch(`${issuer()}/.well-known/openid-configuration`);
 	assert.strictEqual(discovery.status, 404);
@@ -332,7 +340,7 @@ describe('AWS runtime — stubIdp() on a sandbox deployment', () => {
 			new URLSearchParams({
 				response_type: 'code',
 				client_id: 'stub-client-id',
-				redirect_uri: `${gw.base}/aws-blocks/auth/callback`,
+				redirect_uri: `${gw.base}/cdk-blocks/auth/callback`,
 				code_challenge: pkceChallenge('v'.repeat(64)),
 				code_challenge_method: 'S256',
 				state: 's',
@@ -342,9 +350,9 @@ describe('AWS runtime — stubIdp() on a sandbox deployment', () => {
 		const refused: Record<string, string>[] = [
 			{ client_id: 'anything' },
 			{ redirect_uri: 'https://evil.example/land' },
-			{ redirect_uri: `${gw.base}/aws-blocks/auth/callback/x` },
+			{ redirect_uri: `${gw.base}/cdk-blocks/auth/callback/x` },
 			// The gateway origin without its stage is not where the app's callback lives.
-			{ redirect_uri: `${new URL(gw.base).origin}/aws-blocks/auth/callback` },
+			{ redirect_uri: `${new URL(gw.base).origin}/cdk-blocks/auth/callback` },
 		];
 		for (const overrides of refused) {
 			const what = JSON.stringify(overrides);
@@ -372,12 +380,12 @@ describe('AWS runtime — stubIdp() on a sandbox deployment', () => {
 			const authorize = await kickoff(b);
 			assert.strictEqual(
 				new URL(authorize).searchParams.get('redirect_uri'),
-				`${publicOrigin}/aws-blocks/auth/callback`,
+				`${publicOrigin}/cdk-blocks/auth/callback`,
 			);
 			// A native SDK pointed at the gateway sends the gateway callback.
 			for (const redirectUri of [
-				`${publicOrigin}/aws-blocks/auth/callback`,
-				`${gw.base}/aws-blocks/auth/callback`,
+				`${publicOrigin}/cdk-blocks/auth/callback`,
+				`${gw.base}/cdk-blocks/auth/callback`,
 			]) {
 				const form = new URLSearchParams(new URL(authorize).searchParams);
 				form.set('redirect_uri', redirectUri);

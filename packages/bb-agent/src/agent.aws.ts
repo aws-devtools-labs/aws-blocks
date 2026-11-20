@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomUUID } from 'node:crypto';
-import { getConfig, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
-import type { FileBucket } from '@aws-blocks/bb-file-bucket';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { getConfig, getSdkIdentifiers, installClientUserAgent } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import type { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from '@aws-sdk/client-bedrock-agentcore';
 import type { SnapshotStorage } from '@strands-agents/sdk';
 import { S3Storage } from '@strands-agents/sdk/session/s3-storage';
@@ -33,7 +33,7 @@ function toRuntimeSessionId(base: string): string {
  * caller-chosen, so it could otherwise equal another user's conversation id and land the turn
  * in that user's session. `sessionId` is the conversation's Strands session id (the
  * conversationId, or the owner-scoped key of an `inferenceOnly` agent with
- * `sessionScope: 'user'`), so two users who pass the same conversationId to such an agent
+ * `sessionScope: 'user'`, the default), so two users who pass the same conversationId to such an agent
  * route to different runtime sessions.
  */
 function runtimeSessionIdFor(payload: { conversationId?: string }, sessionId?: string): string {

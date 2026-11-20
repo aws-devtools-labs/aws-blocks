@@ -1,8 +1,11 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
-import type { api as apiType, hello as helloType } from 'aws-blocks';
+import type { api as apiType, hello as helloType } from 'cdk-blocks';
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
@@ -20,13 +23,13 @@ test.before(async () => {
   });
   server.unref();
 
-  // Wait for the server to answer. It also writes `aws-blocks/client.js`, the
+  // Wait for the server to answer. It also writes `cdk-blocks/client.js`, the
   // generated client the import below resolves to, so import only after this.
   let ready = false;
   for (let i = 0; i < 60 && !ready; i++) {
     await setTimeout(1000);
     try {
-      const res = await fetch('http://localhost:3001/aws-blocks/api', {
+      const res = await fetch('http://localhost:3001/cdk-blocks/api', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'hello.greet', params: ['ping'] }),
@@ -39,7 +42,7 @@ test.before(async () => {
   if (!ready) throw new Error('Server not ready');
 
   // Import API via browser conditional export (client proxy)
-  const mod = await import('aws-blocks');
+  const mod = await import('cdk-blocks');
   api = mod.api;
   hello = mod.hello;
 });
@@ -65,11 +68,11 @@ test('KV Store - set and get', async () => {
 });
 
 // ── Per-user todos ───────────────────────────────────────────────────────────
-// Two users, each with their own cookie jar, talk to the dev server over raw
-// JSON-RPC (the shared client proxy has a single cookie session). Sign-up is
-// confirmed with the code the local runtime writes to `.bb-data/<fullId>/last-code.json`.
+// Use raw JSON-RPC with one cookie jar per user because the shared client proxy
+// has a single session. Confirm sign-up with the code the local runtime writes to
+// `.cdk-blocks/local/data/<fullId>/last-code.json`.
 
-const RPC_URL = 'http://localhost:3001/aws-blocks/api';
+const RPC_URL = 'http://localhost:3001/cdk-blocks/api';
 
 class Session {
   private cookies = new Map<string, string>();
@@ -110,7 +113,7 @@ async function signedInUser(label: string): Promise<{ session: Session; username
     email: `${username}@example.com`,
   });
   const { readFile } = await import('node:fs/promises');
-  const delivered = JSON.parse(await readFile('.bb-data/my-app-auth/last-code.json', 'utf8')) as { username: string; code: string };
+  const delivered = JSON.parse(await readFile('.cdk-blocks/local/data/my-app-auth/last-code.json', 'utf8')) as { username: string; code: string };
   assert.strictEqual(delivered.username, username);
   await session.call('authApi.setAuthState', { action: 'confirmSignUp', username, code: delivered.code });
   const state = await session.call<{ state: string }>('authApi.setAuthState', { action: 'autoSignIn', username });

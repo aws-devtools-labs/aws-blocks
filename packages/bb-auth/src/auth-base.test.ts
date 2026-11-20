@@ -10,13 +10,14 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { resolveProviders } from './auth-base.js';
 import { requiresUserPool } from './cdk/contract.js';
 import { encryptAutoSignInPayload, signSessionId } from './cookies.js';
 import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';
 import { resolveOptions } from './resolve-options.js';
+import { SESSION_STORE_ID } from './session-store-id.js';
 import { SessionStore } from './sessions.js';
 import {
 	Browser,
@@ -31,8 +32,8 @@ import {
 import { mockStateCapture } from './test-support/legacy-fixtures.js';
 import type { AppSettingRef, AuthOptions } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const oktaSecret: AppSettingRef = { fullId: 'okta-secret', get: async () => 'shh' };
 
@@ -88,7 +89,7 @@ describe('requireAuth truth table', () => {
 
 	test('valid but older than freshAgeSeconds → only { fresh: true } throws 401 ReauthenticationRequired; session kept', async () => {
 		const seed = makeAuth();
-		const store = new SessionStore(seed.auth, 400 * 86400);
+		const store = new SessionStore(seed.auth, 30 * 86400);
 		const sid = await store.create(poolTokens('alice', { authTime: Math.floor(Date.now() / 1000) - 120 }));
 		// A fresh instance (as on the next cold start) reads the row from the store.
 		const h = makeAuth({ session: { freshAgeSeconds: 60 } }, { rootId: seed.auth.parent.id });
@@ -146,7 +147,7 @@ describe('requireAuth truth table', () => {
 		const user = await b.request((ctx) => h.auth.requireAuth(ctx));
 		assert.strictEqual(user.username, 'alice');
 		assert.ok(h.native.calls.includes('refresh'));
-		assert.ok(setCookieFor(b.lastSetCookies, h.cookieName)?.includes('Max-Age=34560000'));
+		assert.ok(setCookieFor(b.lastSetCookies, h.cookieName)?.includes('Max-Age=2592000'));
 	});
 
 	test('a transient refresh failure keeps the session and surfaces a retriable 5xx (no sign-out)', async () => {
@@ -237,10 +238,10 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 		});
 	}
 
-	test('an old AuthOIDC row in the same table, reached by a verified cookie → signed-out, cleared, row untouched', async () => {
+	test('a row in another shape (an old AuthOIDC row) in the session store, reached by a verified cookie → signed-out, cleared, row untouched', async () => {
 		const h = makeAuth();
-		const { KVStore } = await import('@aws-blocks/bb-kv-store');
-		const table = new KVStore<unknown>(h.auth, 'sessions');
+		const { KVStore } = await import('@aws-cdk-blocks/bb-kv-store');
+		const table = new KVStore<unknown>(h.auth, SESSION_STORE_ID);
 		const oidcRow = {
 			userId: 'https://idp.example.com:sub-1',
 			refreshToken: 'r',
@@ -251,7 +252,7 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 		await table.put('oidc-session-id', oidcRow);
 		const fresh = makeAuth(undefined, { rootId: h.auth.parent.id });
 		await expectSignedOut(fresh, `${fresh.cookieName}=${signSessionId('oidc-session-id', TEST_SECRET)}`, true);
-		const reread = new KVStore<unknown>(fresh.auth, 'sessions');
+		const reread = new KVStore<unknown>(fresh.auth, SESSION_STORE_ID);
 		assert.deepStrictEqual(await reread.get('oidc-session-id'), oidcRow, 'a foreign row is never deleted');
 	});
 
@@ -267,8 +268,8 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 	] as const) {
 		test(`${label} → signed-out`, async () => {
 			const h = makeAuth();
-			const { KVStore } = await import('@aws-blocks/bb-kv-store');
-			await new KVStore<unknown>(h.auth, 'sessions').put('bad', row);
+			const { KVStore } = await import('@aws-cdk-blocks/bb-kv-store');
+			await new KVStore<unknown>(h.auth, SESSION_STORE_ID).put('bad', row);
 			const fresh = makeAuth(undefined, { rootId: h.auth.parent.id });
 			await expectSignedOut(fresh, `${fresh.cookieName}=${signSessionId('bad', TEST_SECRET)}`, true);
 		});
@@ -752,6 +753,71 @@ describe('email + password flows through AuthBase', () => {
 			{ status: 403 },
 		);
 		assert.ok(!b.jar.has(h.cookieName));
+	});
+
+	test('outside a sandbox over a plain-HTTP front door: sign-in is refused before anything is written; sign-out still clears', async () => {
+		const keys = ['BLOCKS_DEPLOYMENT_TYPE', 'BLOCKS_PUBLIC_ORIGIN'] as const;
+		const before = keys.map((k) => process.env[k]);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = 'production';
+		process.env.BLOCKS_PUBLIC_ORIGIN = 'http://my-alb-123.us-east-1.elb.amazonaws.com';
+		try {
+			let validated = false;
+			const h = makeAuth({
+				validateUser: async () => {
+					validated = true;
+				},
+			});
+			h.native.addUser('alice');
+			const b = new Browser();
+			await assert.rejects(
+				b.request((ctx) => h.auth.signIn('alice', 'Passw0rd!', ctx)),
+				(e: unknown) => isBlocksError(e, AuthErrors.InsecureTransport),
+			);
+			assert.ok(!b.jar.has(h.cookieName));
+			assert.strictEqual(validated, false, 'validateUser does not run for a refused sign-in');
+			assert.ok(h.native.calls.includes('signOut:false'), "the engine's upstream tokens are revoked");
+			const { KVStore } = await import('@aws-cdk-blocks/bb-kv-store');
+			const rows = await Array.fromAsync(new KVStore<unknown>(h.auth, 'sessions').scan());
+			assert.deepStrictEqual(rows, [], 'no session row is stored');
+
+			const ctx = makeContext();
+			await h.auth.signOut(ctx);
+			assert.ok(
+				isCleared(ctx.response.headers.getSetCookie(), h.cookieName),
+				'sign-out clears the cookie, no 500',
+			);
+		} finally {
+			keys.forEach((k, i) => {
+				const v = before[i];
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			});
+		}
+	});
+
+	test("outside a sandbox over a plain-HTTP front door with the door's `allowPlainHttp` opt-out: sign-in issues a cookie without Secure", async () => {
+		const keys = ['BLOCKS_DEPLOYMENT_TYPE', 'BLOCKS_PUBLIC_ORIGIN', 'BLOCKS_ALLOW_PLAIN_HTTP'] as const;
+		const before = keys.map((k) => process.env[k]);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = 'production';
+		process.env.BLOCKS_PUBLIC_ORIGIN = 'http://my-alb-123.us-east-1.elb.amazonaws.com';
+		process.env.BLOCKS_ALLOW_PLAIN_HTTP = 'true';
+		try {
+			const h = makeAuth();
+			h.native.addUser('alice');
+			const ctx = makeContext();
+			const user = await h.auth.signIn('alice', 'Passw0rd!', ctx);
+			assert.ok(user, 'signed in');
+			const line = ctx.response.headers.getSetCookie().find((l) => l.startsWith(`${h.cookieName}=`));
+			assert.ok(line, 'the session cookie is set');
+			assert.match(line, /HttpOnly; SameSite=Lax; Path=\//);
+			assert.doesNotMatch(line, /;\s*Secure/, 'no Secure: the browser would drop it over HTTP');
+		} finally {
+			keys.forEach((k, i) => {
+				const v = before[i];
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			});
+		}
 	});
 
 	test('signOut: clears the cookie even when signed out; global revokes upstream; onSignOut errors never block', async () => {

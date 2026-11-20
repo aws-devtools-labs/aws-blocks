@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `GET /aws-blocks/settings` with no BB_SETTINGS_GROUP_URL used to shell out to
+ * `GET /cdk-blocks/settings` with no BB_SETTINGS_GROUP_URL used to shell out to
  * open an editor and echo the working directory in the page — and the built-in
  * routes are registered by the deployed Lambda too, so an anonymous GET could
  * trigger a process spawn there. Opening an editor is now opt-in by the dev
@@ -20,9 +20,9 @@ type Sent = { status: number; body: string };
 
 async function getSettings(
   headers: Record<string, string> = {},
-  url = 'http://localhost:3000/aws-blocks/settings',
+  url = 'http://localhost:3000/cdk-blocks/settings',
 ): Promise<Sent> {
-  const match = matchRoute('GET', '/aws-blocks/settings');
+  const match = matchRoute('GET', '/cdk-blocks/settings');
   assert.ok(match, 'settings route registered');
   const sent: Sent = { status: 0, body: '' };
   const ctx = {
@@ -38,7 +38,7 @@ async function getSettings(
   return sent;
 }
 
-describe('built-in /aws-blocks/settings route', () => {
+describe('built-in /cdk-blocks/settings route', () => {
   let opened: string[];
   beforeEach(() => {
     clearRouteRegistry();
@@ -55,12 +55,12 @@ describe('built-in /aws-blocks/settings route', () => {
     assert.ok(!res.body.includes(process.cwd()), 'the working directory must not be disclosed');
   });
 
-  it('local dev server opt-in: opens .bb-data/settings.json in the editor', async () => {
+  it('local dev server opt-in: opens .cdk-blocks/local/data/settings.json in the editor', async () => {
     registerBuiltinRoutes({ localDev: true });
     const res = await getSettings();
     assert.strictEqual(res.status, 200);
     assert.strictEqual(opened.length, 1);
-    assert.match(opened[0], /\.bb-data[\\/]settings\.json$/);
+    assert.match(opened[0], /\.cdk-blocks\/local\/data[\\/]settings\.json$/);
   });
 
   it(
@@ -84,7 +84,7 @@ describe('built-in /aws-blocks/settings route', () => {
   );
 
   // A page on another site can make the browser send a GET to the dev server
-  // (`<img src="http://localhost:3000/aws-blocks/settings">`). Opening the editor
+  // (`<img src="http://localhost:3000/cdk-blocks/settings">`). Opening the editor
   // needs the local-dev signal on the request itself, not only at registration.
   it('local dev server: refuses a cross-site request without opening the editor', async () => {
     registerBuiltinRoutes({ localDev: true });
@@ -105,7 +105,7 @@ describe('built-in /aws-blocks/settings route', () => {
     assert.strictEqual(fetched.status, 200, 'a fetch from localhost:5173');
     const byIp = await getSettings(
       { 'Sec-Fetch-Site': 'same-site', Origin: 'http://127.0.0.1:5173' },
-      'http://127.0.0.1:3000/aws-blocks/settings',
+      'http://127.0.0.1:3000/cdk-blocks/settings',
     );
     assert.strictEqual(byIp.status, 200, 'a fetch from 127.0.0.1:5173');
     assert.strictEqual(opened.length, 3);
@@ -115,12 +115,12 @@ describe('built-in /aws-blocks/settings route', () => {
     registerBuiltinRoutes({ localDev: true });
     const foreignOrigin = await getSettings(
       { 'Sec-Fetch-Site': 'same-site', Origin: 'http://other.example.com' },
-      'http://mybox.example.com:3000/aws-blocks/settings',
+      'http://mybox.example.com:3000/cdk-blocks/settings',
     );
     assert.strictEqual(foreignOrigin.status, 403, 'a sibling subdomain of a configured dev host');
     const namedHost = await getSettings(
       { 'Sec-Fetch-Site': 'same-site' },
-      'http://mybox.example.com:3000/aws-blocks/settings',
+      'http://mybox.example.com:3000/cdk-blocks/settings',
     );
     assert.strictEqual(namedHost.status, 403, 'same-site against a non-loopback dev host');
     const nonLoopbackOrigin = await getSettings({ 'Sec-Fetch-Site': 'same-site', Origin: 'http://192.168.1.10:5173' });

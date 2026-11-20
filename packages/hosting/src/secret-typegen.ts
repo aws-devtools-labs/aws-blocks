@@ -32,28 +32,28 @@
 
 import { existsSync, watch as fsWatch } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import fg from 'fast-glob';
 import type * as TS from 'typescript';
 import type { ValueKind } from './secret.js';
 
 /**
  * Module specifiers the generated `.d.ts` augments. The value API (`getSecret`/
- * `getConfig`) lives on the bare `@aws-blocks/hosting` entry, and module
+ * `getConfig`) lives on the bare `@aws-cdk-blocks/hosting` entry, and module
  * augmentation narrows a function only for the *exact* specifier the caller imports
  * from — so this is the single specifier apps read the getters from. (Override via
  * `moduleSpecifiers` to also augment a re-export path.)
  */
-export const DEFAULT_TYPEGEN_MODULES = ['@aws-blocks/hosting'];
+export const DEFAULT_TYPEGEN_MODULES = ['@aws-cdk-blocks/hosting'];
 
 /** The primary module specifier the generated `.d.ts` augments. */
 export const DEFAULT_TYPEGEN_MODULE = DEFAULT_TYPEGEN_MODULES[0];
 
 /** Default globs scanned for `secret()` / `config()` calls, relative to `cwd`. */
-export const DEFAULT_TYPEGEN_INCLUDE = ['aws-blocks/**/*.{ts,tsx,mts,cts}', 'src/**/*.{ts,tsx,mts,cts}'];
+export const DEFAULT_TYPEGEN_INCLUDE = ['cdk-blocks/**/*.{ts,tsx,mts,cts}', 'src/**/*.{ts,tsx,mts,cts}'];
 
 /** Default output path (relative to `cwd`) for the generated augmentation. */
-export const DEFAULT_TYPEGEN_OUT = '.blocks/hosting-values.d.ts';
+export const DEFAULT_TYPEGEN_OUT = '.cdk-blocks/hosting-values.d.ts';
 
 /** A `secret()` / `config()` call whose key is not a string literal — skipped, reported. */
 export interface DynamicCallSite {
@@ -96,7 +96,7 @@ export interface TypegenOptions {
 	 */
 	readonly include?: string[];
 	/**
-	 * Module specifiers the generated augmentation targets. The bare `@aws-blocks/hosting` entry
+	 * Module specifiers the generated augmentation targets. The bare `@aws-cdk-blocks/hosting` entry
 	 * by default (that is where apps read the getters from); see {@link DEFAULT_TYPEGEN_MODULES}.
 	 * @default {@link DEFAULT_TYPEGEN_MODULES}
 	 */
@@ -121,16 +121,16 @@ const VALUE_FNS: Record<string, ValueKind> = { secret: 'secret', config: 'config
  * and a namespace import (`import * as blocks … blocks.secret(…)`) works. This is a
  * distinct list from {@link DEFAULT_TYPEGEN_MODULES} (which is where the getters are
  * imported *to*, and what the generated `.d.ts` augments). It must include the paths
- * apps actually declare through — notably `@aws-blocks/blocks/cdk` and
- * `@aws-blocks/core/cdk`, which re-export the markers — or detection silently misses
+ * apps actually declare through — notably `aws-cdk-blocks/cdk` and
+ * `@aws-cdk-blocks/core/cdk`, which re-export the markers — or detection silently misses
  * the primary path.
  */
 export const DEFAULT_MARKER_MODULES = [
-	'@aws-blocks/hosting',
-	'@aws-blocks/blocks/cdk',
-	'@aws-blocks/blocks',
-	'@aws-blocks/core/cdk',
-	'@aws-blocks/core',
+	'@aws-cdk-blocks/hosting',
+	'aws-cdk-blocks/cdk',
+	'aws-cdk-blocks',
+	'@aws-cdk-blocks/core/cdk',
+	'@aws-cdk-blocks/core',
 ];
 
 /** Per-file resolution of which local names bind to `secret`/`config` from an allowed module. */
@@ -218,11 +218,12 @@ function collectFromSourceFile(
 	configKeys: Set<string>,
 	schemaKeys: { secret: Set<string>; config: Set<string> },
 	dynamicCallSites: DynamicCallSite[],
-): void {
+): boolean {
 	const bindings = buildMarkerBindings(ts, sourceFile, allowed);
 	// No marker is imported into this file → nothing here can be a marker call. Skip.
-	if (bindings.named.size === 0 && bindings.namespaces.size === 0) return;
+	if (bindings.named.size === 0 && bindings.namespaces.size === 0) return false;
 	const kindOfCall = makeKindOfCall(ts, bindings);
+	let hasSchema = false;
 
 	const visit = (node: TS.Node): void => {
 		if (ts.isCallExpression(node)) {
@@ -231,7 +232,10 @@ function collectFromSourceFile(
 				const arg = node.arguments[0];
 				if (arg && ts.isStringLiteralLike(arg)) {
 					(fn === 'secret' ? secretKeys : configKeys).add(arg.text);
-					if (schemaArgOf(ts, node)) schemaKeys[fn].add(arg.text);
+					if (schemaArgOf(ts, node)) {
+						schemaKeys[fn].add(arg.text);
+						hasSchema = true;
+					}
 				} else if (arg) {
 					const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
 					dynamicCallSites.push({ file: filePath, line: line + 1, fn });
@@ -241,6 +245,7 @@ function collectFromSourceFile(
 		ts.forEachChild(node, visit);
 	};
 	visit(sourceFile);
+	return hasSchema;
 }
 
 /** Infer the TypeScript output type of a Standard Schema expression via the checker. */
@@ -269,28 +274,90 @@ function inferSchemaOutput(
 }
 
 /**
+ * The tsconfig that compiles `file`, found the way an editor finds it: the nearest
+ * `tsconfig.json`, or, when that one does not list the file, the project it references
+ * that does. A root that only lists project references (create-vite apps, the AWS
+ * Blocks Vite templates) lists no file itself, so its own options are TypeScript's
+ * defaults, not the app's.
+ */
+function configFor(
+	ts: typeof import('typescript'),
+	file: string,
+	parsedConfigs: Map<string, TS.ParsedCommandLine | undefined>,
+): { path: string; parsed: TS.ParsedCommandLine } | undefined {
+	const parse = (path: string): TS.ParsedCommandLine | undefined => {
+		if (!parsedConfigs.has(path)) {
+			const parsed = ts.getParsedCommandLineOfConfigFile(path, {}, {
+				...ts.sys,
+				onUnRecoverableConfigFileDiagnostic: () => {},
+			} as TS.ParseConfigFileHost);
+			parsedConfigs.set(path, parsed);
+		}
+		return parsedConfigs.get(path);
+	};
+	const lists = (parsed: TS.ParsedCommandLine): boolean =>
+		parsed.fileNames.some((name) => resolve(name) === resolve(file));
+	const nearest = ts.findConfigFile(dirname(file), ts.sys.fileExists, 'tsconfig.json');
+	const root = nearest && parse(nearest);
+	if (!nearest || !root) return undefined;
+	if (lists(root)) return { path: nearest, parsed: root };
+	for (const reference of root.projectReferences ?? []) {
+		const path = ts.resolveProjectReferencePath(reference);
+		const parsed = parse(path);
+		if (parsed && lists(parsed)) return { path, parsed };
+	}
+	// Intended fallback: no project lists the file, so use the nearest config's options.
+	// resolveSchemaTypes still applies `strict: true` under them.
+	return { path: nearest, parsed: root };
+}
+
+/**
  * Resolve the inferred output type for every `{ schema }`-carrying marker call, using
  * a full TypeScript `Program` (needed to resolve the schema library's types). Only
- * built when at least one schema is present, so the common no-schema path stays fast.
+ * built for the files that carry a schema, so the common no-schema path stays fast.
+ * Each file is checked with the options of the tsconfig that compiles it (see
+ * {@link configFor}), merged over `strict: true`: without `strictNullChecks`, a
+ * `.nullable()` or `.optional()` schema loses `null` and `undefined`.
  */
 function resolveSchemaTypes(
 	ts: typeof import('typescript'),
-	cwd: string,
 	files: string[],
 	allowed: Set<string>,
 ): { secret: Record<string, string>; config: Record<string, string> } {
 	const out = { secret: {} as Record<string, string>, config: {} as Record<string, string> };
-	const configPath = ts.findConfigFile(cwd, ts.sys.fileExists, 'tsconfig.json');
-	let options: import('typescript').CompilerOptions = { strict: true, skipLibCheck: true };
-	if (configPath) {
-		const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
-			...ts.sys,
-			onUnRecoverableConfigFileDiagnostic: () => {},
-		} as import('typescript').ParseConfigFileHost);
-		if (parsed) options = { ...parsed.options };
+	const parsedConfigs = new Map<string, TS.ParsedCommandLine | undefined>();
+	const byConfig = new Map<string, { options: TS.CompilerOptions; files: string[] }>();
+	for (const file of files) {
+		const config = configFor(ts, file, parsedConfigs);
+		const key = config?.path ?? '';
+		const group = byConfig.get(key) ?? {
+			options: config
+				? { strict: true, ...config.parsed.options }
+				: {
+						strict: true,
+						target: ts.ScriptTarget.ESNext,
+						module: ts.ModuleKind.ESNext,
+						moduleResolution: ts.ModuleResolutionKind.Bundler,
+						esModuleInterop: true,
+					},
+			files: [],
+		};
+		group.files.push(file);
+		byConfig.set(key, group);
 	}
-	options.noEmit = true;
-	options.skipLibCheck = true;
+	for (const group of byConfig.values()) resolveSchemaTypesIn(ts, group.files, group.options, allowed, out);
+	return out;
+}
+
+/** {@link resolveSchemaTypes} for the files that one tsconfig compiles. */
+function resolveSchemaTypesIn(
+	ts: typeof import('typescript'),
+	files: string[],
+	compilerOptions: TS.CompilerOptions,
+	allowed: Set<string>,
+	out: { secret: Record<string, string>; config: Record<string, string> },
+): void {
+	const options: TS.CompilerOptions = { ...compilerOptions, noEmit: true, skipLibCheck: true };
 	const program = ts.createProgram(files, options);
 	const checker = program.getTypeChecker();
 
@@ -317,7 +384,6 @@ function resolveSchemaTypes(
 		};
 		visit(sf);
 	}
-	return out;
 }
 
 /**
@@ -335,7 +401,7 @@ export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanR
 	const files = await fg(include, {
 		cwd,
 		absolute: true,
-		ignore: ['**/node_modules/**', '**/dist/**', '**/.blocks/**', '**/*.d.ts'],
+		ignore: ['**/node_modules/**', '**/dist/**', '**/.cdk-blocks/**', '**/*.d.ts'],
 	});
 
 	const ts = await loadTypeScript();
@@ -344,17 +410,19 @@ export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanR
 	const schemaKeys = { secret: new Set<string>(), config: new Set<string>() };
 	const dynamicCallSites: DynamicCallSite[] = [];
 
+	const schemaFiles: string[] = [];
 	for (const file of files) {
 		const text = await readFile(file, 'utf-8');
 		const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /* setParentNodes */ true);
-		collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, schemaKeys, dynamicCallSites);
+		if (
+			collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, schemaKeys, dynamicCallSites)
+		) {
+			schemaFiles.push(file);
+		}
 	}
 
 	// Only pay for a full Program (type resolution) when at least one schema exists.
-	const valueTypes =
-		schemaKeys.secret.size || schemaKeys.config.size
-			? resolveSchemaTypes(ts, cwd, files, allowed)
-			: { secret: {}, config: {} };
+	const valueTypes = schemaFiles.length ? resolveSchemaTypes(ts, schemaFiles, allowed) : { secret: {}, config: {} };
 
 	return {
 		secretKeys: [...secretKeys].sort(),
@@ -398,7 +466,7 @@ ${renderRegistry('HostingConfigRegistry', scan.configKeys, types.config)}
 		)
 		.join('\n\n');
 
-	return `// AUTO-GENERATED by @aws-blocks/hosting typegen — DO NOT EDIT.
+	return `// AUTO-GENERATED by @aws-cdk-blocks/hosting typegen — DO NOT EDIT.
 // Regenerate with \`npm run typegen\`. It narrows getSecret()/getConfig() to your
 // declared secret()/config() keys. Deleting it is safe — the keys fall back to \`string\`.
 
@@ -471,7 +539,7 @@ export async function generateHostingValuesDts(options: GenerateOptions = {}): P
 	return { ...scan, outFile, content, upToDate };
 }
 
-/** The non-glob directory prefix of an include glob (`aws-blocks/**` → `aws-blocks`). */
+/** The non-glob directory prefix of an include glob (`cdk-blocks/**` → `cdk-blocks`). */
 function staticDirOf(glob: string): string {
 	const dir: string[] = [];
 	for (const seg of glob.split('/')) {
@@ -540,6 +608,13 @@ export async function watchHostingValues(options: WatchOptions = {}): Promise<()
 	};
 
 	await regenerate(); // initial
+
+	// Aborted during the first scan (Ctrl+C before it finished): an `abort` listener added
+	// now would never fire, so don't open any watchers at all.
+	if (options.signal?.aborted) {
+		if (timer) clearTimeout(timer);
+		return () => {};
+	}
 
 	const dirs = [...new Set(include.map((g) => resolve(cwd, staticDirOf(g))))].filter(existsSync);
 	const cleanups: Array<() => void> = [];
@@ -629,6 +704,11 @@ export async function runTypegenCli(argv: string[], deps: TypegenCliDeps = {}): 
 		await watchHostingValues({ ...genOptions, log, error: err, signal: deps.signal });
 		// Stay alive until aborted (Ctrl+C in the CLI; the injected signal in tests).
 		return new Promise<number>((resolve) => {
+			// An already-aborted signal never fires `abort` again, so check it first.
+			if (deps.signal?.aborted) {
+				resolve(0);
+				return;
+			}
 			deps.signal?.addEventListener('abort', () => resolve(0), { once: true });
 		});
 	}

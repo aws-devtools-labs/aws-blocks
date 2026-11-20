@@ -1,6 +1,6 @@
 # foundations
 
-Standard Building Blocks for common AWS services in the AWS Blocks.
+Standard Building Blocks for common AWS services in the AWS CDK Blocks.
 
 > **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md), [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) and [`packages/bb-auth/README.md`](../bb-auth/README.md), which are the authoritative reference for the shipped blocks. The `Auth` section below matches the shipped API.
 
@@ -14,7 +14,7 @@ Standard Building Blocks for common AWS services in the AWS Blocks.
 One authentication block for email + password, social sign-in, generic OIDC and SAML. This section describes the shipped API; see [`packages/bb-auth/README.md`](../bb-auth/README.md) (including *Which option and why*) for the full reference.
 
 ```typescript
-import { AppSetting, Auth } from '@aws-blocks/blocks';
+import { AppSetting, Auth } from 'aws-cdk-blocks';
 
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
 
@@ -30,7 +30,7 @@ export const authApi = auth.createApi();
 const sso = new Auth(scope, 'sso', {
   store: 'builtin',
   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
-  redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+  redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' },
 });
 export const ssoApi = sso.createApi();
 
@@ -42,45 +42,44 @@ const user = await auth.requireAuth(ctx);
 S3-backed file storage with optimized naming patterns.
 
 ```typescript
-import { FileBucket } from '@aws-blocks/blocks';
+import { FileBucket } from 'aws-cdk-blocks';
 
 const files = new FileBucket('app', 'uploads');
 await files.write('key', content);
 const data = await files.read('key');
 ```
 
-### DistributedTable
-DynamoDB-like key-value storage with local SQLite mocking.
-
-```typescript
-import { DistributedTable } from '@aws-blocks/blocks';
-
-const table = new DistributedTable('app', 'data', {
-  partitionKey: 'userId',
-  sortKey: 'timestamp'
-});
-```
-
 ### KVStore
-Simple key-value storage for user-scoped data.
+Key-value and document storage backed by DynamoDB. With no options it is a string-keyed store; with a `schema` and a `key` it holds records that you list or query.
 
 ```typescript
-import { KVStore } from '@aws-blocks/blocks';
+import { KVStore } from 'aws-cdk-blocks';
+import { z } from 'zod';
 
 const store = new KVStore(scope, 'settings');
+
+const events = new KVStore(scope, 'events', {
+  schema: z.object({ userId: z.string(), timestamp: z.number(), kind: z.string() }),
+  key: { partitionKey: 'userId', sortKey: 'timestamp' },
+});
 
 // Data methods run at request time, inside a handler — not at CDK synth time.
 await store.put(`user:${userId}:theme`, 'dark');
 const theme = await store.get(`user:${userId}:theme`);
+
+await events.put({ userId, timestamp: Date.now() }, { kind: 'sign-in' });
+for await (const { key, value } of events.query({ where: { userId: { equals: userId } }, order: 'desc', limit: 10 })) {
+  console.log(key.timestamp, value.kind);
+}
 ```
 
-See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, TTL, and conditional writes.
+See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, keys, indexes, TTL, and conditional writes.
 
 ### SQLTable
 Relational database with SQL query support. Uses SQLite locally, DSQL on AWS.
 
 ```typescript
-import { SQLTable } from '@aws-blocks/blocks';
+import { SQLTable } from 'aws-cdk-blocks';
 
 const db = new SQLTable('app', 'products', {
   schema: `
@@ -97,7 +96,7 @@ const db = new SQLTable('app', 'products', {
 Secure secret storage using AWS Secrets Manager.
 
 ```typescript
-import { Secret } from '@aws-blocks/blocks';
+import { Secret } from 'aws-cdk-blocks';
 
 const apiKey = new Secret('app', 'api-key');
 const key = await apiKey.getValue();
@@ -107,7 +106,7 @@ const key = await apiKey.getValue();
 A single application configuration value using AWS Systems Manager Parameter Store.
 
 ```typescript
-import { AppSetting } from '@aws-blocks/blocks';
+import { AppSetting } from 'aws-cdk-blocks';
 
 const newUiFlag = new AppSetting(scope, 'new-ui', { value: 'disabled' });
 
@@ -122,7 +121,7 @@ See [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) for the f
 Scheduled background tasks using EventBridge.
 
 ```typescript
-import { CronJob } from '@aws-blocks/blocks';
+import { CronJob } from 'aws-cdk-blocks';
 
 const cleanup = new CronJob('app', 'cleanup', {
   schedule: 'rate(1 day)',
@@ -136,7 +135,7 @@ const cleanup = new CronJob('app', 'cleanup', {
 Background job processing for long-running tasks.
 
 ```typescript
-import { AsyncJob } from '@aws-blocks/blocks';
+import { AsyncJob } from 'aws-cdk-blocks';
 
 const processor = new AsyncJob('app', 'processor');
 await processor.enqueue({ task: 'process', data: {...} });
@@ -146,7 +145,7 @@ await processor.enqueue({ task: 'process', data: {...} });
 WebSocket-based real-time communication using AppSync Event API.
 
 ```typescript
-import { Realtime } from '@aws-blocks/blocks';
+import { Realtime } from 'aws-cdk-blocks';
 
 const chat = new Realtime('app', 'chat');
 await chat.publish('room-1', { message: 'Hello!' });
@@ -156,18 +155,18 @@ await chat.publish('room-1', { message: 'Hello!' });
 Integration with AWS Bedrock for AI/ML capabilities.
 
 ```typescript
-import { LLM } from '@aws-blocks/blocks';
+import { LLM } from 'aws-cdk-blocks';
 
 const ai = new LLM('app', 'assistant', {
   model: 'anthropic.claude-v2'
 });
-const response = await ai.generate('Explain AWS Blocks');
+const response = await ai.generate('Explain AWS CDK Blocks');
 ```
 
 ## Installation
 
 ```bash
-npm install @aws-blocks/blocks
+npm install aws-cdk-blocks
 ```
 
 ## Design Principles
@@ -190,7 +189,7 @@ See the Building Block Guide (see docs/reference/building-block-structure.md) fo
 
 ## Related Packages
 
-- [@aws-blocks/blocks](../blocks/README.md) - Main package with all Building Blocks
+- [aws-cdk-blocks](../blocks/README.md) - Main package with all Building Blocks
 - [create-blocks-app](../create-blocks-app/README.md) - Project scaffolding CLI
 
 ## License

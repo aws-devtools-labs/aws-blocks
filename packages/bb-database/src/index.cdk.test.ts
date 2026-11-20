@@ -5,13 +5,15 @@ import assert from 'node:assert';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
+import { isDeepStrictEqual } from 'node:util';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from '@aws-cdk-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { MIGRATION_SERVICE_TIMEOUT_SECONDS, MIGRATION_TOTAL_TIMEOUT_MINUTES } from './constants.js';
 import { MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
-import { Database, DatabaseCluster } from './index.cdk.js';
+import { Database, DatabaseCluster, LegacyDatabaseCluster } from './index.cdk.js';
 import { migrations } from './test-support/fixtures.js';
 import { freshScope, installLocalTestHooks } from './test-support/lifecycle.js';
 
@@ -84,6 +86,64 @@ describe('Database (CDK)', () => {
 		Template.fromStack(other.stack).hasResource('AWS::DSQL::Cluster', { DeletionPolicy: 'Delete' });
 	});
 
+	test('the DSQL cluster carries Tags.of() tags, including the app tag, under its existing logical id', () => {
+		const { stack } = setup();
+		// A fixed scope id: the logical id comes from the construct path.
+		const parent = new Scope('ledger');
+		new Database(parent, 'db');
+		cdk.Tags.of(stack).add('app', 'ledger', { priority: 1000 });
+		cdk.Tags.of(parent).add('cost-center', 'payments');
+		const clusters = Template.fromStack(stack).findResources('AWS::DSQL::Cluster');
+		// A changed logical id would replace the cluster.
+		assert.deepStrictEqual(Object.keys(clusters), [`${stack.id}ledgerdbDsqlCluster`]);
+		const [cluster] = Object.values(clusters);
+		assert.deepStrictEqual(cluster.Properties, {
+			DeletionProtectionEnabled: false,
+			Tags: [
+				{ Key: 'app', Value: 'ledger' },
+				{ Key: 'cost-center', Value: 'payments' },
+			],
+		});
+	});
+
+	test('an owned DSQL cluster has the logical id DistributedDatabase declared, so an upgraded app keeps its cluster', () => {
+		const { stack } = setup();
+		const db = new Database(new Scope('ledger'), 'db');
+		// How `DistributedDatabase` declared its cluster: a child of the stack named `<fullId>DsqlCluster`.
+		const earlierStack = new cdk.Stack(new cdk.App(), 'Earlier');
+		const earlier = new cdk.CfnResource(earlierStack, `${db.fullId}DsqlCluster`, { type: 'AWS::DSQL::Cluster' });
+		const earlierId = earlierStack.getLogicalId(earlier);
+		// The block's `fullId` starts with the stack's id.
+		assert.strictEqual(earlierId, `${stack.id}ledgerdbDsqlCluster`);
+
+		const template = Template.fromStack(stack);
+		assert.deepStrictEqual(Object.keys(template.findResources('AWS::DSQL::Cluster')), [earlierId]);
+		// Everything that names the cluster follows the id.
+		const [migration] = Object.values(migrationResources(template));
+		assert.deepStrictEqual(migration.Properties.clusterEndpoint, { 'Fn::GetAtt': [earlierId, 'Endpoint'] });
+		assert.ok(migration.DependsOn.includes(earlierId));
+	});
+
+	test('two owned blocks whose ids differ only in punctuation fail at synth, by name', () => {
+		const { stack } = setup();
+		const parent = new Scope('ledger');
+		new Database(parent, 'db-a');
+		assert.throws(
+			() => {
+				new Database(parent, 'dba');
+				Template.fromStack(stack);
+			},
+			(e: unknown) => e instanceof Error && /ledger-dba/.test(e.message) && /ledger-db-a/.test(e.message),
+		);
+	});
+
+	test('a shared DSQL cluster keeps the logical id of its construct path', () => {
+		const { stack } = setup();
+		new DatabaseCluster(new Scope('ledger'), 'shared', { type: 'dsql' });
+		const ids = Object.keys(Template.fromStack(stack).findResources('AWS::DSQL::Cluster'));
+		assert.deepStrictEqual(ids, ['ledgersharedDsqlCluster2ACEACDA']);
+	});
+
 	test('the app role gets dsql:DbConnect; the migration Lambdas get dsql:DbConnectAdmin', () => {
 		const { stack, parent } = setup();
 		new Database(parent, 'db');
@@ -109,7 +169,11 @@ describe('Database (CDK)', () => {
 								'aws:SourceArn': {
 									'Fn::Join': [
 										'',
-										['arn:', { Ref: 'AWS::Partition' }, ':states:us-east-1:123456789012:stateMachine:*'],
+										[
+											'arn:',
+											{ Ref: 'AWS::Partition' },
+											':states:us-east-1:123456789012:stateMachine:*',
+										],
 									],
 								},
 							},
@@ -382,5 +446,257 @@ describe('DatabaseCluster type aurora (CDK)', () => {
 			}),
 		});
 		Template.fromStack(stack).resourceCountIs('AWS::RDS::DBCluster', 1);
+	});
+});
+
+describe('Database on an existing database (CDK)', () => {
+	const CA = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
+	const files = { '001_items.sql': 'CREATE TABLE items (id int);' };
+	const statementsOf = (template: Template): { Action: unknown; Resource: unknown; Condition?: unknown }[] =>
+		Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+			(policy) => policy.Properties.PolicyDocument.Statement,
+		);
+
+	test('provisions no cluster, and with no migrations no migration resource either', () => {
+		const { stack, parent } = setup();
+		const db = new Database(parent, 'db', { cluster: DatabaseCluster.fromExisting({ name: 'db-url', ca: CA }) });
+		assert.deepStrictEqual(db.cluster, { kind: 'external', id: 'external' });
+		assert.strictEqual(db.schemaName, 'public');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::DSQL::Cluster', 0);
+		template.resourceCountIs('AWS::RDS::DBCluster', 0);
+		assert.strictEqual(Object.keys(migrationResources(template)).length, 0);
+	});
+
+	test('with a name, the app role may read the SSM parameter /<stackName>-<name> and nothing holds a value', () => {
+		const { stack, parent } = setup();
+		new Database(parent, 'db', { cluster: DatabaseCluster.fromExisting({ name: 'db-url' }) });
+		const template = Template.fromStack(stack);
+		const read = statementsOf(template).filter((s) => JSON.stringify(s.Action).includes('ssm:GetParameter'));
+		assert.ok(read.length > 0, 'a statement grants ssm:GetParameter');
+		assert.ok(
+			read.some((s) => JSON.stringify(s.Resource).includes(`parameter/${stack.id}-db-url`)),
+			'on the parameter named after the stack and the short name',
+		);
+		assert.ok(
+			!JSON.stringify(template.toJSON()).includes('postgres'),
+			'the template names the place, never a value',
+		);
+	});
+
+	test('with migrations: one custom resource that names the parameter, and two functions outside any VPC', () => {
+		const { stack, parent } = setup();
+		const db = new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ name: 'db-url', ca: CA }),
+			migrationsPath: migrations(files),
+		});
+		const template = Template.fromStack(stack);
+		const resources = Object.values(migrationResources(template));
+		assert.strictEqual(resources.length, 1);
+		const properties = resources[0].Properties;
+		assert.strictEqual(properties.connectionParameter, `/${stack.id}-db-url`);
+		assert.strictEqual(properties.schemaName, 'public');
+		assert.strictEqual(properties.blockFullId, db.fullId);
+		assert.ok(properties.migrationsBucket && properties.migrationsKey, 'the files travel as an asset');
+		assert.strictEqual(properties.connectionSecretArn, undefined);
+		for (const handler of ['index.handler', 'index.isComplete']) {
+			const functions = Object.values(functionsByHandler(template, handler)).filter(
+				(fn) => fn.Properties.Environment?.Variables?.CLUSTER_KIND === 'external',
+			);
+			assert.strictEqual(functions.length, 1, handler);
+			assert.strictEqual(functions[0].Properties.VpcConfig, undefined);
+			assert.strictEqual(functions[0].Properties.Timeout, 600);
+		}
+		const statements = statementsOf(template);
+		assert.ok(
+			statements.some(
+				(s) =>
+					s.Action === 'ssm:GetParameter' &&
+					JSON.stringify(s.Resource).includes(`parameter/${stack.id}-db-url`),
+			),
+			'the migration functions may read the parameter',
+		);
+		assert.ok(
+			statements.some(
+				(s) =>
+					s.Action === 'kms:Decrypt' &&
+					isDeepStrictEqual(s.Condition, {
+						StringEquals: { 'kms:ViaService': 'ssm.us-east-1.amazonaws.com' },
+					}),
+			),
+			'and decrypt it through SSM only',
+		);
+	});
+
+	test('a changed certificate authority re-runs the migration resource', () => {
+		const hashWith = (ca: string) => {
+			const { stack, parent } = setup();
+			new Database(parent, 'db', {
+				cluster: DatabaseCluster.fromExisting({ name: 'db-url', ca }),
+				migrationsPath: migrations(files),
+			});
+			return Object.values(migrationResources(Template.fromStack(stack)))[0].Properties.migrationsHash;
+		};
+		assert.notStrictEqual(hashWith(CA), hashWith(CA.replace('MIIB', 'MIIC')));
+	});
+
+	test('every function on the app role waits for the migrations of the block', () => {
+		const { stack, parent } = setup();
+		new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ name: 'db-url' }),
+			migrationsPath: migrations(files),
+		});
+		const template = Template.fromStack(stack);
+		const [migrationId] = Object.keys(migrationResources(template));
+		const handlers = template.findResources('AWS::Lambda::Function', { Properties: { Handler: 'index.handler' } });
+		const app = Object.values(handlers).find(
+			(fn) => fn.Properties.Environment?.Variables?.CLUSTER_KIND === undefined,
+		);
+		assert.ok(app, 'the stub app function');
+		assert.ok([app.DependsOn].flat().includes(migrationId));
+	});
+
+	test("the app's own AppSetting is read by its parameter name", () => {
+		const { stack, parent } = setup();
+		const own = AppSetting.fromExisting<string>(parent, 'own-url', { name: '/custom/db-url', secret: true });
+		new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ connectionString: own }),
+			migrationsPath: migrations(files),
+		});
+		const properties = Object.values(migrationResources(Template.fromStack(stack)))[0].Properties;
+		assert.strictEqual(properties.connectionParameter, '/custom/db-url');
+	});
+
+	test('migrations with a source that the deploy cannot read fail synth', () => {
+		const { parent } = setup();
+		assert.throws(
+			() =>
+				new Database(parent, 'db', {
+					cluster: DatabaseCluster.fromExisting({ connectionString: { get: async () => null } }),
+					migrationsPath: migrations(files),
+				}),
+			/need a connection string that the\s+deploy can read/,
+		);
+	});
+});
+
+describe('Database on a database that is reached through the RDS Data API (CDK)', () => {
+	const files = { '001_items.sql': 'CREATE TABLE items (id int);' };
+	const dataApi = {
+		clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:app',
+		secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:app-AbCdEf',
+		database: 'app',
+	};
+	const DATA_API_ACTIONS = [
+		'rds-data:ExecuteStatement',
+		'rds-data:BeginTransaction',
+		'rds-data:CommitTransaction',
+		'rds-data:RollbackTransaction',
+	];
+	const statementsOf = (template: Template): { Action: unknown; Resource: unknown }[] =>
+		Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+			(policy) => policy.Properties.PolicyDocument.Statement,
+		);
+
+	test('fromExisting({ dataApi }): no cluster, the grants on that cluster and secret, and the three values on the migration resource', () => {
+		const { stack, parent } = setup();
+		new Database(parent, 'db', {
+			cluster: DatabaseCluster.fromExisting({ dataApi }),
+			migrationsPath: migrations(files),
+		});
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::RDS::DBCluster', 0);
+		template.resourceCountIs('AWS::DSQL::Cluster', 0);
+		const statements = statementsOf(template);
+		// The app role and the two migration functions.
+		assert.strictEqual(
+			statements.filter((s) => isDeepStrictEqual(s.Action, DATA_API_ACTIONS) && s.Resource === dataApi.clusterArn)
+				.length,
+			3,
+		);
+		assert.strictEqual(
+			statements.filter((s) => s.Action === 'secretsmanager:GetSecretValue' && s.Resource === dataApi.secretArn)
+				.length,
+			3,
+		);
+		const [resource] = Object.values(migrationResources(template));
+		assert.deepStrictEqual(resource.Properties.dataApi, dataApi);
+		assert.strictEqual(resource.Properties.connectionParameter, undefined);
+	});
+
+	test('LegacyDatabaseCluster declares the cluster of the earlier block under its logical ids', () => {
+		const { stack } = setup();
+		const scope = new Scope('ledger');
+		const cluster = new LegacyDatabaseCluster(scope, 'main', { minCapacity: 1, removalPolicy: 'retain' });
+		new Database(scope, 'main-db', { cluster, migrationsPath: migrations(files) });
+		const template = Template.fromStack(stack);
+
+		// The construct ids of the earlier block: `<fullId>Cluster`, `<fullId>Vpc`, `<fullId>Sg`, under `ledger/main`.
+		const alnum = cluster.fullId.replace(/[^A-Za-z0-9]/g, '');
+		const clusters = template.findResources('AWS::RDS::DBCluster');
+		const [[clusterId, declared]] = Object.entries(clusters);
+		assert.match(clusterId, new RegExp(`^ledgermain${alnum}Cluster[0-9A-F]{8}$`));
+		assert.strictEqual(declared.DeletionPolicy, 'Retain');
+		assert.strictEqual(declared.Properties.EnableHttpEndpoint, true);
+		assert.strictEqual(declared.Properties.DatabaseName, cluster.fullId.replace(/[^a-zA-Z0-9]/g, '_'));
+		assert.deepStrictEqual(declared.Properties.ServerlessV2ScalingConfiguration, {
+			MinCapacity: 1,
+			MaxCapacity: 2,
+		});
+		assert.strictEqual(declared.Properties.EngineVersion, '16.13');
+		assert.strictEqual(declared.Properties.StorageEncrypted, undefined);
+		template.resourceCountIs('AWS::RDS::DBInstance', 1);
+		template.resourceCountIs('AWS::EC2::VPC', 1);
+		template.resourceCountIs('AWS::SecretsManager::Secret', 1);
+		template.resourceCountIs('AWS::DSQL::Cluster', 0);
+
+		// The block's files run through the Data API of that cluster, after the cluster exists.
+		const [resource] = Object.values(migrationResources(template));
+		assert.deepStrictEqual(resource.Properties.dataApi.clusterArn, {
+			'Fn::Join': [
+				'',
+				['arn:', { Ref: 'AWS::Partition' }, ':rds:us-east-1:123456789012:cluster:', { Ref: clusterId }],
+			],
+		});
+		assert.ok(resource.DependsOn.includes(clusterId));
+		assert.strictEqual(resource.Properties.schemaName, 'public');
+		// The migration functions are outside the VPC of the cluster.
+		for (const fn of Object.values(functionsByHandler(template, 'index.handler'))) {
+			assert.strictEqual(fn.Properties.VpcConfig, undefined);
+		}
+	});
+
+	test('a file of a block on a LegacyDatabaseCluster gets no check at synth', () => {
+		setup();
+		const scope = new Scope('ledger');
+		const older = { '001_index.sql': 'CREATE INDEX CONCURRENTLY t_n ON t (n);' };
+		assert.doesNotThrow(
+			() =>
+				new Database(scope, 'main-db', {
+					cluster: new LegacyDatabaseCluster(scope, 'main'),
+					migrationsPath: migrations(older),
+				}),
+		);
+		// The same file on a cluster that the block provisions is refused.
+		assert.throws(
+			() =>
+				new Database(scope, 'new-db', {
+					cluster: new DatabaseCluster(scope, 'new', { type: 'aurora' }),
+					migrationsPath: migrations(older),
+				}),
+			(e: unknown) => e instanceof Error && e.name === MIGRATION_VALIDATION_ERROR_NAME,
+		);
+	});
+
+	test('the context key of the earlier package keeps an encrypted cluster encrypted', () => {
+		const app = new cdk.App({
+			context: { 'aws:cdk:bundling-stacks': [], '@aws-blocks/bb-data:encryptStorageByDefault': true },
+		});
+		const stack = new StubBlocksStack(app, 'EncryptedLegacy');
+		new LegacyDatabaseCluster(
+			freshScope('app', (id) => new Scope(id)),
+			'main',
+		);
+		Template.fromStack(stack).hasResourceProperties('AWS::RDS::DBCluster', { StorageEncrypted: true });
 	});
 });

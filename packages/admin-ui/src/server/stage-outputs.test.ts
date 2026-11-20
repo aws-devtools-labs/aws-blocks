@@ -16,10 +16,10 @@ import {
 	resolveStageRegion,
 } from './stage-outputs.js';
 
-/** A project root with the given stage files written into `.blocks-sandbox/`. */
+/** A project root with the given stage files written into `.cdk-blocks-sandbox/`. */
 function project(files: Record<string, unknown>): string {
 	const root = mkdtempSync(join(tmpdir(), 'blocks-stage-outputs-'));
-	mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+	mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
 	for (const [relative, content] of Object.entries(files)) {
 		const target = join(root, ...relative.split('/'));
 		writeFileSync(target, typeof content === 'string' ? content : JSON.stringify(content, null, 2));
@@ -28,7 +28,7 @@ function project(files: Record<string, unknown>): string {
 }
 
 const EU_BACKEND = {
-	ApiUrl: 'https://a1b2c3d4e5.execute-api.eu-west-1.amazonaws.com/prod/aws-blocks/api',
+	ApiUrl: 'https://a1b2c3d4e5.execute-api.eu-west-1.amazonaws.com/prod/cdk-blocks/api',
 	HostingCdnDistributionUrl6712AC73: 'https://d1a2b3c4d5e6f7.cloudfront.net',
 };
 
@@ -76,14 +76,14 @@ describe('OUTPUTS_FILE agrees with core', () => {
 	it('resolves an absolute path under the project root', () => {
 		assert.strictEqual(
 			outputsFilePath('production', '/app'),
-			join('/app', '.blocks-sandbox', 'outputs.production.json'),
+			join('/app', '.cdk-blocks-sandbox', 'outputs.production.json'),
 		);
 	});
 });
 
 describe('readStageOutputs', () => {
 	it('selects the stack publishing ApiUrl', () => {
-		const root = project({ '.blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND } });
+		const root = project({ '.cdk-blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND } });
 		const result = readStageOutputs(root, 'sandbox');
 		assert.strictEqual(result.status, 'found');
 		assert.strictEqual(result.stackName, 'app-sandbox');
@@ -91,8 +91,8 @@ describe('readStageOutputs', () => {
 
 	it('reads each stage from its own file, never the other stage s', () => {
 		const root = project({
-			'.blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND },
-			'.blocks-sandbox/outputs.production.json': {
+			'.cdk-blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND },
+			'.cdk-blocks-sandbox/outputs.production.json': {
 				'app-prod': { ApiUrl: 'https://p.execute-api.us-east-1.amazonaws.com/prod/' },
 			},
 		});
@@ -102,7 +102,7 @@ describe('readStageOutputs', () => {
 
 	it('ignores a second stack with no ApiUrl (the Lambda@Edge stack)', () => {
 		const root = project({
-			'.blocks-sandbox/outputs.json': {
+			'.cdk-blocks-sandbox/outputs.json': {
 				'edge-lambda-stack-abc': { Fn: 'arn:aws:lambda:us-east-1:1:function:edge' },
 				'app-sandbox': EU_BACKEND,
 			},
@@ -122,14 +122,14 @@ describe('readStageOutputs', () => {
 	it('reports an empty document as unusable, not as no-record', () => {
 		// A failed deploy writes {} from the CDK CLI's finally block. That is NOT
 		// "you never deployed" — a standing stack may still exist.
-		const result = readStageOutputs(project({ '.blocks-sandbox/outputs.json': {} }), 'sandbox');
+		const result = readStageOutputs(project({ '.cdk-blocks-sandbox/outputs.json': {} }), 'sandbox');
 		assert.strictEqual(result.status, 'unusable');
 		assert.match(result.reason ?? '', /failed/);
 	});
 
 	it('refuses to guess between two ApiUrl stacks', () => {
 		const root = project({
-			'.blocks-sandbox/outputs.json': { a: EU_BACKEND, b: EU_BACKEND },
+			'.cdk-blocks-sandbox/outputs.json': { a: EU_BACKEND, b: EU_BACKEND },
 		});
 		const result = readStageOutputs(root, 'sandbox');
 		assert.strictEqual(result.status, 'unusable');
@@ -137,12 +137,12 @@ describe('readStageOutputs', () => {
 	});
 
 	it('reports malformed JSON as unusable', () => {
-		const root = project({ '.blocks-sandbox/outputs.json': '{ not json' });
+		const root = project({ '.cdk-blocks-sandbox/outputs.json': '{ not json' });
 		assert.strictEqual(readStageOutputs(root, 'sandbox').status, 'unusable');
 	});
 
 	it('reports a non-object document as unusable', () => {
-		const root = project({ '.blocks-sandbox/outputs.json': '[]' });
+		const root = project({ '.cdk-blocks-sandbox/outputs.json': '[]' });
 		const result = readStageOutputs(root, 'sandbox');
 		assert.strictEqual(result.status, 'unusable');
 		assert.match(result.reason ?? '', /an array/);
@@ -199,7 +199,7 @@ describe('regionFromOutputs', () => {
 });
 
 describe('resolveStageRegion precedence', () => {
-	const root = project({ '.blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND } });
+	const root = project({ '.cdk-blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND } });
 
 	it('tier 1: --region wins over everything, including the outputs file', () => {
 		const result = resolveStageRegion(root, 'sandbox', { cli: 'ap-southeast-1', env: 'us-east-1' });
@@ -229,7 +229,7 @@ describe('resolveStageRegion precedence', () => {
 	it('still reports the region when the outputs file is unusable but a flag is set', () => {
 		// The flag is enough to perform a lookup; the unusable file only costs us
 		// the stack name from the document.
-		const broken = project({ '.blocks-sandbox/outputs.json': {} });
+		const broken = project({ '.cdk-blocks-sandbox/outputs.json': {} });
 		const result = resolveStageRegion(broken, 'sandbox', { cli: 'eu-west-1' });
 		assert.strictEqual(result.region, 'eu-west-1');
 		assert.strictEqual(result.source, 'cli');
@@ -237,15 +237,15 @@ describe('resolveStageRegion precedence', () => {
 	});
 
 	it('carries the outputs status through so a caller can tell no-record from unusable', () => {
-		const broken = project({ '.blocks-sandbox/outputs.json': {} });
+		const broken = project({ '.cdk-blocks-sandbox/outputs.json': {} });
 		assert.strictEqual(resolveStageRegion(broken, 'sandbox', {}).outputs.status, 'unusable');
 		assert.strictEqual(resolveStageRegion(project({}), 'sandbox', {}).outputs.status, 'no-record');
 	});
 
 	it('resolves the two stages independently', () => {
 		const both = project({
-			'.blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND },
-			'.blocks-sandbox/outputs.production.json': {
+			'.cdk-blocks-sandbox/outputs.json': { 'app-sandbox': EU_BACKEND },
+			'.cdk-blocks-sandbox/outputs.production.json': {
 				'app-prod': { ApiUrl: 'https://p.execute-api.us-east-1.amazonaws.com/prod/' },
 			},
 		});

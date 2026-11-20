@@ -15,19 +15,19 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { BlocksContext } from '@aws-blocks/core';
-import { ApiNamespace } from '@aws-blocks/core';
-import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
-import { generateSpec } from '@aws-blocks/core/scripts';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { ApiNamespace } from '@aws-cdk-blocks/core';
+import { createLambdaHandler } from '@aws-cdk-blocks/core/lambda-handler';
+import { generateSpec } from '@aws-cdk-blocks/core/scripts';
 import { Auth, AuthErrors } from './index.mock.js';
 import { apiMethodNames, apiNamespaceOptionsOf } from './protect.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 let instance = 0;
 
-/** The backend module an app would write (`aws-blocks/index.ts`). */
+/** The backend module an app would write (`cdk-blocks/index.ts`). */
 function backend() {
 	const codes = new Map<string, string>();
 	const scope = { id: `protect${process.pid}x${++instance}` };
@@ -117,7 +117,7 @@ function client(handler: ReturnType<typeof createLambdaHandler>) {
 			const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
 			const response: unknown = await handler({
 				httpMethod: 'POST',
-				path: '/aws-blocks/api',
+				path: '/cdk-blocks/api',
 				headers: {
 					'Content-Type': 'application/json',
 					host: 'localhost:3000',
@@ -289,7 +289,7 @@ describe('the OpenRPC spec of a protect() namespace', () => {
 		const { mkdtempSync, writeFileSync } = await import('node:fs');
 		const { dirname, join } = await import('node:path');
 		const { fileURLToPath } = await import('node:url');
-		// Inside the package, so `@aws-blocks/*` resolve through the workspace's node_modules.
+		// Inside the package, so `@aws-cdk-blocks/*` resolve through the workspace's node_modules.
 		const dir = mkdtempSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.spec-protect-'));
 		try {
 			writeFileSync(
@@ -299,8 +299,8 @@ describe('the OpenRPC spec of a protect() namespace', () => {
 				}),
 			);
 			const source = `
-import { Scope } from '@aws-blocks/core';
-import { Auth } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-cdk-blocks/core';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('spec');
 const auth = new Auth(scope, 'auth', { users: { groups: ['admin'] } });

@@ -1,3 +1,4 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 // Run: node --test scripts/generate-block-catalog.test.mjs
@@ -18,7 +19,7 @@ describe('normalizeDescription', () => {
   const cases = [
     {
       name: 'strips the inline code markers a real blurb contains',
-      // bb-data's actual blurb ends this way.
+      // The shape of a real blurb.
       input: 'Full PostgreSQL database — connects via `fromExisting()`.',
       expected: 'Full PostgreSQL database — connects via fromExisting().',
     },
@@ -46,70 +47,70 @@ describe('attachDescriptions', () => {
   const entry = (type, source) => ({ type, category: 'data', source });
 
   it('describes a block whose package exports exactly one class', () => {
-    const { entries } = attachDescriptions([entry('KVStore', '@aws-blocks/bb-kv-store')], () => 'Simple key-value storage.');
+    const { entries } = attachDescriptions([entry('KVStore', '@aws-cdk-blocks/bb-kv-store')], () => 'Simple key-value storage.');
     assert.equal(entries[0].description, 'Simple key-value storage.');
   });
 
   it('describes NEITHER class when the package exports two, and reports the package', () => {
-    // The real case: @aws-blocks/core exports ApiNamespace and RawRoute, and its
+    // The real case: @aws-cdk-blocks/core exports ApiNamespace and RawRoute, and its
     // README describes the package. Two blocks sharing one sentence is the defect
     // being prevented here.
     const { entries, suppressed } = attachDescriptions(
-      [entry('ApiNamespace', '@aws-blocks/core'), entry('RawRoute', '@aws-blocks/core')],
+      [entry('ApiNamespace', '@aws-cdk-blocks/core'), entry('RawRoute', '@aws-cdk-blocks/core')],
       () => 'Core primitives for building full-stack applications.',
     );
     assert.equal(entries[0].description, undefined);
     assert.equal(entries[1].description, undefined);
-    assert.deepEqual(suppressed, ['@aws-blocks/core']);
+    assert.deepEqual(suppressed, ['@aws-cdk-blocks/core']);
   });
 
   it('still describes a single-class package alongside a suppressed multi-class one', () => {
     const { entries } = attachDescriptions(
       [
-        entry('ApiNamespace', '@aws-blocks/core'),
-        entry('RawRoute', '@aws-blocks/core'),
-        entry('KVStore', '@aws-blocks/bb-kv-store'),
+        entry('ApiNamespace', '@aws-cdk-blocks/core'),
+        entry('RawRoute', '@aws-cdk-blocks/core'),
+        entry('KVStore', '@aws-cdk-blocks/bb-kv-store'),
       ],
-      (pkg) => (pkg === '@aws-blocks/core' ? 'Core primitives.' : 'Simple key-value storage.'),
+      (pkg) => (pkg === '@aws-cdk-blocks/core' ? 'Core primitives.' : 'Simple key-value storage.'),
     );
     assert.equal(entries[2].description, 'Simple key-value storage.');
   });
 
   it('reports a package once, not once per class it exports', () => {
     const { suppressed } = attachDescriptions(
-      [entry('A', '@aws-blocks/core'), entry('B', '@aws-blocks/core'), entry('C', '@aws-blocks/core')],
+      [entry('A', '@aws-cdk-blocks/core'), entry('B', '@aws-cdk-blocks/core'), entry('C', '@aws-cdk-blocks/core')],
       () => 'Core primitives.',
     );
-    assert.deepEqual(suppressed, ['@aws-blocks/core']);
+    assert.deepEqual(suppressed, ['@aws-cdk-blocks/core']);
   });
 
   it('sets no description when the package has no README blurb', () => {
-    const { entries } = attachDescriptions([entry('KVStore', '@aws-blocks/bb-kv-store')], () => '');
+    const { entries } = attachDescriptions([entry('KVStore', '@aws-cdk-blocks/bb-kv-store')], () => '');
     assert.equal(entries[0].description, undefined);
     assert.ok(!('description' in entries[0]), 'the key is absent rather than undefined');
   });
 
   it('normalizes on the way in, so markdown never reaches the catalog', () => {
-    const { entries } = attachDescriptions([entry('KVStore', '@aws-blocks/bb-kv-store')], () => 'Backed by `DynamoDB`.');
+    const { entries } = attachDescriptions([entry('KVStore', '@aws-cdk-blocks/bb-kv-store')], () => 'Backed by `DynamoDB`.');
     assert.equal(entries[0].description, 'Backed by DynamoDB.');
   });
 
   it('flags an over-long blurb without dropping or truncating it', () => {
     const long = `${'x'.repeat(DESCRIPTION_WARN_LENGTH)}y`;
-    const { entries, overlong } = attachDescriptions([entry('KVStore', '@aws-blocks/bb-kv-store')], () => long);
-    assert.deepEqual(overlong, ['@aws-blocks/bb-kv-store']);
+    const { entries, overlong } = attachDescriptions([entry('KVStore', '@aws-cdk-blocks/bb-kv-store')], () => long);
+    assert.deepEqual(overlong, ['@aws-cdk-blocks/bb-kv-store']);
     assert.equal(entries[0].description, long, 'the full text is kept; clamping is the display layer’s job');
   });
 
   it('does not flag a blurb exactly at the limit', () => {
-    const { overlong } = attachDescriptions([entry('KVStore', '@aws-blocks/bb-kv-store')], () =>
+    const { overlong } = attachDescriptions([entry('KVStore', '@aws-cdk-blocks/bb-kv-store')], () =>
       'x'.repeat(DESCRIPTION_WARN_LENGTH),
     );
     assert.deepEqual(overlong, []);
   });
 
   it('does not mutate the entries it was given', () => {
-    const input = [entry('KVStore', '@aws-blocks/bb-kv-store')];
+    const input = [entry('KVStore', '@aws-cdk-blocks/bb-kv-store')];
     attachDescriptions(input, () => 'Simple key-value storage.');
     assert.equal(input[0].description, undefined);
   });
@@ -117,10 +118,10 @@ describe('attachDescriptions', () => {
 
 describe('packageDirName', () => {
   it('maps a bb-* package to its directory', () => {
-    assert.equal(packageDirName('@aws-blocks/bb-kv-store'), 'bb-kv-store');
+    assert.equal(packageDirName('@aws-cdk-blocks/bb-kv-store'), 'bb-kv-store');
   });
   it('maps a non-vendorized package to its directory', () => {
-    assert.equal(packageDirName('@aws-blocks/core'), 'core');
+    assert.equal(packageDirName('@aws-cdk-blocks/core'), 'core');
   });
 });
 
@@ -151,8 +152,8 @@ describe('renderEntry — output is already biome-formatted', () => {
 
   it('keeps a description-less entry on one line', () => {
     assert.equal(
-      renderEntry({ type: 'RawRoute', category: 'core', source: '@aws-blocks/core' }),
-      "\t['RawRoute', { category: 'core', source: '@aws-blocks/core' }],",
+      renderEntry({ type: 'RawRoute', category: 'core', source: '@aws-cdk-blocks/core' }),
+      "\t['RawRoute', { category: 'core', source: '@aws-cdk-blocks/core' }],",
     );
   });
 
@@ -166,7 +167,7 @@ describe('renderEntry — output is already biome-formatted', () => {
     const rendered = renderEntry({
       type: 'FileBucket',
       category: 'storage',
-      source: '@aws-blocks/bb-file-bucket',
+      source: '@aws-cdk-blocks/bb-file-bucket',
       description: 'File storage backed by Amazon S3.',
     });
     assert.ok(rendered.split('\n').length > 1, 'expected the wrapped form');

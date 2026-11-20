@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType, authApi as authApiType } from 'aws-blocks';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
+import type { api as apiType, authApi as authApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -12,18 +12,22 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
-let app: typeof import('aws-blocks');
+let app: typeof import('cdk-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (the deployed API URL without /cdk-blocks/api). The client resolves BLOCKS_API_URL first, so
+// a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 /**
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
  * address with a 6-digit code, then signs the user in. Locally no email is
  * sent: `getLastAuthCode` reads the code the local auth block issued (it finds
- * the block's .bb-data/ files itself). On AWS, Cognito emails it instead.
+ * the block's .cdk-blocks/local/data/ files itself). On AWS, Cognito emails it instead.
  *
  * `user` defaults to this file's clients (the cookie jar `installCookieJar`
  * installs); pass `createTestClient(app)` for another user with a session of
@@ -36,8 +40,22 @@ async function signUpAndSignIn(username: string, password: string, user = { auth
   return await user.authApi.setAuthState({ action: 'autoSignIn', username });
 }
 
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const response = await fetch(readinessUrl);
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
 test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -46,24 +64,20 @@ test.before(async () => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     server.unref();
-    await setTimeout(2000);
   }
 
-  app = await import('aws-blocks');
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
+
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/cdk-blocks/api`;
+
+  // Import the client only once the server answers: the dev server regenerates
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  app = await import('cdk-blocks');
   api = app.api;
   authApi = app.authApi;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
-    try {
-      const response = await fetch(readinessUrl);
-      if (response.ok) return;
-    } catch {
-      // The server is not listening yet.
-    }
-    await setTimeout(1000);
-  }
-  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -77,7 +91,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -98,7 +112,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace these methods with your own.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -108,6 +122,39 @@ test('health: public liveness check', async () => {
   const result = await api.health();
   assert.strictEqual(result.status, 'ok');
   assert.ok(typeof result.timestamp === 'number');
+});
+
+const healthzUrl = `http://localhost:${serverPort}/healthz`;
+
+// The RawRoute probe a load balancer hits: a plain GET, no RPC envelope, no auth.
+test('healthz: plain GET answers 200 with an uncached JSON body', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  const res = await fetch(healthzUrl);
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /^application\/json/);
+  assert.match(res.headers.get('cache-control') ?? '', /no-store/);
+  const body = await res.json();
+  assert.strictEqual(body.status, 'ok');
+  assert.ok(typeof body.timestamp === 'number');
+});
+
+// Probes often append a cache-buster or a trailing slash; both still reach the route.
+test('healthz: query string and trailing slash still match the route', async () => {
+  for (const url of [`${healthzUrl}?probe=uptime&t=${Date.now()}`, `${healthzUrl}/`]) {
+    const res = await fetch(url);
+    assert.strictEqual(res.status, 200, `${url} should reach /healthz`);
+    assert.strictEqual((await res.json()).status, 'ok');
+  }
+});
+
+// The route is registered for GET only, and nothing else lives under it.
+test('healthz: other methods and sub-paths are not routed', async () => {
+  const post = await fetch(healthzUrl, { method: 'POST', body: '{}' });
+  assert.ok([404, 405].includes(post.status), `POST /healthz must not reach the GET handler (got ${post.status})`);
+  await post.body?.cancel();
+  const nested = await fetch(`${healthzUrl}/deep`);
+  assert.strictEqual(nested.status, 404, '/healthz/deep is not a registered route');
+  await nested.body?.cancel();
 });
 
 // A presigned URL is a bearer credential, so only a signed-in caller gets one.
@@ -191,9 +238,9 @@ test('items: auth-gated CRUD round-trip', async () => {
 // When you replace the sample API, update or delete this test.
 test('items: optimistic-lock conflict rejects a stale write', async () => {
   // isBlocksError is client-safe (the browser bundle re-exports it); the error
-  // name is asserted as a literal string because DistributedTableErrors is a
+  // name is asserted as a literal string because KVStoreErrors is a
   // server-only value and is not present in the client bundle this test runs in.
-  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  const { isBlocksError } = await import('aws-cdk-blocks/client');
   const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';
 
   const username = `e2e-lock-${Date.now().toString(36)}@example.com`;

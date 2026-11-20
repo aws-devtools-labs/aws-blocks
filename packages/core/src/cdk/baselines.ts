@@ -61,7 +61,7 @@
  *   optional field an older reader can ignore does not.
  * - **A reader keeps accepting every version from 1 to the current one.** Apps
  *   commit these files and upgrade at their own pace, so a file written at
- *   version 1 must stay readable by every later `@aws-blocks/core`.
+ *   version 1 must stay readable by every later `@aws-cdk-blocks/core`.
  * - `version` is this module's: it versions the fields above (the envelope).
  *   A block versions its own fields itself, with a field of its own, when
  *   their shape changes — it does not bump `version`, and writes the literal
@@ -99,7 +99,7 @@ export interface BaselineRemovalGuard {
 }
 
 /**
- * The newest baseline file-format version this `@aws-blocks/core` reads. It
+ * The newest baseline file-format version this `@aws-cdk-blocks/core` reads. It
  * reads every version from 1 to this one. See the module docs.
  */
 export const BASELINE_FORMAT_VERSION = 1;
@@ -107,7 +107,7 @@ export const BASELINE_FORMAT_VERSION = 1;
 /** A baseline file's `version`, classified by {@link readBaselineFormatVersion}. */
 export type BaselineFormatVersion =
 	| { status: 'supported'; version: number }
-	/** An integer above {@link BASELINE_FORMAT_VERSION}: written by a newer `@aws-blocks/core` or block. */
+	/** An integer above {@link BASELINE_FORMAT_VERSION}: written by a newer `@aws-cdk-blocks/core` or block. */
 	| { status: 'newer'; version: number }
 	/** Not a positive integer (a string, `0`, a fraction, `null`, …): the file is not a valid baseline. */
 	| { status: 'invalid'; version: unknown };
@@ -319,9 +319,9 @@ export function addOrphanedBaselineCheck(root: Construct, backendHandlerPath: st
 					case 'newerVersion':
 						errors.push(
 							`Blocks stack '${name}': the baseline ${display(finding.file)} uses format version ${finding.version}, ` +
-								`written by a newer version of @aws-blocks/core or of the Building Block that owns it; this version ` +
+								`written by a newer version of @aws-cdk-blocks/core or of the Building Block that owns it; this version ` +
 								`reads versions 1 to ${BASELINE_FORMAT_VERSION}, so it cannot tell whether the file guards a resource. ` +
-								'Upgrade @aws-blocks/core (and @aws-blocks/blocks) to match. The file is left as it is.',
+								'Upgrade @aws-cdk-blocks/core (and aws-cdk-blocks) to match. The file is left as it is.',
 						);
 						break;
 					case 'invalidVersion':
@@ -338,7 +338,7 @@ export function addOrphanedBaselineCheck(root: Construct, backendHandlerPath: st
 						if (!existsSync(finding.file)) break;
 						unlinkSync(finding.file);
 						cdk.Annotations.of(root).addInfoV2(
-							'@aws-blocks/core:BaselineRemoved',
+							'@aws-cdk-blocks/core:BaselineRemoved',
 							`${finding.guard.rebaselineEnv} named '${finding.fullId}', which no longer exists in this app: deleted its ` +
 								`baseline ${display(finding.file)}. Commit the deletion. CloudFormation will delete ${finding.guard.deletes} ` +
 								"on the next deploy unless its removal policy was 'retain'.",

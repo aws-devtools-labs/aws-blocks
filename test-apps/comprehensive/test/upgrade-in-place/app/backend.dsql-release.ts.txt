@@ -1,0 +1,24 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Fixture of `upgrade-sql-blocks.ts`: the app on the last release of `DistributedDatabase`.
+
+import { ApiNamespace, DistributedDatabase, Scope, sql } from 'aws-cdk-blocks';
+
+const scope = new Scope('upgrade');
+const ledger = new DistributedDatabase(scope, 'ledger', { migrationsPath: './cdk-blocks/migrations' });
+
+export const api = new ApiNamespace(scope, 'api', () => ({
+	async seed() {
+		await ledger.execute(
+			sql`INSERT INTO accounts (owner, name, balance) VALUES ('u1', 'checking', 100), ('u1', 'savings', 2500.5), ('u2', 'checking', 0)`,
+		);
+		return 'seeded';
+	},
+
+	async dump() {
+		return ledger.query<{ owner: string; name: string; balance: string }>(
+			sql`SELECT owner, name, balance::text AS balance FROM accounts ORDER BY owner, name`,
+		);
+	},
+}));

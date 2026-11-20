@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK entry for `@aws-blocks/bb-secret/internal`.
+ * CDK entry for `@aws-cdk-blocks/bb-secret/internal`.
  *
  * This subpath is for AWS Blocks' own Building Blocks only. It is not part of
  * the public API and can change in any release.
@@ -10,9 +10,9 @@
  * @internal
  */
 
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import type { ScopeParent } from '@aws-blocks/core';
-import { type BlocksDefaults, BlocksPresets, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { type BlocksDefaults, BlocksPresets, isSandboxContext, synthGuard } from '@aws-cdk-blocks/core/cdk';
 import { Annotations, RemovalPolicy } from 'aws-cdk-lib';
 import type { IConstruct } from 'constructs';
 import { FRAMEWORK_KEY, type FrameworkKeySecretOptions } from './framework-key-options.js';

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * MonitoringConstruct — alarm-wiring assertions.
  *
@@ -140,7 +143,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -155,7 +158,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -174,7 +177,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -200,7 +203,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(hostingStack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -222,7 +225,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -236,7 +239,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -499,21 +502,26 @@ void describe('MonitoringConstruct', () => {
       });
     });
 
-    void it('scopes the CloudWatch grant to this account without hard-failing when aws:SourceAccount is absent', () => {
+    void it("scopes the CloudWatch grant to this account's alarms with aws:SourceAccount and aws:SourceArn", () => {
       const stack = createStack();
       new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
       const template = Template.fromStack(stack);
 
-      // `IfExists` matters: aws:SourceAccount is only populated on
-      // direct service-principal calls, and a hard StringEquals would
-      // reintroduce the silent deny this grant exists to prevent.
+      // The conditions Amazon SNS documents for an AWS service publishing
+      // to an encrypted topic. Not the `IfExists` form, which lets a
+      // request without aws:SourceAccount through.
       template.hasResourceProperties('AWS::KMS::Key', {
         KeyPolicy: {
           Statement: Match.arrayWith([
             Match.objectLike({
               Principal: { Service: 'cloudwatch.amazonaws.com' },
               Condition: {
-                StringEqualsIfExists: { 'aws:SourceAccount': '123456789012' },
+                StringEquals: { 'aws:SourceAccount': '123456789012' },
+                ArnLike: {
+                  'aws:SourceArn': {
+                    'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':cloudwatch:us-west-2:123456789012:alarm:*']],
+                  },
+                },
               },
             }),
           ]),

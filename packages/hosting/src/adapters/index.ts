@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import * as fs from 'fs';
 import * as path from 'path';
 import { HostingError } from '../hosting_error.js';
@@ -34,6 +37,9 @@ export type { SveltekitAdapterOptions } from './sveltekit.js';
 // user-declared `basePath` prop the same way adapters normalize the
 // framework-config value, keeping one canonical form for `manifest.basePath`.
 export { normalizeBasePath } from './shared/basepath.js';
+// Re-exported so core `Hosting` runs its `buildCommand` with the same
+// environment the adapters give the app's own build.
+export { appBuildEnv } from './shared/app_build_env.js';
 
 /**
  * A framework adapter function that produces a DeployManifest from a project.

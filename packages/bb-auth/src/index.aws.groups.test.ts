@@ -15,7 +15,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { isBlocksError, registerSdkIdentifiers } from '@aws-blocks/core';
+import { isBlocksError, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { INTERNAL_ERROR_MESSAGE } from './error-mapping.js';
 import { AuthErrors } from './index.aws.js';
 import {
@@ -27,8 +27,8 @@ import {
 	TEST_POOL_ID,
 } from './test-support/aws-harness.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function groupsReply(...names: string[]) {
 	return { Groups: names.map((GroupName) => ({ GroupName, UserPoolId: TEST_POOL_ID })) };
@@ -417,12 +417,31 @@ describe('AWS admin surface — command shapes', () => {
 		assert.strictEqual(h.sent[1].input.PaginationToken, 'p2');
 	});
 
-	test('revokeUserSessions sends AdminUserGlobalSignOut', async () => {
+	test('revokeUserSessions sends only AdminUserGlobalSignOut when audit is off', async () => {
 		const h = makeAwsAuth({ admin: {} });
 		h.on('AdminUserGlobalSignOutCommand', () => ({}));
 		await h.auth.admin.revokeUserSessions('bob');
 		assert.deepStrictEqual(h.sent, [
 			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
 		]);
+	});
+
+	test('with audit on, revokeUserSessions looks the user up, then sends AdminUserGlobalSignOut', async () => {
+		const audit = captureLogger();
+		const h = makeAwsAuth({ admin: {}, audit: audit.logger });
+		h.on('AdminGetUserCommand', () => ({ Username: 'bob', UserAttributes: [{ Name: 'sub', Value: 'sub-bob' }] }));
+		h.on('AdminListGroupsForUserCommand', () => ({ Groups: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
+		await h.auth.admin.revokeUserSessions('bob');
+		// The lookup gives the audit record a `sub` (the argument may be a sign-in email).
+		assert.deepStrictEqual(h.sent, [
+			{ name: 'AdminGetUserCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
+			{ name: 'AdminListGroupsForUserCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
+			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
+		]);
+		assert.deepStrictEqual(
+			audit.entries.map((e) => e.context?.sub),
+			['sub-bob'],
+		);
 	});
 });

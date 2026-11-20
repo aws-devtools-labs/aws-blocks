@@ -17,7 +17,7 @@ public final nonisolated class Posts: Sendable {
     public func list(authorId: String) async throws -> [List.Result] {
         let request = BlocksRequest(method: "posts.list", params: [authorId], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for posts.list") }
+        guard let result else { throw TransportError(message: "Unexpected null result for posts.list") }
         return try JSONDecoder().decode([List.Result].self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Posts: Sendable {
     public func create(input: Create.Input) async throws -> Create.Result {
         let request = BlocksRequest(method: "posts.create", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for posts.create") }
+        guard let result else { throw TransportError(message: "Unexpected null result for posts.create") }
         return try JSONDecoder().decode(Create.Result.self, from: result)
     }
 
@@ -33,13 +33,13 @@ public final nonisolated class Posts: Sendable {
     public func delete(id: String) async throws -> Delete.Result {
         let request = BlocksRequest(method: "posts.delete", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for posts.delete") }
+        guard let result else { throw TransportError(message: "Unexpected null result for posts.delete") }
         return try JSONDecoder().decode(Delete.Result.self, from: result)
     }
 
     public enum List {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let authorId: String
             public let id: String
             public let title: String
@@ -54,7 +54,7 @@ public final nonisolated class Posts: Sendable {
 
     public enum Create {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let authorId: String
             public let body: String
             public let title: String
@@ -66,7 +66,7 @@ public final nonisolated class Posts: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let authorId: String
             public let id: String
             public let title: String
@@ -81,7 +81,7 @@ public final nonisolated class Posts: Sendable {
 
     public enum Delete {
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
@@ -107,7 +107,7 @@ public final nonisolated class Users: Sendable {
     public func get(id: String) async throws -> User {
         let request = BlocksRequest(method: "users.get", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for users.get") }
+        guard let result else { throw TransportError(message: "Unexpected null result for users.get") }
         return try JSONDecoder().decode(User.self, from: result)
     }
 
@@ -115,7 +115,7 @@ public final nonisolated class Users: Sendable {
     public func list() async throws -> [User] {
         let request = BlocksRequest(method: "users.list", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for users.list") }
+        guard let result else { throw TransportError(message: "Unexpected null result for users.list") }
         return try JSONDecoder().decode([User].self, from: result)
     }
 
@@ -123,13 +123,13 @@ public final nonisolated class Users: Sendable {
     public func create(input: Create.Input) async throws -> User {
         let request = BlocksRequest(method: "users.create", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for users.create") }
+        guard let result else { throw TransportError(message: "Unexpected null result for users.create") }
         return try JSONDecoder().decode(User.self, from: result)
     }
 
     public enum Create {
 
-        public struct Input: Codable {
+        public struct Input: Codable, Sendable {
             public let email: String
             public let name: String
 
@@ -176,5 +176,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

@@ -12,8 +12,8 @@
 import assert from 'node:assert';
 import type { AsyncLocalStorage } from 'node:async_hooks';
 import { afterEach, describe, test } from 'node:test';
-import type { BlocksContext } from '@aws-blocks/core';
-import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 import { appBaseUrl, computeCallbackUrl } from './engines/federation-direct.js';
 import { stubIssuerPath, stubIssuerUrl } from './engines/stub-idp-routes.js';
 
@@ -41,26 +41,26 @@ describe('URLs Auth builds from the request keep the API Gateway stage', () => {
 
 	test("the direct engine's redirect_uri: the request's base URL, stage included", () => {
 		delete process.env.BLOCKS_PUBLIC_ORIGIN;
-		const ctx = ctxFor('/aws-blocks/auth/signin/okta');
+		const ctx = ctxFor('/cdk-blocks/auth/signin/okta');
 		baseUrlStore.run(`${GATEWAY}/prod`, () => {
 			assert.strictEqual(appBaseUrl(ctx), `${GATEWAY}/prod`);
-			assert.strictEqual(computeCallbackUrl(ctx, '/aws-blocks/auth/callback'), `${GATEWAY}/prod/aws-blocks/auth/callback`);
+			assert.strictEqual(computeCallbackUrl(ctx, '/cdk-blocks/auth/callback'), `${GATEWAY}/prod/cdk-blocks/auth/callback`);
 		});
 		// A configured public origin still wins.
 		process.env.BLOCKS_PUBLIC_ORIGIN = 'https://app.example.com/';
 		baseUrlStore.run(`${GATEWAY}/prod`, () => {
-			assert.strictEqual(computeCallbackUrl(ctx, '/aws-blocks/auth/callback'), 'https://app.example.com/aws-blocks/auth/callback');
+			assert.strictEqual(computeCallbackUrl(ctx, '/cdk-blocks/auth/callback'), 'https://app.example.com/cdk-blocks/auth/callback');
 		});
 	});
 
 	test("the stub IdP's issuer: the request's base URL, or BLOCKS_API_URL's origin and stage", () => {
 		delete process.env.BLOCKS_API_URL;
-		const ctx = ctxFor('/aws-blocks/auth/idp/corp/authorize');
+		const ctx = ctxFor('/cdk-blocks/auth/idp/corp/authorize');
 		baseUrlStore.run(`${GATEWAY}/prod`, () => {
 			assert.strictEqual(stubIssuerUrl('corp', ctx), `${GATEWAY}/prod${stubIssuerPath('corp')}`);
 		});
 		assert.strictEqual(
-			stubIssuerUrl('corp', ctx, `${GATEWAY}/sandbox/aws-blocks/api`),
+			stubIssuerUrl('corp', ctx, `${GATEWAY}/sandbox/cdk-blocks/api`),
 			`${GATEWAY}/sandbox${stubIssuerPath('corp')}`,
 		);
 	});

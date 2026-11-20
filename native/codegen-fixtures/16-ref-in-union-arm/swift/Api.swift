@@ -17,13 +17,13 @@ public final nonisolated class Api: Sendable {
     public func doAction(input: DoAction.Input) async throws -> DoAction.Result {
         let request = BlocksRequest(method: "api.doAction", params: [input], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.doAction") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.doAction") }
         return try JSONDecoder().decode(DoAction.Result.self, from: result)
     }
 
     public enum DoAction {
 
-        public enum Input: Codable {
+        public enum Input: Codable, Sendable {
             case signOut
             case mfaChallenge(MfaChallenge)
 
@@ -54,7 +54,7 @@ public final nonisolated class Api: Sendable {
             }
         }
 
-        public struct Result: Codable {
+        public struct Result: Codable, Sendable {
             public let ok: Bool
 
             public init(ok: Bool) {
@@ -97,5 +97,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

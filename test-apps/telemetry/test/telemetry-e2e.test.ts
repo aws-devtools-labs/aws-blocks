@@ -33,7 +33,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join, dirname } from 'node:path';
+import { basename, join, dirname } from 'node:path';
 import { tmpdir, homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -41,14 +41,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = join(__dirname, '..');
 const REPO_ROOT = join(APP_ROOT, '..', '..');
-// The create-blocks-app CLI is a monorepo workspace package (@aws-blocks/create-blocks-app)
+// The create-blocks-app CLI is a monorepo workspace package (@aws-cdk-blocks/create-blocks-app)
 // that is not published to the public npm registry, so `npm exec create-blocks-app` 404s.
 // Invoke the locally built binary directly (built by `npm run build` before the suite).
 const CREATE_BLOCKS_APP_BIN = join(REPO_ROOT, 'packages', 'create-blocks-app', 'dist', 'index.js');
-// The blocks-telemetry consent CLI is the `blocks-telemetry` bin of @aws-blocks/core.
-// `npx blocks-telemetry` depends on the workspace bin symlink + exec bit surviving the
-// build step, which is fragile in CI; invoke the built entrypoint directly with `node`.
-const BLOCKS_TELEMETRY_CLI = join(REPO_ROOT, 'packages', 'core', 'dist', 'scripts', 'telemetry-cli.js');
+// Invoke the package bootstrap directly; this fixture does not declare task scripts.
+const BLOCKS_TASK = ['--input-type=module', '-e', "import 'aws-cdk-blocks/run'", '--'];
 
 const PINNED_INSTALLATION_ID = '00000000-0000-0000-0000-000000000e2e';
 const PINNED_PROJECT_ID = '00000000-0000-0000-0000-0000000e2e57';
@@ -66,17 +64,13 @@ function createTmpDir(prefix = 'blocks-telemetry-e2e'): string {
 }
 
 function installationIdPath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), '.blocks', 'telemetry', 'installation-id');
+  return join(homeDir ?? homedir(), '.cdk-blocks', 'telemetry', 'installation-id');
 }
 
 function seedPinnedInstallationId(homeDir?: string): void {
   const filePath = installationIdPath(homeDir);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, PINNED_INSTALLATION_ID, 'utf-8');
-}
-
-function globalConfigPath(homeDir?: string): string {
-  return join(homeDir ?? homedir(), '.blocks', 'config.json');
 }
 
 function uniqueTelemetryFile(dir: string): string {
@@ -208,7 +202,7 @@ function spawnDevServer(options: {
     const { port, home, telemetryFile, env = {} } = options;
     const output = { stdout: '', stderr: '' };
 
-    const child = spawn('npx', ['tsx', 'aws-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
+    const child = spawn('npx', ['tsx', 'cdk-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
       cwd: APP_ROOT,
       stdio: 'pipe',
       detached: true,
@@ -243,16 +237,25 @@ function spawnDevServer(options: {
   });
 }
 
-function killProcess(proc: ChildProcess): void {
-  try {
-    // Graceful abort first (SIGINT) so a long-lived dev server can flush its
-    // telemetry before exiting; escalates to SIGKILL after the grace window.
-    // Process is detached (own group), so -pid targets the child's group, not
-    // the test runner's. Note: we intentionally do NOT removeAllListeners here —
-    // gracefulTerminate registers an 'exit' listener it uses to skip the SIGKILL
-    // fallback once the process has exited cleanly.
-    gracefulTerminate(proc);
-  } catch {}
+/**
+ * Stop a detached dev server and wait until its whole process group is gone.
+ * the dev task allows one dev server per app, so the next case's server in
+ * APP_ROOT is refused while this one, or its tsx watch, still runs.
+ */
+async function killProcess(proc: ChildProcess): Promise<void> {
+  const pid = proc.pid;
+  if (!pid) return;
+  // Graceful abort first (SIGINT) so a long-lived dev server can flush its
+  // telemetry before exiting; escalates to SIGKILL after the grace window.
+  // Process is detached (own group), so -pid targets the child's group, not
+  // the test runner's. Note: we intentionally do NOT removeAllListeners here —
+  // gracefulTerminate registers an 'exit' listener it uses to skip the SIGKILL
+  // fallback once the process has exited cleanly.
+  gracefulTerminate(proc);
+  const groupAlive = () => { try { process.kill(-pid, 0); return true; } catch { return false; } };
+  for (const deadline = Date.now() + TERMINATION_GRACE_MS + 2_000; groupAlive() && Date.now() < deadline;) await sleep(100);
+  // The npx parent can exit before the dev server under it does.
+  try { process.kill(-pid, 'SIGKILL'); } catch {}
 }
 
 async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean> {
@@ -300,8 +303,8 @@ function assertNotDelivered(stderr: string): void {
  * other groups do.
  *
  * - `root` is a copy of the app. The CLI keeps its state under the project
- *   root (`cdk.out`, `.blocks-sandbox/` with the cdk assembly, outputs.json
- *   and the sandbox id, the generated `aws-blocks/client.js`, the project
+ *   root (`cdk.out`, `.cdk-blocks-sandbox/` with the cdk assembly, outputs.json
+ *   and the sandbox id, the generated `cdk-blocks/client.js`, the project
  *   config), and two cdk processes in one `cdk.out` fail on its lock.
  * - `home` is its own HOME, seeded with the pinned installation-id. The local
  *   group writes `telemetry.enabled=false` to the real HOME's global config
@@ -317,7 +320,7 @@ interface CloudGroup {
 const CLOUD_GROUPS_DIR = join(APP_ROOT, '.e2e-groups');
 
 /** App entries a group copy needs. The generated client is left out. */
-const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'aws-blocks'];
+const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.cdk-blocks', 'cdk-blocks'];
 
 /**
  * App entries a group copy leaves out: the tests and docs, state the CLI, the
@@ -329,7 +332,7 @@ const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'aw
  */
 const APP_EXCLUDED = [
   'test', 'README.md', '.gitignore', 'node_modules', 'dist',
-  'cdk.out', 'cdk.context.json', '.blocks-sandbox', '.bb-data', '.e2e-groups',
+  'cdk.out', 'cdk.context.json', '.cdk-blocks-sandbox', '.cdk-blocks/local/data', '.e2e-groups',
   '.DS_Store', '.idea', '.vscode',
 ];
 
@@ -429,14 +432,95 @@ function cloudGroup(name: string): CloudGroup {
 const sandboxGroup = cloudGroup('sandbox');
 const productionGroup = cloudGroup('production');
 
+/**
+ * The commands added to telemetry with the CLI dispatcher (tracked in the CLI,
+ * in core's entry points, or in the `blocks-generate-client` bin) plus
+ * `sandbox deploy` and `sandbox preview`, run where no AWS account is
+ * reachable: their own app copy (so generated files never land in the app), their
+ * own HOME without the `~/.aws` link, and every credential source blocked.
+ */
+const cliGroup = cloudGroup('cli-commands');
+
+/** Every AWS credential source the SDK's default chain reads, blocked. */
+const NO_AWS_ENV: Record<string, string | undefined> = {
+  AWS_ACCESS_KEY_ID: '',
+  AWS_SECRET_ACCESS_KEY: '',
+  AWS_SESSION_TOKEN: '',
+  AWS_PROFILE: undefined,
+  AWS_DEFAULT_PROFILE: undefined,
+  AWS_SHARED_CREDENTIALS_FILE: '/nonexistent',
+  AWS_CONFIG_FILE: '/nonexistent',
+  AWS_WEB_IDENTITY_TOKEN_FILE: undefined,
+  AWS_ROLE_ARN: undefined,
+  AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: undefined,
+  AWS_CONTAINER_CREDENTIALS_FULL_URI: undefined,
+  AWS_EC2_METADATA_DISABLED: 'true',
+  AWS_REGION: 'us-east-1',
+};
+
+interface CliCase {
+  args: string[];
+  command: string;
+  state: 'SUCCESS' | 'FAIL';
+  exitCode: number;
+  /**
+   * False when the run sends no event: the CLI rejects a usage error of `secret`
+   * and `config` before it calls core, which is where those two are tracked.
+   */
+  emits?: false;
+  /** Run this script with node instead of the CLI task, as an app on vendored scripts runs a bin. */
+  script?: string;
+}
+
+const GENERATE_CLIENT_BIN = join(REPO_ROOT, 'packages', 'blocks', 'dist', 'generate-client-cli.js');
+const GENERATE_SPEC_BIN = join(REPO_ROOT, 'packages', 'core', 'dist', 'scripts', 'generate-spec-cli.js');
+
+/**
+ * One case per invocation. SUCCESS cases need no AWS; FAIL cases stop at a
+ * usage error or at the credential check, before any AWS call.
+ */
+const CLI_CASES: CliCase[] = [
+  { args: ['help'], command: 'help', state: 'SUCCESS', exitCode: 0 },
+  { args: ['help', 'deploy'], command: 'help', state: 'SUCCESS', exitCode: 0 },
+  { args: ['docs'], command: 'docs', state: 'SUCCESS', exitCode: 0 },
+  { args: ['docs', 'bb-kv-store'], command: 'docs', state: 'SUCCESS', exitCode: 0 },
+  { args: ['dev', 'stop'], command: 'dev:stop', state: 'SUCCESS', exitCode: 0 },
+  { args: ['cleanup'], command: 'dev:stop', state: 'SUCCESS', exitCode: 0 },
+  { args: ['generate', 'types'], command: 'generate:types', state: 'SUCCESS', exitCode: 0 },
+  { args: ['generate', 'spec'], command: 'generate:spec', state: 'SUCCESS', exitCode: 0 },
+  { args: ['generate', 'client'], command: 'generate:client', state: 'SUCCESS', exitCode: 0 },
+  { args: ['migrate', '--dry-run'], command: 'migrate', state: 'SUCCESS', exitCode: 0 },
+  {
+    args: ['cdk-blocks/index.ts', 'cdk-blocks/client.js'], script: GENERATE_CLIENT_BIN,
+    command: 'generate:client', state: 'SUCCESS', exitCode: 0,
+  },
+  {
+    args: ['cdk-blocks/missing.ts', 'cdk-blocks/client.js'], script: GENERATE_CLIENT_BIN,
+    command: 'generate:client', state: 'FAIL', exitCode: 2,
+  },
+  {
+    args: ['cdk-blocks/index.ts', 'cdk-blocks/blocks.spec.json'], script: GENERATE_SPEC_BIN,
+    command: 'generate:spec', state: 'SUCCESS', exitCode: 0,
+  },
+  { args: ['whoami'], command: 'whoami', state: 'FAIL', exitCode: 1 },
+  { args: ['secret'], command: 'secret', state: 'FAIL', exitCode: 2, emits: false },
+  { args: ['secret', 'list'], command: 'secret', state: 'FAIL', exitCode: 1 },
+  { args: ['config'], command: 'config', state: 'FAIL', exitCode: 2, emits: false },
+  { args: ['config', 'list'], command: 'config', state: 'FAIL', exitCode: 1 },
+  { args: ['db'], command: 'db', state: 'FAIL', exitCode: 2 },
+  { args: ['db', 'status'], command: 'db', state: 'FAIL', exitCode: 2 },
+  { args: ['sandbox', 'deploy', '--yes'], command: 'sandbox:deploy', state: 'FAIL', exitCode: 1 },
+  { args: ['sandbox', 'preview', '--yes'], command: 'sandbox:preview', state: 'FAIL', exitCode: 1 },
+];
+
 function writeSandboxId(projectRoot: string, sandboxId: string): void {
-  const dir = join(projectRoot, '.blocks-sandbox');
+  const dir = join(projectRoot, '.cdk-blocks-sandbox');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'sandbox-id.txt'), sandboxId);
 }
 
 function prepareCloudGroup(group: CloudGroup, sandboxId: string): void {
-  const generatedClient = join(APP_ROOT, 'aws-blocks', 'client.js');
+  const generatedClient = join(APP_ROOT, 'cdk-blocks', 'client.js');
   for (const entry of APP_ENTRIES) {
     cpSync(join(APP_ROOT, entry), join(group.root, entry), {
       recursive: true,
@@ -479,17 +563,19 @@ describe('Telemetry E2E', { timeout: SUITE_TIMEOUT_MS, concurrency: true }, () =
     writeSandboxId(APP_ROOT, sandboxId);
     prepareCloudGroup(sandboxGroup, sandboxId);
     prepareCloudGroup(productionGroup, sandboxId);
+    prepareCliGroup();
   });
 
-  // Clean up: remove the seeded .blocks directory and the group copies
+  // Clean up: remove the seeded .cdk-blocks directory and the group copies
   // (rmSync removes the links in them, not what they point to).
   after(() => {
-    rmSync(join(homedir(), '.blocks', 'telemetry'), { recursive: true, force: true });
+    rmSync(join(homedir(), '.cdk-blocks', 'telemetry'), { recursive: true, force: true });
     rmSync(CLOUD_GROUPS_DIR, { recursive: true, force: true });
   });
 
   // The three groups run concurrently; the cases inside a group run in order.
   describe('local commands', { concurrency: false }, localCommandSuites);
+  describe('CLI commands', { concurrency: false }, cliCommandSuites);
   describe('AWS sandbox lifecycle', { concurrency: false }, sandboxLifecycleSuites);
   describe('AWS production lifecycle', { concurrency: false }, productionLifecycleSuites);
 });
@@ -507,8 +593,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -597,8 +683,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -634,13 +720,12 @@ function localCommandSuites(): void {
       // Run 1
       const r1 = await spawnDevServer({ port: port1, telemetryFile: file1 });
       assert.ok(await waitForFile(file1, 15_000), `Run 1: telemetry file not written.\nstdout: ${r1.output.stdout.slice(-300)}\nstderr: ${r1.output.stderr.slice(-300)}`);
-      killProcess(r1.process);
-      await sleep(1000);
+      await killProcess(r1.process);
 
       // Run 2
       const r2 = await spawnDevServer({ port: port2, telemetryFile: file2 });
       assert.ok(await waitForFile(file2, 15_000), `Run 2: telemetry file not written.\nstdout: ${r2.output.stdout.slice(-300)}\nstderr: ${r2.output.stderr.slice(-300)}`);
-      killProcess(r2.process);
+      await killProcess(r2.process);
 
       const body1 = readTelemetryFile(file1);
       const body2 = readTelemetryFile(file2);
@@ -658,10 +743,8 @@ function localCommandSuites(): void {
 
     afterEach(async () => {
       if (devProcess) {
-        // Kill just the npx/tsx parent — NOT the process group.
-        // The dev server (PR #136) has internal process-tree management;
-        // group-killing propagates signals back to the test runner.
-        try { process.kill(devProcess.pid!, 'SIGKILL'); } catch {}
+        // Stop the whole detached group: a dev server left behind would refuse the next case's (one per app).
+        await killProcess(devProcess);
         devProcess.stdout?.destroy();
         devProcess.stderr?.destroy();
         devProcess = null;
@@ -697,7 +780,7 @@ function localCommandSuites(): void {
       // process, so PR #136's startup reclaim never resolves a listener to the
       // runner (or an ancestor) and can't group-kill the suite. We assert only
       // command=dev / state=FAIL — the specific error code/phase is irrelevant.
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: { PORT: '80' }, timeoutMs: 30_000,
       });
 
@@ -762,7 +845,7 @@ function localCommandSuites(): void {
       tmpHome = createTmpDir('vendorize-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npm', ['exec', '--', 'blocks-vendorize', '@nonexistent/fake-package'], {
+      const result = await runCommand(process.execPath, [...BLOCKS_TASK, 'vendorize', '@nonexistent/fake-package'], {
         telemetryFile, timeoutMs: 15_000,
       });
 
@@ -781,21 +864,21 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=1 prevents telemetry', async () => {
+    test('CDK_DISABLE_CLI_TELEMETRY=1 prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-env');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile,
         env: {
           PORT: String(port),
-          AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+          CDK_DISABLE_CLI_TELEMETRY: '1',
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
         },
         timeoutMs: 12_000,
@@ -806,16 +889,41 @@ function localCommandSuites(): void {
       assertNotDelivered(result.stderr);
     });
 
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=true prevents telemetry', async () => {
+    test("cdk.context.json cli-telemetry=false prevents telemetry", async () => {
+      tmpHome = createTmpDir('disable-cdk-context');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+      // What `cdk cli-telemetry --disable` records, and the only opt-out the app itself carries.
+      const contextFile = join(APP_ROOT, 'cdk.context.json');
+      const original = existsSync(contextFile) ? readFileSync(contextFile, 'utf-8') : null;
+      writeFileSync(contextFile, JSON.stringify({ 'cli-telemetry': false }));
+
+      try {
+        const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
+          telemetryFile,
+          env: { PORT: String(port), BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable' },
+          timeoutMs: 12_000,
+        });
+
+        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
+        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
+        assertNotDelivered(result.stderr);
+      } finally {
+        if (original !== null) writeFileSync(contextFile, original);
+        else rmSync(contextFile, { force: true });
+      }
+    });
+
+    test('CDK_DISABLE_CLI_TELEMETRY=true prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-env-true');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile,
         env: {
           PORT: String(port),
-          AWS_BLOCKS_DISABLE_TELEMETRY: 'true',
+          CDK_DISABLE_CLI_TELEMETRY: 'true',
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
         },
         timeoutMs: 12_000,
@@ -826,118 +934,14 @@ function localCommandSuites(): void {
       assertNotDelivered(result.stderr);
     });
 
-    test('global config telemetry.enabled=false prevents telemetry', async () => {
-      tmpHome = createTmpDir('disable-global');
-      // Write global config disabling telemetry in real HOME
-      const globalCfg = globalConfigPath();
-      const hadConfig = existsSync(globalCfg);
-      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
-      mkdirSync(dirname(globalCfg), { recursive: true });
-      writeFileSync(globalCfg, JSON.stringify({ telemetry: { enabled: false } }));
-
-      try {
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-        const port = getNextPort();
-
-        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          telemetryFile,
-          env: {
-            PORT: String(port),
-            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
-          },
-          timeoutMs: 12_000,
-        });
-
-        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
-        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
-      } finally {
-        // Restore original state
-        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
-        else rmSync(globalCfg, { force: true });
-      }
-    });
-
-    test('per-project config telemetry.enabled=false prevents telemetry', async () => {
-      tmpHome = createTmpDir('disable-project');
-      // Write per-project config disabling telemetry
-      const projectConfig = join(APP_ROOT, '.blocks', 'config.json');
-      const originalContent = existsSync(projectConfig) ? readFileSync(projectConfig, 'utf-8') : null;
-
-      try {
-        mkdirSync(dirname(projectConfig), { recursive: true });
-        writeFileSync(projectConfig, JSON.stringify({ telemetry: { enabled: false } }));
-
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-        const port = getNextPort();
-
-        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          telemetryFile,
-          env: {
-            PORT: String(port),
-            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
-          },
-          timeoutMs: 12_000,
-        });
-
-        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
-        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
-      } finally {
-        // Restore original config
-        if (originalContent !== null) {
-          writeFileSync(projectConfig, originalContent);
-        } else {
-          rmSync(projectConfig, { force: true });
-        }
-      }
-    });
-
-    test('a project config enabling telemetry cannot re-enable a global disable', async () => {
-      tmpHome = createTmpDir('disable-global-project-enabled');
-      const globalCfg = globalConfigPath(tmpHome);
-      // Must be the real path: the dev server resolves its project config from APP_ROOT.
-      const projectConfig = join(APP_ROOT, '.blocks', 'config.json');
-      const originalProject = existsSync(projectConfig) ? readFileSync(projectConfig, 'utf-8') : null;
-
-      mkdirSync(dirname(globalCfg), { recursive: true });
-      writeFileSync(globalCfg, JSON.stringify({ telemetry: { enabled: false } }));
-      mkdirSync(dirname(projectConfig), { recursive: true });
-      writeFileSync(projectConfig, JSON.stringify({ telemetry: { enabled: true } }));
-
-      try {
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-        const port = getNextPort();
-
-        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          home: tmpHome,
-          telemetryFile,
-          env: {
-            PORT: String(port),
-            BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
-            npm_config_cache: join(homedir(), '.npm'),
-          },
-          timeoutMs: 12_000,
-        });
-
-        assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
-        // Consent gates the file sink too (D-018): a disabled run writes nothing.
-        assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
-      } finally {
-        if (originalProject !== null) writeFileSync(projectConfig, originalProject);
-        else rmSync(projectConfig, { force: true });
-      }
-    });
-
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=0 does NOT disable', async () => {
+    test('CDK_DISABLE_CLI_TELEMETRY=0 does NOT disable', async () => {
       tmpHome = createTmpDir('disable-zero');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
       const result = await spawnDevServer({
         port, telemetryFile,
-        env: { AWS_BLOCKS_DISABLE_TELEMETRY: '0' },
+        env: { CDK_DISABLE_CLI_TELEMETRY: '0' },
       });
       devProcess = result.process;
 
@@ -953,8 +957,8 @@ function localCommandSuites(): void {
   describe('network resilience', () => {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -963,7 +967,7 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: {
           PORT: String(port),
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
@@ -980,7 +984,7 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: {
           PORT: String(port),
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
@@ -1019,8 +1023,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1065,8 +1069,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1147,8 +1151,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1170,11 +1174,11 @@ function localCommandSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile,
         env: {
           PORT: String(port),
-          AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+          CDK_DISABLE_CLI_TELEMETRY: '1',
           BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
         },
         timeoutMs: 12_000,
@@ -1194,12 +1198,11 @@ function localCommandSuites(): void {
 
       const r1 = await spawnDevServer({ port: port1, telemetryFile: file1 });
       assert.ok(await waitForFile(file1, 15_000));
-      killProcess(r1.process);
-      await sleep(1000);
+      await killProcess(r1.process);
 
       const r2 = await spawnDevServer({ port: port2, telemetryFile: file2 });
       assert.ok(await waitForFile(file2, 15_000));
-      killProcess(r2.process);
+      await killProcess(r2.process);
 
       const body1 = readTelemetryFile(file1);
       const body2 = readTelemetryFile(file2);
@@ -1213,8 +1216,8 @@ function localCommandSuites(): void {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
-    afterEach(() => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+    afterEach(async () => {
+      if (devProcess) { await killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -1224,124 +1227,89 @@ function localCommandSuites(): void {
       const port = getNextPort();
 
       // Use real HOME which has the pinned installation-id
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/server.ts'], {
         telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
       });
 
-      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'consent notice should NOT show when id exists');
+      assert.ok(!result.stderr.includes('AWS CDK Blocks collects usage data'), 'consent notice should NOT show when id exists');
     });
   });
 
-  // ── 11. blocks-telemetry CLI consent commands ──────────────────────────────
+}
 
-  describe('blocks-telemetry CLI', () => {
-    let tmpHome: string;
+// ── 3b. CLI commands (no AWS) ───────────────────────────────────────────────
 
-    afterEach(() => {
-      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+function prepareCliGroup(): void {
+  const generatedClient = join(APP_ROOT, 'cdk-blocks', 'client.js');
+  for (const entry of APP_ENTRIES) {
+    cpSync(join(APP_ROOT, entry), join(cliGroup.root, entry), {
+      recursive: true,
+      filter: (src) => src !== generatedClient,
     });
+  }
+  symlinkSync(join(REPO_ROOT, 'node_modules'), join(cliGroup.root, 'node_modules'), 'dir');
+  seedPinnedInstallationId(cliGroup.home);
+}
 
-    test('bare command shows help/usage', async () => {
-      tmpHome = createTmpDir('cli-bare');
-      const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+/** The CLI commands group: one event per case, and the same result when the send fails. */
+function cliCommandSuites(): void {
+  const inGroup = { cwd: cliGroup.root, home: cliGroup.home };
+
+  describe('command events', () => {
+    let tmpDir: string;
+    afterEach(() => { if (tmpDir) rmSync(tmpDir, { recursive: true, force: true }); });
+
+    for (const c of CLI_CASES) {
+      const label = c.script ? `${basename(c.script)} ${c.args.join(' ')}` : c.args.join(' ');
+      const title = c.emits === false
+        ? `${label} exits ${c.exitCode} and emits nothing`
+        : `${c.state}: ${label} emits ${c.command}/${c.state}`;
+      test(title, async () => {
+        tmpDir = createTmpDir('cli-command');
+        const telemetryFile = uniqueTelemetryFile(tmpDir);
+
+        const result = await runCommand(process.execPath, [...(c.script ? [c.script] : BLOCKS_TASK), ...c.args], {
+          ...inGroup, telemetryFile, timeoutMs: 120_000, env: NO_AWS_ENV,
+        });
+
+        assert.strictEqual(result.exitCode, c.exitCode, `exit code\nstderr: ${result.stderr.slice(-1000)}`);
+        if (c.emits === false) {
+          assert.ok(!(await waitForFile(telemetryFile, 3_000)), `${c.args.join(' ')} should emit no telemetry`);
+          return;
+        }
+        assert.ok(await waitForFile(telemetryFile, 5_000), `${c.args.join(' ')} should emit telemetry`);
+        const body = readTelemetryFile(telemetryFile);
+        assert.strictEqual(body.event.command, c.command);
+        assert.strictEqual(body.event.state, c.state, `error=${JSON.stringify(body.event.error)}`);
+        if (c.state === 'FAIL') assert.ok(body.event.error, 'FAIL should carry error info');
+        assertDelivered(result.stderr, `${c.command} ${c.state}`);
       });
-      assert.ok(result.stdout.includes('Usage:') || result.stdout.includes('--enable'), 'bare command should show usage');
-    });
-
-    test('--help shows usage information', async () => {
-      tmpHome = createTmpDir('cli-help');
-      const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--help'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-      });
-      assert.ok(result.stdout.includes('--enable'), '--help should mention --enable');
-      assert.ok(result.stdout.includes('--disable'), '--help should mention --disable');
-    });
-
-    test('--disable creates config with telemetry.enabled=false', async () => {
-      tmpHome = createTmpDir('cli-disable');
-      const configPath = join(APP_ROOT, '.blocks', 'config.json');
-      const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
-
-      try {
-        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--disable'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, false);
-      } finally {
-        if (originalContent !== null) writeFileSync(configPath, originalContent);
-        else rmSync(configPath, { force: true });
-      }
-    });
-
-    test('--enable creates config with telemetry.enabled=true', async () => {
-      tmpHome = createTmpDir('cli-enable');
-      const configPath = join(APP_ROOT, '.blocks', 'config.json');
-      const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
-
-      try {
-        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--enable'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, true);
-      } finally {
-        if (originalContent !== null) writeFileSync(configPath, originalContent);
-        else rmSync(configPath, { force: true });
-      }
-    });
-
-    test('--status shows current telemetry status', async () => {
-      tmpHome = createTmpDir('cli-status');
-      const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--status'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-      });
-      assert.strictEqual(result.exitCode, 0);
-      assert.ok(result.stdout.includes('Telemetry:') || result.stdout.includes('telemetry'), '--status should show telemetry state');
-    });
-
-    test('--disable --global writes global config', async () => {
-      tmpHome = createTmpDir('cli-disable-global');
-      const globalCfg = globalConfigPath();
-      const hadConfig = existsSync(globalCfg);
-      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
-
-      try {
-        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--disable', '--global'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, false);
-      } finally {
-        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
-        else rmSync(globalCfg, { force: true });
-      }
-    });
-
-    test('--enable --global writes global config', async () => {
-      tmpHome = createTmpDir('cli-enable-global');
-      const globalCfg = globalConfigPath();
-      const hadConfig = existsSync(globalCfg);
-      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
-
-      try {
-        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--enable', '--global'], {
-          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-        });
-        assert.strictEqual(result.exitCode, 0);
-        const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
-        assert.strictEqual(config.telemetry.enabled, true);
-      } finally {
-        if (originalContent !== null) writeFileSync(globalCfg, originalContent);
-        else rmSync(globalCfg, { force: true });
-      }
-    });
+    }
   });
 
+  describe('a telemetry failure never changes the command', () => {
+    let tmpDir: string;
+    afterEach(() => { if (tmpDir) rmSync(tmpDir, { recursive: true, force: true }); });
+
+    for (const c of CLI_CASES) {
+      const label = c.script ? `${basename(c.script)} ${c.args.join(' ')}` : c.args.join(' ');
+      test(`${label}: same exit code with an unreachable endpoint`, async () => {
+        tmpDir = createTmpDir('cli-unreachable');
+        const telemetryFile = uniqueTelemetryFile(tmpDir);
+
+        const result = await runCommand(process.execPath, [...(c.script ? [c.script] : BLOCKS_TASK), ...c.args], {
+          ...inGroup, telemetryFile, timeoutMs: 120_000,
+          env: { ...NO_AWS_ENV, BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable', NODE_DEBUG: '' },
+        });
+
+        assert.strictEqual(result.exitCode, c.exitCode, `exit code\nstderr: ${result.stderr.slice(-1000)}`);
+        assert.ok(!result.stderr.includes('BLOCKS-TELEMETRY'), 'a send failure must be invisible without NODE_DEBUG');
+        if (c.emits === false) return;
+        const body = readTelemetryFile(telemetryFile);
+        assert.strictEqual(body.event.state, c.state, "the recorded outcome is the command's own");
+      });
+    }
+  });
 }
 
 // ── 4. AWS commands (require valid credentials) ─────────────────────────────
@@ -1358,24 +1326,24 @@ function sandboxLifecycleSuites(): void {
     afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
     after(() => releaseSandboxFirstCreate());
 
-    test('FAIL: no creds emits sandbox/FAIL', async () => {
+    test('FAIL: no creds emits sandbox:deploy/FAIL', async () => {
       tmpHome = createTmpDir('sandbox-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox FAIL should emit telemetry');
       const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.command, 'sandbox:deploy');
       assert.strictEqual(body.event.state, 'FAIL');
       assert.ok(body.event.error, 'FAIL should carry error info');
       assertDelivered(result.stderr, 'sandbox FAIL');
     });
 
-    test('SUCCESS: sandbox deploys and emits sandbox/SUCCESS', async () => {
+    test('SUCCESS: sandbox deploys and emits sandbox:deploy/SUCCESS', async () => {
       tmpHome = createTmpDir('sandbox-success');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
@@ -1400,20 +1368,20 @@ function sandboxLifecycleSuites(): void {
       const firstCreate = spaceRestApiCall('create');
       releaseSandboxFirstCreate();
       await firstCreate;
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 300_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.command, 'sandbox:deploy');
       assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 2000): ${result.stdout.slice(-2000)}\nstderr(last 2000): ${result.stderr.slice(-2000)}`);
       assert.strictEqual(body.event.error, undefined);
       assertDelivered(result.stderr, 'sandbox SUCCESS');
 
       // Cleanup: destroy the sandbox stack
       await spaceRestApiCall('delete');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
@@ -1427,7 +1395,7 @@ function sandboxLifecycleSuites(): void {
       tmpHome = createTmpDir('sandbox-destroy-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 450_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
@@ -1445,14 +1413,14 @@ function sandboxLifecycleSuites(): void {
       // First deploy a sandbox
       const deployFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('create');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       // Then destroy it
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('delete');
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: DESTROY_TIMEOUT_MS,
       });
 
@@ -1475,13 +1443,13 @@ function sandboxLifecycleSuites(): void {
       // Deploy sandbox first to create outputs.json
       const deployFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('create');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox.ts'], {
         ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       // Run console
       const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/console.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/console.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 15_000,
       });
 
@@ -1493,7 +1461,7 @@ function sandboxLifecycleSuites(): void {
 
       // Cleanup: destroy the sandbox
       await spaceRestApiCall('delete');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/sandbox-destroy.ts'], {
         ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
@@ -1515,7 +1483,7 @@ function productionLifecycleSuites(): void {
       tmpHome = createTmpDir('deploy-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/deploy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
@@ -1539,7 +1507,7 @@ function productionLifecycleSuites(): void {
       await Promise.race([sandboxFirstCreate, sleep(120_000, undefined, { signal: cap.signal }).catch(() => {})]);
       cap.abort();
       await spaceRestApiCall('create');
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/deploy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 300_000,
       });
 
@@ -1551,7 +1519,7 @@ function productionLifecycleSuites(): void {
 
       // Cleanup: destroy the production stack
       await spaceRestApiCall('delete');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/destroy.ts'], {
         ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
       });
     });
@@ -1565,7 +1533,7 @@ function productionLifecycleSuites(): void {
       tmpHome = createTmpDir('destroy-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
@@ -1583,13 +1551,13 @@ function productionLifecycleSuites(): void {
       // Deploy first, then destroy
       const deployFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('create');
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+      await runCommand('npx', ['tsx', 'cdk-blocks/scripts/deploy.ts'], {
         ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('delete');
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+      const result = await runCommand('npx', ['tsx', 'cdk-blocks/scripts/destroy.ts'], {
         ...inGroup, telemetryFile, timeoutMs: DESTROY_TIMEOUT_MS,
       });
 

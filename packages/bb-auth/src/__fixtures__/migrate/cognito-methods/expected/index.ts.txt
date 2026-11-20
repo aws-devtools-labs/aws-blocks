@@ -1,11 +1,11 @@
-import { ApiNamespace, Scope, isBlocksError } from '@aws-blocks/core';
+import { ApiNamespace, Scope, isBlocksError } from '@aws-cdk-blocks/core';
 import {
 	Auth,
 	AuthErrors,
 	type AuthOptions,
 	type AuthenticatedUser,
 	type MfaPreference,
-} from '@aws-blocks/bb-auth';
+} from '@aws-cdk-blocks/bb-auth';
 
 const scope = new Scope('app');
 const options = { groups: ['admins'] } as const satisfies AuthOptions;

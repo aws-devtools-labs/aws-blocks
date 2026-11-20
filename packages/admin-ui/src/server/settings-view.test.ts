@@ -15,7 +15,7 @@ function block(id: string, secret = false): DiscoveredBlock {
 		id,
 		fullId: `shop-${id}`,
 		category: 'config',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 1,
 		setting: { parameterName: `/shop-${id}`, nameSource: 'derived', secret, hasSchema: false, external: false },
 	};
@@ -147,7 +147,7 @@ describe('buildLocalSettingEntry', () => {
 
 	/**
 	 * A local secret is usually a random placeholder, which is harmless. But
-	 * `db pull` seeds that same file from a real environment, so the one case
+	 * that same file can hold a real value written into it, so the one case
 	 * that matters is exactly the one that would leak.
 	 */
 	it('masks a declared secret locally too', () => {

@@ -10,7 +10,7 @@ import { getStackName } from './stack-id.js';
 
 /**
  * Structured deploy history: the PRIMARY source for the dashboard's
- * deployments view (.blocks/deploy-history.jsonl). CloudFormation stack
+ * deployments view (.cdk-blocks/deploy-history.jsonl). CloudFormation stack
  * events are only a reconstructed backfill — they carry no deploy
  * correlation id, so grouping them into episodes is a heuristic.
  *
@@ -23,7 +23,7 @@ import { getStackName } from './stack-id.js';
  * deterministically, instead of trusting ambient AWS_REGION/IMDS at
  * read time — those can and do differ from where the deploy went.
  *
- * The record shape mirrors DeploymentRecord in @aws-blocks/admin-ui's
+ * The record shape mirrors DeploymentRecord in @aws-cdk-blocks/admin-ui's
  * src/contract/v1.ts (kept in sync manually — core must not depend on the
  * opt-in admin-ui package).
  */
@@ -43,17 +43,17 @@ export interface DeployHistoryRecord {
 	stackName?: string;
 }
 
-export const DEPLOY_HISTORY_FILE = join('.blocks', 'deploy-history.jsonl');
+export const DEPLOY_HISTORY_FILE = join('.cdk-blocks', 'deploy-history.jsonl');
 
 const ERROR_SUMMARY_MAX_LENGTH = 300;
 
 /**
- * Appends a record to .blocks/deploy-history.jsonl. Best-effort by design:
+ * Appends a record to .cdk-blocks/deploy-history.jsonl. Best-effort by design:
  * history bookkeeping must never break a deploy, so failures only warn.
  */
 export function appendDeployHistoryRecord(projectRoot: string, record: DeployHistoryRecord): void {
 	try {
-		mkdirSync(join(projectRoot, '.blocks'), { recursive: true });
+		mkdirSync(join(projectRoot, '.cdk-blocks'), { recursive: true });
 		appendFileSync(join(projectRoot, DEPLOY_HISTORY_FILE), `${JSON.stringify(record)}\n`);
 	} catch (error) {
 		console.warn(`(Could not write deploy history: ${error instanceof Error ? error.message : error})`);
@@ -90,7 +90,9 @@ function safeResolveRegion(): string | undefined {
 	}
 }
 
-/** Best-effort stack name: getStackName throws when .blocks/config.json lacks stackId. */
+/**
+ * Best-effort stack name: getStackName throws when .cdk-blocks/config.json lacks stackId.
+ */
 function safeGetStackName(projectRoot: string, stage: string): string | undefined {
 	try {
 		return getStackName({ sandbox: stage === 'sandbox', projectRoot });

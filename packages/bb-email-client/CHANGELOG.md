@@ -1,5 +1,189 @@
 # @aws-blocks/bb-email-client
 
+## 1.0.0-rc.0
+
+### Major Changes
+
+- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+
+  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+
+  ```diff
+   {
+     "dependencies": {
+  -    "@aws-blocks/blocks": "<your range>",
+  -    "@aws-blocks/core": "<your range>"
+  +    "aws-cdk-blocks": "<your range>",
+  +    "@aws-cdk-blocks/core": "<your range>"
+     }
+   }
+  ```
+
+  ```diff
+  -import { KVStore } from '@aws-blocks/blocks';
+  +import { KVStore } from 'aws-cdk-blocks';
+
+  -import { ApiNamespace } from '@aws-blocks/core';
+  +import { ApiNamespace } from '@aws-cdk-blocks/core';
+  ```
+
+  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
+
+  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
+
+  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
+
+  The old `@aws-blocks/*` packages stop receiving releases.
+
+### Minor Changes
+
+- 64f7247: `EmailClient.sendBatch()` now takes at most 100 messages per call by default. A larger batch throws `InvalidInputException` (`Batch size 101 exceeds the maximum of 100 messages.`) and nothing is sent, locally and when deployed. Before, a single call could send any number of messages, so one request to an exposed method could fan out into an unbounded number of SES sends.
+
+  **Behavior change:** a `sendBatch()` call with more than 100 messages that worked before now throws. Split the messages across calls, or set the new `maxBatchSize` option (a positive integer) to raise the cap for a trusted server-side job. An invalid `maxBatchSize` throws `InvalidInputException` from the constructor, and fails at synth.
+
+  The SES send permission granted to the app's execution role is now scoped to the stack's own region and partition, instead of every region. The runtime only ever calls SES in the Lambda's own region, so this does not change what an app can send.
+
+  The README has a new security section: an `ApiNamespace` method that passes caller input to `send()` or `sendBatch()` without a gate is an open relay. It shows gating with `auth.requireAuth(context)` and building the message on the server. The umbrella `aws-cdk-blocks` gets a minor bump because it re-exports `EmailClient`, so the `sendBatch()` behavior change reaches umbrella users too, and because the `bb-email-client` README/DESIGN docs it bundles have changed.
+
+### Patch Changes
+
+- 382b4fa: docs(bb-email-client): explain why the block doesn't rate-limit callers, and what happens to the app's SES account if an app that sends on a caller's behalf doesn't add its own limit. The README also shows one way to add a per-user limit with a `KVStore` counter.
+- 450e25f: `EmailClient` now warns at synth when `fromAddress` is on a reserved domain that SES can never verify (`example.com`, `example.net`, `example.org` and their subdomains, or anything under `.test`, `.example`, `.invalid` or `.localhost`), since every send from such an address fails once deployed. The warning id is `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, raised in sandbox and production, and can be acknowledged. A `replyTo` address on a reserved domain gets `@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`. For a reserved sender, this warning replaces the generic "must be verified in SES" console notice, so synth prints one message. The demo template no longer sends from `noreply@example.com`: its sender is an `EMAIL_SENDER` constant with a `.invalid` placeholder to replace with a verified SES identity before deploying to production.
+- da1e2a5: `send()` and `sendBatch()` now reject a subject that contains CR, LF or another control character (C0, DEL, C1, U+2028, U+2029) with `InvalidInputException`, locally and when deployed. Previously the local mock sent such a message while SES rejected it. In `sendBatch()` the entry is marked `failed` and not sent.
+- 8e96367: fix: stop sending raw backend error text to clients
+
+  Several Building Blocks passed the raw text of an unexpected error (an AWS SDK, database, storage or hook error, which can name account ids, role and resource ARNs, and request details) to the client. They now follow the same rule as the RPC serializer: the message of an `ApiError` or a branded Building Block error (`blocksError()` / `brandBlocksError()`) still reaches the client unchanged, and any other error is logged server-side and reported as `Internal error`.
+
+  - **bb-agent:** when a turn fails, the `error` chunk, the persisted `metadata.error`, and the `StreamFailed` error from `complete()` carry `Internal error` unless the failure is a branded Building Block error. A malformed or invalid canned-responses dictionary (the local `canned` provider) now fails with a branded `InvalidModelConfigException` on the server, so its fixed message, e.g. `InvalidModelConfigException: Malformed canned responses JSON in 'responses.json'.`, reaches the client; it names the file by basename only and never quotes its contents, and the parser's detail is logged server-side. `complete()` still rejects with `StreamFailed` for it. Conversations persisted before this change keep the `metadata.error` text they were saved with, and `getConversation()` still returns it.
+  - **bb-email-client:** `send()` errors have stable messages per `EmailErrors` code, and a failed `sendBatch()` entry reports the error code or SES entry status instead of the raw SES text. The SES error is logged and kept on the error's non-enumerable `cause`.
+
+- Updated dependencies [d01c34c]
+- Updated dependencies [75c5d98]
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c67048e]
+- Updated dependencies [b2eb306]
+- Updated dependencies [703238f]
+- Updated dependencies [45a05d1]
+- Updated dependencies [1de6ea4]
+- Updated dependencies [aaf419f]
+- Updated dependencies [5938d8b]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [4665f81]
+- Updated dependencies [1deb34b]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [41968b7]
+- Updated dependencies [8894669]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [5f55dac]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [81113a3]
+- Updated dependencies [c045273]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [384827f]
+- Updated dependencies [58daa51]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [73feb71]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [99660fd]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [cd533c0]
+- Updated dependencies [44c7377]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [4d81f11]
+- Updated dependencies [072c3ff]
+- Updated dependencies [c67048e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [227a856]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [a5f39c3]
+- Updated dependencies [d01c34c]
+- Updated dependencies [5f55dac]
+- Updated dependencies [0ff1e1f]
+- Updated dependencies [0ff1e1f]
+- Updated dependencies [d01c34c]
+- Updated dependencies [f7e28b4]
+- Updated dependencies [93d533a]
+- Updated dependencies [adb6077]
+- Updated dependencies [60360c1]
+- Updated dependencies [dd1c554]
+- Updated dependencies [8ece10a]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [6d3077e]
+- Updated dependencies [e1e4844]
+- Updated dependencies [2095f31]
+- Updated dependencies [e50b9e9]
+- Updated dependencies [6d3077e]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-cdk-blocks/core@1.0.0-rc.0
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.0
+
 ## 0.2.0
 
 ### Minor Changes

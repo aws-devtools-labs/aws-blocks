@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { buildingBlockParent, computeScopeFullId, OFFICIAL_BB_NAMES, Scope } from './index.js';
 import type { ScopeParent } from './index.js';
 import { CORE_VERSION } from '../version.js';
+import { BLOCKS_BACKEND_DIR, LEGACY_BLOCKS_BACKEND_DIR } from './constants.js';
 
 /**
  * Test subclass that exposes the protected buildUserAgentChain method.
@@ -342,8 +343,9 @@ describe('formatUserAgentString', () => {
 
 	test('a chain exceeding 63 bytes drops parents from inside until it fits', () => {
 		const root = { id: 'my-app' };
-		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
-		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		// Short enough to fit beside the origin for a core version of up to 16 characters.
+		const p1 = new TestBB('a', { parent: root, bbName: 'Auth', bbVersion: '1.2.3' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'LambdaCompute', bbVersion: '4.5.6' });
 		const p3 = new TestBB('c', { parent: p2, bbName: 'EmailClient', bbVersion: '7.8.9' });
 		const leaf = new TestBB('db', { parent: p3, bbName: 'Database', bbVersion: '0.2.6' });
 
@@ -352,13 +354,13 @@ describe('formatUserAgentString', () => {
 
 		const s = leaf.testFormatUserAgentString();
 		assert.ok(Buffer.byteLength(s, 'utf8') <= 63, `result must fit in 63 bytes, got ${Buffer.byteLength(s, 'utf8')}`);
-		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/KnowledgeBase/1.2.3 ... bb/Database/0.2.6`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/Auth/1.2.3 ... bb/Database/0.2.6`);
 	});
 
 	test('never truncates mid-token: result is always a fitting subset', () => {
 		const root = { id: 'my-app' };
 		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '10.20.30' });
-		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedDatabase', bbVersion: '10.20.30' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '10.20.30' });
 		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '10.20.30' });
 
 		const s = leaf.testFormatUserAgentString();
@@ -383,9 +385,10 @@ describe('formatUserAgentString', () => {
 		const auth = new TestBB('auth', { parent: root, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
 		const leaf = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
 
-		// 20 bytes admits `aws-blocks/<core>` but not the marker plus the leaf.
-		const s = leaf.testFormatUserAgentString(20);
-		assert.strictEqual(s, `aws-blocks/${CORE_VERSION}`);
+		// Exactly the origin's length admits `aws-blocks/<core>` but not the marker plus the leaf.
+		const origin = `aws-blocks/${CORE_VERSION}`;
+		const s = leaf.testFormatUserAgentString(Buffer.byteLength(origin, 'utf8'));
+		assert.strictEqual(s, origin);
 	});
 
 	test('drops the fewest parents needed, nearest the leaf first', () => {
@@ -431,23 +434,24 @@ describe('formatUserAgentString', () => {
 		const bb = new MultiByteChainBB('x', { parent: { id: 'my-app' } });
 
 		const full = `aws-blocks/${CORE_VERSION} ${leafEntry}`;
-		assert.ok(full.length <= 50, `precondition: ${full.length} characters must look like it fits`);
+		// A budget of the string's length in characters, which it overflows only in bytes.
+		const budget = full.length;
 		assert.ok(
-			Buffer.byteLength(full, 'utf8') > 50,
-			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must actually overflow`,
+			Buffer.byteLength(full, 'utf8') > budget,
+			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must actually overflow ${budget}`,
 		);
 
-		const s = bb.testFormatUserAgentString(50);
+		const s = bb.testFormatUserAgentString(budget);
 		assert.ok(
-			Buffer.byteLength(s, 'utf8') <= 50,
-			`result must fit in 50 bytes, got ${Buffer.byteLength(s, 'utf8')}`,
+			Buffer.byteLength(s, 'utf8') <= budget,
+			`result must fit in ${budget} bytes, got ${Buffer.byteLength(s, 'utf8')}`,
 		);
 	});
 
 	test('every byte is printable ASCII, which is all Postgres preserves', () => {
 		const root = { id: 'my-app' };
 		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
-		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'LambdaCompute', bbVersion: '4.5.6' });
 		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '0.2.6' });
 
 		const s = leaf.testFormatUserAgentString();
@@ -566,5 +570,17 @@ describe('buildingBlockParent', () => {
 		assert.strictEqual(self.fullId, 'my-app-auth');
 		assert.strictEqual(new TestBB('sessions', { parent: self }).fullId, 'my-app-auth-sessions');
 		assert.strictEqual(computeScopeFullId({ id: 'sessions', parent: self }), 'my-app-auth-sessions');
+	});
+});
+
+// ── LEGACY_BLOCKS_BACKEND_DIR: pinned so a rename cannot sweep it up ────────
+describe('LEGACY_BLOCKS_BACKEND_DIR', () => {
+	test('is the historical directory name and never follows a rename', () => {
+		assert.strictEqual(LEGACY_BLOCKS_BACKEND_DIR, 'aws-blocks');
+		assert.notStrictEqual(LEGACY_BLOCKS_BACKEND_DIR, BLOCKS_BACKEND_DIR);
+	});
+
+	test('is the current directory name for every non-migrate command', () => {
+		assert.strictEqual(BLOCKS_BACKEND_DIR, 'cdk-blocks');
 	});
 });

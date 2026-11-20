@@ -5,16 +5,16 @@
 // Pipeline (and all other CDK constructs) are re-exported via the wildcard below.
 // Note: BlocksStack / BlocksBackend from this wildcard are shadowed below by
 // factory-injecting wrappers of the same name.
-export * from '@aws-blocks/core/cdk';
+export * from '@aws-cdk-blocks/core/cdk';
 
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute';
 import {
 	type BlocksBackendProps,
 	type BlocksStackProps,
 	BlocksBackend as CoreBlocksBackend,
 	BlocksStack as CoreBlocksStack,
-} from '@aws-blocks/core/cdk';
-import type { ComputeBase, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+} from '@aws-cdk-blocks/core/cdk';
+import type { ComputeBase, DefaultComputeFactory } from '@aws-cdk-blocks/core/cdk/internal';
 import type { Construct } from 'constructs';
 
 // The umbrella is the one package that depends on both core and a concrete
@@ -62,7 +62,7 @@ export type {
 	AuthUser,
 	AuthUserOf,
 	BlocksAuth,
-} from '@aws-blocks/auth-common';
+} from '@aws-cdk-blocks/auth-common';
 export type {
 	AgentConfig,
 	AgentResult,
@@ -77,10 +77,10 @@ export type {
 	ToolFactory,
 	ToolHandlerArgs,
 	ToolsConfig,
-} from '@aws-blocks/bb-agent';
-export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
-export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
-export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
+} from '@aws-cdk-blocks/bb-agent';
+export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-cdk-blocks/bb-agent';
+export type { AppSettingOptions } from '@aws-cdk-blocks/bb-app-setting';
+export { AppSetting, AppSettingErrors } from '@aws-cdk-blocks/bb-app-setting';
 export type {
 	AsyncJobBaseOptions,
 	AsyncJobContext,
@@ -91,9 +91,9 @@ export type {
 	BatchSubmitResult,
 	SubmitOptions,
 	WaitUntilCompleteOptions,
-} from '@aws-blocks/bb-async-job';
-export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
+} from '@aws-cdk-blocks/bb-async-job';
+export { AsyncJob, AsyncJobErrors } from '@aws-cdk-blocks/bb-async-job';
+export { Compute, type ComputeProps } from '@aws-cdk-blocks/bb-compute';
 export type {
 	ComputeOptions,
 	ComputeType,
@@ -102,38 +102,37 @@ export type {
 	ContainerSize,
 	ScalingSignal,
 	ServerlessComputeOptions,
-} from '@aws-blocks/core';
+} from '@aws-cdk-blocks/core';
 // Building Blocks (CDK versions)
-export type * from '@aws-blocks/bb-auth';
-export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubIdp } from '@aws-blocks/bb-auth';
-export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
-export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
+export type * from '@aws-cdk-blocks/bb-auth';
+export { Auth, AuthErrors, customOauth2, github, isAuthError, relayOrigin, stubIdp } from '@aws-cdk-blocks/bb-auth';
+export type { CronJobEvent, CronJobOptions } from '@aws-cdk-blocks/bb-cron-job';
+export { CronJob, CronJobErrors } from '@aws-cdk-blocks/bb-cron-job';
 export type {
 	DashboardOptions,
 	MetricConfig,
 	MetricsBBRef,
 	MetricsSource,
-} from '@aws-blocks/bb-dashboard';
-export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
-export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
-export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+} from '@aws-cdk-blocks/bb-dashboard';
+export { Dashboard, DashboardErrors } from '@aws-cdk-blocks/bb-dashboard';
 export type {
-	DeleteOptions as DTDeleteOptions,
-	DistributedTableOptions,
-	ExternalKmsKeyRef as DTExternalKmsKeyRef,
-	GetOptions as DTGetOptions,
-	PutOptions as DTPutOptions,
-	QueryOptions as DTQueryOptions,
-	ReadValidationMode,
-	ScanOptions as DTScanOptions,
-	TableKey,
-	TableKeyConfig,
-} from '@aws-blocks/bb-distributed-table';
-export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
-export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
+	ClusterKind,
+	ClusterType,
+	ConnectionStringSource,
+	DataApiOptions,
+	DatabaseClusterOptions,
+	DatabaseOptions,
+	ExistingClusterOptions,
+	ExistingClusterRef,
+	LegacyDatabaseClusterOptions,
+	ScopedDatabase,
+	SqlQuery,
+	Transaction,
+	TransactionOptions,
+} from '@aws-cdk-blocks/bb-database';
+export { Database, DatabaseCluster, DatabaseErrors, LegacyDatabaseCluster, sql } from '@aws-cdk-blocks/bb-database';
+export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-cdk-blocks/bb-email-client';
+export { EmailClient, EmailErrors } from '@aws-cdk-blocks/bb-email-client';
 export type {
 	CorsRule,
 	ExternalBucketRef as FBExternalBucketRef,
@@ -147,8 +146,8 @@ export type {
 	PutOptions as FBPutOptions,
 	PutUrlOptions,
 	ScanOptions as FBScanOptions,
-} from '@aws-blocks/bb-file-bucket';
-export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
+} from '@aws-cdk-blocks/bb-file-bucket';
+export { FileBucket, FileBucketErrors } from '@aws-cdk-blocks/bb-file-bucket';
 export type {
 	ChunkingConfig,
 	ChunkingStrategy,
@@ -161,19 +160,38 @@ export type {
 	RetrieveResult,
 	SourceConfig,
 	WaitUntilSyncedOptions,
-} from '@aws-blocks/bb-knowledge-base';
-export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
+} from '@aws-cdk-blocks/bb-knowledge-base';
+export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-cdk-blocks/bb-knowledge-base';
+// A type keeps its own name. It gets the block prefix only when another block
+// in this file exports a type with the same name (`PutOptions` and
+// `ScanOptions` are also names of `FileBucket`).
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
+	Entry,
 	ExternalKmsKeyRef,
 	ExternalTableRef,
+	GetOptions,
+	IndexConfig,
+	KeyConfig,
+	KeyOf,
 	KVStoreOptions,
+	LegacyKVStoreDeleteOptions,
+	LegacyKVStoreOptions,
+	LegacyKVStorePutOptions,
+	PutBatchEntry,
 	PutOptions as KVPutOptions,
-} from '@aws-blocks/bb-kv-store';
-export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
-export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
+	QueryOptions,
+	ReadValidationMode,
+	Results,
+	ScanOptions as KVScanOptions,
+	SortCondition,
+	ValueOf,
+	Where,
+} from '@aws-cdk-blocks/bb-kv-store';
+export { KVStore, KVStoreErrors, LegacyKVStore } from '@aws-cdk-blocks/bb-kv-store';
+export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-cdk-blocks/bb-logger';
+export { Logger, LoggingErrors } from '@aws-cdk-blocks/bb-logger';
 export type {
 	EmitOptions,
 	ExternalMetricsRef,
@@ -182,23 +200,23 @@ export type {
 	MetricsEmitter,
 	MetricsOptions,
 	MetricUnit,
-} from '@aws-blocks/bb-metrics';
-export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
+} from '@aws-cdk-blocks/bb-metrics';
+export { Metrics, MetricsErrors } from '@aws-cdk-blocks/bb-metrics';
 export type {
 	DisconnectReason,
 	GetChannelOptions,
 	RealtimeChannel,
 	RealtimeSubscription,
 	SubscribeOptions,
-} from '@aws-blocks/bb-realtime';
-export { Realtime } from '@aws-blocks/bb-realtime';
-export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
-export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
-export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
-export { Tracer } from '@aws-blocks/bb-tracer';
+} from '@aws-cdk-blocks/bb-realtime';
+export { Realtime } from '@aws-cdk-blocks/bb-realtime';
+export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-cdk-blocks/bb-secret';
+export { Secret, SecretErrors } from '@aws-cdk-blocks/bb-secret';
+export type { AnnotationValue, Segment, TracerOptions } from '@aws-cdk-blocks/bb-tracer';
+export { Tracer } from '@aws-cdk-blocks/bb-tracer';
 // Override core's untyped getSdkIdentifiers with typed overloads
 export { getSdkIdentifiers } from './sdk-identifiers.js';
 
-// Blocks generated by `@aws-blocks/create-block` (contributor mode) are re-exported here.
+// Blocks generated by `@aws-cdk-blocks/create-block` (contributor mode) are re-exported here.
 // <!-- BEGIN:generated-block-exports -->
 // <!-- END:generated-block-exports -->

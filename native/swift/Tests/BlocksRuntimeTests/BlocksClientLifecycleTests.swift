@@ -73,7 +73,7 @@ private final class InvalidationRecorder: NSObject, URLSessionDelegate {
 }
 
 final class BlocksClientLifecycleTests: XCTestCase {
-    private let url = "http://127.0.0.1:9/aws-blocks/api"
+    private let url = "http://127.0.0.1:9/cdk-blocks/api"
 
     override func setUp() {
         super.setUp()
@@ -204,7 +204,7 @@ final class BlocksClientLifecycleTests: XCTestCase {
         }
         let token = await oidc.getAccessToken()
         await oidc.onAuthFailure()
-        await oidc.restore()
+        _ = try? await oidc.restore()
         let access = await store.get("/auth/exchange#access_token")
         let refresh = await store.get("/auth/exchange#refresh_token")
         XCTAssertNil(token)

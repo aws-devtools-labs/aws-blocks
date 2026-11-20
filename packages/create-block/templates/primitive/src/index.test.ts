@@ -4,7 +4,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { __BB_CLASS__, __BB_CLASS__Errors } from './index.mock.js';
 
 // A real, typed parent Scope — no casts (this test represents customer usage).
@@ -12,10 +12,12 @@ const parent = new Scope('test-app');
 let n = 0;
 const make = () => new __BB_CLASS__(parent, `thing-${n++}`);
 
-// Reset mock data between tests (blocks that persist to disk write under .bb-data).
+// Reset mock data between tests (blocks that persist to disk write under
+// .cdk-blocks/local/data).
 beforeEach(() => {
 	try {
-		rmSync('.bb-data', { recursive: true, force: true });
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
+	rmSync('.bb-data', { recursive: true, force: true });
 	} catch {}
 });
 

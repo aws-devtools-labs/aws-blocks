@@ -14,7 +14,7 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BlocksPresets } from './blocks-defaults.js';
 
 describe('BlocksPresets', () => {
-	test('sandbox is disposable: DESTROY + deletion protection off + no PITR', () => {
+	test('sandbox is disposable: DESTROY + deletion protection off + no PITR or rotation', () => {
 		assert.strictEqual(BlocksPresets.sandbox.removalPolicy, RemovalPolicy.DESTROY);
 		assert.strictEqual(BlocksPresets.sandbox.deletionProtection, false);
 		assert.strictEqual(BlocksPresets.sandbox.pointInTimeRecovery, false);

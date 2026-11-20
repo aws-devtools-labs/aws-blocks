@@ -1,19 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, isWireSafeError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import { Realtime } from '@aws-blocks/bb-realtime';
-import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, isWireSafeError } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import { Realtime } from '@aws-cdk-blocks/bb-realtime';
+import { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 // Runtime values from `@strands-agents/sdk` are deferred to loadStrands(); only types
 // are imported here (erased at compile time). See loadStrands() / issue #153.
 import type { Agent as StrandsAgent, SnapshotStorage } from '@strands-agents/sdk';
 import type { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
-import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
+import { type messageSchema, type conversationSchema, agentStreamChunkSchema, conversationsTableOptions, messagesTableOptions } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, ToolHandlerArgs, CannedToolHints } from './types.js';
 import { AgentErrors, agentErrorFromChunk, blocksAgentError, brandedModelUnavailableMessage, classifyModelAccessError, InterruptError, walkCauseChain } from './errors.js';
 import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolError, wrapUntrustedToolOutput } from './untrusted.js';
@@ -111,7 +111,7 @@ export function errorCauseShape(error: unknown): { name?: string; httpStatusCode
  * Lazily import the Strands SDK runtime, caching the module after the first load.
  *
  * Importing the Agent BB must not eagerly evaluate `@strands-agents/sdk`: the
- * `@aws-blocks/blocks` umbrella re-exports `Agent` statically, so a static top-level
+ * `aws-cdk-blocks` umbrella re-exports `Agent` statically, so a static top-level
  * import here would load Strands — and its non-optional `@modelcontextprotocol/sdk`
  * and `@opentelemetry/api` peers — for every app that touches the umbrella, even
  * ones that never create an agent (see issue #153). Deferring the import to first
@@ -195,7 +195,7 @@ async function createConversationManager(config?: ConversationManagerConfig) {
  *
  * Creates internal BBs depending on mode:
  * - FileBucket: session snapshot storage for Strands SessionManager (always)
- * - DistributedTable: frontend message history (when inferenceOnly = false)
+ * - KVStore: frontend message history (when inferenceOnly = false)
  * - Realtime: streaming chunks to browser (always)
  *
  * The agent loop runs via {@link dispatchTurn}: in-process locally (mock), and on the
@@ -208,9 +208,17 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Tools resolved from the `tools` callback into a name→tool map (name = Record key). */
 	private toolMap: Map<string, AgentTool<TContext>>;
 	/** Conversation metadata table. */
-	private conversations?: DistributedTable<z.infer<typeof conversationSchema>, { partitionKey: 'userId'; sortKey: 'conversationId' }>;
+	private conversations?: KVStore<
+		z.input<typeof conversationSchema>,
+		z.infer<typeof conversationSchema>,
+		(typeof conversationsTableOptions)['key']
+	>;
 	/** Message history table. */
-	private messages?: DistributedTable<z.infer<typeof messageSchema>, { partitionKey: 'conversationId'; sortKey: 'messageId' }>;
+	private messages?: KVStore<
+		z.input<typeof messageSchema>,
+		z.infer<typeof messageSchema>,
+		(typeof messagesTableOptions)['key']
+	>;
 	/** Realtime pub/sub — streams chunks to browser. */
 	private rt: InstanceType<typeof Realtime>;
 	/** Which model provider to use. */
@@ -239,6 +247,15 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, `sessionScope must be 'shared' or 'user', got ${JSON.stringify(config.sessionScope)}.`);
 		}
 		this.toolMap = resolveTools<TContext>(config.tools);
+		// resume() refuses an inferenceOnly agent with sessionScope: 'shared' (its sessions have no
+		// owner to approve a pending tool call), so a tool that declares an approval step could only
+		// ever pause on a prompt nobody can answer. Reject that configuration up front.
+		if (config.inferenceOnly && config.sessionScope === 'shared') {
+			const approvalTools = [...this.toolMap.values()].filter(t => t.needsApproval || t.interrupt).map(t => t.name);
+			if (approvalTools.length) {
+				throw blocksAgentError(AgentErrors.InvalidModelConfig, `Tools ${approvalTools.map(n => `'${n}'`).join(', ')} set 'needsApproval' or 'interrupt', but an inferenceOnly agent with sessionScope: 'shared' can't resume() a paused turn, so their approval prompts could never be answered. Use sessionScope: 'user' (the default) and pass the caller's userId, or enable persistence.`);
+			}
+		}
 		this.modelConfig = modelConfig;
 
 		// IDs shortened to keep S3 bucket names within the 63-char limit
@@ -246,14 +263,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		this.snapshotStorage = createSnapshotStorage(this.sessionBucket, this.log);
 
 		if (!config.inferenceOnly) {
-			this.conversations = new DistributedTable(this, 'convos', {
-				schema: conversationSchema,
-				key: { partitionKey: 'userId', sortKey: 'conversationId' },
-			});
-			this.messages = new DistributedTable(this, 'messages', {
-				schema: messageSchema,
-				key: { partitionKey: 'conversationId', sortKey: 'messageId' },
-			});
+			this.conversations = new KVStore(this, 'convos', conversationsTableOptions);
+			this.messages = new KVStore(this, 'messages', messagesTableOptions);
 		}
 
 		this.rt = new Realtime(this, 'rt', {
@@ -290,7 +301,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * be scoped to its user (stream()/resume() reject that before dispatching; the bare
 	 * caller-chosen channelId may be another user's channel), and a turn whose error chunk
 	 * itself fails to publish (e.g. a channel path over Realtime's size limit). A turn without a
-	 * `userId` on an `inferenceOnly` agent with `sessionScope: 'user'` falls in the first case:
+	 * `userId` on an `inferenceOnly` agent with `sessionScope: 'user'` (the default) falls in the first case:
 	 * it is refused and logged, never run in a shared `'anonymous'` scope.
 	 *
 	 * The `error` chunk and the persisted `metadata.error` are client-visible, so they carry the
@@ -340,7 +351,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
-					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage, ...(errorName && { errorName }) }) });
+					await this.saveMessage({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage, ...(errorName && { errorName }) }) });
 				}
 			} catch (persistErr) {
 				this.log.error('Failed to persist error to history', { error: persistErr });
@@ -479,13 +490,15 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		// Only persist user message on initial path (not resume)
 		if (!interruptResponses && conversationId && this.messages) {
-			await this.messages.put({ conversationId, messageId: ulid(), role: 'user' as const, content: message, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: '{}' });
+			await this.saveMessage({ conversationId, messageId: ulid(), role: 'user' as const, content: message, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: '{}' });
 		}
 
 		let fullText = '';
 		let usage: TokenUsage | undefined;
 		let blockBuffer = '';
 		let interrupted = false;
+		// toolUseIds of calls a hook cancelled before they ran (see the BeforeToolCallEvent branch).
+		const cancelledToolUseIds = new Set<string>();
 		const isBlockMode = this.config.streamingMode !== 'token';
 
 		// Determine input: resume with responses or initial message
@@ -512,14 +525,28 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 						blockBuffer = '';
 					}
 				} else if (event instanceof BeforeToolCallEvent) {
-					await this.rt.publish('chunks', channelId, { type: 'tool-call', toolName: event.toolUse.name, input: event.toolUse.input });
+					// Strands runs every BeforeToolCallEvent hook before it yields the event here, so
+					// `event.cancel` already holds the decision of the HITL hook (a denied approval) and
+					// the cap hook. A cancelled call never runs: publish no tool-call chunk for it, and
+					// no tool-result chunk for the cancellation result that follows. (A call that pauses
+					// for approval isn't yielded at all; it is yielded once the turn resumes.)
+					if (event.cancel) {
+						cancelledToolUseIds.add(event.toolUse.toolUseId);
+					} else {
+						cancelledToolUseIds.delete(event.toolUse.toolUseId);
+						await this.rt.publish('chunks', channelId, { type: 'tool-call', toolName: event.toolUse.name, input: event.toolUse.input });
+					}
+					// History keeps the paired tool-call/tool-result rows for a cancelled call too: the
+					// tool-result row records the denial for audit (see the README's HITL row sequence).
 					if (conversationId && this.messages) {
-						await this.messages.put({ conversationId, messageId: ulid(), role: 'tool-call' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolInput: event.toolUse.input }) });
+						await this.saveMessage({ conversationId, messageId: ulid(), role: 'tool-call' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolInput: event.toolUse.input }) });
 					}
 				} else if (event instanceof AfterToolCallEvent) {
-					await this.rt.publish('chunks', channelId, { type: 'tool-result', toolName: event.toolUse.name });
+					if (!cancelledToolUseIds.has(event.toolUse.toolUseId)) {
+						await this.rt.publish('chunks', channelId, { type: 'tool-result', toolName: event.toolUse.name });
+					}
 					if (conversationId && this.messages) {
-						await this.messages.put({ conversationId, messageId: ulid(), role: 'tool-result' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolOutput: event.result?.content }) });
+						await this.saveMessage({ conversationId, messageId: ulid(), role: 'tool-result' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ toolName: event.toolUse.name, toolOutput: event.result?.content }) });
 					}
 				} else if (event instanceof AgentResultEvent) {
 					const u = event.result.metrics?.toJSON()?.accumulatedUsage;
@@ -540,7 +567,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 						});
 						// Persist interrupt to DynamoDB for reload/audit
 						if (conversationId && this.messages) {
-							await this.messages.put({ conversationId, messageId: ulid(), role: 'interrupt' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interrupts: pendingInterrupts }) });
+							await this.saveMessage({ conversationId, messageId: ulid(), role: 'interrupt' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interrupts: pendingInterrupts }) });
 						}
 					}
 				}
@@ -579,7 +606,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 				// AfterToolCallEvent for a call cancelled via `event.cancel` (carrying the
 				// cancellation as the result), which the loop above persists as
 				// 'tool-result', so no dangling tool_use is left behind for the next turn.
-				await this.messages.put({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: stoppedError, latencyMs }) });
+				await this.saveMessage({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: stoppedError, latencyMs }) });
 			}
 			await this.rt.publish('chunks', channelId, { type: 'error', error: stoppedError });
 			return;
@@ -589,14 +616,14 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (interrupted) return;
 
 		if (conversationId && this.messages) {
-			await this.messages.put({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ usage, latencyMs }) });
+			await this.saveMessage({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ usage, latencyMs }) });
 		}
 
-		// TODO: use partial update when DistributedTable supports it (DynamoDB UpdateItem)
+		// TODO: use partial update when KVStore supports it (DynamoDB UpdateItem)
 		if (conversationId && this.conversations) {
 			const existing = await this.conversations.get({ userId, conversationId });
 			if (existing) {
-				await this.conversations.put({ ...existing, updatedAt: Date.now() });
+				await this.conversations.put({ userId, conversationId }, { ...existing, updatedAt: Date.now() });
 			}
 		}
 
@@ -758,7 +785,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
 	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
-	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` and `options.userId` is missing.
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` (the default) and
+	 *   `options.userId` is missing.
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
@@ -771,7 +799,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
-		const channel = this.rt.getChannel('chunks', rtChannel);
+		// Exact scope: the handle may reach the client, and must not open sub-channels of this one.
+		const channel = this.rt.getChannel('chunks', rtChannel, { scope: 'exact' });
 		// Most callers never await `channel`; don't let a rejection go unhandled.
 		channel.catch(() => {});
 		return {
@@ -814,24 +843,34 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
 	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
-	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` and `options.userId` is missing.
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` (the default) and
+	 *   `options.userId` is missing.
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'shared'`: its sessions have no
+	 *   owner, so anyone who knows the conversationId could approve the pending tool calls. Checked first,
+	 *   before any approval is persisted or the turn is dispatched.
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
 		if (!responses.length) throw blocksAgentError(AgentErrors.InterruptRequired, 'resume() requires at least one interrupt response.');
 		this.log.info('Resuming agent', { channelId, responseCount: responses.length, conversationId: options?.conversationId });
 		const conversationId = options?.conversationId;
+		// An inferenceOnly agent with sessionScope: 'shared' keys its session by the
+		// conversationId alone and has no record of who started it, so any caller who knows
+		// (or picks) the id could approve, or `trust`, the pending tool calls. Refuse.
+		if (this.config.inferenceOnly && !this.scopesSessionsToUser) {
+			throw blocksAgentError(AgentErrors.InvalidUsage, "resume() is not available on an inferenceOnly agent with sessionScope: 'shared': its sessions have no owner, so anyone who knows the conversationId could approve the pending tool calls. Use sessionScope: 'user' (the default) and pass the caller's userId, or enable persistence.");
+		}
 		// Resuming an interrupted agent requires restoring its paused state, which
 		// only the SessionManager (keyed by conversationId) holds. Without a
 		// conversationId there is no session to restore, so the resume job would run
 		// with a fresh agent and the interrupt responses would have nothing to apply
 		// to. Fail fast with a clear error instead of silently submitting a job that
-		// can't honor the responses. For inferenceOnly agents this is a fundamental
-		// limitation (they never persist a session), not a missing parameter — call
-		// that out explicitly so developers don't go looking for a workaround.
+		// can't honor the responses. An inferenceOnly agent only keeps a session for a
+		// turn that passed a conversationId, so call that out explicitly: the fix is to
+		// pass the same conversationId to stream() and resume().
 		if (!conversationId) {
 			const reason = this.config.inferenceOnly
-				? 'Agents with inferenceOnly: true cannot be resumed because they have no persistent session to restore.'
+				? 'An agent with inferenceOnly: true keeps a session only for a turn that passed a conversationId: pass the same options.conversationId to stream() and resume().'
 				: 'Pass options.conversationId so the interrupted session can be restored.';
 			throw blocksAgentError(AgentErrors.InterruptRequired, `resume() requires a conversationId to restore the interrupted session. ${reason}`);
 		}
@@ -852,7 +891,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (conversationId && this.messages) {
 			for (const r of responses) {
 				const content = r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no';
-				await this.messages.put({ conversationId, messageId: ulid(), role: 'approval' as const, content, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interruptId: r.interruptId, approved: r.approved, trust: r.trust ?? false, response: r.response, toolName: r.toolName, input: r.input }) });
+				await this.saveMessage({ conversationId, messageId: ulid(), role: 'approval' as const, content, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ interruptId: r.interruptId, approved: r.approved, trust: r.trust ?? false, response: r.response, toolName: r.toolName, input: r.input }) });
 			}
 		}
 		// Translate to format for Strands — use response directly if provided, otherwise translate from approved/trust
@@ -871,8 +910,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * `encodeURIComponent` keeps the user segment free of `/`, so one user's channels
 	 * can never prefix-match another's. It can't encode a userId with a lone surrogate;
 	 * that throws InvalidUsage, which stream()/resume() surface before persisting or
-	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId,
-	 * unless they set `sessionScope: 'user'`, which scopes their channels the same way.
+	 * dispatching. inferenceOnly agents have no owner record; with `sessionScope: 'user'` (the
+	 * default) their channels are scoped the same way, and with `sessionScope: 'shared'` they
+	 * keep the bare channelId.
 	 *
 	 * The result must also be a valid Realtime channel name (no empty, `.` or `..` segment,
 	 * no leading or trailing `/`). Realtime rejects any other name on publish and getChannel(),
@@ -899,16 +939,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/**
 	 * Whether turns, sessions and channels are scoped to the caller's userId: always with
 	 * persistence (ownership is checked against the conversation record), and for an
-	 * `inferenceOnly` agent only with `sessionScope: 'user'` (the session key and channel
+	 * `inferenceOnly` agent with `sessionScope: 'user'`, the default (the session key and channel
 	 * carry the userId, since there is no record to check against).
 	 */
 	private get isUserScoped(): boolean {
 		return !!this.conversations || this.scopesSessionsToUser;
 	}
 
-	/** An `inferenceOnly` agent with `sessionScope: 'user'`. */
+	/** An `inferenceOnly` agent with `sessionScope: 'user'` (the default; only `'shared'` opts out). */
 	private get scopesSessionsToUser(): boolean {
-		return !this.conversations && this.config.sessionScope === 'user';
+		return !this.conversations && this.config.sessionScope !== 'shared';
 	}
 
 	/**
@@ -927,14 +967,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	}
 
 	/**
-	 * Throws InvalidUsage when an `inferenceOnly` agent with `sessionScope: 'user'` is called
-	 * without a userId: the default 'anonymous' would put every such caller in one shared scope.
+	 * Throws InvalidUsage when an `inferenceOnly` agent with `sessionScope: 'user'` (the default)
+	 * is called without a userId: the default 'anonymous' would put every such caller in one
+	 * shared scope. The message names the `'shared'` opt-out, since this is what an existing
+	 * inferenceOnly agent hits first after upgrading.
 	 */
 	private assertUserIdForUserScope(userId: unknown, method: string): void {
 		// Same test as requireUserId: an untyped RPC caller's `123` would otherwise get the
 		// channel of '123' but the session hash of the number, a different session.
 		if (this.scopesSessionsToUser && (typeof userId !== 'string' || !userId)) {
-			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires options.userId when sessionScope is 'user'. Take it from the authenticated session.`);
+			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires options.userId: an inferenceOnly agent scopes its sessions and channels to the caller (sessionScope: 'user', the default). Take the userId from the authenticated session. To key sessions by the conversationId alone instead, set sessionScope: 'shared' on the agent, but only if callers can never choose the conversationId or channelId.`);
 		}
 	}
 
@@ -969,7 +1011,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/**
 	 * Throws ConversationNotFound unless `userId` owns `conversationId`. A no-op for
 	 * inferenceOnly agents, which keep no conversation records to check against
-	 * (`sessionScope: 'user'` isolates their sessions by keying them with the userId instead).
+	 * (`sessionScope: 'user'`, the default, isolates their sessions by keying them with the
+	 * userId instead; `sessionScope: 'shared'` opts out, and resume() refuses it).
 	 * "Not found" covers both a missing and a foreign conversation so the error
 	 * doesn't confirm that another user's conversation exists.
 	 */
@@ -999,7 +1042,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (!this.conversations) throw blocksAgentError(AgentErrors.PersistenceRequired, 'createConversationId() requires persistence. Set inferenceOnly: false (default).');
 		const conversationId = crypto.randomUUID();
 		const now = Date.now();
-		await this.conversations.put({ userId, conversationId, name: conversationId, createdAt: now, updatedAt: now });
+		await this.conversations.put({ userId, conversationId }, { name: conversationId, createdAt: now, updatedAt: now });
 		return conversationId;
 	}
 
@@ -1009,16 +1052,19 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * stream()/resume(), taken from the authenticated session. The channel only
 	 * carries that user's turns, so a caller who knows another user's conversation
 	 * id can't listen to it. Throws InvalidUsage without a `userId`. An `inferenceOnly`
-	 * agent has no owner to scope by, so its channels are not user-scoped and the
-	 * `userId` is not used, unless it sets `sessionScope: 'user'`: then its channels are
-	 * scoped to the `userId` like a persistent agent's, and a `userId` is required.
+	 * agent has no owner record, but with `sessionScope: 'user'` (the default) its channels
+	 * are scoped to the `userId` like a persistent agent's, and a `userId` is required. Only
+	 * with `sessionScope: 'shared'` are its channels not user-scoped and the `userId` not used.
+	 *
+	 * The handle's token authorizes this one channel only (Realtime's `scope: 'exact'`), not
+	 * sub-channels under it, which may be another turn's or another caller's.
 	 *
 	 * @param options.userId - The caller's user id (the same one passed to stream()/resume()).
 	 */
 	async getChannel(channelId: string, options: { userId: string }) {
-		if (!this.isUserScoped) return this.rt.getChannel('chunks', channelId);
+		if (!this.isUserScoped) return this.rt.getChannel('chunks', channelId, { scope: 'exact' });
 		const userId = this.requireUserId(options, 'getChannel', 'getChannel(channelId, { userId })');
-		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId));
+		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId), { scope: 'exact' });
 	}
 
 	/** Check if a conversation has pending (unanswered) interrupts by checking DynamoDB history.
@@ -1039,7 +1085,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// Single pass in reverse: collect approval IDs until we hit the interrupt
 		const approvedIds = new Set<string>();
 		let lastInterrupt: any = null;
-		for await (const msg of this.messages.query({ where: { conversationId: { equals: conversationId } }, order: 'desc' })) {
+		for await (const { value: msg } of this.messages.query({ where: { conversationId: { equals: conversationId } }, order: 'desc' })) {
 			if (msg.role === 'approval') {
 				approvedIds.add(JSON.parse(msg.metadata).interruptId);
 			} else if (msg.role === 'interrupt') {
@@ -1058,7 +1104,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	async listConversations(userId: string): Promise<Conversation[]> {
 		if (!this.conversations) throw blocksAgentError(AgentErrors.PersistenceRequired, 'listConversations() requires persistence. Set inferenceOnly: false (default).');
 		const result: Conversation[] = [];
-		for await (const item of this.conversations.query({ where: { userId: { equals: userId } } })) {
+		for await (const { value: item } of this.conversations.query({ where: { userId: { equals: userId } } })) {
 			result.push({ conversationId: item.conversationId, name: item.name, createdAt: item.createdAt, updatedAt: item.updatedAt });
 		}
 		return result.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1090,7 +1136,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// messages" so neither 0 nor a negative value is silently read as "no limit".
 		if (options?.limit !== undefined && options.limit <= 0) return [];
 		const result: Message[] = [];
-		for await (const item of this.messages.query({ where: { conversationId: { equals: id } }, order: 'desc' })) {
+		for await (const { value: item } of this.messages.query({ where: { conversationId: { equals: id } }, order: 'desc' })) {
 			result.push({
 				messageId: item.messageId,
 				role: item.role,
@@ -1118,11 +1164,17 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		await this.conversations.delete({ userId, conversationId: id });
 		// Delete all messages in batch
 		const toDelete: { conversationId: string; messageId: string }[] = [];
-		for await (const item of this.messages.query({ where: { conversationId: { equals: id } } })) {
-			toDelete.push({ conversationId: item.conversationId, messageId: item.messageId });
+		for await (const { key } of this.messages.query({ where: { conversationId: { equals: id } } })) {
+			toDelete.push(key);
 		}
 		if (toDelete.length > 0) await this.messages.deleteBatch(toDelete);
 		// Delete agent session data
 		await this.snapshotStorage.deleteSession({ sessionId: id });
+	}
+
+	/** Persist one message under its `{ conversationId, messageId }` key. A no-op without persistence. */
+	private async saveMessage(record: z.infer<typeof messageSchema>): Promise<void> {
+		if (!this.messages) return;
+		await this.messages.put({ conversationId: record.conversationId, messageId: record.messageId }, record);
 	}
 }

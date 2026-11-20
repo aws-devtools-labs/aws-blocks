@@ -11,7 +11,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import { requiresUserPool } from './cdk/contract.js';
 import { Auth, stubIdp } from './index.cdk.js';
@@ -59,7 +59,10 @@ const RUNTIME_METHODS = [
 	'deletePasskey',
 ] as const satisfies readonly (keyof AuthShape)[];
 /** `admin` is a getter, stubbed separately (see its test below). */
-type Unlisted = Exclude<keyof AuthShape, (typeof RUNTIME_METHODS)[number] | 'createApi' | 'protect' | 'admin'>;
+type Unlisted = Exclude<
+	keyof AuthShape,
+	(typeof RUNTIME_METHODS)[number] | 'createApi' | 'createOidcApi' | 'protect' | 'admin'
+>;
 const everyMethodListed: [Unlisted] extends [never] ? true : Unlisted = true;
 
 /** A bare stack that the CDK `Scope` accepts as a parent (test plumbing). */

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:io';
 
 /// Runs all E2E test suites against test-apps/native-bindings.
@@ -26,6 +29,10 @@ void main() async {
     // Tuples on the wire: a rest tuple parameter's elements are positional
     // params; one-element and short tuples.
     'rest_tuple_params_test.dart',
+    // A session survives a process restart through the default session
+    // store, and each Auth block's cookie is kept and removed on its own.
+    // Local dev server only (it signs up and uses the stub IdP).
+    'session_restart_test.dart',
   ];
 
   var allPassed = true;

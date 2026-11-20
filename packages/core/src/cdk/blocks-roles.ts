@@ -25,6 +25,9 @@
  *
  * Each role is visited once per visitor, whichever way it was reached.
  *
+ * The same walk reaches the `AWS::KMS::Key` resources in those scopes, for
+ * checks that read key policies ({@link forEachBlocksKmsKey}).
+ *
  * The covered set also holds roles the app creates itself (in a `BlocksStack`
  * the root's subtree is the whole stack; in either root the app's backend
  * module adds constructs). {@link isAppOwnedRole} tells those apart from the
@@ -41,16 +44,23 @@ import { Construct, type IConstruct } from 'constructs';
 /** A function called once for every IAM role AWS Blocks created for a root. */
 export type BlocksRoleVisitor = (role: cdk.CfnResource) => void;
 
+/** A function called once for every KMS key in the scopes covered for a root. */
+export type BlocksKmsKeyVisitor = (key: cdk.CfnResource) => void;
+
 /** Construct ids of the per-stack providers CDK adds for cross-region references. */
 const CROSS_REGION_PROVIDER = /^Custom::CrossRegionExport(Writer|Reader)CustomResourceProvider$/;
 
 const ROLE_TYPE = 'AWS::IAM::Role';
+const KMS_KEY_TYPE = 'AWS::KMS::Key';
 
 interface RoleCoverage {
 	readonly visitors: BlocksRoleVisitor[];
 	/** Roles reached so far, in visit order; each has been passed to every visitor. */
 	readonly roles: cdk.CfnResource[];
 	readonly seen: WeakSet<cdk.CfnResource>;
+	readonly keyVisitors: BlocksKmsKeyVisitor[];
+	/** `AWS::KMS::Key` resources reached so far by the same walk; each has been passed to every key visitor. */
+	readonly keys: cdk.CfnResource[];
 	/** Scopes already walked by an aspect (avoids stacking duplicate aspects). */
 	readonly scopes: WeakSet<IConstruct>;
 	/** Stacks whose prepare-time cross-region provider roles belong to this root. */
@@ -68,6 +78,8 @@ function coverageOf(root: Construct): RoleCoverage {
 		visitors: [],
 		roles: [],
 		seen: new WeakSet(),
+		keyVisitors: [],
+		keys: [],
 		scopes: new WeakSet(),
 		lateStacks: new Set(),
 		finalized: false,
@@ -78,6 +90,17 @@ function coverageOf(root: Construct): RoleCoverage {
 
 function isRole(node: IConstruct): node is cdk.CfnResource {
 	return cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === ROLE_TYPE;
+}
+
+function isKmsKey(node: IConstruct): node is cdk.CfnResource {
+	return cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === KMS_KEY_TYPE;
+}
+
+function visitKmsKey(coverage: RoleCoverage, key: cdk.CfnResource): void {
+	if (coverage.seen.has(key)) return;
+	coverage.seen.add(key);
+	coverage.keys.push(key);
+	for (const visitor of coverage.keyVisitors) visitor(key);
 }
 
 function visitRole(coverage: RoleCoverage, role: cdk.CfnResource): void {
@@ -105,6 +128,7 @@ function coverScope(coverage: RoleCoverage, scope: IConstruct): void {
 		{
 			visit(node) {
 				if (isRole(node)) visitRole(coverage, node);
+				else if (isKmsKey(node)) visitKmsKey(coverage, node);
 			},
 		},
 		{ priority: mutatingPriority(scope) },
@@ -137,6 +161,19 @@ export function forEachBlocksRole(root: Construct, visitor: BlocksRoleVisitor): 
 	coverage.visitors.push(visitor);
 	// Roles already reached (only possible once synthesis has begun) get it too.
 	for (const role of coverage.roles) visitor(role);
+}
+
+/**
+ * Register `visitor` for every `AWS::KMS::Key` in the scopes covered for `root`:
+ * the same walk, and so the same coverage, as {@link forEachBlocksRole} (the
+ * root's subtree, the stack-level additions of an embedded backend, and
+ * `Hosting`'s subtree and helper stacks). Keys are visited at synth, in
+ * registration order. The prepare-time cross-region providers hold no keys.
+ */
+export function forEachBlocksKmsKey(root: Construct, visitor: BlocksKmsKeyVisitor): void {
+	const coverage = coverageOf(root);
+	coverage.keyVisitors.push(visitor);
+	for (const key of coverage.keys) visitor(key);
 }
 
 /**
@@ -272,6 +309,9 @@ export function snapshotForHosting(hosting: Construct): HostingSnapshot {
 	return { stack: snapshotChildren(cdk.Stack.of(hosting)), stage: stage ? snapshotChildren(stage) : new Set() };
 }
 
+/** CDK's Lambda@Edge stack (`edge-lambda-stack-<hash>`), or the `<app id>-edge` one under `defaults.appIdentity`. */
+const isEdgeStackName = (id: string): boolean => id.startsWith('edge-lambda-stack-') || id.endsWith('-edge');
+
 /**
  * Cover a `Hosting` construct's roles on behalf of the backend it fronts
  * (`owner`): its subtree, the stack-level singletons and the helper stacks it
@@ -280,14 +320,18 @@ export function snapshotForHosting(hosting: Construct): HostingSnapshot {
  * `edge-lambda-stack-*` under the same construct id and doesn't expose that role,
  * so it's found there by id. The helper stacks' cross-region providers are
  * reached at finalize. No-op without an owning root.
+ *
+ * @returns the separate stacks Hosting added for the app (the us-east-1 support
+ *   stack, the Lambda@Edge stack), so `defaults.appIdentity` can tag them as the app's;
+ *   empty without an owning root.
  */
 export function coverHosting(
 	hosting: Construct,
 	owner: Construct | undefined,
 	before: HostingSnapshot,
 	edgeFunctions: readonly IConstruct[],
-): void {
-	if (!owner) return;
+): cdk.Stack[] {
+	if (!owner) return [];
 	const coverage = coverageOf(owner);
 	const stack = cdk.Stack.of(hosting);
 	coverScope(coverage, hosting);
@@ -300,15 +344,33 @@ export function coverHosting(
 	);
 	for (const helper of helperStacks) coverScope(coverage, helper);
 
-	const edgeStacks = stack.dependencies.filter((s) => s.node.id.startsWith('edge-lambda-stack-'));
+	// The edge stack is CDK's `edge-lambda-stack-<hash>`, or `<app id>-edge` under
+	// `defaults.appIdentity`. `EdgeFunction` keeps the real function in its private
+	// `_edgeFunction`, so that function's own stack is the edge stack exactly;
+	// if a CDK version drops the field, fall back to a dependency that is named as
+	// an edge stack (`edge-lambda-stack-…` or `…-edge`) and holds a child with the
+	// edge function's id, so an unrelated stack's same-named child never counts.
+	const edgeStacks: cdk.Stack[] = [];
+	const addEdge = (edgeStack: cdk.Stack, scope: IConstruct) => {
+		coverScope(coverage, scope);
+		if (!edgeStacks.includes(edgeStack)) edgeStacks.push(edgeStack);
+	};
 	for (const fn of edgeFunctions) {
-		for (const edgeStack of edgeStacks) {
-			const peer = edgeStack.node.tryFindChild(fn.node.id);
-			if (peer) coverScope(coverage, peer);
+		const real = (fn as { _edgeFunction?: unknown })._edgeFunction;
+		if (real && Construct.isConstruct(real)) {
+			const edgeStack = cdk.Stack.of(real);
+			if (edgeStack !== stack) addEdge(edgeStack, real);
+			continue;
+		}
+		for (const dependency of stack.dependencies) {
+			if (!isEdgeStackName(dependency.node.id)) continue;
+			const peer = dependency.node.tryFindChild(fn.node.id);
+			if (peer) addEdge(dependency, peer);
 		}
 	}
 
 	for (const s of [stack, ...helperStacks, ...edgeStacks]) coverage.lateStacks.add(s);
+	return [...helperStacks, ...edgeStacks.filter((s) => !helperStacks.includes(s))];
 }
 
 /**

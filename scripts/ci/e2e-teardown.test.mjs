@@ -23,7 +23,7 @@ const ID = 'runner-k3x9q2';
 // The random half of the id: test-apps/comprehensive names its production
 // stack with only this (bb-test-prod-<suffix>-<salt>, since #1031).
 const SALT = 'k3x9q2';
-const CDK_ENTRY = fileURLToPath(new URL('../../test-apps/comprehensive/aws-blocks/index.cdk.ts', import.meta.url));
+const CDK_ENTRY = fileURLToPath(new URL('../../test-apps/comprehensive/cdk-blocks/index.cdk.ts', import.meta.url));
 
 // A stand-in for the AWS CLI: serves list-stacks / describe-stacks /
 // delete-stack from a JSON state file, logs each call, and applies scripted
@@ -70,8 +70,8 @@ function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suff
 	const app = join(dir, 'app');
 	mkdirSync(app);
 	if (id !== null) {
-		mkdirSync(join(app, '.blocks-sandbox'));
-		writeFileSync(join(app, '.blocks-sandbox', 'sandbox-id.txt'), `${id}\n`);
+		mkdirSync(join(app, '.cdk-blocks-sandbox'));
+		writeFileSync(join(app, '.cdk-blocks-sandbox', 'sandbox-id.txt'), `${id}\n`);
 	}
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
@@ -611,7 +611,7 @@ describe('pr-checks.yml', () => {
 			const steps = stepsOf(jobs[id]);
 			const [teardown, refresh] = [steps.at(-1), steps.at(-2)];
 			assert.match(teardown, /run: node scripts\/ci\/e2e-teardown\.mjs test-apps\/comprehensive\n/);
-			const guard = "always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''";
+			const guard = "always() && hashFiles('test-apps/comprehensive/.cdk-blocks-sandbox/sandbox-id.txt') != ''";
 			assert.equal(ifOf(teardown), guard);
 			assert.ok(refresh.includes(CREDENTIALS), `${id}: the teardown must follow a credentials step`);
 			const withOf = (step) => step.slice(step.indexOf('        with:\n')).trim();

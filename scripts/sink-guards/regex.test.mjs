@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Repo invariant: a value reaches `new RegExp(…)` only as a constant or through
-// an escape (`escapeRegExp` from `@aws-blocks/core/bb-utils`, or a same-named
+// an escape (`escapeRegExp` from `@aws-cdk-blocks/core/bb-utils`, or a same-named
 // helper that escapes every metacharacter). Unescaped, a configured
 // `example.com` also matches `exampleXcom`, and `a|.*` matches everything.
 //
@@ -26,27 +26,27 @@ import {
 
 const ALLOWLIST = [
 	{
-		at: 'packages/blocks/src/cli/config.ts:228',
+		at: 'packages/blocks/src/cli/config.ts:242',
 		reason: '`port` is a number (frontendPort ?? DEFAULT_FRONTEND_PORT), so the pattern holds digits only.',
 	},
 	{
-		at: 'packages/core/src/cors.ts:38',
-		reason: 'CORS allowlist compilation; plain origins are matched literally by open PR #1413, which owns this file.',
+		at: 'packages/core/src/cors.ts:166',
+		reason: 'literalOriginPattern(): the origin goes through escapeOriginToPattern(), which escapes every metacharacter and anchors with ^…$.',
 	},
 	{
-		at: 'packages/core/src/cors.ts:40',
-		reason: 'CORS allowlist compilation through escapeOriginToPattern(); reworked by open PR #1413, which owns this file.',
+		at: 'packages/core/src/cors.ts:372',
+		reason: 'validateCorsOriginEntry() compiles a user regex entry on its own only to check it is valid; the result is discarded and never matched.',
 	},
 	{
-		at: 'packages/core/src/cors.ts:120',
-		reason: 'Hosting origins compiled through escapeOriginToPattern(); reworked by open PR #1413, which owns this file.',
+		at: 'packages/core/src/cors.ts:471',
+		reason: 'allowedOrigins regex entries are intentionally regexes: validateCorsOriginEntry() runs first (bare dots, globs, nested quantifiers, standalone compile) and the entry is anchored as ^(?:…)$.',
 	},
 	{
-		at: 'packages/core/src/raw-route.ts:444',
+		at: 'packages/core/src/raw-route.ts:443',
 		reason: 'Built one character at a time: every character in REGEX_SPECIAL is escaped and `{` `}` `*` are parsed as params and the wildcard.',
 	},
 	{
-		at: 'packages/core/src/scripts/cdk-output.ts:451',
+		at: 'packages/core/src/scripts/cdk-output.ts:470',
 		reason: 'Joins the `.source` of a fixed array of regex literals written in this file.',
 	},
 	{
@@ -54,7 +54,7 @@ const ALLOWLIST = [
 		reason: 'Joins the keys of the NETWORK_ERRORS object literal (Node error codes such as ECONNREFUSED) declared in this file.',
 	},
 	{
-		at: 'packages/hosting/src/adapters/nextjs.ts:1042',
+		at: 'packages/hosting/src/adapters/nextjs.ts:1049',
 		reason: '`key` is one of the literal OpenNext option names passed by the callers in this file; `value` goes through escapeRegex().',
 	},
 	{
@@ -87,6 +87,23 @@ describe('regex sink detector', () => {
 		assert.deepEqual(find('function f(o: string) { return new RegExp(`^${escapeRegExp(o)}$`); }'), []);
 		assert.deepEqual(find("function f(o: string) { const e = o.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'); return new RegExp(e); }"), []);
 		assert.deepEqual(find('for (const a of ["br", "gzip"]) new RegExp(`\\\\.includes\\\\("${a}"\\\\)`);'), []);
+	});
+
+	it('recognizes escaped alternatives without trusting other maps or separators', () => {
+		const findAlternation = (expr, params = 'words: string[]') => find([
+			'function escapeRegExp(s: string) { return s.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&"); }',
+			`function f(${params}) {`,
+			`  const alternatives = ${expr};`,
+			'  return new RegExp(`^(${alternatives})$`);',
+			'}',
+		].join('\n'));
+		const escaped = 'words.map(escapeRegExp).join("|")';
+		assert.deepEqual(findAlternation(escaped), []);
+		assert.deepEqual(findAlternation('words.join("|")'), [4]);
+		assert.deepEqual(findAlternation('words.map(escapeRegExp).join(separator)'), [4]);
+		assert.deepEqual(findAlternation('words.map(util.escapeRegExp).join("|")'), [4]);
+		assert.deepEqual(findAlternation(escaped, 'words: Mapper'), [4]);
+		assert.deepEqual(findAlternation(escaped, 'words: string[], escapeRegExp: Transform'), [4]);
 	});
 
 	it('resolves a name through its own scope, not another declaration of it', () => {

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin.parser
 
 import com.aws.blocks.kotlin.model.Constraints
@@ -65,7 +68,6 @@ object OpenRpcParser {
 
         val info = parseInfo(root)
         val servers = parseServers(root)
-        val endpoint = root["x-blocks-endpoint"]?.jsonPrimitive?.contentOrNull
         val nativeCatalogs = NativeCatalogParser.parse(root)
 
         val methodsArray = root["methods"]?.jsonArray
@@ -74,7 +76,6 @@ object OpenRpcParser {
                 methods = emptyList(),
                 servers = servers,
                 components = componentsObj,
-                endpoint = endpoint,
                 nativeCatalogs = nativeCatalogs,
             )
 
@@ -146,7 +147,6 @@ object OpenRpcParser {
             methods = methods,
             servers = servers,
             components = componentsObj,
-            endpoint = endpoint,
             nativeCatalogs = nativeCatalogs,
         )
     }

@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Source for the S3 cache plugin written into the user's
  * `server/plugins/_hosting-cache.mjs` before `nuxt build`. Inlined as

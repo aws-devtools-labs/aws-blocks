@@ -24,9 +24,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
-import { type BuildingBlockScope, DEFAULT_NODE_RUNTIME, getBlocksRoot, registerConfig } from '@aws-blocks/core/cdk';
-import { deployTimeLambdaCode } from '@aws-blocks/core/cdk/internal';
+import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-cdk-blocks/bb-app-setting';
+import { type BuildingBlockScope, DEFAULT_NODE_RUNTIME, getBlocksRoot, registerConfig } from '@aws-cdk-blocks/core/cdk';
+import { deployTimeLambdaCode } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -35,6 +35,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct, IDependable } from 'constructs';
 import type { ResolvedAuthOptions } from '../resolve-options.js';
+import { clientLifetimes } from './token-settings.js';
 import type { ProviderSecretRef } from '../types.js';
 import { RPC_PREFIX, resolvedBackendApiUrl } from './api-url.js';
 import { federationConfigKeys, federationRedirectPaths } from './contract.js';
@@ -45,6 +46,7 @@ import {
 	validateDomainPrefix,
 	validateFederationOptions,
 } from './federation-providers.js';
+import { endUserWriteAttributes } from './mappers.js';
 import { keepProviderLogGroupsOwned } from './owned-log-group.js';
 
 /**
@@ -180,7 +182,7 @@ export function validateHostedUiFederation(scope: BuildingBlockScope, options: R
 	return idpRegistrations(options);
 }
 
-/** Set by `@aws-blocks/bb-secret`'s CDK layer on a stack-managed `Secret` (see there). */
+/** Set by `@aws-cdk-blocks/bb-secret`'s CDK layer on a stack-managed `Secret` (see there). */
 const SECRET_HAS_INITIAL_VALUE = Symbol.for('blocks:SecretHasInitialValue');
 
 /** Every hosted-UI provider secret in `options`, with the option path that names it. */
@@ -221,7 +223,7 @@ function warnOnValuelessProviderSecrets(scope: BuildingBlockScope, options: Reso
 	for (const { what, ref } of hostedUiProviderSecrets(options)) {
 		if (managedSecretHasInitialValue(ref) !== false) continue;
 		cdk.Annotations.of(scope).addWarningV2(
-			'@aws-blocks/bb-auth:ProviderSecretWithoutValue',
+			'@aws-cdk-blocks/bb-auth:ProviderSecretWithoutValue',
 			`Auth '${scope.fullId}': ${what} is the Secret '${ref.fullId}', which this stack creates with no value. ` +
 				'The provider is registered with Cognito during the same deploy, so the first deploy fails reading it. ' +
 				'Give the Secret `generate: true` (a placeholder value; set the real one after the deploy, e.g. ' +
@@ -315,7 +317,8 @@ export function provisionHostedUiFederation(
 		userPool: pool,
 		generateSecret: false,
 		preventUserExistenceErrors: true,
-		// No SDK sign-in flow on this client: refresh only.
+		// No SDK flow on this client. With refresh rotation on (the default) CDK also leaves out
+		// `ALLOW_REFRESH_TOKEN_AUTH`, so `ExplicitAuthFlows` is empty; refresh goes through the OAuth token endpoint.
 		authFlows: { userPassword: false, userSrp: false, custom: false, adminUserPassword: false, user: false },
 		oAuth: {
 			flows: { authorizationCodeGrant: true },
@@ -328,6 +331,15 @@ export function provisionHostedUiFederation(
 		supportedIdentityProviders: registrations.map((r) =>
 			cognito.UserPoolClientIdentityProvider.custom(r.providerName),
 		),
+		// What end users may set, plus every attribute a provider maps (Cognito's
+		// `CreateUserPoolClient` reference asks for every mapped attribute in `WriteAttributes`).
+		// Cognito's default is every standard and custom attribute. Updates in place.
+		writeAttributes: endUserWriteAttributes(
+			options.users?.attributes,
+			registrations.flatMap((r) => Object.keys(r.attributeMapping)),
+		),
+		// Same lifetimes and rotation as the native client (`session.*`). Updates in place.
+		...clientLifetimes(options),
 	});
 	// Cognito rejects a client that lists a provider the pool does not have yet.
 	for (const idp of idps) hostedUiClient.node.addDependency(idp);
@@ -345,7 +357,7 @@ export function provisionHostedUiFederation(
 /**
  * Directory of the esbuild-bundled registration handler (`npm run build:lambda`).
  * A vendorized copy has no `dist/`, so its source is bundled at synth instead
- * (`deployTimeLambdaCode` in `@aws-blocks/core/cdk/internal`).
+ * (`deployTimeLambdaCode` in `@aws-cdk-blocks/core/cdk/internal`).
  */
 const REGISTRATION_LAMBDA = {
 	moduleUrl: import.meta.url,

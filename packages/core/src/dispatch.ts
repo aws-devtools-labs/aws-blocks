@@ -123,7 +123,7 @@ export interface DispatcherOptions {
   /**
    * Which API namespaces (by export name) this compute serves. A call to any
    * other namespace gets the same "not found" error as an unknown one, whichever
-   * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
+   * RPC path it arrived on — so the bare `/cdk-blocks/api` endpoint can't run a
    * namespace placed on another compute. Default: every namespace is served.
    * The Lambda handler and the container HTTP server build it from the placement
    * map in the compute's environment (see `apiNamespaceFilterFromEnv`).
@@ -137,10 +137,14 @@ export interface DispatcherOptions {
  * @internal
  */
 export interface DispatchCorsPolicy {
-  /** Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin. */
-  rejects(origin: string): boolean;
-  /** The CORS headers for a response to a request from `origin` (`''` when absent). */
-  headers(origin: string): Record<string, string>;
+  /**
+   * Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin.
+   * `request` is the request itself, for a policy that also depends on its method or `Host` (the local
+   * dev server refuses only state-changing requests from a foreign origin).
+   */
+  rejects(origin: string, request: DispatchRequest): boolean;
+  /** The CORS headers for a response to `request`, from `origin` (`''` when absent). */
+  headers(origin: string, request: DispatchRequest): Record<string, string>;
 }
 
 /**
@@ -170,7 +174,7 @@ export interface DispatchRpcTrace {
 /** The deployed CORS policy: the configured allowlist, when there is one. */
 const ALLOWLIST_CORS_POLICY: DispatchCorsPolicy = {
   rejects: (origin) => getCorsPatterns() !== null && !isOriginAllowed(origin),
-  headers: buildCorsHeaders,
+  headers: (origin) => buildCorsHeaders(origin),
 };
 
 /**
@@ -219,11 +223,11 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
 }
 
 /**
- * Create the dispatcher for a backend module (the app's `aws-blocks/index.ts`).
+ * Create the dispatcher for a backend module (the app's `cdk-blocks/index.ts`).
  *
  * Handles, in order: cross-origin rejection, `OPTIONS` preflight, RawRoute
- * dispatch for any path outside `/aws-blocks/api`, and JSON-RPC for the
- * `/aws-blocks/api` subtree. Request cookies and the validated client user agent
+ * dispatch for any path outside `/cdk-blocks/api`, and JSON-RPC for the
+ * `/cdk-blocks/api` subtree. Request cookies and the validated client user agent
  * are available to handlers through {@link requestCookies} /
  * {@link requestClientUserAgent} for the duration of the call, and the request's
  * {@link DispatchRequest.baseUrl} through `getRequestBaseUrl()` ({@link requestBaseUrl}).
@@ -249,10 +253,10 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
   };
   return async (request) => {
     const { origin, method: httpMethod } = request;
-    const corsHeaders = cors.headers(origin);
+    const corsHeaders = cors.headers(origin, request);
 
     // Reject cross-origin requests from disallowed origins
-    if (origin && cors.rejects(origin)) {
+    if (origin && cors.rejects(origin, request)) {
       const rejection = corsRejection();
       return { kind: 'cors-rejected', status: rejection.statusCode, headers: rejection.headers, cookies: [], body: rejection.body };
     }
@@ -277,11 +281,12 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     // agent stores (see below).
     const dispatchWithinStores = async (): Promise<DispatchResponse> => {
       // RawRoute dispatch — check path-based routes before falling through to RPC.
-      // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
-      // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
+      // The whole `/cdk-blocks/api` subtree (the bare path and every per-namespace
+      // `/cdk-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
       // JSON-RPC body, and a per-namespace path must name the same one (see
       // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
-      // handling below.
+      // handling below. Both match a legacy `/aws-blocks/...` path as its
+      // `/cdk-blocks/...` twin.
       const requestPath = request.path;
       if (!isRpcPath(requestPath)) {
         const matched = matchRoute(httpMethod, requestPath);
@@ -290,11 +295,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         }
         // No RawRoute matched and the path is not under the RPC endpoint — 404.
         // Log it: an unmatched route used to be entirely silent, which is what
-        // made a split route registry (duplicate @aws-blocks/core copies)
+        // made a split route registry (duplicate @aws-cdk-blocks/core copies)
         // undiagnosable from CloudWatch alone. The path is already in the front
         // door's access logs, so this adds no new category of data.
         const copies = getLoadedCoreCopies();
-        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-cdk-blocks/core are loaded` : '';
         const requestNote = request.requestId === undefined ? '' : ` [request ${request.requestId}]`;
         console.error(
           `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}${requestNote}`,
@@ -382,7 +387,9 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         }
 
         const result = await runHandler(`${apiNamespace}.${method}`, () => apiMethod(...args));
-        const value = responseBody ?? result;
+        // JSON.stringify drops an `undefined` result, and a JSON-RPC 2.0 success
+        // response must carry `result`, so a `Promise<void>` method answers `null`.
+        const value = responseBody ?? result ?? null;
         trace?.result?.(apiNamespace, method, value);
 
         return {

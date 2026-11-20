@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <title>AWS Blocks Auth</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <!-- First-paint tokens only. The authoritative token layer (incl. the
-       .bb-* component classes) is @aws-blocks/auth-common's THEME_CSS,
+       .bb-* component classes) is @aws-cdk-blocks/auth-common's THEME_CSS,
        injected by the components at runtime; this inline copy exists so a
        dark-mode user's first paint already uses the dark palette instead of
        flashing white until the deferred module bundle runs. -->
@@ -144,7 +145,7 @@
       command. Locally, stop the dev server first (<code>npm run dev:stop</code>) and start it again
       afterwards; on a deployed stage, add <code>--stage sandbox</code> or <code>--stage prod --yes</code>:
     </p>
-    <pre style="background: var(--bb-color-surface-alt, #f5f5f5); color: var(--bb-color-text, #333); padding: 10px; border-radius: 4px; font-size: 0.85em; overflow-x: auto;">npx @aws-blocks/bb-auth users add-to-group you@example.com editors</pre>
+    <pre style="background: var(--bb-color-surface-alt, #f5f5f5); color: var(--bb-color-text, #333); padding: 10px; border-radius: 4px; font-size: 0.85em; overflow-x: auto;">npx @aws-cdk-blocks/bb-auth users add-to-group you@example.com editors</pre>
     <p style="color: var(--bb-color-text-muted, #555); font-size: 0.9em; margin: 5px 0;">
       <code>requireRole</code> reads the current membership, so the change applies on the next
       request. To manage groups from application code, enable the opt-in

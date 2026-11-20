@@ -3,9 +3,9 @@
 import { afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert';
 import type { ChildProcess } from 'node:child_process';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -273,12 +273,12 @@ describe('attachCdkWatchOutput', () => {
     const err = collectingSink();
     const child = fakeWatch();
     attachCdkWatchOutput(child, { level: 'normal', stderr: err });
-    child.out.write('Detected change to aws-blocks/index.ts\nbundling chatter\n');
+    child.out.write('Detected change to cdk-blocks/index.ts\nbundling chatter\n');
     child.out.write('[START RequestId: abc] Version: $LATEST\n');
     child.err.write('❌ Deployment failed: Error: Resource handler returned message: boom\n');
     await tick();
     assert.deepStrictEqual(calls, [
-      ['log', '[CDK Watch] Detected change to aws-blocks/index.ts'],
+      ['log', '[CDK Watch] Detected change to cdk-blocks/index.ts'],
       ['error', '[CDK Watch] ❌ Deployment failed: Error: Resource handler returned message: boom'],
     ]);
     assert.match(err.text(), /──── cdk watch output \(3 lines, retained because BLOCKS_LOG_LEVEL=normal\) ────/);
@@ -318,8 +318,8 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
   }
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   const SYNTH_CRASH = [
-    "Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'",
-    '/app/aws-blocks/index.ts:3',
+    "Detected change to 'cdk-blocks/index.ts' (type: change). Triggering 'cdk deploy'",
+    '/app/cdk-blocks/index.ts:3',
     'SyntaxError: Unexpected token }',
   ];
 
@@ -355,7 +355,7 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
     await sleep(5);
     assert.ok(calls.includes('[CDK Watch] SyntaxError: Unexpected token }'));
     assert.strictEqual(err.text(), '');
-    child.out.write("Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'\n");
+    child.out.write("Detected change to 'cdk-blocks/index.ts' (type: change). Triggering 'cdk deploy'\n");
     await sleep(5);
     assert.match(err.text(), /cdk watch output \(3 lines/);
     child.emit('exit', null, 'SIGTERM');
@@ -379,7 +379,7 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
       const err = collectingSink();
       const child = fakeWatch();
       attachCdkWatchOutput(child, { level: 'quiet', stderr: err, failureIdleMs: 20 });
-      child.out.write(`Detected change to 'aws-blocks/${file}' (type: change). Triggering 'cdk deploy'\n`);
+      child.out.write(`Detected change to 'cdk-blocks/${file}' (type: change). Triggering 'cdk deploy'\n`);
       // A real hotswap is silent for seconds before its ✅; well past the idle window.
       await sleep(60);
       child.out.write(' ✅  MyStack\n');
@@ -420,7 +420,7 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
     child.err.write(SYNTH_CRASH.join('\n') + '\n');
     await sleep(5);
     child.out.write(
-      "Detected change to 'aws-blocks/HttpError.ts' (type: change) while 'cdk deploy' is still running. Will queue for another deployment after this one finishes\n",
+      "Detected change to 'cdk-blocks/HttpError.ts' (type: change) while 'cdk deploy' is still running. Will queue for another deployment after this one finishes\n",
     );
     await sleep(5);
     assert.strictEqual(err.text(), '', 'a queued change does not dump early');
@@ -482,6 +482,79 @@ describe('runDestroyWithRetries failure dump', () => {
       },
     });
     assert.deepStrictEqual(events, []);
+  });
+
+  it('stops at once, with no retry, when an operator aborted the destroy', async () => {
+    mock.method(console, 'error', () => {});
+    mock.method(console, 'log', () => {});
+    let attempts = 0;
+    const aborted = new DeployProcessError('aborted', { aborted: true, operatorSignal: 'SIGTERM' });
+    await assert.rejects(
+      runDestroyWithRetries({
+        runDestroy: async () => {
+          attempts++;
+          throw aborted;
+        },
+        listStacks: () => [],
+        emptyBuckets: async () => {},
+        sleep: async () => {},
+        retryDelays: [0, 0],
+      }),
+      (error: unknown) => error === aborted,
+    );
+    assert.strictEqual(attempts, 1);
+  });
+});
+
+describe('createCdkOutput — deferSignals (a real cdk tree)', { skip: process.platform === 'win32' ? 'POSIX signals' : false }, () => {
+  // The sandbox deploy and destroy ran cdk with no signal handling: one SIGTERM (the task runner forwards
+  // it at once) killed the runner and left cdk running, unwatched (JA-2).
+  it('defers a first SIGTERM, and on a second one stops the whole cdk tree and reports the operator signal', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cdk-defer-'));
+    let cdk = 0;
+    let run: ChildProcess | undefined;
+    try {
+      const pidFile = join(dir, 'cdk.pid');
+      // A real process that only waits to be signalled (this test drives real POSIX signals, not a clock).
+      const grandchild = join(dir, 'cdk.cjs');
+      writeFileSync(grandchild, `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`);
+      const harness =
+        `const { createCdkOutput } = await import(${JSON.stringify(new URL('./cdk-output.js', import.meta.url).href)});\n` +
+        "const out = createCdkOutput({ label: 'cdk deploy', verb: 'deploy', level: 'verbose' });\n" +
+        // The shell plays npx/npm: the cdk process is a grandchild, as in the real tree.
+        // The paths reach the shell as its positional args, never inside the script, so nothing needs quoting.
+        `try { await out.run('/bin/sh', ['-c', '"$0" "$1"', ${JSON.stringify(process.execPath)}, ${JSON.stringify(grandchild)}], { deferSignals: true }); console.log('DONE'); }\n` +
+        "catch (e) { console.log('ABORTED ' + JSON.stringify({ aborted: e.aborted, operatorSignal: e.operatorSignal })); process.exitCode = 3; }\n";
+      run = spawn(process.execPath, ['--input-type=module', '-e', harness], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      run.stdout?.on('data', (d) => { stdout += d; });
+      const exited = new Promise<number | null>((resolve) => run?.once('exit', (code) => resolve(code)));
+      const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      const until = async (what: string, check: () => boolean, ms = 10_000) => {
+        for (const deadline = Date.now() + ms; !check(); await new Promise((r) => setTimeout(r, 25))) {
+          if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}; stdout: ${stdout}`);
+        }
+      };
+      await until('cdk to start', () => existsSync(pidFile) && readFileSync(pidFile, 'utf-8') !== '');
+      cdk = Number(readFileSync(pidFile, 'utf-8'));
+      run.kill('SIGTERM');
+      await until('the deferral notice', () => stdout.includes('Ignoring SIGTERM: the deploy is still running'));
+      assert.ok(alive(run.pid ?? 0) && alive(cdk), `a lone SIGTERM stops neither the runner nor cdk; stdout: ${stdout}`);
+      // A real wait: a SIGTERM inside the 2 s coalesce window counts as the same delivery, not a repeat.
+      await new Promise((r) => setTimeout(r, 2300));
+      run.kill('SIGTERM');
+      assert.strictEqual(await exited, 3, stdout);
+      assert.match(stdout, /ABORTED \{"aborted":true,"operatorSignal":"SIGTERM"\}/);
+      await until('cdk to be stopped', () => !alive(cdk));
+    } finally {
+      // Without the fix, cdk outlives the runner and holds its pipe: reap what is left, so the run ends.
+      for (const pid of [run?.pid, cdk]) {
+        try { if (pid) process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+      }
+      run?.stdout?.destroy();
+      run?.stderr?.destroy();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

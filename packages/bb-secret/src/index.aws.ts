@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
-import { blocksError, installClientUserAgent, Scope } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { blocksError, installClientUserAgent, Scope } from '@aws-cdk-blocks/core';
 import {
 	GetSecretValueCommand,
 	ListSecretVersionIdsCommand,
@@ -92,8 +92,7 @@ type CachedRead = { raw: string | null; fetchedAt: number };
  * connection strings, webhook signing keys, encryption keys.
  *
  * **When NOT to use:** For non-sensitive configuration (feature flags, display
- * strings, thresholds), use `AppSetting`. For application state, use `KVStore`
- * or `DistributedTable`.
+ * strings, thresholds), use `AppSetting`. For application state, use `KVStore`.
  *
  * **Best practices:**
  * - One `Secret` per logical credential.

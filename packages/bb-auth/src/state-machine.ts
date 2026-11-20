@@ -26,7 +26,7 @@
  * @internal
  */
 
-import type { AuthAction, AuthField, AuthState, AuthUser } from '@aws-blocks/auth-common';
+import type { AuthAction, AuthField, AuthState, AuthUser } from '@aws-cdk-blocks/auth-common';
 import type { MfaFactor, PasskeyDescription, SignInNextStep } from './types.js';
 
 /** A federated provider as the signed-out state shows it. */

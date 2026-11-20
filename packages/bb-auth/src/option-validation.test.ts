@@ -23,9 +23,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, describe, test } from 'node:test';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import { Auth as AwsAuth } from './index.aws.js';
 import { Auth as CdkAuth } from './index.cdk.js';
@@ -39,7 +39,7 @@ import {
 } from './option-validation.js';
 import type { AppSettingRef, AuthMockOptions } from './types.js';
 
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 let n = 0;
 const root = (): ScopeParent => ({ id: `optval${process.pid}x${++n}` });
@@ -692,8 +692,8 @@ describe('valid configurations pass', () => {
 			validateUser: async () => {},
 			session: { ttlSeconds: 60, crossDomain: false, freshAgeSeconds: 30 },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/callback',
-				signOutPath: '/aws-blocks/auth/signout',
+				callbackPath: '/cdk-blocks/auth/callback',
+				signOutPath: '/cdk-blocks/auth/signout',
 				postSignInPath: '/',
 				postSignOutPath: '/',
 				allowedRelayOrigins: [relayOrigin('myapp://auth')],
@@ -756,7 +756,7 @@ describe('valid configurations pass', () => {
 			validateUser: async () => {},
 			session: { ttlSeconds: 60, crossDomain: false, freshAgeSeconds: 30 },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/callback',
+				callbackPath: '/cdk-blocks/auth/callback',
 				allowedRelayOrigins: [relayOrigin('myapp://auth')],
 			},
 			allowBearerAuth: true,
@@ -1315,6 +1315,60 @@ describe('emailPassword: false with an email + password only option is rejected 
 		assert.match(
 			message(() => new CdkAuth(stack as unknown as ScopeParent, 'auth', conflicting)),
 			expected,
+		);
+	});
+});
+
+describe('users.attributes: userWritable', () => {
+	test('a provider mapping onto a `userWritable: false` attribute is refused, with or without self sign-up', () => {
+		const attributes = [{ name: 'team' }, { name: 'role', userWritable: false }];
+		const google = (attributeMapping: Record<string, string>) => ({
+			google: { type: 'google', clientId: 'g', clientSecret: secret, attributeMapping },
+		});
+		const refused =
+			/users\.attributes 'role' is `userWritable: false`, but provider 'google' maps '(custom:)?role'/;
+		// Bare and `custom:`-prefixed keys, whatever self sign-up is set to.
+		for (const emailPassword of [undefined, { selfSignUp: true }, { selfSignUp: false }, false]) {
+			for (const key of ['role', 'custom:role']) {
+				const options = {
+					...(emailPassword === undefined ? {} : { emailPassword }),
+					providers: google({ [key]: 'hd' }),
+					users: { attributes },
+				};
+				assert.throws(() => assertKnownAuthOptions('auth', options), refused, JSON.stringify(options));
+			}
+		}
+		assert.throws(
+			() => new Auth(root(), 'auth', untyped({ providers: google({ role: 'hd' }), users: { attributes } })),
+			refused,
+		);
+		// Allowed: a mapping onto a user-writable attribute, a standard one, or a verified flag.
+		assert.doesNotThrow(() =>
+			assertKnownAuthOptions('auth', {
+				providers: google({ team: 'hd', email: 'email', email_verified: 'email_verified' }),
+				users: { attributes },
+			}),
+		);
+	});
+
+	test('`userWritable: false` with `required: true` is refused at construction: the pair contradicts itself', () => {
+		const options = { users: { attributes: [{ name: 'role', required: true, userWritable: false }] } };
+		assert.throws(
+			() => assertKnownAuthOptions('auth', options),
+			/'role' can't be both `required: true` and `userWritable: false`: `required` has no effect on a custom attribute, and the pair contradicts itself/,
+		);
+		assert.throws(() => new Auth(root(), 'auth', untyped(options)), /can't be both/);
+	});
+
+	test('`userWritable` must be a boolean; `false` alone is accepted', () => {
+		assert.doesNotThrow(() =>
+			assertKnownAuthOptions('auth', { users: { attributes: [{ name: 'role', userWritable: false }] } }),
+		);
+		assert.deepStrictEqual(
+			findInvalidAuthOptions({ users: { attributes: [{ name: 'role', userWritable: 'false' }] } }).map(
+				(v) => v.path,
+			),
+			['users.attributes[0].userWritable'],
 		);
 	});
 });

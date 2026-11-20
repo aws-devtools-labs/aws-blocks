@@ -3,21 +3,17 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import type { api as apiType } from 'aws-blocks';
+import { testBaseUrl } from './api-url.js';
+import type { api as apiType } from 'cdk-blocks';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 /** The dev server and API Gateway are separate responders; CI runs this per env. */
 export function corsPreflightTests(_getApi: () => typeof apiType) {
   describe('CORS preflight allow-list', () => {
     test('preflight allows Content-Type, Authorization and the client user-agent header', async () => {
       const baseUrl = getBaseUrl();
-      const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+      const resp = await fetch(`${baseUrl}/cdk-blocks/api`, {
         method: 'OPTIONS',
         headers: {
           // The frontend origin: a non-allowlisted one is rejected before the preflight.

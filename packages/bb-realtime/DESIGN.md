@@ -2,7 +2,7 @@
 
 Design document for Realtime. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-realtime`
+**Package:** `@aws-cdk-blocks/bb-realtime`
 **Type:** Client-facing
 **AWS Services:** API Gateway WebSocket, DynamoDB, AWS Secrets Manager or SSM Parameter Store (token secret, per `defaults.secretsStore`)
 
@@ -57,11 +57,23 @@ A failed subscribe rejects only that subscription's `established` promise — ot
 
 Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix with a `$connect` suffix (e.g., `collab$connect`). It authorizes the `$connect` handshake only: a subscribe needs a channel token, whose scope always has a `/` after the instance prefix (`validateChannelToken` with a `requestedChannel` rejects any token whose scope has none).
 
-**Channel token scope:** a default channel token's payload is `{ "channel": "<instance>/<namespace>/<channel>", "exp": <unix_seconds> }`; it authorizes its channel and every `/`-separated sub-channel (`validateChannelToken` accepts a requested channel equal to the token's, or starting with it plus `/`). This is the `getChannel()` default, `scope: 'subtree'`, and it is byte-for-byte the format minted before `scope` existed, so tokens issued by an older deployment keep validating with the same subtree scope. A `scope: 'exact'` token's payload is `{ "exact": "<instance>/<namespace>/<channel>", "exp": <unix_seconds> }`, and it authorizes its channel only. The path sits under `exact` rather than `channel` on purpose: a validator from before `scope` existed returns `null` for a payload without `channel`, so if old code checks an exact token (a warm container during an update, or after a rollback) the handle stops working instead of being granted subtree access. A payload with both `channel` and `exact`, with neither, or with a `scope` field is rejected. The native clients pass tokens through unchanged. The internal token a server-side `subscribe()` mints for its own WebSocket is always exact, since it only ever subscribes to its one channel.
+**Channel token payload:** every token (connect and channel) is `{ "channel" | "exact": "<path>", "exp": <unix_seconds>, "iat": <unix_seconds>, "jti": "<random id>", "sub": "<principal>" }`. `sub` is present only when `getChannel()` got a `principal`. `validateChannelToken` refuses a token without a numeric `exp` and `iat` and a string `jti`, or whose `sub` is not a non-empty string. Tokens minted before `iat` and `jti` existed are therefore refused; this is a breaking change to the token format, and a client that passes `refresh` gets a new handle on its next reconnect.
+
+**Channel token scope:** a default channel token carries its path under `channel`; it authorizes its channel and every `/`-separated sub-channel (`validateChannelToken` accepts a requested channel equal to the token's, or starting with it plus `/`). This is the `getChannel()` default, `scope: 'subtree'`. A `scope: 'exact'` token carries its path under `exact` and authorizes its channel only. The path sits under `exact` rather than `channel` on purpose: a validator from before `scope` existed returns `null` for a payload without `channel`, so if old code checks an exact token (a warm container during an update, or after a rollback) the handle stops working instead of being granted subtree access. A payload with both `channel` and `exact`, with neither, or with a `scope` field is rejected. The native clients pass tokens through unchanged. The internal token a server-side `subscribe()` mints for its own WebSocket is always exact, since it only ever subscribes to its one channel.
+
+**Principal binding:** `getChannel(ns, ch, { principal })` signs the user id into both tokens of the handle. At `$connect` the handler stores the connect token's `sub` on the sentinel record (`principal`). On subscribe, `validateChannelToken(token, secret, channel, { principal: sentinel.principal })` accepts the channel token only if its `sub` equals the connection's, where both absent counts as equal. So a channel token handed to another user, or used on a connection opened as someone else or as no one, is refused, and so is a bound token on an anonymous connection and an anonymous token on a bound one. The comparison runs on every subscribe, including each resubscribe after a reconnect. A connection carries one principal, so the client pools sockets by endpoint and principal (`poolKey` in pool-key.ts reads `sub` from the connect token, without verifying it, only to pick the socket): handles for different users, or a bound and an unbound handle, never share a socket. A handle with no `principal` behaves as before (any holder may use it), so pass `principal` for every channel that belongs to a user. Binding keeps a channel token from being used on a connection opened for another user or for no user; it does not prove who holds the handle. The handle (both tokens) is a bearer credential until it expires or `revokeAccess()` is called, and the same handle can be used on several sockets. The connection id is not signed into the token: it does not exist until the client connects, after the handle was minted, and the connect token that carries the principal is what ties the connection to a user.
+
+**Re-validation on ping:** the subscription record keeps what is needed to re-check the token: `tokenExp`, `tokenIat`, `tokenId` (`jti`) and `principal`. Every keep-alive ping (~9 min) runs `checkSubscriptionAuth` (subscription-auth.ts, shared by the deployed handler and the local WebSocket server) over the connection's subscriptions. A subscription ends, and the client is sent `{ type: 'error', channel, code, message }`, when: `token_expired` (the channel token's `exp` has passed), `principal_mismatch` (the record's principal differs from the connection's), or `access_revoked` (below). A record without token details (written by an older deployment) ends as `token_expired`. The channel-record TTL (1 hour) is no longer what bounds a subscription's lifetime: the token's expiry is, and a client with `refresh` renews in place on `token_expired` (a new subscribe with a fresh token on the same socket, no `onDisconnect`, no `onReconnect`). A client without `refresh` gets `onDisconnect('error')`. Messages published between the server ending a subscription and the renewal completing are not delivered to that channel (one API round trip, about once an hour per channel). The ping deletes an ended record only if it still carries the `tokenId` the ping read, so a subscription renewed in between is kept. The ping is for telling the client why a subscription ended; it is not what enforces the end (see below).
+
+**Revocation:** `rt.revokeAccess(principal)` writes a record into the existing connections table (partition key `revoked#<principal>`, sort key `__revoked__`, `revokedAt` in unix seconds, `expiresAt` = now + 2h 5m, so DynamoDB TTL removes it once every token it could affect has expired). No new resource is created and the handler's existing table access covers it. A token is revoked when its `iat` is at or before `revokedAt`; a handle minted afterwards works, so revoking a user does not lock them out of the next `getChannel()` call. The record is read on `$connect` (the connect token), on every subscribe and on every ping, which is one `GetItem` on a key that is hot in a single partition; a principal-less connection skips the read. The connect and subscribe reads are consistent reads (the client subscribes right after `$connect` wrote the sentinel, and a handle used right after `revokeAccess()` must see it); the ping read stays eventually consistent. Effects: a new connection or subscribe with an older handle is refused immediately. **Fan-out enforces expiry and revocation:** `publish()` reads whole records from `channel-index`, skips records whose `tokenExp` has passed or that lack token details, and does one `BatchGetItem` of the `revoked#` records for the distinct principals among the recipients, skipping records with `tokenIat <= revokedAt`. A client that never pings is therefore cut off as well; DynamoDB TTL deletion is lazy and queries still return expired items, so the record's `expiresAt` is not relied on. If that read fails, `publish()` throws and sends nothing (it fails closed). Skipped records are not deleted at fan-out: the connection's next ping deletes them and sends the client `token_expired` or `access_revoked`, so a channel with `refresh` renews instead of going silent. On a connection that stops pinging without a `$disconnect`, a skipped record stays until DynamoDB TTL removes it, and until then `publish()` keeps reading it (and including its principal in the revocation read); this costs reads, not correctness. The revocation read at fan-out is eventually consistent. A revoked subscription's client learns it ended on the connection's next ping (within about 9 minutes) and the socket itself stays open until it closes; `revokeAccess()` does not call `DeleteConnection`. The check order is principal, then revocation, then expiry, so a revoked subscription whose token has also expired is reported as `access_revoked`, which a client does not renew. Revocation only lasts if the app's `refresh` endpoint also refuses that user, because a handle minted after the call is valid by design. Clock skew between containers: a token minted a second ahead on one container, just before `revokeAccess()` runs on another, can have `iat > revokedAt` and survive; this is an accepted residual. Tokens without a principal can't be revoked, only left to expire (channel tokens after 1 hour, connect tokens after 2 hours). Revocation compares whole seconds, so a handle minted in the same second as the call counts as older. The local dev server keeps revocations in memory and ends open subscriptions at once, which is stricter than AWS (messages stop at the next publish, the client hears at its next ping). The mock client sends no keep-alive ping, so locally an expired token is not re-checked on a timer.
+
+**Rollback:** a handler from before this change ignores `sub` and does not read `revoked#` records, so during a rolling update or after a rollback a warm old container accepts a principal-bound token on any connection and does not enforce revocation. Binding and revocation are not enforced by such a handler.
+
+**Rate limiting (residual):** API Gateway throttles a WebSocket API per stage (and per account) in messages per second, as described under "Stage defaults". It does not offer a per-connection limit, and the handler does not add one. A single connection that sends many `subscribe`/`ping` frames is limited only by the stage rate. This is a known residual: per-connection limiting would need a counter per connection in the connections table (a write on every message) or an external limiter, and is not implemented.
 
 **Channel names:** the `channel` argument of `publish()`, `subscribe()` and `getChannel()` may contain `/`, but not an empty name, a leading or trailing `/`, an empty segment, or a `.` or `..` segment (`validateChannelName`). Without the rule, `a//b` and `a/` produce paths that differ from, yet sit under, `a`, and `..` segments read like path traversal even though no path is resolved.
 
-**Channel paths:** a subscribe or unsubscribe must name a channel path of the form `getChannel()` mints, `<instance>/<namespace>/<channel>`, of at most 1024 UTF-8 bytes (`isClientChannelPath`). The deployed handler and the local WebSocket server check this before the token or the connections table, answer an invalid subscribe with `{ type: 'error', message: 'Invalid channel' }` (no `channel` field), and ignore an invalid unsubscribe.
+**Channel paths:** a subscribe or unsubscribe must name a channel path of the form `getChannel()` mints, `<instance>/<namespace>/<channel>`, of at most 1024 UTF-8 bytes and with no empty, `.` or `..` segment (`isClientChannelPath`). The deployed handler and the local WebSocket server check this before the token or the connections table, answer an invalid subscribe with `{ type: 'error', message: 'Invalid channel' }` (no `channel` field), and ignore an invalid unsubscribe.
 
 ### Mock Middleware
 
@@ -105,7 +117,7 @@ All `Realtime` instances in a stack share infrastructure. The first constructor 
 | WebSocket API | API Gateway WebSocketApi | Client WebSocket endpoint |
 | WebSocket Stage | WebSocketStage (`rt`, auto-deploy) | Deployment stage |
 
-All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design). No separate Lambdas are created.
+All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-cdk-blocks/core/cdk/internal` is only for keys shared by design). No separate Lambdas are created.
 
 #### Stage defaults (throttling + access logging)
 
@@ -136,7 +148,7 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key. Open connections keep working; on their next reconnect, clients that pass `refresh` get new tokens, and clients without it get `onDisconnect('error')` and must call `getChannel()` again |
+| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-cdk-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key. Open connections keep working; on their next reconnect, clients that pass `refresh` get new tokens, and clients without it get `onDisconnect('error')` and must call `getChannel()` again |
 
 ### DynamoDB Connections Table
 
@@ -147,22 +159,23 @@ GSI: channel-index (PK=channel, SK=connectionId)
 TTL: expiresAt     (Number)
 ```
 
-- **Sentinel record** (`SK: "__connection__"`): Created at $connect, carries `lastTtlSweep` timestamp.
-- **Channel records**: Created on subscribe, one per (connectionId, channel) pair.
-- **TTL**: Sentinel = 2.5 hours, channel records = 1 hour.
+- **Sentinel record** (`SK: "__connection__"`): Created at $connect, carries `lastTtlSweep` timestamp and the connect token's `principal`.
+- **Channel records**: Created on subscribe, one per (connectionId, channel) pair, with the token's `tokenExp`, `tokenIat`, `tokenId` and `principal`.
+- **Revocation records** (`PK: "revoked#<principal>"`, `SK: "__revoked__"`): Written by `revokeAccess()`, carry `revokedAt`.
+- **TTL**: Sentinel = 2.5 hours, channel records = 1 hour after their channel token expires, revocation records = 2 hours 5 minutes.
 
 ### TTL Refresh (Sweep-Based)
 
 On every keep-alive ping (~9 min):
 1. Update sentinel TTL (1 DynamoDB write)
-2. If `lastTtlSweep` > 30 min ago: batch-refresh all channel record TTLs, update `lastTtlSweep`
-3. If recent: done (1 write total)
+2. Re-check every subscription against its token and the principal's revocation record (see "Re-validation on ping"); delete and announce the ones that fail
+3. If `lastTtlSweep` > 30 min ago: batch-refresh the TTLs of the channel records that remain, update `lastTtlSweep`
 
-This keeps cost at O(1) per ping for the common case, with periodic O(N) sweeps.
+Re-validation reads the connection's records on every ping (one query, plus one `GetItem` for a user-bound connection), so a ping costs O(N) reads in the number of subscriptions on the connection; the TTL refresh writes stay periodic.
 
 ### Publish Fan-Out
 
-`publish()` queries the GSI by channel, then calls `postToConnection` for each connectionId in parallel. 410 GoneException triggers cleanup of all records for that connectionId.
+`publish()` queries the GSI by channel, skips subscriptions whose token expired or was revoked (see "Revocation"; they are left for the next ping to delete and announce), then calls `postToConnection` for each remaining connectionId in parallel. 410 GoneException triggers cleanup of all records for that connectionId.
 
 **Concurrency model:** All `postToConnection` calls are issued via `Promise.all` — no application-level batching or semaphore. Concurrency is governed by the AWS SDK's HTTP agent, which defaults to `maxSockets: 50` per origin. This means at most 50 requests are in-flight simultaneously; the rest queue at the HTTP layer.
 
@@ -195,7 +208,9 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 | `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting; `'ssm'` mode only) |
 | `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (`'secrets-manager'` mode only). If a new container starts with the previous deploy's config (no ARN) and its SSM read fails, it reloads the config once and switches to Secrets Manager |
 
-The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
+The connections table is provisioned by the nested `KVStore`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
+
+The record type, the schema and the store options of the connections table live in `src/connections.ts`. The CDK entry and the runtime entry both construct the store from `connectionsTableOptions`, so the table that synth provisions is the table that the runtime reads. The schema states the type of each field: `KVStore` reads the DynamoDB type of a key field and an index field from the schema, at synth and at run time, and a schema that accepts every value would make `connectionId` and `channel` number keys.
 
 ### Channel Path Mapping
 
@@ -219,11 +234,11 @@ Channel path:             my-app-collab/chat/room-123
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| Mock skips connect-time token auth (`?token=` query param) | A client can still *open* a WS locally, but can no longer *subscribe* without a valid channel token (enforced at subscribe time) | Recommend sandbox testing for connect-time auth-sensitive flows |
+| Mock skips connect-time token auth for a connection that sends no `?token=`; with one, it reads the principal from it and refuses an invalid or revoked token | A client can still *open* a WS locally, but cannot *subscribe* without a valid channel token (enforced at subscribe time, with the same principal check as AWS) | Recommend sandbox testing for connect-time auth-sensitive flows |
+| `revokeAccess()` ends open subscriptions at once locally; on AWS messages stop at the next `publish()` and the client hears at its next ping. The mock client sends no keep-alive ping, so an expired token is not re-checked on a timer locally | Local revocation is stricter than AWS | Sandbox-test revocation and expiry flows |
 | No connection duration limit locally | Mock WS stays open indefinitely | Document the 2-hour AWS limit in README |
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
-| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (128 KiB logical message, not the 32 KB frame quota — API Gateway reassembles frames) are now enforced in both environments |
 | Mock fires `onReconnect` connection-wide once resubscribe frames are sent; AWS fires it per-channel only after that channel's resubscribe is server-CONFIRMED | A multi-channel local test can observe `onReconnect` for a channel the real server would have rejected with `onDisconnect('error')` — so multi-channel reconnect-rejection behavior differs between local dev and deployed | Sandbox-test multi-channel reconnect flows; treat `onReconnect` as "resubscribe attempted", not "channel guaranteed live", and backfill from the durable store |
 
 ## Serialization
@@ -325,7 +340,7 @@ Absent `refresh`, reconnect replays the stored tokens (correct for short/transie
 
 ## Channel Name Limits
 
-The previous AppSync Events implementation enforced a 5-segment × 50-character channel name limit. With the move to API Gateway WebSocket + DynamoDB, that restriction no longer applies.
+Channel names have no segment-count or per-segment length limit; the byte limits below are the only size limits.
 
 ### Enforced Limits
 
@@ -338,7 +353,7 @@ Both the mock (local dev) and AWS runtimes enforce these limits at `publish()`, 
 
 **Channel path** is the fully-qualified string `{fullId}/{namespace}/{channel}` stored as the DynamoDB sort key. The validation uses `Buffer.byteLength(fullChannel, 'utf8')` so multi-byte characters (emoji, CJK, etc.) are counted correctly.
 
-**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. API Gateway publishes **two distinct** WebSocket quotas: a 32 KB maximum *frame* size and a 128 KiB (131,072 byte) maximum *message* size. The service reassembles fragmented frames into one logical message, so the limit that applies to a published payload is **128 KiB** — the 32 KB frame quota is not the per-message cap. Do not "re-fix" this constant back to 32 KB. Exceeding 128 KiB is what causes API Gateway to reject the message (and close the connection with code 1009).
+**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. API Gateway publishes **two distinct** WebSocket quotas: a 32 KB maximum *frame* size and a 128 KiB (131,072 byte) maximum *message* size. The service reassembles fragmented frames into one logical message, so the limit that applies to a published payload is **128 KiB** — the 32 KB frame quota is not the per-message cap. Do not lower this constant to 32 KB. Exceeding 128 KiB is what causes API Gateway to reject the message (and close the connection with code 1009).
 
 ### Why Enforce in Both Environments
 
@@ -379,6 +394,6 @@ A 256-character user channel name, combined with a typical prefix (`myapp-rt/cur
 
 Longer names are technically possible but offer no benefit. They increase DynamoDB read/write unit consumption (items are billed in 4 KB read / 1 KB write increments) and make WebSocket messages larger for no functional gain.
 
-### Why AppSync Had 5×50
+### Why there is no per-segment limit
 
-AppSync Events used a hierarchical channel namespace (`/segment1/segment2/.../segment5`) with each segment limited to 50 characters. This was likely driven by AppSync's internal routing and subscription filtering architecture, not a fundamental WebSocket or DynamoDB constraint. Since we handle routing ourselves via DynamoDB GSI queries, we don't inherit that limitation.
+Routing is a DynamoDB GSI query (`channel-index`) on the full channel path, so the number of `/`-separated segments and the length of each segment do not matter to delivery. The only constraints on a channel name are the grammar rules (no empty, `.` or `..` segment) and the byte limits above.

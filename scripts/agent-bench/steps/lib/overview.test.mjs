@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for the PR-vs-baseline report helpers (overview.mjs): the diff math, the delta color
 // engine, formatters, and the single results table (renderDetailed) + preword. Run under bare `node --test`.
 

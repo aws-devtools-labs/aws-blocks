@@ -1,21 +1,23 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Pre-bundle the Lambda handlers that ship inside @aws-blocks/hosting into
+// Pre-bundle the Lambda handlers that ship inside @aws-cdk-blocks/hosting into
 // self-contained `.mjs` files at BUILD time, so the runtime construct can use a
 // plain `Code.fromAsset(...)` (no `NodejsFunction`, no `projectRoot` /
 // `depsLockFilePath` discovery).
 //
 // Why: `NodejsFunction` re-bundles `entry` at SYNTH time and requires `entry`
 // to sit under a `projectRoot` that also has a lockfile. That only holds inside
-// this monorepo — once @aws-blocks/hosting is installed from npm the handler
+// this monorepo — once @aws-cdk-blocks/hosting is installed from npm the handler
 // lives under the consumer's `node_modules/`, `projectRoot` resolves into
 // `node_modules/` (no package-lock there), and synth fails with PathNotUnderRoot.
 // Bundling here removes that dependency entirely: the consumer ships a ready
 // asset and CDK just zips it.
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { buildThirdPartyNotices } from './third-party-notices.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(__dirname, '..');
@@ -40,11 +42,20 @@ const handlers = [
   },
 ];
 
-await Promise.all(
+const results = await Promise.all(
   handlers.map((h) =>
     build({
       entryPoints: [h.entry],
       outfile: h.outfile,
+      // Metafile paths are relative to this dir; third-party-notices.mjs
+      // resolves them against the same root.
+      absWorkingDir: pkgRoot,
+      // The metafile lists every input file, which is how the bundled npm
+      // packages are found for THIRD-PARTY-LICENSES.txt.
+      metafile: true,
+      // License texts live in THIRD-PARTY-LICENSES.txt, not inline in the
+      // minified bundle.
+      legalComments: 'none',
       bundle: true,
       platform: 'node',
       // Resolve Building Block `aws-runtime` export conditions so the bundle
@@ -67,6 +78,19 @@ await Promise.all(
         js: "import{createRequire as __cr}from'module';const require=__cr(import.meta.url);",
       },
     }),
+  ),
+);
+
+// One notices file for all bundles (they share most packages), next to them in
+// dist/constructs/ so it ships in the npm package with them.
+const noticesFile = join(pkgRoot, 'dist', 'constructs', 'THIRD-PARTY-LICENSES.txt');
+writeFileSync(
+  noticesFile,
+  buildThirdPartyNotices(
+    handlers.map((h, i) => ({ name: basename(h.outfile), metafile: results[i].metafile })),
+    pkgRoot,
+    // The package's own LICENSE is the Apache License 2.0 text.
+    join(pkgRoot, 'LICENSE'),
   ),
 );
 

@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, blocksError, registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, blocksError, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import {
 	existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, copyFileSync, utimesSync, rmSync,
 } from 'node:fs';
@@ -44,8 +44,8 @@ export type {
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
 
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 import { FileBucketErrors } from './errors.js';
@@ -75,8 +75,7 @@ function getDevBaseUrl(): string {
  * user uploads, generated reports, images, videos, or static assets.
  *
  * **When NOT to use:** If you need structured key-value data with conditional
- * writes, use `KVStore`. If you need queryable records with indexes, use
- * `DistributedTable`.
+ * writes, or queryable records with indexes, use `KVStore`.
  *
  * **Best practices:**
  * - Use path prefixes to organize files (e.g., `uploads/{userId}/`, `reports/`)
@@ -124,8 +123,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.dataDir = getMockDataDir(this);
 		this.versioned = options?.versioned ?? true;
-		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
-		this.registerDevAttachment('@aws-blocks/bb-file-bucket/file-server');
+		this.registerClientMiddleware('@aws-cdk-blocks/bb-file-bucket/middleware');
+		this.registerDevAttachment('@aws-cdk-blocks/bb-file-bucket/file-server');
 		registerSdkIdentifiers(this.fullId, { bucketName: `mock-${bucketName}` });
 		// Register in global registry so the file-server can delegate PUT to bucket.put()
 		const g = globalThis as any;
@@ -191,6 +190,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	/**
 	 * Download a file.
+	 *
+	 * Reads the whole body. There is no metadata-only read: this is the only call
+	 * that returns `contentType` and `metadata`. `scan()` returns `size` and
+	 * `lastModified` without the body.
 	 *
 	 * @param path - The object key.
 	 * @param options - Optional. On versioned buckets, pass `{ versionId }` to retrieve a specific version.

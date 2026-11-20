@@ -11,7 +11,7 @@
     "sandbox:delete": "NODE_OPTIONS='--conditions=cdk' npx ampx sandbox delete --yes",
     "test:e2e": "npx playwright test",
     "test": "echo 'E2E tests run via test:e2e'",
-    "blocks:dev": "tsx watch aws-blocks/scripts/server.ts"
+    "blocks:dev": "tsx watch cdk-blocks/scripts/server.ts"
   },
   "devDependencies": {
     "@aws-amplify/backend": "^1.25.1",
@@ -32,13 +32,13 @@
   },
   "dependencies": {
     "aws-amplify": "^6.22.2",
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/core": "*",
-    "@aws-blocks/bb-kv-store": "*",
-    "@aws-blocks/bb-distributed-data": "*",
-    "@aws-blocks/bb-auth": "*"
+    "aws-cdk-blocks": "1.0.0-rc.0",
+    "@aws-cdk-blocks/core": "1.0.0-rc.0",
+    "@aws-cdk-blocks/bb-kv-store": "1.0.0-rc.0",
+    "@aws-cdk-blocks/bb-database": "1.0.0-rc.0",
+    "@aws-cdk-blocks/bb-auth": "1.0.0-rc.0"
   },
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ]
 }

@@ -22,17 +22,15 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import type { api as apiType } from 'cdk-blocks';
 import { isDeployedE2e } from './test-support.js';
+import { testBaseUrl } from './api-url.js';
 
 const POLICY_MESSAGE = 'Only @allowed.example accounts may join';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  return String(config.apiUrl).replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 /** `name=value` pairs from a response's `Set-Cookie` headers (cleared cookies dropped). */
 function cookiesOf(resp: Response): string[] {
@@ -46,8 +44,8 @@ function cookiesOf(resp: Response): string[] {
 // production run must not read the sandbox's.
 const OUTPUTS_FILE =
   process.env.BLOCKS_TEST_ENV === 'production'
-    ? '.blocks-sandbox/outputs.production.json'
-    : '.blocks-sandbox/outputs.json';
+    ? '.cdk-blocks-sandbox/outputs.production.json'
+    : '.cdk-blocks-sandbox/outputs.json';
 
 /** A stack output of the deployed e2e build (the stage's `OUTPUTS_FILE`). */
 function stackOutput(prefix: string): string {
@@ -104,7 +102,7 @@ export function authValidateUserTests(getApi: () => typeof apiType) {
       { skip: ENV === 'production' && 'stub IdP is sandbox-only' },
       async () => {
         const baseUrl = getBaseUrl();
-        const start = await fetch(`${baseUrl}/aws-blocks/auth/gated/signin/gated-idp`, { redirect: 'manual' });
+        const start = await fetch(`${baseUrl}/cdk-blocks/auth/gated/signin/gated-idp`, { redirect: 'manual' });
         assert.strictEqual(start.status, 302, `sign-in kickoff should 302, got ${start.status}`);
         const pending = cookiesOf(start);
         const authorize = await fetch(start.headers.get('location') ?? '', { redirect: 'manual' });

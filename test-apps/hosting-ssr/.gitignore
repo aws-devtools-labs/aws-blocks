@@ -1,6 +1,6 @@
 node_modules/
 .next/
-.blocks-sandbox/
+.cdk-blocks-sandbox/
 !src/app/.blocks-sandbox/
 
 .open-next/

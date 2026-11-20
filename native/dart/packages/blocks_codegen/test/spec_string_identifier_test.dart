@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:convert';
 
 import 'package:blocks_codegen/src/builder.dart';
@@ -254,11 +257,16 @@ void main() {
         base,
         contains(r"      case 'a\$b': return A$bEvent.fromJson(json);"),
       );
+      // `Event` is a result, so it is open: an unknown arm keeps the object.
       expect(
         base,
         contains(
-          r"      default: throw ArgumentError('Unknown k\$ind: ${json['k\$ind']}');",
+          '      default: return EventUnknown(_blocksFrozenObject(json));',
         ),
+      );
+      expect(
+        _decl(output, 'EventUnknown'),
+        contains(r"  String get discriminator => json['k\$ind'] as String;"),
       );
     });
 
@@ -286,7 +294,7 @@ void main() {
     );
 
     test('maps each identifier to its escaped wire value', () {
-      final mark = _decl(output, 'Mark');
+      final mark = _decl(output, 'MarkKnown');
       expect(mark, contains('  itS,\n  backSlash,\n  a\$b,\n  newLine\n;'));
       expect(mark, contains(r"    'it\'s': itS,"));
       expect(mark, contains(r"    'back\\slash': backSlash,"));
@@ -621,7 +629,7 @@ void main() {
       );
       expect(output, contains('class Doc {'));
       expect(output, contains('class CONFIRM_SIGN_IN {'));
-      expect(output, contains('  late final ApiApi api;'));
+      expect(output, contains('  late final Api api;'));
     });
   });
 

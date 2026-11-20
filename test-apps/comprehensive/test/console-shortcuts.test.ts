@@ -4,19 +4,16 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { testBaseUrl } from './api-url.js';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 // Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
 // production run must not read the sandbox's.
 const outputsFile =
   process.env.BLOCKS_TEST_ENV === 'production'
-    ? '.blocks-sandbox/outputs.production.json'
-    : '.blocks-sandbox/outputs.json';
+    ? '.cdk-blocks-sandbox/outputs.production.json'
+    : '.cdk-blocks-sandbox/outputs.json';
 
 function getStackName(): string {
   const outputs = JSON.parse(readFileSync(outputsFile, 'utf-8'));
@@ -27,10 +24,10 @@ const isDeployed = process.env.BLOCKS_TEST_ENV === 'sandbox' || process.env.BLOC
 
 export function consoleShortcutTests() {
 
-  describe('Console shortcuts (/aws-blocks/resources, /aws-blocks/settings)', () => {
+  describe('Console shortcuts (/cdk-blocks/resources, /cdk-blocks/settings)', () => {
 
-    test('GET /aws-blocks/resources — HTML locally, redirect when deployed', async () => {
-      const res = await fetch(`${getBaseUrl()}/aws-blocks/resources`, { redirect: 'manual' });
+    test('GET /cdk-blocks/resources — HTML locally, redirect when deployed', async () => {
+      const res = await fetch(`${getBaseUrl()}/cdk-blocks/resources`, { redirect: 'manual' });
       if (isDeployed) {
         const stackName = getStackName();
         assert.strictEqual(res.status, 302);
@@ -43,12 +40,12 @@ export function consoleShortcutTests() {
         const contentType = res.headers.get('content-type');
         assert.ok(contentType?.includes('text/html'), `Expected text/html, got: ${contentType}`);
         const body = await res.text();
-        assert.ok(body.includes('.bb-data'), 'HTML should mention .bb-data');
+        assert.ok(body.includes('.cdk-blocks/local/data'), 'HTML should mention .cdk-blocks/local/data');
       }
     });
 
-    test('GET /aws-blocks/settings — HTML locally, redirect when deployed', async () => {
-      const res = await fetch(`${getBaseUrl()}/aws-blocks/settings`, { redirect: 'manual' });
+    test('GET /cdk-blocks/settings — HTML locally, redirect when deployed', async () => {
+      const res = await fetch(`${getBaseUrl()}/cdk-blocks/settings`, { redirect: 'manual' });
       if (isDeployed) {
         const stackName = getStackName();
         assert.strictEqual(res.status, 302);
@@ -61,7 +58,7 @@ export function consoleShortcutTests() {
         const contentType = res.headers.get('content-type');
         assert.ok(contentType?.includes('text/html'), `Expected text/html, got: ${contentType}`);
         const body = await res.text();
-        assert.ok(body.includes('.bb-data/settings'), 'HTML should mention .bb-data/settings');
+        assert.ok(body.includes('.cdk-blocks/local/data/settings'), 'HTML should mention .cdk-blocks/local/data/settings');
       }
     });
 

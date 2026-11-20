@@ -17,7 +17,7 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { AuthErrors, type SignInNextStep } from './index.aws.js';
 import {
 	Browser,
@@ -32,15 +32,15 @@ import {
 /** The options a pool that issues every MFA challenge was created from (the block rejects steps its options do not enable). */
 const MFA_ALL = { mfa: { mode: 'optional', types: ['SMS', 'TOTP', 'EMAIL'] } } as const;
 
-const DEFAULT_TTL = 400 * 86400;
+const DEFAULT_TTL = 30 * 86400;
 
 /** The signed challenge envelope a next step carries (every challenge step has one). */
 function stepSession(step: SignInNextStep): string {
 	return 'session' in step ? step.session : '';
 }
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 	test('sends InitiateAuth with USER_PASSWORD_AUTH, the client id, and USERNAME/PASSWORD', async () => {
@@ -68,7 +68,7 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 		assert.deepStrictEqual(h.sent[0].input.ClientMetadata, { tenant: 't1' });
 	});
 
-	test('writes exactly the three Cognito tokens as the session record, with the default 400-day TTL', async () => {
+	test('writes exactly the three Cognito tokens as the session record, with the default 30-day TTL', async () => {
 		const h = makeAwsAuth();
 		const b = new Browser();
 		const tokens = h.idp.authResult('alice');
@@ -77,8 +77,10 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 
 		assert.strictEqual(h.sessionWrites.length, 1);
 		const [w] = h.sessionWrites;
-		// Plus `Auth`'s own sign-in time, which a password reset compares against (#912).
-		const { issuedAt, ...cognitoTokens } = w.value;
+		// Plus `Auth`'s own sign-in time, which a password reset compares against (#912),
+		// and the row's `version`, which a conditional write compares: 1 for a new session.
+		const { issuedAt, version, ...cognitoTokens } = w.value;
+		assert.strictEqual(version, 1);
 		assert.deepStrictEqual(cognitoTokens, {
 			idToken: tokens.IdToken,
 			accessToken: tokens.AccessToken,
@@ -88,7 +90,8 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 		assert.deepStrictEqual(w.options, { ttlSeconds: DEFAULT_TTL });
 		// Opaque, server-generated id: 24 random bytes, base64url.
 		assert.match(w.key, /^[A-Za-z0-9_-]{32}$/);
-		assert.deepStrictEqual(await h.lookupSession(w.key), w.value);
+		// The record that the store reads back is the row without its `version`.
+		assert.deepStrictEqual(await h.lookupSession(w.key), { ...cognitoTokens, issuedAt });
 	});
 
 	test('sets an HttpOnly session cookie auth_<fullId>=<sessionId>.<hmac> with Max-Age = session TTL', async () => {

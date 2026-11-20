@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/** The `cdk-blocks` CLI entry: parse, build the context, run the handler, map errors to exit codes. */
+/** The package task dispatcher: parse, build the context, run the handler, map errors to exit codes. */
 
 import { verbHelp } from './commands.js';
 import { blocksVersion, type CliDeps, Context, processDeps } from './context.js';
@@ -9,6 +9,7 @@ import { CliError, ExitCode, formatError } from './errors.js';
 import { commandHelp, rootHelp } from './help.js';
 import { colorEnabled } from './output.js';
 import { type ParsedInvocation, parseArgv } from './parse.js';
+import { withCommandTelemetry } from './telemetry.js';
 
 /**
  * Run the CLI with `argv` (without the node and script entries).
@@ -64,11 +65,17 @@ export async function main(argv: readonly string[], deps: CliDeps = processDeps(
 		return ExitCode.Usage;
 	}
 	try {
-		return await command.handler(ctx, {
-			flags: parsed.flags,
-			positionals: parsed.positionals,
-			passthrough: parsed.passthrough,
-		});
+		return await withCommandTelemetry(
+			command.path,
+			() => ctx.findRoot(),
+			() =>
+				command.handler!(ctx, {
+					flags: parsed.flags,
+					positionals: parsed.positionals,
+					passthrough: parsed.passthrough,
+				}),
+			deps.telemetry,
+		);
 	} catch (error) {
 		return report(error);
 	}

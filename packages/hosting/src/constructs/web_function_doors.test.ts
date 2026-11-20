@@ -27,7 +27,7 @@ import { cf } from './cf_helpers.js';
 import { defineFrontDoor } from './front_door.js';
 import { doorCapabilitiesFor, HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
 
 const customCloudFrontDoor = defineFrontDoor({
   service: 'my-cdn',
@@ -63,7 +63,8 @@ describe("compute.type 'web-function' × every front door", () => {
   });
 
   const synth = (frontDoor: HostingConstructProps['frontDoor'], extra: Partial<HostingConstructProps> = {}) => {
-    const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
     const hosting = new HostingConstruct(stack, 'Hosting', {
       manifest: ssrManifest(),
       compute: { type: 'web-function' },
@@ -181,7 +182,8 @@ describe('HostingConstruct — a streaming server needs a door that streams', ()
   });
   const domain = { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' };
   const synth = (frontDoor: HostingConstructProps['frontDoor'], streaming: boolean, extra: Partial<HostingConstructProps> = {}) =>
-    new HostingConstruct(new Stack(new App(), 'St', { env: { account: '111111111111', region: 'us-west-2' } }), 'Hosting', {
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    new HostingConstruct(new Stack(new App({ context: { sandboxMode: 'true' } }), 'St', { env: { account: '111111111111', region: 'us-west-2' } }), 'Hosting', {
       manifest: manifest(streaming),
       frontDoor,
       backendApi: { url: API_URL },

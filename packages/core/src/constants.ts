@@ -1,50 +1,81 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { BLOCKS_SANDBOX_SERVED_DIR } from './common/constants.js';
+
 /**
  * Reserved namespace for AWS-managed framework features.
  * No user routes can be registered under this path.
  */
-export const BLOCKS_NAMESPACE = '/aws-blocks';
+export const BLOCKS_NAMESPACE = '/cdk-blocks';
+
+/**
+ * Previous reserved namespace, still served as an alias of {@link BLOCKS_NAMESPACE}
+ * so already-deployed clients and registered auth callbacks keep working.
+ */
+export const LEGACY_BLOCKS_NAMESPACE = '/aws-blocks';
+
+/**
+ * Every namespace the framework serves: the canonical one first, then the legacy alias.
+ */
+export const BLOCKS_NAMESPACES: readonly string[] = [BLOCKS_NAMESPACE, LEGACY_BLOCKS_NAMESPACE];
+
+/**
+ * Rewrite a path under {@link LEGACY_BLOCKS_NAMESPACE} to the same path under
+ * {@link BLOCKS_NAMESPACE}; any other path is returned unchanged. The match is
+ * case-sensitive and segment-aligned (`/aws-blocksx` is not rewritten).
+ *
+ * @param pathname - The request path, without query string.
+ */
+export function canonicalBlocksPath(pathname: string): string {
+	if (pathname === LEGACY_BLOCKS_NAMESPACE || pathname.startsWith(`${LEGACY_BLOCKS_NAMESPACE}/`)) {
+		return BLOCKS_NAMESPACE + pathname.slice(LEGACY_BLOCKS_NAMESPACE.length);
+	}
+	return pathname;
+}
 
 /**
  * URL path prefix for the Blocks RPC endpoint.
  *
  * CloudFront behaviors route this path (and children) to the API Gateway
- * origin. Namespaced under `/aws-blocks/api` so it doesn't shadow
+ * origin. Namespaced under `/cdk-blocks/api` so it doesn't shadow
  * framework-conventional `/api/*` SSR routes (Next.js `pages/api/*`,
  * `app/api/*`, Nuxt `server/api/*`) on CloudFront's first-match-wins
  * behavior resolution.
  */
-export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
+export const BLOCKS_RPC_PREFIX = '/cdk-blocks/api';
 
 /**
  * Whether a request path targets the RPC endpoint or any namespace under it.
  *
  * True for {@link BLOCKS_RPC_PREFIX} itself (the back-compat body-addressed
  * endpoint) and for every per-namespace path beneath it
- * (`/aws-blocks/api/{namespace}`). The whole subtree is RPC: dispatch takes the
+ * (`/cdk-blocks/api/{namespace}`). The whole subtree is RPC: dispatch takes the
  * namespace from the JSON-RPC body, and a per-namespace path must name the same
  * one (see `parseRpcRequest`), so a caller matching against it must treat the
  * prefix and its descendants identically — e.g. the handler skips RawRoute
  * matching for the entire subtree.
  *
+ * A legacy `/aws-blocks/...` path is matched as its `/cdk-blocks/...` twin (see
+ * {@link canonicalBlocksPath}).
+ *
  * @param pathname - The request path, without query string.
  */
 export function isRpcPath(pathname: string): boolean {
-	return pathname === BLOCKS_RPC_PREFIX || pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`);
+	const path = canonicalBlocksPath(pathname);
+	return path === BLOCKS_RPC_PREFIX || path.startsWith(`${BLOCKS_RPC_PREFIX}/`);
 }
 
 /**
  * Extract the API namespace from a per-namespace RPC path, or `undefined` for
  * the bare {@link BLOCKS_RPC_PREFIX} endpoint.
  *
- * The typed client POSTs to `/aws-blocks/api/{namespace}` so a gateway can route
+ * The typed client POSTs to `/cdk-blocks/api/{namespace}` so a gateway can route
  * each namespace to the compute that hosts it; this reads that `{namespace}`
  * segment back out on the server, where it is checked against the body's
  * `namespace.method` prefix. Only the first segment after the prefix is the
  * namespace; `parseRpcRequest` rejects a path that goes any deeper. Returns `undefined` for the bare
- * `/aws-blocks/api` path (and a trailing-slash-only variant), where the body's
+ * `/cdk-blocks/api` path (and a trailing-slash-only variant), where the body's
  * prefix alone names the namespace.
  *
  * The segment is percent-decoded defensively (matching RawRoute param handling),
@@ -53,8 +84,9 @@ export function isRpcPath(pathname: string): boolean {
  * @param pathname - The request path, without query string.
  */
 export function rpcNamespaceFromPath(pathname: string): string | undefined {
-	if (!pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
-	const segment = pathname.slice(BLOCKS_RPC_PREFIX.length + 1).split('/')[0];
+	const path = canonicalBlocksPath(pathname);
+	if (!path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
+	const segment = path.slice(BLOCKS_RPC_PREFIX.length + 1).split('/')[0];
 	if (!segment) return undefined;
 	try {
 		return decodeURIComponent(segment);
@@ -66,14 +98,14 @@ export function rpcNamespaceFromPath(pathname: string): string | undefined {
 /**
  * Reserved subtree for the auth Building Block's HTTP routes.
  *
- * Like {@link BLOCKS_RPC_PREFIX}, this lives under the reserved `/aws-blocks`
+ * Like {@link BLOCKS_RPC_PREFIX}, this lives under the reserved `/cdk-blocks`
  * namespace so Hosting can proxy the whole auth flow (callback, sign-in,
  * exchange, authorize-params, the stub IdP, …) to the API Gateway origin with a
  * single CloudFront behavior — and so it never collides with a customer's own
  * `/auth/*` frontend routes. The auth BB mounts every route it owns under this
  * prefix; CloudFront forwards the subtree and the Lambda dispatches by path.
  */
-export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
+export const BLOCKS_AUTH_PREFIX = '/cdk-blocks/auth';
 
 /**
  * Reserved path for the client runtime config (`config.json`).
@@ -85,8 +117,12 @@ export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
  * which only serves its own static dir (Next.js `public/`, etc.) and would 404
  * on a project-root file. Keeping this symmetric with production is what makes
  * the browser client work the same in `dev`, `sandbox`, and deployed.
+ *
+ * Built from {@link BLOCKS_SANDBOX_SERVED_DIR}, which is NOT the on-disk directory
+ * name: this is a public URL an already-deployed frontend asks for, so it did not
+ * follow the CDK Blocks rename of the private state directory (D-031).
  */
-export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';
+export const BLOCKS_SANDBOX_PREFIX = `/${BLOCKS_SANDBOX_SERVED_DIR}`;
 
 /**
  * Header name carrying the native-client token on the RPC hop. A custom header,

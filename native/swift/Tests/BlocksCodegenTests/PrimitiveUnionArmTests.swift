@@ -119,7 +119,7 @@ final class PrimitiveUnionArmTests: XCTestCase {
         assertContains(output.api, "case result_Variant3(Result_Variant3)")
         // The element of an array of objects is declared beside the union, like a variant's struct.
         assertContains(output.api, "case result_Variant2([Result_Variant2])")
-        assertContains(output.api, "public struct Result_Variant2: Codable {\n            public let q: String")
+        assertContains(output.api, "public struct Result_Variant2: Codable, Sendable {\n            public let q: String")
     }
 
     func testValueArmsInComponentSchemasAndNestedRecords() throws {
@@ -133,11 +133,11 @@ final class PrimitiveUnionArmTests: XCTestCase {
             methods: [method("getFilter", result: ##"{ "$ref": "#/components/schemas/Filter" }"##)]
         )
 
-        assertContains(output.models, "case value_Variant0(String)")
-        assertContains(output.models, "case value_Variant1(Int)")
+        assertContains(output.models, "case filterValue_Variant0(String)")
+        assertContains(output.models, "case filterValue_Variant1(Int)")
         assertContains(output.models, "        case inner_Variant0(Bool)")
-        assertContains(output.models, "case objs_Variant0([Objs_Variant0])")
-        assertContains(output.models, "public nonisolated struct Objs_Variant0: Codable {\n    public let q: String")
+        assertContains(output.models, "case filterObjs_Variant0([FilterObjs_Variant0])")
+        assertContains(output.models, "public nonisolated struct FilterObjs_Variant0: Codable, Sendable {\n    public let q: String")
     }
 
     func testUnionsThatDifferOnlyInAValueArmAreNotMerged() throws {
@@ -148,10 +148,10 @@ final class PrimitiveUnionArmTests: XCTestCase {
             methods: [method("getPair", result: ##"{ "$ref": "#/components/schemas/Pair" }"##)]
         )
 
-        assertContains(output.models, "public let a: A")
-        assertContains(output.models, "public let b: B")
-        assertContains(output.models, "case a_Variant0(String)")
-        assertContains(output.models, "case b_Variant0(Double)")
+        assertContains(output.models, "public let a: PairA")
+        assertContains(output.models, "public let b: PairB")
+        assertContains(output.models, "case pairA_Variant0(String)")
+        assertContains(output.models, "case pairB_Variant0(Double)")
     }
 
     func testDiscriminatedUnionWithAValueArm() throws {
@@ -208,7 +208,10 @@ final class PrimitiveUnionArmTests: XCTestCase {
     func testDiscriminatedUnionWithoutValueArmsOpensTheContainerOnce() throws {
         let kindA = object(["kind": literal("a"), "x": string])
         let kindB = object(["kind": literal("b")])
-        let output = try generate(methods: [method("act", result: oneOf(kindA, kindB))])
+        // A parameter, so the union is closed: an open one (a result) opens a container per known case.
+        let output = try generate(methods: [
+            method("act", params: #"[{ "name": "input", "required": true, "schema": \#(oneOf(kindA, kindB)) }]"#, result: string)
+        ])
 
         assertContains(output.api, """
                     public func encode(to encoder: Encoder) throws {
@@ -306,8 +309,8 @@ final class PrimitiveUnionArmTests: XCTestCase {
         // A component schema, a nested record and an array of objects.
         print(roundTrip(#"{"meta":{"inner":false},"objs":[{"q":"r"}],"value":"v"}"#, as: Filter.self))
         print(roundTrip(#"{"meta":{"inner":{"y":"z"}},"objs":{"w":"w"},"value":3}"#, as: Filter.self))
-        let filter = Filter(meta: Filter.Meta(inner: .inner_Variant0(true)), objs: .objs_Variant0([Objs_Variant0(q: "q")]),
-                            value: .value_Variant1(9))
+        let filter = Filter(meta: Filter.Meta(inner: .inner_Variant0(true)), objs: .filterObjs_Variant0([FilterObjs_Variant0(q: "q")]),
+                            value: .filterValue_Variant1(9))
         print(try encoded(filter))
         """#
         guard let run = try runConsumer(models: output.models, api: output.api, main: main) else { return }

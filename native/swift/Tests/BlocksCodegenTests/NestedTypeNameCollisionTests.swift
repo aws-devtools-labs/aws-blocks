@@ -16,7 +16,9 @@ import XCTest
 /// registered at the top level of Models.swift no longer silently share a name with a different type.
 final class NestedTypeNameCollisionTests: XCTestCase {
 
-    private func generate(schemas: String = "{}", methods: [String]) throws -> GeneratedSources {
+    private func generate(
+        schemas: String = "{}", methods: [String]
+    ) throws -> GeneratedSources {
         let json = """
         {
             "openrpc": "1.3.2",
@@ -26,7 +28,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         }
         """
         let rpcModel = try OpenRPCParser().parse(data: Data(json.utf8))
-        return try SwiftCodeGenerator().generate(from: CodegenModelBuilder().build(from: rpcModel))
+        return try SwiftCodeGenerator()
+            .generate(from: CodegenModelBuilder().build(from: rpcModel))
     }
 
     private func method(_ name: String, params: String = "[]", result: String) -> String {
@@ -45,6 +48,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         return #"{ "type": "object", "properties": { \#(props) }, "required": [\#(required)] }"#
     }
 
+    private func union(_ members: String...) -> String { #"{ "oneOf": [\#(members.joined(separator: ", "))] }"# }
     private func array(_ items: String) -> String { #"{ "type": "array", "items": \#(items) }"# }
     private func map(_ values: String) -> String { #"{ "type": "object", "additionalProperties": \#(values) }"# }
     private func channel(_ message: String) -> String {
@@ -80,8 +84,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         assertContains(output.models, "public let item: Item\n")
         assertContains(output.models, "public let items: [Items]\n")
-        XCTAssertEqual(count("public nonisolated struct Item: Codable {", in: output.models), 1)
-        assertContains(output.models, "public nonisolated struct Items: Codable {\n        public let qty: Double\n        public let sku: String")
+        XCTAssertEqual(count("public nonisolated struct Item: Codable, Sendable {", in: output.models), 1)
+        assertContains(output.models, "public nonisolated struct Items: Codable, Sendable {\n        public let qty: Double\n        public let sku: String")
     }
 
     func testEnumsInANestedRecordCollide() throws {
@@ -90,8 +94,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         assertContains(output.models, "public let kind: Kind\n")
         assertContains(output.models, "public let kinds: [Kinds]\n")
-        assertContains(output.models, "public enum Kind: String, Codable {\n            case a\n            case b")
-        assertContains(output.models, "public enum Kinds: String, Codable {\n            case c\n            case d")
+        assertContains(output.models, "public enum Kind: RawRepresentable, Codable, Hashable, Sendable {\n            case a\n            case b")
+        assertContains(output.models, "public enum Kinds: RawRepresentable, Codable, Hashable, Sendable {\n            case c\n            case d")
     }
 
     func testDirectPropertyKeepsItsNameOverAMapsValueType() throws {
@@ -100,8 +104,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         assertContains(output.models, "public let tags: [String: TagsValue_2]\n")
         assertContains(output.models, "public let tagsValue: TagsValue\n")
-        assertContains(output.models, "public nonisolated struct TagsValue_2: Codable {\n        public let label: String")
-        assertContains(output.models, "public nonisolated struct TagsValue: Codable {\n        public let weight: Double")
+        assertContains(output.models, "public nonisolated struct TagsValue_2: Codable, Sendable {\n        public let label: String")
+        assertContains(output.models, "public nonisolated struct TagsValue: Codable, Sendable {\n        public let weight: Double")
     }
 
     func testPropertiesThatDifferOnlyInCase() throws {
@@ -111,7 +115,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         // Fields are sorted, so `UserName` comes first and keeps the name.
         assertContains(output.models, "public let UserName: UserName\n")
         assertContains(output.models, "public let userName: UserName_2\n")
-        assertContains(output.models, "public nonisolated struct UserName_2: Codable {\n        public let a: String")
+        assertContains(output.models, "public nonisolated struct UserName_2: Codable, Sendable {\n        public let a: String")
     }
 
     // MARK: - The top level of Models.swift
@@ -120,9 +124,9 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let ticket = object(["kind": strings("bug", "task"), "kinds": array(strings("urgent", "later"))])
         let output = try generate(schemas: #"{ "Ticket": \#(ticket) }"#, methods: [returning("Ticket")])
 
-        assertContains(output.models, "public nonisolated enum Kind: String, Codable {\n    case bug\n    case task\n}")
-        assertContains(output.models, "public nonisolated enum Kinds: String, Codable {\n    case urgent\n    case later\n}")
-        assertContains(output.models, "public let kinds: [Kinds]\n")
+        assertContains(output.models, "public nonisolated enum TicketKind: RawRepresentable, Codable, Hashable, Sendable {\n    case bug\n    case task\n")
+        assertContains(output.models, "public nonisolated enum TicketKinds: RawRepresentable, Codable, Hashable, Sendable {\n    case urgent\n    case later\n")
+        assertContains(output.models, "public let kinds: [TicketKinds]\n")
     }
 
     func testUnionAndListOfUnionsOnASchemaStayTopLevelUnderTwoNames() throws {
@@ -137,10 +141,10 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let output = try generate(schemas: #"{ "Event": \#(event) }"#, methods: [returning("Event")])
 
         // Before, `payloads` reused `Payload` (the text/count union), so a plain/rich element didn't decode.
-        assertContains(output.models, "public nonisolated enum Payload: Codable {\n    case text(Text)\n    case count(Count)")
-        assertContains(output.models, "public nonisolated enum Payloads: Codable {\n    case plain(Plain)\n    case rich(Rich)")
-        assertContains(output.models, "public let payload: Payload\n")
-        assertContains(output.models, "public let payloads: [Payloads]\n")
+        assertContains(output.models, "public nonisolated enum EventPayload: Codable, Sendable {\n    case text(Text)\n    case count(Count)")
+        assertContains(output.models, "public nonisolated enum EventPayloads: Codable, Sendable {\n    case plain(Plain)\n    case rich(Rich)")
+        assertContains(output.models, "public let payload: EventPayload\n")
+        assertContains(output.models, "public let payloads: [EventPayloads]\n")
     }
 
     func testSameNamedEnumsOfTwoSchemasDontMerge() throws {
@@ -151,21 +155,145 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let output = try generate(schemas: schemas, methods: [returning("Order"), returning("Ticket")])
 
         // Before, `Ticket.status` was typed as `Order`'s enum, so `"open"` didn't decode.
-        assertContains(output.models, "public nonisolated enum Status: String, Codable {\n    case pending\n    case shipped\n}")
-        assertContains(output.models, "public nonisolated enum TicketStatus: String, Codable {\n    case open\n    case closed\n}")
-        assertContains(output.models, "public nonisolated struct Ticket: Codable {\n    public let status: TicketStatus\n")
+        assertContains(
+            output.models, "public nonisolated enum OrderStatus: RawRepresentable, Codable, Hashable, Sendable {\n    case pending\n    case shipped\n"
+        )
+        assertContains(output.models, "public nonisolated enum TicketStatus: RawRepresentable, Codable, Hashable, Sendable {\n    case open\n    case closed\n")
+        assertContains(output.models, "public nonisolated struct Ticket: Codable, Sendable {\n    public let status: TicketStatus\n")
     }
 
-    func testIdenticalEnumsOfTwoSchemasStillShareOneType() throws {
+    func testIdenticalEnumsOfTwoSchemasAreNamedForEach() throws {
         let schemas = """
         { "Order": \(object(["status": strings("open", "closed")])),
           "Ticket": \(object(["status": strings("open", "closed")])) }
         """
         let output = try generate(schemas: schemas, methods: [returning("Order"), returning("Ticket")])
 
-        XCTAssertEqual(count("public nonisolated enum Status: String, Codable {", in: output.models), 1)
-        assertNotContains(output.models, "TicketStatus")
-        assertContains(output.models, "public nonisolated struct Ticket: Codable {\n    public let status: Status\n")
+        // Each schema's enum takes the schema's prefix, as on Dart, so neither is the generic `Status`.
+        assertNotContains(output.models, "enum Status:")
+        assertContains(output.models, "public nonisolated struct Order: Codable, Sendable {\n    public let status: OrderStatus\n")
+        assertContains(output.models, "public nonisolated struct Ticket: Codable, Sendable {\n    public let status: TicketStatus\n")
+    }
+
+    func testOldNamesAreNotDeclared() throws {
+        let schemas = #"{ "AuthAction": \#(object(["capability": strings("webauthn-get", "webauthn-create")])) }"#
+        let output = try generate(schemas: schemas, methods: [returning("AuthAction")])
+
+        assertContains(output.models, "public nonisolated enum AuthActionCapability: RawRepresentable, Codable, Hashable, Sendable {")
+        assertContains(output.models, "public let capability: AuthActionCapability\n")
+        assertNotContains(output.models, "typealias")
+    }
+
+    func testListOfEnumsOnASchemaKeepsThePropertysName() throws {
+        let user = object(["groups": array(strings("admins", "users"))])
+        let output = try generate(schemas: #"{ "AuthenticatedUser": \#(user) }"#, methods: [returning("AuthenticatedUser")])
+
+        // Named after the array property, not its singular element, as on Dart.
+        assertContains(output.models, "public nonisolated enum AuthenticatedUserGroups: RawRepresentable, Codable, Hashable, Sendable {")
+        assertContains(output.models, "public let groups: [AuthenticatedUserGroups]\n")
+        assertNotContains(output.models, "enum AuthenticatedUserGroup:")
+    }
+
+    /// The schema's prefix is always added, as on Dart, so a name that starts with the schema's name (`userType`)
+    /// or is the schema's name (`status` on `Status`) still gets it.
+    func testTheSchemaPrefixIsAlwaysAdded() throws {
+        let schemas = """
+        { "User": \(object(["userType": strings("admin", "member")])),
+          "Car": \(object(["cardType": strings("visa", "amex")])),
+          "Status": \(object(["status": strings("up", "down")])) }
+        """
+        let output = try generate(schemas: schemas, methods: ["User", "Car", "Status"].map(returning))
+
+        assertContains(output.models, "public let userType: UserUserType\n")
+        assertContains(output.models, "public let cardType: CarCardType\n")
+        assertContains(output.models, "public let status: StatusStatus\n")
+    }
+
+    /// A prefixed name that is a Swift or runtime type (`Transport.error` → `TransportError`) gets a suffix instead.
+    func testAPrefixedNameThatIsARuntimeTypeGetsASuffix() throws {
+        let schemas = """
+        { "Transport": \(object(["error": strings("timeout", "refused")])),
+          "Err": \(object(["or": strings("a", "b")])) }
+        """
+        let output = try generate(schemas: schemas, methods: ["Transport", "Err"].map(returning))
+
+        assertContains(output.models, "public let error: TransportError_2\n")
+        assertContains(output.models, "public let or: ErrOr\n")
+        assertNotContains(output.models, "enum TransportError:")
+    }
+
+    /// A schema whose name isn't PascalCase (`JWT`) is declared once under that name, not again as `JWTJwt`.
+    func testASchemaWhoseNameIsNotPascalCaseIsDeclaredOnce() throws {
+        let jwt = object(["kind": strings("a", "b"), "sub": string])
+        let output = try generate(schemas: #"{ "JWT": \#(jwt) }"#, methods: [returning("JWT")])
+
+        assertContains(output.models, "public nonisolated struct JWT: Codable, Sendable {")
+        assertContains(output.models, "public let kind: JWTKind\n")
+        assertNotContains(output.models, "JWTJwt")
+        assertNotContains(output.models, "struct Jwt:")
+    }
+
+    /// A map of enums is named after its property, as an array of them is, and as on Dart.
+    func testAMapOfEnumsKeepsThePropertysName() throws {
+        let feature = object(["flags": map(strings("on", "off")), "rows": array(map(strings("x", "y")))])
+        let output = try generate(schemas: #"{ "Feature": \#(feature) }"#, methods: [returning("Feature")])
+
+        assertContains(output.models, "public let flags: [String: FeatureFlags]\n")
+        assertContains(output.models, "public let rows: [[String: FeatureRows]]\n")
+    }
+
+    /// An enum on a discriminated variant's field is named after the variant and its union, as on Dart.
+    func testAnEnumOnAVariantIsNamedAfterTheVariant() throws {
+        let email = object(["channel": strings("email"), "priority": strings("low", "high")])
+        let sms = object(["channel": strings("sms"), "priority": strings("urgent", "normal")])
+        let notification = object(["payload": union(email, sms)])
+        let output = try generate(schemas: #"{ "Notification": \#(notification) }"#, methods: [returning("Notification")])
+
+        assertContains(output.models, "public let priority: EmailNotificationPayloadPriority\n")
+        assertContains(output.models, "public let priority: SmsNotificationPayloadPriority\n")
+        assertNotContains(output.models, "NotificationPriority")
+    }
+
+    /// A top-level union's variant struct and an inline type don't take one name, whichever comes first.
+    func testAVariantStructAndAnInlineTypeDontShareAName() throws {
+        let event = object(["event": union(object(["type": strings("orderStatus"), "at": string]), object(["type": strings("ping"), "id": string]))])
+        let order = object(["status": strings("pending", "shipped")])
+        // `Notification` resolves before `Order`, `Order` before `Zone`.
+        let output = try generate(
+            schemas: #"{ "Notification": \#(event), "Order": \#(order), "Zone": \#(event) }"#,
+            methods: ["Notification", "Order", "Zone"].map(returning)
+        )
+
+        XCTAssertEqual(count("struct OrderStatus:", in: output.models), 1)
+        assertContains(output.models, "public let status: OrderStatus_2\n")
+        assertContains(output.models, "case orderStatus(OrderStatus)")
+        // `Zone.event`'s identical union is the same type, so it shares the declaration.
+        assertContains(output.models, "public let event: NotificationEvent\n")
+    }
+
+    /// Two top-level unions whose variant structs share a name but not a shape each declare their own.
+    func testDifferentlyShapedVariantStructsOfOneNameAreBothDeclared() throws {
+        let alpha = object(["payload": union(object(["type": strings("text"), "body": string]), object(["type": strings("none"), "why": string]))])
+        let beta = object(["payload": union(object(["type": strings("text"), "html": string]), object(["type": strings("none"), "code": string]))])
+        let output = try generate(schemas: #"{ "Alpha": \#(alpha), "Beta": \#(beta) }"#, methods: ["Alpha", "Beta"].map(returning))
+
+        assertContains(output.models, "public nonisolated struct Text: Codable, Sendable {\n    public let body: String\n")
+        assertContains(output.models, "public nonisolated struct BetaPayloadText: Codable, Sendable {\n    public let html: String\n")
+        assertContains(output.models, "case betaPayloadText(BetaPayloadText)")
+    }
+
+    func testRenamedNamesCompile() throws {
+        #if os(macOS)
+        let event = object(["event": union(object(["type": strings("orderStatus"), "at": string]), object(["type": strings("ping"), "id": string]))])
+        let schemas = """
+        { "Notification": \(event), "Order": \(object(["status": strings("pending", "shipped")])),
+          "RPC": \(object(["error": strings("timeout", "refused")])), "Status": \(object(["status": strings("up", "down")])) }
+        """
+        let output = try generate(schemas: schemas, methods: ["Notification", "Order", "RPC", "Status"].map(returning))
+        try typecheckConsumer(models: output.models, api: output.api, consumer: "import Generated\n", moduleFlags: ["-warnings-as-errors"])
+        #else
+        throw XCTSkip("Compiling the generated module needs the host toolchain (macOS only).")
+        #endif
     }
 
     func testInlineTypeDoesntReplaceAComponentSchemaOfItsName() throws {
@@ -179,11 +307,11 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         // Before, `Alpha`'s inline enums took the names and the component schemas were lost: `Status` (a struct)
         // wasn't generated at all, and `Kind` had `Alpha.kind`'s cases.
-        assertContains(output.models, "public nonisolated enum AlphaKind: String, Codable {\n    case a\n    case b\n}")
-        assertContains(output.models, "public nonisolated enum AlphaStatus: String, Codable {\n    case on\n    case off\n}")
-        assertContains(output.models, "public nonisolated enum Kind: String, Codable {\n    case x\n    case y\n}")
-        assertContains(output.models, "public nonisolated struct Status: Codable {\n    public let code: String")
-        assertContains(output.models, "public nonisolated struct Zed: Codable {\n    public let kind: Kind\n")
+        assertContains(output.models, "public nonisolated enum AlphaKind: RawRepresentable, Codable, Hashable, Sendable {\n    case a\n    case b\n")
+        assertContains(output.models, "public nonisolated enum AlphaStatus: RawRepresentable, Codable, Hashable, Sendable {\n    case on\n    case off\n")
+        assertContains(output.models, "public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {\n    case x\n    case y\n")
+        assertContains(output.models, "public nonisolated struct Status: Codable, Sendable {\n    public let code: String")
+        assertContains(output.models, "public nonisolated struct Zed: Codable, Sendable {\n    public let kind: Kind\n")
     }
 
     func testInlineEnumIdenticalToAComponentSchemaReusesIt() throws {
@@ -192,7 +320,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         """
         let output = try generate(schemas: schemas, methods: [returning("Alpha"), returning("Kind")])
 
-        XCTAssertEqual(count("public nonisolated enum Kind: String, Codable {", in: output.models), 1)
+        XCTAssertEqual(count("public nonisolated enum Kind: RawRepresentable, Codable, Hashable, Sendable {", in: output.models), 1)
         assertNotContains(output.models, "AlphaKind")
     }
 
@@ -203,8 +331,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let output = try generate(methods: [method("putItems", params: params, result: string)])
 
         assertContains(output.api, "public func putItems(item: PutItems.Item, items: [PutItems.Items]) async throws -> String {")
-        XCTAssertEqual(count("public struct Item: Codable {", in: output.api), 1)
-        assertContains(output.api, "public struct Items: Codable {\n            public let qty: Double")
+        XCTAssertEqual(count("public struct Item: Codable, Sendable {", in: output.api), 1)
+        assertContains(output.api, "public struct Items: Codable, Sendable {\n            public let qty: Double")
     }
 
     func testResultPropertiesCollide() throws {
@@ -213,7 +341,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         assertContains(output.api, "public let item: Item\n")
         assertContains(output.api, "public let items: [Items]\n")
-        assertContains(output.api, "public struct Items: Codable {\n                public let qty: Double")
+        assertContains(output.api, "public struct Items: Codable, Sendable {\n                public let qty: Double")
     }
 
     func testChannelAndListOfChannels() throws {
@@ -222,18 +350,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
 
         assertContains(output.api, "public let feed: RealtimeChannel<FeedMessage>\n")
         assertContains(output.api, "public let feeds: [RealtimeChannel<FeedsMessage>]\n")
-        assertContains(output.api, "public struct FeedMessage: Codable {\n                public let text: String")
-        assertContains(output.api, "public struct FeedsMessage: Codable {\n                public let count: Double")
-    }
-
-    func testChannelParameterAndListOfChannelParameters() throws {
-        let params = "[\(param("feed", channel(object(["text": string])))), \(param("feeds", array(channel(object(["count": number])))))]"
-        let output = try generate(methods: [method("relay", params: params, result: string)])
-
-        assertContains(
-            output.api,
-            "public func relay(feed: RealtimeChannel<Relay.FeedMessage>, feeds: [RealtimeChannel<Relay.FeedsMessage>]) async throws -> String {"
-        )
+        assertContains(output.api, "public struct FeedMessage: Codable, Sendable {\n                public let text: String")
+        assertContains(output.api, "public struct FeedsMessage: Codable, Sendable {\n                public let count: Double")
     }
 
     func testParameterNamedResultLeavesTheResultItsName() throws {
@@ -241,8 +359,8 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let output = try generate(methods: [method("check", params: params, result: object(["passed": #"{ "type": "boolean" }"#]))])
 
         assertContains(output.api, "public func check(result: Check.Result_2) async throws -> Check.Result {")
-        assertContains(output.api, "public struct Result_2: Codable {\n            public let input: String")
-        assertContains(output.api, "public struct Result: Codable {\n            public let passed: Bool")
+        assertContains(output.api, "public struct Result_2: Codable, Sendable {\n            public let input: String")
+        assertContains(output.api, "public struct Result: Codable, Sendable {\n            public let passed: Bool")
     }
 
     func testSignatureNamesTheOperationsOwnTypeOverADeeperOneOfTheSameName() throws {
@@ -258,7 +376,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         let skip = object(["action": strings("skip"), "reason": string])
         let output = try generate(methods: [method("act", result: #"{ "oneOf": [\#(pick), \#(skip)] }"#)])
 
-        assertContains(output.api, "public struct Pick: Codable {\n            public let item: Item\n            public let items: [Items]\n")
+        assertContains(output.api, "public struct Pick: Codable, Sendable {\n            public let item: Item\n            public let items: [Items]\n")
     }
 
     // MARK: - Names that don't collide are unchanged
@@ -280,7 +398,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         assertContains(output.models, "public let address: ShipmentAddress\n")
         assertContains(output.models, "public let parcels: [Parcel]\n")
         assertContains(output.models, "public let customs: [String: CustomsValue]\n")
-        assertContains(output.models, "public let status: Status\n")
+        assertContains(output.models, "public let status: ShipmentStatus\n")
         assertContains(output.api, "public func watch(filter: Watch.Filter) async throws -> Watch.Result {")
         assertContains(output.api, "public let feed: RealtimeChannel<FeedMessage>\n")
         assertContains(output.api, "public let notes: [Note]\n")
@@ -339,8 +457,6 @@ final class NestedTypeNameCollisionTests: XCTestCase {
                 result: object(["item": object(["count": number]), "items": array(object(["sku": string]))])
             ),
             method("getFeeds", result: object(["feed": channel(object(["text": string])), "feeds": array(channel(object(["count": number])))])),
-            method("relay", params: "[\(param("feed", channel(object(["text": string])))), \(param("feeds", array(channel(object(["count": number])))))]",
-                   result: string),
             method("check", params: "[\(param("result", object(["input": string])))]", result: object(["passed": #"{ "type": "boolean" }"#])),
             method("act", result: #"{ "oneOf": [\#(pick), \#(skip)] }"#),
             method("search", params: "[\(param("query", #"{ "anyOf": [{ "type": "string" }, \#(object(["text": string]))] }"#))]", result: string)
@@ -359,17 +475,16 @@ final class NestedTypeNameCollisionTests: XCTestCase {
         }
 
         // Every type is nameable from outside the module.
-        func signatures(_ api: Api, feed: RealtimeChannel<Api.Relay.FeedMessage>) async throws {
+        func signatures(_ api: Api) async throws {
             let items: Api.PutItems.Result = try await api.putItems(
                 item: Api.PutItems.Item(sku: "a"), items: [Api.PutItems.Items(qty: 1, sku: "b")]
             )
             let feeds: Api.GetFeeds.Result = try await api.getFeeds()
             let first: RealtimeChannel<Api.GetFeeds.Result.FeedMessage> = feeds.feed
             let rest: [RealtimeChannel<Api.GetFeeds.Result.FeedsMessage>] = feeds.feeds
-            let relayed: String = try await api.relay(feed: feed, feeds: [RealtimeChannel<Api.Relay.FeedsMessage>]())
             let checked: Api.Check.Result = try await api.check(result: Api.Check.Result_2(input: "c"))
             let picked: Api.Act.Result = try await api.act()
-            _ = (items, first, rest, relayed, checked, picked)
+            _ = (items, first, rest, checked, picked)
             _ = (Api.PutItems.Result.Item(count: 1), Api.PutItems.Result.Items(sku: "d"))
             _ = (Api.Act.Pick.Item(sku: "e"), Api.Act.Pick.Items(qty: 2))
         }

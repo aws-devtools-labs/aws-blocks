@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Nuxt adapter — kept as a named alias for the framework-agnostic Nitro
  * adapter. Both Nuxt 3 and Nuxt 4 build with Nitro, so the translation

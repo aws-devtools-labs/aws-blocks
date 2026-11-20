@@ -14,9 +14,9 @@
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { finalizeDashboards } from '@aws-blocks/core/cdk';
- * import { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
+ * import { isBlocksError } from '@aws-cdk-blocks/core';
+ * import { finalizeDashboards } from '@aws-cdk-blocks/core/cdk';
+ * import { Dashboard, DashboardErrors } from '@aws-cdk-blocks/bb-dashboard';
  *
  * new Dashboard(stack, 'dash', {
  *   metrics: { metrics, metricConfigs: [{ name: '', stat: 'Sum' }] }, // empty name triggers validation

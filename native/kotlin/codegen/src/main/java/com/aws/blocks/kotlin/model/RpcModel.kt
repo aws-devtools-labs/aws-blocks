@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 package com.aws.blocks.kotlin.model
 
 import kotlinx.serialization.json.JsonElement
@@ -158,7 +161,6 @@ data class RpcModel(
     val methods: List<Method>,
     val servers: List<Server> = emptyList(),
     val components: JsonObject? = null,
-    val endpoint: String? = null,
     val nativeCatalogs: NativeCatalogs = NativeCatalogs.EMPTY,
 )
 

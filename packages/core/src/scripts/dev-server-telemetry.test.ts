@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
@@ -72,7 +75,7 @@ startDevServer({ backendPath: '${join(tmpDir!, 'backend.ts').replace(/\\/g, '/')
       env: {
         ...process.env,
         BLOCKS_TELEMETRY_ENDPOINT: `http://127.0.0.1:${addr.port}/collect`,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '',
+        CDK_DISABLE_CLI_TELEMETRY: '',
         CI: '',
         CONTINUOUS_INTEGRATION: '',
         BUILD_NUMBER: '',

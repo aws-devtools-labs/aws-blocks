@@ -19,8 +19,8 @@
  */
 
 import type { AsyncLocalStorage } from 'node:async_hooks';
-import { type BlocksContext, matchRoute } from '@aws-blocks/core';
-import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+import { type BlocksContext, matchRoute } from '@aws-cdk-blocks/core';
+import { getRequestBaseUrl } from '@aws-cdk-blocks/core/bb-utils';
 
 // Importing core registers the per-request base-URL store the transports fill.
 void getRequestBaseUrl;
@@ -30,7 +30,7 @@ const baseUrlStore = Reflect.get(globalThis, '__BLOCKS_REQUEST_BASE_URL_STORE__'
 export interface FakeGateway {
 	/** `https://<host>/<stage>` — the base every app URL starts with. */
 	readonly base: string;
-	/** `<base>/aws-blocks/api` — what `LambdaCompute.apiUrl` is for this stage. */
+	/** `<base>/cdk-blocks/api` — what `LambdaCompute.apiUrl` is for this stage. */
 	readonly apiUrl: string;
 	/** Requests served, as `METHOD path` (path with the stage). */
 	readonly served: string[];
@@ -91,7 +91,7 @@ export function installFakeGateway(host = 'gw0test.execute-api.us-east-1.amazona
 	};
 	return {
 		base,
-		apiUrl: `${base}/aws-blocks/api`,
+		apiUrl: `${base}/cdk-blocks/api`,
 		served,
 		uninstall: () => {
 			globalThis.fetch = realFetch;

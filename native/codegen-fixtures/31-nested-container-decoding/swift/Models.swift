@@ -39,7 +39,7 @@ public nonisolated struct Board: Codable {
     }
 }
 
-public nonisolated struct Layout: Codable {
+public nonisolated struct Layout: Codable, Sendable {
     public let grid: [[Note]]
     public let levels: [Level]
     public let levelsByUser: [String: [Level]]?
@@ -92,12 +92,48 @@ public nonisolated struct Layout: Codable {
     }
 }
 
-public nonisolated enum Level: String, Codable {
+public nonisolated enum Level: RawRepresentable, Codable, Hashable, Sendable {
     case low
     case high
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "low": self = .low
+        case "high": self = .high
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .low: return "low"
+        case .high: return "high"
+        case .unknown(let value): return value
+        }
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.low, .low): return true
+        case (.high, .high): return true
+        case let (.unknown(lhs), .unknown(rhs)): return lhs == rhs
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .low: hasher.combine(0)
+        case .high: hasher.combine(1)
+        case .unknown(let value):
+            hasher.combine(2)
+            hasher.combine(value)
+        }
+    }
 }
 
-public nonisolated struct LoginMenu: Codable {
+public nonisolated struct LoginMenu: Codable, Sendable {
     public let fallback: OIDCClient<String>?
     public let options: [SignInOption]
     public let primary: SignInOption
@@ -122,7 +158,7 @@ public nonisolated struct LoginMenu: Codable {
     }
 }
 
-public nonisolated struct Note: Codable {
+public nonisolated struct Note: Codable, Sendable {
     public let body: String
     public let id: String
 
@@ -132,7 +168,7 @@ public nonisolated struct Note: Codable {
     }
 }
 
-public nonisolated struct SignInOption: Codable {
+public nonisolated struct SignInOption: Codable, Sendable {
     public let client: OIDCClient<String>
     public let label: String
 

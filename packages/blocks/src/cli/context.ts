@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The run context of one `cdk-blocks` invocation: project-root detection, the
+ * The run context of one package task invocation: project-root detection, the
  * environment for child processes (`--profile`, `--region`, `BLOCKS_LOG_LEVEL`),
  * the interactive/CI decision and the injectable process seams.
  */
@@ -13,13 +13,14 @@ import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
-import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
+import type * as CoreScriptsModule from '@aws-cdk-blocks/core/scripts';
 import { loadCoreScripts } from './core-load.js';
+import { type LoadTelemetry, loadCoreTelemetry } from './telemetry.js';
 import { CliError, UsageError } from './errors.js';
-import { Output, type OutputStream } from './output.js';
+import { Output, type OutputFormat, type OutputStream } from './output.js';
 import type { Globals, ParsedInvocation } from './parse.js';
 
-/** The `@aws-blocks/core/scripts` module. Tests replace parts of it. */
+/** The `@aws-cdk-blocks/core/scripts` module. Tests replace parts of it. */
 export type CoreScripts = typeof CoreScriptsModule;
 
 export interface SpawnSpec {
@@ -30,7 +31,7 @@ export interface SpawnSpec {
 	/** Send the child's stdout to stderr, so that stdout carries only the CLI's JSON document. */
 	stdoutToStderr?: boolean;
 	/**
-	 * The child runs until it is stopped: `cdk-blocks dev` and `cdk-blocks sandbox` in
+	 * The child runs until it is stopped: `npm run dev` and `npm run sandbox` in
 	 * watch mode. The CLI stops it at once on a SIGTERM or SIGHUP (a supervisor,
 	 * `timeout`, a closed terminal, `kill <pid>`), whether or not the signal also
 	 * reached the child's process group: it sends one SIGTERM, which the
@@ -45,7 +46,7 @@ export interface SpawnSpec {
 	 */
 	longRunning?: boolean;
 	/**
-	 * The child is `tsx watch` (`cdk-blocks dev`). A second SIGTERM makes it SIGKILL
+	 * The child is `tsx watch` (`npm run dev`). A second SIGTERM makes it SIGKILL
 	 * its runner, which then leaves the frontend running, so the CLI never sends
 	 * it one while the runner lives: it SIGTERMs the runner, which the group
 	 * signal may have reached already (the dev server's cleanup is idempotent
@@ -80,7 +81,7 @@ export interface CliDeps {
 	stdinIsTTY: boolean;
 	/**
 	 * The environment. The CLI sets AWS_PROFILE, AWS_REGION and BLOCKS_LOG_LEVEL on it
-	 * for the run, and `cdk-blocks whoami` loads `.env.production` into it, as core's deploy does.
+	 * for the run, and `npm run whoami` loads `.env.production` into it, as core's deploy does.
 	 */
 	env: NodeJS.ProcessEnv;
 	cwd: string;
@@ -95,10 +96,15 @@ export interface CliDeps {
 	 */
 	argv: string[];
 	/**
-	 * Load `@aws-blocks/core/scripts`. A seam rather than a static import, so that
-	 * `cdk-blocks --help` and usage errors do not load core, and tests can replace it.
+	 * Load `@aws-cdk-blocks/core/scripts`. A seam rather than a static import, so that
+	 * `npm run --help` and usage errors do not load core, and tests can replace it.
 	 */
 	core(): Promise<CoreScripts>;
+	/**
+	 * Load `@aws-cdk-blocks/core/track-command`, for the commands the CLI tracks itself
+	 * (see `telemetry.ts`). A seam, so tests never send events.
+	 */
+	telemetry: LoadTelemetry;
 }
 
 export type LogLevel = 'quiet' | 'normal' | 'verbose' | 'debug';
@@ -119,6 +125,20 @@ export function isCi(env: NodeJS.ProcessEnv): boolean {
 	return Boolean(env.CI) && env.CI !== 'false' && env.CI !== '0';
 }
 
+/**
+ * The format of the run's result on stdout. An explicit `--output` wins. Without it,
+ * a command with a JSON result prints JSON when stdout is not a terminal (a pipe, a
+ * file, a coding agent's shell) and text on a terminal; every other command, help
+ * and `--version` print text whatever stdout is. `--query` prints its field either
+ * way (see {@link Output}).
+ */
+export function resultFormat(parsed: ParsedInvocation, stdout: OutputStream): OutputFormat {
+	const { globals, command } = parsed;
+	if (globals.output !== undefined) return globals.output;
+	if (globals.help || globals.version || !command?.json) return 'text';
+	return stdout.isTTY === true ? 'text' : 'json';
+}
+
 /** An AWS Region code: `us-east-1`, `eu-central-2`, `us-gov-west-1`, `cn-north-1`, `eusc-de-east-1`. */
 export const REGION_PATTERN = /^[a-z]{2,}(-[a-z]+)+-\d+$/;
 
@@ -134,17 +154,28 @@ const ACCESS_KEY_VARIABLES = [
 
 /**
  * The project root: the nearest directory at or above `start` that holds both a
- * `package.json` and an `aws-blocks/` directory.
+ * `package.json` and a `cdk-blocks/` directory.
  */
-export function findProjectRoot(start: string): string | undefined {
+export function findProjectRoot(start: string, backendDir: string = 'cdk-blocks'): string | undefined {
 	let dir = resolve(start);
 	for (;;) {
-		const appDir = join(dir, 'aws-blocks');
+		const appDir = join(dir, backendDir);
 		if (existsSync(join(dir, 'package.json')) && existsSync(appDir) && statSync(appDir).isDirectory()) return dir;
 		const parent = dirname(dir);
 		if (parent === dir) return undefined;
 		dir = parent;
 	}
+}
+
+/**
+ * The root of an app that has not been migrated yet, found by its legacy
+ * `aws-blocks/` directory. Only `migrate` uses this: every other command
+ * detects the current `cdk-blocks/`.
+ */
+export function findLegacyProjectRoot(start: string): string | undefined {
+	// Spelled out rather than imported: core is loaded lazily here (`core-load.ts`)
+	// so a version mismatch reports itself. Pinned as `LEGACY_BLOCKS_BACKEND_DIR`.
+	return findProjectRoot(start, 'aws-blocks');
 }
 
 /** The env file that core's deploy (`production`) and sandbox (`sandbox`) load from the project root. */
@@ -177,7 +208,7 @@ export function stageEnv(env: NodeJS.ProcessEnv, root: string, stage: keyof type
 	return copy;
 }
 
-/** The installed `@aws-blocks/blocks` version. */
+/** The installed `aws-cdk-blocks` version. */
 export function blocksVersion(): string {
 	const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8')) as {
 		version: string;
@@ -214,7 +245,7 @@ export class Context {
 		this.out = new Output(
 			deps.stdout,
 			deps.stderr,
-			this.globals.output,
+			resultFormat(parsed, deps.stdout),
 			this.logLevel === 'quiet',
 			this.env,
 			// --version prints only the version; it does not query it.
@@ -235,7 +266,7 @@ export class Context {
 		}
 		// The Region reaches child command lines, store names and console URLs: accept only a Region code.
 		// An explicit --region is always checked; an inherited AWS_REGION only for a command that uses AWS,
-		// so a stray one does not stop local commands. Help (`--help`, `cdk-blocks help`) and --version never use it.
+		// so a stray one does not stop local commands. Help (`--help`, `npm run help`) and --version never use it.
 		if (parsed.command && parsed.command.path[0] !== 'help' && !this.globals.help && !this.globals.version) {
 			if (this.globals.region !== undefined && !REGION_PATTERN.test(this.globals.region)) {
 				throw new UsageError(
@@ -273,18 +304,20 @@ export class Context {
 		}
 	}
 
-	/** The project root, if the command runs inside an AWS Blocks app. */
+	/** The project root, if the command runs inside an AWS CDK Blocks app. */
 	findRoot(): string | undefined {
 		if (this.root === null) this.root = findProjectRoot(this.startDir);
 		return this.root;
 	}
 
-	/** The project root, or a CLI error when the command runs outside an AWS Blocks app. */
-	requireRoot(): string {
-		const root = this.findRoot();
+	/** The project root, or a CLI error when the command runs outside an AWS CDK Blocks app. */
+	requireRoot(opts?: { allowLegacyBackendDir?: boolean }): string {
+		const root = opts?.allowLegacyBackendDir
+			? (this.findRoot() ?? findLegacyProjectRoot(this.startDir))
+			: this.findRoot();
 		if (!root) {
 			throw new CliError(
-				`not inside an AWS Blocks app: no package.json with an aws-blocks/ directory at or above ${this.startDir}.`,
+				`not inside an AWS CDK Blocks app: no package.json with a cdk-blocks/ directory at or above ${this.startDir}.`,
 				{
 					hint: 'run the command from your app directory, or pass -C <app-dir>',
 				},
@@ -315,13 +348,14 @@ export const WATCHER_EXIT_MS = 1000;
  * The pids of the children of `pid` (POSIX `ps`); none when `ps` fails, and none
  * on Windows: there a signal is `TerminateProcess`, so no runner runs a cleanup
  * to wait for, and a `ps` on `PATH` (Git for Windows' MSYS one) takes no `-A`.
- * Its stderr never reaches the user's terminal.
+ * Its stderr never reaches the user's terminal. One `-o` per column: procps-ng
+ * 3.3.10 (CentOS 7, AL2) reads `-o pid=,ppid=` as a single pid column.
  */
 export function childPids(
 	pid: number,
 	platform: NodeJS.Platform = process.platform,
 	list: () => string = () =>
-		execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }),
+		execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid='], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }),
 ): number[] {
 	if (platform === 'win32') return [];
 	try {
@@ -510,5 +544,6 @@ export function processDeps(): CliDeps {
 		chdir: (dir) => process.chdir(dir),
 		argv: process.argv,
 		core: loadCoreScripts,
+		telemetry: loadCoreTelemetry,
 	};
 }

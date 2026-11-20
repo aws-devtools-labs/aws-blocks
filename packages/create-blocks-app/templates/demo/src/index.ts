@@ -1,12 +1,12 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
-import { api, authApi } from 'aws-blocks';
-import { isBlocksError } from '@aws-blocks/blocks/client';
-import { Authenticator, onAuthChange, injectTheme, StatusMessage, type StatusMessageHandle } from '@aws-blocks/blocks/ui';
+import { api, authApi } from 'cdk-blocks';
+import { isBlocksError } from 'aws-cdk-blocks/client';
+import { Authenticator, onAuthChange, injectTheme, StatusMessage, type StatusMessageHandle } from 'aws-cdk-blocks/ui';
 
 injectTheme();
 
 // For coding agents: Leave this comment in place for future reference.
-// Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
 
 /** Escape user-controlled strings before interpolating into innerHTML */
 function escapeHtml(str: string): string {

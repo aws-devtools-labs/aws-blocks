@@ -3,12 +3,12 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
-import type { api as apiType } from 'aws-blocks';
-import { isBlocksError } from '@aws-blocks/core';
-import { AgentErrors } from '@aws-blocks/bb-agent';
-import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
-import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
-import type { RealtimeSubscription } from '@aws-blocks/bb-realtime';
+import type { api as apiType } from 'cdk-blocks';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { AgentErrors } from '@aws-cdk-blocks/bb-agent';
+import { createChat, realtimeTransport } from '@aws-cdk-blocks/bb-agent/client';
+import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-cdk-blocks/bb-agent/client';
+import type { RealtimeSubscription } from '@aws-cdk-blocks/bb-realtime';
 // The agent per-user isolation test needs two distinct signed-in users; it does
 // not test sign-up itself. On a deployed stack they are provisioned through the
 // secret-gated `testSupport.provisionUser` (no mailbox needed), locally through
@@ -175,7 +175,7 @@ export function agentTests(getApi: () => typeof apiType) {
             const fresh = await api.agentGetRawDescriptor(conversationId);
             return { ...fresh, __blocks: 'realtime/channel' };
           },
-        } satisfies import('aws-blocks').SubscribeOptions<any>);
+        } satisfies import('cdk-blocks').SubscribeOptions<any>);
 
         try {
           await sub.established;
@@ -518,6 +518,37 @@ export function agentTests(getApi: () => typeof apiType) {
       after(async () => {
         subA?.unsubscribe();
         await getApi().authSignOut();
+      });
+
+      // inferenceOnly agents keep no conversation records; by default (sessionScope: 'user')
+      // they key the session and the channel by the caller, so a shared conversationId
+      // doesn't put two users on one channel.
+      test("inferenceOnly: users who pass the same conversationId get separate channels", { timeout: 150_000 }, async () => {
+        const api = getApi();
+        const conv = crypto.randomUUID();
+        await signInAs(api, userA);
+        const chunksIA: AgentStreamChunk[] = [];
+        const subIA = (await api.agentInferenceOnlyGetChannel(conv)).channel.subscribe((chunk) => { chunksIA.push(chunk); });
+        await subIA.established;
+        await signInAs(api, userB);
+        const chunksIB: AgentStreamChunk[] = [];
+        const subIB = (await api.agentInferenceOnlyGetChannel(conv)).channel.subscribe((chunk) => { chunksIB.push(chunk); });
+        await establishedOrTimeout(subIB);
+        try {
+          await api.agentInferenceOnly('Say hello', conv);
+          await turnEnds(chunksIB, 0, "user B's inferenceOnly turn on B's channel");
+          await new Promise(r => setTimeout(r, 2_000));
+          assert.deepStrictEqual(chunksIA, [], "user B's turn must not reach user A's channel");
+          await signInAs(api, userA);
+          const seenByB = chunksIB.length;
+          await api.agentInferenceOnly('Say hello', conv);
+          await turnEnds(chunksIA, 0, "user A's inferenceOnly turn on A's channel");
+          await new Promise(r => setTimeout(r, 2_000));
+          assert.strictEqual(chunksIB.length, seenByB, "user A's turn must not reach user B's channel");
+        } finally {
+          subIA.unsubscribe();
+          subIB.unsubscribe();
+        }
       });
 
       test("user B can't stream into user A's conversation", async () => {

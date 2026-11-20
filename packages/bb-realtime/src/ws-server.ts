@@ -12,16 +12,55 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { EventEmitter } from 'events';
-import { setBroadcastBus, LOCAL_TOKEN_SECRET } from './local-dev.js';
+import { setBroadcastBus, getRevokedAt, LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { isClientChannelPath, validateChannelToken } from './utils.js';
-import { isLoopbackHost, isWildcardHost, isIpLiteral } from '@aws-blocks/core/bb-utils';
+import { checkSubscriptionAuth, subscriptionEndedMessage } from './subscription-auth.js';
+import type { SubscriptionAuth } from './subscription-auth.js';
+import { isLoopbackHost, isWildcardHost, isIpLiteral } from '@aws-cdk-blocks/core/bb-utils';
 
 export const localRealtimeBus = new EventEmitter();
 localRealtimeBus.setMaxListeners(1000);
 
 interface ClientSubscription {
 	ws: WebSocket;
-	channels: Set<string>;
+	/** Subscribed channels, each with what is kept of the token it was authorized with. */
+	channels: Map<string, SubscriptionAuth>;
+	/** The principal the connection's connect token is bound to; `undefined` when the connection carries none. */
+	principal: string | undefined;
+}
+
+/**
+ * Re-check every subscription on a connection against its token (see
+ * `checkSubscriptionAuth`), ending and announcing the ones that fail. Runs on a
+ * client ping and when access is revoked, as the deployed handler does on a ping.
+ */
+function revalidateSubscriptions(client: ClientSubscription): void {
+	const now = Math.floor(Date.now() / 1000);
+	const revokedAt = getRevokedAt(client.principal);
+	for (const [channel, auth] of client.channels) {
+		const failure = checkSubscriptionAuth(auth, client.principal, revokedAt, now);
+		if (!failure) continue;
+		client.channels.delete(channel);
+		if (client.ws.readyState === WebSocket.OPEN) {
+			client.ws.send(JSON.stringify({ type: 'error', channel, code: failure, message: subscriptionEndedMessage(failure) }));
+		}
+	}
+}
+
+/**
+ * Read the principal from the connect token in the upgrade URL's `token` query
+ * parameter, as `$connect` does on AWS. A connection without a token carries no
+ * principal (local dev skips connect-time auth). Returns `null` when a token is
+ * present but not valid, or was minted before the principal's access was revoked.
+ */
+function connectionPrincipal(url: string | undefined): { principal: string | undefined } | null {
+	const token = new URL(url || '/', 'http://localhost').searchParams.get('token');
+	if (token === null) return { principal: undefined };
+	const valid = validateChannelToken(token, LOCAL_TOKEN_SECRET);
+	if (!valid) return null;
+	const revokedAt = getRevokedAt(valid.sub);
+	if (revokedAt !== undefined && valid.iat <= revokedAt) return null;
+	return { principal: valid.sub };
 }
 
 /**
@@ -44,7 +83,7 @@ interface ClientSubscription {
  *   Origin and Host); to use a name, set `BLOCKS_DEV_HOST` to it.
  *
  * Loopback/wildcard/IP classification is shared with the dev server's bind
- * decision (`@aws-blocks/core/bb-utils`), so the two can't drift apart.
+ * decision (`@aws-cdk-blocks/core/bb-utils`), so the two can't drift apart.
  */
 export function isAllowedUpgradeOrigin(
 	origin: string | undefined,
@@ -101,11 +140,15 @@ export function attach(httpServer: Server) {
 			socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
 			return;
 		}
+		if (!connectionPrincipal(req.url)) {
+			socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+			return;
+		}
 		wss!.handleUpgrade(req, socket, head, (ws) => wss!.emit('connection', ws, req));
 	});
 
-	wss.on('connection', (ws) => {
-		const subscription: ClientSubscription = { ws, channels: new Set() };
+	wss.on('connection', (ws, req) => {
+		const subscription: ClientSubscription = { ws, channels: new Map(), principal: connectionPrincipal(req.url)?.principal };
 		clients.set(ws, subscription);
 
 		ws.on('message', (data) => {
@@ -122,15 +165,22 @@ export function attach(httpServer: Server) {
 						ws.send(JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: missing token' }));
 						return;
 					}
-					const valid = validateChannelToken(msg.token, LOCAL_TOKEN_SECRET, msg.channel);
+					const valid = validateChannelToken(msg.token, LOCAL_TOKEN_SECRET, msg.channel, { principal: subscription.principal });
 					if (!valid) {
 						ws.send(JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: invalid or expired token' }));
 						return;
 					}
-					subscription.channels.add(msg.channel);
+					const revokedAt = getRevokedAt(valid.sub);
+					if (revokedAt !== undefined && valid.iat <= revokedAt) {
+						ws.send(JSON.stringify({ type: 'error', channel: msg.channel, code: 'access_revoked', message: subscriptionEndedMessage('access_revoked') }));
+						return;
+					}
+					subscription.channels.set(msg.channel, { tokenExp: valid.exp, tokenIat: valid.iat, principal: valid.sub });
 					ws.send(JSON.stringify({ type: 'subscribe_success', channel: msg.channel }));
 				} else if (msg.action === 'unsubscribe') {
 					subscription.channels.delete(msg.channel);
+				} else if (msg.action === 'ping') {
+					revalidateSubscriptions(subscription);
 				} else if (msg.action === 'publish') {
 					// Parity with the deployed handler (index.aws.ts), which has no client
 					// publish: publishing is server-side only (`Realtime.publish`). This arm
@@ -155,6 +205,9 @@ export function attach(httpServer: Server) {
 			}
 		}
 	});
+
+	// `revokeAccess()` in the dev server process: end affected subscriptions now rather than on the next ping.
+	localRealtimeBus.on('revoke', () => { for (const client of clients.values()) revalidateSubscriptions(client); });
 
 	setBroadcastBus(localRealtimeBus);
 }

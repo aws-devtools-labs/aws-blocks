@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CLI wrapper for `writeSpec()`. Generates `aws-blocks/blocks.spec.json` from a
+ * CLI wrapper for `writeSpec()`. Generates `cdk-blocks/blocks.spec.json` from a
  * backend entry point. Exposed as the `blocks-generate-spec` bin entry on
- * `@aws-blocks/core`, so any Blocks app can invoke it via
+ * `@aws-cdk-blocks/core`, so any Blocks app can invoke it via
  * `npx blocks-generate-spec`.
  *
  * Usage:
  *   node dist/scripts/generate-spec-cli.js [backendPath] [outputPath]
  *
  * Defaults:
- *   backendPath = ./aws-blocks/index.ts
- *   outputPath  = ./aws-blocks/blocks.spec.json
+ *   backendPath = ./cdk-blocks/index.ts
+ *   outputPath  = ./cdk-blocks/blocks.spec.json
  *
  * For a TypeScript backend entry, this CLI lazily loads `tsx` and uses
  * its programmatic `tsImport` so no extra build step is needed. JS entries
@@ -40,7 +40,7 @@ async function selectLoader(foundationPath: string): Promise<FoundationLoader | 
 	try {
 		// `tsx/esm/api` is a peer-style helper. We require the consuming app to
 		// have it installed (via the template's devDependencies) rather than
-		// bundling it into @aws-blocks/core, so the runtime Lambda path stays
+		// bundling it into @aws-cdk-blocks/core, so the runtime Lambda path stays
 		// JS-only. If it's missing, fall through to the helpful error below.
 		const mod = await import('tsx/esm/api');
 		tsImport = (mod as { tsImport?: typeof tsImport }).tsImport;
@@ -71,7 +71,7 @@ async function selectLoader(foundationPath: string): Promise<FoundationLoader | 
 async function main() {
 	const [, , backendArg, outputArg] = process.argv;
 
-	const backendPath = resolve(backendArg ?? './aws-blocks/index.ts');
+	const backendPath = resolve(backendArg ?? './cdk-blocks/index.ts');
 	const outputPath = resolve(
 		outputArg ?? join(dirname(backendPath), 'blocks.spec.json')
 	);

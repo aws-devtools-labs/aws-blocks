@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ComputeOptions } from '@aws-blocks/core';
+import type { ComputeOptions } from '@aws-cdk-blocks/core';
 import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
 /**

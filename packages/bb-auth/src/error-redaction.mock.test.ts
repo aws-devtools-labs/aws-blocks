@@ -12,14 +12,14 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import { ApiError, type BlocksContext, type ScopeParent } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { ApiError, type BlocksContext, type ScopeParent } from '@aws-cdk-blocks/core';
 import { INTERNAL_ERROR_MESSAGE } from './error-mapping.js';
 import { Auth, AuthErrors } from './index.mock.js';
 import { Browser } from './test-support/aws-harness.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** What an SDK raises for a denied call: its message names an account and a role ARN. */
 const RAW_BACKEND_ERROR = 'User: arn:aws:sts::111122223333:assumed-role/app-role/x is not authorized to perform: ses:SendEmail';

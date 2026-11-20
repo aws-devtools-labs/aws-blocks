@@ -17,7 +17,7 @@ public final nonisolated class Api: Sendable {
     public func getSession() async throws -> GetSession.Result {
         let request = BlocksRequest(method: "api.getSession", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getSession") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getSession") }
         return try JSONDecoder().decode(GetSession.Result.self, from: result)
     }
 
@@ -25,7 +25,7 @@ public final nonisolated class Api: Sendable {
     public func getOtherSession() async throws -> GetOtherSession.Result {
         let request = BlocksRequest(method: "api.getOtherSession", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getOtherSession") }
+        guard let result else { throw TransportError(message: "Unexpected null result for api.getOtherSession") }
         return try JSONDecoder().decode(GetOtherSession.Result.self, from: result)
     }
 
@@ -48,7 +48,7 @@ public final nonisolated class Api: Sendable {
                 self.stringValues = stringValues
             }
 
-            public struct ChannelMessage: Codable {
+            public struct ChannelMessage: Codable, Sendable {
                 public let text: String
 
                 public init(text: String) {
@@ -63,7 +63,7 @@ public final nonisolated class Api: Sendable {
                     self.channel = channel
                 }
 
-                public struct ChannelMessage: Codable {
+                public struct ChannelMessage: Codable, Sendable {
                     public let body: String
 
                     public init(body: String) {
@@ -79,7 +79,7 @@ public final nonisolated class Api: Sendable {
                     self.channel = channel
                 }
 
-                public struct ChannelMessage: Codable {
+                public struct ChannelMessage: Codable, Sendable {
                     public let online: Bool
 
                     public init(online: Bool) {
@@ -91,21 +91,31 @@ public final nonisolated class Api: Sendable {
             public enum Event: Codable {
                 case message(Message)
                 case presence(Presence)
+                case unknown(JSONValue)
 
                 enum CodingKeys: String, CodingKey {
                     case kind
                 }
 
                 public func encode(to encoder: Encoder) throws {
-                    var container = encoder.container(keyedBy: CodingKeys.self)
                     switch self {
                     case .message(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("message", forKey: .kind)
                         try params.encode(to: encoder)
                     case .presence(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("presence", forKey: .kind)
                         try params.encode(to: encoder)
+                    case .unknown(let value):
+                        try value.encode(to: encoder)
                     }
+                }
+
+                public var unknownDiscriminator: String? {
+                    guard case .unknown(.dictionary(let object)) = self,
+                          case .string(let tag)? = object["kind"] else { return nil }
+                    return tag
                 }
 
                 public init(from decoder: Decoder) throws {
@@ -115,7 +125,7 @@ public final nonisolated class Api: Sendable {
                     case "message": self = .message(try Message(from: decoder))
                     case "presence": self = .presence(try Presence(from: decoder))
                     default:
-                        throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "Unknown value: \(disc)")
+                        self = .unknown(try JSONValue(from: decoder))
                     }
                 }
             }
@@ -127,7 +137,7 @@ public final nonisolated class Api: Sendable {
                     self.channel = channel
                 }
 
-                public struct ChannelMessage: Codable {
+                public struct ChannelMessage: Codable, Sendable {
                     public let count: Int
 
                     public init(count: Int) {
@@ -147,7 +157,7 @@ public final nonisolated class Api: Sendable {
                 self.channel = channel
             }
 
-            public struct ChannelMessage: Codable {
+            public struct ChannelMessage: Codable, Sendable {
                 public let count: Int
 
                 public init(count: Int) {
@@ -191,5 +201,5 @@ public final nonisolated class Blocks: Sendable {
 // MARK: - Servers
 
 public nonisolated enum Servers {
-    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")
+    public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")
 }

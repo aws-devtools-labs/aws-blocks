@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 
 export function metricsTests(getApi: () => typeof apiType) {
   describe('Metrics BB', () => {

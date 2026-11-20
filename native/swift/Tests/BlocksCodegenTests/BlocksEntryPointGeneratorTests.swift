@@ -91,16 +91,16 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
             "public final nonisolated class Todos: Sendable {",
             "public final nonisolated class Blocks: Sendable {",
             "public nonisolated enum Servers {",
-            "public nonisolated struct Todo: Codable {",
-            "public nonisolated enum Status: String, Codable {"
+            "public nonisolated struct Todo: Codable, Sendable {",
+            "public nonisolated enum Status: RawRepresentable, Codable, Hashable, Sendable {"
         ])
         let members = (output.api + output.models).split(separator: "\n").filter { $0.hasPrefix(" ") && $0.contains("nonisolated") }
         XCTAssertEqual(members, [], "members inherit nonisolated from their type")
     }
 
     func testDefaultsFollowTheFirstOfSeveralServers() throws {
-        let sandbox = #"{ "name": "sandbox", "url": "https://a.example/prod/aws-blocks/api" }"#
-        let local = #"{ "name": "local", "url": "http://localhost:3001/aws-blocks/api" }"#
+        let sandbox = #"{ "name": "sandbox", "url": "https://a.example/prod/cdk-blocks/api" }"#
+        let local = #"{ "name": "local", "url": "http://localhost:3001/cdk-blocks/api" }"#
         let sandboxFirst = try generate(servers: "[\(sandbox), \(local)]").api
         XCTAssertTrue(sandboxFirst.contains("        server: BlocksRuntime.BlocksServer = Servers.sandbox,"))
         XCTAssertTrue(sandboxFirst.contains("    public convenience init(server: BlocksServer = Servers.sandbox) {"))
@@ -112,24 +112,24 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
 
     func testWithoutServersTheDefaultIsTheFullLocalRpcUrl() throws {
         let api = try generate().api
-        XCTAssertTrue(api.contains(#"public static let local = BlocksServer(name: "local", url: "http://localhost:3001/aws-blocks/api")"#))
+        XCTAssertTrue(api.contains(#"public static let local = BlocksServer(name: "local", url: "http://localhost:3001/cdk-blocks/api")"#))
     }
 
     func testServerUrlsAreEmittedVerbatim() throws {
-        let api = try generate(servers: #"[{ "name": "sandbox", "url": "https://a.example/prod/aws-blocks/api" }]"#).api
-        XCTAssertTrue(api.contains(#"url: "https://a.example/prod/aws-blocks/api")"#))
-        XCTAssertFalse(api.contains("/aws-blocks/api/aws-blocks/api"))
+        let api = try generate(servers: #"[{ "name": "sandbox", "url": "https://a.example/prod/cdk-blocks/api" }]"#).api
+        XCTAssertTrue(api.contains(#"url: "https://a.example/prod/cdk-blocks/api")"#))
+        XCTAssertFalse(api.contains("/cdk-blocks/api/cdk-blocks/api"))
     }
 
     func testServerNamedDefaultIsBacktickedWhereDeclaredAndUsed() throws {
-        let api = try generate(servers: #"[{ "name": "default", "url": "https://a.example/aws-blocks/api" }]"#).api
-        XCTAssertTrue(api.contains(#"public static let `default` = BlocksServer(name: "default", url: "https://a.example/aws-blocks/api")"#))
+        let api = try generate(servers: #"[{ "name": "default", "url": "https://a.example/cdk-blocks/api" }]"#).api
+        XCTAssertTrue(api.contains(#"public static let `default` = BlocksServer(name: "default", url: "https://a.example/cdk-blocks/api")"#))
         XCTAssertTrue(api.contains("        server: BlocksRuntime.BlocksServer = Servers.`default`,"))
     }
 
     func testServerNameAndUrlAreEscapedLiterals() throws {
-        let api = try generate(servers: #"[{ "name": "q\"b\\", "url": "https://a.example/\"/aws-blocks/api" }]"#).api
-        XCTAssertTrue(api.contains(#"BlocksServer(name: "q\"b\\", url: "https://a.example/\"/aws-blocks/api")"#))
+        let api = try generate(servers: #"[{ "name": "q\"b\\", "url": "https://a.example/\"/cdk-blocks/api" }]"#).api
+        XCTAssertTrue(api.contains(#"BlocksServer(name: "q\"b\\", url: "https://a.example/\"/cdk-blocks/api")"#))
     }
 
     func testNamespacesNamedLikeBlocksMembersAreSuffixed() throws {
@@ -213,7 +213,9 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
     // A namespace class named like any type the generated files name unqualified would shadow it.
     func testReservedClassNamesCoverEveryTypeGeneratedCodeNamesUnqualified() throws {
         let fixtures = swiftPackageURL.deletingLastPathComponent().appendingPathComponent("codegen-fixtures")
+        // A fixture whose Swift golden is a codegen error (a transferable parameter) generates no code to scan.
         let specs = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
+            .filter { !FileManager.default.fileExists(atPath: $0.appendingPathComponent("swift/codegen-error.txt").path) }
             .map { $0.appendingPathComponent("spec.json") }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
             .map { try String(contentsOf: $0) }
@@ -258,7 +260,7 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
         var lines: [String] = []
         generator.emitNamespaceHeader(name, defaultServer: "Servers.local", lines: &lines)
         generator.emitBlocksEntryPoint([name], defaultServer: "Servers.local", lines: &lines)
-        generator.emitServers([ServerDefinition(name: "local", url: "http://localhost:3001/aws-blocks/api")], lines: &lines)
+        generator.emitServers([ServerDefinition(name: "local", url: "http://localhost:3001/cdk-blocks/api")], lines: &lines)
         let code = lines.filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
             .replacingOccurrences(of: #""[^"]*""#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"BlocksRuntime\.\w+"#, with: "", options: .regularExpression)
@@ -269,7 +271,7 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
 
     // Keeps the rule of `testNoForceUnwrapsInGeneratedCode` for the new emission.
     func testEntryPointHasNoExclamationMark() throws {
-        let api = try generate(namespaces: ["", "client", "class"], servers: #"[{ "name": "default", "url": "https://a.example/aws-blocks/api" }]"#).api
+        let api = try generate(namespaces: ["", "client", "class"], servers: #"[{ "name": "default", "url": "https://a.example/cdk-blocks/api" }]"#).api
         XCTAssertFalse(api.contains("!"))
     }
 

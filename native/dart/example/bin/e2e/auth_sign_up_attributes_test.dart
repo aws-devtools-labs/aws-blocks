@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:blocks_runtime/blocks_runtime.dart' show blocksDeepEquals;
 
 import 'harness.dart';
@@ -58,7 +61,7 @@ void _roundTripFlat() {
     'toJson() puts the attributes flat beside username and password '
     '(got: $encoded)',
   );
-  final decoded = AuthBasicApiSetAuthStateInput.fromJson(wire);
+  final decoded = AuthActionInput.fromJson(wire);
   check(
     decoded == signUp,
     'fromJson() of the flat wire form gives the same SignUpInput '

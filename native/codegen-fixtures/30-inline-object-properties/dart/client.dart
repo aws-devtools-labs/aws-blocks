@@ -1,21 +1,50 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
-// Requires blocks_runtime 0.1.5 or later.
+// Requires blocks_runtime 0.2.0 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
+export 'package:blocks_runtime/blocks_runtime.dart' show ApiException, BlocksClient, BlocksException, ClientClosedException, InMemorySessionStore, SessionStore, TransportException, isBlocksError;
 
 // --- Models ---
 
-enum ShipmentDestinationGeoAccuracySource {
+sealed class ShipmentDestinationGeoAccuracySource {
+  static const gps = ShipmentDestinationGeoAccuracySourceKnown.gps;
+  static const cell = ShipmentDestinationGeoAccuracySourceKnown.cell;
+  static const values = ShipmentDestinationGeoAccuracySourceKnown.values;
+  static final Map<String, ShipmentDestinationGeoAccuracySourceKnown> _byJson = ShipmentDestinationGeoAccuracySourceKnown.values.asNameMap();
+
+  String toJson();
+  static ShipmentDestinationGeoAccuracySource fromJson(String json) => _byJson[json] ?? ShipmentDestinationGeoAccuracySourceUnknown(json);
+}
+
+enum ShipmentDestinationGeoAccuracySourceKnown implements ShipmentDestinationGeoAccuracySource {
   gps,
   cell
 ;
 
+  @override
   String toJson() => name;
-  static ShipmentDestinationGeoAccuracySource fromJson(String json) => values.byName(json);
+}
+
+final class ShipmentDestinationGeoAccuracySourceUnknown implements ShipmentDestinationGeoAccuracySource {
+  final String value;
+
+  const ShipmentDestinationGeoAccuracySourceUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ShipmentDestinationGeoAccuracySourceUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'ShipmentDestinationGeoAccuracySourceUnknown' '($value)';
 }
 
 
@@ -492,9 +521,9 @@ class Receipt {
 }
 
 
-class ApiApi {
+class Api {
   final BlocksClient _client;
-  ApiApi(this._client);
+  Api(this._client);
 
   Future<Shipment> getShipment({required String id}) async {
     final params = <dynamic>[
@@ -527,11 +556,18 @@ class ApiApi {
 // --- Blocks Client ---
 
 class Blocks {
-  late final ApiApi api;
+  late final Api api;
+  late final BlocksClient _client;
 
   Blocks({required String baseUrl, SessionStore? sessionStore}) {
     final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);
-    api = ApiApi(client);
+    _client = client;
+    api = Api(client);
   }
+
+  /// Closes the client. A call after this throws a [ClientClosedException],
+  /// and so does an `OidcClient` one of its calls returned. Closing twice
+  /// does nothing more.
+  void close() => _client.close();
 }
 
