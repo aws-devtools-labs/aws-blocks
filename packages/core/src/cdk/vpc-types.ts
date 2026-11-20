@@ -61,6 +61,35 @@ export interface BlocksVpcOptions {
 	 * @default true
 	 */
 	provisionEndpoints?: boolean;
+
+	/**
+	 * Derive the construct ids (and so the CloudFormation logical ids) of the
+	 * Blocks-provisioned VPC endpoints from each service's short name, for example
+	 * `VpcGws3` and `VpcIflogs`.
+	 *
+	 * When `false`, an endpoint's id is built from the service's full name, which
+	 * embeds CDK token sequence numbers. Those numbers shift when code that runs
+	 * earlier in the synth creates more or fewer tokens (an unrelated change, or a
+	 * framework upgrade), and a shifted id makes CloudFormation replace the
+	 * endpoint. With `true`, the ids change only when the set of endpoints changes.
+	 *
+	 * Recommended for new apps.
+	 *
+	 * **Leave it off for an existing stack that already has Blocks-provisioned
+	 * endpoints.** Turning it on changes each endpoint's logical id once, so
+	 * CloudFormation creates the new endpoints before it deletes the old ones, and
+	 * the two can't coexist: the S3 gateway endpoint fails with "route table ...
+	 * already has a route", the CloudWatch Logs interface endpoint fails with a
+	 * conflicting DNS domain, and the update rolls back. To adopt it on an
+	 * existing stack, remove the Blocks-provisioned endpoints first (a deploy with
+	 * `provisionEndpoints: false`), then deploy with this option on. The compute
+	 * in the VPC can't reach those services between the two deploys.
+	 *
+	 * Has no effect when `provisionEndpoints` is `false`.
+	 *
+	 * @default false
+	 */
+	stableEndpointIds?: boolean;
 }
 
 /**

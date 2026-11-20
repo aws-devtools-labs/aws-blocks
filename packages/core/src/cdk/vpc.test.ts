@@ -49,6 +49,7 @@ function synthWith(
 		network: vpc,
 		subnets: opts?.subnets,
 		provisionEndpoints: opts?.provisionEndpoints,
+		stableEndpointIds: opts?.stableEndpointIds,
 	};
 	if (opts?.withContext !== false) initializeVpc(stack, options);
 	bbs(stack);
@@ -622,5 +623,118 @@ describe('lazy VPC derivation', () => {
 		const { iface, gateway } = endpointCounts(template);
 		assert.equal(iface, 2, 'SQS + Logs');
 		assert.equal(gateway, 1, 'S3 gateway');
+	});
+});
+
+describe('finalizeVpc — endpoint logical ids', () => {
+	/** Logical ids of every VPC endpoint in the template, sorted. */
+	function endpointIds(template: Template): string[] {
+		return Object.keys(template.findResources(IFACE)).sort();
+	}
+
+	/**
+	 * Synth a stack with one BB that requests endpoints. `before` runs first, so
+	 * it can create unrelated tokens, and the service objects are built inside
+	 * the synth, so their token numbers come from the token counter at that
+	 * point (the way an upgrade that changes earlier code shifts them).
+	 */
+	function synthAfter(before: (stack: cdk.Stack) => void, stableEndpointIds?: boolean): Template {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'TestStack', { env: { account: '123456789012', region: 'us-east-1' } });
+		before(stack);
+		const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 1 });
+		const options: BlocksVpcOptions = { network: vpc, stableEndpointIds };
+		initializeVpc(stack, options);
+		new FakeBB(stack, 'Db', {
+			gatewayEndpoints: [new ec2.GatewayVpcEndpointAwsService('dynamodb')],
+			interfaceEndpoints: [
+				new ec2.InterfaceVpcEndpointAwsService('secretsmanager'),
+				new ec2.InterfaceVpcEndpointAwsService('ssm'),
+			],
+		});
+		finalizeVpc(stack, options);
+		return Template.fromStack(stack);
+	}
+
+	/** Unrelated construct that creates tokens before the VPC is built. */
+	function addTokens(stack: cdk.Stack): void {
+		const topic = new cdk.CfnResource(stack, 'Unrelated', { type: 'AWS::SNS::Topic' });
+		for (let i = 0; i < 25; i++) cdk.Lazy.string({ produce: () => topic.ref });
+	}
+
+	const allServices = (scope: Construct): void => {
+		new FakeBB(scope, 'Kv', { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+		new FakeBB(scope, 'Job', { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] });
+		new FakeBB(scope, 'Db', {
+			interfaceEndpoints: [
+				ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+				ec2.InterfaceVpcEndpointAwsService.RDS_DATA,
+				ec2.InterfaceVpcEndpointAwsService.SSM,
+			],
+		});
+	};
+
+	it('by default keeps the ids derived from the full service name, as before', () => {
+		const template = synthWith(allServices);
+		// The id is `VpcGw`/`VpcIf` + the alphanumerics of `service.name`, so an
+		// existing stack keeps the logical ids it was deployed with.
+		const legacy = (prefix: string, service: { name: string }): string =>
+			`${prefix}${service.name.replace(/[^a-zA-Z0-9]/g, '')}`;
+		const expected = [
+			legacy('VpcGw', ec2.GatewayVpcEndpointAwsService.S3),
+			legacy('VpcGw', ec2.GatewayVpcEndpointAwsService.DYNAMODB),
+			legacy('VpcIf', ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS),
+			legacy('VpcIf', ec2.InterfaceVpcEndpointAwsService.SQS),
+			legacy('VpcIf', ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER),
+			legacy('VpcIf', ec2.InterfaceVpcEndpointAwsService.RDS_DATA),
+			legacy('VpcIf', ec2.InterfaceVpcEndpointAwsService.SSM),
+		].sort();
+		const ids = endpointIds(template);
+		assert.deepEqual(ids.map((id) => id.replace(/[0-9A-F]{8}$/, '')).sort(), expected);
+		assert.ok(
+			ids.some((id) => id.startsWith('VpcGwcomamazonawsTokenAWSRegion')),
+			`old-shaped ids: ${ids}`,
+		);
+	});
+
+	it('with stableEndpointIds, keeps the ids when an unrelated construct adds tokens before the VPC', () => {
+		const baseline = endpointIds(synthAfter(() => {}, true));
+		const shifted = endpointIds(synthAfter(addTokens, true));
+		assert.deepEqual(shifted, baseline);
+	});
+
+	it('with stableEndpointIds, derives every id from the service short name, with no token text', () => {
+		const ids = endpointIds(synthWith(allServices, { stableEndpointIds: true }));
+		for (const id of ids) assert.doesNotMatch(id, /Token/i, `no token text in ${id}`);
+		// Snapshot of the full id set. Changing any of these replaces the endpoint
+		// on existing stacks, so treat a diff here as a deliberate migration.
+		assert.deepEqual(ids.map((id) => id.replace(/[0-9A-F]{8}$/, '')).sort(), [
+			'VpcGwdynamodb',
+			'VpcGws3',
+			'VpcIflogs',
+			'VpcIfrdsdata',
+			'VpcIfsecretsmanager',
+			'VpcIfsqs',
+			'VpcIfssm',
+		]);
+	});
+
+	it('with stableEndpointIds, derives a gateway id quickly from a name full of token-like text', () => {
+		const hostilePrefix = `${'${Token['.repeat(50_000)}]x`;
+		const started = Date.now();
+		const ids = endpointIds(
+			synthWith(
+				(scope) =>
+					new FakeBB(scope, 'Kv', {
+						gatewayEndpoints: [new ec2.GatewayVpcEndpointAwsService('dynamodb', hostilePrefix)],
+					}),
+				{ stableEndpointIds: true },
+			),
+		);
+		assert.ok(
+			ids.some((id) => id.startsWith('VpcGwdynamodb')),
+			`dynamodb gateway id: ${ids}`,
+		);
+		assert.ok(Date.now() - started < 5_000, 'id derivation stays linear in the name length');
 	});
 });

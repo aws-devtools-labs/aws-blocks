@@ -127,6 +127,33 @@ Pass the id exactly as above. The id the CDK CLI prints under the warning is
 prefixed (`Annotation::blocks:vpc:endpoint-client-unadmitted`) and does not match
 here.
 
+### Stable Endpoint IDs
+
+By default, a Blocks-provisioned endpoint's logical id is built from the
+service's full name, which embeds CDK token sequence numbers (for example
+`VpcGwcomamazonawsTokenAWSRegion13s3`). Those numbers shift when code that runs
+earlier in the synth creates more or fewer tokens, such as an unrelated change
+or a framework upgrade. A shifted id makes CloudFormation replace the endpoint,
+and the update fails as described below.
+
+Set `stableEndpointIds: true` to derive the ids from each service's short name
+instead (`VpcGws3`, `VpcIflogs`, `VpcIfssm`, ...). They then change only when the
+set of endpoints changes. This is recommended for new apps:
+
+```typescript
+defaults: { ...BlocksPresets.production, vpc: { network: vpc, stableEndpointIds: true } },
+```
+
+**Leave it off for an existing stack that already has Blocks-provisioned
+endpoints.** Turning it on changes each endpoint's logical id once.
+CloudFormation creates the new endpoints before it deletes the old ones, and the
+two can't coexist: the S3 gateway endpoint fails with "route table ... already
+has a route", the CloudWatch Logs interface endpoint fails with a conflicting
+DNS domain, and the update rolls back. To adopt it on an existing stack, first
+deploy with `provisionEndpoints: false` to remove the Blocks-provisioned
+endpoints, then deploy with `stableEndpointIds: true`. The compute in the VPC
+can't reach those services between the two deploys.
+
 ### Database in a VPC
 
 `Database` and `DatabaseCluster` create nothing in the VPC and need no VPC
@@ -159,6 +186,15 @@ interface BlocksVpcOptions {
    * @default true
    */
   provisionEndpoints?: boolean;
+
+  /**
+   * Derive the endpoint logical ids from each service's short name, so they
+   * change only when the set of endpoints changes. Recommended for new apps;
+   * leave it off on a stack that already has Blocks-provisioned endpoints
+   * (see "Stable Endpoint IDs").
+   * @default false
+   */
+  stableEndpointIds?: boolean;
 }
 ```
 

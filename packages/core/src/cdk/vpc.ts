@@ -305,16 +305,26 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	// endpoints are free (route-table entries, no ENI), so this is unconditional.
 	gatewayEndpoints.push(ec2.GatewayVpcEndpointAwsService.S3);
 
+	// The dedup key and construct id of each endpoint. By default both come from
+	// `service.name`, exactly as they always have, so an existing stack keeps its
+	// logical ids. With `stableEndpointIds` they come from the service short name,
+	// which carries no CDK token numbers (see endpointServiceKey).
+	const stable = options.stableEndpointIds === true;
+	const endpointKey = (service: ec2.GatewayVpcEndpointAwsService | ec2.InterfaceVpcEndpointAwsService): string =>
+		stable ? endpointServiceKey(service) : service.name;
+	const endpointId = (prefix: string, key: string): string =>
+		stable ? `${prefix}${key}` : `${prefix}${key.replace(/[^a-zA-Z0-9]/g, '')}`;
+
 	// Provision gateway endpoints (deduplicated). Gateway endpoints attach to
 	// route tables, not ENIs, so they have no security-group layer.
 	const provisionedGateway = new Set<string>();
 
 	for (const service of gatewayEndpoints) {
-		const key = service.name;
+		const key = endpointKey(service);
 		if (provisionedGateway.has(key)) continue;
 		provisionedGateway.add(key);
 
-		const constructId = `VpcGw${key.replace(/[^a-zA-Z0-9]/g, '')}`;
+		const constructId = endpointId('VpcGw', key);
 		new ec2.GatewayVpcEndpoint(scope, constructId, { vpc, service });
 	}
 
@@ -375,11 +385,11 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	const provisionedInterface = new Set<string>();
 
 	for (const service of interfaceEndpoints) {
-		const key = service.name;
+		const key = endpointKey(service);
 		if (provisionedInterface.has(key)) continue;
 		provisionedInterface.add(key);
 
-		const constructId = `VpcIf${key.replace(/[^a-zA-Z0-9]/g, '')}`;
+		const constructId = endpointId('VpcIf', key);
 		const endpoint = new ec2.InterfaceVpcEndpoint(scope, constructId, {
 			vpc,
 			service,
@@ -396,6 +406,33 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 			Node.of(dependent).addDependency(endpoint);
 		}
 	}
+}
+
+/**
+ * The stable key of a VPC endpoint service: its short name (`s3`, `dynamodb`,
+ * `logs`, `secretsmanager`, ...) with non-alphanumerics removed. It is both the
+ * dedup key and the suffix of the endpoint's construct id, so it must not depend
+ * on `service.name`: that string embeds CDK token sequence numbers
+ * (`com.amazonaws.${Token[AWS.Region.13]}.s3`), which shift whenever code that
+ * runs earlier creates more or fewer tokens, and a shifted construct id changes
+ * the logical id and makes CloudFormation replace the endpoint.
+ *
+ * Interface services carry `shortName`. Gateway services don't, so the short
+ * name is the last dot-separated segment of `name` after its last token (a
+ * token's own text contains dots, e.g. `AWS.Region.13`). Plain string scanning,
+ * not a regex, so a hostile service name can't make it slow.
+ */
+function endpointServiceKey(service: ec2.GatewayVpcEndpointAwsService | ec2.InterfaceVpcEndpointAwsService): string {
+	const shortName =
+		'shortName' in service
+			? service.shortName
+			: (service.name
+					.slice(service.name.lastIndexOf('}') + 1)
+					.split('.')
+					.pop() ?? '');
+	const key = shortName.replace(/[^a-zA-Z0-9]/g, '');
+	if (!key) throw new Error(`Cannot derive a stable construct id for VPC endpoint service '${service.name}'.`);
+	return key;
 }
 
 /**
