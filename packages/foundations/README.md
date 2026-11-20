@@ -1,17 +1,12 @@
 # foundations
 
-Standard Building Blocks for common AWS services in the AWS CDK Blocks.
+Private placeholder package for a consolidated entry point to the common Building Blocks.
 
-> **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md), [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) and [`packages/bb-auth/README.md`](../bb-auth/README.md), which are the authoritative reference for the shipped blocks. The `Auth` section below matches the shipped API.
+`foundations` is private. Its `src/index.ts` default-exports an empty object; it does not export any Building Blocks. Use [`aws-cdk-blocks`](../blocks/README.md) for the umbrella package or see `packages/bb-<name>/README.md` for an individual block's API.
 
-## Overview
+## Auth
 
-`foundations` provides production-ready Building Blocks for the most common AWS services. Each block includes CDK infrastructure, runtime SDK integration, and local mocking for development without an AWS account.
-
-## Available Building Blocks
-
-### Auth
-One authentication block for email + password, social sign-in, generic OIDC and SAML. This section describes the shipped API; see [`packages/bb-auth/README.md`](../bb-auth/README.md) (including *Which option and why*) for the full reference.
+An app with two `Auth` blocks. [`packages/bb-auth/README.md`](../bb-auth/README.md) is the reference for `Auth`. `packages/bb-auth/src/multi-block-snippets.test.ts` compiles and loads this snippet:
 
 ```typescript
 import { AppSetting, Auth } from 'aws-cdk-blocks';
@@ -38,160 +33,8 @@ export const ssoApi = sso.createApi();
 const user = await auth.requireAuth(ctx);
 ```
 
-### Storage (FileBucket)
-S3-backed file storage with optimized naming patterns.
-
-```typescript
-import { FileBucket } from 'aws-cdk-blocks';
-
-const files = new FileBucket('app', 'uploads');
-await files.write('key', content);
-const data = await files.read('key');
-```
-
-### KVStore
-Key-value and document storage backed by DynamoDB. With no options it is a string-keyed store; with a `schema` and a `key` it holds records that you list or query.
-
-```typescript
-import { KVStore } from 'aws-cdk-blocks';
-import { z } from 'zod';
-
-const store = new KVStore(scope, 'settings');
-
-const events = new KVStore(scope, 'events', {
-  schema: z.object({ userId: z.string(), timestamp: z.number(), kind: z.string() }),
-  key: { partitionKey: 'userId', sortKey: 'timestamp' },
-});
-
-// Data methods run at request time, inside a handler — not at CDK synth time.
-await store.put(`user:${userId}:theme`, 'dark');
-const theme = await store.get(`user:${userId}:theme`);
-
-await events.put({ userId, timestamp: Date.now() }, { kind: 'sign-in' });
-for await (const { key, value } of events.query({ where: { userId: { equals: userId } }, order: 'desc', limit: 10 })) {
-  console.log(key.timestamp, value.kind);
-}
-```
-
-See [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) for the full API, options, keys, indexes, TTL, and conditional writes.
-
-### SQLTable
-Relational database with SQL query support. Uses SQLite locally, DSQL on AWS.
-
-```typescript
-import { SQLTable } from 'aws-cdk-blocks';
-
-const db = new SQLTable('app', 'products', {
-  schema: `
-    CREATE TABLE products (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      price REAL
-    )
-  `
-});
-```
-
-### Secret
-Secure secret storage using AWS Secrets Manager.
-
-```typescript
-import { Secret } from 'aws-cdk-blocks';
-
-const apiKey = new Secret('app', 'api-key');
-const key = await apiKey.getValue();
-```
-
-### AppSetting
-A single application configuration value using AWS Systems Manager Parameter Store.
-
-```typescript
-import { AppSetting } from 'aws-cdk-blocks';
-
-const newUiFlag = new AppSetting(scope, 'new-ui', { value: 'disabled' });
-
-// Data methods run at request time, inside a handler.
-await newUiFlag.put('enabled');
-const newUI = await newUiFlag.get();
-```
-
-See [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) for the full API and options.
-
-### CronJob
-Scheduled background tasks using EventBridge.
-
-```typescript
-import { CronJob } from 'aws-cdk-blocks';
-
-const cleanup = new CronJob('app', 'cleanup', {
-  schedule: 'rate(1 day)',
-  handler: async () => {
-    // Cleanup logic
-  }
-});
-```
-
-### AsyncJob
-Background job processing for long-running tasks.
-
-```typescript
-import { AsyncJob } from 'aws-cdk-blocks';
-
-const processor = new AsyncJob('app', 'processor');
-await processor.enqueue({ task: 'process', data: {...} });
-```
-
-### Realtime
-WebSocket-based real-time communication using AppSync Event API.
-
-```typescript
-import { Realtime } from 'aws-cdk-blocks';
-
-const chat = new Realtime('app', 'chat');
-await chat.publish('room-1', { message: 'Hello!' });
-```
-
-### LLM
-Integration with AWS Bedrock for AI/ML capabilities.
-
-```typescript
-import { LLM } from 'aws-cdk-blocks';
-
-const ai = new LLM('app', 'assistant', {
-  model: 'anthropic.claude-v2'
-});
-const response = await ai.generate('Explain AWS CDK Blocks');
-```
-
-## Installation
-
-```bash
-npm install aws-cdk-blocks
-```
-
-## Design Principles
-
-All Building Blocks in this package follow these principles:
-
-1. **Local-first** - Work without AWS account during development
-2. **Type-safe** - Full TypeScript support with IDE autocomplete
-3. **Scalable** - Built on AWS services that scale automatically
-4. **Documented** - Rich docstrings with performance characteristics
-5. **Composable** - Can be combined to create higher-level abstractions
-
-## Performance Characteristics
-
-Each Building Block includes detailed performance documentation in its docstrings, visible in your IDE. This helps both humans and AI coding agents make informed decisions about which blocks to use.
-
-## Creating Custom Building Blocks
-
-See the Building Block Guide (see docs/reference/building-block-structure.md) for instructions on creating your own blocks that integrate with this ecosystem.
-
-## Related Packages
+## Related
 
 - [aws-cdk-blocks](../blocks/README.md) - Main package with all Building Blocks
 - [create-blocks-app](../create-blocks-app/README.md) - Project scaffolding CLI
-
-## License
-
-Apache-2.0
+- [Building block structure](../../docs/reference/building-block-structure.md) - File structure and patterns for a new Building Block

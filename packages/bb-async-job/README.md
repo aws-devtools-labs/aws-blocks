@@ -2,30 +2,15 @@
 
 Background job processing backed by SQS, run on Lambda or a container.
 
-> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+**When to use:** Work that must not block the API response: sending email, processing an upload, generating a report.
 
-## Quick Reference
-
-**Common Operations → Methods**
-
-| What you want | Use this method |
-|---------------|----------------|
-| Submit a job | `submit(payload)` |
-| Submit with delay | `submit(payload, { delaySeconds: 60 })` |
-| Submit multiple jobs | `submitBatch(payloads)` |
-| Get job ID back | `const { jobId } = await job.submit(payload)` |
-| Read a job's state | `getStatus(jobId)` (needs `trackStatus: true`) |
-| Wait for a job to finish | `waitUntilComplete(jobId)` (needs `trackStatus: true`) |
+**When NOT to use:** Work that runs on a schedule: use `CronJob`.
 
 **Keywords:** queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS
 
-**Available Methods:**
-- **`submit(payload, options?)`** - Enqueue a single job (returns `{ jobId }`)
-- **`submitBatch(payloads, options?)`** - Enqueue up to 10,000 jobs in one call — batches larger than SQS's 10-entry / 256 KB per-request limits are split across multiple `SendMessageBatch` requests automatically and sent with bounded concurrency (over 10,000 throws `AsyncJobErrors.BatchTooLarge`; returns `{ jobIds, failed: [] }` on full success). Because a multi-chunk submit is not atomic, on partial failure it **throws** `AsyncJobErrors.BatchSubmitFailed` — the error has `.jobIds` (real MessageIds for the entries that made it onto the queue, `null` at failed indexes) and `.failed[]` (each entry's `index`, `code`, `message`; a transport-level `send()` rejection fails its whole chunk and short-circuits the rest). The mock runtime never partially fails; this is AWS-only.
-- **`getStatus(jobId)`** - Read a job's recorded state and full transition history (returns `AsyncJobStatus | null`). Requires `trackStatus: true`.
-- **`waitUntilComplete(jobId, options?)`** - Wait until the job reaches `complete` or `failed` (returns the final `AsyncJobStatus`). Requires `trackStatus: true`.
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
-## Quick Start
+## Quick start
 
 ```typescript
 import { Scope } from '@aws-cdk-blocks/core';
@@ -44,34 +29,69 @@ const emailJob = new AsyncJob(scope, 'welcome-email', {
 const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Welcome' });
 ```
 
-## When to Use
+## API
 
-- Sending emails or notifications
-- Processing file uploads
-- Generating reports
-- Any fire-and-forget task that shouldn't block the API response
+`new AsyncJob<T>(scope, id, options)`. `T` is the payload type.
 
-## Options
-
-| Option | Default | Description |
+| Method | Returns | Description |
 |--------|---------|-------------|
-| `handler` | (required) | Async function that processes each job |
-| `schema` | — | StandardSchemaV1 (Zod, Valibot, etc.) for payload validation on submit |
-| `maxRetries` | 3 | Total deliveries, **including the first**, before the job goes to the dead-letter queue (the queue's `maxReceiveCount`). `3` = one attempt plus two retries; to run a job at most twice, set `maxRetries: 2` |
-| `batchSize` | 10 | Messages per Lambda invocation |
-| `maxBatchingWindowSeconds` | 5 | Seconds SQS waits to fill a batch before invoking the Lambda |
-| `trackStatus` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |
-| `logger` | — | Optional logger for internal operations; defaults to a Logger at error level |
-| `compute` | the scope's compute | Inherits the nearest parent scope's compute, falling back to the backend default when none is assigned. Assign a container `Compute` explicitly for long-running work. |
-| `timeoutSeconds` | — | Wall-clock limit for one delivery. On a container the runtime terminates the job's worker at the deadline; on serverless it's bounded by the function timeout. |
-| `maxConcurrencyPerCPU` | 5 per job per instance when omitted | Container-only. When specified, in-flight deliveries **per vCPU**; the per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`. Higher for IO-bound work; explicitly set 1 for CPU-bound. Omitting it uses five deliveries per job per instance, regardless of vCPU count. |
+| `submit(payload, { delaySeconds? })` | `Promise<{ jobId }>` | Enqueues one job and returns as soon as it is queued. `delaySeconds` (0–900, default 0) delays processing. |
+| `submitBatch(payloads, { delaySeconds? })` | `Promise<{ jobIds, failed }>` | Enqueues 1 to 10,000 jobs. See [submitBatch()](#submitbatch). |
+| `getStatus(jobId)` | `Promise<AsyncJobStatus \| null>` | Reads a job's recorded state and transition history. `null` for a job id it has never seen. Requires `trackStatus: true`. |
+| `waitUntilComplete(jobId, { timeoutMs?, pollIntervalMs?, signal? })` | `Promise<AsyncJobStatus>` | Waits until the job reaches `complete` or `failed` and returns the final status. Requires `trackStatus: true`. See [Job status](#job-status-trackstatus). |
 
-### Running on a container compute
+### Options
 
-A job inherits the nearest parent scope's compute unless `compute` is set
-explicitly. With no scope assignment it falls back to the backend's default
-compute, normally Lambda. Assign a container `Compute` explicitly for
-long-running or high-memory work:
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `handler` | `(payload: T, ctx: AsyncJobContext) => Promise<void>` | (required) | Async function that processes each job. Must be idempotent: delivery is at-least-once on every compute. |
+| `schema` | `StandardSchemaV1<T>` | — | StandardSchemaV1 (Zod, Valibot, etc.) for payload validation on submit |
+| `maxRetries` | `number` | 3 | Total deliveries, **including the first**, before the job goes to the dead-letter queue (the queue's `maxReceiveCount`). `3` = one attempt plus two retries; to run a job at most twice, set `maxRetries: 2` |
+| `batchSize` | `number` | 10 | Lambda only. Messages per Lambda invocation. 1–10, or up to 10000 when `maxBatchingWindowSeconds` is greater than 0. See [Batching on Lambda](#batching-on-lambda). |
+| `maxBatchingWindowSeconds` | `number` | 5 | Lambda only. Seconds SQS waits to fill a batch before invoking the Lambda. 0–300. |
+| `trackStatus` | `boolean` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |
+| `logger` | `ChildLogger` | — | Optional logger for internal operations; defaults to a Logger at error level |
+| `compute` | `Compute` | the scope's compute | Inherits the nearest parent scope's compute, falling back to the backend default when none is assigned. Assign a container `Compute` explicitly for long-running work. |
+| `timeoutSeconds` | `number` | — | Wall-clock limit for one delivery. On a container the runtime terminates the job's worker at the deadline; on serverless it's bounded by the function timeout. |
+| `maxConcurrencyPerCPU` | `number` | 5 per job per instance when omitted | Container-only, and a compile error without an explicit container `compute`. In-flight deliveries **per vCPU**; the per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`. Higher for IO-bound work; explicitly set 1 for CPU-bound. |
+
+## Errors
+
+```typescript
+import { AsyncJobErrors, isBlocksError } from 'aws-cdk-blocks';
+
+try {
+  await emailJob.submit(payload);
+} catch (e: unknown) {
+  if (isBlocksError(e, AsyncJobErrors.PayloadTooLarge)) {
+    // store the data elsewhere and submit a reference to it
+  }
+}
+```
+
+| Constant | `error.name` | Thrown when |
+|----------|--------------|-------------|
+| `AsyncJobErrors.PayloadTooLarge` | `PayloadTooLargeException` | `submit()` or `submitBatch()`: a serialized payload exceeds 256 KB. |
+| `AsyncJobErrors.ValidationFailed` | `ValidationFailedException` | `submit()` or `submitBatch()`: a payload fails `schema`. |
+| `AsyncJobErrors.BatchEmpty` | `BatchEmptyException` | `submitBatch([])`. |
+| `AsyncJobErrors.BatchTooLarge` | `BatchTooLargeException` | `submitBatch()` with more than 10,000 payloads. |
+| `AsyncJobErrors.BatchSubmitFailed` | `BatchSubmitFailedException` | `submitBatch()` on AWS: one or more messages failed to enqueue. See [submitBatch()](#submitbatch). |
+| `AsyncJobErrors.Timeout` | `AsyncJobTimeoutException` | `waitUntilComplete()`: the job did not reach a terminal state within `timeoutMs`. See [Timeout means status unknown](#timeout-means-status-unknown). |
+| `AsyncJobErrors.StatusNotTracked` | `StatusNotTrackedException` | `getStatus()` or `waitUntilComplete()` on a job created without `trackStatus: true`. |
+| `AsyncJobErrors.InvalidOption` | `InvalidOptionException` | Synth time: `batchSize` or `maxBatchingWindowSeconds` is outside its range on a Lambda compute, or `maxConcurrencyPerCPU` is set and the compute is not a container. |
+| `AsyncJobErrors.UnsupportedCompute` | `UnsupportedComputeException` | Synth time: the resolved compute is not a Lambda or container compute, or belongs to another backend. |
+
+## submitBatch()
+
+- Returns `{ jobIds, failed: [] }` when every payload is enqueued. `jobIds` is in the order of `payloads`.
+- On AWS, `submitBatch()` is not atomic: SQS can reject individual entries even in a single request, and large batches span multiple requests. If any entry fails, `submitBatch()` throws `AsyncJobErrors.BatchSubmitFailed`; other entries may already be on the queue.
+- The error has `.jobIds` (the job id of each enqueued entry, `null` at failed indexes) and `.failed[]` (each failed entry's `index`, `code`, `message`). Retry only the `null` indexes.
+- A request that fails as a whole (throttling, connection) fails every entry in it, and the requests not yet started are not sent.
+- The local mock never partially fails.
+
+## Running on a container compute
+
+Assign a container `Compute` for long-running or high-memory work:
 
 ```ts
 import { Compute } from 'aws-cdk-blocks';
@@ -90,46 +110,20 @@ new AsyncJob(scope, 'reports', {
 });
 ```
 
-On a container, delivery moves from a native SQS→Lambda event source to an
-owner-matched poller the container self-starts; each delivery runs in its own
-worker thread, so `timeoutSeconds` is hard-enforced (the worker is terminated at
-the deadline). `timeoutSeconds` and `maxConcurrencyPerCPU` are properties of the
-work and live on the job; `size`/`scaling` are properties of the machine and live
-on the `Compute`. In local dev the assignment is transparent — handlers run
-in-process. See `@aws-cdk-blocks/bb-compute`.
+- On a container each delivery runs in its own worker thread, which the runtime terminates at `timeoutSeconds`.
+- A deploy that changes your code replaces the container's tasks. A delivery still running about 2 minutes later is stopped and redelivered from the start, and the redelivery counts toward `maxRetries`.
+- For `size`, `scaling` and the other compute options, see [Compute](../bb-compute/README.md).
 
-A deploy that changes your code replaces the container's tasks. A delivery still
-running about 2 minutes later is stopped and redelivered from the start, and the
-redelivery counts toward `maxRetries`.
+## Batching on Lambda
 
-### Batching and handler requirements
+`batchSize` and `maxBatchingWindowSeconds` apply on a Lambda compute only.
 
-The queue is a standard SQS queue, so delivery is at-least-once and a handler must
-already be idempotent to be correct — a message can be delivered more than once
-regardless of compute type or `batchSize`.
+- A handler that throws fails its own message only: the other messages of the batch are not redelivered.
+- A Lambda that times out or runs out of memory partway through a batch redelivers the whole batch, including the messages whose handler had already finished.
+- `maxBatchingWindowSeconds` makes SQS wait up to that many seconds before invoking the Lambda, so a job starts up to that many seconds late. `maxBatchingWindowSeconds: 0` removes the wait and keeps batching.
+- Set `batchSize: 1` for latency-sensitive work, and to keep a whole-invocation failure from re-running other jobs.
 
-`batchSize` and `maxBatchingWindowSeconds` control the Lambda event-source path,
-not the container poller's concurrency. On Lambda, batching widens the window in
-which duplicate work happens: with
-`batchSize: 10`, a Lambda that times out or runs out of memory partway through a
-batch redelivers all ten messages, including the ones whose handler had already
-finished. Per-record failures on their own are isolated (only the failed message is
-redelivered), so this is specifically the whole-invocation failure case.
-
-Set `batchSize: 1` for handlers that cannot tolerate being re-run, or for
-latency-sensitive work — a batching window makes SQS wait up to
-`maxBatchingWindowSeconds` before invoking the Lambda at all, so a job submitted on
-a user-facing path starts up to that many seconds late. `maxBatchingWindowSeconds: 0`
-opts out of the wait while keeping batching.
-
-The queue's configured visibility timeout is `900 + maxBatchingWindowSeconds`
-seconds, using the framework's default Lambda timeout constant. On the Lambda
-path, the batching window consumes part of this visibility period before the
-handler runs. On the container path, the poller overrides visibility when receiving
-messages and extends it with a heartbeat while each worker runs; the queue setting
-is not a container job's execution-time limit.
-
-## Handler Context
+## Handler context
 
 The handler receives a second argument, `ctx: AsyncJobContext`, carrying metadata about the current job:
 
@@ -139,56 +133,11 @@ The handler receives a second argument, `ctx: AsyncJobContext`, carrying metadat
 | `receiveCount` | `number` | Number of times this message has been received (`1` on first delivery; increments on each retry). |
 | `sentAt` | `string` | ISO 8601 timestamp of when the message was sent (enqueued). |
 
-In AWS, `receiveCount` is the SQS `ApproximateReceiveCount` attribute, and the name is SQS's own warning: it is a best-effort counter, not an exact one. A delivery SQS records but never hands to a handler, or a redrive that re-counts, moves it without a matching attempt. Read it as roughly how many times the job has been tried. The `attempt` on each status transition and the `attempts` total both carry this same number, so the caveat travels with them. In local dev the queue is in-process and the count is exact, so a test that asserts on an exact attempt number can pass locally and still be wrong in AWS.
+On AWS, `receiveCount` is the SQS `ApproximateReceiveCount` attribute: approximate, not exact. The `attempt` on each status transition and the `attempts` total carry the same number. Locally the count is exact, so a test that asserts an exact attempt number can pass locally and fail on AWS.
 
-## Error Constants
+## Job status (trackStatus)
 
-```typescript
-import { AsyncJobErrors } from 'aws-cdk-blocks';
-
-AsyncJobErrors.PayloadTooLarge    // payload > 256 KB
-AsyncJobErrors.BatchEmpty         // submitBatch([]) called with no items
-AsyncJobErrors.BatchTooLarge      // submitBatch() over the 10,000-payload soft cap
-AsyncJobErrors.ValidationFailed   // schema validation failed
-AsyncJobErrors.BatchSubmitFailed  // one or more messages failed to enqueue
-AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job settled
-AsyncJobErrors.StatusNotTracked   // status method called without trackStatus: true
-AsyncJobErrors.UnsupportedCompute // unsupported compute or compute from another backend (synth time)
-```
-
-## Compute Compatibility
-
-AsyncJob supports Lambda and container compute:
-
-- **Lambda:** attaches a native SQS event source to the resolved compute's function.
-- **Container:** uses an owner-matched SQS poller in the container runtime, with
-  each delivery dispatched to a worker thread. No Lambda event source is created.
-
-The `compute` option selects a compute explicitly; otherwise the job uses its
-scope's resolved compute. Other compute types, and computes from another backend,
-fail at synth time with `UnsupportedComputeException`.
-See [Running on a container compute](#running-on-a-container-compute)
-for an example.
-
-## Local Development
-
-In local dev mode, AsyncJob uses an in-process queue. Jobs process via `setTimeout` in the same Node.js process. Retries, DLQ behavior, and payload limits are enforced identically to AWS.
-
-Selecting container compute does not create worker threads locally or enforce
-the container delivery timeout. Use a sandbox deployment to exercise those behaviors.
-
-## AWS Deployment
-
-Automatically provisions an SQS queue and dead-letter queue. Lambda jobs attach
-an event source to their resolved Lambda compute; container jobs grant queue
-consumption to their compute's task role and are received by its runtime poller.
-The container poller deletes a message only after its worker succeeds. On either
-path, an unsuccessful delivery becomes available for retry when its visibility
-period expires, with SQS redrive moving exhausted messages to the DLQ.
-
-## How Do I Know My Job Ran?
-
-`submit()` is fire-and-forget — it returns as soon as the payload is queued, and the handler runs asynchronously on the job's compute: a Lambda invocation or a container worker thread. Pass `trackStatus: true` and AsyncJob records the job's state for you:
+`submit()` returns as soon as the payload is queued. With `trackStatus: true`, AsyncJob records the job's state transitions, and `getStatus()` and `waitUntilComplete()` read them:
 
 ```typescript
 const job = new AsyncJob(scope, 'ingest', {
@@ -206,9 +155,17 @@ status.state;                              // 'complete'
 status.transitions.map((t) => t.state);    // ['queued', 'processing', 'complete']
 ```
 
-### Every state stays observable
+`waitUntilComplete()` resolves on **either** terminal state — check `state` to tell success from failure. Its options:
 
-`transitions` is append-only, so reading it is not a race. A handler that finishes in a millisecond still records that it passed through `processing`, and a caller that reads the status once — long after the job settled — sees the whole sequence. You never need to slow a handler down to make an intermediate state visible.
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `timeoutMs` | `number` | `30000` | Total time to wait before throwing `AsyncJobErrors.Timeout`. |
+| `pollIntervalMs` | `number` | `250` | Delay between status reads, with ±20% jitter. |
+| `signal` | `AbortSignal` | — | Cancels the wait and rejects with the signal's abort reason. |
+
+### Transitions
+
+`transitions` is append-only: a read after the job settled shows every state it entered, including `processing`.
 
 A retry appends another `processing` entry rather than a second terminal state, so the history shows how many attempts it took:
 
@@ -232,39 +189,39 @@ status.error;     // message from the last handler error
 | `updatedAt` | `string` | ISO 8601 timestamp of the most recent transition. |
 | `error` | `string \| undefined` | Message from the last handler error. Set when `state` is `failed`. |
 
-`getStatus()` returns `null` for a job id it has never seen. `waitUntilComplete()` resolves on **either** terminal state — check `state` to tell success from failure — and accepts `timeoutMs` (default `30000`), `pollIntervalMs` (default `250`, with ±20% jitter), and a `signal` (`AbortSignal`) that cancels the wait and rejects with the signal's abort reason.
+### Timeout means status unknown
 
-### Reading a Timeout
+`waitUntilComplete()` throws `AsyncJobErrors.Timeout` when the job has not reached a terminal state in time. Treat that as **status unknown**, not as a verdict on the job. The causes:
 
-`waitUntilComplete()` throws `AsyncJobErrors.Timeout` when the job has not reached a terminal state in time. Treat that as **status unknown**, not as a verdict on the job.
+1. The job is still running. This is the usual cause, and waiting again is safe.
+2. The status write that records `complete` or `failed` failed. A failed status write is logged and never fails or retries the job, so the job has finished and its record never reaches a terminal state.
+3. The delivery was killed: a Lambda timeout, an out-of-memory kill, a hard crash. `failed` is recorded only for errors the handler throws, and AsyncJob does not detect a killed delivery, so the record stays at its last transition, normally `processing`. SQS still redelivers the message and moves it to the dead-letter queue after `maxRetries` deliveries.
 
-Almost always it means the job is still running, so waiting again is the right move and is safe. But status writes on the handler path are best-effort by design (see below), so there is a second, rarer reading: if the write that would have recorded `complete` or `failed` was itself dropped, the job has already finished and its record will never reach a terminal state, so waiting longer will never resolve. A `Timeout` therefore does not prove the job is still in flight, and it certainly does not mean the job failed. A third reading, below, is that the delivery was killed outright.
+To tell them apart:
 
-If you need a definitive answer, check the job's own effect rather than its status — the row it writes, the file it uploads, the message it sends. That is authoritative in a way bookkeeping cannot be. `status.updatedAt` is also a useful signal: a timestamp that stops advancing well past your handler's expected duration points at a dropped write rather than slow work.
+- Check the job's own effect: the row it writes, the file it uploads, the message it sends.
+- A `status.updatedAt` that stopped advancing well past the handler's expected duration means cause 2 or 3. Check the dead-letter queue, and the handler's CloudWatch logs for a `Task timed out` or out-of-memory line.
+- Throwing before the Lambda deadline lets AsyncJob handle the error. Earlier deliveries are retried; only a throw on the final delivery records `failed`.
 
-### Known limitation: a killed delivery records no failure
+### Cost of trackStatus
 
-The `failed` transition is written from the handler's `catch`, so it exists only for errors the handler actually throws. A delivery that dies without unwinding — Lambda timeout, an out-of-memory kill, a hard crash — never reaches that `catch`, and nothing writes a terminal state on its behalf.
+- `trackStatus: true` provisions one DynamoDB table (on-demand billing) for the job's status records and adds a write on submit plus one per state change.
+- Records expire 24 hours after their last transition.
+- With the flag off nothing is provisioned and `submit()` is a single SQS call.
+- Overlapping deliveries of the same job do not drop each other's transitions.
 
-The record therefore stays at its last transition, normally `processing`, and stays there for good. `waitUntilComplete()` keeps polling until it gives up with `AsyncJobErrors.Timeout`, so a job that is definitively dead reads as status unknown rather than as a failure. The work itself is not lost track of: SQS redelivers on its own schedule and the message still reaches the dead-letter queue once it has burned through `maxRetries`. It is only the status record that stops telling you anything.
+## What it provisions (AWS)
 
-AsyncJob does not detect this for you yet. Until it does, a `Timeout` on a job whose `updatedAt` stopped advancing is the signal to look outside the status record: the dead-letter queue, and the handler's own CloudWatch logs for a `Task timed out` or out-of-memory line. A handler that runs close to its limit can also catch the condition itself — check the remaining wall clock and throw before the Lambda deadline, so the `catch` does run and `failed` is recorded.
+- One SQS queue named after the job's `fullId` (first 80 characters), and one dead-letter queue named with the first 76 characters of `fullId` plus `-dlq`.
+- On a Lambda compute, an SQS event source on the compute's function. On a container compute, no event source: the container's runtime polls the queue.
+- With `trackStatus: true`, one DynamoDB table.
 
-### Cost of enabling it
+A failed delivery becomes available for retry when its SQS visibility timeout expires: on a Lambda compute `900 + maxBatchingWindowSeconds` seconds after the delivery was received (905 seconds by default), on a container compute within about 2 minutes. After `maxRetries` deliveries SQS moves the message to the dead-letter queue.
 
-`trackStatus: true` provisions one DynamoDB table (on-demand billing) for the job's status records and adds a write on submit plus one per state change. Records expire 24 hours after their last transition. Leave the flag off for pure fire-and-forget work — nothing is provisioned and `submit()` stays a single SQS call. Calling `getStatus()` or `waitUntilComplete()` without the flag throws `AsyncJobErrors.StatusNotTracked`.
+## Local development
 
-Status writes on the handler path never fail a job: if one errors it is logged and the job's own outcome is unaffected, so a bookkeeping blip can neither retry work that succeeded nor mask work that failed. That is a deliberate trade — the job's correctness outranks its record — and it is what makes the `Timeout` caveat above possible. Appends themselves are guarded by a compare-and-swap, so two overlapping deliveries of the same job cannot silently drop each other's transitions.
+In local dev mode, AsyncJob uses an in-process queue and runs handlers in the same Node.js process. Retries, the `maxRetries` limit and payload limits are enforced as on AWS. The differences:
 
-### Other options
-
-**Use `ctx.jobId` for logging:**
-```typescript
-handler: async (payload, ctx) => {
-  console.log(`[${ctx.jobId}] Starting work...`);
-  // Your logs will include the job ID for tracing
-}
-```
-
-**Check the dead-letter queue:** Jobs that fail after `maxRetries` attempts land in the DLQ. In AWS, check the `{scope}-{id}-dlq` queue in the SQS console. In local dev, failed jobs are logged to the console with their full payload.
-
+- A failed delivery is retried immediately.
+- A job that fails `maxRetries` times is logged to the console with its full payload; there is no dead-letter queue to inspect.
+- Selecting container compute does not create worker threads locally or enforce the container delivery timeout. Use a sandbox deployment to exercise those behaviors.

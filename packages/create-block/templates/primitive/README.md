@@ -5,22 +5,31 @@ becomes the block's blurb in the `aws-cdk-blocks` catalog table.)
 
 **Keywords:** TODO, comma, separated
 
-A **primitive** block: it provisions and owns its own AWS infrastructure. The
-generated code is a storage-agnostic `Scope` skeleton with one example method —
-replace it with your block's real API and infrastructure. See `bb-kv-store` for a
-worked key/value example, `bb-file-bucket` for object storage.
+TODO: delete this paragraph. A **primitive** block provisions and owns its own
+AWS infrastructure. The generated code is a storage-agnostic `Scope` skeleton
+with one example method: replace it with your block's real API and
+infrastructure. See `bb-kv-store` for a worked key/value example,
+`bb-file-bucket` for object storage.
 
 ## API
 
 ### `new __BB_CLASS__(scope, id, options?)`
 
-| Option | Type | Notes |
-| --- | --- | --- |
-| `label` | `string` | TODO — replace with your real options. |
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `label` | `string` | TODO | TODO — replace with your real options. |
 
 ### Methods
 
 - `echo(input): Promise<string>` — TODO: replace with your block's methods.
+
+## Errors
+
+Match an error with `isBlocksError(e, __BB_CLASS__Errors.<Constant>)`.
+
+| Constant | `error.name` | Thrown when |
+| --- | --- | --- |
+| `InvalidInput` | `InvalidInputException` | TODO — one row per entry of `src/errors.ts`. |
 
 ## Examples
 
@@ -39,5 +48,9 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 ## Local Development
 
 `npm run dev` runs the mock entry (`index.mock.ts`) — no AWS account required.
-Implement local state there (in-memory or on-disk under `.cdk-blocks/local/data/`). Wipe local
-state with `rm -rf .cdk-blocks/local/data .bb-data`.
+
+TODO: say where the mock keeps its data (in memory, or on disk under
+`.cdk-blocks/local/data/`, which `rm -rf .cdk-blocks/local/data .bb-data` resets along with legacy data).
+
+TODO: list each difference between the mock and AWS that an app can observe.
+Write "None." if there is none.

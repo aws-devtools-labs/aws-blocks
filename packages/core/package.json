@@ -26,6 +26,7 @@
   "files": [
     "dist",
     "README.md",
+    "SHARED-ACCOUNT.md",
     "src",
     "!src/**/*.test.json",
     "LICENSE"

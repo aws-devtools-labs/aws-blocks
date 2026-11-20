@@ -23,7 +23,7 @@ export function renderLocalDashboard(title: string, options?: DashboardOptions):
 <p>The dev server is running. CloudWatch charts are available after deployment; this view does not connect to AWS.</p>
 ${options?.logs === false ? '' : '<section><h2>Logs</h2><p>Read structured log entries in the terminal running the dev server.</p></section>'}
 <section><h2>Metrics</h2><p>The Metrics block writes EMF records to the dev server terminal.</p>${metrics}</section>
-${options?.traces === false ? '' : '<section><h2>Traces</h2><p>If your app uses Tracer, find its local traces in <code>.bb-data/&lt;tracer-id&gt;/traces.json</code>.</p></section>'}
+${options?.traces === false ? '' : '<section><h2>Traces</h2><p>If your app uses Tracer, find its local traces in <code>.cdk-blocks/local/data/&lt;tracer-fullId&gt;/traces.json</code>.</p></section>'}
 <section><h2>Explore the app</h2><p>To browse local block data in the Admin UI, run this in a second terminal from the app directory:</p>
 <pre><code>node --input-type=module -e "import { dashboard } from 'aws-cdk-blocks/scripts'; await dashboard()"</code></pre>
 <p>Open the session URL it prints. No AWS credentials or deployment are required.</p></section>
