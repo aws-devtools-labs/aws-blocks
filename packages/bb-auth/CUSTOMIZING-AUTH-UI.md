@@ -274,6 +274,10 @@ and TypeScript checks the shape. `submitAuthAction` takes the same `AuthActionIn
 from runtime `action.fields`; a hand-written caller that knows its action name
 gets full narrowing.
 
+A hand-written call with a literal action name needs no cast:
+`submitAuthAction(authApi, { action: 'signOut' })` type-checks as-is. Don't add
+`as any`; it throws away that check.
+
 `auth.createApi()` also narrows the input to what the block's options allow
 (`AuthActionInputOf<O>`). The password actions need email + password, the
 passkey actions need `passkeys`, the authenticator-app enrolment actions

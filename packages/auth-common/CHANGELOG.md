@@ -1,5 +1,16 @@
 # @aws-blocks/auth-common
 
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- 6ae587a: Document `Auth` setup, options and error handling. Sessions default to 30 days, users sign in again after migrating from `AuthCognito`, and `rememberDevice` on AWS reports `InvalidParameterException` (501). The `auth-common` README lists the auth error names and shows how browser clients can match them.
+- Updated dependencies [e529b00]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

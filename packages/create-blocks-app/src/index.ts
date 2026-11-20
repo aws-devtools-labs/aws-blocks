@@ -946,7 +946,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     devDeps: {
       'tsx': '^4.7.0',
       'esbuild': '^0.27.1',
-      '@types/node': '^20.0.0',
+      '@types/node': '^22.12.0',
       'cross-env': '^7.0.3',
     },
     scripts: {
@@ -1159,7 +1159,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'constructs': tplDevDeps['constructs'] || '^10.6.0',
       'tsx': tplDevDeps['tsx'] || '^4.7.0',
       'esbuild': tplDevDeps['esbuild'] || '^0.27.1',
-      '@types/node': tplDevDeps['@types/node'] || '^20.0.0',
+      '@types/node': tplDevDeps['@types/node'] || '^22.12.0',
     },
     scripts: { ...tasks, 'dev:server': tasks.dev },
     blocksConfig: backendDevConfig(templatePkg.blocks),

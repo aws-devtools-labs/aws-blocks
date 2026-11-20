@@ -4,8 +4,8 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join, sep } from 'node:path';
-import { PGlite } from '@electric-sql/pglite';
 import { LEGACY_MOCK_DATA_DIR, MOCK_DATA_DIR } from '@aws-cdk-blocks/core/bb-utils';
+import { PGlite } from '@electric-sql/pglite';
 import type { TransactionHandle } from '../common/engine.js';
 import { initializePgliteWithRetry } from '../common/pglite-init.js';
 import { closeOnProcessExit, pgliteUnrefTimersExtension } from '../common/pglite-process.js';
@@ -23,6 +23,7 @@ import {
 	type RowCountingEngine,
 	withTransaction,
 } from './handle.js';
+import { AURORA_LOCAL_EXTENSIONS, explainMissingExtension } from './pglite-extensions.js';
 
 // How PGlite stands in for DSQL's asynchronous DDL. On DSQL, `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC …
 // VALIDATE CONSTRAINT` return a job id that `sys.jobs` lists until `sys.wait_for_job(job_id)` sees it finish.
@@ -219,7 +220,12 @@ class PgliteCluster {
 		recoverIncompletePgliteDataDir(this.dataDir);
 		cleanStaleLock(this.dataDir);
 		this.cancelExitClose ??= closeOnProcessExit(() => this.closeForExit());
-		return new PGlite(this.dataDir, { extensions: { awsBlocksUnrefTimers: pgliteUnrefTimersExtension } });
+		// An aurora cluster is PostgreSQL with its contrib extensions; DSQL has none, and dsql-lint rejects
+		// `CREATE EXTENSION` before a statement reaches PGlite.
+		const contrib = this.kind === 'aurora' ? AURORA_LOCAL_EXTENSIONS : {};
+		return new PGlite(this.dataDir, {
+			extensions: { ...contrib, awsBlocksUnrefTimers: pgliteUnrefTimersExtension },
+		});
 	}
 
 	// So PostgreSQL shuts down cleanly and removes its postmaster.pid when the process exits.
@@ -274,8 +280,12 @@ class PgliteCluster {
 	async raw<T>(sql: string, params?: unknown[]): Promise<{ rows: T[]; affectedRows: number }> {
 		const db = await this.ensureReady();
 		// ASYNC is a DSQL form; Aurora rejects it, and so does PGlite when the cluster is `aurora`.
-		const result = await db.query<T>(this.kind === 'dsql' ? synchronous(sql) : sql, params);
-		return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
+		try {
+			const result = await db.query<T>(this.kind === 'dsql' ? synchronous(sql) : sql, params);
+			return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
+		} catch (e) {
+			throw this.kind === 'aurora' ? explainMissingExtension(e) : e;
+		}
 	}
 
 	/** Points the session at `schema`, with `role` as its user. */

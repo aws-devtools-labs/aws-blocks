@@ -51,7 +51,7 @@
     "@aws-cdk-blocks/hosting": "*"
   },
   "devDependencies": {
-    "@types/node": "^20.19.43",
+    "@types/node": "^22.12.0",
     "typescript": "^5.9.3",
     "vite": "^6.4.5",
     "tsx": "^4.23.15",

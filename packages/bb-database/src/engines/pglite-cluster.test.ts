@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { isBlocksError } from '@aws-cdk-blocks/core';
+import { quoteIdent } from '../constants.js';
 import { DatabaseErrors } from '../errors.js';
 import { runInTransactionScope, TransactionScope } from '../runtime/tx-scope.js';
 import { installLocalTestHooks } from '../test-support/lifecycle.js';
 import { _closeAllPgliteClusters, type SchemaEngine, sharedPgliteCluster } from './pglite-cluster.js';
+import { AURORA_LOCAL_EXTENSIONS } from './pglite-extensions.js';
 
 const DATA_DIR = join(process.cwd(), '.cdk-blocks/local/data', `pglite-cluster-test-${process.pid}`);
 let counter = 0;
@@ -114,5 +118,59 @@ describe('PGlite cluster transaction handle lifecycle', () => {
 		cluster();
 		const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 15_000).unref());
 		assert.notStrictEqual(await Promise.race([_closeAllPgliteClusters().then(() => 'closed'), timeout]), 'timeout');
+	});
+});
+
+describe('PGlite cluster extensions', () => {
+	const extensions = Object.keys(AURORA_LOCAL_EXTENSIONS);
+
+	test('an aurora cluster creates every extension of the set, and reopens a data directory whose tables use one', async () => {
+		const dir = join(DATA_DIR, `ext${++counter}`, 'pglite');
+		const first = sharedPgliteCluster(dir, 'aurora');
+		const engine = first.forSchema('public');
+		await asAdmin(engine, [
+			// Each key is the name CREATE EXTENSION takes (`uuid-ossp`, not the bundle's `uuid_ossp`).
+			...extensions.map((name) => `CREATE EXTENSION ${quoteIdent(name)}`),
+			'CREATE TABLE t (email CITEXT)',
+			"INSERT INTO t VALUES ('Ada@Example.com')",
+		]);
+		await first.destroy();
+
+		// A new instance on the same directory: the citext type's functions must load again.
+		const again = sharedPgliteCluster(dir, 'aurora').forSchema('public');
+		const rows = await again.asAdmin(() => again.query("SELECT email FROM t WHERE email = 'ada@example.com'"));
+		assert.deepStrictEqual(rows, [{ email: 'Ada@Example.com' }]);
+	});
+
+	// PGlite's contrib bundles that the set leaves out; AURORA_LOCAL_EXTENSIONS gives the reason for each.
+	const LEFT_OUT = ['auto_explain', 'file_fdw', 'pageinspect', 'pg_stat_statements', 'pg_surgery', 'pg_walinspect'];
+
+	test('the set is every contrib extension the installed PGlite ships, minus the ones left out on purpose', () => {
+		const contrib = dirname(fileURLToPath(import.meta.resolve('@electric-sql/pglite/contrib/citext')));
+		const shipped = readdirSync(contrib).flatMap((file) => /^(\w+)\.js$/.exec(file)?.[1] ?? []);
+		assert.deepStrictEqual(
+			shipped.sort(),
+			[...extensions.map((name) => name.replace('-', '_')), ...LEFT_OUT].sort(),
+			'a bundle PGlite ships is neither in AURORA_LOCAL_EXTENSIONS nor in LEFT_OUT (or the reverse)',
+		);
+	});
+
+	test('README and DESIGN list the set', () => {
+		const quoted = extensions.map((name) => `\`${name}\``);
+		const list = `${quoted.slice(0, -1).join(', ')} and ${quoted.at(-1)}`;
+		for (const doc of ['README.md', 'DESIGN.md']) {
+			const text = readFileSync(join(import.meta.dirname, '..', '..', doc), 'utf-8');
+			assert.ok(text.includes(list), `${doc} must list the extensions of AURORA_LOCAL_EXTENSIONS: ${list}`);
+		}
+	});
+
+	test('a dsql cluster loads no extension', async () => {
+		const engine = cluster().forSchema('public');
+		await assert.rejects(asAdmin(engine, ['CREATE EXTENSION citext']), (e: unknown) => {
+			assert.ok(isBlocksError(e, DatabaseErrors.QueryFailed));
+			const root = e instanceof Error ? e.cause : undefined;
+			assert.ok(root instanceof Error && /extension "citext" is not available$/.test(root.message), String(root));
+			return true;
+		});
 	});
 });

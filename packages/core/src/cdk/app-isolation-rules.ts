@@ -19,7 +19,8 @@
  * These checks are fast feedback, not the boundary: the app's own code runs at
  * synth, so a determined app could get around them. The boundary is IAM (the
  * platform's permissions boundary, per-app execution role and deploy guard; see
- * the core README's "Running many apps in one AWS account").
+ * `SHARED-ACCOUNT.md`, linked from the core README's "Running many apps in one
+ * AWS account").
  *
  * @internal
  */
@@ -485,7 +486,7 @@ function isKnownExemption(actions: string[], name: string, arn = ''): boolean {
 	}
 	// SES sending authorizes against account-level identities and configuration sets
 	// that no app's name or tag scopes; EmailClient grants sending only. An accepted
-	// exception the core README lists under the limits (one app can send as an
+	// exception listed under Limits in SHARED-ACCOUNT.md (one app can send as an
 	// identity another app verified).
 	if (
 		(arn === '*' || /^arn:[^:]*:ses:[^:]*:[^:]*:(identity|configuration-set)\/\*$/.test(arn)) &&

@@ -2,14 +2,13 @@
 
 Distributed tracing backed by AWS X-Ray.
 
-> **Fleet-wide + cost:** tracing is presence-gated — constructing **any** `Tracer`
-> in the app enables X-Ray Active mode on **every** compute (X-Ray is billed per
-> trace recorded/retrieved). `enabled: false` on a `Tracer` only removes *that*
-> Tracer's opt-in; if any other `Tracer` exists, X-Ray still turns on fleet-wide.
+> An enabled `Tracer` turns on X-Ray Active tracing for every Lambda compute in the app.
+> Setting `enabled: false` opts out only that instance. Container computes do not provision
+> an X-Ray collector. X-Ray is billed per trace recorded or retrieved.
 
-**When to use:** You need to trace request flow across services, debug latency issues, or visualize service dependencies. Good for identifying bottlenecks, understanding call chains, and correlating failures across Building Blocks.
+**When to use:** You need to trace request flow across services, debug latency issues, or visualize service dependencies.
 
-**When NOT to use:** If you need structured log output, use `Logging`. If you need numeric measurements over time, use `Metrics`.
+**When NOT to use:** If you need structured log output, use `Logger`. If you need numeric measurements over time, use `Metrics`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -19,7 +18,7 @@ Distributed tracing backed by AWS X-Ray.
 npm install @aws-cdk-blocks/bb-tracer
 ```
 
-## Quick Usage
+## Quick start
 
 ```typescript
 import { Tracer } from '@aws-cdk-blocks/bb-tracer';
@@ -69,41 +68,27 @@ The `segment` object passed to `startSegment`'s callback:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enabled` | `boolean` | `true` | Enable or disable tracing. When `false`, `startSegment` still executes the wrapped function. |
-| `samplingRate` | `number` | `1.0` | Sampling rate between 0 and 1. Only affects local mock behavior. |
+| `enabled` | `boolean` | `true` | When `false`, `startSegment` still executes the wrapped function, but records nothing, and `getTraceId()` returns `null`. Other enabled Tracers are unaffected. |
+| `samplingRate` | `number` | `1.0` | Fraction of traces the local mock records, between 0 and 1 (`0.1` records roughly 10%); the mock throws `RangeError` for a value outside that range. Ignored on AWS, where X-Ray sampling rules (configured in the AWS console or via CDK) decide. |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
-## Best Practices
+## Best practices
 
-- Use `startSegment` to wrap discrete units of work (DB calls, HTTP requests, business logic)
-- Keep segment names short and descriptive (e.g., `'fetchUser'`, `'processPayment'`)
-- Use annotations for values you want to filter/search by in the X-Ray console
-- Use metadata for large or complex debugging data you don't need to search
 - Keep annotation cardinality low (avoid user-specific values as annotation keys)
-- Use `AsyncJob` for long-running work rather than tracing huge spans
 
-## Local Development
+## Local development
 
 Mock data persists to disk at `.cdk-blocks/local/data/{fullId}/traces.json` across dev server restarts. Nested segments are stored as a tree (children array). Wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 
-The mock records all traces locally with full timing, annotations, metadata, and error data — matching the shape of what X-Ray would capture in production.
-
-## Sampling
-
-- **Local (mock):** Controlled by the `samplingRate` option. A value of `0.1` means roughly 10% of local traces are recorded. Default is `1.0` (record everything).
-- **Production (AWS):** Sampling is controlled by X-Ray sampling rules configured in the AWS console or via CDK. The `samplingRate` option is ignored in production — X-Ray's native sampling infrastructure takes precedence.
-
-## Pricing
+## Scaling and cost (AWS)
 
 - **Free tier:** 100,000 traces recorded per month, 1,000,000 traces scanned/retrieved per month
 - **Beyond free tier:** $5.00 per million traces recorded, $0.50 per million traces retrieved or scanned
 - **Lambda daemon:** No additional charge — the X-Ray daemon is built into the Lambda runtime
 - **Cost drivers:** Number of traced invocations × sampling rate
-- **Cost optimization:** Configure X-Ray sampling rules to keep recorded-trace volume (and cost) low for high-throughput functions (the `samplingRate` option only affects the local mock, not production)
-- **Disabled (`enabled: false`):** Zero X-Ray cost — no traces are recorded or sent
+- **Cost optimization:** Configure X-Ray sampling rules to keep recorded-trace volume (and cost) low for high-throughput functions
+- With no enabled `Tracer`, Blocks does not turn on Lambda Active tracing.
 
+## See also
 
-
-## See Also
-
-- [Types](./src/types.ts) — Shared type definitions (`Segment`, `TracerOptions`, `AnnotationValue`)
+- Exact types (`Segment`, `TracerOptions`, `AnnotationValue`): `npm run docs:api Tracer`

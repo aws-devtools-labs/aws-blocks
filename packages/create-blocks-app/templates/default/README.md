@@ -8,12 +8,11 @@ Real-time todo app with authentication, per-user data isolation, and live sync a
 npm run dev          # Start local dev server (mocks, no AWS needed)
 npm run test:e2e     # Run API tests
 npm run sandbox      # Deploy to AWS sandbox
-npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`.
 
-**Signing up locally:** sign-up confirms the email address with a 6-digit code. Locally no email is sent, so the code is printed in the `npm run dev` terminal (`[auth] signUp code for …`). Enter it and you are signed in. Once deployed, Amazon Cognito emails the code (its default sender is limited to 50 emails a day).
+**Signing up locally:** sign-up confirms the email address with a 6-digit code. Locally no email is sent, so the code is printed in the `npm run dev` terminal (`[auth] signUp code for …`). Enter it and you are signed in.
 
 ## Project Structure
 
@@ -27,48 +26,24 @@ Open http://localhost:3000 after `npm run dev`.
 ## What's Included
 
 - **Auth** — email + password sign-up / sign-in / sign-out with server-side sessions (Amazon Cognito on AWS)
-- **KVStore** — todos stored in DynamoDB with Zod schema validation. A `KVStore` with a `schema` and a `key` stores records you list or query as a collection; a store fixes its key when you create it
+- **KVStore** — todos stored in DynamoDB with Zod schema validation
 - **Optimistic locking** — `version` field + `ifFieldEquals` prevents lost updates
 - **Realtime** — todo changes broadcast to all connected tabs via WebSocket
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Local dev with mock storage |
-| `npm run dev:stop` | Stop the local dev server this app started |
-| `npm run test:e2e` | Test API via direct imports |
-| `npm run typecheck` | TypeScript type checking |
-| `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
-| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
-| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
-| `npm run deploy` | Full production deploy |
-| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
-| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
-| `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
-| `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
-| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+`npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
-The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
-`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
 
 ## Building on this template
 
-The test file (`test/e2e.test.ts`) is structured in sections — Auth, CRUD, Conflicts, Realtime. Add your own tests by copying a `test(...)` block and changing the assertion. The API methods in `cdk-blocks/index.ts` follow a consistent pattern: authenticate → do work → broadcast.
-
-To replace the todo domain with your own: update the Zod schema, rename the API methods, and adjust the tests. The auth and real-time wiring stays the same.
+The test file (`test/e2e.test.ts`) has the sections App readiness, Auth, CRUD, Conditional writes (optimistic locking), Per-user isolation and Realtime. Add your own tests by copying a `test(...)` block and changing the assertion. The API methods in `cdk-blocks/index.ts` follow a consistent pattern: authenticate → do work → broadcast.
 
 ## Stack naming
 
-Your CloudFormation stack names are derived from the `stackId` in `.cdk-blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
-
-To change the stack name, edit `stackId` in `.cdk-blocks/config.json`. For dynamic naming logic, modify `cdk-blocks/index.cdk.ts` directly.
+A sandbox stack's name ends in an identifier that is per machine, stored in `.cdk-blocks-sandbox/sandbox-id.txt` (gitignored). `AGENTS.md` describes the stack names and how to rename them.
 
 ## For Agents
 
 Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.
-
-**Do not use local files or in-memory storage** — use Building Blocks for all data persistence and cloud abstractions (they mock locally and deploy to AWS automatically).
-
-Start in `cdk-blocks/index.ts` (backend) and `src/index.ts` (frontend). Test via `npm run test:e2e`. The API transport (JSON-RPC) is auto-generated and intentionally invisible — do not curl endpoints directly. Testing is best done through the e2e tests which use the same typed client as the frontend. If you do need to call the API directly (e.g. troubleshooting a deployed app), every namespace shares one endpoint — `POST /cdk-blocks/api` with the export name and method in the JSON-RPC `method` field (`"api.listTodos"`, `"authApi.getAuthState"`); there are no per-namespace paths like `/cdk-blocks/authApi`. See `npm run docs troubleshooting` for curl examples.

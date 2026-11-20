@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The README section "Running many apps in one AWS account" gives the shared
- * IAM policies in full, for platforms to copy. Pin what it says about them: every
- * JSON block parses, and every full policy fits IAM's managed-policy limit of
- * 6,144 characters (white space not counted), so the snippets and the README's
- * size claims can't drift apart.
+ * `SHARED-ACCOUNT.md`, the platform's side of the README section "Running many
+ * apps in one AWS account", gives the shared IAM policies in full, for platforms
+ * to copy. Pin what it says about them: every JSON block parses, and every full
+ * policy fits IAM's managed-policy limit of 6,144 characters (white space not
+ * counted), so the snippets and the document's size claims can't drift apart.
  */
 
 import assert from 'node:assert';
@@ -18,21 +18,17 @@ import { fileURLToPath } from 'node:url';
 /** IAM's limit on a customer managed policy, not counting white space. */
 const MANAGED_POLICY_MAX = 6144;
 
-const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'README.md'), 'utf8');
-const start = readme.indexOf('### Running many apps in one AWS account');
-const end = readme.indexOf('\n### ', start + 1);
-const section = readme.slice(start, end === -1 ? undefined : end);
-const jsonBlocks = [...section.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
+const doc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'SHARED-ACCOUNT.md'), 'utf8');
+const jsonBlocks = [...doc.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
 
-describe('README: the shared platform policies', () => {
-	test('the section is found and has JSON blocks', () => {
-		assert.ok(start !== -1, 'README section "Running many apps in one AWS account" not found');
-		assert.ok(jsonBlocks.length > 0, 'no JSON blocks in the section');
+describe('SHARED-ACCOUNT.md: the shared platform policies', () => {
+	test('the document has JSON blocks', () => {
+		assert.ok(jsonBlocks.length > 0, 'no JSON blocks in SHARED-ACCOUNT.md');
 	});
 
 	test('every JSON block parses', () => {
 		for (const [i, block] of jsonBlocks.entries()) {
-			assert.doesNotThrow(() => JSON.parse(block), `JSON block ${i + 1} in the section doesn't parse`);
+			assert.doesNotThrow(() => JSON.parse(block), `JSON block ${i + 1} in SHARED-ACCOUNT.md doesn't parse`);
 		}
 	});
 

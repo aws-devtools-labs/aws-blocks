@@ -209,7 +209,7 @@ export type {
 	RealtimeSubscription,
 	SubscribeOptions,
 } from '@aws-cdk-blocks/bb-realtime';
-export { Realtime } from '@aws-cdk-blocks/bb-realtime';
+export { Realtime, RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-cdk-blocks/bb-secret';
 export { Secret, SecretErrors } from '@aws-cdk-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-cdk-blocks/bb-tracer';

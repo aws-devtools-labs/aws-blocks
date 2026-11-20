@@ -153,6 +153,12 @@ handler does**, which is how the loop gets `BLOCKS_RT_CALLBACK_URL` (registered 
 every other `registerConfig()` value a tool's Building Block may read. IAM to read the blob is inherited
 from the shared execution role.
 
+The config blob is uploaded by a deployment that is not ordered before the Runtime, so the container can
+start before the blob is readable. The entry (`serveBackend()`) starts the harness at once and imports the
+backend only after a config load finds the blob; until then each invocation loads the config again and
+fails, so the caller's `stream()` rejects instead of running a turn that cannot publish to Realtime. This
+is the same rule the Lambda handler follows for its cold start.
+
 > **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned. A derived name is not always the `fullId` itself (FileBucket shortens a `fullId` over S3's 63 characters), so the runtime always addresses a child by the identifier it registered (`getSdkIdentifiers(child)`), never by its raw `fullId`. The two `KVStore` children also take their options from one place in both layers: `conversationsTableOptions` and `messagesTableOptions` in `schemas.ts`.
 
 ## Model Providers
@@ -206,6 +212,15 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
   `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
   surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **A completed row read before anything streamed** (`rowContinuesTurn`). The in-flight turn's user
+  row is written after `stream()` returns, so an early read can end at the previous turn's answer.
+  The read is behind when it holds fewer user rows than the client shows, and only then is a row
+  equal to the previous answer treated as that turn's: the client keeps waiting. A current read is
+  adopted even when its answer repeats the previous one. The counts drift when a send failed before
+  its row was written (an extra bubble); an identical answer whose `done` was lost then ends on the
+  failsafe's `Timed out` error. Rows carry no turn id, so two stale reads still slip through: one two
+  or more turns behind, and one ending at a previous turn that ended on the failsafe with less text
+  than it saved.
 - **A turn that failed during the gap** is recovered from the row the backend saves for it: an
   assistant row with a string `metadata.error` (`persistedTurnError`). Its `content` is empty when the
   turn threw, and holds the partial text when a runaway cap (`maxLlmCalls` / `maxToolIterations`)

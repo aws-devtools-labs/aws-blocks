@@ -79,6 +79,11 @@ const ALLOWED: ReadonlyArray<{
 		why: "the changeset announcing this rename, which has to name the old folder to say what to rename (`git mv .blocks .cdk-blocks`); at release its text moves into the changelogs above",
 	},
 	{
+		path: ".changeset/pre/cdk-blocks-dot-folder.md",
+		match: "exact",
+		why: "the same changeset once `changeset version` has run: in pre mode a consumed changeset moves into `.changeset/pre/` and keeps its text",
+	},
+	{
 		path: "packages/blocks/test-fixtures/migrate-apps.json",
 		match: "exact",
 		why: "snapshots of the scaffolded wrappers of past create-blocks-app releases, which `cdk-blocks migrate` recognises by the SHA-256 of their source: renaming the folder inside them makes migrate treat a real user's wrapper as an unrecognised version and keep it",

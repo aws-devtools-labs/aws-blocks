@@ -141,10 +141,13 @@ export class Database extends Scope {
 		const legacy = resolved.shared instanceof LegacyDatabaseCluster ? resolved.shared : undefined;
 		this.ownerRunsStatements = legacy !== undefined;
 		const dataApi = resolved.external?.dataApi;
+		const provisioned = !resolved.external && !legacy;
+		// The app role the migration Lambda creates for the cluster, which the block connects as.
+		const appRole = sanitizeDbRoleName(clusterFullId);
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: clusterFullId,
 			schemaName: this.schemaName,
-			...(resolved.external || legacy ? {} : readClusterConfig(clusterFullId)),
+			...(provisioned ? { ...readClusterConfig(clusterFullId), roleName: appRole } : {}),
 		});
 
 		let buildEngine: () => Promise<RowCountingEngine>;
@@ -168,12 +171,11 @@ export class Database extends Scope {
 						`Database '${this.fullId}' is not configured: missing ${clusterConfigKey(clusterFullId, 'ENDPOINT')} / _REGION. Ensure the cluster is provisioned.`,
 					);
 				}
-				const role = sanitizeDbRoleName(clusterFullId);
 				return new PgEngine({
 					kind,
 					endpoint: clusterEndpoint,
-					role,
-					getAuthToken: iamAuthToken({ kind, endpoint: clusterEndpoint, region, role }),
+					role: appRole,
+					getAuthToken: iamAuthToken({ kind, endpoint: clusterEndpoint, region, role: appRole }),
 					searchPath: searchPathFor(this.schemaName),
 				});
 			};

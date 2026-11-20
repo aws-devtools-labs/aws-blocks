@@ -5,7 +5,6 @@
 
 import {
 	ChartLine,
-	CircleDollarSign,
 	Component,
 	Gauge,
 	Rocket,
@@ -30,18 +29,12 @@ import { cn } from '@/lib/utils';
 const NAV = [
 	{ href: '/', label: 'Overview', icon: Gauge },
 	// Declared before deployed: what the app says it has comes before what CFN shipped.
-	{ href: '/blocks', label: 'Blocks', icon: Component },
+	{ href: '/blocks', label: 'CDK Blocks', icon: Component },
 	// Next to Blocks: the playground calls the methods those blocks declare.
 	{ href: '/playground', label: 'Playground', icon: Terminal },
 	{ href: '/deployments', label: 'Deployments', icon: Rocket },
 	{ href: '/logs', label: 'Logs', icon: ScrollText },
-	// Between Logs and Cost deliberately: all three read the deployed stage, and
-	// this is the one that says how much the app is being used before Cost says
-	// what that used cost.
 	{ href: '/usage', label: 'Usage', icon: ChartLine },
-	{ href: '/cost', label: 'Cost', icon: CircleDollarSign },
-	// Last, and after Cost on purpose: it is the only entry that WRITES, so it
-	// sits apart from the five read-only views rather than among them.
 	{ href: '/settings', label: 'Settings', icon: SlidersHorizontal },
 ];
 

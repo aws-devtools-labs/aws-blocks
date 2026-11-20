@@ -7,6 +7,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { CLAIMS_SETTING } from '../constants.js';
 
 const created: string[] = [];
 
@@ -23,6 +24,19 @@ export function migrations(files: Record<string, string>): string {
 	for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
 	return dir;
 }
+
+/**
+ * A migration for "policies written for a role": a `todos` table that only the `authenticated` role reads, each
+ * row by its owner (the `sub` claim). It does not grant the role to the app role; a test adds that line.
+ */
+export const ROLE_TODOS = [
+	'CREATE ROLE authenticated NOLOGIN;',
+	'CREATE TABLE todos (id SERIAL PRIMARY KEY, owner_id TEXT NOT NULL, title TEXT NOT NULL);',
+	'ALTER TABLE todos ENABLE ROW LEVEL SECURITY;',
+	'GRANT SELECT ON todos TO authenticated;',
+	`CREATE POLICY todos_owner ON todos FOR SELECT TO authenticated USING (owner_id = nullif(current_setting('${CLAIMS_SETTING}', true), '')::jsonb ->> 'sub');`,
+	"INSERT INTO todos (owner_id, title) VALUES ('alice', 'a1'), ('bob', 'b1');",
+].join('\n');
 
 export function removeFixtures(): void {
 	for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });

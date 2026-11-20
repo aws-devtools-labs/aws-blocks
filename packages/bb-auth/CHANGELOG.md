@@ -1,5 +1,27 @@
 # @aws-cdk-blocks/bb-auth
 
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
+- 6ae587a: Document `Auth` setup, options and error handling. Sessions default to 30 days, users sign in again after migrating from `AuthCognito`, and `rememberDevice` on AWS reports `InvalidParameterException` (501). The `auth-common` README lists the auth error names and shows how browser clients can match them.
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [6ae587a]
+- Updated dependencies [e529b00]
+- Updated dependencies [c9d73a8]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-app-setting@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-secret@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.1
+  - @aws-cdk-blocks/auth-common@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes
