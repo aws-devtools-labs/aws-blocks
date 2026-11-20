@@ -1153,7 +1153,7 @@ describe('create-blocks-app auto-detection', () => {
 
   it('detects a project\'s framework as Hosting does', async () => {
     // Imported by a computed specifier: this package's moduleResolution can't read Hosting's exports map.
-    const hostingAdapters = '@aws-blocks/hosting/adapters';
+    const hostingAdapters = '@aws-cdk-blocks/hosting/adapters';
     const { detectFramework } = (await import(hostingAdapters)) as { detectFramework: (projectDir: string) => string };
     const tmpDir = mkdtempSync(join(tmpdir(), 'cba-detect-'));
     try {

@@ -1199,7 +1199,7 @@ function usesNext(pkg: PackageDeps): boolean {
   return Boolean(pkg.dependencies?.next || pkg.devDependencies?.next);
 }
 
-/** The frameworks `Hosting` detects from a project's package.json (`detectFramework` in `@aws-blocks/hosting/adapters`). */
+/** The frameworks `Hosting` detects from a project's package.json (`detectFramework` in `@aws-cdk-blocks/hosting/adapters`). */
 export type ProjectFramework = 'nextjs' | 'nitro' | 'astro' | 'sveltekit' | 'spa';
 
 /** The packages that make a project a Nitro app (Nuxt and the other Nitro frameworks), in the order Hosting checks them. */
@@ -1207,7 +1207,7 @@ const NITRO_PACKAGES = ['nuxt', 'nitropack', '@solidjs/start', '@analogjs/platfo
 
 /**
  * The framework `Hosting` detects for a project from its package.json, by the rules of
- * `detectFramework` in `@aws-blocks/hosting/adapters` (which this CLI doesn't load: the
+ * `detectFramework` in `@aws-cdk-blocks/hosting/adapters` (which this CLI doesn't load: the
  * project may not have installed it yet). A test checks that the two agree.
  */
 export function detectProjectFramework(pkg: PackageDeps & { peerDependencies?: Record<string, unknown> }): ProjectFramework {
