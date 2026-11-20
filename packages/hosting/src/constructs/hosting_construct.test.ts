@@ -1887,7 +1887,6 @@ void describe('HostingConstruct — CDN edge cases', () => {
       DistributionConfig: Match.objectLike({
         CustomErrorResponses: Match.arrayWith([
           Match.objectLike({ ErrorCode: 502 }),
-          Match.objectLike({ ErrorCode: 503 }),
           Match.objectLike({ ErrorCode: 504 }),
         ]),
       }),
@@ -2745,18 +2744,12 @@ void describe('HostingConstruct — custom error pages (M5)', () => {
     });
 
     const template = Template.fromStack(stack);
-    // Default SSR behavior: 502/503/504 error responses pointing to _error.html
+    // Default SSR behavior: 502/504 error responses pointing to _error.html
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: {
         CustomErrorResponses: Match.arrayWith([
           Match.objectLike({
             ErrorCode: 502,
-            ResponsePagePath: Match.stringLikeRegexp(
-              '/builds/.*/_error\\.html',
-            ),
-          }),
-          Match.objectLike({
-            ErrorCode: 503,
             ResponsePagePath: Match.stringLikeRegexp(
               '/builds/.*/_error\\.html',
             ),
@@ -2784,6 +2777,14 @@ void describe('HostingConstruct — custom error pages (M5)', () => {
     const errorResponses = (distProperties?.CustomErrorResponses ??
       []) as Array<Record<string, unknown>>;
     const has404 = errorResponses.some((r) => r.ErrorCode === 404);
+    // The server's own 500 / 503 bodies pass through (TTL-only entries).
+    for (const code of [500, 503]) {
+      assert.deepStrictEqual(
+        errorResponses.filter((r) => r.ErrorCode === code),
+        [{ ErrorCode: code, ErrorCachingMinTTL: 0 }],
+        `SSR mode should not replace the server's ${code} body`,
+      );
+    }
     assert.strictEqual(
       has404,
       false,

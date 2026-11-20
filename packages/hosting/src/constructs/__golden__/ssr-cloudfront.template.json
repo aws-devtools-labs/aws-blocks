@@ -1366,20 +1366,8 @@
           "CustomErrorResponses": [
             {
               "ErrorCachingMinTTL": 0,
-              "ErrorCode": 500,
-              "ResponseCode": 500,
-              "ResponsePagePath": "/builds/golden-ssr/_error.html"
-            },
-            {
-              "ErrorCachingMinTTL": 0,
               "ErrorCode": 502,
               "ResponseCode": 502,
-              "ResponsePagePath": "/builds/golden-ssr/_error.html"
-            },
-            {
-              "ErrorCachingMinTTL": 0,
-              "ErrorCode": 503,
-              "ResponseCode": 503,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
@@ -1390,7 +1378,15 @@
             },
             {
               "ErrorCachingMinTTL": 0,
+              "ErrorCode": 500
+            },
+            {
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 501
+            },
+            {
+              "ErrorCachingMinTTL": 0,
+              "ErrorCode": 503
             }
           ],
           "DefaultCacheBehavior": {
