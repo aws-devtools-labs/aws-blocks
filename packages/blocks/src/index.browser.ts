@@ -1,12 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// aws-cdk-blocks browser entry point
-// The main entry is server-only (CDK constructs, Node.js APIs). Under the
-// `browser` condition `aws-cdk-blocks` resolves here instead, to the values of
-// the main entry that client code can use. The API client runtime and the rest
-// of core's browser-safe values stay in 'aws-cdk-blocks/client'.
-
 /**
  * `aws-cdk-blocks` — `browser` entry.
  *
@@ -32,7 +26,8 @@
  * uses `import type` for their types. `RawRouteErrors` is not here either: it
  * names an error thrown while a `RawRoute` is registered on the server, which
  * never reaches a client, and core's browser entry does not carry the route
- * registry it lives in.
+ * registry it lives in. The API client runtime and the rest of core's
+ * browser-safe values stay in `aws-cdk-blocks/client`.
  *
  * `umbrella-browser-exports.test.ts` keeps this list complete. It fails when the
  * backend entry exports an error constant or a client-safe value that is missing

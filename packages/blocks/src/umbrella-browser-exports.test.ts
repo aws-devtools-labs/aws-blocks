@@ -84,11 +84,14 @@ function run<T>(script: string, condition?: string): T {
 	return JSON.parse(out.trim().split('\n').pop() ?? 'null') as T;
 }
 
-interface BrowserView {
-	/** Named exports of `aws-cdk-blocks` under `browser`. */
+interface EntryView {
+	/** Named exports of `aws-cdk-blocks`. */
 	names: string[];
-	/** `*Errors` values of the browser entry. */
+	/** `*Errors` values of the entry. */
 	errorValues: Record<string, unknown>;
+}
+
+interface BrowserView extends EntryView {
 	/** Value exports of `@aws-cdk-blocks/core/client`, and which of them the browser entry re-exports as is. */
 	client: { values: string[]; same: string[] };
 	/** Per package: its browser build's non-class values, and which browser-entry names are that package's object. */
@@ -97,15 +100,19 @@ interface BrowserView {
 	errorsFiles: Record<string, { names: string[]; same: string[] }>;
 }
 
-const browserScript = `
+const entryScript = `
 const umbrella = await import('aws-cdk-blocks');
 const names = Object.keys(umbrella).filter((n) => n !== 'default').sort();
+const errorValues = Object.fromEntries(names.filter((n) => n.endsWith('Errors')).map((n) => [n, umbrella[n]]));
+`;
+
+const browserScript = `${entryScript}
 const isClass = (v) => typeof v === 'function' && /^class[\\s{]/.test(Function.prototype.toString.call(v));
 const same = (m) => names.filter((n) => n in m && m[n] === umbrella[n]);
 const client = await import('@aws-cdk-blocks/core/client');
 const view = {
 	names,
-	errorValues: Object.fromEntries(names.filter((n) => n.endsWith('Errors')).map((n) => [n, umbrella[n]])),
+	errorValues,
 	client: { values: Object.keys(client).filter((n) => n !== 'default'), same: same(client) },
 	builds: {},
 	errorsFiles: {},
@@ -123,13 +130,8 @@ for (const { name, errorsUrl } of ${JSON.stringify(packages)}) {
 console.log(JSON.stringify(view));
 `;
 
-const defaultScript = `
-const umbrella = await import('aws-cdk-blocks');
-const names = Object.keys(umbrella).filter((n) => n !== 'default').sort();
-console.log(JSON.stringify({
-	names,
-	errorValues: Object.fromEntries(names.filter((n) => n.endsWith('Errors')).map((n) => [n, umbrella[n]])),
-}));
+const defaultScript = `${entryScript}
+console.log(JSON.stringify({ names, errorValues }));
 `;
 
 let browserView: BrowserView | undefined;
@@ -137,9 +139,9 @@ const browser = (): BrowserView => {
 	browserView ??= run<BrowserView>(browserScript, 'browser');
 	return browserView;
 };
-let defaultView: { names: string[]; errorValues: Record<string, unknown> } | undefined;
-const backend = () => {
-	defaultView ??= run<{ names: string[]; errorValues: Record<string, unknown> }>(defaultScript);
+let defaultView: EntryView | undefined;
+const backend = (): EntryView => {
+	defaultView ??= run<EntryView>(defaultScript);
 	return defaultView;
 };
 
@@ -200,11 +202,9 @@ test('aws-cdk-blocks: browser entry re-exports each value from the package that 
 	);
 });
 
-for (const { name } of packages) {
+for (const { name } of packages.filter((p) => p.errorsUrl)) {
 	test(`aws-cdk-blocks: ${name} error constants are exported under browser, from its errors.js`, () => {
-		const view = browser();
-		const file = view.errorsFiles[name];
-		if (!file) return;
+		const file = browser().errorsFiles[name];
 		const { names: backendNames } = backend();
 		const notOnRoot = file.names.filter((n) => !backendNames.includes(n));
 		assert.deepStrictEqual(
