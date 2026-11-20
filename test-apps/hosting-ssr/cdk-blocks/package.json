@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
+    "concurrently": "^10.0.7",
     "next": "^16.4.6"
   }
 }
