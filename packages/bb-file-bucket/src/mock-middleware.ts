@@ -26,6 +26,17 @@ function isUploadDescriptor(data: unknown): data is { __blocks: 'file-bucket/upl
 	return d.__blocks === 'file-bucket/upload' && typeof d.url === 'string';
 }
 
+/**
+ * Hydrates `{ __blocks: 'file-bucket/download' }` and
+ * `{ __blocks: 'file-bucket/upload' }` descriptors into live file handles.
+ * Registered as response middleware via `registerMiddleware` below.
+ *
+ * The middleware runs on the result of every API call in the app, so it
+ * walks arrays and plain objects to find nested descriptors. Every other
+ * object comes back as a plain object with the same own enumerable keys
+ * (a JSON key such as `"__proto__"` stays an ordinary key) and
+ * `Object.prototype` as its prototype; primitives are returned unchanged.
+ */
 function hydrate(data: unknown): unknown {
 	if (isDownloadDescriptor(data)) {
 		const { url } = data;
@@ -56,9 +67,9 @@ function hydrate(data: unknown): unknown {
 
 	if (Array.isArray(data)) return data.map(hydrate);
 	if (typeof data === 'object' && data !== null) {
-		const result: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(data)) result[k] = hydrate(v);
-		return result;
+		// Object.fromEntries defines own data properties, so a JSON key named
+		// `__proto__` stays a key instead of becoming the copy's prototype.
+		return Object.fromEntries(Object.entries(data).map(([k, v]) => [k, hydrate(v)]));
 	}
 	return data;
 }
