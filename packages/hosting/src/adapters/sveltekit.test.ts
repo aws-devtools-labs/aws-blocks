@@ -126,6 +126,13 @@ void describe('sveltekitAdapter — manifest from build/ (skipBuild)', () => {
     );
   });
 
+  void it('reads getClientAddress() from the right-most X-Forwarded-For entry, not the socket', () => {
+    scaffoldBuild(tmp);
+    const c = sveltekitAdapter({ projectDir: tmp, skipBuild: true }).compute.default;
+    assert.equal(c.environment?.ADDRESS_HEADER, 'x-forwarded-for');
+    assert.equal(c.environment?.XFF_DEPTH, '1');
+  });
+
   void it('writes a run.sh wrapper into build/ that execs node index.js', () => {
     scaffoldBuild(tmp);
     sveltekitAdapter({ projectDir: tmp, skipBuild: true });

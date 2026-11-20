@@ -49,6 +49,10 @@
  *
  * The router still sees `x-forwarded-proto: http` on the edge → router hop
  * when that hop is plain HTTP (the ALB sets the header from its listener).
+ * The server doesn't: Hosting rewrites it from `CloudFront-Forwarded-Proto`
+ * (which the router behaviors' origin request policy forwards), and reduces
+ * `X-Forwarded-For` to the viewer CloudFront appended, before the server sees
+ * the request (see `forwarded_headers.ts`).
  */
 import { Annotations, Duration } from 'aws-cdk-lib';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
