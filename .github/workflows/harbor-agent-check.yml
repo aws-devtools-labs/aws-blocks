@@ -114,7 +114,7 @@ jobs:
           docker run --rm --init \
             --user "$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges \
             --mount "type=bind,src=$BUILD_DIR,dst=/work" --workdir /work \
-            --env HOME=/tmp/home --env CI=true --env HUSKY=0 --env BLOCKS_DISABLE_TELEMETRY=1 \
+            --env HOME=/tmp/home --env CI=true --env HUSKY=0 --env CDK_DISABLE_CLI_TELEMETRY=1 \
             --env NPM_CONFIG_USERCONFIG=/dev/null --env NPM_CONFIG_GLOBALCONFIG=/dev/null/npmrc \
             --env NPM_CONFIG_CACHE=/tmp/npm-cache \
             "$NODE_IMAGE" \

@@ -49,7 +49,7 @@ def build_and_pack(commit, output):
     empty.touch()
     env = {key: value for key, value in os.environ.items()
            if key not in BUILD_ENV_DROP and not key.startswith('AWS_')}
-    env.update(HUSKY='0', BLOCKS_DISABLE_TELEMETRY='1', NPM_CONFIG_USERCONFIG='/dev/null',
+    env.update(HUSKY='0', CDK_DISABLE_CLI_TELEMETRY='1', NPM_CONFIG_USERCONFIG='/dev/null',
                NPM_CONFIG_GLOBALCONFIG=str(empty), NPM_CONFIG_CACHE=str(output / 'npm-cache'))
     try:
         with (output / 'build.log').open('w') as log:
