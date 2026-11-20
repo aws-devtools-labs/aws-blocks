@@ -749,6 +749,29 @@ void describe('nitroAdapter — preset + feature validation', () => {
       'empty scheduledTasks must not warn',
     );
   });
+
+  void it('warns that an `isr` route rule is not applied, naming the route and `swr`', () => {
+    writeMinimalNitroOutput(tmpDir, {
+      nitroJson: { preset: 'aws-lambda' },
+      bundledRouteRules: { '/isr': { isr: 60 }, '/swr': { swr: 30, cache: { swr: true, maxAge: 30 } } },
+    });
+    writePackageJson(tmpDir);
+    assert.doesNotThrow(() => nitroAdapter({ projectDir: tmpDir, skipBuild: true }));
+    const out = stderrChunks.join('');
+    assert.match(out, /`isr` route rule .*\/isr/, 'must name the route whose isr rule is ignored');
+    assert.match(out, /swr/, 'must point at swr, which this preset honors');
+    assert.ok(!/`isr` route rule .*\/swr/.test(out), 'a swr route must not be named');
+  });
+
+  void it('does not warn about `isr` for a route that also has a cache rule, or for isr: false', () => {
+    writeMinimalNitroOutput(tmpDir, {
+      nitroJson: { preset: 'aws-lambda' },
+      bundledRouteRules: { '/a': { isr: 60, swr: 60, cache: { swr: true, maxAge: 60 } }, '/b': { isr: false } },
+    });
+    writePackageJson(tmpDir);
+    nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.ok(!stderrChunks.join('').includes('`isr` route rule'), 'no isr warning expected');
+  });
 });
 
 void describe('nitroAdapter — output dir resolution from nitro.json', () => {

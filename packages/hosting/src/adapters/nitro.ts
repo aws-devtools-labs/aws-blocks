@@ -243,6 +243,30 @@ const warnNitroUnsupportedFeatures = (info: NitroBuildInfo): void => {
   }
 };
 
+/**
+ * Warn about each route rule that sets `isr` and nothing that caches. Nitro
+ * implements `isr` only in its Vercel, Netlify and Zeabur presets; the
+ * `aws-lambda` and `node-server` presets that Hosting builds leave it out, so
+ * such a route is rendered on every request. `swr` (and `cache`) work on these
+ * presets: the server sends `s-maxage` + `stale-while-revalidate`, which the
+ * edge honors. A warning rather than an error, because the route still serves
+ * correctly, only uncached.
+ */
+const warnIgnoredIsrRules = (routeRules: Record<string, NitroRouteRule>): void => {
+  const ignored = Object.entries(routeRules)
+    .filter(([, rule]) => {
+      const raw = rule as Record<string, unknown>;
+      return Boolean(raw.isr) && !rule.cache && !raw.swr;
+    })
+    .map(([route]) => route);
+  if (ignored.length === 0) return;
+  process.stderr.write(
+    `⚠️  The \`isr\` route rule is not applied on AWS, so these routes are rendered on every request: ${ignored.join(', ')}. ` +
+      'Nitro implements `isr` only in its Vercel, Netlify and Zeabur presets. Use `swr: <seconds>` instead ' +
+      '(for example `routeRules: { \'/isr\': { swr: 60 } }`): it caches the page at the edge and revalidates it in the background.\n',
+  );
+};
+
 type NitroRouteRule = {
   prerender?: boolean;
   redirect?: string | { to: string; statusCode?: 301 | 302 | 307 | 308 };
@@ -439,6 +463,7 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
     nitroInfo.config?.awsLambda?.streaming === true || resolvedPreset === 'aws-lambda-streaming';
   validateNitroPreset(resolvedPreset);
   warnNitroUnsupportedFeatures(nitroInfo);
+  warnIgnoredIsrRules(mergedRouteRules);
   // Nuxt/Nitro projects can also carry a vercel.json with crons (e.g. set up
   // for a Vercel preview) — warn for parity with the Next/Astro path.
   warnIfVercelCron(projectDir);
