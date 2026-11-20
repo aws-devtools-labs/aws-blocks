@@ -59,7 +59,7 @@ new HostingConstruct(stack, 'Hosting', { manifest });
 |---|---|---|---|
 | `manifest` | `DeployManifest` | required | The adapter's output. |
 | `frontDoor` | `'cloudfront'`, `'none'` or `{ kind?, features?, … }` | `'cloudfront'` | The public entry point and its settings. See [Front doors](#front-doors). |
-| `compute` | object | | Overrides for the compute: `type` (`'lambda'` or `'web-function'`, default `'lambda'`), `webFunction`, `memorySize`, `timeout` (a `Duration` or seconds), `reservedConcurrency`, `provisionedConcurrency`, `imageOptimization.reservedConcurrency`, `logRetention`, `environment`, `warmup: { rate }`, `tracing: { otelEndpoint, otelHeaders?, serviceName? }`. |
+| `compute` | object | | Overrides for the compute: `type` (`'lambda'` or `'web-function'`, default `'lambda'`), `webFunction`, `memorySize`, `timeout` (a `Duration` or seconds), `reservedConcurrency`, `provisionedConcurrency`, `imageOptimization.reservedConcurrency`, `revalidation.reservedConcurrency`, `logRetention`, `environment`, `warmup: { rate }`, `tracing: { otelEndpoint, otelHeaders?, serviceName? }`. |
 | `environment` | `Record<string, string \| ManagedValue \| ISecret \| IParameter>` | | Environment variables for all compute functions. See [Secrets & config](#secrets--config). |
 | `secretStore`, `configStore` | `KindStoreOptions` | | Prefix, stage and cache settings. Before deploying, check the [region, prefix and stage limits](#region-prefix-and-stage-limits). |
 | `storage` | object | | `encryption` (`'S3_MANAGED'` or `'KMS'`), `encryptionKey`, `retainOnDelete`, `buildRetentionDays` (default 30), `deployIntervalDays`, `inventory: { enabled }`, `deployment: { memoryLimit, ephemeralStorageMiB }` (the asset-upload Lambda, default 1024 MiB each). |
@@ -718,6 +718,49 @@ new HostingConstruct(stack, 'Hosting', {
 
     Synth reminds you to include the removal in a policy of your own, because
     Hosting can't inspect or extend it.
+
+### Reserved concurrency (`compute.type: 'lambda'`)
+
+No hosting Lambda reserves concurrency by default. Each one scales up to the
+account's unreserved concurrency pool. To cap a function, opt in per function:
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  compute: {
+    reservedConcurrency: 50,                       // every SSR compute function
+    imageOptimization: { reservedConcurrency: 10 }, // the image-optimization Lambda
+    revalidation: { reservedConcurrency: 2 },       // the ISR revalidation worker
+  },
+});
+```
+
+The same `compute` options apply to `Hosting` from `@aws-cdk-blocks/core`.
+
+A reservation is a trade-off, so set it only once you know your traffic:
+
+- **It caps the function.** Requests beyond the reservation are throttled.
+  The SSR and image-optimization Lambdas then return errors (429 or 5xx)
+  through the front door. The revalidation worker's SQS messages go back to
+  the queue and land in its dead-letter queue after 3 receives, so those pages
+  stay stale until they're revalidated again.
+- **It takes from the account pool.** The reserved executions are removed from
+  the concurrency that every other function in the account and Region shares,
+  even while this function is idle.
+- **Fresh accounts can't reserve.** A new account's concurrency limit can be as
+  low as 10. Lambda keeps at least 100 executions unreserved, so any
+  reservation there fails the deploy with a 400. Request a quota increase first.
+
+Reservations aren't applied to:
+
+- **Lambda@Edge functions** (middleware and Next.js `runtime = 'edge'` routes).
+  Hosting doesn't reserve concurrency for them. CloudFront runs them as
+  replicas in the Regions it serves from, and each replica draws on that
+  Region's account concurrency.
+- **Web Functions** (`compute.type: 'web-function'`). `reservedConcurrency` is
+  ignored with a synth warning; cap scale with `webFunction.maxEnvironments`.
+- **Helper functions**: the asset and API proxies of the ALB and API Gateway
+  doors, and deploy-time custom resources. They aren't app compute.
 
 ### The server origin's REST API (`compute.type: 'lambda'`)
 

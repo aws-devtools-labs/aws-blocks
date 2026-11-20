@@ -218,6 +218,15 @@ export type HostingProps = {
       /** Reserved concurrent executions. Default: undefined (no reservation). */
       reservedConcurrency?: number;
     };
+    /**
+     * ISR revalidation worker overrides (the SQS-triggered Lambda that
+     * refreshes stale pages, deployed only when the build emits one).
+     * `reservedConcurrency` defaults to undefined (no reservation).
+     */
+    revalidation?: {
+      /** Reserved concurrent executions. Default: undefined (no reservation). */
+      reservedConcurrency?: number;
+    };
     /** Provisioned concurrency for cold-start elimination. Default: undefined (no provisioning). */
     provisionedConcurrency?: number;
     /** CloudWatch log retention for the SSR Lambda. Default: ONE_MONTH. */

@@ -9,8 +9,9 @@ import * as os from 'os';
 import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
-import { HostingConstruct } from './hosting_construct.js';
+import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
@@ -797,6 +798,49 @@ void describe('HostingConstruct — Cache/ISR', () => {
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       RetentionInDays: 14,
     });
+  });
+
+  void it('reserves concurrency on the revalidation worker only when compute.revalidation.reservedConcurrency is set', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const revalDir = path.join(tmpDir, 'revalidation-fn');
+    fs.mkdirSync(revalDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(revalDir, 'index.mjs'),
+      'export const handler = async () => {};',
+    );
+    const manifest: DeployManifest = {
+      ...ssrManifest(staticDir, bundleDir),
+      cache: {
+        computeResource: 'default',
+        tagRevalidation: true,
+        revalidationQueue: true,
+        revalidationFunction: {
+          bundle: revalDir,
+          handler: 'index.handler',
+        },
+      },
+    };
+    const revalidationReservation = (compute: HostingConstructProps['compute']): unknown => {
+      const stack = createStack();
+      const construct = new HostingConstruct(stack, 'Hosting', {
+        manifest,
+        skipRegionValidation: true,
+        compute,
+      });
+      const fn = construct.computeFunctions.get('revalidation');
+      assert.ok(fn, 'revalidation worker should be deployed');
+      const logicalId = stack.getLogicalId(fn.node.defaultChild as CfnFunction);
+      const resource = Template.fromStack(stack).toJSON().Resources[logicalId];
+      return resource.Properties.ReservedConcurrentExecutions;
+    };
+
+    // Default: no reservation, so the worker takes nothing from the account pool.
+    assert.equal(revalidationReservation(undefined), undefined);
+    // The SSR reservation stays on the SSR function; it doesn't leak to the worker.
+    assert.equal(revalidationReservation({ reservedConcurrency: 7 }), undefined);
+    // Opt-in caps the worker.
+    assert.equal(revalidationReservation({ revalidation: { reservedConcurrency: 2 } }), 2);
   });
 
   void it('does not deploy revalidation worker when revalidationFunction is not configured', () => {

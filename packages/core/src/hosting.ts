@@ -150,6 +150,27 @@ export type ComputeConfig = {
     /** Reserved concurrent executions. Default: undefined (no reservation). */
     reservedConcurrency?: number;
   };
+  /**
+   * Overrides for the ISR revalidation worker, the SQS-triggered Lambda that
+   * refreshes stale pages. It's deployed only when the build emits one
+   * (Next.js ISR, for example).
+   *
+   * `reservedConcurrency` defaults to undefined (no reservation), for the same
+   * fresh-account reason as {@link ComputeConfig.imageOptimization}. While the
+   * worker is throttled, revalidation messages go back to the queue and land
+   * in its dead-letter queue after 3 receives.
+   *
+   * @example
+   * ```ts
+   * compute: {
+   *   revalidation: { reservedConcurrency: 2 },
+   * }
+   * ```
+   */
+  revalidation?: {
+    /** Reserved concurrent executions. Default: undefined (no reservation). */
+    reservedConcurrency?: number;
+  };
   /** CloudWatch log retention for the SSR Lambda. Default: TWO_WEEKS. */
   logRetention?: cdk.aws_logs.RetentionDays;
 };
