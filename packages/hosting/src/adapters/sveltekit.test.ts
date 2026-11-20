@@ -237,6 +237,25 @@ void describe('sveltekitAdapter — manifest from build/ (skipBuild)', () => {
     );
   });
 
+  void it('tells a SvelteKit 3 user which versions to pin', () => {
+    scaffoldBuild(tmp, { kitVersion: '3.3.1' });
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      (error: Error & { resolution?: string }) => {
+        assert.strictEqual(error.name, 'UnsupportedSvelteKitVersionError');
+        assert.match(error.message, /SvelteKit 3\.3\.1 is not supported yet/);
+        const resolution = error.resolution ?? '';
+        assert.match(resolution, /@sveltejs\/kit@\^2/);
+        assert.match(resolution, /@sveltejs\/adapter-node@\^5/);
+        assert.match(resolution, /@sveltejs\/vite-plugin-svelte@\^5/);
+        assert.match(resolution, /vite@\^6/);
+        assert.match(resolution, /svelte\.config\.js/);
+        assert.match(resolution, /github\.com\/aws\/cdk-blocks\/issues\/984/);
+        return true;
+      },
+    );
+  });
+
   void it('serves a prerendered root (/) from S3 instead of the SSR catch-all', () => {
     scaffoldBuild(tmp, { prerendered: { 'index.html': '<h1>home</h1>' } });
     const m = sveltekitAdapter({ projectDir: tmp, skipBuild: true });

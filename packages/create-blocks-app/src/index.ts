@@ -1083,10 +1083,48 @@ function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined 
   return Object.keys(kept).length > 0 ? { dev: kept } : undefined;
 }
 
+/**
+ * The major version of the project's `@sveltejs/kit`: the installed one when
+ * `node_modules` has it, else the lowest major its `package.json` range allows
+ * (`^3.2.0` is 3). `undefined` when the project doesn't use SvelteKit, or the
+ * range names no version (`latest`, `workspace:*`).
+ */
+async function svelteKitMajor(targetDir: string, pkg: PackageDeps): Promise<{ major: number; installed?: string } | undefined> {
+  const installed: unknown = await readFile(join(targetDir, 'node_modules', '@sveltejs', 'kit', 'package.json'), 'utf-8')
+    .then((text) => JSON.parse(text).version, () => undefined);
+  if (typeof installed === 'string' && /^\d+\./.test(installed)) {
+    return { major: Number.parseInt(installed, 10), installed };
+  }
+  const range = pkg.devDependencies?.['@sveltejs/kit'] ?? pkg.dependencies?.['@sveltejs/kit'];
+  const match = typeof range === 'string' ? /^\s*(?:[~^]|>=?|=)?\s*v?(\d+)/.exec(range) : null;
+  return match ? { major: Number.parseInt(match[1], 10) } : undefined;
+}
+
+/**
+ * Stops before anything is written when the project uses a SvelteKit version
+ * the Hosting construct can't deploy (SvelteKit 3, which `npx sv create`
+ * scaffolds). Synth would refuse it too, so adding the backend now would only
+ * leave the project half set up. Prints the versions to pin instead.
+ */
+async function refuseUnsupportedSvelteKit(targetDir: string): Promise<void> {
+  const pkg: PackageDeps = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  const kit = await svelteKitMajor(targetDir, pkg);
+  if (!kit || kit.major < 3) return;
+  console.error(`Error: SvelteKit ${kit.major} is not supported yet${kit.installed ? ` (installed: ${kit.installed})` : ''}.`);
+  console.error('AWS CDK Blocks Hosting deploys SvelteKit 2 (@sveltejs/kit >=2.0.0 <3.0.0) with');
+  console.error('@sveltejs/adapter-node 5 and the SvelteKit config in svelte.config.js.');
+  console.error('');
+  console.error('Pin the SvelteKit 2 toolchain, move the config back to svelte.config.js, then run this command again:');
+  console.error('  npm install -D @sveltejs/kit@^2 @sveltejs/adapter-node@^5 @sveltejs/vite-plugin-svelte@^5 vite@^6');
+  console.error('SvelteKit 3 support is tracked in https://github.com/aws/cdk-blocks/issues/984. Nothing was written.');
+  process.exit(1);
+}
+
 async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
   if (templateName === 'amplify') {
     throw new Error('The amplify template requires an existing Amplify Gen 2 project (amplify/backend.ts).');
   }
+  await refuseUnsupportedSvelteKit(targetDir);
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add an AWS CDK Blocks backend to your project:');

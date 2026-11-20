@@ -40,6 +40,8 @@ This writes `cdk-blocks/tsconfig.json`, a TypeScript project that checks the bac
 
 In an npm workspaces monorepo, the app's `cdk-blocks/` folder has to be a workspace of the monorepo root too: npm installs the app's dependencies at the root and does not read the app's own `"workspaces": ["cdk-blocks"]`. When the app is a workspace of an enclosing root that does not list `<app>/cdk-blocks`, `create-blocks-app` stops before it writes anything and prints the `"workspaces"` entry to add; add it and run the command again.
 
+A SvelteKit project must be on SvelteKit 2 (`@sveltejs/kit` `>=2.0.0 <3.0.0`), which the Hosting construct deploys. SvelteKit 3, which `npx sv create` scaffolds today, is not supported yet: `create-blocks-app` stops before it writes anything and prints the SvelteKit 2 versions to pin (`npm install -D @sveltejs/kit@^2 @sveltejs/adapter-node@^5 @sveltejs/vite-plugin-svelte@^5 vite@^6`, with the SvelteKit config in `svelte.config.js`). It reads the installed `@sveltejs/kit` when `node_modules` has it, and the lowest version of the `package.json` range otherwise. Support for SvelteKit 3 is tracked in [#984](https://github.com/aws/cdk-blocks/issues/984).
+
 It also adds to your `.gitignore` (or creates one): the AWS CDK Blocks build and local-data paths, secret and key-material patterns such as `.env` and `*.pem`, and `node_modules` unless a line such as `node_modules`, `node_modules/` or `/node_modules` already ignores it. A `.gitignore` that un-ignores it (`!node_modules`) is left as it is. Lines you already have are kept, and the CLI prints the ones it adds.
 
 ### Add Blocks to an Amplify Gen 2 Project

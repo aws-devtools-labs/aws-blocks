@@ -1044,6 +1044,48 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('refuses an existing SvelteKit 3 project before it writes anything', () => {
+    // Hosting deploys SvelteKit 2 only; `npx sv create` scaffolds SvelteKit 3.
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-kit3-'));
+    const pkg = JSON.stringify({ name: 'my-svelte-app', version: '0.0.1', devDependencies: { '@sveltejs/kit': '^3.2.0', vite: '^8.0.0' } });
+    writeFileSync(join(tmpDir, 'package.json'), pkg);
+    try {
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 1, result.stdout);
+      assert.match(result.stderr, /SvelteKit 3 is not supported yet/);
+      assert.ok(result.stderr.includes('@sveltejs/kit@^2 @sveltejs/adapter-node@^5 @sveltejs/vite-plugin-svelte@^5 vite@^6'), result.stderr);
+      assert.ok(result.stderr.includes('https://github.com/aws/cdk-blocks/issues/984'), result.stderr);
+      assert.match(result.stderr, /Nothing was written/);
+      assert.strictEqual(readFileSync(join(tmpDir, 'package.json'), 'utf-8'), pkg);
+      assert.deepStrictEqual(readdirSync(tmpDir), ['package.json'], 'nothing is written');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('reads the installed SvelteKit version over the package.json range', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-kit-installed-'));
+    const kitDir = join(tmpDir, 'node_modules', '@sveltejs', 'kit');
+    mkdirSync(kitDir, { recursive: true });
+    try {
+      // A non-semver range: the installed 3.x decides.
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'kit-latest', devDependencies: { '@sveltejs/kit': 'latest' } }));
+      writeFileSync(join(kitDir, 'package.json'), JSON.stringify({ name: '@sveltejs/kit', version: '3.3.1' }));
+      const refused = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(refused.exitCode, 1, refused.stdout);
+      assert.match(refused.stderr, /SvelteKit 3 is not supported yet \(installed: 3\.3\.1\)/);
+      assert.ok(!existsSync(join(tmpDir, 'cdk-blocks')));
+
+      // SvelteKit 2 installed: the backend is added as usual.
+      writeFileSync(join(kitDir, 'package.json'), JSON.stringify({ name: '@sveltejs/kit', version: '2.70.3' }));
+      const added = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(added.exitCode, 0, added.stderr);
+      assert.ok(existsSync(join(tmpDir, 'cdk-blocks', 'index.ts')));
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('gives an Amplify app without Next.js the default template\'s backend tsconfig', () => {
     const tmpDir = join(__dirname, '../.test-amplify-tsconfig');
     mkdirSync(join(tmpDir, 'amplify'), { recursive: true });

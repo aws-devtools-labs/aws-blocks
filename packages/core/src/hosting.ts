@@ -8,6 +8,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-cdk-blocks/hosting/constructs';
 import {
   appBuildEnv,
+  assertFrameworkSupported,
   detectFramework,
   type FrameworkAdapterFn,
   getAdapter,
@@ -1191,6 +1192,11 @@ export class Hosting extends Construct {
     // the build and output-dir checks below, which can abort synth, so a failed deploy
     // still reports the framework it was deploying.
     writeFrameworkSink(framework);
+
+    // Refuse an unsupported framework version (e.g. SvelteKit 3) before the
+    // build below, so the user doesn't wait for a build the adapter rejects.
+    // A custom adapter owns its own checks.
+    if (!props.customAdapter) assertFrameworkSupported(framework, root);
 
     // ── 2. Optionally run the build ──────────────────────────────
     // A destroy reuses an existing build, and `BLOCKS_SKIP_FRONTEND_BUILD=1`

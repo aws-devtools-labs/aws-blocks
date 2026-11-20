@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import {
+  assertFrameworkSupported,
   detectFramework,
   getAdapter,
   readProjectDeps,
@@ -268,5 +269,45 @@ void describe('getAdapter', () => {
         return true;
       },
     );
+  });
+});
+
+void describe('assertFrameworkSupported', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'adapters-supported-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  void it('refuses SvelteKit 3 without building anything', () => {
+    writePackageJson(tmp, { devDependencies: { '@sveltejs/kit': '^3.2.0' } });
+    installFakePackage(tmp, '@sveltejs/kit', '3.3.1');
+    assert.throws(
+      () => assertFrameworkSupported('sveltekit', tmp),
+      (error: Error) => {
+        assert.strictEqual(error.name, 'UnsupportedSvelteKitVersionError');
+        assert.match(error.message, /3\.3\.1/);
+        return true;
+      },
+    );
+    assert.deepStrictEqual(
+      fs.readdirSync(tmp).sort(),
+      ['node_modules', 'package.json'],
+      'the check writes nothing into the project',
+    );
+  });
+
+  void it('accepts SvelteKit 2', () => {
+    writePackageJson(tmp, { devDependencies: { '@sveltejs/kit': '^2.15.0' } });
+    installFakePackage(tmp, '@sveltejs/kit', '2.15.0');
+    assert.doesNotThrow(() => assertFrameworkSupported('sveltekit', tmp));
+  });
+
+  void it('does nothing for a framework without a version check', () => {
+    writePackageJson(tmp, { dependencies: { react: '^18.0.0' } });
+    assert.doesNotThrow(() => assertFrameworkSupported('spa', tmp));
+    assert.doesNotThrow(() => assertFrameworkSupported('static', tmp));
   });
 });
