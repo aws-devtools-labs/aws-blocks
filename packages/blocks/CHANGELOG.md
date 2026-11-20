@@ -2,6 +2,48 @@
 
 <!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthBasic and AuthOIDC blocks -->
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: corrected the API Gateway throttling defaults, and separated a WAF on the gateway stage from one on the Hosting distribution. What `npm run migrate` rewrites, keeps and deletes is in `MIGRATING-FROM-SCRIPTS.md`.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/bb-agent@1.0.0-rc.2
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-app-setting@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-async-job@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-container-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-cron-job@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-dashboard@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-database@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-email-client@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-file-bucket@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-metrics@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-realtime@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-secret@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-tracer@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Minor Changes

@@ -1,5 +1,16 @@
 # @aws-blocks/bb-app-setting
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: `value` is required unless `secret: true`. `ParameterNotFound` is thrown on AWS only. `get()` parses the stored text as JSON, so a console value such as `12345` comes back as a number. `fromExisting` does not create the parameter or grant write access.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

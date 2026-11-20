@@ -1,5 +1,22 @@
 # @aws-blocks/bb-async-job
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: locally a failed delivery is retried at once and an exhausted job is logged, not queued. On AWS the retry wait is `900 + maxBatchingWindowSeconds` seconds on a Lambda compute and about 2 minutes on a container compute.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-container-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

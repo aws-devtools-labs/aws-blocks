@@ -1,5 +1,18 @@
 # @aws-cdk-blocks/bb-database
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the errors table gives the `error.name` a caller sees (`QueryFailedException`, not `QueryFailed`), and the README has a table of the `transaction()` options.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-app-setting@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Minor Changes

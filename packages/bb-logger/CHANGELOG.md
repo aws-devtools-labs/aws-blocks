@@ -1,5 +1,14 @@
 # @aws-blocks/bb-logger
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the retention example keeps the sandbox preset for sandbox stacks. The log level is set only through the `level` option.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes
