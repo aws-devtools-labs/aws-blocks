@@ -1,7 +1,7 @@
 # Labels are applied by the issue-triage-opened workflow, not this template.
 # Adding a labels: field here would race with that workflow on the 'opened' event.
 name: Bug Report
-description: Create a report to help us improve AWS Blocks
+description: Create a report to help us improve AWS CDK Blocks
 body:
   - type: markdown
     attributes:
@@ -12,7 +12,7 @@ body:
     attributes:
       label: Before opening, please confirm
       options:
-        - label: I have [searched for duplicate or closed issues](https://github.com/aws-devtools-labs/aws-blocks/issues?q=is%3Aissue).
+        - label: I have [searched for duplicate or closed issues](https://github.com/aws/cdk-blocks/issues?q=is%3Aissue).
           required: true
         - label: I have done my best to include a minimal, self-contained set of instructions for consistently reproducing the issue.
           required: true
@@ -107,7 +107,7 @@ body:
       description: |
         Please provide the following information:
       value: |
-        - AWS Blocks version:
+        - AWS CDK Blocks version:
         - Node.js version:
         - Package manager (npm/yarn/pnpm):
         - OS:
