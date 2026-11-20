@@ -624,6 +624,72 @@ const blocksStack = await BlocksStack.create(app, stackName, {
   `us-east-1` support stack included.
 - `npm run destroy` passes no stack selection, so the CDK CLI refuses to
   destroy an app with more than one top-level stack.
+- A deploy that changes a Lambda@Edge function (middleware or an Edge route)
+  publishes a new function version and keeps the previous one. CloudFront
+  removes the old version's replicas only hours after the distribution stops
+  using it, and Lambda can't delete a version until then, so Hosting retains
+  replaced versions instead of having the deploy wait on a delete that fails.
+  A retained version doesn't run and has no invocation charge, but its code
+  still counts toward the
+  [Lambda code storage quota](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html#compute-and-storage)
+  of `us-east-1`, which every function in that account and Region shares.
+  Each `next build` changes the edge bundle, so every deploy adds a version;
+  left unpruned, they can fill the quota and stop any function in the Region
+  from publishing new code. Prune versions the distribution no longer uses.
+  CloudFormation no longer tracks a retained version, so deleting one doesn't
+  affect the stack. Work from the distribution, not from function names or
+  version numbers: its cache behaviors name the exact function and version
+  each Lambda@Edge association runs, and an app can have several edge
+  functions (middleware plus one per Edge route). The highest version number
+  isn't necessarily the live one either: a deploy that fails and rolls back
+  leaves the version it published behind while CloudFront keeps running the
+  previous one.
+
+  1. Find the distribution ID in the app's own stack, in the Region you
+     deploy the app to (the distribution is always there, even when the edge
+     functions live in a `us-east-1` support stack). If this lists more than
+     one ID, pick the one whose domain name (`Distribution.DomainName`) or
+     alias (`Distribution.DistributionConfig.Aliases.Items`) from
+     `aws cloudfront get-distribution --id <distribution-id>` matches the
+     site URL in the stack output whose key contains `DistributionUrl`.
+  2. Check that the distribution's status is `Deployed`. While it's
+     `InProgress`, edge locations can still run versions its configuration no
+     longer lists, so wait and check again.
+  3. Read the Lambda@Edge version ARNs from the default cache behavior and
+     every other cache behavior. Each has the form
+     `arn:aws:lambda:us-east-1:<account>:function:<function-name>:<version>`
+     (the same ARN can appear on several behaviors). These versions are live:
+     keep them. The function names in these ARNs are the only functions to
+     prune.
+  4. For each of those functions, list its versions, and delete each numbered
+     version that step 3 didn't return. Skip `$LATEST`, which isn't a
+     published version. Always pass `--qualifier`: without it,
+     `delete-function` deletes the whole function and every version,
+     including the live one.
+
+  ```sh
+  # 1. The distribution ID (app stack, app Region)
+  aws cloudformation list-stack-resources --region <app-region> \
+  	--stack-name <app-stack-name> \
+  	--query "StackResourceSummaries[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId"
+  # 2. Must print Deployed
+  aws cloudfront get-distribution --id <distribution-id> \
+  	--query 'Distribution.Status' --output text
+  # 3. The live version ARNs: keep these
+  aws cloudfront get-distribution-config --id <distribution-id> \
+  	--query '[DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations.Items[].LambdaFunctionARN, DistributionConfig.CacheBehaviors.Items[].LambdaFunctionAssociations.Items[].LambdaFunctionARN][]'
+  # 4. Every version of one of those functions, then delete an unused one
+  aws lambda list-versions-by-function --region us-east-1 \
+  	--function-name <function-name> \
+  	--query 'Versions[].[Version,LastModified,CodeSize]' --output table
+  aws lambda delete-function --region us-east-1 \
+  	--function-name <function-name> --qualifier <unused-version>
+  ```
+
+  A version can only be deleted once CloudFront has removed its replicas:
+  until then Lambda rejects the delete, so wait a few hours after the deploy
+  that replaced it and try again. That rejection also protects a version that
+  another distribution still uses.
 
 ## SSR compute: Lambda or Lambda Web Functions
 

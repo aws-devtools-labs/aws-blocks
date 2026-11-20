@@ -1,0 +1,6 @@
+---
+"@aws-cdk-blocks/hosting": patch
+"aws-cdk-blocks": patch
+---
+
+Retain a replaced Lambda@Edge function version instead of deleting it. A deploy that changed Next.js middleware or an Edge route waited several minutes on deletes that Lambda refuses while CloudFront still holds the old version's replicas, then warned that resources failed to delete. Replaced versions now stay in place without running. A retained version has no invocation charge, but its code still counts toward the `us-east-1` Lambda code storage quota, and each Next.js build adds one, so prune versions the distribution no longer uses once CloudFront has removed their replicas. Read the live version ARNs from the distribution's cache behaviors (`aws cloudfront get-distribution-config`, `LambdaFunctionAssociations`), not from the highest version number, which after a rolled-back deploy can be one CloudFront doesn't run. List each edge function's versions with `aws lambda list-versions-by-function --region us-east-1 --function-name <function-name>` and delete each unused one with `aws lambda delete-function --region us-east-1 --function-name <function-name> --qualifier <version>`; without `--qualifier` the command deletes the whole function. Lambda rejects the delete while replicas remain. The Hosting README's Next.js section has the full steps.
