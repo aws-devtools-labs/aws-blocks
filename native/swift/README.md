@@ -6,11 +6,11 @@ A Swift Package and code generator that produces type-safe Swift client code fro
 
 ### 1. Add the package dependency
 
-This guide targets Swift SDK 0.2.0. Until that tag is published, use the local package in `native/swift` from this checkout. For the released package, pin to the minor version: before 1.0 a minor release can break the API.
+This guide targets Swift SDK 1.0.0. In your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aws/cdk-blocks-swift.git", .upToNextMinor(from: "0.2.0")),
+    .package(url: "https://github.com/aws/cdk-blocks-swift.git", from: "1.0.0"),
 ],
 targets: [
     .target(
