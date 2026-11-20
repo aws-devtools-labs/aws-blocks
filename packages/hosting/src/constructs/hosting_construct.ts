@@ -22,7 +22,6 @@ import {
   experimental,
   type IResponseHeadersPolicy,
   type PriceClass,
-  ResponseHeadersPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, RuleTargetInput, Schedule } from 'aws-cdk-lib/aws-events';
@@ -105,7 +104,7 @@ import { MonitoringConstruct } from './monitoring_construct.js';
 import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
-import { createManagedEquivalentSecurityHeadersPolicy, createSecurityHeadersPolicy } from './security_headers.js';
+import { defaultSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
 import { DEFAULT_WAF_RATE_LIMIT, WafConstruct } from './waf_construct.js';
 import { WEB_FUNCTION_INTERNAL_HEADERS, WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
@@ -1624,15 +1623,12 @@ export class HostingConstruct extends Construct {
               '(a shared policy like this avoids one Hosting-created policy per stack).',
           );
         }
-      } else if (f.contentSecurityPolicy) {
-        securityHeadersPolicy = createSecurityHeadersPolicy(this, 'SecurityHeaders', {
+      } else {
+        // Shared with the stacked door's edge (`cloudFrontEdgeDoor`).
+        securityHeadersPolicy = defaultSecurityHeadersPolicy(this, 'SecurityHeaders', {
           contentSecurityPolicy: f.contentSecurityPolicy,
           removeHeaders: removeOriginHeaders,
         });
-      } else if (removeOriginHeaders.length > 0) {
-        securityHeadersPolicy = createManagedEquivalentSecurityHeadersPolicy(this, 'SecurityHeaders', removeOriginHeaders);
-      } else {
-        securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
       }
 
       // ---- 9. CloudFront distribution ----

@@ -78,7 +78,7 @@ import { ASSET_BEHAVIOR_OPTIONS, assetsS3Origin, cf, inlineFunction, trimSlashes
 import { customErrorResponses, withServerErrorsNotCached } from './error_responses.js';
 import { type DoorInput, type DoorUpstream, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { proxyRulesJs } from './proxy_rules.js';
-import { createSecurityHeadersPolicy } from './security_headers.js';
+import { defaultSecurityHeadersPolicy } from './security_headers.js';
 
 /** The edge's input: the {@link DoorInput} plus the router it fronts (`upstream`) and internal-only edge settings. */
 export type CloudFrontEdgeDoorInput = DoorInput & {
@@ -217,7 +217,10 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
       enableAcceptEncodingGzip: true,
       enableAcceptEncodingBrotli: true,
     });
-    const securityHeaders = createSecurityHeadersPolicy(scope, 'CfOverAlbSecurityHeaders', {
+    // The CloudFront door's security headers: the AWS-managed policy (no CSP,
+    // and a header the server sets itself, such as `X-Frame-Options`, wins),
+    // or the custom policy when the edge has a `contentSecurityPolicy`.
+    const securityHeaders = defaultSecurityHeadersPolicy(scope, 'CfOverAlbSecurityHeaders', {
       contentSecurityPolicy: input.contentSecurityPolicy,
     });
     const { app, origins } = input;

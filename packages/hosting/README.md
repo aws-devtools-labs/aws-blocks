@@ -489,6 +489,16 @@ Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFront
     (`manifest.invalidationPaths`, else `/*`), after the new build and server
     are live.
   - The router sees the public host in `x-forwarded-host`.
+- **Security headers.** The edge's security headers are the CloudFront door's.
+  - By default, AWS's managed `SecurityHeadersPolicy`. It adds
+    `Strict-Transport-Security`, `X-Frame-Options`, `X-XSS-Protection` and
+    `Referrer-Policy` only when the response has none, so a header the server
+    sets itself (say `X-Frame-Options: DENY` from middleware) reaches the
+    browser unchanged. It always sets `X-Content-Type-Options: nosniff` and
+    sets no `Content-Security-Policy`.
+  - With `features.edge.contentSecurityPolicy`, the edge gets the same custom
+    policy as the CloudFront door with `contentSecurityPolicy`: that CSP and
+    fixed values for the other security headers, which replace the server's.
 - **Behavior budget.** A distribution allows 25 behaviors, the default
   included. Over that, the router becomes the default, API paths no static
   route can shadow are left to it first, and the rest goes through the ALB
