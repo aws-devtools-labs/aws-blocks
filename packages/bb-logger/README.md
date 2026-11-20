@@ -101,19 +101,26 @@ Logging is always on. Every compute captures its handler's stdout to its own Clo
 group, which carries the stack-wide default retention (`defaults.logRetention` —
 one week in sandbox, one year in production).
 
-To change retention, set `logRetention` on the stack-wide `defaults` that
-`cdk-blocks/index.cdk.ts` passes to `BlocksStack.create()` (it applies to every
-compute's handler log group). Keep the preset choice that file makes with `sandboxMode`:
+In `cdk-blocks/index.cdk.ts`, add the `RetentionDays` import and replace the inline
+`defaults` value as shown in this API-only scaffold excerpt. Spreading the selected
+preset keeps its other settings; `logRetention` overrides retention for every compute's handler log group.
 
 ```typescript
-import { BlocksPresets } from '@aws-cdk-blocks/core/cdk';
+import { BlocksStack, BlocksPresets } from 'aws-cdk-blocks/cdk';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
-const defaults = {
-  ...(sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production),
-  logRetention: RetentionDays.ONE_MONTH,
-};
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: {
+    ...(sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production),
+    logRetention: RetentionDays.ONE_MONTH,
+  },
+});
 ```
+
+In the Amplify scaffold, make the same inline `defaults` change in
+`BlocksBackend.create(stack, 'blocks', …)` instead.
 
 A `Logger` does not configure retention — the compute owns the single,
 framework-owned handler log group. To override the default for one compute, set

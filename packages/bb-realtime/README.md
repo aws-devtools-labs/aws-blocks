@@ -135,6 +135,7 @@ When access ends:
 - `await rt.revokeAccess(user.userSub)` ends a user's access, for example on sign-out, a role change or a removed account.
 - Handles minted for that user before the call are refused on connect and subscribe right away. A handle minted in the same second as the call counts as older.
 - On AWS, publish checks revocation using an eventually consistent read. An already-open subscription can still receive a message just after revocation; the client learns that access ended when a keep-alive ping observes it. The local dev server ends affected subscriptions immediately.
+- AWS stores each user's revocation record in the existing connections table with a TTL of 2 hours and 5 minutes, long enough for all previously issued tokens to expire.
 - A handle minted after the call works, so also make your `refresh` endpoint refuse that user.
 
 ### Rate limits
@@ -196,8 +197,8 @@ const sub = channel.subscribe({
 });
 ```
 
-If a resubscribe is rejected (for example, the stored token expired or the channel was revoked), the client gets `onDisconnect('error')`.
-Without a `refresh` callback, re-fetch the channel from your API and subscribe again.
+If the stored channel token has expired or the user's access was revoked, the server can reject the resubscribe and the client reports `onDisconnect('error')`. A reconnect can also fail before resubscription: without `refresh`, the client reuses its stored connect token, which expires after 2 hours. After five failed reconnect attempts, the client gives up and reports a final `onDisconnect('error')`.
+Without a `refresh` callback, re-fetch the channel from your API and subscribe again if the user still has access.
 
 ### Outliving the token TTLs with `refresh`
 

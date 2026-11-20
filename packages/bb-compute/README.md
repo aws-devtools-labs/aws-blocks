@@ -85,14 +85,17 @@ the `defaults.vpc.subnets` you choose).
 
 ## Errors
 
-All checks run at synth (`cdk synth` / deploy) and throw an `Error` that names
-the compute or the namespace path at fault:
+The following conditions throw an error at synth (`cdk synth` / deploy):
 
 - `scaling.minInstances` is not an integer of 0 or more, `scaling.maxInstances`
   is not an integer of 1 or more, or `minInstances` exceeds `maxInstances`.
 - `scaling.minInstances: 0` on a compute with no `AsyncJob` or `CronJob`, or
   with a `cpu`/`memory` strategy.
 - `scaling.minInstances: 0` on a compute that serves an `ApiNamespace`.
+- A placed namespace's export name does not match `[A-Za-z0-9:._$-]+`.
+  Rename it so API Gateway can use it as a path segment.
+- With `strictNamespacePlacement: true`, the JSON placement map exceeds 2048
+  UTF-8 bytes. Place fewer namespaces or shorten export names or compute IDs.
 - A namespace path longer than 128 characters (an export name over 112
   characters), or two namespace paths that map to the same load balancer rule
   priority. Rename the export.
@@ -101,9 +104,20 @@ Synth warnings:
 
 - `@aws-cdk-blocks/bb-container-compute:api-rule-quota`: more than 100 container
   API namespaces share one load balancer, its default listener-rule quota.
-  Request a quota increase before deploying.
+  Request a quota increase before deploying. Once the quota is sufficient,
+  acknowledge the listener warning on the stack returned by `BlocksStack.create()`:
+  `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-container-compute:api-rule-quota')`.
+  If using `BlocksBackend.create()`, pass the returned backend instead; the
+  shared listener is a descendant of that backend, not of an individual compute.
 - `blocks:apigateway:bare-endpoint-serves-placed-namespaces`: see
   [`strictNamespacePlacement`](#strictnamespaceplacement).
+- `blocks:apigateway:namespace-compute-not-owned`: a namespace explicitly uses
+  a compute from another backend and runs on this backend's default compute instead.
+- `blocks:api:direct-routes-without-public-subnets`: the load balancer's VPC
+  has no public subnets, so CloudFront uses the gateway (see [Time limits](#time-limits)).
+- `blocks:api:direct-routes-without-waf`: CloudFront routes directly to a
+  container load balancer but the distribution has no web ACL. Gateway
+  throttling and access logs do not apply to those routes.
 
 ## Scaling
 
@@ -273,9 +287,11 @@ on the stack or backend returned by `create()`.
 
 - API Gateway allows about 29 seconds. On Lambda, the handler returns a timeout after 28 seconds or one second before the function deadline, whichever comes first. Run longer work in an `AsyncJob`.
 - A call to a `container` namespace on the `apiFrontDoor: 'cloudfront'` tier
-  can run up to 60 seconds: the CloudFront distribution that fronts the API
-  (the managed one, or `Hosting`'s default CloudFront door) routes the
-  namespace's path straight to the container's load balancer.
+  can run up to 60 seconds if the load balancer's VPC has public subnets:
+  the managed distribution or `Hosting`'s default CloudFront door routes the
+  namespace's path straight to the load balancer. Without public subnets,
+  synth warns `blocks:api:direct-routes-without-public-subnets` and the call
+  stays on API Gateway's roughly 29-second limit.
 
 ### Container namespaces
 

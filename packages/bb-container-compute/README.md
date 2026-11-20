@@ -41,9 +41,10 @@ rules: [bb-compute README](../bb-compute/README.md#container).
 
 ## Errors
 
-The synth checks and the `@aws-cdk-blocks/bb-container-compute:api-rule-quota`
-warning are thrown from `src/index.cdk.ts` and listed in the
-[bb-compute README](../bb-compute/README.md#errors).
+At synth, `src/index.cdk.ts` throws errors for invalid container configurations
+and adds the `@aws-cdk-blocks/bb-container-compute:api-rule-quota` warning as
+an annotation on the shared listener. The [bb-compute README](../bb-compute/README.md#errors)
+lists these checks alongside the namespace placement errors and warnings from core.
 
 ## What it provisions (AWS)
 

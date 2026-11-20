@@ -129,7 +129,7 @@ new CronJob(scope, 'nightly-rebuild', {
 
 A container inherited from the scope works the same way. For `scaling.minInstances`,
 which decides how soon a tick starts and what the container costs between ticks,
-see [Compute](../bb-compute/README.md).
+see [Compute scaling](../bb-compute/README.md#scaling).
 
 ## Delivery and retries
 
@@ -170,7 +170,7 @@ To run one handler on several schedules, create one `CronJob` per schedule and v
 
 In local dev mode, CronJob runs schedules in-process:
 
-- Rate and cron schedules fire on their real schedule, with `timezone` applied to cron expressions. Slots missed while the process is suspended (for example machine sleep) are not run.
+- Rate and cron schedules fire on their real schedule, with `timezone` applied to cron expressions. If a tick was due while the process was suspended (for example, during machine sleep), the job runs once on wake and skips the other missed slots.
 - Console logs when the job fires: `[CronJob:{id}] triggered at {timestamp}`
 - When `enabled: false`, the job is registered and the schedule does not run.
 - A failed handler is logged with a warning that AWS would retry. The mock does not retry it.

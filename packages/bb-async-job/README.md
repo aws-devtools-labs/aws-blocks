@@ -84,7 +84,7 @@ try {
 ## submitBatch()
 
 - Returns `{ jobIds, failed: [] }` when every payload is enqueued. `jobIds` is in the order of `payloads`.
-- On AWS a batch is sent as several SQS requests, so it is not atomic. If any entry fails, `submitBatch()` throws `AsyncJobErrors.BatchSubmitFailed` after some entries may already be on the queue.
+- On AWS, `submitBatch()` is not atomic: SQS can reject individual entries even in a single request, and large batches span multiple requests. If any entry fails, `submitBatch()` throws `AsyncJobErrors.BatchSubmitFailed`; other entries may already be on the queue.
 - The error has `.jobIds` (the job id of each enqueued entry, `null` at failed indexes) and `.failed[]` (each failed entry's `index`, `code`, `message`). Retry only the `null` indexes.
 - A request that fails as a whole (throttling, connection) fails every entry in it, and the requests not yet started are not sent.
 - The local mock never partially fails.

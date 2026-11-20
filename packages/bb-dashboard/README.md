@@ -74,7 +74,7 @@ new Dashboard(scope: ScopeParent, id: string, options?: DashboardOptions)
 | `logs` | `boolean` | `true` | Show the logs section for each compute. `false` hides the section; logs are still captured |
 | `traces` | `boolean` | `true` | Show each compute's traces section when the app has an enabled `Tracer`. Lambda computes support X-Ray; container computes do not. |
 | `metrics` | `MetricsSource \| MetricsSource[]` | none | Metrics source(s); each renders one app-wide section for its namespace. See [`MetricsSource`](#metricssource) |
-| `dashboardName` | `string` | the block's own `fullId` | CloudWatch Dashboard name (max 255 characters, auto-truncated) |
+| `dashboardName` | `string` | the block's own `fullId` | CloudWatch Dashboard name. Characters other than ASCII letters, digits, `-`, and `_` become `-`; the result is truncated to 255 characters. |
 | `defaultTimeRange` | `string` | `'-PT3H'` | Default time range (ISO 8601 duration) |
 | `routePath` | `string \| false` | `'/cdk-blocks/dashboard'` | Route path for the redirect. Set to `false` to disable |
 

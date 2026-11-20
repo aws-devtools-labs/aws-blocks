@@ -13,14 +13,14 @@
 "aws-cdk-blocks": patch
 ---
 
-docs(compute, async, observability): the READMEs of 11 blocks correct wrong statements, list every error in one section, and the `bb-compute` README holds the `Compute` options, defaults, scaling rules and synth errors.
+The runtime block READMEs document error conditions and local development differences. The `bb-compute` README now collects the `Compute` options, defaults, scaling rules and placement diagnostics.
 
 Corrections:
 
 - `bb-cron-job`: no longer says a job with `enabled: false` can be triggered by hand. The schedule is deployed in the `DISABLED` state and does not fire, on AWS or locally. `InvalidSchedule` and `InvalidTimezone` are thrown at construction locally and at synth time on deploy. The local mock does not retry a failed handler and ignores the year field of a cron expression.
 - `bb-compute`: `scaling.strategy` is one signal object or an array of them (`{ on: 'cpu', targetPercent }`, `{ on: 'memory', targetPercent }`, `{ on: 'queue-depth', backlogPerInstance }`), not a list of names. One table gives the default strategy for a compute that runs only jobs, no jobs, or jobs and an `ApiNamespace`.
 - `bb-tracer`: `enabled: false` does not remove X-Ray cost while another `Tracer` in the app is enabled. The local mock samples by `samplingRate`; it does not record every trace.
-- `bb-dashboard`: the `metrics` option takes `{ metrics, metricConfigs? }`, not a `Metrics` block. `dashboardName` defaults to the block's own `fullId`. The traces section exists only when the app has an enabled `Tracer`. Local development names `npm run sandbox` and `npm run deploy` instead of `npx cdk deploy`.
+- `bb-dashboard`: documents the `metrics` source, dashboard name normalization, and when trace widgets are available. The local dashboard page now points to `.cdk-blocks/local/data/` for saved traces.
 - `bb-metrics`: `namespace` defaults to the block's own `fullId`. `InvalidNamespace` is thrown by `new Metrics(...)` at runtime and in local dev, not during CDK synthesis.
 - `bb-logger`: the retention example is a valid statement that keeps the sandbox preset for sandbox stacks. The level is set only through the `level` option.
 - `bb-logger`, `bb-metrics`, `bb-tracer`: cross-references name the `Logger` and `Tracer` classes instead of `Logging` and `Tracing`.
