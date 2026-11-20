@@ -352,12 +352,19 @@ void describe('withViteBundlePreload — a real `vite build`', { skip: viteBin ?
     `  ssr: { external: ['dep-b'] },\n` +
     `});\n`;
 
-  const build = (args: string[] = []): string => {
+  const build = (args: string[] = [], outFile = path.join('out', 'entry.js')): string => {
     const result = withViteBundlePreload(process.env, (env) =>
       spawnSync(process.execPath, [viteBin ?? '', 'build', ...args], { cwd: tmp, env, encoding: 'utf-8' }),
     );
     assert.equal(result.status, 0, `vite build failed: ${String(result.stderr)}`);
-    return fs.readFileSync(path.join(tmp, 'out', 'entry.js'), 'utf-8');
+    return fs.readFileSync(path.join(tmp, outFile), 'utf-8');
+  };
+
+  /** The output bundles dep-a and keeps the config's `ssr.external` dep-b as an import. */
+  const assertBundled = (output: string): void => {
+    assert.ok(output.includes('from-dep-a'), 'dep-a is bundled');
+    assert.ok(!/from ['"]dep-a['"]/.test(output), 'no import of dep-a is left');
+    assert.match(output, /from ['"]dep-b['"]/, 'an explicit ssr.external stays an import');
   };
 
   for (const file of ['vite.config.ts', 'vite.config.mjs']) {
@@ -379,6 +386,198 @@ void describe('withViteBundlePreload — a real `vite build`', { skip: viteBin ?
     assert.ok(output.includes('from-dep-a'));
     assert.match(output, /from ['"]dep-b['"]/);
   });
+
+  void it('wraps the config in the root that the build command names after its options', () => {
+    // `vite build --mode staging frontend`: the root is `frontend`, so Vite loads frontend/vite.config.*.
+    fs.mkdirSync(path.join(tmp, 'frontend'));
+    fs.renameSync(path.join(tmp, 'entry.js'), path.join(tmp, 'frontend', 'entry.js'));
+    fs.writeFileSync(path.join(tmp, 'frontend', 'vite.config.mjs'), config(false));
+    assertBundled(build(['--mode', 'staging', 'frontend'], path.join('frontend', 'out', 'entry.js')));
+    assert.equal(fs.readFileSync(path.join(tmp, 'frontend', 'vite.config.mjs'), 'utf-8'), config(false));
+  });
+
+  void it('keeps a vite.config.js CommonJS in a package without "type": "module", so its require() works', () => {
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'p', dependencies: { 'dep-a': '*' } }));
+    const helper = path.join(tmp, 'node_modules', 'cfg-helper-cjs');
+    fs.mkdirSync(helper, { recursive: true });
+    fs.writeFileSync(path.join(helper, 'package.json'), JSON.stringify({ name: 'cfg-helper-cjs', main: 'index.js' }));
+    fs.writeFileSync(path.join(helper, 'index.js'), "module.exports = { value: '-cjs' };\n");
+    fs.writeFileSync(
+      path.join(tmp, 'vite.config.js'),
+      "const { value } = require('cfg-helper-cjs');\n" +
+        'module.exports = ({ mode }) => ({\n' +
+        '  define: { __MODE__: JSON.stringify(mode + value) },\n' +
+        "  build: { ssr: 'entry.js', outDir: 'out' },\n" +
+        "  ssr: { external: ['dep-b'] },\n" +
+        '});\n',
+    );
+    // In a CommonJS package Vite names the ESM server output entry.mjs.
+    assertBundled(build([], path.join('out', 'entry.mjs')));
+  });
+
+  void it('wraps the config Vite picks when several exist: vite.config.cjs before vite.config.mts', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'vite.config.cjs'),
+      "module.exports = { build: { ssr: 'entry.js', outDir: 'out' }, ssr: { external: ['dep-b'] } };\n",
+    );
+    fs.writeFileSync(path.join(tmp, 'vite.config.mts'), "export default { build: { ssr: 'entry.js', outDir: 'not-this-one' } };\n");
+    assertBundled(build());
+    assert.ok(!fs.existsSync(path.join(tmp, 'not-this-one')), 'the vite.config.mts is not loaded');
+  });
+});
+
+/**
+ * The preload's config selection, against a stand-in `vite/bin/vite.js` that
+ * prints the arguments it gets and the bridge config they point at. Vite's own
+ * rules (vite/src/node/config.ts `loadConfigFromFile`, constants.ts
+ * `DEFAULT_CONFIG_FILES`, cli.ts with cac): an explicit `--config` resolves from
+ * the working directory; otherwise the first of vite.config.{js,mjs,ts,cjs,mts,cts}
+ * in the root, which is the first positional after `build` (else the working
+ * directory); a `.js`/`.ts` config is CommonJS unless the nearest package.json
+ * says `"type": "module"`.
+ */
+void describe('the bundling preload wraps the config Vite would load', () => {
+  let tmp: string;
+  let fakeVite: string;
+  beforeEach(() => {
+    tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sveltekit-vite-select-')));
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: 'p', type: 'module' }));
+    const viteDir = path.join(tmp, 'node_modules', 'vite');
+    fs.mkdirSync(path.join(viteDir, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(viteDir, 'package.json'), JSON.stringify({ name: 'vite' }));
+    fakeVite = path.join(viteDir, 'bin', 'vite.js');
+    fs.writeFileSync(
+      fakeVite,
+      [
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
+        'const args = process.argv.slice(2);',
+        "const i = args.lastIndexOf('--config');",
+        "const bridgePath = i >= 0 && path.basename(path.dirname(args[i + 1])).startsWith('aws-blocks-sveltekit-') ? args[i + 1] : null;",
+        "const bridge = bridgePath ? fs.readFileSync(bridgePath, 'utf-8') : null;",
+        'process.stdout.write(JSON.stringify({ args, bridgePath, bridge }));',
+        '',
+      ].join('\n'),
+    );
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const write = (...files: string[]): void => {
+    for (const rel of files) {
+      fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true });
+      fs.writeFileSync(path.join(tmp, rel), 'export default {};\n');
+    }
+  };
+
+  type Run = { args: string[]; bridgePath: string | null; bridge: string | null };
+  const run = (args: string[]): Run => {
+    const result = withViteBundlePreload(process.env, (env) =>
+      spawnSync(process.execPath, [fakeVite, ...args], { cwd: tmp, env, encoding: 'utf-8' }),
+    );
+    assert.equal(result.status, 0, String(result.stderr));
+    return JSON.parse(result.stdout) as Run;
+  };
+
+  /** The project-relative config file that the bridge loads, `null` for none. */
+  const wrapped = (out: Run): string | null => {
+    assert.ok(out.bridgePath && out.bridge, `the build is wrapped: ${JSON.stringify(out.args)}`);
+    const m = /(?:from |require\()("[^"]*")/.exec(out.bridge);
+    if (!m?.[1]) return null;
+    const file = path.resolve(path.dirname(out.bridgePath), JSON.parse(m[1]) as string);
+    return path.relative(tmp, fs.realpathSync(file)).split(path.sep).join('/');
+  };
+
+  const unchanged = (args: string[]): void => {
+    const out = run(args);
+    assert.deepEqual(out.args, args, 'the build runs as the command wrote it');
+    assert.equal(out.bridgePath, null);
+  };
+
+  for (const args of [
+    ['build', '--mode', 'staging', 'frontend'],
+    ['--mode', 'staging', 'build', 'frontend'],
+    ['build', '-m', 'staging', '--emptyOutDir', 'frontend'],
+    ['build', '--mode=staging', '-w', 'frontend'],
+    ['build', 'frontend', '--outDir', 'dist'],
+  ]) {
+    void it(`loads the root's config for \`vite ${args.join(' ')}\``, () => {
+      write('vite.config.js', 'frontend/vite.config.ts');
+      const out = run(args);
+      assert.equal(wrapped(out), 'frontend/vite.config.ts');
+      assert.deepEqual(out.args, [...args, '--config', out.bridgePath], 'every other argument stays');
+    });
+  }
+
+  void it('reads the word after an option that takes an optional value as its value, as Vite does', () => {
+    // `--ssr [entry]`: `vite build --ssr frontend` builds the SSR entry `frontend` from the working directory.
+    write('vite.config.js', 'frontend/vite.config.ts');
+    assert.equal(wrapped(run(['build', '--ssr', 'frontend'])), 'vite.config.js');
+  });
+
+  for (const [present, expected] of [
+    [['vite.config.js', 'vite.config.mjs', 'vite.config.ts', 'vite.config.cjs', 'vite.config.mts', 'vite.config.cts'], 'vite.config.js'],
+    [['vite.config.mjs', 'vite.config.ts', 'vite.config.cjs', 'vite.config.mts', 'vite.config.cts'], 'vite.config.mjs'],
+    [['vite.config.ts', 'vite.config.cjs', 'vite.config.mts', 'vite.config.cts'], 'vite.config.ts'],
+    [['vite.config.cjs', 'vite.config.mts', 'vite.config.cts'], 'vite.config.cjs'],
+    [['vite.config.mts', 'vite.config.cts'], 'vite.config.mts'],
+    [['vite.config.cts'], 'vite.config.cts'],
+  ] as const) {
+    void it(`picks ${expected} from ${present.join(', ')}, in Vite's order`, () => {
+      write(...present);
+      assert.equal(wrapped(run(['build'])), expected);
+    });
+  }
+
+  for (const args of [
+    ['build', '-c', 'configs/custom.mjs', 'frontend'],
+    ['build', '--config=configs/custom.mjs', 'frontend'],
+  ]) {
+    void it(`wraps the --config file from the working directory, not the root, for \`vite ${args.join(' ')}\``, () => {
+      write('configs/custom.mjs', 'frontend/configs/custom.mjs', 'frontend/vite.config.js');
+      const out = run(args);
+      assert.equal(wrapped(out), 'configs/custom.mjs');
+      assert.deepEqual(out.args, ['build', '--config', out.bridgePath, 'frontend']);
+    });
+  }
+
+  void it('wraps no config when the root has none, as Vite then loads none', () => {
+    write('other/vite.config.js');
+    const out = run(['build']);
+    assert.equal(wrapped(out), null);
+    assert.match(out.bridge ?? '', /const userConfig = \{\};/);
+  });
+
+  for (const [why, args, files] of [
+    ['a --config file that does not exist', ['build', '--config', 'missing.mjs'], ['vite.config.js']],
+    ['two --config options', ['build', '--config', 'a.mjs', '--config', 'b.mjs'], ['a.mjs', 'b.mjs']],
+    ['--config inside combined short flags', ['build', '-wc', 'a.mjs'], ['a.mjs', 'vite.config.js']],
+    ['an option this Vite CLI table does not know', ['build', '--new-vite-option', 'x'], ['vite.config.js', 'x/vite.config.js']],
+    ['another command than build', ['dev'], ['vite.config.js']],
+  ] as const) {
+    void it(`leaves the build unchanged for ${why}`, () => {
+      write(...files);
+      unchanged([...args]);
+    });
+  }
+
+  for (const [file, pkg, bridgeExt] of [
+    ['frontend/vite.config.js', {}, '.cjs'],
+    ['frontend/vite.config.ts', { type: 'commonjs' }, '.cjs'],
+    ['frontend/vite.config.cts', { type: 'module' }, '.cjs'],
+    ['frontend/vite.config.js', { type: 'module' }, '.mjs'],
+    ['frontend/vite.config.mts', {}, '.mjs'],
+  ] as const) {
+    void it(`keeps ${path.basename(file)} ${bridgeExt === '.cjs' ? 'CommonJS' : 'ESM'} under a package.json of ${JSON.stringify(pkg)}`, () => {
+      write(file);
+      fs.writeFileSync(path.join(tmp, 'frontend', 'package.json'), JSON.stringify(pkg));
+      const out = run(['build', 'frontend']);
+      assert.equal(wrapped(out), file);
+      assert.equal(path.extname(out.bridgePath ?? ''), bridgeExt);
+      assert.match(out.bridge ?? '', bridgeExt === '.cjs' ? /require\(/ : /^import userConfig from /m);
+    });
+  }
 });
 
 void describe('unresolvedServerImports', () => {

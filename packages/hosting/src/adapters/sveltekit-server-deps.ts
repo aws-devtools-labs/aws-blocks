@@ -9,8 +9,8 @@
  * Bundling ({@link withViteBundlePreload}): the build runs with a Node.js
  * `--import` preload that a `vite build` process picks up. It points Vite's
  * `--config` at a bridge config in a fresh temporary directory; the bridge
- * imports the app's own config (the default `vite.config.*`, or the one the
- * build command names with `--config`) and appends a build-only plugin setting
+ * loads the config Vite itself would load (see {@link buildVitePreloadSource})
+ * in the same module format, and appends a build-only plugin setting
  * `ssr.noExternal: true`. Nothing in the project is written, renamed or
  * restored, so two overlapping builds can't lose the app's config, a `cdk
  * watch` sees no change, and a type check in the build script never sees the
@@ -43,63 +43,167 @@ export const SVELTEKIT_BUNDLE_PLUGIN_NAME = 'aws-blocks:sveltekit-bundle-server-
 // ---- bundling ----
 
 /**
- * The `--import` preload. In a `vite build` process it writes the bridge
- * config next to itself and adds `--config <bridge>` (replacing the app's own
- * `--config`, which the bridge imports instead). A CommonJS config
- * (`.cjs`/`.cts`) is left alone: an ESM bridge can't load it, and the
- * post-build check names what stays unbundled. A failure only prints a
- * warning: the build then runs unchanged.
+ * The `--import` preload. In a `vite build` process it finds the config file
+ * that Vite itself would load and wraps it: it writes the bridge config next
+ * to itself and passes `--config <bridge>` (in place of the app's own
+ * `--config`, which the bridge loads instead). The selection follows Vite
+ * (`loadConfigFromFile` in vite/src/node/config.ts, `DEFAULT_CONFIG_FILES` in
+ * constants.ts, and the cac-parsed CLI in cli.ts):
+ *
+ * - the arguments are parsed as cac does for `vite build [root]`: an option
+ *   declared without a value is boolean, any other one takes the next word
+ *   that doesn't start with `-` (so `--mode staging frontend` has the root
+ *   `frontend`, and `--ssr frontend` has none);
+ * - an explicit `--config` resolves from the working directory; otherwise the
+ *   first of `vite.config.{js,mjs,ts,cjs,mts,cts}` in the root (the first
+ *   positional after `build`, resolved from the working directory, else the
+ *   working directory itself); no file means no config, as for Vite;
+ * - the config is ESM for `.mjs`/`.mts`, CommonJS for `.cjs`/`.cts`, and for
+ *   `.js`/`.ts` ESM only when the nearest package.json has `"type": "module"`
+ *   (Vite's `isFilePathESM`); the bridge uses the same format (`.mjs` importing
+ *   it, or `.cjs` requiring it), so a CommonJS config's `require()` still works.
+ *
+ * When the selection isn't certain (an option this table doesn't know, as a
+ * newer Vite may add; `--config` given twice, inside combined short flags or
+ * naming a missing file), the build runs unchanged, and the post-build check
+ * names whatever stays unbundled. A failure only prints a warning: the build
+ * then runs unchanged too.
  * @internal exported for unit tests.
  */
 export const buildVitePreloadSource = (): string => `// Written by @aws-cdk-blocks/hosting for one SvelteKit build; removed when it ends.
-import { existsSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const CONFIG_FILES = ['vite.config.js', 'vite.config.mjs', 'vite.config.ts', 'vite.config.mts', 'vite.config.cjs', 'vite.config.cts'];
+// Vite's DEFAULT_CONFIG_FILES, in Vite's order.
+const CONFIG_FILES = ['vite.config.js', 'vite.config.mjs', 'vite.config.ts', 'vite.config.cjs', 'vite.config.mts', 'vite.config.cts'];
+// The options of \`vite build\` (global ones included) that cac declares without a value.
+const BOOLEAN_OPTIONS = new Set(['clearScreen', 'emptyOutDir', 'watch', 'w', 'app', 'help', 'h', 'version', 'v']);
+// The ones that take a value (\`<value>\` or \`[value]\`).
+const VALUE_OPTIONS = new Set(['config', 'c', 'base', 'logLevel', 'l', 'configLoader', 'debug', 'd', 'filter', 'f', 'mode', 'm',
+  'target', 'outDir', 'assetsDir', 'assetsInlineLimit', 'ssr', 'sourcemap', 'minify', 'manifest', 'ssrManifest']);
+const camel = (name) => name.replace(/([a-z])-([a-z])/g, (_, a, b) => a + b.toUpperCase());
+const known = (name) => BOOLEAN_OPTIONS.has(camel(name)) || VALUE_OPTIONS.has(camel(name));
 
-const bridgeSource = (importPath) => \`\${importPath ? \`import userConfig from \${JSON.stringify(importPath)};\\n\` : 'const userConfig = {};\\n'}
-// The server function ships build/ without node_modules, so its dependencies are bundled.
-const bundleServerDependencies = {
-  name: '${SVELTEKIT_BUNDLE_PLUGIN_NAME}',
-  apply: 'build',
-  config: () => ({ ssr: { noExternal: true } }),
+// cac's parse (mri) of the arguments; undefined when one is an option it doesn't know.
+const parseArgs = (args) => {
+  const end = args.indexOf('--');
+  const words = end === -1 ? args : args.slice(0, end);
+  const positionals = [];
+  const configs = [];
+  for (let i = 0; i < words.length; i++) {
+    const arg = words[i];
+    let dashes = 0;
+    while (dashes < arg.length && arg[dashes] === '-') dashes++;
+    if (dashes === 0) {
+      positionals.push(arg);
+      continue;
+    }
+    if (arg.startsWith('no-', dashes)) {
+      if (!known(arg.slice(dashes + 3))) return undefined;
+      continue;
+    }
+    const start = i;
+    const eq = arg.indexOf('=', dashes + 1);
+    const name = arg.slice(dashes, eq === -1 ? arg.length : eq);
+    let value = eq === -1 ? '' : arg.slice(eq + 1);
+    if (!value) value = i + 1 === words.length || words[i + 1].startsWith('-') ? true : words[++i];
+    const names = dashes === 2 ? [name] : [...name];
+    for (let k = 0; k < names.length; k++) {
+      const flag = names[k];
+      const flagValue = k + 1 < names.length ? true : value;
+      if (!known(flag)) return undefined;
+      if (BOOLEAN_OPTIONS.has(flag)) {
+        if (typeof flagValue === 'string' && flagValue !== 'true' && flagValue !== 'false') positionals.push(flagValue);
+      } else if (flag === 'c' || camel(flag) === 'config') {
+        configs.push({ value: flagValue, start, count: i - start + 1, combined: names.length > 1 });
+      }
+    }
+  }
+  return { positionals, configs };
 };
 
-export default async (env) => {
-  const config = (typeof userConfig === 'function' ? await userConfig(env) : await userConfig) ?? {};
-  return { ...config, plugins: [...(config.plugins ?? []), bundleServerDependencies] };
+// Vite's isFilePathESM.
+const isEsm = (file) => {
+  if (file.endsWith('.mjs') || file.endsWith('.mts')) return true;
+  if (file.endsWith('.cjs') || file.endsWith('.cts')) return false;
+  for (let dir = dirname(file); ; dir = dirname(dir)) {
+    const manifest = join(dir, 'package.json');
+    if (existsSync(manifest)) {
+      try {
+        return JSON.parse(readFileSync(manifest, 'utf-8')).type === 'module';
+      } catch {
+        return false;
+      }
+    }
+    if (dirname(dir) === dir) return false;
+  }
 };
-\`;
+
+const PLUGIN = [
+  '// The server function ships build/ without node_modules, so its dependencies are bundled.',
+  'const bundleServerDependencies = {',
+  "  name: '${SVELTEKIT_BUNDLE_PLUGIN_NAME}',",
+  "  apply: 'build',",
+  '  config: () => ({ ssr: { noExternal: true } }),',
+  '};',
+  'const wrap = async (env) => {',
+  "  const config = (typeof userConfig === 'function' ? await userConfig(env) : await userConfig) ?? {};",
+  '  return { ...config, plugins: [...(config.plugins ?? []), bundleServerDependencies] };',
+  '};',
+];
+
+const bridgeSource = (importPath, esm) => {
+  const load = importPath === undefined
+    ? ['const userConfig = {};']
+    : esm
+      ? ['import userConfig from ' + JSON.stringify(importPath) + ';']
+      : ['const userModule = require(' + JSON.stringify(importPath) + ');',
+         'const userConfig = userModule && userModule.__esModule ? userModule.default : userModule;'];
+  return [...load, ...PLUGIN, esm ? 'export default wrap;' : 'module.exports = wrap;', ''].join('\\n');
+};
 
 try {
   const argv = process.argv;
   const bin = argv[1] ? realpathSync(argv[1]).split(sep).join('/') : '';
-  if (bin.endsWith('/vite/bin/vite.js') && argv[2] === 'build') {
-    let configArg;
-    const rest = [];
-    for (let i = 3; i < argv.length; i++) {
-      const arg = argv[i];
-      if (arg === '--config' || arg === '-c') configArg = argv[++i];
-      else if (arg.startsWith('--config=')) configArg = arg.slice('--config='.length);
-      else rest.push(arg);
+  const args = argv.slice(2);
+  if (bin.endsWith('/vite/bin/vite.js') && args.includes('build')) {
+    const parsed = parseArgs(args);
+    let selected;
+    if (parsed && parsed.positionals[0] !== 'build') {
+      // Another command, whose argument is the word build.
+    } else if (!parsed || parsed.configs.length > 1) {
+      selected = undefined;
+    } else if (parsed.configs.length === 1) {
+      const { value, combined } = parsed.configs[0];
+      const file = typeof value === 'string' && !combined ? resolve(value) : undefined;
+      selected = file && existsSync(file) ? { file } : undefined;
+    } else {
+      const root = parsed.positionals[1] ? resolve(parsed.positionals[1]) : process.cwd();
+      selected = { file: CONFIG_FILES.map((f) => join(root, f)).find((p) => existsSync(p)) };
     }
-    const root = argv[3] && !argv[3].startsWith('-') ? resolve(argv[3]) : process.cwd();
-    const userConfig = configArg ? resolve(configArg) : CONFIG_FILES.map((f) => join(root, f)).find((p) => existsSync(p));
-    if (!userConfig || !/\\.c[jt]s$/.test(userConfig)) {
+    if (selected) {
       const here = dirname(fileURLToPath(import.meta.url));
       let importPath;
-      if (userConfig) {
-        importPath = relative(here, userConfig).split(sep).join('/');
+      if (selected.file) {
+        importPath = relative(here, selected.file).split(sep).join('/');
         if (!isAbsolute(importPath) && !importPath.startsWith('.')) importPath = './' + importPath;
       }
-      const bridge = join(here, \`vite.config.\${process.pid}.mjs\`);
-      writeFileSync(bridge, bridgeSource(importPath));
-      argv.splice(3, argv.length - 3, ...rest, '--config', bridge);
+      const esm = selected.file === undefined || isEsm(selected.file);
+      const bridge = join(here, 'vite.config.' + process.pid + (esm ? '.mjs' : '.cjs'));
+      writeFileSync(bridge, bridgeSource(importPath, esm));
+      const config = parsed.configs[0];
+      if (config) args.splice(config.start, config.count, '--config', bridge);
+      else if (args.includes('--')) args.splice(args.indexOf('--'), 0, '--config', bridge);
+      else args.push('--config', bridge);
+      argv.splice(2, argv.length - 2, ...args);
+    } else if (parsed?.positionals[0] === 'build' || !parsed) {
+      process.stderr.write("@aws-cdk-blocks/hosting: could not tell which Vite config 'vite " + args.join(' ') +
+        "' loads, so the SvelteKit server's dependencies may stay unbundled; building unchanged.\\n");
     }
   }
 } catch (err) {
-  process.stderr.write(\`@aws-cdk-blocks/hosting: could not bundle the SvelteKit server's dependencies (\${err}); building unchanged.\\n\`);
+  process.stderr.write("@aws-cdk-blocks/hosting: could not bundle the SvelteKit server's dependencies (" + err + '); building unchanged.\\n');
 }
 `;
 

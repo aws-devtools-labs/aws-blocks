@@ -635,9 +635,14 @@ find in `node_modules` at runtime. So the deploy builds the server with its
 dependencies bundled:
 
 - The build runs with a Node.js preload (`NODE_OPTIONS=--import=…`) that hands
-  `vite build` a config in a temporary directory: it imports your
-  `vite.config.*` (or the file your build command names with `--config`) and
-  adds one build-only Vite plugin, which sets `ssr.noExternal: true`. Nothing in
+  `vite build` a config in a temporary directory: it loads the config that Vite
+  itself would load (the file your build command names with `--config`, else
+  the first of `vite.config.{js,mjs,ts,cjs,mts,cts}` in the root that the
+  command names, else in the working directory), in the same ESM or CommonJS
+  format, and adds one build-only Vite plugin, which sets
+  `ssr.noExternal: true`. When the command leaves the config unclear (for
+  example `--config` given twice, or an option the preload doesn't know), the
+  build runs unchanged and says so. Nothing in
   your project is written or renamed, so builds that overlap are safe and a
   `cdk watch` sees no change. Your own adapter-node setup and the adapter's
   transparent build are treated the same.
@@ -647,8 +652,8 @@ dependencies bundled:
   files those resolve to. It fails with `SvelteKitUnbundledDependencyError`,
   naming each missing module with the file that imports it, for example a
   package you list in `ssr.external`. Remove it from `ssr.external`, or, for a
-  CommonJS `vite.config.cjs`/`.cts` (which the preload doesn't wrap), set
-  `ssr: { noExternal: true }` yourself. A dynamic `import()` or `require()`
+  build whose config the preload couldn't tell, set `ssr: { noExternal: true }`
+  yourself. A dynamic `import()` or `require()`
   that the code handles failing (in a `try` with a `catch`, or with a
   `.catch()`) is optional and doesn't fail synth.
 - `npm run destroy` skips this check, so a build left from before can't block

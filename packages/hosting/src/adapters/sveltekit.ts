@@ -485,8 +485,9 @@ const assertServerDependenciesBundled = (buildDir: string): void => {
     resolution:
       'Remove these packages from `ssr.external` in your Vite config so the build bundles them, ' +
       'and rebuild (a build reused with BLOCKS_SKIP_FRONTEND_BUILD may predate the bundling). ' +
-      'The deploy builds the server with `ssr.noExternal: true`; a CommonJS vite.config.cjs/.cts ' +
-      'is not wrapped, so set `ssr: { noExternal: true }` there yourself.',
+      'The deploy builds the server with `ssr.noExternal: true` on the Vite config the build loads; ' +
+      'when the build command leaves that config unclear (the build log then says so), ' +
+      'set `ssr: { noExternal: true }` in it yourself.',
   });
 };
 
