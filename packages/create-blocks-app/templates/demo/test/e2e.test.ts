@@ -28,14 +28,28 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 
 // Locally no email is sent: `getLastAuthCode(name)` reads the verification code
 // the local auth block just issued for `name` (it finds the block's .cdk-blocks/local/data/
-// files itself). On AWS, Cognito emails it instead.
+// files itself). On AWS, Cognito emails it instead, so on a deployed backend (TEST_URL, or
+// a dev server that proxies to a sandbox) the tests that sign up skip; the public and
+// signed-out checks still run. The readiness config.json says which one the dev server is.
+let isLocalMock = false;
+
+/** Skips [t] unless the server is the local mock; true when skipped. */
+function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
+  if (isLocalMock) return false;
+  t.skip('needs the local mock: Cognito emails the code on a deployed backend');
+  return true;
+}
 
 // Wait for the Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
       const response = await fetch(readinessUrl);
-      if (response.ok) return;
+      if (response.ok) {
+        const config: { environment?: string } = await response.json();
+        isLocalMock = config.environment === 'local';
+        return;
+      }
     } catch {
       // The server is not listening yet.
     }
@@ -146,7 +160,8 @@ test('Protected methods reject signed-out callers', async () => {
   await assert.rejects(api.transfer('signed-out', 'other', 1), { status: 401 });
 });
 
-test('KV Store - set and get (signed in, keys isolated per user)', async () => {
+test('KV Store - set and get (signed in, keys isolated per user)', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const suffix = uniqueSuffix();
 
   await signUp(`alice-${suffix}`);
@@ -161,7 +176,8 @@ test('KV Store - set and get (signed in, keys isolated per user)', async () => {
   await authApi.setAuthState({ action: 'signOut' });
 });
 
-test('KV Store - a ":" in the username cannot reach another user\'s keys', async () => {
+test('KV Store - a ":" in the username cannot reach another user\'s keys', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const alice = `alice-${uniqueSuffix()}`;
 
   await signUp(alice);
@@ -187,7 +203,8 @@ test('Cookie - a hostile value round-trips without adding attributes', async () 
 
 // Sign-up confirms the email address with a code, then signs the user in
 // (the <Authenticator> does the same steps in the browser).
-test('auth: sign up with the emailed code, then call a protected method', async () => {
+test('auth: sign up with the emailed code, then call a protected method', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const username = `demo-${Date.now().toString(36)}@example.com`;
   const password = 'TestPass123!';
 
@@ -223,7 +240,8 @@ async function signUpAs(username: string, password: string, user = { authApi }) 
 }
 
 // Todos are private: each method reads and writes only the caller's own.
-test('todos: another user can neither see nor change them', async () => {
+test('todos: another user can neither see nor change them', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const password = 'TestPass123!';
   // Alice and Bob signed in at once, each with a cookie jar of their own.
   const alice = createTestClient(app);
@@ -258,6 +276,7 @@ test('todos: another user can neither see nor change them', async () => {
 // server (no AWS). We upload bytes, then download them back and assert they
 // round-trip unchanged.
 test('FileBucket - upload then download round-trips', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`files-${uniqueSuffix()}`);
   const path = 'uploads/greeting.txt';
   const contentType = 'text/plain';
@@ -282,14 +301,16 @@ test('FileBucket - upload then download round-trips', async (t) => {
 
 // Only the allowed content types get an upload handle: a presigned PUT stores
 // whatever Content-Type it was signed with.
-test('FileBucket - an unsupported content type is declined', async () => {
+test('FileBucket - an unsupported content type is declined', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`ctype-${uniqueSuffix()}`);
   await assert.rejects(api.getUploadSlot('uploads/page.html', 'text/html'), { status: 400 });
 });
 
 // ─── AppSetting ───────────────────────────────────────────────────────────────
 // A runtime config value backed by SSM Parameter Store (local file in dev).
-test('AppSetting - set and get a flag', async () => {
+test('AppSetting - set and get a flag', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`flag-${uniqueSuffix()}`);
   const setResult = await api.setFlag('on');
   assert.strictEqual(setResult.success, true);
@@ -303,7 +324,8 @@ test('AppSetting - set and get a flag', async () => {
 // it keeps version history: after a rotation the previous value stays readable
 // until the next rotation (history is capped at current + previous, not time-aged).
 // We set, rotate, then assert current + previous + that two versions are labeled.
-test('Secret - rotate keeps the previous value readable', async () => {
+test('Secret - rotate keeps the previous value readable', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`secret-${uniqueSuffix()}`);
   await api.rotateApiKey('key-v1');
   await api.rotateApiKey('key-v2');
@@ -318,7 +340,8 @@ test('Secret - rotate keeps the previous value readable', async () => {
 // locally the mock builds a TF-IDF index over the committed docs (no AWS). We
 // query a billing question and assert the top hit comes from billing.md, not
 // the unrelated shipping doc, with a positive relevance score.
-test('KnowledgeBase - retrieves the relevant doc for a query', async () => {
+test('KnowledgeBase - retrieves the relevant doc for a query', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`docs-${uniqueSuffix()}`);
   const results = await api.searchDocs('how do I get a refund for a payment');
   assert.ok(results.length > 0, 'expected at least one retrieval result');
@@ -335,7 +358,8 @@ test('KnowledgeBase - retrieves the relevant doc for a query', async () => {
 // ─── AsyncJob ─────────────────────────────────────────────────────────────────
 // Background processing. The handler runs locally (no SQS/Lambda); we submit a
 // job, wait for completion, and confirm the handler's side effect landed.
-test('AsyncJob - submit, complete, and observe the effect', async () => {
+test('AsyncJob - submit, complete, and observe the effect', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`job-${uniqueSuffix()}`);
   const name = `e2e-${Date.now().toString(36)}`;
 
@@ -353,7 +377,8 @@ test('AsyncJob - submit, complete, and observe the effect', async () => {
 // `.cdk-blocks/local/data/{fullId}/emails.json`, where fullId is `<scope id>-<block id>`.
 const outboxPath = join('.cdk-blocks/local/data', 'my-app-mailer', 'emails.json');
 
-test('EmailClient - a sent welcome mail reaches the local outbox', async () => {
+test('EmailClient - a sent welcome mail reaches the local outbox', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`email-${uniqueSuffix()}`);
   // A unique recipient picks out this run's mail in an outbox that persists across runs.
   const to = `welcome-${uniqueSuffix()}@example.com`;
@@ -372,7 +397,8 @@ test('EmailClient - a sent welcome mail reaches the local outbox', async () => {
 
 // The mock runs the same address checks as the deployed client, so a bad
 // address fails here exactly as it would against SES.
-test('EmailClient - an invalid recipient is rejected by name', async () => {
+test('EmailClient - an invalid recipient is rejected by name', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const { isBlocksError } = await import('aws-cdk-blocks/client');
   await signUp(`email-bad-${uniqueSuffix()}`);
   await assert.rejects(
@@ -390,7 +416,8 @@ test('EmailClient - an invalid recipient is rejected by name', async () => {
 // (SerializationFailureException / retryOnConflict) is covered by the
 // bb-database unit suite; forcing a real 40001 race here would be
 // non-deterministic, so the canary asserts the atomic-commit behavior instead.
-test('Database - a transfer moves both balances atomically', async () => {
+test('Database - a transfer moves both balances atomically', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUp(`ledger-${uniqueSuffix()}`);
   await api.openAccount('alice', 100);
   await api.openAccount('bob', 0);
@@ -413,7 +440,8 @@ test('Database - a transfer moves both balances atomically', async () => {
 // transfer throws an ApiError (wire-safe), so the 'TransferDeclined' name crosses
 // the RPC boundary and the client can match it; the decisive proof is behavioral:
 // the call rejects with that branded error AND neither balance moved.
-test('Database - a declined transfer rolls back atomically', async () => {
+test('Database - a declined transfer rolls back atomically', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const { isBlocksError } = await import('aws-cdk-blocks/client');
 
   await signUp(`ledger-${uniqueSuffix()}`);
@@ -453,7 +481,8 @@ test('Database - a declined transfer rolls back atomically', async () => {
 
 // Accounts belong to the user who opened them: another user neither sees them
 // nor can move money into or out of them, even using the same account names.
-test("Database - a user cannot read, debit or credit another user's accounts", async () => {
+test("Database - a user cannot read, debit or credit another user's accounts", async (t) => {
+  if (skipUnlessLocal(t)) return;
   const { isBlocksError } = await import('aws-cdk-blocks/client');
 
   const owner = `ledger-owner-${uniqueSuffix()}`;
@@ -486,7 +515,8 @@ test("Database - a user cannot read, debit or credit another user's accounts", a
 
 // Todos are keyed by the owner's userSub. `updates` is typed, but RPC arguments
 // aren't checked at runtime, so a caller can send fields the type doesn't allow.
-test("KVStore - an update cannot move a todo into another user's list", async () => {
+test("KVStore - an update cannot move a todo into another user's list", async (t) => {
+  if (skipUnlessLocal(t)) return;
   const suffix = uniqueSuffix();
   const victim = `todo-victim-${suffix}`;
   await signUp(victim);

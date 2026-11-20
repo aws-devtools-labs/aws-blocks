@@ -26,6 +26,21 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
+// `placeOrder` needs a signed-in user, and the test confirms the sign-up with
+// `getLastAuthCode()`, which reads the local mock's files (.cdk-blocks/local/data/). On a
+// deployed backend (TEST_URL, or a dev server that proxies to a sandbox) Cognito emails the
+// code instead, so that test skips there, and so do the checks that read local traces and
+// the dev server's output; the signed-out check still runs. The readiness config.json says
+// which one the dev server is.
+let isLocalMock = false;
+
+/** Skips [t] unless the server is the local mock; true when skipped. */
+function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
+  if (isLocalMock) return false;
+  t.skip('needs the local mock: Cognito emails the code on a deployed backend');
+  return true;
+}
+
 // Every line the dev server writes, when this file started it. Logger and
 // Metrics write to the server's stdout/stderr, so that is where the test reads
 // them. With a dev server you started yourself, those checks are skipped.
@@ -46,7 +61,11 @@ async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
       const response = await fetch(readinessUrl);
-      if (response.ok) return;
+      if (response.ok) {
+        const config: { environment?: string } = await response.json();
+        isLocalMock = config.environment === 'local';
+        return;
+      }
     } catch {
       // The server is not listening yet.
     }
@@ -179,7 +198,8 @@ test('placeOrder rejects a signed-out caller', async () => {
   await assert.rejects(api.placeOrder('coffee'), { status: 401 });
 });
 
-test('placeOrder returns an order id and the trace id', async () => {
+test('placeOrder returns an order id and the trace id', async (t) => {
+  if (skipUnlessLocal(t)) return;
   // Sign-up confirms the email with a code, as the sign-in UI does. Locally no
   // email is sent: getLastAuthCode reads the code the local auth block issued.
   await authApi.setAuthState({ action: 'signUp', ...creds });
@@ -191,7 +211,8 @@ test('placeOrder returns an order id and the trace id', async () => {
   assert.ok(order.traceId, 'traceId should be set: the Tracer samples every request by default');
 });
 
-test('Tracer: the placeOrder segment is saved with its annotation', { skip: testUrl && 'reads the local Tracer mock, so it needs a dev server' }, async () => {
+test('Tracer: the placeOrder segment is saved with its annotation', { skip: testUrl && 'reads the local Tracer mock, so it needs a dev server' }, async (t) => {
+  if (skipUnlessLocal(t)) return;
   const trace = savedTraces().find((t) => t.traceId === order.traceId);
   assert.ok(trace, `no saved trace with traceId ${order.traceId}`);
   assert.strictEqual(trace.segment, 'placeOrder');

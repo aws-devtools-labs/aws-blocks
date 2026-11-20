@@ -23,6 +23,20 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
+// The signed-in tests below confirm each sign-up with `getLastAuthCode()`, which reads the
+// local mock's files (.cdk-blocks/local/data/). On a deployed backend (TEST_URL, or a dev
+// server that proxies to a sandbox) Cognito emails the code instead, so those tests skip
+// there; the signed-out check still runs. The readiness config.json says which one the
+// dev server is.
+let isLocalMock = false;
+
+/** Skips [t] unless the server is the local mock; true when skipped. */
+function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
+  if (isLocalMock) return false;
+  t.skip('needs the local mock: Cognito emails the code on a deployed backend');
+  return true;
+}
+
 /**
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
  * address with a 6-digit code, then signs the user in. Locally no email is
@@ -45,7 +59,11 @@ async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
       const response = await fetch(readinessUrl);
-      if (response.ok) return;
+      if (response.ok) {
+        const config: { environment?: string } = await response.json();
+        isLocalMock = config.environment === 'local';
+        return;
+      }
     } catch {
       // The server is not listening yet.
     }
@@ -117,11 +135,20 @@ test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL target
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
 
+// Every method is private, so a caller without a session is turned away. Needs
+// no account, so it also runs against a deployed app.
+test('sql: rejects a signed-out caller', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await assert.rejects(api.listNotebooks(), { status: 401 });
+  await assert.rejects(api.createNotebook('Journal'), { status: 401 });
+});
+
 // Runs against the sample SQL API the template ships with, so a freshly
 // scaffolded app is validated end to end: signup + login, then a notebook and
 // note round-trip through PostgreSQL. When you replace the sample API, update
 // or delete this test to exercise your own methods instead.
-test('sql: notebook and note round-trip', async () => {
+test('sql: notebook and note round-trip', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const username = `e2e-${Date.now().toString(36)}@example.com`;
   const password = 'TestPass123!';
 
@@ -157,7 +184,8 @@ test('sql: notebook and note round-trip', async () => {
 
 // Notebooks and notes are private: every method reads and writes only the
 // caller's own. When you replace the sample API, update or delete this test.
-test('sql: another user can neither see nor change them', async () => {
+test('sql: another user can neither see nor change them', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const password = 'TestPass123!';
   // Two users signed in at once, each with a cookie jar of their own.
   const owner = createTestClient(app);

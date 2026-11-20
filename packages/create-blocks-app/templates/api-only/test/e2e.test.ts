@@ -23,6 +23,20 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
+// The signed-in tests below confirm each sign-up with `getLastAuthCode()`, which reads the
+// local mock's files (.cdk-blocks/local/data/). On a deployed backend (TEST_URL, or a dev
+// server that proxies to a sandbox) Cognito emails the code instead, so those tests skip
+// there; the public and signed-out checks still run. The readiness config.json says which
+// one the dev server is.
+let isLocalMock = false;
+
+/** Skips [t] unless the server is the local mock; true when skipped. */
+function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
+  if (isLocalMock) return false;
+  t.skip('needs the local mock: Cognito emails the code on a deployed backend');
+  return true;
+}
+
 /**
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
  * address with a 6-digit code, then signs the user in. Locally no email is
@@ -45,7 +59,11 @@ async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
       const response = await fetch(readinessUrl);
-      if (response.ok) return;
+      if (response.ok) {
+        const config: { environment?: string } = await response.json();
+        isLocalMock = config.environment === 'local';
+        return;
+      }
     } catch {
       // The server is not listening yet.
     }
@@ -124,7 +142,8 @@ test('health: public liveness check', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
-const healthzUrl = `http://localhost:${serverPort}/healthz`;
+// RawRoutes are served from the same base URL as the API: next to /cdk-blocks/api, not under it.
+const healthzUrl = `${testUrl ?? `http://localhost:${serverPort}`}/healthz`;
 
 // The RawRoute probe a load balancer hits: a plain GET, no RPC envelope, no auth.
 test('healthz: plain GET answers 200 with an uncached JSON body', async () => {
@@ -139,8 +158,13 @@ test('healthz: plain GET answers 200 with an uncached JSON body', async () => {
 });
 
 // Probes often append a cache-buster or a trailing slash; both still reach the route.
-test('healthz: query string and trailing slash still match the route', async () => {
-  for (const url of [`${healthzUrl}?probe=uptime&t=${Date.now()}`, `${healthzUrl}/`]) {
+test('healthz: query string and trailing slash still match the route', async (t) => {
+  const urls = [`${healthzUrl}?probe=uptime&t=${Date.now()}`];
+  // The route matcher drops a trailing slash, but in front of a deployed app the
+  // gateway decides what path the backend sees, so that probe is only checked on the dev server.
+  if (testUrl) t.diagnostic('trailing slash not checked: TEST_URL targets a deployed app');
+  else urls.push(`${healthzUrl}/`);
+  for (const url of urls) {
     const res = await fetch(url);
     assert.strictEqual(res.status, 200, `${url} should reach /healthz`);
     assert.strictEqual((await res.json()).status, 'ok');
@@ -165,17 +189,19 @@ test('files: signed-out callers cannot mint presigned URLs', async () => {
 });
 
 // Only the allowed content types get a presigned upload URL.
-test('files: an unsupported content type is declined', async () => {
+test('files: an unsupported content type is declined', async (t) => {
+  if (skipUnlessLocal(t)) return;
   await signUpAndSignIn(`ctype-${Date.now().toString(36)}@example.com`, 'TestPass123!');
   await assert.rejects(api.createUploadUrl('page.html', 'text/html'), { status: 400 });
 });
 
 // FileBucket via presigned URLs — the headless-client path. Ask the API for an
 // upload URL, PUT the bytes directly (no bytes through the API), then ask for a
-// download URL and GET them back. Backed by the dev server's local file server,
+// download URL and GET them back. Locally, backed by the dev server's local file server,
 // so it runs with no AWS. The Content-Type on the PUT must match the one the
 // upload URL was signed with (presigned-URL parity with S3).
-test('files: presigned upload/download round-trips', async () => {
+test('files: presigned upload/download round-trips', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const state = await signUpAndSignIn(`files-${Date.now().toString(36)}@example.com`, 'TestPass123!');
   assert.strictEqual(state.state, 'signedIn');
 
@@ -207,7 +233,8 @@ test('files: presigned upload/download round-trips', async () => {
 // Runs against the sample CRUD API the template ships with, so a freshly
 // scaffolded app is validated end to end: signup, then an item round-trip.
 // When you replace the sample API, update or delete this test.
-test('items: auth-gated CRUD round-trip', async () => {
+test('items: auth-gated CRUD round-trip', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const username = `e2e-${Date.now().toString(36)}@example.com`;
   const password = 'TestPass123!';
 
@@ -236,7 +263,8 @@ test('items: auth-gated CRUD round-trip', async () => {
 // Two compare-and-swap writes branch off the same version; the second (stale)
 // one must be rejected with a ConditionalCheckFailed conflict.
 // When you replace the sample API, update or delete this test.
-test('items: optimistic-lock conflict rejects a stale write', async () => {
+test('items: optimistic-lock conflict rejects a stale write', async (t) => {
+  if (skipUnlessLocal(t)) return;
   // isBlocksError and KVStoreErrors are client-safe: the browser entry of
   // aws-cdk-blocks, which this test loads (tsx -C browser), re-exports them.
   const { isBlocksError, KVStoreErrors } = await import('aws-cdk-blocks');
@@ -273,7 +301,8 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
 
 // Items are private: every method reads and writes only the caller's own.
 // When you replace the sample API, update or delete this test.
-test('items: another user can neither see nor change them', async () => {
+test('items: another user can neither see nor change them', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const password = 'TestPass123!';
   // Two users signed in at once, each with a cookie jar of their own.
   const owner = createTestClient(app);

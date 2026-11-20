@@ -48,7 +48,17 @@ const password = 'TestPass123!';
 
 // Locally no email is sent: `getLastAuthCode(name)` reads the verification code
 // the local auth block just issued for `name` (it finds the block's .cdk-blocks/local/data/
-// files itself). On AWS, Cognito emails it instead.
+// files itself). On AWS, Cognito emails it instead, so on a deployed backend (TEST_URL, or
+// a dev server that proxies to a sandbox) the tests that sign up or need that session skip;
+// the signed-out checks still run. The readiness config.json says which one the dev server is.
+let isLocalMock = false;
+
+/** Skips [t] unless the server is the local mock; true when skipped. */
+function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
+  if (isLocalMock) return false;
+  t.skip('needs the local mock: Cognito emails the code on a deployed backend');
+  return true;
+}
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
@@ -57,7 +67,11 @@ async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
       const response = await fetch(readinessUrl);
-      if (response.ok) return;
+      if (response.ok) {
+        const config: { environment?: string } = await response.json();
+        isLocalMock = config.environment === 'local';
+        return;
+      }
     } catch {
       // The server is not listening yet.
     }
@@ -137,12 +151,14 @@ test('auth: starts signed out', async () => {
   assert.strictEqual(state.state, 'signedOut');
 });
 
-test('auth: sign up asks for the emailed code', async () => {
+test('auth: sign up asks for the emailed code', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const state = await authApi.setAuthState({ action: 'signUp', username, password });
   assert.strictEqual(state.state, 'confirmingSignUp');
 });
 
-test('auth: the code confirms the account and signs in', async () => {
+test('auth: the code confirms the account and signs in', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const confirmed = await authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
   // The <Authenticator> submits this step on its own; no second password entry.
   assert.ok(confirmed.actions.some((a) => a.name === 'autoSignIn'));
@@ -161,14 +177,17 @@ test('auth: unauthenticated access is rejected', async () => {
     (err: unknown) => isBlocksError(err, 'NotAuthenticatedException'),
   );
 
-  // Sign back in for remaining tests
+  // Sign back in for remaining tests. Without the local mock no account was
+  // confirmed and they skip, so the check above is all this test does.
+  if (!isLocalMock) return;
   const state = await authApi.setAuthState({ action: 'signIn', username, password });
   assert.strictEqual(state.state, 'signedIn');
 });
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
-test('todos: create with priority', async () => {
+test('todos: create with priority', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const todo = await api.createTodo('Buy milk', 1);
   assert.strictEqual(todo.title, 'Buy milk');
   assert.strictEqual(todo.priority, 1);
@@ -177,7 +196,8 @@ test('todos: create with priority', async () => {
   assert.ok(todo.todoId);
 });
 
-test('todos: list (only own)', async () => {
+test('todos: list (only own)', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const list = await api.listTodos();
   assert.ok(list.length >= 1);
   // Every todo is keyed on the owner's userSub, the same for all of them.
@@ -186,7 +206,8 @@ test('todos: list (only own)', async () => {
   assert.ok(list.every(t => t.userSub === owner));
 });
 
-test('todos: list sorted by priority (client-side sort)', async () => {
+test('todos: list sorted by priority (client-side sort)', async (t) => {
+  if (skipUnlessLocal(t)) return;
   // Create todos with different priorities
   await api.createTodo('Low priority task', 3);
   await api.createTodo('High priority task', 1);
@@ -200,7 +221,8 @@ test('todos: list sorted by priority (client-side sort)', async () => {
   }
 });
 
-test('todos: list sorted by title (client-side sort)', async () => {
+test('todos: list sorted by title (client-side sort)', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const sorted = await api.listTodos('title');
   assert.ok(sorted.length >= 2);
   const titles = sorted.map(t => t.title);
@@ -209,7 +231,8 @@ test('todos: list sorted by title (client-side sort)', async () => {
   }
 });
 
-test('todos: toggle completion', async () => {
+test('todos: toggle completion', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const [todo] = await api.listTodos();
   await api.toggleTodo(todo.todoId);
 
@@ -218,7 +241,8 @@ test('todos: toggle completion', async () => {
   assert.strictEqual(updated?.version, todo.version + 1);
 });
 
-test('todos: delete', async () => {
+test('todos: delete', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const before = await api.listTodos();
   const target = before[0];
   await api.deleteTodo(target.todoId);
@@ -229,7 +253,8 @@ test('todos: delete', async () => {
 
 // ─── Conditional writes (optimistic locking) ──────────────────────────────────
 
-test('todos: concurrent toggle → conflict → retry succeeds', async () => {
+test('todos: concurrent toggle → conflict → retry succeeds', async (t) => {
+  if (skipUnlessLocal(t)) return;
   // Create a fresh todo
   const todo = await api.createTodo('Conflict test');
 
@@ -253,7 +278,8 @@ test('todos: concurrent toggle → conflict → retry succeeds', async () => {
 
 // ─── Per-user isolation ───────────────────────────────────────────────────────
 
-test('todos: another user can neither see nor change them', async () => {
+test('todos: another user can neither see nor change them', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const mine = await api.createTodo('Private to the first user', 2);
 
   // A second, brand-new user, signed in at the same time: `createTestClient`
@@ -317,6 +343,7 @@ function nextMessage<T>(
 }
 
 test('realtime: a created todo broadcasts to a subscriber', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const channel = await api.subscribeTodos();
   if (typeof channel.subscribe !== 'function') {
     t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
@@ -336,6 +363,7 @@ test('realtime: a created todo broadcasts to a subscriber', async (t) => {
 });
 
 test('realtime: a priority change broadcasts an updated event', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const todo = await api.createTodo('Realtime priority', 3);
   const channel = await api.subscribeTodos();
   if (typeof channel.subscribe !== 'function') {
@@ -360,6 +388,7 @@ test('realtime: a priority change broadcasts an updated event', async (t) => {
 });
 
 test('realtime: a deleted todo broadcasts a deleted event', async (t) => {
+  if (skipUnlessLocal(t)) return;
   const todo = await api.createTodo('Realtime delete');
   const channel = await api.subscribeTodos();
   if (typeof channel.subscribe !== 'function') {
