@@ -56,7 +56,8 @@ Fields:
 
 ### Serialization Safety
 
-- **Circular references** → replaced with `"[Circular]"` via WeakSet tracking.
+- **Circular references** → replaced with `"[Circular]"`. Only true cycles count: the replacer tracks the ancestor path (objects on the path from the root to the current value), so an object referenced more than once without a cycle (sibling keys, repeated array elements) is serialized in full each time.
+- **Repeated references** → a `WeakSet` of already-serialized objects counts re-expansions of shared references; after `MAX_REPEATED_EXPANSIONS` (1000) per entry, further repeats are replaced with `"[Repeated]"`. This bounds output on shared DAGs and densely linked graphs, where full expansion is exponential or factorial and would block the synchronous `log.*` call.
 - **BigInt values** → converted to string representation.
 - **Functions/Symbols** → replaced with `"[unserializable]"`.
 - **Error objects in context** → extracted to `{ name, message, stack }`.

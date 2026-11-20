@@ -37,17 +37,47 @@ export function processValue(value: unknown): unknown {
 }
 
 /**
+ * How many times one log entry may serialize an object it has already
+ * serialized (a shared reference reached again) before further repeats are
+ * replaced with `'[Repeated]'`. Without a cap, expansion is exponential on
+ * shared DAGs (`{ a: x, b: x }` nested a few dozen levels deep) and factorial
+ * on densely linked graphs, and `log.*` is synchronous.
+ */
+export const MAX_REPEATED_EXPANSIONS = 1000;
+
+/**
  * Safely stringify an object, handling circular references and BigInt values.
+ * Only true cycles (an object that contains itself somewhere below it) are
+ * replaced with `'[Circular]'`; an object referenced more than once without a
+ * cycle (sibling keys, repeated array elements) is serialized in full each time,
+ * up to {@link MAX_REPEATED_EXPANSIONS} repeats per entry, after which later
+ * repeats are replaced with `'[Repeated]'` so output stays bounded.
  * Falls back to a degraded entry on unexpected serialization failure.
  */
 export function safeStringify(obj: Record<string, unknown>): string {
-	const seen = new WeakSet();
+	// Objects on the path from the root to the value being serialized.
+	// JSON.stringify calls the replacer with `this` bound to the holder of
+	// the current key, so popping until the top is `this` drops finished
+	// siblings' subtrees and leaves exactly the current value's ancestors.
+	const ancestors: object[] = [];
+	// Every object serialized so far, to count re-expansions of shared references.
+	const expanded = new WeakSet<object>();
+	let repeats = 0;
 	try {
-		return JSON.stringify(obj, (_key, value) => {
+		return JSON.stringify(obj, function (this: unknown, _key: string, value: unknown) {
 			if (typeof value === 'bigint') return value.toString();
 			if (typeof value === 'object' && value !== null) {
-				if (seen.has(value)) return '[Circular]';
-				seen.add(value);
+				while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
+					ancestors.pop();
+				}
+				if (ancestors.includes(value)) return '[Circular]';
+				if (expanded.has(value)) {
+					if (repeats >= MAX_REPEATED_EXPANSIONS) return '[Repeated]';
+					repeats++;
+				} else {
+					expanded.add(value);
+				}
+				ancestors.push(value);
 			}
 			if (typeof value === 'function' || typeof value === 'symbol') {
 				return '[unserializable]';
