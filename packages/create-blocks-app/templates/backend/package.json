@@ -48,12 +48,12 @@
     "aws-cdk-blocks": "*"
   },
   "devDependencies": {
-    "@types/node": "^22.12.0",
+    "@types/node": "^22.20.5",
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
     "esbuild": "^0.28.2",
-    "aws-cdk": "^2.1147.0",
-    "aws-cdk-lib": "^2.275.0",
+    "aws-cdk": "^2.1148.1",
+    "aws-cdk-lib": "^2.277.0",
     "constructs": "^10.8.1"
   }
 }
