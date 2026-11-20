@@ -1,4 +1,4 @@
-# AGENTS.md — CDK Blocks (contributor guide)
+# AGENTS.md — AWS CDK Blocks (contributor guide)
 
 > **CDK Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `cdk-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
 
