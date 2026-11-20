@@ -2882,6 +2882,10 @@ const resolveHostingFrontDoor = (props: HostingConstructProps): ResolvedHostingF
  *   given `Host` as `x-forwarded-host` instead (see `withDoorEventShim`), so a
  *   server that builds redirects or absolute URLs from it never uses a host
  *   the client chose.
+ * - `edgeCache`: a shared cache in front of the server stores responses the
+ *   app marks shared-cacheable (`s-maxage`, `stale-while-revalidate`). Behind
+ *   a door without one, those routes render on every request; synth warns
+ *   (`@aws-cdk-blocks/hosting:NoEdgeCache`) when the app's header rules ask for it.
  *
  * A bring-your-own door declares only `streaming`, through `serverResponse`
  * (default `'streaming'`); the rest are its own to wire (and `cf.recordWired`
@@ -2894,6 +2898,7 @@ export type DoorCapabilities = {
   readonly wildcardRoutes?: boolean;
   readonly appliesRules?: boolean;
   readonly forwardedHost?: boolean;
+  readonly edgeCache?: boolean;
 };
 
 /**
@@ -2902,23 +2907,43 @@ export type DoorCapabilities = {
  * @internal Framework-only.
  */
 export const doorCapabilitiesFor = (frontDoor: HostingConstructProps['frontDoor']): DoorCapabilities => {
-  if (frontDoor === 'none') return { streaming: false, wildcardRoutes: false, appliesRules: false, forwardedHost: false };
+  if (frontDoor === 'none') {
+    return { streaming: false, wildcardRoutes: false, appliesRules: false, forwardedHost: false, edgeCache: false };
+  }
   if (typeof frontDoor !== 'object' || frontDoor === null) {
-    return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true };
+    return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true, edgeCache: true };
   }
   switch (frontDoor.kind) {
     case 'alb':
-      return { streaming: albDoor.serverResponse === 'streaming', wildcardRoutes: true, appliesRules: false, forwardedHost: false };
+      return {
+        streaming: albDoor.serverResponse === 'streaming',
+        wildcardRoutes: true,
+        appliesRules: false,
+        forwardedHost: false,
+        edgeCache: false,
+      };
     case 'stackedRouter':
       // The edge in front applies the rules and sets the forwarded host; the ALB under it invokes the server.
-      return { streaming: albDoor.serverResponse === 'streaming', wildcardRoutes: true, appliesRules: true, forwardedHost: true };
+      return {
+        streaming: albDoor.serverResponse === 'streaming',
+        wildcardRoutes: true,
+        appliesRules: true,
+        forwardedHost: true,
+        edgeCache: true,
+      };
     case 'apiGateway':
-      return { streaming: (frontDoor.api ?? 'http') === 'rest', wildcardRoutes: false, appliesRules: false, forwardedHost: false };
+      return {
+        streaming: (frontDoor.api ?? 'http') === 'rest',
+        wildcardRoutes: false,
+        appliesRules: false,
+        forwardedHost: false,
+        edgeCache: false,
+      };
     case 'custom':
       // `door` is validated (with a clear error) by the time the door is built.
       return { streaming: (frontDoor.door?.serverResponse ?? 'streaming') === 'streaming' };
     default:
-      return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true };
+      return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true, edgeCache: true };
   }
 };
 

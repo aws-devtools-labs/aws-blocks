@@ -51,7 +51,7 @@ import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import { BLOCKS_PATH_PREFIXES, DEFAULT_API_PATHS, routableApiPaths } from './apigw_routes.js';
-import { warnRulesNotApplied } from './proxy_rules.js';
+import { warnNoEdgeCache, warnRulesNotApplied } from './proxy_rules.js';
 import type { OriginHandle } from './layer.js';
 import { assetProxyEnvironment } from './asset_proxy_core.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
@@ -577,8 +577,10 @@ export class AlbConstruct extends Construct {
     }
 
     // The rules the proxies can't apply (responses the ALB sends straight to a
-    // function). Behind the stacked door's edge, the edge applies them.
+    // function), and the shared-cache rules nothing stores (no edge cache).
+    // Behind the stacked door's edge, the edge applies and caches them.
     if (!props.restrictToCloudFront) {
+      warnNoEdgeCache(this, 'ALB', plan.routes.headers);
       warnRulesNotApplied(this, {
         door: 'ALB',
         headers: plan.routes.headers,

@@ -44,7 +44,7 @@ import { Construct } from 'constructs';
 import type { HostingPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { imagePathPrefixes, trimTrailingSlashes } from './asset_proxy_core.js';
-import { warnRulesNotApplied } from './proxy_rules.js';
+import { warnNoEdgeCache, warnRulesNotApplied } from './proxy_rules.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
   APIGW_DEFAULT_ROUTE_QUOTA,
@@ -323,6 +323,8 @@ export class ApiGatewayConstruct extends Construct {
       nativeApi: backendPaths.size > 0,
       api: (plan.backend?.origins.length ?? 0) > 0,
     });
+    // No edge cache: the app's shared-cache rules (`s-maxage`, SWR) store nothing.
+    warnNoEdgeCache(this, 'API Gateway', plan.routes.headers);
 
     this.url = this.api.apiEndpoint; // https://<id>.execute-api.<region>.amazonaws.com
 
