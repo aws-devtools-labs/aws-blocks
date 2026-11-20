@@ -6,6 +6,7 @@ import { Duration } from 'aws-cdk-lib';
 import {
   HeadersFrameOption,
   HeadersReferrerPolicy,
+  type IResponseHeadersPolicy,
   ResponseCustomHeader,
   ResponseHeadersPolicy,
   ResponseSecurityHeadersBehavior,
@@ -279,6 +280,38 @@ export const createManagedEquivalentSecurityHeadersPolicy = (
     },
     removeHeaders,
   });
+
+/**
+ * The security-headers policy a CloudFront distribution gets when the app
+ * brings no policy of its own. The CloudFront door and the stacked door's edge
+ * both use it, so an app's headers get the same treatment behind either:
+ *
+ * - with a `contentSecurityPolicy`: {@link createSecurityHeadersPolicy};
+ * - with origin headers to remove: {@link createManagedEquivalentSecurityHeadersPolicy};
+ * - otherwise the AWS-managed `SecurityHeadersPolicy`, which consumes no
+ *   response headers policy quota. It adds `Strict-Transport-Security`,
+ *   `X-Frame-Options`, `X-XSS-Protection` and `Referrer-Policy` only when the
+ *   origin sent none (a server-set header of the same name wins), and always
+ *   sets `X-Content-Type-Options: nosniff`. It sets no Content-Security-Policy:
+ *   frameworks emit their own, and a blanket one would conflict.
+ */
+export const defaultSecurityHeadersPolicy = (
+  scope: Construct,
+  id: string,
+  opts: { contentSecurityPolicy?: string; removeHeaders?: string[] } = {},
+): IResponseHeadersPolicy => {
+  const removeHeaders = opts.removeHeaders ?? [];
+  if (opts.contentSecurityPolicy) {
+    return createSecurityHeadersPolicy(scope, id, {
+      contentSecurityPolicy: opts.contentSecurityPolicy,
+      removeHeaders,
+    });
+  }
+  if (removeHeaders.length > 0) {
+    return createManagedEquivalentSecurityHeadersPolicy(scope, id, removeHeaders);
+  }
+  return ResponseHeadersPolicy.SECURITY_HEADERS;
+};
 
 /**
  * Create a per-pattern ResponseHeadersPolicy that bundles the security

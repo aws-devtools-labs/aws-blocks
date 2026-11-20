@@ -165,7 +165,7 @@ type Behavior = {
 const edgeFor = (
   id: string,
   p: HostingPlan,
-  opts: { image?: boolean; server?: boolean; apiPaths?: string[]; staticDir?: string } = {},
+  opts: { image?: boolean; server?: boolean; apiPaths?: string[]; staticDir?: string; contentSecurityPolicy?: string } = {},
 ) => {
   const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-east-1' } });
   const bucket = new Bucket(stack, 'Assets');
@@ -191,6 +191,7 @@ const edgeFor = (
         url: 'https://router.example.com',
         originHandle: { domainName: 'router.example.com', protocol: 'https', customHeaders: { 'x-blocks-origin-verify': 'v' } },
       },
+      ...(opts.contentSecurityPolicy ? { contentSecurityPolicy: opts.contentSecurityPolicy } : {}),
     },
     { wiringCheck: false },
   );
@@ -267,6 +268,36 @@ describe('cloudFrontEdgeDoor — behaviors, caching, rules', () => {
     assert.ok(s3, 'an S3 behavior');
     assert.ok(responseFns(s3).includes(headerFn), 'on the S3 behavior');
     assert.ok(responseFns(config.DefaultCacheBehavior).includes(headerFn), 'on the router default');
+  });
+
+  it("the security headers let the app's own headers win, as on the CloudFront door", () => {
+    // The AWS-managed SecurityHeadersPolicy (the CloudFront door's default): it
+    // adds X-Frame-Options, Referrer-Policy, X-XSS-Protection and HSTS only when
+    // the origin sent none, so a page that sets its own keeps it.
+    const MANAGED_SECURITY_HEADERS = '67f7725c-6f97-4210-82d7-5512b31e9d03';
+    const { t, config, behaviors } = edgeFor(
+      'SecHdr',
+      serverPlan([{ pattern: '/assets/*', kind: 'static' }, { pattern: '/*', kind: 'server' }]),
+      { server: true },
+    );
+    t.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 0);
+    for (const b of [config.DefaultCacheBehavior, ...behaviors]) {
+      assert.equal(b.ResponseHeadersPolicyId, MANAGED_SECURITY_HEADERS, b.PathPattern ?? 'default');
+    }
+  });
+
+  it('with an edge contentSecurityPolicy, the edge gets the CloudFront door\'s CSP policy', () => {
+    const csp = "default-src 'self'";
+    const { t, config } = edgeFor('SecHdrCsp', serverPlan([{ pattern: '/*', kind: 'server' }]), {
+      server: true,
+      contentSecurityPolicy: csp,
+    });
+    const policies = t.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    assert.equal(Object.keys(policies).length, 1);
+    const [id] = Object.keys(policies);
+    assert.deepEqual(config.DefaultCacheBehavior.ResponseHeadersPolicyId, { Ref: id });
+    const sec = policies[id]?.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    assert.deepEqual(sec.ContentSecurityPolicy, { ContentSecurityPolicy: csp, Override: true });
   });
 
   it("the app's error pages answer from S3 under this build's prefix", () => {
