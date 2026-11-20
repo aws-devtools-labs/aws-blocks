@@ -8,6 +8,9 @@ import * as path from 'path';
 import * as os from 'os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { once } from 'node:events';
+import { PassThrough } from 'node:stream';
+import * as zlib from 'node:zlib';
 import type { SpawnSyncOptions } from 'node:child_process';
 import semver from 'semver';
 import { spawn } from './spawn.js';
@@ -1149,16 +1152,18 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
       post,
       /setContentType\("application\/vnd\.awslambda\.http-integration-response"\)/,
     );
-    // Accept-Encoding branches all neutered (none of br/gzip/deflate
-    // remain as the literal `.includes("…")` check; replaced with a
-    // sentinel that never matches a real Accept-Encoding header).
-    for (const algo of ['br', 'gzip', 'deflate']) {
+    // The br and deflate branches are neutered (replaced with a sentinel
+    // that never matches a real Accept-Encoding header); the gzip branch
+    // stays live so the server compresses the stream itself.
+    for (const algo of ['br', 'deflate']) {
       assert.doesNotMatch(post, new RegExp(`\\.includes\\("${algo}"\\)`));
       assert.match(
         post,
         new RegExp(`\\.includes\\("__hosting_no_${algo}__"\\)`),
       );
     }
+    assert.match(post, /\.includes\("gzip"\)/);
+    assert.doesNotMatch(post, /__hosting_no_gzip__/);
     // Snapshot: re-running the patcher against the post-patch bundle must
     // be a no-op (the regexes don't match anymore) — proves the patcher
     // is idempotent and not partially-undoing prior runs.
@@ -1189,6 +1194,128 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
       stat1 < PRE.length,
       `expected post-patch (${stat1}) < pre-patch (${PRE.length})`,
     );
+  });
+});
+
+// The streaming response has no Content-Length, so CloudFront cannot compress
+// it at the edge (it only compresses responses that carry one), and the
+// wrapper's `content-encoding: identity` would stop it anyway. The server must
+// therefore compress the stream itself. This runs a wrapper modeled on the
+// @opennextjs/aws `aws-lambda-streaming` wrapper (3.10.x and 4.x share this
+// shape) through the patcher, invokes it with a fake Lambda response stream,
+// and checks what a viewer behind CloudFront receives.
+void describe('patchStreamingWrapperForApiGateway — response compression', () => {
+  const WRAPPER = [
+    'import zlib from "node:zlib";',
+    'export const handler = (handler) => awslambda.streamifyResponse(async (event, responseStream) => {',
+    '  const acceptEncoding = event.headers["Accept-Encoding"] ?? event.headers["accept-encoding"] ?? "";',
+    '  let contentEncoding;',
+    '  let compressedStream;',
+    '  if (acceptEncoding.includes("br")) {',
+    '    contentEncoding = "br";',
+    '    compressedStream = zlib.createBrotliCompress({ flush: zlib.constants.BROTLI_OPERATION_FLUSH });',
+    '    compressedStream.pipe(responseStream);',
+    '  } else if (acceptEncoding.includes("gzip")) {',
+    '    contentEncoding = "gzip";',
+    '    compressedStream = zlib.createGzip({ flush: zlib.constants.Z_SYNC_FLUSH });',
+    '    compressedStream.pipe(responseStream);',
+    '  } else if (acceptEncoding.includes("deflate")) {',
+    '    contentEncoding = "deflate";',
+    '    compressedStream = zlib.createDeflate({ flush: zlib.constants.Z_SYNC_FLUSH });',
+    '    compressedStream.pipe(responseStream);',
+    '  } else {',
+    '    contentEncoding = "identity";',
+    '    compressedStream = responseStream;',
+    '  }',
+    '  const streamCreator = {',
+    '    writeHeaders: (_prelude) => {',
+    '      responseStream.setContentType("application/vnd.awslambda.http-integration-response");',
+    '      _prelude.headers["content-encoding"] = contentEncoding;',
+    '      responseStream.write(JSON.stringify(_prelude));',
+    '      responseStream.write(new Uint8Array(8));',
+    '      return compressedStream ?? responseStream;',
+    '    },',
+    '  };',
+    '  await handler(event, { streamCreator });',
+    '});',
+  ].join('\n');
+
+  const HTML = `<!DOCTYPE html><html><body>${'<p>streamed server-rendered row</p>'.repeat(200)}</body></html>`;
+
+  /**
+   * Patch the wrapper, run it for one request, and return the headers the
+   * prelude carries plus the decoded body. The app handler writes the HTML in
+   * two chunks so the test also covers a streamed (multi-write) body.
+   */
+  const invoke = async (acceptEncoding: string) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-gzip-'));
+    try {
+      const dir = path.join(tmp, 'server-functions', 'default');
+      fs.mkdirSync(dir, { recursive: true });
+      const bundle = path.join(dir, 'index.mjs');
+      fs.writeFileSync(bundle, WRAPPER);
+      patchStreamingWrapperForApiGateway(tmp);
+
+      const chunks: Buffer[] = [];
+      const responseStream = new PassThrough();
+      responseStream.on('data', (c: Buffer) => chunks.push(Buffer.from(c)));
+      const g = globalThis as { awslambda?: unknown };
+      g.awslambda = {
+        streamifyResponse:
+          (fn: (event: unknown, stream: unknown) => Promise<void>) =>
+          (event: unknown) =>
+            fn(event, responseStream),
+      };
+      try {
+        const mod = (await import(`${pathToFileURL(bundle).href}?t=${Date.now()}`)) as {
+          handler: (
+            app: (
+              event: unknown,
+              opts: { streamCreator: { writeHeaders: (p: { headers: Record<string, string> }) => NodeJS.WritableStream } },
+            ) => Promise<void>,
+          ) => (event: unknown) => Promise<void>;
+        };
+        const lambda = mod.handler(async (_event, { streamCreator }) => {
+          const body = streamCreator.writeHeaders({ headers: { 'content-type': 'text/html' } });
+          body.write(HTML.slice(0, 1000));
+          body.end(HTML.slice(1000));
+        });
+        await lambda({ headers: { 'accept-encoding': acceptEncoding } });
+        await once(responseStream, 'end');
+      } finally {
+        delete g.awslambda;
+      }
+      const raw = Buffer.concat(chunks);
+      const preludeEnd = raw.indexOf(Buffer.alloc(8));
+      const prelude = JSON.parse(raw.subarray(0, preludeEnd).toString('utf-8')) as {
+        headers: Record<string, string>;
+      };
+      const payload = raw.subarray(preludeEnd + 8);
+      const encoding = prelude.headers['content-encoding'];
+      const body = encoding === 'gzip' ? zlib.gunzipSync(payload).toString('utf-8') : payload.toString('utf-8');
+      return { encoding, payloadBytes: payload.length, body };
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  };
+
+  void it('gzips the stream when the viewer accepts gzip (CloudFront forwards "br,gzip")', async () => {
+    const res = await invoke('br,gzip');
+    assert.strictEqual(res.encoding, 'gzip');
+    assert.strictEqual(res.body, HTML);
+    assert.ok(res.payloadBytes < HTML.length / 3, `expected a compressed payload, got ${res.payloadBytes} bytes`);
+  });
+
+  void it('gzips the stream for a gzip-only viewer', async () => {
+    const res = await invoke('gzip');
+    assert.strictEqual(res.encoding, 'gzip');
+    assert.strictEqual(res.body, HTML);
+  });
+
+  void it('sends the body uncompressed when the viewer accepts no gzip', async () => {
+    const res = await invoke('');
+    assert.strictEqual(res.encoding, 'identity');
+    assert.strictEqual(res.body, HTML);
   });
 });
 

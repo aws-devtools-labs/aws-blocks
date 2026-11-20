@@ -1608,8 +1608,18 @@ const warnIfNextOutsideOpenNextPeerRange = (
  *   1. Drop the `setContentType("application/vnd.awslambda.http-integration-
  *      response")` call — that's the Function URL streaming marker; API
  *      Gateway leaks it into the wire response and breaks HTTP/2 framing.
- *   2. Force the wrapper's identity branch (skip brotli/gzip/deflate);
- *      CloudFront handles compression downstream.
+ *   2. Neuter the wrapper's brotli and deflate branches, so it compresses
+ *      the stream with gzip when the request accepts gzip and sends it
+ *      uncompressed otherwise. The server has to compress: the streamed
+ *      response has no `Content-Length`, and CloudFront only compresses
+ *      responses that carry one (and none that carry a `Content-Encoding`,
+ *      which the wrapper always sets). CloudFront forwards a normalized
+ *      `Accept-Encoding` (`br,gzip`, `gzip` or none) and keys its cache on
+ *      it, so a compressed copy is only ever served to viewers that accept
+ *      it. Brotli stays off because OpenNext 3.10.x runs it at quality 11,
+ *      which delays every streamed chunk; gzip (level 6, sync-flushed) keeps
+ *      streaming responsive on every verified OpenNext version. Deflate is
+ *      never forwarded by CloudFront.
  * Idempotent.
  * @internal
  */
@@ -1654,8 +1664,10 @@ export const patchStreamingWrapperForApiGateway = (
     //   else if (acceptEncoding.includes("gzip")) { ... gzip ... }
     //   else if (acceptEncoding.includes("deflate")) { ... deflate ... }
     //   else { identity }
-    // Force the identity branch by neutering all three checks.
-    for (const algo of ['br', 'gzip', 'deflate']) {
+    // Neuter the br and deflate checks so a request that accepts gzip takes
+    // the gzip branch and anything else takes the identity branch. The gzip
+    // check is left alone: the server must compress (see the doc comment).
+    for (const algo of ['br', 'deflate']) {
       const re = new RegExp(`\\.includes\\("${algo}"\\)`, 'g');
       if (re.test(src)) {
         src = src.replace(re, `.includes("__hosting_no_${algo}__")`);
