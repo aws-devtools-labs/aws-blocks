@@ -275,7 +275,7 @@ function, `origins.entry`, and that function runs the whole route table. This
 fits a door shared by many apps, such as one ALB with one listener rule per app.
 
 ```ts
-// aws-blocks/shared-alb-door.ts
+// cdk-blocks/shared-alb-door.ts
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { LambdaTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import { defineFrontDoor } from '@aws-cdk-blocks/hosting/constructs';
@@ -303,7 +303,7 @@ export const sharedAlbDoor = (listener: elbv2.IApplicationListener, host: string
 ```
 
 ```ts
-// aws-blocks/index.cdk.ts: `listener` is the shared ALB's HTTPS listener.
+// cdk-blocks/index.cdk.ts: `listener` is the shared ALB's HTTPS listener.
 new Hosting(stack, 'Hosting', {
   root: '..',
   api: stack,
