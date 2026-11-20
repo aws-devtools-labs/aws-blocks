@@ -80,7 +80,7 @@
     "prebuild": "node ../../scripts/gen-block-docs.mjs",
     "prepack": "node ../../scripts/gen-block-docs.mjs",
     "build": "tsc --build",
-    "test": "node --test dist/conditional-exports.test.js dist/mock-aws-parity.test.js dist/vendorize-map.test.js dist/ui.test.js dist/brand-coverage.test.js dist/sandbox-dir-coverage.test.js dist/sandbox-url-decoupling.test.js dist/branded-message-coverage.test.js dist/default-compute-telemetry.test.js dist/file-bucket-exports.test.js dist/readme-links.test.js dist/test-client.test.js dist/umbrella-browser-exports.test.js dist/totp.test.js dist/utils-exports.test.js dist/docs-pointers.test.js dist/doc-snippets.test.js dist/imports-reference.test.js dist/cli/*.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
+    "test": "node --env-file=../../scripts/test-telemetry-off.env --test dist/conditional-exports.test.js dist/mock-aws-parity.test.js dist/vendorize-map.test.js dist/ui.test.js dist/brand-coverage.test.js dist/sandbox-dir-coverage.test.js dist/sandbox-url-decoupling.test.js dist/branded-message-coverage.test.js dist/default-compute-telemetry.test.js dist/file-bucket-exports.test.js dist/readme-links.test.js dist/test-client.test.js dist/umbrella-browser-exports.test.js dist/totp.test.js dist/utils-exports.test.js dist/docs-pointers.test.js dist/doc-snippets.test.js dist/imports-reference.test.js dist/cli/*.test.js && node --env-file=../../scripts/test-telemetry-off.env --conditions=cdk --test dist/umbrella-compute.test.js"
   },
   "dependencies": {
     "@aws-cdk-blocks/core": "^1.0.0-rc.2",

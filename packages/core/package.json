@@ -79,7 +79,7 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs --core && node ../../scripts/generate-bb-names.mjs",
     "build": "tsc --build",
-    "test": "node --test dist/*.test.js dist/**/*.test.js",
+    "test": "node --env-file=../../scripts/test-telemetry-off.env --test dist/*.test.js dist/**/*.test.js",
     "dev": "tsc --build --watch"
   },
   "bin": {

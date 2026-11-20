@@ -891,6 +891,12 @@ describe('telemetry/--telemetry-file flag', () => {
   const originalArgv = [...process.argv];
   const originalEnv = { ...process.env };
 
+  // Telemetry is on in this file (see the top), so a test here that does not set its
+  // own endpoint would send its event to the real collection endpoint.
+  beforeEach(() => {
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = DEAD_ENDPOINT;
+  });
+
   afterEach(() => {
     process.argv = [...originalArgv];
     process.env = { ...originalEnv };
