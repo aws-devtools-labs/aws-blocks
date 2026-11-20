@@ -58,7 +58,7 @@
     "@smithy/signature-v4": "^5.7.5",
     "@types/node": "^20.19.43",
     "aws-cdk-lib": "^2.274.0",
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.7",
     "constructs": "^10.8.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
