@@ -120,7 +120,9 @@ export type ComputeConstructProps = {
  *   A replaced version is retained, not deleted (Lambda can't delete it while
  *   CloudFront holds its replicas). Retained versions count toward the
  *   `us-east-1` Lambda code storage quota; prune them once their replicas are
- *   gone with `aws lambda delete-function --qualifier <version>`.
+ *   gone with `aws lambda delete-function --qualifier <version>`. Take the
+ *   live versions from the distribution's Lambda@Edge associations, not the
+ *   highest version number (see the README's Next.js section).
  */
 export class ComputeConstruct extends Construct {
   readonly function: LambdaFunction | experimental.EdgeFunction;
