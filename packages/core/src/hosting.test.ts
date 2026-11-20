@@ -4373,6 +4373,10 @@ const _blocksFrontDoorTypes: Array<HostingProps['frontDoor']> = [
   { features: { domain: { domainName: config('DOMAIN_PROD') }, priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },
   { kind: 'apiGateway', api: 'rest', features: { domain: { domainName: config('DOMAIN_PROD') } } },
   { kind: 'stacked', edge: 'cloudfront', router: 'alb', features: { router: { logging: { enabled: true } } } },
+  // A web ACL of your own needs no `enabled`, on the default door and with `kind` given.
+  { features: { waf: { webAclArn: 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/acl/1' } } },
+  { kind: 'cloudfront', features: { waf: { webAclArn: 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/acl/1' } } },
+  { kind: 'alb', features: { waf: { webAclArn: 'arn:aws:wafv2:us-west-2:111111111111:regional/webacl/acl/1' } } },
   // @ts-expect-error — the stacked edge has no access logs.
   { kind: 'stacked', edge: 'cloudfront', router: 'alb', features: { edge: { logging: { enabled: true } } } },
   // @ts-expect-error — the stacked door takes its settings per layer, not flat.
