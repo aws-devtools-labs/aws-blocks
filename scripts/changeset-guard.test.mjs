@@ -385,6 +385,26 @@ describe("verify-coverage", () => {
 		assert.match(output, /@aws-cdk-blocks\/core/);
 	});
 
+	it("passes an edit to a released package's CHANGELOG.md with no changeset", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, { "packages/core/CHANGELOG.md": "# @aws-cdk-blocks/core\n\n## 0.1.0\n\n- Shorter notes.\n" });
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 0, output);
+	});
+
+	it("still needs a changeset when a CHANGELOG.md edit comes with a code change", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"packages/core/CHANGELOG.md": "# @aws-cdk-blocks/core\n\n## 0.1.0\n\n- Shorter notes.\n",
+			"packages/core/src/index.ts": "export const a = 1;\n",
+		});
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 1, output);
+		assert.match(output, /@aws-cdk-blocks\/core/);
+	});
+
 	it("passes when every changed package is covered", (t) => {
 		const dir = baseRepo(t);
 		commitPr(dir, {

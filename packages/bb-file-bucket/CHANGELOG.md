@@ -1,1049 +1,191 @@
-# @aws-blocks/bb-file-bucket
+# @aws-cdk-blocks/bb-file-bucket
 
 ## 1.0.0
 
-### Major Changes
+The first stable release. The changes since 1.0.0-rc.2 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+### Changes since `@aws-blocks/bb-file-bucket` 0.x
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+- The package is now `@aws-cdk-blocks/bb-file-bucket`. Install it in place of `@aws-blocks/bb-file-bucket`, and change the import specifiers.
+- 7c23ab9: Upload URLs carry signed constraints, download disposition is opt-in, key validation is stricter, and invalid input returns 400.
+- 072c3ff: An unrecognized `encryption` value on `KVStore` or `FileBucket` fails the synth instead of falling back to the default key.
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
-
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
-
-### Minor Changes
-
-- 7c23ab9: feat(bb-file-bucket): signed upload constraints, opt-in download disposition, stricter key validation and 400 for invalid input
-
-  - **Presigned uploads always sign a `Content-Type`.** `putUrl()` and `createUploadHandle()` now sign the `contentType` you pass, or `application/octet-stream` when you pass none, so the upload must send exactly that header (S3 answers `403 SignatureDoesNotMatch` otherwise). `createUploadHandle().upload()` and its hydrated client handle always send it. **Breaking:** an upload to a `putUrl()` URL created without `contentType` must now send `Content-Type: application/octet-stream`; pass the `contentType` the client will send. `createUploadHandle()` without `contentType` now stores `application/octet-stream` instead of the browser's file type; pass `contentType: file.type` to keep it. Browser uploads now always send `Content-Type`, so `corsRules` must allow it in `allowedHeaders`. `put()` without `contentType` now stores `application/octet-stream` on AWS too, matching local dev.
-  - **`contentType` must be a single media type.** `put()`, `putUrl()` and `createUploadHandle()` reject (400 `ValidationFailed`) a `contentType` that is not `type/subtype` with optional `; name=value` parameters — for example a comma-separated list, non-ASCII or control characters, or an empty value.
-  - **`contentType` is signed and stored in canonical form.** Parameters are rendered as `; name=value`, with one space after `;` and none around `=` (`text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`); a quoted value is written bare when its content is a token (`charset="utf-8"` becomes `charset=utf-8`) and otherwise stays quoted. HTTP clients that re-render a parsed `Content-Type`, such as the native Kotlin client, then send exactly the signed value.
-  - **New `contentLength` option** on `putUrl()` / `createUploadHandle()` signs the exact upload size, so only a body of that size is accepted.
-  - **New bucket options `allowedContentTypes` and `maxUploadBytes`.** `allowedContentTypes` (exact media types or `type/*` wildcards) restricts the content types `put()`, `putUrl()` and `createUploadHandle()` accept. A `type/*` wildcard does not match `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml`, `text/xsl`, the JavaScript and ECMAScript types (`text/javascript`, `text/ecmascript`, `application/javascript`, `application/ecmascript`, `application/x-javascript`), or any `+xml` subtype; list one exactly to accept it. `maxUploadBytes` caps `put()` bodies and makes presigned uploads require a `contentLength` at or under it. Both are checked identically in local dev and on AWS, and their shape is validated at synth.
-  - **New `attachment` option** on `getUrl()` / `getFileHandle()`: `true` or a filename signs a `Content-Disposition: attachment` into the download URL, so the browser saves the file instead of displaying it. Directional formatting and zero-width characters are removed from the filename, `/` and `\` are replaced with `_`, and a filename that is empty, `.` or `..` is rejected. Default behavior is unchanged.
-  - **Stricter key validation.** Keys are also rejected when they contain a backslash, C1 control characters, U+2028/U+2029, or bidirectional formatting characters, a segment that contains `.` or `..` once `%2e`, `%2f` and `%5c` are decoded, or more than 1,024 bytes in UTF-8. `scan({ prefix })` now validates the prefix with the same rules (an empty prefix and a trailing `/` are allowed).
-  - **`ValidationFailed` is now an `ApiError` with status 400**, so API methods answer invalid keys, prefixes, expiry values and upload constraints with HTTP 400 instead of 500. The name and message format are unchanged, and messages never include the key.
-  - **`VersionNotFound` from `restoreVersion()` now has the fixed message `The requested version does not exist`**, without the key or version id.
-
-  The README adds sections on per-user isolation (derive keys from the authenticated user, never from a client-supplied key or prefix), upload constraints, serving user uploads, and the key rules; its examples now build keys from the caller's identity.
-
-- 072c3ff: An unrecognized `encryption` value on `KVStore` or `FileBucket` now fails the synth with an error that lists the valid values (`'aws-managed'`, `'customer-managed'`, or the block's `fromKmsKey(arn)`). Previously such a value (for example a typo like `'kms-managed'` in untyped JavaScript, or a value loaded from JSON or the environment) only emitted an `UnknownEncryption` warning and fell back to the AWS-managed key, so a request for a customer-managed key could be silently downgraded. Apps that pass a valid value, or omit `encryption`, are unaffected; an app that hits the new error was never getting the encryption it asked for and should correct the value.
-
-### Patch Changes
+### Since 1.0.0-rc.2
 
 - 63e571c: Use AWS CDK Blocks consistently in starter apps, CLI messages, package metadata, and documentation. Package imports and commands are unchanged.
-- c67048e: feat!: `Database` from `@aws-cdk-blocks/bb-database` is the only SQL Building Block
-
-  **Breaking change.** `aws-cdk-blocks` exports `Database`, `DatabaseCluster`, `DatabaseErrors` and `sql` from `@aws-cdk-blocks/bb-database`. The packages `@aws-blocks/bb-data`, `@aws-blocks/bb-distributed-data` and `@aws-blocks/data-common` are not part of AWS Blocks any more. There is no compatibility layer.
-
-  ```ts
-  import { Database, DatabaseCluster, sql } from "aws-cdk-blocks";
-
-  const orders = new Database(scope, "orders"); // owns an Aurora DSQL cluster
-
-  const cluster = new DatabaseCluster(scope, "main", { type: "aurora" }); // Aurora PostgreSQL Serverless v2
-  const users = new Database(scope, "users", { cluster });
-  ```
-
-  - **`Database`** owns an Aurora DSQL cluster when it has no `cluster` option. A `DatabaseCluster` of type `'dsql'` or `'aurora'` holds several `Database` blocks, each in its own schema. Migrations are ordered `.sql` files in `cdk-blocks/migrations/<id>/`.
-  - **Not exported any more:** `DistributedDatabase`, `DistributedDatabaseErrors`, `DistributedDatabaseOptions`, `Database.fromExisting()` and `ExternalDatabaseRef` (an existing PostgreSQL database is now `DatabaseCluster.fromExisting()`, passed as `cluster`). `withRLS()` is replaced by `asUser()` and `asRole()`. `crud()` has no equivalent in `@aws-cdk-blocks/bb-database`. For Kysely, use `DatabaseDialect` from `@aws-cdk-blocks/bb-database/kysely`.
-  - **`getSdkIdentifiers(db)`** returns `clusterId` and `schemaName`, plus `clusterEndpoint` and `region` in a deployed Lambda. `getSdkIdentifiers(cluster)` returns `clusterEndpoint`.
-  - **Data is not moved.** A `Database` that takes the place of a `Database` of `@aws-blocks/bb-data` on the same line of code is a new block with a new cluster. To keep the old cluster, make that line a `LegacyDatabaseCluster` and put a `Database` with a new id on it. A `Database` that takes the place of a `DistributedDatabase` with the same id keeps its cluster.
-  - **`@aws-cdk-blocks/create-blocks-app`:** the `sql` and `demo` templates use the new `Database` on its default Aurora DSQL cluster, with migrations in `cdk-blocks/migrations/<id>/`. The templates' `cdk.json` has no `@aws-blocks/bb-data:encryptStorageByDefault` context key.
-  - **`@aws-cdk-blocks/bb-database`:** the CDK `Database` records itself as the `Database` Building Block of the stack.
-
-  **An existing PostgreSQL database.** `DatabaseCluster.fromExisting({ name, ca })` puts a `Database` on a PostgreSQL database that already exists, with its tables and data; Supabase is the tested provider. The block provisions nothing and `db.cluster.kind` is `'external'`. The connection string is never written in code: with `name` the block reads the SSM SecureString `/<stackName>-<name>` on AWS and a local value under `.cdk-blocks/local/data/`, and `connectionString` takes your own `AppSetting` or `Secret`. The server certificate is always verified, against `ca` (PEM text) or Node's trust store, and a connection string that carries a TLS parameter is refused. Local mode connects to the real database and runs no migration file.
-
-  Migrations on an existing database run during the deploy, in a function outside any VPC, one transaction per file; the file is recorded in that transaction. The `_migrations` table and the files of an app that used `@aws-blocks/bb-data` with `fromExisting()` continue as they are, so no file runs twice.
-
-  **`npm run db`** runs the commands of `@aws-cdk-blocks/bb-database`. `pull` and `generate-types` are not commands any more.
-
-  - `connect` checks an existing database (certificate, role, policies, endpoint) and stores the connection string for local mode or for a stage. The connection string is read from a hidden prompt or stdin and is never printed.
-  - `migrate` applies pending files to the development database with the code a deploy uses. `migrate --mark-applied <file>` records a file as applied without running it, for a schema dump of a database that already has the schema; `--stage` records it on a stage.
-  - `types` writes one `Tables` interface for Kysely. `status` lists applied and pending files.
-  - `types --block <id>` writes the `Tables` interface of a block that provisions its cluster, from the block's migration files (`cdk-blocks/migrations/<id>`). It applies the files to a new local database in a temporary directory, so it needs no AWS account and does not touch `.cdk-blocks/local/data/`. Pass `--type aurora` for a block on an `aurora` cluster.
-  - `status --block <id>` lists the applied and the pending files in the block's local database; pass `--cluster <id>` for a block on a `DatabaseCluster`. It reads a copy of the database, so it is safe while `npm run dev` runs.
-
-  On a cluster that the block owns, migrations run on the first statement in local mode and during the deploy on AWS.
-
-  **Statements as a user or a role.** `Database.asUser(user, claims?)` returns the block with every statement run as one user, for tables with Row Level Security on an `aurora` cluster. Each transaction on it starts by setting `request.jwt.claims` to `{ ...claims, sub: user.userId }` for that transaction only, so a policy such as `USING (owner_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')` gives each user their own rows. `query`, `queryOne`, `execute`, `transaction` and Kysely (`new DatabaseDialect(db.asUser(user))`) all run as the user, locally and on AWS. The result of an auth block's `requireAuth()` passes as it is. A statement on the block itself carries no user and reads no rows from a table whose policy compares with `sub`.
-
-  `Database.asRole(role, claims?)` returns the block with every statement run as a database role, for Row Level Security policies written for a role (`TO authenticated`): each transaction starts with `SET LOCAL ROLE` and the claims, for that transaction only. Use it where the connection role owns the tables, since PostgreSQL does not apply policies to an owner.
-
-  `asUser()` and `asRole()` throw `DatabaseConfigurationError` on a `dsql` cluster. A Kysely transaction's isolation level is now set by the engine, and `BEGIN` is tried once more when its pooled connection was closed while idle.
-
-  **Errors.**
-
-  - A write that a policy refuses fails with the new `DatabaseErrors.PermissionDenied` (HTTP 403).
-  - A statement that breaks a constraint now has its own error name: `DatabaseErrors.NotNullViolation` and `DatabaseErrors.CheckViolation` (HTTP 400), and `DatabaseErrors.ForeignKeyViolation` (HTTP 409). These were `QueryFailed` before. The message has no value of the row; the server's own text stays on the server-side `cause`. None of the three is retried.
-  - `ConnectionFailed` now also covers a connection that was never made (the address did not answer, the server certificate was not accepted, the login was refused); these were `QueryFailed` before. A connection that ends between two statements of a transaction no longer ends the Node process, and a connect that timed out is no longer tried a second time.
-
-  **Local mode.** A block's statements run as a plain database role with the grants the deployed app role gets; migrations run as the admin. PostgreSQL now refuses the same statements under `npm run dev` as on AWS: DDL and `TRUNCATE` outside a migration, and reads of the migration ledger, fail with `QueryFailed`. A Row Level Security policy on a table of an `aurora` cluster applies to the block's statements locally as it does on AWS. DDL in a handler was `DatabasePermissionException` locally before; the `_migrations` and `_migration_progress` tables are no longer readable from application code. An existing `.cdk-blocks/local/data` directory needs no reset.
-
-  **`@aws-cdk-blocks/core`.** `npm run dev`, `sandbox` and `deploy` do not apply migrations to an external database before they run. `sandbox` and `deploy` no longer copy a `*_DB_URL` or `*_CONNECTION_STRING` environment variable to the SSM parameter `/<stackName>-db-url`. `npm run db -- connect --stage <stage>` stores the connection string of a `Database` on an existing database, after it has checked the database; an environment value written on every deploy replaced what that command stored. A parameter that an earlier deploy wrote stays in SSM and is still read with `DatabaseCluster.fromExisting({ name: 'db-url' })`. `ensureSecrets` is not exported from `@aws-cdk-blocks/core/scripts` and `aws-cdk-blocks/scripts` any more.
-
-- e8e3262: Brand the `ValidationFailed` error thrown for an invalid object key so its name and message reach RPC clients instead of a generic internal error.
-- eacc87e: Local file server now returns 404 `NoSuchKey` for presigned GETs of a versioned key whose current version is a delete marker, matching S3 and `get()`.
-- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
-- 94d5900: The production settings of `FileBucket` now live in a `PRODUCTION.md` next to the block's `README.md`, which links to it. It covers access logging, KMS encryption, Object Lock, scaling and cost. The file ships in its package and in `aws-cdk-blocks` under `docs/<block>/`, and the shorter README can be read in one pass.
-- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
-- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
-
-  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
-
-  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
-
-  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
-
-  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
-
-- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
-
-  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
-
-- d01c34c: docs: fix two stale references
-
-  - The FileBucket README's access-control examples construct `new Auth(scope, 'auth')` (from `@aws-cdk-blocks/bb-auth`) instead of the removed `AuthBasic`.
-  - The scaffolded `AGENTS.md` no longer says to import `ApiError` and the typed client from `aws-cdk-blocks`, whose browser build exports nothing: `ApiNamespace` comes from `aws-cdk-blocks` in the backend, and `ApiError` / `isBlocksError` from `aws-cdk-blocks/client` in frontend code and tests.
-
-- 0b422ee: docs: no method throws `FileBucketErrors.FileNotFound` or `FileTooLarge`. `get()` returns `null` for a missing file, and an upload over `maxUploadBytes` throws `ValidationFailed`, matched with `isBlocksError(e, 'ValidationFailed')`.
-- 0ff1e1f: docs: the FileBucket design doc describes the installed version
-
-  Design decisions state the current design instead of the changes that led to it: PR numbers, "previously" and "Update: superseded by" notes are replaced with the current rule and its reason. The versioning, bucket-name and access-log decisions describe today's defaults (versioning on, over-long names shortened, retention from `defaults.logRetention`).
-
-- 8fb67ec: Fix local FileBucket version deletion so removing the newest stored data version updates the current body and metadata from the next stored data version, or removes the current copies when none remain. Active delete-marker flags and older-version deletion behavior are preserved. Document that historical delete markers discarded by a subsequent upload are not reconstructed, so deletion across re-uploads still differs from S3.
-
-  Ignore nested-key directories when reading version history. Retain the target version body until current-copy reconciliation and version-sidecar removal succeed, allowing filesystem failures to be retried with the same version ID.
-
-- 11877b6: The FileBucket docs now state that `get()` always downloads the whole body and is the only call that returns `contentType` and `metadata`, because there is no metadata-only read. `scan()` returns `size` and `lastModified` without the body.
-- 77c2c75: Docs: FileBucket object metadata is set when the object is written and can't be edited in place. Each `put()` replaces it, and a `put()` without `metadata` leaves none. A new "Changing Metadata" README section shows how to change it (re-`put()` the same body with the complete new set) and what that implies: a full GET and PUT, `cacheControl` passed again, another stored version on versioned buckets (the default), a rewrite that isn't atomic, and no custom metadata on presigned uploads. It also notes that S3 stores metadata keys in lowercase while the local mock keeps their case; DESIGN.md lists this among the mock vs AWS differences. The `PutOptions.metadata` and `put()` JSDoc say the same.
-- f643a76: Return HTTP 404 for local presigned downloads of unknown or permanently deleted file versions instead of serving the current file's content.
-- 6d3077e: docs: refer to `KVStore` as the one NoSQL block
-
-  Docstrings, READMEs and design notes that pointed at `DistributedTable` now describe `KVStore` with a `schema` and a `key`. No code changes.
-
-- Updated dependencies [63e571c]
-- Updated dependencies [cad7bb8]
-- Updated dependencies [d01c34c]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [c67048e]
-- Updated dependencies [e529b00]
-- Updated dependencies [b2eb306]
-- Updated dependencies [fbe48c5]
-- Updated dependencies [c42ba42]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [3081521]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [0b422ee]
-- Updated dependencies [d01c34c]
-- Updated dependencies [0b422ee]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [d01c34c]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [c607deb]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [2095f31]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [23692f1]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/bb-logger@1.0.0
-  - @aws-cdk-blocks/core@1.0.0
 
 ## 1.0.0-rc.2
 
 ### Patch Changes
 
-- 0b422ee: docs: no method throws `FileBucketErrors.FileNotFound` or `FileTooLarge`. `get()` returns `null` for a missing file, and an upload over `maxUploadBytes` throws `ValidationFailed`, matched with `isBlocksError(e, 'ValidationFailed')`.
-- Updated dependencies [cad7bb8]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-  - @aws-cdk-blocks/core@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+- 0b422ee: The docs state that no method throws `FileBucketErrors.FileNotFound` or `FileTooLarge`. `get()` returns `null` for a missing file, and an upload over `maxUploadBytes` throws `ValidationFailed`.
 
 ## 1.0.0-rc.1
 
 ### Patch Changes
 
-- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
-- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
-- Updated dependencies [e529b00]
-- Updated dependencies [fbe48c5]
-- Updated dependencies [c42ba42]
-- Updated dependencies [3081521]
-- Updated dependencies [23692f1]
-  - @aws-cdk-blocks/core@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+- e529b00: The README error examples import the error constants and `isBlocksError` from `aws-cdk-blocks`, which works in backend and client code.
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`, and existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Minor Changes
 
-- 7c23ab9: feat(bb-file-bucket): signed upload constraints, opt-in download disposition, stricter key validation and 400 for invalid input
+- 7c23ab9: **Breaking: `putUrl()` and `createUploadHandle()` always sign a `Content-Type`, which is `application/octet-stream` when you pass no `contentType`.**
 
-  - **Presigned uploads always sign a `Content-Type`.** `putUrl()` and `createUploadHandle()` now sign the `contentType` you pass, or `application/octet-stream` when you pass none, so the upload must send exactly that header (S3 answers `403 SignatureDoesNotMatch` otherwise). `createUploadHandle().upload()` and its hydrated client handle always send it. **Breaking:** an upload to a `putUrl()` URL created without `contentType` must now send `Content-Type: application/octet-stream`; pass the `contentType` the client will send. `createUploadHandle()` without `contentType` now stores `application/octet-stream` instead of the browser's file type; pass `contentType: file.type` to keep it. Browser uploads now always send `Content-Type`, so `corsRules` must allow it in `allowedHeaders`. `put()` without `contentType` now stores `application/octet-stream` on AWS too, matching local dev.
-  - **`contentType` must be a single media type.** `put()`, `putUrl()` and `createUploadHandle()` reject (400 `ValidationFailed`) a `contentType` that is not `type/subtype` with optional `; name=value` parameters — for example a comma-separated list, non-ASCII or control characters, or an empty value.
-  - **`contentType` is signed and stored in canonical form.** Parameters are rendered as `; name=value`, with one space after `;` and none around `=` (`text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`); a quoted value is written bare when its content is a token (`charset="utf-8"` becomes `charset=utf-8`) and otherwise stays quoted. HTTP clients that re-render a parsed `Content-Type`, such as the native Kotlin client, then send exactly the signed value.
-  - **New `contentLength` option** on `putUrl()` / `createUploadHandle()` signs the exact upload size, so only a body of that size is accepted.
-  - **New bucket options `allowedContentTypes` and `maxUploadBytes`.** `allowedContentTypes` (exact media types or `type/*` wildcards) restricts the content types `put()`, `putUrl()` and `createUploadHandle()` accept. A `type/*` wildcard does not match `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml`, `text/xsl`, the JavaScript and ECMAScript types (`text/javascript`, `text/ecmascript`, `application/javascript`, `application/ecmascript`, `application/x-javascript`), or any `+xml` subtype; list one exactly to accept it. `maxUploadBytes` caps `put()` bodies and makes presigned uploads require a `contentLength` at or under it. Both are checked identically in local dev and on AWS, and their shape is validated at synth.
-  - **New `attachment` option** on `getUrl()` / `getFileHandle()`: `true` or a filename signs a `Content-Disposition: attachment` into the download URL, so the browser saves the file instead of displaying it. Directional formatting and zero-width characters are removed from the filename, `/` and `\` are replaced with `_`, and a filename that is empty, `.` or `..` is rejected. Default behavior is unchanged.
-  - **Stricter key validation.** Keys are also rejected when they contain a backslash, C1 control characters, U+2028/U+2029, or bidirectional formatting characters, a segment that contains `.` or `..` once `%2e`, `%2f` and `%5c` are decoded, or more than 1,024 bytes in UTF-8. `scan({ prefix })` now validates the prefix with the same rules (an empty prefix and a trailing `/` are allowed).
-  - **`ValidationFailed` is now an `ApiError` with status 400**, so API methods answer invalid keys, prefixes, expiry values and upload constraints with HTTP 400 instead of 500. The name and message format are unchanged, and messages never include the key.
-  - **`VersionNotFound` from `restoreVersion()` now has the fixed message `The requested version does not exist`**, without the key or version id.
+  To upgrade:
 
-  The README adds sections on per-user isolation (derive keys from the authenticated user, never from a client-supplied key or prefix), upload constraints, serving user uploads, and the key rules; its examples now build keys from the caller's identity.
+  1. Pass to `putUrl()` the `contentType` the client will send, or send `Content-Type: application/octet-stream` with the upload.
+  2. Pass `contentType: file.type` to `createUploadHandle()` to keep storing the browser's file type.
+  3. Allow `Content-Type` in the `allowedHeaders` of your `corsRules`.
 
-- 072c3ff: An unrecognized `encryption` value on `KVStore` or `FileBucket` now fails the synth with an error that lists the valid values (`'aws-managed'`, `'customer-managed'`, or the block's `fromKmsKey(arn)`). Previously such a value (for example a typo like `'kms-managed'` in untyped JavaScript, or a value loaded from JSON or the environment) only emitted an `UnknownEncryption` warning and fell back to the AWS-managed key, so a request for a customer-managed key could be silently downgraded. Apps that pass a valid value, or omit `encryption`, are unaffected; an app that hits the new error was never getting the encryption it asked for and should correct the value.
+  Also adds the `contentLength`, `attachment`, `allowedContentTypes`, and `maxUploadBytes` options, validates keys more strictly, and answers `ValidationFailed` with HTTP 400 instead of 500.
+
+- 072c3ff: An unrecognized `encryption` value on `KVStore` or `FileBucket` fails the synth instead of emitting an `UnknownEncryption` warning and falling back to the AWS-managed key. If you hit the error, correct the value.
 
 ### Patch Changes
 
-- c67048e: feat!: `Database` from `@aws-cdk-blocks/bb-database` is the only SQL Building Block
+- c67048e: **Breaking: `Database` from `@aws-cdk-blocks/bb-database` is the only SQL Building Block, and `@aws-blocks/bb-data`, `@aws-blocks/bb-distributed-data`, and `@aws-blocks/data-common` are removed.**
 
-  **Breaking change.** `aws-cdk-blocks` exports `Database`, `DatabaseCluster`, `DatabaseErrors` and `sql` from `@aws-cdk-blocks/bb-database`. The packages `@aws-blocks/bb-data`, `@aws-blocks/bb-distributed-data` and `@aws-blocks/data-common` are not part of AWS Blocks any more. There is no compatibility layer.
+  To upgrade:
 
-  ```ts
-  import { Database, DatabaseCluster, sql } from "aws-cdk-blocks";
+  1. Import `Database`, `DatabaseCluster`, `DatabaseErrors`, and `sql` from `aws-cdk-blocks`.
+  2. To keep an old `@aws-blocks/bb-data` cluster, make that line a `LegacyDatabaseCluster` and put a `Database` with a new id on it.
+  3. Replace `DistributedDatabase` with a `Database` of the same id, which keeps its cluster.
+  4. Replace `Database.fromExisting()` with `DatabaseCluster.fromExisting()`, passed as `cluster`.
+  5. Replace `withRLS()` with `asUser()` or `asRole()`, and use `DatabaseDialect` from `@aws-cdk-blocks/bb-database/kysely` for Kysely.
+  6. Store the connection string of an existing database with `npm run db -- connect --stage <stage>`, not a `*_DB_URL` or `*_CONNECTION_STRING` environment variable.
 
-  const orders = new Database(scope, "orders"); // owns an Aurora DSQL cluster
-
-  const cluster = new DatabaseCluster(scope, "main", { type: "aurora" }); // Aurora PostgreSQL Serverless v2
-  const users = new Database(scope, "users", { cluster });
-  ```
-
-  - **`Database`** owns an Aurora DSQL cluster when it has no `cluster` option. A `DatabaseCluster` of type `'dsql'` or `'aurora'` holds several `Database` blocks, each in its own schema. Migrations are ordered `.sql` files in `cdk-blocks/migrations/<id>/`.
-  - **Not exported any more:** `DistributedDatabase`, `DistributedDatabaseErrors`, `DistributedDatabaseOptions`, `Database.fromExisting()` and `ExternalDatabaseRef` (an existing PostgreSQL database is now `DatabaseCluster.fromExisting()`, passed as `cluster`). `withRLS()` is replaced by `asUser()` and `asRole()`. `crud()` has no equivalent in `@aws-cdk-blocks/bb-database`. For Kysely, use `DatabaseDialect` from `@aws-cdk-blocks/bb-database/kysely`.
-  - **`getSdkIdentifiers(db)`** returns `clusterId` and `schemaName`, plus `clusterEndpoint` and `region` in a deployed Lambda. `getSdkIdentifiers(cluster)` returns `clusterEndpoint`.
-  - **Data is not moved.** A `Database` that takes the place of a `Database` of `@aws-blocks/bb-data` on the same line of code is a new block with a new cluster. To keep the old cluster, make that line a `LegacyDatabaseCluster` and put a `Database` with a new id on it. A `Database` that takes the place of a `DistributedDatabase` with the same id keeps its cluster.
-  - **`@aws-cdk-blocks/create-blocks-app`:** the `sql` and `demo` templates use the new `Database` on its default Aurora DSQL cluster, with migrations in `cdk-blocks/migrations/<id>/`. The templates' `cdk.json` has no `@aws-blocks/bb-data:encryptStorageByDefault` context key.
-  - **`@aws-cdk-blocks/bb-database`:** the CDK `Database` records itself as the `Database` Building Block of the stack.
-
-  **An existing PostgreSQL database.** `DatabaseCluster.fromExisting({ name, ca })` puts a `Database` on a PostgreSQL database that already exists, with its tables and data; Supabase is the tested provider. The block provisions nothing and `db.cluster.kind` is `'external'`. The connection string is never written in code: with `name` the block reads the SSM SecureString `/<stackName>-<name>` on AWS and a local value under `.bb-data/`, and `connectionString` takes your own `AppSetting` or `Secret`. The server certificate is always verified, against `ca` (PEM text) or Node's trust store, and a connection string that carries a TLS parameter is refused. Local mode connects to the real database and runs no migration file.
-
-  Migrations on an existing database run during the deploy, in a function outside any VPC, one transaction per file; the file is recorded in that transaction. The `_migrations` table and the files of an app that used `@aws-blocks/bb-data` with `fromExisting()` continue as they are, so no file runs twice.
-
-  **`npm run db`** runs the commands of `@aws-cdk-blocks/bb-database`. `pull` and `generate-types` are not commands any more.
-
-  - `connect` checks an existing database (certificate, role, policies, endpoint) and stores the connection string for local mode or for a stage. The connection string is read from a hidden prompt or stdin and is never printed.
-  - `migrate` applies pending files to the development database with the code a deploy uses. `migrate --mark-applied <file>` records a file as applied without running it, for a schema dump of a database that already has the schema; `--stage` records it on a stage.
-  - `types` writes one `Tables` interface for Kysely. `status` lists applied and pending files.
-  - `types --block <id>` writes the `Tables` interface of a block that provisions its cluster, from the block's migration files (`cdk-blocks/migrations/<id>`). It applies the files to a new local database in a temporary directory, so it needs no AWS account and does not touch `.bb-data/`. Pass `--type aurora` for a block on an `aurora` cluster.
-  - `status --block <id>` lists the applied and the pending files in the block's local database; pass `--cluster <id>` for a block on a `DatabaseCluster`. It reads a copy of the database, so it is safe while `npm run dev` runs.
-
-  On a cluster that the block owns, migrations run on the first statement in local mode and during the deploy on AWS.
-
-  **Statements as a user or a role.** `Database.asUser(user, claims?)` returns the block with every statement run as one user, for tables with Row Level Security on an `aurora` cluster. Each transaction on it starts by setting `request.jwt.claims` to `{ ...claims, sub: user.userId }` for that transaction only, so a policy such as `USING (owner_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')` gives each user their own rows. `query`, `queryOne`, `execute`, `transaction` and Kysely (`new DatabaseDialect(db.asUser(user))`) all run as the user, locally and on AWS. The result of an auth block's `requireAuth()` passes as it is. A statement on the block itself carries no user and reads no rows from a table whose policy compares with `sub`.
-
-  `Database.asRole(role, claims?)` returns the block with every statement run as a database role, for Row Level Security policies written for a role (`TO authenticated`): each transaction starts with `SET LOCAL ROLE` and the claims, for that transaction only. Use it where the connection role owns the tables, since PostgreSQL does not apply policies to an owner.
-
-  `asUser()` and `asRole()` throw `DatabaseConfigurationError` on a `dsql` cluster. A Kysely transaction's isolation level is now set by the engine, and `BEGIN` is tried once more when its pooled connection was closed while idle.
-
-  **Errors.**
-
-  - A write that a policy refuses fails with the new `DatabaseErrors.PermissionDenied` (HTTP 403).
-  - A statement that breaks a constraint now has its own error name: `DatabaseErrors.NotNullViolation` and `DatabaseErrors.CheckViolation` (HTTP 400), and `DatabaseErrors.ForeignKeyViolation` (HTTP 409). These were `QueryFailed` before. The message has no value of the row; the server's own text stays on the server-side `cause`. None of the three is retried.
-  - `ConnectionFailed` now also covers a connection that was never made (the address did not answer, the server certificate was not accepted, the login was refused); these were `QueryFailed` before. A connection that ends between two statements of a transaction no longer ends the Node process, and a connect that timed out is no longer tried a second time.
-
-  **Local mode.** A block's statements run as a plain database role with the grants the deployed app role gets; migrations run as the admin. PostgreSQL now refuses the same statements under `npm run dev` as on AWS: DDL and `TRUNCATE` outside a migration, and reads of the migration ledger, fail with `QueryFailed`. A Row Level Security policy on a table of an `aurora` cluster applies to the block's statements locally as it does on AWS. DDL in a handler was `DatabasePermissionException` locally before; the `_migrations` and `_migration_progress` tables are no longer readable from application code. An existing `.bb-data` directory needs no reset.
-
-  **`@aws-cdk-blocks/core`.** `npm run dev`, `sandbox` and `deploy` do not apply migrations to an external database before they run. `sandbox` and `deploy` no longer copy a `*_DB_URL` or `*_CONNECTION_STRING` environment variable to the SSM parameter `/<stackName>-db-url`. `npm run db -- connect --stage <stage>` stores the connection string of a `Database` on an existing database, after it has checked the database; an environment value written on every deploy replaced what that command stored. A parameter that an earlier deploy wrote stays in SSM and is still read with `DatabaseCluster.fromExisting({ name: 'db-url' })`. `ensureSecrets` is not exported from `@aws-cdk-blocks/core/scripts` and `aws-cdk-blocks/scripts` any more.
+  Data is not moved, and `crud()`, `ensureSecrets`, and the `npm run db` commands `pull` and `generate-types` are removed.
 
 - e8e3262: Brand the `ValidationFailed` error thrown for an invalid object key so its name and message reach RPC clients instead of a generic internal error.
 - eacc87e: Local file server now returns 404 `NoSuchKey` for presigned GETs of a versioned key whose current version is a delete marker, matching S3 and `get()`.
-- 94d5900: The production settings of `FileBucket` now live in a `PRODUCTION.md` next to the block's `README.md`, which links to it. It covers access logging, KMS encryption, Object Lock, scaling and cost. The file ships in its package and in `aws-cdk-blocks` under `docs/<block>/`, and the shorter README can be read in one pass.
-- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
+- 94d5900: The production settings of `FileBucket` live in a `PRODUCTION.md` next to the block's `README.md`, which links to it. It covers access logging, KMS encryption, Object Lock, scaling, and cost.
 
-  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
+- 703238f: **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.**
 
-  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
+  To upgrade:
 
-  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
+  1. Rename the `aws-blocks/` directory to `cdk-blocks/`.
+  2. Change the `"workspaces"` entry that names it.
+  3. Change the `"name"` in its `cdk-blocks/package.json` to `cdk-blocks`.
+  4. Change every `from 'aws-blocks'` import to import `cdk-blocks`.
+  5. Rename an `aws-blocks/migrations` directory or set an explicit migrations path, because `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`.
 
-  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
+  The reserved URL namespace, such as `/aws-blocks/api` and `/aws-blocks/auth/*`, keeps its path, so deployed routes and OAuth callback URLs keep working.
 
-- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
-
-  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
-
-- d01c34c: docs: fix two stale references
-
-  - The FileBucket README's access-control examples construct `new Auth(scope, 'auth')` (from `@aws-cdk-blocks/bb-auth`) instead of the removed `AuthBasic`.
-  - The scaffolded `AGENTS.md` no longer says to import `ApiError` and the typed client from `aws-cdk-blocks`, whose browser build exports nothing: `ApiNamespace` comes from `aws-cdk-blocks` in the backend, and `ApiError` / `isBlocksError` from `aws-cdk-blocks/client` in frontend code and tests.
-
-- 0ff1e1f: docs: the FileBucket design doc describes the installed version
-
-  Design decisions state the current design instead of the changes that led to it: PR numbers, "previously" and "Update: superseded by" notes are replaced with the current rule and its reason. The versioning, bucket-name and access-log decisions describe today's defaults (versioning on, over-long names shortened, retention from `defaults.logRetention`).
-
-- 8fb67ec: Fix local FileBucket version deletion so removing the newest stored data version updates the current body and metadata from the next stored data version, or removes the current copies when none remain. Active delete-marker flags and older-version deletion behavior are preserved. Document that historical delete markers discarded by a subsequent upload are not reconstructed, so deletion across re-uploads still differs from S3.
-
-  Ignore nested-key directories when reading version history. Retain the target version body until current-copy reconciliation and version-sidecar removal succeed, allowing filesystem failures to be retried with the same version ID.
-
-- 11877b6: The FileBucket docs now state that `get()` always downloads the whole body and is the only call that returns `contentType` and `metadata`, because there is no metadata-only read. `scan()` returns `size` and `lastModified` without the body.
-- 77c2c75: Docs: FileBucket object metadata is set when the object is written and can't be edited in place. Each `put()` replaces it, and a `put()` without `metadata` leaves none. A new "Changing Metadata" README section shows how to change it (re-`put()` the same body with the complete new set) and what that implies: a full GET and PUT, `cacheControl` passed again, another stored version on versioned buckets (the default), a rewrite that isn't atomic, and no custom metadata on presigned uploads. It also notes that S3 stores metadata keys in lowercase while the local mock keeps their case; DESIGN.md lists this among the mock vs AWS differences. The `PutOptions.metadata` and `put()` JSDoc say the same.
+- 9d69412: The docs state that session cookies default to `SameSite=Lax`, that an `inferenceOnly` agent still creates its S3 session bucket, and that `objectLock` can be added to a deployed `FileBucket` as an in-place update.
+- d01c34c: The FileBucket README's access-control examples construct `new Auth(scope, 'auth')` instead of the removed `AuthBasic`. For frontend code and tests, the scaffolded `AGENTS.md` says to import `ApiError` and `isBlocksError` from `aws-cdk-blocks/client`.
+- 0ff1e1f: The FileBucket design doc describes the installed version. The versioning, bucket-name, and access-log decisions describe today's defaults.
+- 8fb67ec: Deleting the newest stored version in a local FileBucket makes the next stored version the current body and metadata, or removes the current copies when none remain.
+- 11877b6: The FileBucket docs state that `get()` always downloads the whole body and is the only call that returns `contentType` and `metadata`. `scan()` returns `size` and `lastModified` without the body.
+- 77c2c75: The README has a new "Changing Metadata" section. FileBucket object metadata is set when the object is written, each `put()` replaces it, and a `put()` without `metadata` leaves none.
 - f643a76: Return HTTP 404 for local presigned downloads of unknown or permanently deleted file versions instead of serving the current file's content.
-- 6d3077e: docs: refer to `KVStore` as the one NoSQL block
-
-  Docstrings, READMEs and design notes that pointed at `DistributedTable` now describe `KVStore` with a `schema` and a `key`. No code changes.
-
-- Updated dependencies [d01c34c]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [c67048e]
-- Updated dependencies [b2eb306]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [d01c34c]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [d01c34c]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [c607deb]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [2095f31]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/core@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.0
+- 6d3077e: Docstrings, READMEs, and design notes that pointed at `DistributedTable` describe `KVStore` with a `schema` and a `key`.
 
 ## 0.4.0
 
 ### Minor Changes
 
-- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
-
-  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
-  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
-  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
-  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
-  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
-  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
-
-  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
-
-- 9c96135: feat(bb-file-bucket): customer-managed KMS encryption, Object Lock, and a stack-wide default for S3 access logging
-
-  - **`encryption`** on `FileBucket` takes the same values as `KVStore` and `DistributedTable`. `'aws-managed'` (the default) keeps SSE-S3. `'customer-managed'` creates a dedicated KMS key for the bucket, with rotation on, and removes it along with the bucket. `FileBucket.fromKmsKey(arn)` uses a key you already own. Both KMS options use S3 Bucket Keys. The runtime role is granted the key permissions, so `put`/`get` and presigned URLs keep working.
-  - **`objectLock: { mode: 'governance' | 'compliance', retentionDays }`** turns on S3 Object Lock with a default retention for every new object version. It needs versioning (on by default) and a retained bucket, and both are checked at synth: `versioned: false` and a `'destroy'` removal policy, which is the sandbox default, both fail synth. Pass `removalPolicy: 'retain'` to use Object Lock in a sandbox. Object Lock can only be turned on when the bucket is first created. S3 requires a signed checksum on every upload to such a bucket, which a presigned URL can't carry, so `putUrl()` and `createUploadHandle()` throw the new `FileBucketErrors.PresignedUploadUnsupported` there; upload with `put()`.
-  - **`BlocksDefaults.storageAccessLogging`** (optional) turns S3 server access logging on or off for every `FileBucket` without changing API Gateway access logging. It is unset in both presets, so `FileBucket` still falls back to `accessLogging` and existing stacks deploy unchanged.
-
-  `encryption` and `objectLock` are ignored on a bucket wrapped with `FileBucket.fromExisting`, and synth warns when either is set there. `@aws-blocks/blocks` re-exports `ObjectLockOptions` and the FileBucket key reference type, as `FBExternalKmsKeyRef`.
-
-  `@aws-blocks/core` now parses the `encryption` option in one place for all three storage blocks. An unrecognized value still warns and falls back to the AWS-managed default.
+- 88747f5: A Building Block's mock entry throws when it is loaded in a deployed environment, so bundle your backend with the `aws-runtime` export condition. `@aws-blocks/core/bb-utils` exports the check as `assertNotMockInDeployedEnv(bbName)`.
+- 9c96135: Adds `encryption` and `objectLock` options to `FileBucket`, and `BlocksDefaults.storageAccessLogging` for S3 server access logging on every `FileBucket`. With Object Lock, `putUrl()` and `createUploadHandle()` throw `FileBucketErrors.PresignedUploadUnsupported`, so upload with `put()`.
 
 ### Patch Changes
 
-- ee69cd7: docs(bb-file-bucket): document that `corsRules` is required for browser uploads and downloads
-
-  Browser uploads and downloads that worked under `npm run dev` failed after
-  deploying to a sandbox or production stack with `No 'Access-Control-Allow-Origin'
-header is present on the requested resource`, and nothing in the docs explained
-  why. The local dev file-server accepts any origin, but the deployed S3 bucket has
-  no CORS configuration unless `corsRules` is set — and it does not inherit the
-  stack's `defaults.allowedOrigins` or the Hosting domain.
-
-  - **bb-file-bucket README** — new "Browser Uploads and Downloads (CORS)" section
-    with the failing error, a working `corsRules` example (`GET`/`PUT`,
-    `allowedHeaders: ['Content-Type']`), how to find the deployed Hosting origin
-    (`HostingUrl`), and notes on preflight headers, S3 origin syntax, the scope of
-    the wildcard synth guard, which requests need CORS, and wrapped buckets. The
-    `corsRules` option row, Best Practices, and Local Development sections now
-    point to it.
-  - **bb-file-bucket TSDoc / DESIGN.md** — `corsRules` documents its no-CORS
-    default, that it is ignored for wrapped buckets, and (new D-FB-15) why it is
-    not derived from `defaults.allowedOrigins` or the Hosting domain.
-  - **blocks README** — the Security Considerations list notes that
-    `defaults.allowedOrigins` covers the API only and FileBucket needs its own
-    `corsRules`.
-
-  Documentation only — no runtime or API change.
-
-- 943d405: fix: error constants can be imported in frontend code
-
-  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
-  package's `browser` entry. Some of those imports failed the frontend build:
-
-  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
-    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
-    `@aws-blocks/bb-logger`. They are now exported.
-  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
-    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
-    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
-  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
-    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
-    server's constants instead of keeping their own copies.
-  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
-    server build and failed to bundle. It now has one.
-
-  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
-  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
-
-- 943d405: fix: export types missing from the `cdk` entry point
-
-  Some types exported by the default entry point of `@aws-blocks/bb-file-bucket` were missing from its `cdk` entry, so
-  backend code importing them failed to type-check under that condition — for example,
-  `import type { FileVersionInfo } from '@aws-blocks/bb-file-bucket'`.
-
-  The `cdk` entry now exports `FileDownloadClient`, `FileUploadClient`, `FileVersionInfo`, `FileDownloadDescriptor`,
-  `FileUploadDescriptor`, `VersionedGetOptions`, `VersionedDeleteOptions`, `VersionedGetUrlOptions`, `GetOptionsFor`,
-  `DeleteOptionsFor`, `GetUrlOptionsFor`.
-
-- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
-
-  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
-  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
-  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
-  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
-
-- 48c35f6: fix: export the same names from every conditional entry point
-
-  Some Building Blocks were missing named exports from their `cdk` or `browser`
-  entry points, even though the TypeScript types said they were there. Importing
-  one of these names from code evaluated during `cdk synth`, or from a browser
-  bundle, failed at import time. Added:
-
-  - `cdk` entry: `InterruptError` (`@aws-blocks/bb-agent`), `BatchSubmitFailedError`
-    (`@aws-blocks/bb-async-job`), and `RLSEnabledDatabase` and `PgClientEngine`
-    (`@aws-blocks/bb-data`).
-  - `browser` entry: the error constants `AgentErrors`, `AppSettingErrors`,
-    `EmailErrors`, `FileBucketErrors` and `LoggingErrors` (for `isBlocksError` checks
-    in frontend code), plus `InterruptError`, `BedrockModels` and `OllamaModels`
-    (`@aws-blocks/bb-agent`) and `fromExisting` (`@aws-blocks/bb-data`).
-
-  The conditional-exports regression test now compares every Building Block's
-  `aws-runtime`, `cdk` and `browser` entries against its default entry in both
-  directions, so these gaps can't come back unnoticed.
-
-- d366907: chore: manual dependency bump (2026-10-19)
-- 0ee86e1: Validate presigned URL expiration values before creating local tokens or AWS signatures. `getUrl`, `putUrl`, and upload/download handles now reject values that are not whole seconds between 1 and 604800 with `ValidationFailed`, matching Signature Version 4 requirements.
-- 48c35f6: `FileBucket` no longer fails `cdk synth` when its derived S3 bucket name is longer than 63 characters. A bucket's name comes from your stack name and scope ids, so a long stack name or deeply nested ids could push it over S3's limit. This also hit blocks that create a bucket internally, such as `Agent`. These names are now shortened to the start of the name plus `-` and an 8-character hash. The result is the same on every deploy, and different scope chains still get different names. Bucket names that already fit are unchanged, so no existing bucket is renamed or replaced. Names that break any other S3 naming rule still fail synth with `ValidationFailed`.
-- ea57feb: Correct JSDoc: the `EmailErrors` example now calls `send()` with a single message object, `Secret` examples that call `put()` now pass `allowRuntimeWrite: true`, and the `FileBucket` `removalPolicy` docs now say an omitted policy inherits the stack's `BlocksDefaults.removalPolicy`.
+- ee69cd7: The docs say that `corsRules` is required for browser uploads and downloads. Without it, uploads and downloads that work under `npm run dev` fail after you deploy to a sandbox or production stack.
+- 943d405: Frontend code can import Building Block error constants, such as `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, `LoggingErrors`, and `RealtimeErrors`, to match errors with `isBlocksError`. `CronJobErrors.ScheduleNotSupported` is no longer `undefined` in the browser.
+- 943d405: The `cdk` entry of `@aws-blocks/bb-file-bucket` exports the types that were missing from it, such as `FileVersionInfo`, `FileDownloadClient`, and `FileUploadClient`, so backend code that imports them type-checks.
+- a3969b5: A Building Block runtime method called at the top level of a backend module throws `<Class>.<method>() cannot be called during CDK synth` instead of `TypeError: x is not a function`.
+- 48c35f6: The `cdk` and `browser` entry points export the names they were missing, so importing them during `cdk synth` or in a browser bundle no longer fails. The `browser` entries add the error constants `AgentErrors`, `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors`.
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- 0ee86e1: `getUrl`, `putUrl`, and upload and download handles reject expiration values that are not whole seconds between 1 and 604800 with `ValidationFailed`.
+- 48c35f6: `FileBucket` no longer fails `cdk synth` when its derived S3 bucket name is longer than 63 characters. It shortens such a name to the start of the name plus `-` and an 8-character hash, and names that already fit are unchanged.
+- ea57feb: Corrects three JSDoc comments. The `EmailErrors` example passes `send()` a single message object, `Secret` examples that call `put()` pass `allowRuntimeWrite: true`, and an omitted `FileBucket` `removalPolicy` inherits the stack's `BlocksDefaults.removalPolicy`.
 - 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
-- Updated dependencies [0765f84]
-- Updated dependencies [5572341]
-- Updated dependencies [88747f5]
-- Updated dependencies [1076ccc]
-- Updated dependencies [928c48a]
-- Updated dependencies [4d5ea86]
-- Updated dependencies [90c1b12]
-- Updated dependencies [943d405]
-- Updated dependencies [50b8c94]
-- Updated dependencies [a3969b5]
-- Updated dependencies [48c35f6]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [9a32674]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8c73a24]
-- Updated dependencies [48c35f6]
-- Updated dependencies [4553866]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [54e9443]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d366907]
-- Updated dependencies [91ed1fc]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d062eeb]
-- Updated dependencies [c22eeee]
-- Updated dependencies [1546160]
-- Updated dependencies [9c96135]
-- Updated dependencies [63b154f]
-- Updated dependencies [8565ef7]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [515089c]
-- Updated dependencies [dde6340]
-- Updated dependencies [7477b6e]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [6a53068]
-- Updated dependencies [dd5e807]
-- Updated dependencies [db15b5e]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [72e3259]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8565ef7]
-- Updated dependencies [48c35f6]
-- Updated dependencies [0d4ede3]
-- Updated dependencies [63b154f]
-- Updated dependencies [b6b8ade]
-- Updated dependencies [82ea78a]
-- Updated dependencies [e44ac0c]
-- Updated dependencies [33e8d73]
-- Updated dependencies [b003705]
-- Updated dependencies [48c35f6]
-  - @aws-blocks/core@0.8.0
-  - @aws-blocks/bb-logger@0.3.0
 
 ## 0.3.1
 
 ### Patch Changes
 
-- 92fa27b: Internal: route named-error minting through `@aws-blocks/core`'s `blocksError`. No behavior change.
-- Updated dependencies [ec7eebe]
-- Updated dependencies [e682ba7]
-- Updated dependencies [e7e96e6]
-- Updated dependencies [9ebda66]
-- Updated dependencies [78f4396]
-- Updated dependencies [440ecce]
-- Updated dependencies [1a5c18e]
-- Updated dependencies [4ae500e]
-- Updated dependencies [6d764f7]
-- Updated dependencies [5d6656a]
-- Updated dependencies [60616b1]
-- Updated dependencies [a50fb46]
-- Updated dependencies [8a1a4a9]
-- Updated dependencies [38ce80c]
-- Updated dependencies [94a914a]
-- Updated dependencies [cb0ec01]
-- Updated dependencies [005c095]
-- Updated dependencies [b8649dc]
-- Updated dependencies [2da2fd4]
-- Updated dependencies [66f4be2]
-- Updated dependencies [32a4b73]
-- Updated dependencies [da6d4c7]
-- Updated dependencies [e3e5e22]
-- Updated dependencies [e9241b5]
-- Updated dependencies [f1eb149]
-- Updated dependencies [122c49c]
-- Updated dependencies [7c19c4f]
-  - @aws-blocks/core@0.7.0
-  - @aws-blocks/bb-logger@0.2.2
+- 92fa27b: Internal refactor that creates named errors through `@aws-blocks/core`'s `blocksError`. No behavior change.
 
 ## 0.3.0
 
 ### Minor Changes
 
-- 1f8a412: FileBucket now validates object keys identically in local dev and on AWS. A key is rejected (`ValidationFailed`) on both paths when it is empty, has a leading slash, contains an empty path segment (interior `a//b` or trailing `a/`), contains ASCII control characters, or contains a `..`/`.` path segment. Previously this validation ran only in the local mock, so such a key was silently accepted on the AWS runtime.
-
-  Behavior change: the AWS runtime previously performed no key validation, so these keys were accepted. After upgrading, `get`/`delete`/`listVersions`/`restoreVersion` and the URL/batch methods reject them. If an application already stored objects under such keys, re-key those objects before upgrading.
+- 1f8a412: **Breaking: on AWS, FileBucket now rejects invalid object keys with `ValidationFailed`, as it already did in local dev.** A key is invalid when it is empty, has a leading slash, or contains an empty path segment, ASCII control characters, or a `..` or `.` path segment. If your app already stored objects under such keys, re-key those objects before upgrading.
 
 ### Patch Changes
 
-- fa0406b: Refactor: extract FileBucket's synth-time option guards (unsafe-CORS wildcard, `noncurrentVersionExpirationDays` format) into a shared `validation.ts` (`validateFileBucketOptions`) called by both the CDK and mock constructors. Previously each constructor carried a verbatim copy of the guards; a single source of truth keeps mock↔CDK parity from drifting. No behavior change — the same combinations are rejected with identical messages on both paths. Follows the `bb-app-setting` pattern (#584); refs #590.
-- 251aed2: fix(bb-file-bucket): align unknown-`versionId` behavior between the mock and AWS
-
-  On a versioned bucket, an unknown `versionId` diverged between runtimes. S3 does
-  **not** signal an unknown `versionId` as `NoSuchVersion` (verified against real
-  S3): an id it cannot resolve comes back as `InvalidArgument` ("Invalid version id
-  specified") on `GetObject`/`DeleteObject` and `InvalidRequest` on `CopyObject`;
-  `NoSuchVersion` is reserved for a well-formed id that no longer exists. The AWS
-  runtime now normalizes all of these so the observable contract matches the mock:
-
-  - `get()` — returns `null` for an unknown `versionId` (matching the mock and
-    `get()`'s documented "null if it does not exist" contract), instead of throwing.
-  - `delete()` — is a silent no-op for an unknown `versionId` (matching the mock),
-    instead of throwing.
-  - `restoreVersion()` — throws a clean, matchable `FileBucketErrors.VersionNotFound`
-    (`NoSuchVersion`) via core's `blocksError` producer, so both `.name`
-    (`isBlocksError(e, FileBucketErrors.VersionNotFound)`) and the `.message` agree
-    across runtimes — instead of the raw S3 error, whose enumerable `$metadata`
-    (request IDs, ARNs) would leak to the client on serialization.
-
-  The raw S3 codes are folded only when a `versionId` was actually supplied, so an
-  unrelated `InvalidArgument`/`InvalidRequest` still surfaces. Also adds the public
-  `FileBucketErrors.VersionNotFound` constant, and encodes the caller-supplied
-  `versionId` in `CopySource` (a value with `&`, `#`, `?`, or a space would
-  otherwise corrupt the `x-amz-copy-source` header).
-
-- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-
-  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
-  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
-  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
-  and exports `installClientUserAgent`, an SDK middleware that appends the validated
-  token to the outgoing user agent. The 12 participating Building Blocks install it,
-  so native attribution rides the SDK user-agent chain AWS service telemetry already
-  counts. The Kotlin runtime already sends the header, so Kotlin
-  callers are attributed as soon as this ships; Swift and Dart follow.
-
-- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-
-  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-
-  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-
-  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-
-  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-
-  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-
-  ## Breaking change (why `@aws-blocks/core` is a minor)
-
-  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-
-  ```ts
-  // before — message collapses to "Internal error" on the client
-  throw new Error("Todo not found");
-
-  // after — status, message, and name all reach the client
-  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
-  ```
-
-  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
-
-- Updated dependencies [5501cb6]
-- Updated dependencies [b58f248]
-- Updated dependencies [39628cb]
-- Updated dependencies [d4b32f2]
-- Updated dependencies [a649895]
-- Updated dependencies [27646ac]
-- Updated dependencies [5515483]
-- Updated dependencies [757d4a9]
-- Updated dependencies [a23b8d8]
-- Updated dependencies [9e02b82]
-- Updated dependencies [465a002]
-  - @aws-blocks/core@0.6.0
-  - @aws-blocks/bb-logger@0.2.1
+- fa0406b: Moves the synth-time option guards of `FileBucket` into a shared `validation.ts` that the CDK and mock constructors both call, with no behavior change.
+- 251aed2: On AWS, `get()` returns `null` and `delete()` is a no-op for an unknown `versionId`, as in the mock. `restoreVersion()` throws the new `FileBucketErrors.VersionNotFound`.
+- 757d4a9: `@aws-blocks/core` forwards the `x-blocks-user-agent` header that native clients send into the AWS SDK user agent, and exports the `installClientUserAgent` SDK middleware. Kotlin callers are attributed first, and Swift and Dart follow.
+- a23b8d8: **Breaking: a plain `Error` thrown from an API method reaches the client as a generic `500` with `"Internal error"` instead of its raw message.** To send a specific status, name, and message to the client, throw an `ApiError`, for example `new ApiError("Todo not found", 404, { name: "TodoNotFoundException" })`. Building Block errors keep their name and message on the wire.
 
 ## 0.2.1
 
 ### Patch Changes
 
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
-
-- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
-- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-
-  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-
-  **Building Blocks declare VPC requirements via the constructor, not a method.**
-  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
-  requirements (a value, or a callback for values that depend on `fullId`) and
-  registers them in a central per-stack registry. This keeps the compile-time
-  forcing the previous `abstract getVpcRequirements()` provided — a block can't
-  silently omit its requirements — without a standing method on every subclass, and
-  gives the framework one place to read, deduplicate, and answer "does anything here
-  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-
-  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
-  function without a VPC declares `requiresVpc: true`; when one is needed and the
-  customer didn't bring their own, Blocks lazily creates a single shared VPC
-  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
-  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
-  bring-your-own override.
-
-  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
-  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
-  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
-  compliance requirement to use specific subnets. Omit it to keep the default
-  (prefer isolated, fall back to `private-with-egress`).
-
-- Updated dependencies [2806ae2]
-- Updated dependencies [f552ebe]
-- Updated dependencies [9aa0814]
-- Updated dependencies [012cd89]
-- Updated dependencies [5eee114]
-- Updated dependencies [d7312f9]
-- Updated dependencies [21443ba]
-- Updated dependencies [acd1628]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [302090a]
-  - @aws-blocks/core@0.5.0
-  - @aws-blocks/bb-logger@0.2.0
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
+- 6496713: Replaces `registerVpcEndpoint` with `registerVpcGatewayEndpoint` and `registerVpcInterfaceEndpoint`, and reduces `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`.
+- 6496713: A Building Block passes its VPC requirements to the `BuildingBlockScope` constructor, and Blocks creates one shared VPC when a block declares `requiresVpc: true` and you bring none. `Database` accepts an optional `subnets` placement for its Aurora cluster.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 1b66571: `FileBucket`: secure-by-default hardening. Several of these are **behavior/breaking changes** for existing consumers — because the package is pre-1.0 (0.x), this ships as a `minor` bump per the changesets convention that a `minor` signals a breaking change before 1.0.
+- 1b66571: **Breaking: `FileBucket` turns versioning on by default, removes the `logRetentionDays` option, and rejects a wildcard CORS origin with a mutating method at synth.**
 
-  - **TLS enforced unconditionally.** Every provisioned bucket now sets `enforceSSL: true`, attaching a bucket policy that denies any request where `aws:SecureTransport` is `false`. Not configurable.
-  - **Versioning defaults ON.** `versioned` now defaults to `true`; opt out with the literal `versioned: false`. **Breaking:** buckets that were previously non-versioned by default now enable versioning (prior versions accrue storage cost). The non-versioned option typings (no `versionId`) are selected only by the literal `versioned: false`; a non-literal `boolean` or an absent value resolves to the versioned-aware typings.
-  - **Opt-in server access logging routed through stack posture.** New `accessLogging` option; when not set per-block it falls back to the stack `BlocksDefaults.accessLogging`. When enabled, a dedicated, locked-down log bucket (all public access blocked, S3-managed encryption, SSL enforced) receives the main bucket's access logs under the `access-logs/` prefix.
-  - **Access-log retention follows the stack posture's `logRetention`.** Log expiration now derives from `BlocksDefaults.logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps logs indefinitely) instead of a per-block day count. **Breaking (within this unmerged PR):** the per-block `logRetentionDays` option has been **removed** — access-log retention is no longer configured per-block.
-  - **Removal policy routed through stack posture.** `removalPolicy` still accepts an explicit per-block `'destroy'|'retain'`; when omitted it now falls back to `BlocksDefaults.removalPolicy` (`DESTROY` in sandbox, `RETAIN` in production), replacing the previous `sandboxMode`-context behavior.
-  - **New `noncurrentVersionExpirationDays` option** (default `90`). With versioning on (the default), noncurrent object versions are automatically expired after this many days to bound the storage cost that versioning would otherwise let grow unbounded. Must be a positive integer — a non-positive or non-integer value throws at synth. Disable versioning (`versioned: false`) to drop the rule entirely.
-  - **Removed `Access-Control-Allow-Credentials: true`** from the local dev file-server's CORS response headers (it should never have been sent for anonymous, token-scoped presigned-URL access).
-  - **Wildcard-CORS + mutating method now throws at synth.** A CORS rule combining a wildcard origin (`'*'`) with a mutating method (`PUT`/`POST`/`DELETE`) is rejected at synth with an actionable error. **Breaking:** such rules previously deployed unchallenged. Specify explicit origins for mutating methods; wildcard + `GET`/`HEAD` remains allowed.
-  - **Mock mirrors the CDK synth-time validation.** The local/unit `FileBucket` now reproduces the CDK's two synth-time guards verbatim — the noncurrent-version-expiration range check (positive-integer, validated regardless of `versioned`) and the wildcard-CORS/mutating-method guard — so local and unit runs fail the same way `cdk synth` would (mock↔cdk parity). Both are gated on `!bucket`, matching the CDK's external-bucket early-return.
-  - **External `bucket` option documented as not receiving the secure defaults.** The `bucket` option's TSDoc and the README "Wrapping an Existing Bucket" section now state that a wrapped/existing bucket bypasses every secure default (`enforceSSL`, versioning/noncurrent expiration, access logging, `blockPublicAccess`, encryption, the wildcard-CORS guard) — the caller owns that bucket's posture.
+  To upgrade:
 
-### Patch Changes
+  1. Set `versioned: false` on a bucket that must stay non-versioned, because versioned buckets keep noncurrent versions for `noncurrentVersionExpirationDays` days, `90` by default.
+  2. Remove `logRetentionDays`, because access-log retention now follows `BlocksDefaults.logRetention`.
+  3. Give explicit origins to any CORS rule that combines `'*'` with `PUT`, `POST`, or `DELETE`.
 
-- Updated dependencies [df667c5]
-- Updated dependencies [df667c5]
-- Updated dependencies [64ddd74]
-- Updated dependencies [df667c5]
-- Updated dependencies [646614b]
-- Updated dependencies [c45eb92]
-- Updated dependencies [4a830a6]
-- Updated dependencies [f2f186c]
-- Updated dependencies [46b7c89]
-- Updated dependencies [1da58fd]
-  - @aws-blocks/core@0.4.0
-  - @aws-blocks/bb-logger@0.1.6
+  Every provisioned bucket also sets `enforceSSL: true`, and an omitted `removalPolicy` falls back to `BlocksDefaults.removalPolicy`.
 
 ## 0.1.5
 
 ### Patch Changes
 
-- 309a236: refactor(bb): attach IAM grants to the shared execution role
-
-  Data and auth blocks now grant permissions to the shared Blocks execution role
-  (`this.executionRole`) instead of the handler function directly. Grants land on
-  the same role the handler assumes, so the effective runtime permissions are
-  identical — this decouples IAM wiring from the concrete Lambda function ahead of
-  the multi-compute model.
-
-  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
-  config registry (loaded into `process.env` at cold start, like every other
-  block) rather than being set as direct handler environment variables, and the
-  migration Lambda maps the shared execution role's ARN.
-
-- Updated dependencies [5798492]
-- Updated dependencies [f00adb0]
-- Updated dependencies [f00adb0]
-- Updated dependencies [08ab129]
-- Updated dependencies [9d4ccea]
-- Updated dependencies [5bfae0a]
-- Updated dependencies [0ac3879]
-- Updated dependencies [e4dac4a]
-  - @aws-blocks/core@0.3.0
-  - @aws-blocks/bb-logger@0.1.5
+- 309a236: Data and auth blocks grant permissions to the shared Blocks execution role instead of the handler function. The effective runtime permissions are identical.
 
 ## 0.1.4
 
-### Patch Changes
-
-- Updated dependencies [7b4c62d]
-- Updated dependencies [5262062]
-- Updated dependencies [3614a09]
-- Updated dependencies [5262062]
-- Updated dependencies [5071079]
-- Updated dependencies [8966cfb]
-- Updated dependencies [b11a75b]
-  - @aws-blocks/core@0.2.0
-  - @aws-blocks/bb-logger@0.1.4
+Dependency updates only.
 
 ## 0.1.3
 
 ### Patch Changes
 
-- bd59e60: Harden the local dev file server against stored XSS and token forgery. Downloads are now served with `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment`, so an uploaded `text/html`/SVG payload can no longer execute inline in the app's origin. The HMAC secret used to sign presigned-URL tokens is now a per-process random value instead of a hardcoded, source-visible literal, so tokens can no longer be forged offline. Both the token-minting mock and the validating dev file server share the same in-process value, so local presigned-URL round-trips are unaffected.
-- Updated dependencies [b48aaec]
-- Updated dependencies [ac0966a]
-- Updated dependencies [9de27dd]
-- Updated dependencies [8e96d87]
-- Updated dependencies [58f77dd]
-- Updated dependencies [2d3dfdc]
-- Updated dependencies [3c56267]
-  - @aws-blocks/core@0.1.17
-  - @aws-blocks/bb-logger@0.1.3
+- bd59e60: The local dev file server serves downloads with `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment`, so an uploaded `text/html` or SVG file no longer runs inline. A per-process random value replaces the hardcoded HMAC secret that signs presigned-URL tokens.
 
 ## 0.1.2
 
 ### Patch Changes
 
-- ba3bf7b: docs: add per-package DESIGN.md documents
-
-  Adds a `DESIGN.md` to each building-block package describing its architecture, API surface, mock implementation, and key design decisions.
-
-  - Each document is cross-checked against the current source so identifiers, environment variables, error names, and described behavior match the implementation.
-  - Each `DESIGN.md` is listed in its package's `files` array so it ships on npm alongside `README.md`.
-  - For consistency, `bb-auth-cognito`'s document lives at the package root like every other package.
-  - Bumps the umbrella `@aws-blocks/blocks` package so its bundled `docs/` — assembled from these block READMEs at build time — republishes with a fresh version. Its packed content changes whenever the READMEs change, but the version was previously left untouched, which tripped the publish integrity guard.
-
-- Updated dependencies [ba3bf7b]
-  - @aws-blocks/bb-logger@0.1.2
+- ba3bf7b: Adds a `DESIGN.md` to each building-block package that describes its architecture, API surface, mock implementation, and key design decisions. It ships on npm alongside `README.md`.
 
 ## 0.1.1
 
 ### Patch Changes
 
-- 270c049: docs: scrub and port documentation from internal staging repo
+- 270c049: Ports documentation from the internal staging repo.
 - c0558f3: Minor improvements
-- Updated dependencies [270c049]
-- Updated dependencies [c0558f3]
-  - @aws-blocks/core@0.1.1
-  - @aws-blocks/bb-logger@0.1.1
 
 ## 0.1.0
 

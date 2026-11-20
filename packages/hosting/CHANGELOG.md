@@ -1,342 +1,26 @@
-# @aws-blocks/hosting
+# @aws-cdk-blocks/hosting
 
 ## 1.0.0
 
-### Major Changes
+The first stable release. The changes since 1.0.0-rc.1 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0 and 1.0.0-rc.1.
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+### Changes since `@aws-blocks/hosting` 0.x
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+- The package is now `@aws-cdk-blocks/hosting`. Install it in place of `@aws-blocks/hosting`, and change the import specifiers.
+- c42ba42: The hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.
+- 703238f: The scaffolded backend folder is `cdk-blocks/` instead of `aws-blocks/`.
+- 45a05d1: The per-deploy state directory is now `.cdk-blocks-sandbox/`.
+- 1de6ea4: The reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/cdk-blocks/auth/*` and others). `/aws-blocks/` still works as an alias.
+- 4665f81: `defaults.appIdentity` gives each app an identity, so many apps can share one AWS account.
+- 93d533a: Add `allowPlainHttp`, an explicit opt-out for builders who need a plain-HTTP front door in production.
+- adb6077: A production synth fails for a front door that would carry sign-in, session cookies or the origin-verify secret over plain HTTP. To keep such a door, set `allowPlainHttp`.
+- fb29c06: Lock the CloudFront door's server origin with a random secret, a regional web ACL and opt-in access logs.
+- 40d25ec: Keep credentialed and cookie-setting SSR responses out of the shared edge cache.
+- c1fabce: `secret` and `config` CLIs print help for `--help` and `-h`.
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
-
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
-
-### Minor Changes
-
-- c42ba42: **Breaking: the hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.**
-
-  To upgrade an existing app:
-
-  1. Move the config file: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`. Then delete the empty `.blocks/` folder. Do not run `git mv .blocks .cdk-blocks`, because it nests the old folder inside the new one when `.cdk-blocks/` already exists.
-  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`. Without this change, `getSecret()` and `getConfig()` lose their key types.
-  3. Run `npm run typegen` and commit `.cdk-blocks/hosting-values.d.ts`.
-
-  Local data, the local database included, is copied to the new location the first time each block opens its store. `.bb-data/` stays in place. `.cdk-blocks/local/` ignores itself, so it needs no `.gitignore` rule.
-
-  An app that still has `.blocks/config.json` deploys and destroys as before. The telemetry first-run notice prints once more after the upgrade. Pull request #1607 has the full notes.
-
-- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
-
-  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
-
-  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
-
-  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
-
-  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
-
-- 45a05d1: The per-deploy state directory is now `.cdk-blocks-sandbox/`
-
-  The directory that holds an app's per-deploy state was named `.blocks-sandbox/`. It is renamed to `.cdk-blocks-sandbox/`. The path the runtime config is served at does not change — it stays `/.blocks-sandbox/config.json` — so a frontend you have already deployed keeps resolving its API URL, and nothing has to be redeployed on account of this.
-
-  **Your sandbox state is copied forward for you.** On the first `npm run dev`, `npm run deploy`, `npm run sandbox` or `npm run destroy` after upgrading, each state file in `.blocks-sandbox/` is copied into `.cdk-blocks-sandbox/`: `sandbox-id.txt`, `config.json`, `config.sandbox.json`, `config.production.json`, `outputs.json`, `outputs.production.json`, `last-deploy.json`, and the per-port `dev-server.<port>.pid` files. `sandbox-id.txt` is the one that matters: it names your sandbox's CloudFormation stack, and it cannot be regenerated — a lost one would send your next deploy to a different stack and leave your existing sandbox standing in your account, with `npm run sandbox:destroy` reporting there is nothing to delete.
-
-  The copy is per file, so the CDK cloud assembly the directory also holds (`cdk.out/`, `sandbox-destroy.out/`) is left behind rather than duplicated. The old directory is copied, never moved, so an older `cdk-blocks` in the same checkout keeps working; delete `.blocks-sandbox/` yourself once you no longer need it. A file already present under the new name is never overwritten — state written since the upgrade is newer. If the copy cannot be made (a read-only project directory), the command fails and names the file, rather than continuing and generating a new sandbox id.
-
-  **If you scaffolded a Next.js app and serve the config from its route,** keep `src/app/.blocks-sandbox/config.json/route.ts` exactly where it is — the directory name is the URL it answers, and that has not changed. Change only the path it reads, from `.blocks-sandbox/config.json` to `.cdk-blocks-sandbox/config.json`. Leaving it on the old path returns a stale `apiUrl` from the pre-upgrade file, or a 404 once that file is gone. This applies when you serve Next directly; behind the Blocks front door the hosted route is used instead.
-
-  **If you reference the directory yourself,** update it: a `.gitignore` entry, a `cdk.json` `watch.exclude` entry, a CI step reading `.blocks-sandbox/config.sandbox.json` or `outputs.json`, or a script passing `outputsFile`. Apps scaffolded by `create-blocks-app` get the new entries; an existing app's own files are yours. `npm run migrate` skips both directory names while scanning, so it still works on an app that has not been upgraded yet.
-
-- 1de6ea4: The framework's reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/cdk-blocks/auth/*`, `/cdk-blocks/settings`, `/cdk-blocks/dashboard`, ...). The old `/aws-blocks/` prefix stays served as an alias with the same handlers: the runtime (Lambda, container and dev server) treats `/aws-blocks/...` as `/cdk-blocks/...`, the shared API gateway and the Hosting front doors route both, so already-deployed clients, mobile apps and registered auth callbacks keep working. Clients, generated config and defaults use `/cdk-blocks/`.
-
-  `BLOCKS_RPC_PREFIX` and `BLOCKS_AUTH_PREFIX` now hold the new prefix, and `canonicalBlocksPath()` maps a legacy path to its canonical one.
-
-  **Upgrade:**
-
-  - The default `redirects.callbackPath` of an `Auth` with `providers` becomes `/cdk-blocks/auth/callback`. An external identity provider (OIDC, Google, ...) that only allows the old `/aws-blocks/auth/callback` redirect URI must have the new one registered, or set `redirects.callbackPath: '/aws-blocks/auth/callback'` to keep the old one.
-  - A custom front door or an explicit `apiPaths` that routes `/aws-blocks/*` by hand must also route `/cdk-blocks/*` (or use `cf.apiBehaviors(origins.api)`), or the upgraded frontend's API calls won't reach the backend. A custom front door that records only `/aws-blocks/*` as wired now fails synth with `ProxySameOriginApi`; one that wires only `/cdk-blocks/*` gets a warning that legacy `/aws-blocks/*` clients are not routed.
-  - The built-in CloudFront front door adds one cache behavior (`/aws-blocks/*`). An app already at the distribution's cache-behavior quota (25 by default) needs to free a behavior or raise the quota, or the upgrade fails (at synth when container namespaces add direct behaviors, else at deploy).
-
-  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`. Native clients move tokens stored under a block's old `/aws-blocks/` keys to its new keys, so an upgrade keeps their session.
-
-  The Admin UI calls `/cdk-blocks/api` and retries at `/aws-blocks/api` only when an older dev server answers 404 without a JSON-RPC envelope, so it still works with that server and never runs a method twice.
-
-  A `ContainerCompute` keeps the logical ID and priority of each API listener rule it deployed under `/aws-blocks/api/<name>`, so the upgrade updates the rule's path to `/cdk-blocks/api/<name>` in place rather than replacing it.
-
-- 4665f81: feat(core): `defaults.appIdentity` — an app identity for running many apps in one AWS account
-
-  For platforms that deploy many apps (often written by AI coding agents) into
-  one AWS account through one pipeline. All of it is opt-in: without
-  `defaults.appIdentity`, synthesized templates are unchanged. The core README section "Running many apps
-  in one AWS account" shows what a platform puts in its own project template, and
-  documents the IAM policies the platform writes and owns, all three shared by
-  every app in the account and keyed on the role's `app` tag
-  (`${aws:PrincipalTag/app}`): a permissions boundary, a CloudFormation execution
-  policy, and a deploy guard. Each app gets its own CDK bootstrap tagged with its
-  id. Runtime API calls (`execute-api:Invoke` and `ManageConnections`) aren't
-  isolated between apps; the README lists this under its limits. The app id comes
-  from the platform; to AWS Blocks it is just a string.
-
-  - **`defaults.appIdentity: { id, reportOnly? }`** (new, optional). AWS Blocks tags every
-    resource and every IAM role it creates `app=<id>` — including the CDK
-    custom-resource provider roles that `Tags.of()` doesn't reach — at a priority
-    above the default `Tags.of().add()`. It checks that every name it derives
-    starts with `<id>-` (name the stack `<id>` or `<id>-…`), including the
-    CloudFront Functions and KeyValueStores it creates. `Hosting` and the separate
-    `us-east-1` stacks it adds are tagged too. The id is 1–10 lowercase letters
-    and digits, starting with a letter; it is also the app's CDK bootstrap
-    qualifier. Some ids are reserved because their `<id>-…` / `<id>/…` names
-    would cover names other apps, CDK or AWS share (`cdk`, `blocks`, `secrets`,
-    `config`, `amplify`, `cf`, `sagemaker`, the region prefixes such as `us` and
-    `eu`, and any id starting with `aws` or `ssm`); synth rejects them, saying
-    why. Keep `.cdk-blocks/config.json`'s `stackId` equal to the id, so
-    Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`) are the app's
-    own.
-  - **IAM report:** with `defaults.appIdentity` set, `cdk.out/<stack>.blocks-iam.json`
-    gains an `app` section and a `violations` list: a role without the
-    permissions boundary or the app tag, a grant on a name outside the app's
-    prefix, a wildcard or "everything except" grant on a data service (among
-    them SNS, SES, RDS and the RDS Data API, Aurora DSQL, Bedrock, Bedrock
-    AgentCore, S3 Vectors, ECS, CloudFront KeyValueStores, and IAM and STS role passing
-    or assuming, on `*` or on a
-    resource name that starts with `*`; AWS-owned Bedrock models, an Agent
-    invoking its AgentCore runtimes, and SES sending aren't flagged), a resource
-    the check can't resolve, a resource policy that opens up another app's
-    resource, a role that trusts anything but an AWS service, a broad AWS managed
-    policy, the CDK asset bucket of another bootstrap, an API Gateway stage,
-    route or deployment attached to an API outside the app's own template, or a
-    stack or block outside the prefix. Synth fails on any violation
-    unless `reportOnly: true`.
-  - **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-cdk-blocks/hosting`):
-    the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
-    Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has
-    `defaults.appIdentity`, so a shared platform's execution policy and deploy guard see it as
-    the app's own stack.
-
-- 93d533a: Add `allowPlainHttp`, an explicit opt-out for builders who need a plain-HTTP front door in production. A production synth fails for a door that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP; this option is the migration for an app that serves plain HTTP on a network path it trusts, such as an internal ALB reached only inside a private network, or TLS ended upstream by a proxy or another load balancer.
-
-  - **The option.** The `alb` and `custom` doors (`AlbDoorOptions`, `CustomDoorOptions`) and the stacked door (`CloudFrontOverRouterFrontDoor`) take `allowPlainHttp?: boolean` (default `false`). With `allowPlainHttp: true`, a production synth that would fail with `PlainHttpFrontDoorError` or `OriginSecretOverPlainHttpError` succeeds and warns instead.
-  - **The warning.** `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` names what travels in cleartext. Acknowledge it with `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`.
-  - **Sessions.** For the `alb` and `custom` doors, `Hosting` also registers the config entry `BLOCKS_ALLOW_PLAIN_HTTP`. With it, `Auth` issues its same-origin session cookie without `Secure` instead of throwing `AuthErrors.InsecureTransport`. The cookie helpers in `@aws-cdk-blocks/auth-common/cookies` read it fail-closed, from loaded config only on deployed compute: a missing or malformed value still refuses.
-
-  To keep serving plain HTTP in production, add `allowPlainHttp: true` to the door and acknowledge the warning; the deploy and `Auth`'s sign-in then behave as they did before plain-HTTP doors were limited to sandbox deploys. Without the option nothing changes: a sandbox deploy, HTTPS doors and the `'none'` door behave as before.
-
-- adb6077: Front doors that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP now synthesize only in a sandbox deploy (the `sandboxMode` context the sandbox scripts pass). A production synth fails; a sandbox synth warns as before.
-
-  - **The ALB door without a certificate.** `{ kind: 'alb' }` with no `certificate` and `features.domain`, serving an app with an API, fails synth with `PlainHttpFrontDoorError`. So does a `{ kind: 'custom', door }` whose URL is `http://` with an API; serve it over HTTPS (return an `https://` url). To fix the ALB door, give it a `certificate` and `features.domain` (an HTTPS listener; port 80 redirects to 443), or use the CloudFront or stacked door. A sandbox deploy warns (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`). The `'none'` door is unchanged: it warns in every stage.
-  - **The stacked door's edge → router hop.** `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` requires an encrypted edge → router hop for the router's `x-blocks-origin-verify` header. With an internet-facing router and no router certificate, synth fails with `OriginSecretOverPlainHttpError`. To fix it, give the router a `certificate` and `features.router.domain` (the edge → router hop becomes HTTPS :443), or set `internal: true` (the edge reaches the router through a CloudFront VPC origin on the AWS network). A sandbox deploy warns (`@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp`).
-  - **Sessions over plain HTTP.** `Auth` issues a session over a plain-HTTP front door only in a sandbox deploy, where its same-origin cookie omits `Secure` as before. Outside a sandbox it refuses: the cookie helpers in `@aws-cdk-blocks/auth-common/cookies` (`resolveCookieSecurity`, `buildCookieSecurityAttrs`) throw the new `AuthErrors.InsecureTransport` (`InsecureTransportException`, HTTP 500 from `Auth`), and no `Set-Cookie` line is written. `Auth` checks this before it stores a session, so a refused sign-in writes nothing and revokes the engine's tokens. Clearing cookies (`Max-Age=0`) are still written, so sign-out and `deleteUser` keep working; `CookieSecurityInput` gains an optional `clearing` flag for them. Deployed compute whose config doesn't name a sandbox counts as production. Cross-domain cookies, HTTPS doors and local development are unchanged.
-
-  Compatibility: these are behaviour changes for production apps on a plain-HTTP door. An app that deploys to production behind `{ kind: 'alb' }` without a certificate (with an API), or behind the stacked door with an internet-facing router and no router certificate, no longer synthesizes until it makes one of the changes above; that also covers `Auth` behind such a door, whose sign-in used to set a cookie without `Secure`. Every other front door is unchanged.
-
-  The `@aws-cdk-blocks/hosting` README also gains a table of where TLS ends on each front door (viewer hop, origin hop, and the secret header each door's origin requires), and a table of the plain-HTTP shapes that are sandbox-only.
-
-- fb29c06: feat(hosting): lock the CloudFront door's server origin with a random secret, a regional web ACL and opt-in access logs
-
-  The API Gateway REST API that CloudFront reaches the SSR Lambda through now
-  requires a random origin-verify `Referer` value that Secrets Manager generates
-  once per stack. The REST API policy and the CloudFront origin read it through a
-  CloudFormation dynamic reference, so it no longer appears in the template and
-  can't be derived from the stack name. A Nuxt IPX image optimizer gets its own
-  REST API with its own secret.
-
-  With `waf: { enabled: true }`, each server-origin stage also gets a REGIONAL
-  web ACL with the distribution's rules and rate limit. Its CloudWatch Logs keep
-  only the requests a rule blocked or counted, with the `Referer`, `Cookie` and
-  `Authorization` headers redacted, and it keeps no sampled requests.
-
-  Cost: with `waf.enabled`, a second web ACL per stack: its monthly charge, a
-  per-request charge (every uncached SSR request is evaluated by both web ACLs),
-  and the log ingestion of blocked and counted requests. Every CloudFront + SSR
-  stack also gets one Secrets Manager secret (two with Nuxt IPX), each with a
-  small monthly charge.
-
-  New `frontDoor.features.serverOrigin` settings:
-
-  - `accessLogging` (default `false`): JSON stage access logs in CloudWatch Logs.
-    It creates the account-level API Gateway CloudWatch Logs role once per stack.
-  - `logRetention` (default one month): retention of those logs and of the
-    stage web ACL's logs.
-  - `verifySecretRotation`: bump it to rotate the origin-verify secrets.
-  - `acceptLegacyVerifyHeader`: accept the earlier derived value for one deploy
-    while upgrading. Synth warns while it is set.
-
-  Upgrading: the first deploy updates the REST API policy within seconds and the
-  distribution within minutes, so SSR requests can get 403 for those minutes.
-  To avoid this, deploy once with `serverOrigin: { acceptLegacyVerifyHeader: true }`,
-  then deploy again without it. For that deploy the SSR REST API also keeps the
-  IPX image routes it served before, and its stage web ACL is attached only on
-  the next deploy, once every edge sends the marker its rate rule exempts.
-
-- 40d25ec: fix(hosting): keep credentialed and cookie-setting SSR responses out of the shared edge cache
-
-  The hosting construct now installs an SSR cache guard in front of the SSR server it builds, and in front of every other regional compute a route targets (native Lambda handlers, buffered or streaming; Node.js servers on the Lambda Web Adapter or a Lambda Web Function), for every framework. Where the guard cannot be installed (e.g. a Lambda Web Adapter server that is not Node.js), synth emits a `@aws-cdk-blocks/hosting:SsrCacheGuardNotInstalled` warning. The guard sends `Cache-Control: private, no-store` in place of the origin's value when:
-
-  - the response sets cookies (`Set-Cookie`) and is not already `private` or `no-store`; or
-  - the request carries `Authorization` (unless `'authorization'` is in `cacheKeyHeaders`) or a cookie whose name is not in the SSR cache key (the Next.js preview cookies, the skew-protection `__dpl` cookie and `cacheKeyCookies`), and the response is shared-cacheable: `s-maxage`, `public`, `max-age` without `private`, a future `Expires`, no caching headers while `ssrDefaultTtl > 0`, or an error status CloudFront caches without caching headers (404, 414, 500-504). Behind the CloudFront-over-ALB door, whose server-route cache key holds every cookie, only `Authorization` and `Set-Cookie` lead to the rewrite.
-
-  Responses already `private`/`no-store`, or `no-cache` without `s-maxage`, are unchanged. The cache-key names are baked into the generated guard module at synth.
-
-  **BREAKING:** SSR responses that the origin marks shared-cacheable are no longer edge-cached for requests that carry `Authorization` or cookies outside the cache key, and responses with `Set-Cookie` are never edge-cached. To keep a credentialed route cacheable, list its session cookie in `cacheKeyCookies` and/or `'authorization'` in `cacheKeyHeaders`, so the cache is keyed per credential. Client-side analytics and consent cookies (`_ga`, `_gid`, `_fbp`, consent cookies) make ISR/SSR pages uncacheable at the edge for every visitor that carries them, unless they are listed in the new `cacheGuardIgnoredCookies` option (`frontDoor.features.cacheGuardIgnoredCookies`), which the guard ignores and keeps out of the cache key; a listed cookie must never affect the rendered output.
-
-  A distribution with a server sets the error caching minimum TTL to 0 for 500, 501, 502, 503 and 504 (CloudFront caches these for 10 s by default, and caches 500 and 502-504 whatever their `Cache-Control` says), keeping any error page configured for them.
-
-  The SSR cache policy's maximum TTL (and the server-route cache policy of the CloudFront-over-ALB front door) is lowered from 1 year to 1 day, so an origin `s-maxage` longer than a day is clamped to a day.
-
-  On a Lambda Web Adapter server the guard is loaded through `NODE_OPTIONS` (`--import`); a `NODE_OPTIONS` set in `compute.environment` keeps the guard loaded first.
-
-- c1fabce: feat(hosting): `secret` and `config` CLIs print help for `--help` and `-h`
-
-  `hosting-secret`, `hosting-config` and the `runSecretCli` / `runConfigCli` commands of `@aws-cdk-blocks/core/scripts` built on them now print usage for `set`, `list` and `remove` when `--help` or `-h` appears anywhere in the arguments, and exit 0. The help lists each command's flags and shows where `--stage <name>` stores a value (`<prefix>/<name>/<KEY>` instead of the shared `<prefix>/<KEY>`; any name is accepted), with the prefix in effect. Before, `--help` was read as a key or ignored, so `remove KEY --help` deleted the value; a help request now returns before any prompt or AWS call. Without `--help`, every command behaves as before.
-
-  For tools that wrap this CLI, `runValueCli` takes two new options. `interactive: false` refuses the hidden value prompt, with an error that names `--value-stdin`, even on a terminal. `yes: true` confirms `remove --force`, as `--yes` in the arguments does. A usage problem (a missing key, an unknown subcommand, a flag without its value, or a prompt or confirmation the run cannot give) throws the newly exported `ValueCliUsageError`, so a wrapper can tell it apart from an AWS failure.
-
-### Patch Changes
+### Since 1.0.0-rc.1
 
 - 63e571c: Use AWS CDK Blocks consistently in starter apps, CLI messages, package metadata, and documentation. Package imports and commands are unchanged.
-- d01c34c: Add API Extractor reports (`API.md`) for `@aws-cdk-blocks/hosting`, `@aws-cdk-blocks/pipeline` and `@aws-cdk-blocks/bb-compute`, so changes to their public surface show up in review like the other packages' (`npm run update:api`, checked by `npm run check:api`). The block docs folder of `aws-cdk-blocks` ships them next to each package's README.
-- 5f55dac: feat(core): opt in to HTTP error statuses for an API namespace
-
-  `ApiNamespace` takes a new `httpErrorStatus` option. With `httpErrorStatus: true`, a call that throws an `ApiError` with a 4xx status — such as `requireAuth()`'s 401 — is answered with that HTTP status instead of 200, so API Gateway and CloudFront metrics, access logs, WAF rate rules and 4xx alarms can see rejected calls:
-
-  ```ts
-  export const api = new ApiNamespace(
-    scope,
-    "api",
-    (context) => ({
-      async getNote() {
-        const user = await auth.requireAuth(context); // signed out → HTTP 401
-        return notes.get(user.userId);
-      },
-    }),
-    { httpErrorStatus: true },
-  );
-  ```
-
-  The JSON-RPC body is unchanged, and the TypeScript client reads it whatever the status, so `isBlocksError()` and `error.status` behave exactly as before. 5xx and other failures stay HTTP 200. It applies in the local dev server and on AWS alike. The default is unchanged: every RPC response stays HTTP 200.
-
-  Two things to check before turning it on, both documented on the option: CloudFront error pages apply to the proxied API too, so on a `Hosting` distribution that maps 403 or 404 to a page, those responses would reach the client as HTML. CloudFront cannot scope error responses away from `/cdk-blocks/*`, so `Hosting` now fails synth for that combination with a `HostingError` named `HttpErrorStatusErrorPagesError`; remove the 4xx error pages or leave `httpErrorStatus` off for those namespaces. The hosting README describes the gap. (During review this was a synth warning, `@aws-cdk-blocks/hosting:HttpErrorStatusErrorPages`; it was never released as one.) And the Dart client, with an `authProvider`, refreshes its token and runs the method once more on any HTTP 401, so a method that throws 401 after a side effect can run twice for it: put the guard first (`requireAuth()` as the first statement, or `auth.protect`).
-
-- 0ff1e1f: docs: the Hosting README describes the installed version
-
-  Sentences that narrated how the construct changed ("formerly", "now evaluated", PR and issue numbers) state the current behaviour instead. The README also corrects the logging entry point: `version`, `partitioning` and `format` are set through `frontDoor.features.logging` on both `HostingConstruct` and core's `Hosting`; only the deprecated top-level `logging` prop is limited to v1.
-
-- 8fbbeca: Document hosting front-door compatibility, including how to build a buffered Next.js server for an API Gateway HTTP API. Add hosting options and synth-error references, and ship the custom front-door guide with the package.
-
-  Update the pipeline quick start to use `Pipeline.create()` with the AWS CDK Blocks store prefixes and a separate pipeline entry point. Document the pipeline options and their defaults.
-
-- f7e28b4: The Astro, Nitro (Nuxt, SolidStart, Analog, TanStack Start) and SvelteKit adapters run the app's build without the `cdk` export condition. A deploy or destroy synthesizes with `NODE_OPTIONS=--conditions=cdk`, and the app's build inherited it, so a build or `prebuild` script that loads `@aws-cdk-blocks/*` (such as `npm run generate-client`) failed with `Scope at '...' should be created in the scope of a Stack`. Only the `cdk` condition is removed: other `NODE_OPTIONS` entries, such as `--max-old-space-size`, still reach the build.
-
-  `Hosting`'s `buildCommand` now removes the `cdk` condition the same way. Before, it removed only the exact entry `--conditions=cdk`, so `--conditions cdk`, `-C cdk` or a quoted value such as `--conditions="cdk"` still reached the build.
-
-- 668227b: The CloudFront door now serves a server built as a buffered Lambda handler. Its server origin (the SSR REST API) integrated every server Lambda with `ResponseTransferMode: STREAM`, which cannot read the `{ statusCode, headers, body }` object a buffered handler returns. A Nuxt (Nitro) app built with the `aws-lambda` preset and `nitro.awsLambda.streaming` left off, which is Nitro's default, deployed without an error and answered 502 on every path. The integration now follows the server as built, as the API Gateway REST door already does: a streaming server (Next.js through OpenNext, Nitro with `awsLambda.streaming: true`, a Lambda Web Adapter server) keeps the STREAM integration, and a buffered handler gets a plain Lambda proxy integration. A buffered response is sent whole once the handler returns, and Lambda limits it to 6 MB.
-
-  A Nuxt app that leaves `awsLambda.streaming` off now works behind both the CloudFront door and the API Gateway HTTP API door. Turning streaming off is what `StreamingServerNeedsStreamingDoorError` suggests for a door that cannot stream, and that build no longer breaks the CloudFront deploy.
-
-- 1f565bd: Docs: the README and the `getSecret()` JSDoc now say local values for `getSecret()` and `getConfig()` go in `.env.local`, the file the Blocks dev server and sandbox load. They don't load `.env`, so a value only there made the getter throw `no config reference found`.
-- 52dd5e6: A Next.js image request for a source image that isn't in the assets bucket now returns `404 Not Found` instead of `500 Internal server error`. A real server error from the Next.js image optimizer is now sent with `Cache-Control: no-store`, so CloudFront no longer caches it for 60 seconds. The Nuxt and Astro (IPX) image optimizer already returned 404 for a missing source.
-- 5f55dac: The Nitro adapter trims trailing slashes from `runtimeConfig.ipx.baseURL` in linear time when it builds the image optimization route. It used the regular expression `/\/+$/`, which takes quadratic time on a long run of `/` that isn't at the end of the string. The route pattern is unchanged: `/img-cdn///` still gives `/img-cdn/*`.
-- c6a59f4: chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1
-
-  - The Next.js adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`, so 4.1.x no longer prints the out-of-range warning.
-  - An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3. Its `next` peer range is `>=15.5.28 <16 || >=16.4.1`, so the build warns for `next` versions below that.
-  - The `create-blocks-app` `nextjs` template declares `@opennextjs/aws` `~4.1.14`.
-
-- 1e4d08d: docs(hosting): explain what a plain-HTTP front door does to session cookies
-
-  The README's front-door section now says that behind a standalone ALB door with no certificate, `Auth` omits `Secure` from its same-origin session cookie (a browser discards a `Secure` cookie from a plain-HTTP origin), so the cookie and the session travel in clear text. It recommends a certificate (an HTTPS listener) for anything beyond testing, and points at the separate `StackedRouterPlainHttp` warning for the stacked door's edge → router hop.
-
-- 5f55dac: The `PlainHttpFrontDoor` synth warning for a plain-HTTP ALB door now refers to `Auth`, which drops `Secure` from its session cookie behind such a door so that sign-in still works. It no longer names the removed `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks.
-- e6c989d: `frontDoor: 'none'` now always warns at synth (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`), including for a static site with no backend API. The S3 website endpoint takes no certificate, so the pages and scripts travel unencrypted and can be altered in transit. The warning explains this, points to the CloudFront door for HTTPS, and names how to acknowledge it when `'none'` is intended (`Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFrontDoor')`). It stays a warning: synth still succeeds.
-- b2eb306: An empty `secret list` suggests `set <KEY>` (prompted, or piped with `--value-stdin`), instead of `set <KEY> <value>`, which the secret CLI refuses.
-- b2eb306: `secret set` of a key that `secret remove` scheduled for deletion restores the secret and sets the new value, instead of failing with Secrets Manager's raw "already scheduled for deletion" error.
-
-  `secret remove KEY --force --yes` of a key that does not exist reports that it was not set, instead of claiming it was permanently removed.
-
-  `secret remove KEY --force` prints its "deleted immediately" warning only after it found the secret, so a key that is not set reports only that it was not set. The `restore-secret` command that a recoverable `secret remove` suggests names the secret, and the profile and Region the run used.
-
-- 60360c1: `Hosting` no longer rebuilds the frontend on a synth that doesn't need it:
-
-  - **Destroy:** `npm run destroy` and `npm run sandbox:destroy` reuse the frontend build output already on disk instead of running `buildCommand` and the framework build (OpenNext, Nitro, Astro, SvelteKit). On a Next.js app this removes a multi-minute build from every destroy. When there is no build output, the destroy builds as before; a Next.js destroy reuses the `.open-next/` output of an earlier deploy. `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
-  - **Opt-in deploy reuse:** `BLOCKS_SKIP_FRONTEND_BUILD=1` makes a deploy use the existing build output without building. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with the adapter's error (same code and resolution) plus a line naming the variable. The build bakes in `BLOCKS_API_URL`, so a deploy never reuses a build on its own.
-
-  The framework adapters read the decision from the build profile (`reuseBuild: 'if-present' | 'required'`); an explicit `skipBuild` option still wins.
-
-- e3b5949: Ship `dist/constructs/THIRD-PARTY-LICENSES.txt`, which lists the third-party npm packages included in the bundled Lambda handlers, with their license texts.
-- 184df0b: fix(hosting): infer schema-typed `config()` and `secret()` types with the tsconfig that compiles each file
-
-  `npm run typegen` and the dev server read the `tsconfig.json` in the app root. When that root only lists project references, as create-vite apps and the AWS Blocks Vite templates do, it has no compiler options of its own, so the inferred types lost `strictNullChecks`: `z.number().nullable()` became `number` instead of `number | null`, and `.optional()` lost its `| undefined`. The typegen now uses the tsconfig that compiles each scanned file (the nearest one, or the referenced project that lists the file), and its options always start from `strict: true`.
-
-- b2eb306: The hidden value prompt of the secret and config CLI (`hosting-secret set KEY`, `runValueCli`) rejects with the new `ValueCliInterruptedError` on Ctrl-C or Ctrl-D, before any store call, instead of never settling: Node then exited 13 with an "unsettled top-level await" warning.
-
-  The hidden prompt is written to stderr, so `hosting-secret set KEY | cat` shows it and stdout carries only the result.
-
-- b2eb306: The secret and config CLI (`hosting-secret`, `hosting-config`, `runValueCli`) refuses an unknown option, and an extra argument to `list` or `remove`, with a usage error before any store call, instead of storing the option as part of a config value or ignoring it. After `--`, every argument is a positional, so a config value can start with `-`: `config set KEY -- -1`.
-- b2eb306: The secret and config CLI reports an invalid key, an empty value and a missing subcommand as `ValueCliUsageError`s, so callers map them to their usage exit code, and a missing subcommand says `<label> needs a subcommand: set, list or remove.` instead of `Unknown subcommand undefined`.
-- 8ece10a: fix(core,hosting): require source conditions on KMS key policies that name a service principal
-
-  The synth-time service-principal check now also reads the key policy of every KMS key in the scopes it covers. An `Allow` statement that names an AWS service principal must carry `aws:SourceAccount` or `aws:SourceArn`, or `kms:EncryptionContext:aws:logs:arn` for CloudWatch Logs. `events.amazonaws.com` is exempt for `kms:GenerateDataKey*` and `kms:Decrypt`, because Amazon SNS documents that these conditions stop EventBridge from publishing to an encrypted topic. A key AWS Blocks creates fails synth; a key your app creates gets a warning, which you can acknowledge with the id `@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition`.
-
-  A condition now counts, for key policies and for role trust policies alike, only under a positive string or ARN operator (`StringEquals`, `StringLike`, `ArnLike`, …, or their `ForAnyValue:` forms) and with a value that names an account. `…IfExists`, negated (`StringNotEquals`, `ArnNotLike`, …), `Null` and `ForAllValues:` operators don't count. Neither does `*` alone, a wildcard `aws:SourceAccount`, or an ARN whose account segment is empty or a wildcard. A role or key your app creates that relied on one of these forms now gets the synth warning.
-
-  The `Hosting` alarm topic key (regional and `us-east-1` monitoring stacks) now grants `cloudwatch.amazonaws.com` with `StringEquals aws:SourceAccount` and `ArnLike aws:SourceArn` (`arn:<partition>:cloudwatch:<region>:<account>:alarm:*`) in place of `StringEqualsIfExists aws:SourceAccount`. Alarm notifications are still delivered.
-
-- e1e4844: Run AWS Blocks tasks with your app's package manager. New apps define tasks in `package.json` without generating launcher files or installing the `cdk-blocks` executable. Look up documentation with `npm run docs KVStore`, read the API signatures with `npm run docs:api KVStore`, or search with `npm run docs:search "partition key"`.
-
-  Structured task results print text in a terminal and JSON on a pipe or redirect. Use `npm run -s docs KVStore` for clean JSON without npm's banner, or `npm run -s docs -- KVStore --output text` to pipe Markdown. Scripts that previously invoked `cdk-blocks` must switch to package tasks; scripts calling the programmatic `aws-cdk-blocks/scripts` entry remain supported.
-
-  If your app's scripts call `cdk-blocks`, upgrade `aws-cdk-blocks` first. From the app directory, preview the migration without relying on the removed executable:
-
-  ```sh
-  node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate --dry-run
-  ```
-
-  Review the plan, then run the same command without `--dry-run` from a clean Git working tree. The migration rewrites recognized generated scripts and reports custom wrappers that need manual changes.
-
-- 58817b0: fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal trust policies; add synth-time check
-
-  The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
-
-  - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
-  - The waiter state machine roles of the `KVStore` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
-  - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
-  - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
-  - The `@aws-cdk-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.
-
-  Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`, such as `BlocksApiGatewayCloudWatchRole` (created by `@aws-cdk-blocks/core` and `@aws-cdk-blocks/hosting` when access logging is on) or the default `cloudWatchRole` of a CDK `RestApi` the app adds. That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
-
-  - A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
-  - A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
-
-  Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
-
-  To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-cdk-blocks/core` README.
-
-- 23692f1: Every CLI command now sends one usage event. `sandbox deploy` and `sandbox preview` report under their own names instead of `sandbox`. `generate types --watch` now stops cleanly on Ctrl-C or SIGTERM. A telemetry failure never changes a command's exit code or output, and the CDK CLI telemetry opt-out still turns all of it off.
 
 ## 1.0.0-rc.1
 
@@ -344,1286 +28,277 @@
 
 - c42ba42: **Breaking: the hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.**
 
-  To upgrade an existing app:
+  To upgrade:
 
-  1. Move the config file: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`. Then delete the empty `.blocks/` folder. Do not run `git mv .blocks .cdk-blocks`, because it nests the old folder inside the new one when `.cdk-blocks/` already exists.
-  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`. Without this change, `getSecret()` and `getConfig()` lose their key types.
+  1. Run `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`, then delete the empty `.blocks/` folder.
+  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`.
   3. Run `npm run typegen` and commit `.cdk-blocks/hosting-values.d.ts`.
 
-  Local data, the local database included, is copied to the new location the first time each block opens its store. `.bb-data/` stays in place. `.cdk-blocks/local/` ignores itself, so it needs no `.gitignore` rule.
-
-  An app that still has `.blocks/config.json` deploys and destroys as before. The telemetry first-run notice prints once more after the upgrade. Pull request #1607 has the full notes.
+  Local data is copied to the new location the first time each block opens its store. Pull request #1607 has the full notes.
 
 ### Patch Changes
 
-- 8fbbeca: Document hosting front-door compatibility, including how to build a buffered Next.js server for an API Gateway HTTP API. Add hosting options and synth-error references, and ship the custom front-door guide with the package.
-
-  Update the pipeline quick start to use `Pipeline.create()` with the AWS CDK Blocks store prefixes and a separate pipeline entry point. Document the pipeline options and their defaults.
-
-- 23692f1: Every CLI command now sends one usage event. `sandbox deploy` and `sandbox preview` report under their own names instead of `sandbox`. `generate types --watch` now stops cleanly on Ctrl-C or SIGTERM. A telemetry failure never changes a command's exit code or output, and the CDK CLI telemetry opt-out still turns all of it off.
+- 8fbbeca: The hosting docs cover front-door compatibility, hosting options, and synth errors, and the package ships the custom front-door guide. The pipeline quick start uses `Pipeline.create()` and documents the pipeline options and their defaults.
+- 23692f1: Every CLI command sends one usage event, and the CDK CLI telemetry opt-out still turns all of it off. `generate types --watch` stops cleanly on Ctrl-C or SIGTERM.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Minor Changes
 
-- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
+- 703238f: **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.**
 
-  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
+  To upgrade:
 
-  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
+  1. Rename the `aws-blocks/` directory to `cdk-blocks/`.
+  2. Change the `"workspaces"` entry that names it.
+  3. Change the `"name"` in its `cdk-blocks/package.json` to `cdk-blocks`.
+  4. Change every `from 'aws-blocks'` import to import `cdk-blocks`.
+  5. Rename an `aws-blocks/migrations` directory or set an explicit migrations path, because `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`.
 
-  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
+  The reserved URL namespace, such as `/aws-blocks/api` and `/aws-blocks/auth/*`, keeps its path, so deployed routes and OAuth callback URLs keep working.
 
-  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
+- 45a05d1: **Breaking: the per-deploy state directory `.blocks-sandbox/` is renamed to `.cdk-blocks-sandbox/`.**
 
-- 45a05d1: The per-deploy state directory is now `.cdk-blocks-sandbox/`
+  To upgrade:
 
-  The directory that holds an app's per-deploy state was named `.blocks-sandbox/`. It is renamed to `.cdk-blocks-sandbox/`. The path the runtime config is served at does not change — it stays `/.blocks-sandbox/config.json` — so a frontend you have already deployed keeps resolving its API URL, and nothing has to be redeployed on account of this.
+  1. Update your own references to the directory, such as a `.gitignore` entry, a `cdk.json` `watch.exclude` entry, a CI step, or a script passing `outputsFile`.
+  2. In a scaffolded Next.js app, keep `src/app/.blocks-sandbox/config.json/route.ts` where it is and change the path it reads from `.blocks-sandbox/config.json` to `.cdk-blocks-sandbox/config.json`.
+  3. Delete `.blocks-sandbox/` once you no longer need it.
 
-  **Your sandbox state is copied forward for you.** On the first `npm run dev`, `npm run deploy`, `npm run sandbox` or `npm run destroy` after upgrading, each state file in `.blocks-sandbox/` is copied into `.cdk-blocks-sandbox/`: `sandbox-id.txt`, `config.json`, `config.sandbox.json`, `config.production.json`, `outputs.json`, `outputs.production.json`, `last-deploy.json`, and the per-port `dev-server.<port>.pid` files. `sandbox-id.txt` is the one that matters: it names your sandbox's CloudFormation stack, and it cannot be regenerated — a lost one would send your next deploy to a different stack and leave your existing sandbox standing in your account, with `npm run sandbox:destroy` reporting there is nothing to delete.
+  Your state files are copied to the new directory on the first `npm run dev`, `npm run deploy`, `npm run sandbox`, or `npm run destroy` after upgrading.
 
-  The copy is per file, so the CDK cloud assembly the directory also holds (`cdk.out/`, `sandbox-destroy.out/`) is left behind rather than duplicated. The old directory is copied, never moved, so an older `cdk-blocks` in the same checkout keeps working; delete `.blocks-sandbox/` yourself once you no longer need it. A file already present under the new name is never overwritten — state written since the upgrade is newer. If the copy cannot be made (a read-only project directory), the command fails and names the file, rather than continuing and generating a new sandbox id.
+- 1de6ea4: **Breaking: the framework's reserved URL prefix is now `/cdk-blocks/`, and the old `/aws-blocks/` prefix stays served as an alias.**
 
-  **If you scaffolded a Next.js app and serve the config from its route,** keep `src/app/.blocks-sandbox/config.json/route.ts` exactly where it is — the directory name is the URL it answers, and that has not changed. Change only the path it reads, from `.blocks-sandbox/config.json` to `.cdk-blocks-sandbox/config.json`. Leaving it on the old path returns a stale `apiUrl` from the pre-upgrade file, or a 404 once that file is gone. This applies when you serve Next directly; behind the Blocks front door the hosted route is used instead.
+  To upgrade:
 
-  **If you reference the directory yourself,** update it: a `.gitignore` entry, a `cdk.json` `watch.exclude` entry, a CI step reading `.blocks-sandbox/config.sandbox.json` or `outputs.json`, or a script passing `outputsFile`. Apps scaffolded by `create-blocks-app` get the new entries; an existing app's own files are yours. `npm run migrate` skips both directory names while scanning, so it still works on an app that has not been upgraded yet.
+  1. If an external identity provider only allows the `/aws-blocks/auth/callback` redirect URI, register `/cdk-blocks/auth/callback` or set `redirects.callbackPath: '/aws-blocks/auth/callback'`.
+  2. If a custom front door or an explicit `apiPaths` routes `/aws-blocks/*` by hand, also route `/cdk-blocks/*` or use `cf.apiBehaviors(origins.api)`.
+  3. If the app is at the CloudFront cache-behavior quota, 25 by default, free a behavior or raise the quota, because the built-in front door adds one for `/aws-blocks/*`.
 
-- 1de6ea4: The framework's reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/cdk-blocks/auth/*`, `/cdk-blocks/settings`, `/cdk-blocks/dashboard`, ...). The old `/aws-blocks/` prefix stays served as an alias with the same handlers: the runtime (Lambda, container and dev server) treats `/aws-blocks/...` as `/cdk-blocks/...`, the shared API gateway and the Hosting front doors route both, so already-deployed clients, mobile apps and registered auth callbacks keep working. Clients, generated config and defaults use `/cdk-blocks/`.
+  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`.
 
-  `BLOCKS_RPC_PREFIX` and `BLOCKS_AUTH_PREFIX` now hold the new prefix, and `canonicalBlocksPath()` maps a legacy path to its canonical one.
+- 4665f81: Adds `defaults.appIdentity: { id, reportOnly? }`, which tags every resource and IAM role AWS Blocks creates `app=<id>` and checks that derived names start with `<id>-`. It is opt-in, and the core README section "Running many apps in one AWS account" has the full notes.
+- 93d533a: Adds `allowPlainHttp` to the `alb`, `custom`, and stacked doors, an opt-out for a plain-HTTP front door in production. To keep serving plain HTTP in production, add `allowPlainHttp: true` to the door and acknowledge the `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` warning.
 
-  **Upgrade:**
+- adb6077: **Breaking: a production synth fails when a front door would carry sign-in, session cookies, or the router's origin-verify secret over plain HTTP.**
 
-  - The default `redirects.callbackPath` of an `Auth` with `providers` becomes `/cdk-blocks/auth/callback`. An external identity provider (OIDC, Google, ...) that only allows the old `/aws-blocks/auth/callback` redirect URI must have the new one registered, or set `redirects.callbackPath: '/aws-blocks/auth/callback'` to keep the old one.
-  - A custom front door or an explicit `apiPaths` that routes `/aws-blocks/*` by hand must also route `/cdk-blocks/*` (or use `cf.apiBehaviors(origins.api)`), or the upgraded frontend's API calls won't reach the backend. A custom front door that records only `/aws-blocks/*` as wired now fails synth with `ProxySameOriginApi`; one that wires only `/cdk-blocks/*` gets a warning that legacy `/aws-blocks/*` clients are not routed.
-  - The built-in CloudFront front door adds one cache behavior (`/aws-blocks/*`). An app already at the distribution's cache-behavior quota (25 by default) needs to free a behavior or raise the quota, or the upgrade fails (at synth when container namespaces add direct behaviors, else at deploy).
+  To upgrade:
 
-  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`. Native clients move tokens stored under a block's old `/aws-blocks/` keys to its new keys, so an upgrade keeps their session.
+  1. For `{ kind: 'alb' }` with an API, add a `certificate` and `features.domain`, or use the CloudFront or stacked door.
+  2. For a `{ kind: 'custom', door }` whose URL is `http://`, return an `https://` url.
+  3. For `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` with an internet-facing router, give the router a `certificate` and `features.router.domain`, or set `internal: true`.
 
-  The Admin UI calls `/cdk-blocks/api` and retries at `/aws-blocks/api` only when an older dev server answers 404 without a JSON-RPC envelope, so it still works with that server and never runs a method twice.
+  A sandbox deploy warns as before, and outside a sandbox `Auth` throws `AuthErrors.InsecureTransport` instead of issuing a session over plain HTTP.
 
-  A `ContainerCompute` keeps the logical ID and priority of each API listener rule it deployed under `/aws-blocks/api/<name>`, so the upgrade updates the rule's path to `/cdk-blocks/api/<name>` in place rather than replacing it.
+- fb29c06: The CloudFront door's server origin requires a random `Referer` value from Secrets Manager, and `waf: { enabled: true }` adds a second, REGIONAL web ACL per stack. To avoid SSR 403s while upgrading, deploy once with `serverOrigin: { acceptLegacyVerifyHeader: true }`, then again without it.
 
-- 4665f81: feat(core): `defaults.appIdentity` — an app identity for running many apps in one AWS account
+- 40d25ec: **Breaking: hosting no longer edge-caches SSR responses that set cookies, or that answer a request with `Authorization` or a cookie outside the cache key.**
 
-  For platforms that deploy many apps (often written by AI coding agents) into
-  one AWS account through one pipeline. All of it is opt-in: without
-  `defaults.appIdentity`, synthesized templates are unchanged. The core README section "Running many apps
-  in one AWS account" shows what a platform puts in its own project template, and
-  documents the IAM policies the platform writes and owns, all three shared by
-  every app in the account and keyed on the role's `app` tag
-  (`${aws:PrincipalTag/app}`): a permissions boundary, a CloudFormation execution
-  policy, and a deploy guard. Each app gets its own CDK bootstrap tagged with its
-  id. Runtime API calls (`execute-api:Invoke` and `ManageConnections`) aren't
-  isolated between apps; the README lists this under its limits. The app id comes
-  from the platform; to AWS Blocks it is just a string.
+  To upgrade:
 
-  - **`defaults.appIdentity: { id, reportOnly? }`** (new, optional). AWS Blocks tags every
-    resource and every IAM role it creates `app=<id>` — including the CDK
-    custom-resource provider roles that `Tags.of()` doesn't reach — at a priority
-    above the default `Tags.of().add()`. It checks that every name it derives
-    starts with `<id>-` (name the stack `<id>` or `<id>-…`), including the
-    CloudFront Functions and KeyValueStores it creates. `Hosting` and the separate
-    `us-east-1` stacks it adds are tagged too. The id is 1–10 lowercase letters
-    and digits, starting with a letter; it is also the app's CDK bootstrap
-    qualifier. Some ids are reserved because their `<id>-…` / `<id>/…` names
-    would cover names other apps, CDK or AWS share (`cdk`, `blocks`, `secrets`,
-    `config`, `amplify`, `cf`, `sagemaker`, the region prefixes such as `us` and
-    `eu`, and any id starting with `aws` or `ssm`); synth rejects them, saying
-    why. Keep `.blocks/config.json`'s `stackId` equal to the id, so
-    Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`) are the app's
-    own.
-  - **IAM report:** with `defaults.appIdentity` set, `cdk.out/<stack>.blocks-iam.json`
-    gains an `app` section and a `violations` list: a role without the
-    permissions boundary or the app tag, a grant on a name outside the app's
-    prefix, a wildcard or "everything except" grant on a data service (among
-    them SNS, SES, RDS and the RDS Data API, Aurora DSQL, Bedrock, Bedrock
-    AgentCore, S3 Vectors, ECS, CloudFront KeyValueStores, and IAM and STS role passing
-    or assuming, on `*` or on a
-    resource name that starts with `*`; AWS-owned Bedrock models, an Agent
-    invoking its AgentCore runtimes, and SES sending aren't flagged), a resource
-    the check can't resolve, a resource policy that opens up another app's
-    resource, a role that trusts anything but an AWS service, a broad AWS managed
-    policy, the CDK asset bucket of another bootstrap, an API Gateway stage,
-    route or deployment attached to an API outside the app's own template, or a
-    stack or block outside the prefix. Synth fails on any violation
-    unless `reportOnly: true`.
-  - **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-cdk-blocks/hosting`):
-    the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
-    Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has
-    `defaults.appIdentity`, so a shared platform's execution policy and deploy guard see it as
-    the app's own stack.
+  1. To keep a credentialed route cacheable, list its session cookie in `cacheKeyCookies` or `'authorization'` in `cacheKeyHeaders`.
+  2. List analytics and consent cookies that never affect the rendered output, such as `_ga`, in `frontDoor.features.cacheGuardIgnoredCookies` to keep pages cacheable for visitors that carry them.
 
-- 93d533a: Add `allowPlainHttp`, an explicit opt-out for builders who need a plain-HTTP front door in production. A production synth fails for a door that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP; this option is the migration for an app that serves plain HTTP on a network path it trusts, such as an internal ALB reached only inside a private network, or TLS ended upstream by a proxy or another load balancer.
+  The SSR cache policy's maximum TTL drops from 1 year to 1 day, so an origin `s-maxage` longer than a day is clamped to a day.
 
-  - **The option.** The `alb` and `custom` doors (`AlbDoorOptions`, `CustomDoorOptions`) and the stacked door (`CloudFrontOverRouterFrontDoor`) take `allowPlainHttp?: boolean` (default `false`). With `allowPlainHttp: true`, a production synth that would fail with `PlainHttpFrontDoorError` or `OriginSecretOverPlainHttpError` succeeds and warns instead.
-  - **The warning.** `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` names what travels in cleartext. Acknowledge it with `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`.
-  - **Sessions.** For the `alb` and `custom` doors, `Hosting` also registers the config entry `BLOCKS_ALLOW_PLAIN_HTTP`. With it, `Auth` issues its same-origin session cookie without `Secure` instead of throwing `AuthErrors.InsecureTransport`. The cookie helpers in `@aws-cdk-blocks/auth-common/cookies` read it fail-closed, from loaded config only on deployed compute: a missing or malformed value still refuses.
-
-  To keep serving plain HTTP in production, add `allowPlainHttp: true` to the door and acknowledge the warning; the deploy and `Auth`'s sign-in then behave as they did before plain-HTTP doors were limited to sandbox deploys. Without the option nothing changes: a sandbox deploy, HTTPS doors and the `'none'` door behave as before.
-
-- adb6077: Front doors that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP now synthesize only in a sandbox deploy (the `sandboxMode` context the sandbox scripts pass). A production synth fails; a sandbox synth warns as before.
-
-  - **The ALB door without a certificate.** `{ kind: 'alb' }` with no `certificate` and `features.domain`, serving an app with an API, fails synth with `PlainHttpFrontDoorError`. So does a `{ kind: 'custom', door }` whose URL is `http://` with an API; serve it over HTTPS (return an `https://` url). To fix the ALB door, give it a `certificate` and `features.domain` (an HTTPS listener; port 80 redirects to 443), or use the CloudFront or stacked door. A sandbox deploy warns (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`). The `'none'` door is unchanged: it warns in every stage.
-  - **The stacked door's edge → router hop.** `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` requires an encrypted edge → router hop for the router's `x-blocks-origin-verify` header. With an internet-facing router and no router certificate, synth fails with `OriginSecretOverPlainHttpError`. To fix it, give the router a `certificate` and `features.router.domain` (the edge → router hop becomes HTTPS :443), or set `internal: true` (the edge reaches the router through a CloudFront VPC origin on the AWS network). A sandbox deploy warns (`@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp`).
-  - **Sessions over plain HTTP.** `Auth` issues a session over a plain-HTTP front door only in a sandbox deploy, where its same-origin cookie omits `Secure` as before. Outside a sandbox it refuses: the cookie helpers in `@aws-cdk-blocks/auth-common/cookies` (`resolveCookieSecurity`, `buildCookieSecurityAttrs`) throw the new `AuthErrors.InsecureTransport` (`InsecureTransportException`, HTTP 500 from `Auth`), and no `Set-Cookie` line is written. `Auth` checks this before it stores a session, so a refused sign-in writes nothing and revokes the engine's tokens. Clearing cookies (`Max-Age=0`) are still written, so sign-out and `deleteUser` keep working; `CookieSecurityInput` gains an optional `clearing` flag for them. Deployed compute whose config doesn't name a sandbox counts as production. Cross-domain cookies, HTTPS doors and local development are unchanged.
-
-  Compatibility: these are behaviour changes for production apps on a plain-HTTP door. An app that deploys to production behind `{ kind: 'alb' }` without a certificate (with an API), or behind the stacked door with an internet-facing router and no router certificate, no longer synthesizes until it makes one of the changes above; that also covers `Auth` behind such a door, whose sign-in used to set a cookie without `Secure`. Every other front door is unchanged.
-
-  The `@aws-cdk-blocks/hosting` README also gains a table of where TLS ends on each front door (viewer hop, origin hop, and the secret header each door's origin requires), and a table of the plain-HTTP shapes that are sandbox-only.
-
-- fb29c06: feat(hosting): lock the CloudFront door's server origin with a random secret, a regional web ACL and opt-in access logs
-
-  The API Gateway REST API that CloudFront reaches the SSR Lambda through now
-  requires a random origin-verify `Referer` value that Secrets Manager generates
-  once per stack. The REST API policy and the CloudFront origin read it through a
-  CloudFormation dynamic reference, so it no longer appears in the template and
-  can't be derived from the stack name. A Nuxt IPX image optimizer gets its own
-  REST API with its own secret.
-
-  With `waf: { enabled: true }`, each server-origin stage also gets a REGIONAL
-  web ACL with the distribution's rules and rate limit. Its CloudWatch Logs keep
-  only the requests a rule blocked or counted, with the `Referer`, `Cookie` and
-  `Authorization` headers redacted, and it keeps no sampled requests.
-
-  Cost: with `waf.enabled`, a second web ACL per stack: its monthly charge, a
-  per-request charge (every uncached SSR request is evaluated by both web ACLs),
-  and the log ingestion of blocked and counted requests. Every CloudFront + SSR
-  stack also gets one Secrets Manager secret (two with Nuxt IPX), each with a
-  small monthly charge.
-
-  New `frontDoor.features.serverOrigin` settings:
-
-  - `accessLogging` (default `false`): JSON stage access logs in CloudWatch Logs.
-    It creates the account-level API Gateway CloudWatch Logs role once per stack.
-  - `logRetention` (default one month): retention of those logs and of the
-    stage web ACL's logs.
-  - `verifySecretRotation`: bump it to rotate the origin-verify secrets.
-  - `acceptLegacyVerifyHeader`: accept the earlier derived value for one deploy
-    while upgrading. Synth warns while it is set.
-
-  Upgrading: the first deploy updates the REST API policy within seconds and the
-  distribution within minutes, so SSR requests can get 403 for those minutes.
-  To avoid this, deploy once with `serverOrigin: { acceptLegacyVerifyHeader: true }`,
-  then deploy again without it. For that deploy the SSR REST API also keeps the
-  IPX image routes it served before, and its stage web ACL is attached only on
-  the next deploy, once every edge sends the marker its rate rule exempts.
-
-- 40d25ec: fix(hosting): keep credentialed and cookie-setting SSR responses out of the shared edge cache
-
-  The hosting construct now installs an SSR cache guard in front of the SSR server it builds, and in front of every other regional compute a route targets (native Lambda handlers, buffered or streaming; Node.js servers on the Lambda Web Adapter or a Lambda Web Function), for every framework. Where the guard cannot be installed (e.g. a Lambda Web Adapter server that is not Node.js), synth emits a `@aws-cdk-blocks/hosting:SsrCacheGuardNotInstalled` warning. The guard sends `Cache-Control: private, no-store` in place of the origin's value when:
-
-  - the response sets cookies (`Set-Cookie`) and is not already `private` or `no-store`; or
-  - the request carries `Authorization` (unless `'authorization'` is in `cacheKeyHeaders`) or a cookie whose name is not in the SSR cache key (the Next.js preview cookies, the skew-protection `__dpl` cookie and `cacheKeyCookies`), and the response is shared-cacheable: `s-maxage`, `public`, `max-age` without `private`, a future `Expires`, no caching headers while `ssrDefaultTtl > 0`, or an error status CloudFront caches without caching headers (404, 414, 500-504). Behind the CloudFront-over-ALB door, whose server-route cache key holds every cookie, only `Authorization` and `Set-Cookie` lead to the rewrite.
-
-  Responses already `private`/`no-store`, or `no-cache` without `s-maxage`, are unchanged. The cache-key names are baked into the generated guard module at synth.
-
-  **BREAKING:** SSR responses that the origin marks shared-cacheable are no longer edge-cached for requests that carry `Authorization` or cookies outside the cache key, and responses with `Set-Cookie` are never edge-cached. To keep a credentialed route cacheable, list its session cookie in `cacheKeyCookies` and/or `'authorization'` in `cacheKeyHeaders`, so the cache is keyed per credential. Client-side analytics and consent cookies (`_ga`, `_gid`, `_fbp`, consent cookies) make ISR/SSR pages uncacheable at the edge for every visitor that carries them, unless they are listed in the new `cacheGuardIgnoredCookies` option (`frontDoor.features.cacheGuardIgnoredCookies`), which the guard ignores and keeps out of the cache key; a listed cookie must never affect the rendered output.
-
-  A distribution with a server sets the error caching minimum TTL to 0 for 500, 501, 502, 503 and 504 (CloudFront caches these for 10 s by default, and caches 500 and 502-504 whatever their `Cache-Control` says), keeping any error page configured for them.
-
-  The SSR cache policy's maximum TTL (and the server-route cache policy of the CloudFront-over-ALB front door) is lowered from 1 year to 1 day, so an origin `s-maxage` longer than a day is clamped to a day.
-
-  On a Lambda Web Adapter server the guard is loaded through `NODE_OPTIONS` (`--import`); a `NODE_OPTIONS` set in `compute.environment` keeps the guard loaded first.
-
-- c1fabce: feat(hosting): `secret` and `config` CLIs print help for `--help` and `-h`
-
-  `hosting-secret`, `hosting-config` and the `runSecretCli` / `runConfigCli` commands of `@aws-cdk-blocks/core/scripts` built on them now print usage for `set`, `list` and `remove` when `--help` or `-h` appears anywhere in the arguments, and exit 0. The help lists each command's flags and shows where `--stage <name>` stores a value (`<prefix>/<name>/<KEY>` instead of the shared `<prefix>/<KEY>`; any name is accepted), with the prefix in effect. Before, `--help` was read as a key or ignored, so `remove KEY --help` deleted the value; a help request now returns before any prompt or AWS call. Without `--help`, every command behaves as before.
-
-  For tools that wrap this CLI, `runValueCli` takes two new options. `interactive: false` refuses the hidden value prompt, with an error that names `--value-stdin`, even on a terminal. `yes: true` confirms `remove --force`, as `--yes` in the arguments does. A usage problem (a missing key, an unknown subcommand, a flag without its value, or a prompt or confirmation the run cannot give) throws the newly exported `ValueCliUsageError`, so a wrapper can tell it apart from an AWS failure.
+- c1fabce: `hosting-secret`, `hosting-config`, `runSecretCli`, and `runConfigCli` print usage and exit 0 for `--help` or `-h`, so `remove KEY --help` no longer deletes the value. `runValueCli` takes the new options `interactive: false` and `yes: true`, and a usage problem throws the new `ValueCliUsageError`.
 
 ### Patch Changes
 
-- d01c34c: Add API Extractor reports (`API.md`) for `@aws-cdk-blocks/hosting`, `@aws-cdk-blocks/pipeline` and `@aws-cdk-blocks/bb-compute`, so changes to their public surface show up in review like the other packages' (`npm run update:api`, checked by `npm run check:api`). The block docs folder of `aws-cdk-blocks` ships them next to each package's README.
-- 5f55dac: feat(core): opt in to HTTP error statuses for an API namespace
-
-  `ApiNamespace` takes a new `httpErrorStatus` option. With `httpErrorStatus: true`, a call that throws an `ApiError` with a 4xx status — such as `requireAuth()`'s 401 — is answered with that HTTP status instead of 200, so API Gateway and CloudFront metrics, access logs, WAF rate rules and 4xx alarms can see rejected calls:
-
-  ```ts
-  export const api = new ApiNamespace(
-    scope,
-    "api",
-    (context) => ({
-      async getNote() {
-        const user = await auth.requireAuth(context); // signed out → HTTP 401
-        return notes.get(user.userId);
-      },
-    }),
-    { httpErrorStatus: true },
-  );
-  ```
-
-  The JSON-RPC body is unchanged, and the TypeScript client reads it whatever the status, so `isBlocksError()` and `error.status` behave exactly as before. 5xx and other failures stay HTTP 200. It applies in the local dev server and on AWS alike. The default is unchanged: every RPC response stays HTTP 200.
-
-  Two things to check before turning it on, both documented on the option: CloudFront error pages apply to the proxied API too, so on a `Hosting` distribution that maps 403 or 404 to a page, those responses would reach the client as HTML. CloudFront cannot scope error responses away from `/cdk-blocks/*`, so `Hosting` now fails synth for that combination with a `HostingError` named `HttpErrorStatusErrorPagesError`; remove the 4xx error pages or leave `httpErrorStatus` off for those namespaces. The hosting README describes the gap. (During review this was a synth warning, `@aws-cdk-blocks/hosting:HttpErrorStatusErrorPages`; it was never released as one.) And the Dart client, with an `authProvider`, refreshes its token and runs the method once more on any HTTP 401, so a method that throws 401 after a side effect can run twice for it: put the guard first (`requireAuth()` as the first statement, or `auth.protect`).
-
-- 0ff1e1f: docs: the Hosting README describes the installed version
-
-  Sentences that narrated how the construct changed ("formerly", "now evaluated", PR and issue numbers) state the current behaviour instead. The README also corrects the logging entry point: `version`, `partitioning` and `format` are set through `frontDoor.features.logging` on both `HostingConstruct` and core's `Hosting`; only the deprecated top-level `logging` prop is limited to v1.
-
-- f7e28b4: The Astro, Nitro (Nuxt, SolidStart, Analog, TanStack Start) and SvelteKit adapters run the app's build without the `cdk` export condition. A deploy or destroy synthesizes with `NODE_OPTIONS=--conditions=cdk`, and the app's build inherited it, so a build or `prebuild` script that loads `@aws-cdk-blocks/*` (such as `npm run generate-client`) failed with `Scope at '...' should be created in the scope of a Stack`. Only the `cdk` condition is removed: other `NODE_OPTIONS` entries, such as `--max-old-space-size`, still reach the build.
-
-  `Hosting`'s `buildCommand` now removes the `cdk` condition the same way. Before, it removed only the exact entry `--conditions=cdk`, so `--conditions cdk`, `-C cdk` or a quoted value such as `--conditions="cdk"` still reached the build.
-
-- 668227b: The CloudFront door now serves a server built as a buffered Lambda handler. Its server origin (the SSR REST API) integrated every server Lambda with `ResponseTransferMode: STREAM`, which cannot read the `{ statusCode, headers, body }` object a buffered handler returns. A Nuxt (Nitro) app built with the `aws-lambda` preset and `nitro.awsLambda.streaming` left off, which is Nitro's default, deployed without an error and answered 502 on every path. The integration now follows the server as built, as the API Gateway REST door already does: a streaming server (Next.js through OpenNext, Nitro with `awsLambda.streaming: true`, a Lambda Web Adapter server) keeps the STREAM integration, and a buffered handler gets a plain Lambda proxy integration. A buffered response is sent whole once the handler returns, and Lambda limits it to 6 MB.
-
-  A Nuxt app that leaves `awsLambda.streaming` off now works behind both the CloudFront door and the API Gateway HTTP API door. Turning streaming off is what `StreamingServerNeedsStreamingDoorError` suggests for a door that cannot stream, and that build no longer breaks the CloudFront deploy.
-
-- 1f565bd: Docs: the README and the `getSecret()` JSDoc now say local values for `getSecret()` and `getConfig()` go in `.env.local`, the file the Blocks dev server and sandbox load. They don't load `.env`, so a value only there made the getter throw `no config reference found`.
-- 52dd5e6: A Next.js image request for a source image that isn't in the assets bucket now returns `404 Not Found` instead of `500 Internal server error`. A real server error from the Next.js image optimizer is now sent with `Cache-Control: no-store`, so CloudFront no longer caches it for 60 seconds. The Nuxt and Astro (IPX) image optimizer already returned 404 for a missing source.
-- 5f55dac: The Nitro adapter trims trailing slashes from `runtimeConfig.ipx.baseURL` in linear time when it builds the image optimization route. It used the regular expression `/\/+$/`, which takes quadratic time on a long run of `/` that isn't at the end of the string. The route pattern is unchanged: `/img-cdn///` still gives `/img-cdn/*`.
-- c6a59f4: chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1
-
-  - The Next.js adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`, so 4.1.x no longer prints the out-of-range warning.
-  - An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3. Its `next` peer range is `>=15.5.28 <16 || >=16.4.1`, so the build warns for `next` versions below that.
-  - The `create-blocks-app` `nextjs` template declares `@opennextjs/aws` `~4.1.14`.
-
-- 1e4d08d: docs(hosting): explain what a plain-HTTP front door does to session cookies
-
-  The README's front-door section now says that behind a standalone ALB door with no certificate, `Auth` omits `Secure` from its same-origin session cookie (a browser discards a `Secure` cookie from a plain-HTTP origin), so the cookie and the session travel in clear text. It recommends a certificate (an HTTPS listener) for anything beyond testing, and points at the separate `StackedRouterPlainHttp` warning for the stacked door's edge → router hop.
-
-- 5f55dac: The `PlainHttpFrontDoor` synth warning for a plain-HTTP ALB door now refers to `Auth`, which drops `Secure` from its session cookie behind such a door so that sign-in still works. It no longer names the removed `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks.
-- e6c989d: `frontDoor: 'none'` now always warns at synth (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`), including for a static site with no backend API. The S3 website endpoint takes no certificate, so the pages and scripts travel unencrypted and can be altered in transit. The warning explains this, points to the CloudFront door for HTTPS, and names how to acknowledge it when `'none'` is intended (`Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFrontDoor')`). It stays a warning: synth still succeeds.
+- d01c34c: Adds API Extractor reports, `API.md`, for `@aws-cdk-blocks/hosting`, `@aws-cdk-blocks/pipeline`, and `@aws-cdk-blocks/bb-compute`. The block docs folder of `aws-cdk-blocks` ships them next to each package's README.
+- 5f55dac: With the new `ApiNamespace` option `httpErrorStatus: true`, a call that throws an `ApiError` with a 4xx status is answered with that HTTP status instead of 200. `Hosting` then fails synth with `HttpErrorStatusErrorPagesError` if its distribution maps 403 or 404 to a page, so remove those pages.
+- 0ff1e1f: The Hosting README describes the installed version. It also states that `version`, `partitioning`, and `format` are set through `frontDoor.features.logging` on both `HostingConstruct` and core's `Hosting`.
+- f7e28b4: The Astro, Nitro, and SvelteKit adapters and `Hosting`'s `buildCommand` run the app's build without the `cdk` export condition, however it is written, such as `--conditions cdk` or `-C cdk`. A build or `prebuild` script that loads `@aws-cdk-blocks/*` no longer fails during a deploy or destroy.
+- 668227b: The CloudFront door serves a server built as a buffered Lambda handler instead of answering 502 on every path. A Nuxt app that leaves `awsLambda.streaming` off works, and Lambda limits a buffered response to 6 MB.
+- 1f565bd: The README and the `getSecret()` JSDoc state that local values for `getSecret()` and `getConfig()` go in `.env.local`. The Blocks dev server and sandbox do not load `.env`.
+- 52dd5e6: A Next.js image request for a source image that isn't in the assets bucket returns `404 Not Found` instead of `500 Internal server error`. A real server error from the Next.js image optimizer is sent with `Cache-Control: no-store`, so CloudFront no longer caches it for 60 seconds.
+- 5f55dac: The Nitro adapter trims trailing slashes from `runtimeConfig.ipx.baseURL` in linear time when it builds the image optimization route.
+- c6a59f4: The Next.js adapter accepts `@opennextjs/aws` 4.1.x without the out-of-range warning. An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3, and the build warns for `next` versions below `>=15.5.28 <16 || >=16.4.1`.
+- 1e4d08d: The Hosting README states that behind a standalone ALB door with no certificate, `Auth` omits `Secure` from its same-origin session cookie, so the cookie travels in clear text. It recommends a certificate for anything beyond testing.
+- 5f55dac: The `PlainHttpFrontDoor` synth warning for a plain-HTTP ALB door refers to `Auth` instead of the removed `AuthBasic`, `AuthCognito`, and `AuthOIDC` blocks.
+- e6c989d: `frontDoor: 'none'` always warns at synth with `@aws-cdk-blocks/hosting:PlainHttpFrontDoor`, including for a static site with no backend API. If `'none'` is intended, call `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpFrontDoor')`.
 - b2eb306: An empty `secret list` suggests `set <KEY>` (prompted, or piped with `--value-stdin`), instead of `set <KEY> <value>`, which the secret CLI refuses.
-- b2eb306: `secret set` of a key that `secret remove` scheduled for deletion restores the secret and sets the new value, instead of failing with Secrets Manager's raw "already scheduled for deletion" error.
-
-  `secret remove KEY --force --yes` of a key that does not exist reports that it was not set, instead of claiming it was permanently removed.
-
-  `secret remove KEY --force` prints its "deleted immediately" warning only after it found the secret, so a key that is not set reports only that it was not set. The `restore-secret` command that a recoverable `secret remove` suggests names the secret, and the profile and Region the run used.
-
-- 60360c1: `Hosting` no longer rebuilds the frontend on a synth that doesn't need it:
-
-  - **Destroy:** `npm run destroy` and `npm run sandbox:destroy` reuse the frontend build output already on disk instead of running `buildCommand` and the framework build (OpenNext, Nitro, Astro, SvelteKit). On a Next.js app this removes a multi-minute build from every destroy. When there is no build output, the destroy builds as before; a Next.js destroy reuses the `.open-next/` output of an earlier deploy. `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
-  - **Opt-in deploy reuse:** `BLOCKS_SKIP_FRONTEND_BUILD=1` makes a deploy use the existing build output without building. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with the adapter's error (same code and resolution) plus a line naming the variable. The build bakes in `BLOCKS_API_URL`, so a deploy never reuses a build on its own.
-
-  The framework adapters read the decision from the build profile (`reuseBuild: 'if-present' | 'required'`); an explicit `skipBuild` option still wins.
-
+- b2eb306: `secret set` of a key that `secret remove` scheduled for deletion restores the secret and sets the new value instead of failing. For a key that does not exist, `secret remove KEY --force --yes` reports that it was not set.
+- 60360c1: `npm run destroy` and `npm run sandbox:destroy` reuse the frontend build output on disk instead of rebuilding. Set `BLOCKS_SKIP_FRONTEND_BUILD=1` to make a deploy reuse it too.
 - e3b5949: Ship `dist/constructs/THIRD-PARTY-LICENSES.txt`, which lists the third-party npm packages included in the bundled Lambda handlers, with their license texts.
-- 184df0b: fix(hosting): infer schema-typed `config()` and `secret()` types with the tsconfig that compiles each file
+- 184df0b: `npm run typegen` and the dev server infer schema-typed `config()` and `secret()` types with the tsconfig that compiles each file, starting from `strict: true`. `z.number().nullable()` is inferred as `number | null` when the root `tsconfig.json` only lists project references.
+- b2eb306: The hidden value prompt of `hosting-secret set KEY` and `runValueCli` rejects with the new `ValueCliInterruptedError` on Ctrl-C or Ctrl-D instead of never settling. It is written to stderr, so stdout carries only the result.
+- b2eb306: The secret and config CLI refuses an unknown option, or an extra argument to `list` or `remove`, with a usage error instead of storing or ignoring it. After `--`, every argument is a positional, so a config value can start with `-`, as in `config set KEY -- -1`.
+- b2eb306: The secret and config CLI reports an invalid key, an empty value, and a missing subcommand as `ValueCliUsageError`s, so callers map them to their usage exit code. A missing subcommand says `<label> needs a subcommand: set, list or remove.` instead of `Unknown subcommand undefined`.
+- 8ece10a: Synth also checks that a KMS key policy `Allow` statement for an AWS service principal carries `aws:SourceAccount` or `aws:SourceArn`. A key your app creates gets a warning, which you can acknowledge with the id `@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition`.
 
-  `npm run typegen` and the dev server read the `tsconfig.json` in the app root. When that root only lists project references, as create-vite apps and the AWS Blocks Vite templates do, it has no compiler options of its own, so the inferred types lost `strictNullChecks`: `z.number().nullable()` became `number` instead of `number | null`, and `.optional()` lost its `| undefined`. The typegen now uses the tsconfig that compiles each scanned file (the nearest one, or the referenced project that lists the file), and its options always start from `strict: true`.
+- e1e4844: **Breaking: the `cdk-blocks` executable is removed, and AWS Blocks tasks run through your app's package manager.**
 
-- b2eb306: The hidden value prompt of the secret and config CLI (`hosting-secret set KEY`, `runValueCli`) rejects with the new `ValueCliInterruptedError` on Ctrl-C or Ctrl-D, before any store call, instead of never settling: Node then exited 13 with an "unsettled top-level await" warning.
+  To upgrade:
 
-  The hidden prompt is written to stderr, so `hosting-secret set KEY | cat` shows it and stdout carries only the result.
+  1. Upgrade `aws-cdk-blocks`.
+  2. From the app directory, run `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate --dry-run` and review the plan.
+  3. Run the same command without `--dry-run` from a clean Git working tree.
+  4. Change by hand the custom wrappers that the migration reports.
 
-- b2eb306: The secret and config CLI (`hosting-secret`, `hosting-config`, `runValueCli`) refuses an unknown option, and an extra argument to `list` or `remove`, with a usage error before any store call, instead of storing the option as part of a config value or ignoring it. After `--`, every argument is a positional, so a config value can start with `-`: `config set KEY -- -1`.
-- b2eb306: The secret and config CLI reports an invalid key, an empty value and a missing subcommand as `ValueCliUsageError`s, so callers map them to their usage exit code, and a missing subcommand says `<label> needs a subcommand: set, list or remove.` instead of `Unknown subcommand undefined`.
-- 8ece10a: fix(core,hosting): require source conditions on KMS key policies that name a service principal
+  Structured tasks such as `npm run docs KVStore`, `npm run docs:api KVStore`, and `npm run docs:search "partition key"` print text in a terminal and JSON on a pipe or redirect.
 
-  The synth-time service-principal check now also reads the key policy of every KMS key in the scopes it covers. An `Allow` statement that names an AWS service principal must carry `aws:SourceAccount` or `aws:SourceArn`, or `kms:EncryptionContext:aws:logs:arn` for CloudWatch Logs. `events.amazonaws.com` is exempt for `kms:GenerateDataKey*` and `kms:Decrypt`, because Amazon SNS documents that these conditions stop EventBridge from publishing to an encrypted topic. A key AWS Blocks creates fails synth; a key your app creates gets a warning, which you can acknowledge with the id `@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition`.
-
-  A condition now counts, for key policies and for role trust policies alike, only under a positive string or ARN operator (`StringEquals`, `StringLike`, `ArnLike`, …, or their `ForAnyValue:` forms) and with a value that names an account. `…IfExists`, negated (`StringNotEquals`, `ArnNotLike`, …), `Null` and `ForAllValues:` operators don't count. Neither does `*` alone, a wildcard `aws:SourceAccount`, or an ARN whose account segment is empty or a wildcard. A role or key your app creates that relied on one of these forms now gets the synth warning.
-
-  The `Hosting` alarm topic key (regional and `us-east-1` monitoring stacks) now grants `cloudwatch.amazonaws.com` with `StringEquals aws:SourceAccount` and `ArnLike aws:SourceArn` (`arn:<partition>:cloudwatch:<region>:<account>:alarm:*`) in place of `StringEqualsIfExists aws:SourceAccount`. Alarm notifications are still delivered.
-
-- e1e4844: Run AWS Blocks tasks with your app's package manager. New apps define tasks in `package.json` without generating launcher files or installing the `cdk-blocks` executable. Look up documentation with `npm run docs KVStore`, read the API signatures with `npm run docs:api KVStore`, or search with `npm run docs:search "partition key"`.
-
-  Structured task results print text in a terminal and JSON on a pipe or redirect. Use `npm run -s docs KVStore` for clean JSON without npm's banner, or `npm run -s docs -- KVStore --output text` to pipe Markdown. Scripts that previously invoked `cdk-blocks` must switch to package tasks; scripts calling the programmatic `aws-cdk-blocks/scripts` entry remain supported.
-
-  If your app's scripts call `cdk-blocks`, upgrade `aws-cdk-blocks` first. From the app directory, preview the migration without relying on the removed executable:
-
-  ```sh
-  node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate --dry-run
-  ```
-
-  Review the plan, then run the same command without `--dry-run` from a clean Git working tree. The migration rewrites recognized generated scripts and reports custom wrappers that need manual changes.
-
-- 58817b0: fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal trust policies; add synth-time check
-
-  The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
-
-  - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
-  - The waiter state machine roles of the `KVStore` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
-  - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
-  - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
-  - The `@aws-cdk-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.
-
-  Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`, such as `BlocksApiGatewayCloudWatchRole` (created by `@aws-cdk-blocks/core` and `@aws-cdk-blocks/hosting` when access logging is on) or the default `cloudWatchRole` of a CDK `RestApi` the app adds. That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
-
-  - A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
-  - A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
-
-  Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
-
-  To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-cdk-blocks/core` README.
+- 58817b0: The IAM roles AWS Blocks creates scope every service-principal trust to the stack's account with `aws:SourceAccount` and `aws:SourceArn`. Synth warns about a role your app creates without them, and "Service-principal trust" in the `@aws-cdk-blocks/core` README shows how to resolve it.
 
 ## 0.5.0
 
 ### Minor Changes
 
-- dde6340: feat(hosting): swappable front doors, and bring-your-own doors written as one function
-
-  `Hosting` no longer hard-codes CloudFront. The optional `frontDoor` prop picks
-  the public entry point. Omit it and nothing changes: you get the same CloudFront
-  distribution as before.
-
-  - `'cloudfront'` (default): the global CloudFront CDN.
-  - `{ kind: 'alb', vpc?, internal?, certificate? }`: a regional Application Load
-    Balancer, with no CDN. Server-rendered responses are buffered. With
-    `certificate` and `features.domain` it serves HTTPS (TLS 1.2+) at your domain,
-    with a port 80 → 443 redirect and Route 53 alias records.
-  - `{ kind: 'apiGateway', api?: 'http' | 'rest', certificate? }`: Amazon API
-    Gateway, with no CDN, no VPC, and scale-to-zero. `'http'` (the default)
-    buffers server-rendered responses; `'rest'` streams them. `'rest'` needs a
-    custom `domain`: its own URL carries the `/prod` stage, which the app's
-    root-relative links miss, so synth fails without one
-    (`RestFrontDoorNeedsDomainError`).
-  - `{ kind: 'stacked', edge: 'cloudfront', router: 'alb', vpc?, internal?, certificate? }`:
-    a CloudFront edge in front of a full ALB router. The edge serves the app's
-    static routes straight from the private S3 bucket (origin access control);
-    the API and the dynamic routes go through the ALB. The ALB admits only the
-    edge: every listener rule requires a secret header the edge sends (otherwise
-    403), whose value Secrets Manager generates once per stack and both sides
-    read through a CloudFormation dynamic reference; its security group admits
-    only the CloudFront origin-facing managed prefix list, or, with
-    `internal: true`, only the CloudFront VPC origin the edge reaches it through.
-    With a router `certificate` and `features.router.domain`, the edge reaches
-    the router over HTTPS on port 443; otherwise that hop is plain HTTP, and an
-    internet-facing router warns at synth (`StackedRouterPlainHttp`).
-  - `'none'`: no front door. A static site or SPA is served straight from an S3
-    website bucket over HTTP. An app with a server fails synth.
-  - `{ kind: 'custom', door, wiringCheck? }`: your own door.
-
-  Every door serves the API on the app's own origin (except `'none'`, where the
-  browser calls the API cross-origin): `/aws-blocks/*` (RPC and sign-in) and each
-  of the backend's raw routes. Only a CloudFront-backed door (the default, or
-  the stacked door's edge) claims the backend's API front-door role, so
-  `apiFrontDoor: 'cloudfront'` builds no second distribution there. Behind the
-  ALB, API Gateway or a bring-your-own door, the API keeps the distribution
-  `apiFrontDoor: 'cloudfront'` asks for, and `ApiUrl` stays on it for native
-  clients. A plain-HTTP door warns at synth (`PlainHttpFrontDoor`). The backend's trusted origin
-  (`BLOCKS_PUBLIC_ORIGIN`, where the OIDC callback lands and whose scheme sets
-  the session cookie's `Secure`) belongs to the door that serves `/aws-blocks/*`
-  to browsers: a managed `cloudfront` API distribution built beside such a door
-  doesn't overwrite it. `'none'` publishes none (the bucket serves no
-  `/aws-blocks/*`), and its `config.json` names the same API URL as `ApiUrl`.
-
-  Each door kind takes the settings the app asks it for as `features`, typed for
-  that kind: a setting the chosen door doesn't implement does not compile.
-  `{ features }` with no `kind` is the CloudFront default with settings.
-
-  - CloudFront: `domain`, `waf`, `logging`, `monitoring`, `skewProtection`,
-    `geoRestriction`, `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`,
-    `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`.
-  - ALB: `domain` (without `wwwRedirect`), `waf` (a REGIONAL web ACL), `logging`,
-    `monitoring` (`enabled` only). The ALB's own access logs are off unless
-    set; its alarms are on unless `monitoring: { enabled: false }`, as on the
-    CloudFront door.
-  - API Gateway (HTTP and REST): `domain` (without `wwwRedirect`).
-  - Stacked: per layer, `edge: { waf: { webAclArn }, contentSecurityPolicy }` (a
-    CLOUDFRONT-scoped web ACL) and `router: { domain, waf, logging, monitoring }`
-    (a REGIONAL web ACL; the domain is the name the edge connects to).
-  - Custom: `domain`, `waf`, `logging`, `monitoring`, `geoRestriction`,
-    `skewProtection`, handed to the door as `input.features`.
-  - `'none'`: no settings.
-
-  `geoRestriction.type` takes `'allowlist'` or `'denylist'`; the legacy
-  `'whitelist'` / `'blacklist'` mean the same, and any other value fails synth.
-  `frontDoor` is validated at synth: an unknown door, an option the kind doesn't
-  take, a value of the wrong shape, or an unknown key inside a `features` setting
-  fails with `UnsupportedFrontDoorError`, `InvalidFrontDoorOptionError` or
-  `InvalidFrontDoorSettingError`, naming it.
-
-  **Deprecated (still supported):** the top-level settings props. On `Hosting`
-  (`@aws-blocks/core`): `domain`, `waf`, `logging`, `monitoring`,
-  `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`,
-  `quotas`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`. On
-  `HostingConstruct` (`@aws-blocks/hosting`): `domain`, `waf`, `logging`,
-  `monitoring`, `skewProtection` and `cdn` (each `cdn.<x>` is
-  `frontDoor.features.<x>`; `cdn.webAclArn` is `frontDoor.features.waf.webAclArn`).
-  Use `frontDoor.features.<x>` instead: the names are the same, so migrating is a
-  straight move. The aliases are merged into `frontDoor.features` at
-  construction, and an app that sets them with no `frontDoor` (or `'cloudfront'`)
-  synthesizes the same template, with one exception for JavaScript callers of
-  `geoRestriction` (TypeScript only accepted `'whitelist'` / `'blacklist'`): any
-  type other than `'whitelist'` used to deny the listed countries, so
-  `'allowlist'` now allows them as its name says, and a missing or unknown type
-  (e.g. `'Whitelist'`) now fails synth instead of denying. Setting a setting both ways fails synth with
-  `FrontDoorSettingConflictError`, naming both; a top-level prop the chosen kind
-  doesn't implement fails synth with `UnsupportedFrontDoorSettingError`, naming
-  the kind and the prop.
-
-  The ALB and API Gateway doors serve static files through an asset-proxy Lambda
-  that answers like the CloudFront door: a missing file returns 404 (the SPA
-  fallback applies only to paths without an extension), and each file is served
-  with the `Cache-Control` it was uploaded with. It decodes the request path,
-  gzips compressible files, answers conditional requests with 304, and adds
-  baseline security headers. It switches to a new build only after the build's
-  uploads (and the runtime config) have landed. The proxies apply the app's
-  redirects (wildcard tail spliced, exact status, never a protocol-relative
-  target), per-pattern response headers and error pages with the CloudFront
-  door's semantics; synth names what they can't reach (server-rendered and image
-  responses, and API Gateway's natively proxied API) with the warning
-  `@aws-blocks/hosting:DoorRulesNotApplied`. A file is returned base64-encoded in
-  the Lambda response, so it is capped at about 750 KB (gzipped when
-  compressible) behind the ALB (1 MB response) and 4.5 MB behind API Gateway
-  (Lambda's 6 MB response); synth lists every larger build asset
-  (`@aws-blocks/hosting:AssetExceedsProxyLimit`). ALB listener rules are packed
-  within the per-rule limits (five condition values, six wildcards; a pattern
-  with more wildcards fails synth with `UnsupportedRoutePatternError`), and synth
-  warns past the default 100 (`AlbRuleLimit`). Past CloudFront's 25
-  cache behaviors, the stacked door's edge serves the remaining static routes
-  through the ALB and warns (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`).
-
-  Some apps need the CloudFront door. `compute: { type: 'web-function' }` fails
-  synth with `UnsupportedComputeFrontDoorError` behind any other door, and an app
-  with Next.js middleware with `MiddlewareNeedsCloudFrontDoorError` (only the
-  CloudFront door runs it). A streaming server (Next.js through OpenNext, or
-  Nitro with `awsLambda.streaming: true`) fails synth with
-  `StreamingServerNeedsStreamingDoorError` behind a door that invokes it without
-  streaming (the ALB, the stacked door, the API Gateway HTTP API, or a custom
-  door with `serverResponse: 'buffered'`): it would deploy and no page would
-  answer. Each built-in door declares what it can serve (streaming, wildcard
-  routes, the app's rules on every response, and whether it sets
-  `x-forwarded-host`), and the synth checks read those declarations.
-
-  The server is built for the door in front of it. Behind a door that invokes it
-  without streaming (the ALB, the stacked door's ALB router, the API Gateway HTTP
-  API), a Lambda Web Adapter server (Astro, Nuxt, SvelteKit) answers buffered.
-  Serve Next.js through CloudFront, the `'rest'` door, or a door that streams. Behind
-  the ALB, the server answers with multi-value headers (so every `Set-Cookie`
-  survives), and a native handler server (Nitro's `aws-lambda` preset) runs
-  behind a small ALB event shim that maps the ALB event to the API Gateway REST
-  shape (method, decoded query, base64 body) and the response back.
-
-  The CloudFront door and the stacked door's edge set `x-forwarded-host` from
-  the viewer's `Host`. Behind the ALB and API Gateway doors, a native handler
-  server gets it from `Host` through a small shim (a streaming handler stays
-  streaming), and a Lambda Web Adapter server that reads its host from
-  `x-forwarded-host` through `HOST_HEADER` (SvelteKit) reads `host` instead. Any
-  other Lambda Web Adapter server (Astro's Node adapter, Nitro's `node-server`)
-  receives the request's headers as sent, so it shouldn't trust
-  `x-forwarded-host` behind those doors.
-
-  Redirects behave the same on every door. A wildcard tail spliced onto a
-  root-relative destination keeps one leading slash on the CloudFront door too,
-  so `/old//evil.example` never answers a protocol-relative `Location`; an
-  absolute destination (`https://example.org/moved`) is kept as written. On the
-  API Gateway door, a redirect source with a wildcard inside a segment has no
-  route, so on an app with a server it warns
-  (`@aws-blocks/hosting:RedirectNotExpressible`). The regional doors never route
-  the backend's catch-all raw route (`/*`) to the API, which would take every
-  page and asset, and warn (`@aws-blocks/hosting:CatchAllApiPathNotRouted`). The
-  stacked edge serves the framework build's own 404 page, as the other doors do.
-  On the CloudFront door and the stacked door's edge, the app's header rules
-  match the path the viewer asked for, as on the regional doors: the
-  viewer-response function sees the URI rewritten to the build prefix, so the
-  viewer-request function records the viewer's URI for it (`x-blocks-viewer-uri`,
-  trusted only on a rewritten URI), and a rule such as `/assets/*` applies.
-  Nuxt image optimization (`@nuxt/image` through the IPX Lambda) works under an
-  `app.baseURL` behind every door: the ALB and API Gateway doors route the full
-  `/<baseURL>/_ipx/...` path to the image Lambda, which now strips the base path
-  before IPX's own prefix (`IPX_APP_BASE_URL`).
-  The stacked door emits `HostingInvalidationId`, so the post-deploy liveness
-  poll waits for the edge's invalidation.
-
-  `HostingConstruct.securityHeadersPolicy` (the CloudFront door's security-headers
-  policy, which `Hosting` reuses on the API and auth behaviors) is `undefined`
-  behind a door with no CloudFront distribution here; the stacked door's edge
-  carries its own policy on every behavior, the API's included.
-
-  `HostingConstruct` exposes the resolved door as `frontDoorKind`, and takes the
-  backend API to proxy same-origin as `backendApi: { url, paths? }` (the core
-  `Hosting` sets it from `api`).
-
-  A bring-your-own door is one function:
-  `defineFrontDoor({ service, serverResponse?, build(scope, input) })` from
-  `@aws-blocks/hosting/constructs`. `Hosting` calls `build` once at synth, after it
-  has created the bucket, compute and API and before it declares the asset
-  uploads. A door that invokes the server without streaming sets
-  `serverResponse: 'buffered'` (the default is `'streaming'`). The door receives
-  a `DoorInput`:
-
-  - `app`: the build id, base path, Next.js asset prefix, SPA fallback, routes
-    already joined to their origins, redirects, headers and error pages.
-  - `origins`: the assets bucket and build prefix, the server and image Lambdas
-    with their Function URLs (the server's `streaming` says whether it streams,
-    and its Function URL uses the matching invoke mode), and the API with every
-    path that must reach it.
-    The API paths are `/aws-blocks/*` (RPC and sign-in) plus the backend's raw
-    routes. `app.errorPages` is the app's `errorPages`, else the 404 and 500
-    pages the framework build shipped.
-  - `features`: the door's `frontDoor.features`, under the same names and shapes
-    (`domain`, `waf`, `logging`, `monitoring`, `geoRestriction`,
-    `skewProtection`). A field is present only when the app asked for that
-    feature; skew protection is on by default.
-
-  The door returns `{ url, originHandle?, publicBucket?, onUpload?, cutover? }`.
-
-  - `url` is required. It becomes `HostingUrl`, `Hosting.url`,
-    `BLOCKS_PUBLIC_ORIGIN` and an allowed CORS origin (a trailing slash is
-    removed). A missing `url` fails synth with `MissingFrontDoorUrlError`.
-  - `originHandle` is derived from `url` when the door doesn't return one.
-  - `onUpload` runs after the asset uploads are declared, so the door can add
-    something that runs after them, such as a cache invalidation. What it adds
-    under the door's scope also waits for the runtime `config.json` upload.
-  - `cutover` names the constructs that switch traffic to the new build; each
-    waits for every upload.
-
-  The `cf.*` helpers (`cf.origin`, `cf.behaviors`, `cf.apiBehaviors`,
-  `cf.redirects`, `cf.headers`, `cf.errorPages`, `cf.invalidate`) build
-  CloudFront origins, behaviors, functions and error responses from the input
-  and record what they wired. `cf.redirects` and `cf.headers` run the same
-  matcher as the built-in CloudFront door; `cf.errorPages` returns the same error
-  responses. From that record, synth fails if nothing reaches the
-  static assets (`ServeStaticAsset`). It also fails if the app has an API and
-  none of its paths were wired (`ProxySameOriginApi`). Unwired API paths, app
-  redirects, headers or error pages the door didn't wire, and more behaviors than
-  a distribution allows by default, are synth warnings. A door that wires with
-  raw CDK declares it with `cf.recordWired(...)`, or turns the check off with
-  `wiringCheck: false`. `assertDoorConformance(door)` runs the same checks in a
-  door's own tests.
-
-  The built-in doors (`cloudFrontDoor`, `albDoor`, `apiGatewayDoor`,
-  `s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way. The pieces they
-  share are exported for your own doors: `generateAlbAssetProxyCode` and
-  `generateApiGwAssetProxyCode` (with `AssetProxyOptions`: the app's redirects,
-  headers and error pages, and `assetProxyEnvironment()` for the function's
-  environment), `generateAlbApiProxyCode`, `backendBaseUrl`, `coalesceRoutes`,
-  `routeSpecificity`, `createSecurityHeadersPolicy`, and `ORIGIN_VERIFY_HEADER` /
-  `CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST` for a door that stacks CloudFront over
-  its own ALB.
-
-  The framework-injected CORS hosting origin matches case-insensitively (an
-  ALB's DNS name is case-preserving, the browser's `Origin` is lower case); the
-  app's own `CORS_ALLOWED_ORIGINS` patterns keep their case sensitivity.
-
-  `bb-auth-basic` sessions work behind a TLS-less ALB: its same-origin session
-  cookie drops `Secure` when the deployed front door serves over plain HTTP
-  (`isInsecurePublicOrigin()` and `plainHttpOrigin` in
-  `@aws-blocks/auth-common/cookies`). The other auth Building Blocks still set
-  `Secure`, so use an HTTPS door with them. Behind `'none'` (an HTTP S3 website
-  calling a cross-site API), auth needs `crossDomain: true`; that cookie keeps
-  `Secure` and `Partitioned`.
-
-- 7477b6e: Add `compute.type: 'web-function'` to run the SSR server on AWS Lambda Web Functions. The framework's own Node.js server runs directly on Lambda behind CloudFront origin access control, with no API Gateway and no Lambda Web Adapter. Each execution environment serves many concurrent requests and is billed for active CPU. It works with Astro, SvelteKit, Nuxt/Nitro and Next.js in the Regions where Web Functions are available. When this compute is selected, Nitro builds with the `node-server` preset and Next.js builds with OpenNext's `node` wrapper automatically. Tune it with `compute.webFunction` (`maxConcurrencyPerEnvironment`, `maxEnvironments`, `rateLimit`). The default (`'lambda'`) is unchanged.
-
-  Sandbox deploys (`npm run sandbox`) of a Web Function app skip CloudFormation Express Mode after the first deploy. Express Mode can't update a Web Function endpoint, so the deploy uses a full deploy with rollback instead.
-
-- d79a0bd: perf(hosting,core): faster preview deploys
-
-  - `HostingConstruct` takes `inPlaceBuild`: a re-deploy of an unchanged build reuses the same `builds/<buildId>/` prefix, so the ALB and API Gateway asset proxies (the door's `cutover`) are not ordered after the asset uploads and the runtime config upload. CloudFormation creates them alongside the uploads. The CloudFront door ignores it. `Hosting` sets it for `buildId: 'fixed'` (`HostingPresets.preview`).
-  - A preview re-deploy (`startSandbox({ preview: true })`) passes `--method direct` next to `--hotswap-fallback`, so a change that can't be hotswapped falls back to a direct CloudFormation update instead of creating and executing a change set.
-  - A Next.js build with `imageOptimization: false` (`HostingPresets.preview`) no longer installs `sharp`. The generated `open-next.config.ts` sets `imageOptimization: { install: false }`, so OpenNext skips its `sharp` install for the image-optimization bundle that is never deployed. Builds that deploy the image-optimization function are unchanged.
-  - An in-place build (`inPlaceBuild`, `buildId: 'fixed'`) drops the AWS CLI layers no upload handler uses. Every CDK `BucketDeployment` creates its own layer, but the stack's shared upload handler uses only one per memory size; the others were published on every create, and the one under the runtime config upload was the last resource the stack waited for. Default and production builds keep every layer.
-
-- d79a0bd: feat(hosting): `HostingPresets` and preview-mode settings for fast, disposable deploys
-
-  `Hosting` takes four new props, and `HostingPresets` bundles them (the hosting counterpart of `BlocksPresets`). Omit them and nothing changes.
-
-  ```ts
-  new Hosting(stack, "Web", {
-    ...(isPreview ? HostingPresets.preview : HostingPresets.production),
-    root,
-    api: blocksStack,
-  });
-  new Hosting(stack, "Web", {
-    ...HostingPresets.preview,
-    imageOptimization: true,
-    root,
-    api: blocksStack,
-  });
-  ```
-
-  - `imageOptimization: false`: no image function. The adapters record the app's remote-image allowlist in the new optional `DeployManifest.imageRemoteSources` (Nitro from `@nuxt/image` `image.domains`, Astro from `image.domains` and `image.remotePatterns`), and the door matches a remote source's host on its parsed URL. The framework image endpoints (`/_next/image`, `/_ipx/*`, `/_image`) serve the source image, unoptimized. A remote source is redirected to itself only when its host is in the app's image allowlist, else 404; it is never fetched. Needs the API Gateway HTTP API door.
-  - `incrementalRegeneration: false`: Next.js builds without the tag cache and the revalidation queue (no DynamoDB table, SQS queue or revalidation function). Prerendered pages are still served from the build's cache snapshot. Any door.
-  - `edgeRoutes: 'regional'`: Next.js `runtime: 'edge'` routes run as regional Lambda functions, each routed straight to its function, instead of Lambda@Edge. Needs the API Gateway HTTP API door, where it is the default; `edgeRoutes: 'edge'` there fails synth when the app has edge routes (`EdgeRouteNeedsCloudFrontDoorError`, raised for a Lambda@Edge compute behind any door other than CloudFront).
-  - `buildId: 'fixed'`: the build id is a hash of the uploaded content (the static assets and the ISR cache seed), and Next.js builds with a pinned build id. An unchanged build keeps its id, so a re-deploy skips the asset upload and `startSandbox({ preview: true })` hotswaps a server-only change; a changed build gets a new `builds/<id>/` prefix, so deleted files stop being served and the ISR tag seed re-runs. Next.js's `_buildManifest.js` and `_ssgManifest.js` get a revalidating Cache-Control under a pinned build id. Not behind CloudFront or the stacked door (an edge cache would keep serving overwritten files).
-
-  A setting the chosen door can't serve fails synth with `UnsupportedHostingSettingError`. `HostingPresets.preview` sets all four plus `frontDoor: { kind: 'apiGateway' }`; `HostingPresets.production` sets nothing.
-
-  The API Gateway HTTP API door now builds the server for the HTTP API: OpenNext uses the `aws-apigw-v2` converter and the buffered `aws-lambda` wrapper, and Nitro builds the `node-server` preset unless the app picked one, or keeps `aws-lambda` when the stack's region has no Lambda Web Adapter layer (`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`) or isn't pinned (a stack with no `env`). Nitro's `node-server` on Lambda starts through a generated `run.sh`. A route served by a compute other than the server gets its own route. Adapters read these choices with `buildProfile()` (`withBuildProfile()` in `@aws-blocks/hosting/adapters`), so the adapter signature is unchanged. With no image function, Next.js's `/_next/*` stays on the static assets (the route table no longer merges `/_next/image` and `/_next/data` into a `/_next/*` server route).
-
-- 6a53068: Security headers (and the CSP) now cover the API and auth CloudFront
-  behaviours, not just the static site. Before, a `ResponseHeadersPolicy` was
-  attached only to the static root; requests through `/aws-blocks/api`,
-  `/aws-blocks/api/*`, `/aws-blocks/auth/*` and the raw-route proxies went out
-  with no security headers at all, so the two surfaces where it matters most —
-  auth and API — were the ones left uncovered (issue #765).
-
-  Both front-door paths are fixed:
-
-  - **Hosting-claimed path:** the behaviours added in `addApiBehaviors` now reuse
-    the distribution's existing `securityHeadersPolicy` — the same policy already
-    on the static behaviours — so there is one policy per distribution and no
-    drift. To reach it, `CdnConstruct` and `HostingConstruct` now expose the
-    policy as a public `securityHeadersPolicy` field.
-  - **Standalone managed front door** (`api-front-door.ts`): has no Hosting
-    construct to borrow from, so it attaches the AWS-managed
-    `ResponseHeadersPolicy.SECURITY_HEADERS` to its default behaviour. The managed
-    policy creates no CloudFormation resource and consumes no account
-    `ResponseHeadersPolicy` quota (capped at 20 per account by default), so a
-    cloudfront-tier app near that cap can't fail a deploy, and it matches what the
-    Hosting-fronted path ships by default. It carries HSTS, X-Content-Type-Options,
-    X-Frame-Options, X-XSS-Protection and Referrer-Policy — no CSP, since the API
-    subtree serves JSON and redirects rather than documents.
-
-  This is a `minor` bump for `@aws-blocks/hosting` because it adds public API
-  (`CdnConstruct.securityHeadersPolicy` and `HostingConstruct.securityHeadersPolicy`)
-  and a `patch` for `@aws-blocks/core` because it only changes behaviour (no new
-  public surface). Existing apps gain the headers automatically on their next
-  synth. On the Hosting-fronted path the API/auth behaviours reuse the policy
-  already on the static site, so there is no new option to set and no behaviour
-  change beyond the added response headers. On the standalone managed front door
-  the behaviour attaches the AWS-managed `SECURITY_HEADERS` policy — no new
-  CloudFormation resource and no quota impact.
-
-- 3b5a419: Add opt-in CloudFront **standard logging v2** for hosting access logs. Set `logging.version: 'v2'` to deliver access logs through the CloudWatch Logs vended-logs delivery pipeline instead of legacy inline logging. v2 removes the log bucket's ACL requirement (`BUCKET_OWNER_ENFORCED` instead of `BUCKET_OWNER_PREFERRED`), delivers a partitioned S3 key layout (`logging.partitioning: 'date' | 'hive'`), and supports selectable record formats (`logging.format: 'w3c' | 'plain' | 'json' | 'parquet'`). The default remains `'v1'` (no behavior or billing change). Standard logging v2's delivery source must be created in us-east-1; synth throws `LoggingV2RegionError` in any other Region, and warns when the Region is unresolved at synth.
-- 48c35f6: `hosting-secret remove --force` and `blocks secret remove --force` now always need `--yes` (or `-y`) to confirm, in every stage, and print a warning first that names the stage (or says an un-staged value is shared by every stage, including production) and that the delete is immediate with no recovery window. Without `--yes` the command refuses before it calls Secrets Manager. **This changes existing CLI behaviour:** scripts that run `remove --force` must add `--yes`. A plain `remove` is still recoverable, `config` removes are unchanged, and the programmatic `removeValue()` / `removeSecret({ force: true })` stay non-interactive and log the same warning.
+- dde6340: Adds the `frontDoor` prop to `Hosting`, which picks CloudFront, an Application Load Balancer, Amazon API Gateway, a stacked door, no door, or your own door built with `defineFrontDoor`. The top-level settings props are deprecated but still supported, so move each to `frontDoor.features.<x>`.
+- 7477b6e: Adds `compute.type: 'web-function'`, which runs the SSR server on AWS Lambda Web Functions behind CloudFront with no API Gateway and no Lambda Web Adapter. Tune it with the `maxConcurrencyPerEnvironment`, `maxEnvironments`, and `rateLimit` fields of `compute.webFunction`.
+- d79a0bd: Preview deploys are faster. `HostingConstruct` takes `inPlaceBuild`, a preview re-deploy passes `--method direct` next to `--hotswap-fallback`, and a Next.js build with `imageOptimization: false` no longer installs `sharp`.
+- d79a0bd: Adds `HostingPresets` and four `Hosting` props, `imageOptimization`, `incrementalRegeneration`, `edgeRoutes`, and `buildId`. `HostingPresets.preview` sets all four plus `frontDoor: { kind: 'apiGateway' }`, and a setting the chosen door can't serve fails synth with `UnsupportedHostingSettingError`.
+- 6a53068: The API and auth CloudFront behaviors attach a response headers policy, so their responses carry headers such as HSTS and X-Frame-Options from the next synth. `CdnConstruct` and `HostingConstruct` expose the policy as a public `securityHeadersPolicy` field.
+- 3b5a419: Adds opt-in CloudFront standard logging v2 for hosting access logs, set with `logging.version: 'v2'`. The default remains `'v1'`, and synth throws `LoggingV2RegionError` in any Region other than us-east-1.
+- 48c35f6: **Breaking: `hosting-secret remove --force` and `blocks secret remove --force` need `--yes` or `-y` to confirm, in every stage.** Add `--yes` to scripts that run `remove --force`.
 
 ### Patch Changes
 
-- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
-
-  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
-  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
-  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
-  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
-  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
-  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
-
-  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
-
-- d366907: chore: manual dependency bump (2026-10-19)
-- 2c73654: fix(hosting): load `astro.config` under Astro 7
-
-  Astro 7's `astro/config` pulls in a Vite build that uses `import.meta.require`, which the adapter's config loader couldn't handle. The adapter logged "Failed to load astro.config … falling back to defaults" and dropped the whole config, so `redirects`, `trailingSlash` and image settings were ignored. The config now loads natively first, and the verified Astro range covers 7.x.
-
-- 515089c: fix(hosting): serve the default 404 page behind every front door
-
-  A multi-page static site that ships no 404 page of its own and sets no
-  `errorPages.notFound` (for example Astro with `output: 'static'` and no
-  `404.astro`) now gets AWS Blocks' default "404 — Page Not Found" page, at HTTP
-  404, behind every front door, not only CloudFront. The ALB and API Gateway
-  (HTTP and REST) doors serve it from their asset proxy instead of a plain-text
-  `Not Found`. A bring-your-own door receives it as `DoorInput.app.errorPages.notFound`
-  (`_not_found.html`), so `cf.errorPages` wires it too. The precedence is the same
-  on every door: the app's `errorPages.notFound`, then the framework's
-  `errorPages[404]`, then the default. The stacked door's edge and
-  `cf.errorPages` now serve an error page at its own key (the default
-  `_not_found.html`, or a framework page under any name) instead of always
-  pointing at `404.html` / `500.html`. An SPA keeps its `index.html` fallback, a
-  site with a server keeps its own 404, and the `'none'` door keeps its S3
-  website error document.
-
-  Every door now makes the same decision from the manifest:
-  - only an explicit `staticAssets.spaFallback: true` is an SPA, as in routing,
-    so a custom adapter's manifest that leaves it unset gets the default page
-    rather than S3's 403 (the built-in adapters always set it);
-  - an image optimizer doesn't count as a server, so a static site with one
-    still gets the default page on CloudFront too;
-  - the build's cutover waits for the default page's upload, so a miss never
-    reaches a new build before its 404 page does.
-
-  The CloudFront door no longer maps 403 twice for a static site that ships a
-  500 page but no 404 page. `cf.origin` now lets CloudFront list the assets
-  bucket (scoped to the door's distribution, as on the built-in doors), so a
-  missing file is a 404 and a bring-your-own door's `cf.errorPages` can serve
-  the page. The CloudFront template of an app built by a built-in adapter is
-  otherwise unchanged.
-
-  The docs now match the doors' behavior:
-  - the ALB door's own alarms are on unless `monitoring: { enabled: false }`;
-  - only a CloudFront-backed door takes over the API's address under
-    `apiFrontDoor: 'cloudfront'`;
-  - the ALB packs listener rules within five condition values and six wildcards
-    per rule;
-  - which servers behind the ALB and API Gateway doors are given `Host` as
-    `x-forwarded-host`, and which receive the client's value.
-
-- a02549a: fix(hosting): keep `HostingError.cause` out of serialized output
-
-  `HostingError` now passes its optional cause to the native `Error` constructor, so `cause` is a non-enumerable property. `JSON.stringify` and object spread of a `HostingError` no longer include the wrapped error (for example AWS SDK `$metadata`). `error.cause` still returns the original error.
-
-- f8bfab1: fix(hosting): pages that render on demand inside a Nuxt/Nitro ISR folder no longer 404
-
-  With an ISR or SWR route rule that names a folder in `public/` (for example `routeRules: { '/blog/**': { isr: 60 }, '/blog/featured': { prerender: true } }`), the Nitro adapter used to emit a blanket static `/blog/*` route for the folder. Every front door takes the first match, so `/blog/any-other-post` went to the static asset origin and returned 404, including when the prerendered page sat one folder deeper (`/blog/2024/featured`).
-
-  The folder no longer gets a blanket static route. Instead:
-
-  - Its real files keep their own static routes: each file directly in the folder (`/blog/hero.png`), and one route per sub-folder that holds no pages (`/blog/img/*`). They're still served from S3.
-  - A page frozen by an explicit `prerender: true` rule keeps its own routes and is still served frozen from S3.
-  - Every other path under the folder goes to the server and renders on demand.
-
-  `RouteBehavior` has a new optional `exact` field. A route marked `exact` keeps its own row in the front door's route table: it isn't merged with its siblings into a `<parent>/*` wildcard, and it isn't switched to the server when ISR/SWR is active. The Nitro adapter sets it for the routes above. A site-wide rule (`'/**'`) and apps without ISR/SWR rules are unchanged.
-
-- 3ae22e6: fix(hosting): build Next.js apps with a verified OpenNext version, and explain Edge-route and version mismatches
-
-  - **`@opennextjs/aws` not installed.** Hosting declares OpenNext as an optional peer dependency, so nothing installs it for the app, and a bare `npx @opennextjs/aws build` downloaded the newest release, which is often outside the version range the Next.js adapter is verified against. When the project doesn't declare it, the adapter now builds with `@opennextjs/aws@4.0.3` and prints the command to declare it (`npm install --save-dev @opennextjs/aws@~4.0.3`). If that build fails, it throws `OpenNextNotFoundError` with the same command. Before this change that error could never be raised.
-  - **Next.js outside OpenNext's `next` peer range.** When the app's `next` version is outside the range the building OpenNext declares (for example `next@15.5.7` with `@opennextjs/aws@4.0.3`, which requires `>=15.5.18 <16 || >=16.2.6`), the adapter now prints a warning naming both versions and the range. Package managers that skip peer checks would otherwise build an untested pair without a word.
-  - **Edge routes on a stack without a region.** A Next.js route with `runtime = 'edge'` is built as Lambda@Edge, which needs the stack's region at synth time. On a stack with no explicit `env.region`, synth failed with CDK's `stacks which use EdgeFunctions must have an explicitly set region`. Hosting now throws `EdgeComputeRequiresRegionError`, which names the route's compute and shows the `env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION }` fix.
-  - **Package versions in workspaces and monorepos.** The Next.js, Astro, Nuxt and SvelteKit adapters now read `next`, `@opennextjs/aws`, `astro`, `@astrojs/node`, `nitropack`, `@nuxt/image`, `@sveltejs/kit` and `@sveltejs/adapter-node` from the app's own directory. They previously started at its parent, so an app that pins a different version than the one hoisted to the workspace root got the root's version. For example, a Next.js 15 app under a root `next@16` had the Next.js 16 image-optimizer patch applied and missed the peer-range warning.
-  - **Local images on Next.js 15.5.16+ and 16.2.0–16.2.4.** The adapter patches OpenNext's call to Next.js's `fetchInternalImage` when Next.js takes an extra `maximumResponseBody` argument. It decided by major version (patch on 16, skip on 15), but that argument arrived in patch releases: it is in 15.5.16 and later, and in 16.2.5 and later, but not in 16.0.x, 16.1.x or 16.2.0–16.2.4. So `/_next/image` returned 500 (`TypeError: … is not a function`) for local images on Next.js 15.5.16+ and on 16.2.3–16.2.4. The adapter now reads the signature from the installed `next` (falling back to those version boundaries).
-  - The `@opennextjs/aws` peer dependency range is now bounded: `>=3.10.0 <5.0.0`.
-  - `@aws-blocks/create-blocks-app`: the `nextjs` template declares `@opennextjs/aws` (`~4.0.3`) as a devDependency, so new Next.js apps build with a pinned, verified OpenNext.
-
-- c8c26f7: fix(hosting): don't hard-fail a Next.js deploy the day its major ages out of OpenNext's support window
-
-  `@opennextjs/aws` refuses to build a Next.js major that has passed the Next.js team's 2-year support window: it prints `Next.js version X is not supported by the Next.js team` and calls `process.exit(1)` unless invoked with `--dangerously-use-unsupported-next-version`. Because that window is a wall-clock deadline, a Next.js SSR deploy that worked yesterday would start hard-failing the day the major expires — with no change on the user's side (e.g. Next 15 aged out on 2026-10-21).
-
-  The Next.js adapter now passes `--dangerously-use-unsupported-next-version` to the OpenNext build unconditionally. The flag is inert on a supported version — OpenNext reads it only inside its `if (!isSupported)` branch — and on an aged-out major it downgrades the hard `exit(1)` to a warning and continues. The deployed app still runs; the support policy is about upstream security patches, not runtime compatibility. OpenNext's own `isNextVersionSupported` remains the single source of truth for the supported/unsupported decision, so nothing in this package needs to track Next.js release dates.
-
-- 3803f19: Ship a patched `sharp` in every image-optimization bundle. The Next.js image-optimization Lambda, the Astro SSR `/_image` endpoint and the Nuxt IPX Lambda installed sharp 0.34.x, which is affected by [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) (a librsvg use-after-free that can lead to remote code execution on glibc Linux). They now install `sharp@^0.35.5`. A sharp already in the bundle is replaced unless it is 0.35.5 or later and built for the function's CPU, and the Nuxt IPX bundle forces ipx onto the same sharp. Redeploy to pick up the fix.
-
-  Astro 4 and 5: sharp 0.35 removed the `failOnError` option that Astro's sharp image service passes, so a slightly corrupt source image (for example a truncated JPEG) that `/_image` used to render now fails to optimize.
-
-- db15b5e: fix(core): make the API Gateway 29s integration default explicit and warn on an undeliverable alarm topic
-
-  Two right-sizing fixes to the production defaults a deployed Blocks app ships with.
-
-  - **API Gateway integration timeout is set explicitly to 29s.** `LambdaIntegration` already defaults to 29s, so this is no runtime change — it writes the boundary into the synthesized template (an explicit `TimeoutInMillis: 29000` on each Lambda method) so it is visible at review and aligned with the handler's own 28s deadline guard (`APIGW_TIMEOUT_MS`), which already emits a structured 504 just before the cut-off. A request still in flight at 29s is cut off by API Gateway regardless of how long the Lambda may run; the shared handler's function timeout (up to 900s) is the async-work ceiling and is unreachable on the synchronous HTTP path. The `bb-lambda-compute` `memory`/`maxTimeoutSeconds` docs now explain that the generous defaults are sized for the shared async path and how to right-size an API-only compute.
-  - **Hosting monitoring warns at synth when an alarm topic has no subscriber.** When monitoring is enabled and an alarm topic ends up with no subscriber, it can enter ALARM but deliver to no one. A shared validation now emits a loud synth warning, applied to both the regional alarm topic and the off-region us-east-1 support-stack topic that carries the CloudFront 5xx alarm, so each topic is judged on its own alarms and subscribers. The check is deferred to synth so it accounts for subscriptions added after construction — a direct `topic.addSubscription`, or a `LambdaSubscription`/`SqsSubscription` whose subscription resource lands in another stack — and it stays quiet when no alarm is wired or when every alarm already routes to a delivery action other than the topic. The message names the `acknowledgeWarning` escape hatch for callers who accept the gap knowingly.
-
+- 88747f5: A Building Block's mock entry throws when it is loaded in a deployed environment, so bundle your backend with the `aws-runtime` export condition. `@aws-blocks/core/bb-utils` exports the check as `assertNotMockInDeployedEnv(bbName)`.
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- 2c73654: The adapter loads `astro.config` under Astro 7, so `redirects`, `trailingSlash`, and image settings are no longer ignored.
+- 515089c: A multi-page static site with no 404 page of its own and no `errorPages.notFound` gets the default 404 page, at HTTP 404, behind every front door, not only CloudFront. A bring-your-own door receives it as `DoorInput.app.errorPages.notFound`.
+- a02549a: `HostingError` keeps `cause` as a non-enumerable property, so `JSON.stringify` and object spread no longer include the wrapped error. `error.cause` still returns the original error.
+- f8bfab1: With an ISR or SWR route rule that names a folder in `public/`, pages under that folder that render on demand go to the server instead of returning 404. `RouteBehavior` has a new optional `exact` field that keeps a route in its own row of the front door's route table.
+- 3ae22e6: The Next.js adapter builds with `@opennextjs/aws@4.0.3` when the app does not declare `@opennextjs/aws`, and warns when the app's `next` version is outside OpenNext's peer range. Run `npm install --save-dev @opennextjs/aws@~4.0.3` to declare it.
+- c8c26f7: A Next.js deploy no longer fails when its Next.js major passes OpenNext's support window. The Next.js adapter passes `--dangerously-use-unsupported-next-version` to the OpenNext build, so OpenNext prints a warning and continues.
+- 3803f19: The image-optimization bundles for Next.js, Astro, and Nuxt install `sharp@^0.35.5` instead of sharp 0.34.x, so redeploy to pick it up. On Astro 4 and 5, a slightly corrupt source image that `/_image` used to render now fails to optimize.
+- db15b5e: The API Gateway integration timeout is written to the template as an explicit `TimeoutInMillis: 29000`, with no runtime change. Hosting monitoring warns at synth when an alarm topic has no subscriber.
 - c0f6a83: Include the Apache-2.0 `LICENSE` file in the published package.
 
 ## 0.4.1
 
 ### Patch Changes
 
-- 8b5ef4a: fix(hosting): stop the SSR REST API from leaking an IAM role on every teardown
-
-  The SSR origin's `RestApi` relied on CDK's default `cloudWatchRole: true`, which
-  provisions an account-level `AWS::ApiGateway::Account` plus a CloudWatch Logs IAM
-  role with `RemovalPolicy.RETAIN`. The SSR stage enables neither execution nor
-  access logging, so the role was unused, and because it is retained, every
-  `cdk destroy` of a hosting SSR stack left one orphaned IAM role behind — enough,
-  over repeated deploys, to exhaust the account's 3000 `RolesPerAccount` quota and
-  make all subsequent deploys fail with `ServiceLimitExceeded`. The SSR `RestApi`
-  now sets `cloudWatchRole: false` (matching `bb-lambda-compute`), so no role or
-  `ApiGateway::Account` is created. Existing stacks drop both resources on their
-  next deploy; the previously retained role is not removed by CloudFormation and
-  can be deleted manually — but first check `aws apigateway get-account`: if the
-  region's `cloudwatchRoleArn` still points at that role, deleting it breaks
-  logging for every other API Gateway stage in the region.
-
-- 382dac6: fix(hosting): the image-optimization Lambda no longer follows redirects on remote image fetches
-
-  The IPX image Lambda validated a remote image URL against the allowlist
-  (`IMAGE_ALLOWED_HOSTNAMES` / `remotePatterns`) once, before fetching — and the
-  fetch then followed HTTP redirects without re-validating the target. An allowlisted
-  host with an open redirect (a user-content CDN, say) could therefore steer the fetch
-  to any host, including `127.0.0.1` inside the Lambda sandbox.
-
-  Remote fetches now use `fetchOptions: { redirect: 'error' }`, so a 3xx fails the
-  image request instead of being followed, and the allowlist holds for every request
-  the Lambda makes. **If an allowlisted image host serves its images through a redirect,
-  allowlist the final location instead.** The generated Lambda also pins `ipx` to an
-  exact version (`3.1.1`) rather than `^3.0.0`, so the fetch behavior this guard relies
-  on can't change at deploy time.
-
-- c6d9e49: fix(hosting): the image-optimization Lambda's SVG gate now decides by content, not file extension
-
-  With `dangerouslyAllowSVG` / `IMAGE_ALLOW_SVG` off, the image Lambda rejected SVG
-  sources only when the URL ended in `.svg`. An origin's content type isn't tied to its
-  path, so an SVG served from `/logo` or `/logo.png` passed the gate and was returned as
-  `image/svg+xml` from the application's own origin. SVGO, which IPX runs on SVG input,
-  is an optimiser rather than a sanitiser and keeps some script-capable constructs.
-
-  The Lambda now sniffs the image bytes from both the S3 originals bucket and allowlisted
-  remote hosts, and rejects SVG content with a `415` before IPX processes it. That also
-  covers rasterizing requests such as `?f=png`. As a backstop it refuses any SVG output
-  unless SVG is enabled. The `.svg` extension check remains as a cheap pre-filter.
-  Nothing changes when SVG is enabled, or for raster images.
-
-- 7c19c4f: feat: `npm run deploy -- --wait-live` holds `BLOCKS_DEPLOYED` until the new build is actually served
-
-  `cdk deploy` returning is not the same as the new frontend build being served.
-  Two edge windows stay open after CloudFormation reports complete, and emitting
-  `BLOCKS_DEPLOYED` while either is open lets a caller's immediate self-test hit a
-  stale bundle and silently miss a regression.
-
-  - **New opt-in `--wait-live` flag.** When set, `npm run deploy` only prints
-    `BLOCKS_DEPLOYED` once the new build is confirmed live, so a request issued
-    immediately after the signal returns the new asset.
-  - **Per-build config match (the KVS cutover).** Each deploy stamps its build id
-    into the runtime config (`/.blocks-sandbox/config.json`) and surfaces it as a
-    `HostingBuildId` stack output; the poll declares the config live only when the
-    body CloudFront serves carries that exact id, distinguishing the new build from
-    a byte-identical config still served by an edge POP routing to the previous
-    build during cutover — the common re-deploy case.
-  - **Invalidation wait (the compute/SSR window).** For a compute deploy the `/*`
-    CloudFront invalidation that flushes the previous build's edge-cached SSR HTML
-    is fire-and-forget, so CloudFormation returns before it propagates. The deploy
-    now surfaces the invalidation id as a `HostingInvalidationId` stack output and,
-    under `--wait-live`, polls `GetInvalidation` until `Completed` before signalling
-    — closing the window where the edge still serves old SSR HTML (referencing old
-    hashed assets → 403). Pure-static deploys issue no invalidation and skip this.
-  - **Bounded probing.** Each config probe carries a per-request timeout
-    (`AbortSignal`), so one stalled response cannot hold the deploy past its budget.
-    `--wait-live-timeout=<seconds>` tunes the overall budget (default 180); if
-    liveness can't be confirmed in time, the deploy — which itself succeeded — prints
-    a clear warning and exits non-zero rather than emitting a false "live" signal.
-  - **No-op for backend-only apps** (no frontend to verify) and off by default, so the
-    existing deploy flow is unchanged unless you opt in.
+- 8b5ef4a: The hosting SSR `RestApi` sets `cloudWatchRole: false`, so `cdk destroy` no longer leaves an unused IAM role behind. Before you delete a previously retained role by hand, run `aws apigateway get-account` and check that `cloudwatchRoleArn` does not point at it.
+- 382dac6: The image-optimization Lambda no longer follows redirects on remote image fetches, so a 3xx fails the image request. If an allowlisted image host serves its images through a redirect, allowlist the final location instead.
+- c6d9e49: With `dangerouslyAllowSVG` / `IMAGE_ALLOW_SVG` off, the image-optimization Lambda rejects SVG content with a `415` by checking the image bytes, not the file extension. An SVG served from `/logo` or `/logo.png` no longer passes the gate.
+- 7c19c4f: Adds an opt-in `--wait-live` flag to `npm run deploy`. With it, the deploy prints `BLOCKS_DEPLOYED` only once the new build is served, and exits non-zero if that is not confirmed within `--wait-live-timeout=<seconds>`, default 180.
 
 ## 0.4.0
 
 ### Minor Changes
 
-- 5501cb6: Fix off-region CloudFront 5xx alarm and rework alarm subscription wiring (#481).
+- 5501cb6: **Breaking: the `monitoring.snsTopicArn` prop and the `hosting.monitoringTopic` attribute are removed.**
 
-  **Breaking change** (a minor bump pre-1.0):
+  To upgrade:
 
-  - The `monitoring.snsTopicArn` prop is **removed**. Attach notifications
-    with the new `monitoring.subscriptions` list instead: `EmailSubscription`
-    and `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions` (endpoint
-    subscriptions only, for now). Each subscription is applied to **both**
-    hosting alarm topics, so you subscribe in one place and every alarm is
-    covered regardless of region.
-  - The `hosting.monitoringTopic` attribute is **removed**, replaced by
-    `hosting.monitoring` = `{ alarms, alarmTopics }` (all alarms and all
-    alarm topics across both regions).
+  1. Replace `monitoring: { snsTopicArn }` with `monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` or a `UrlSubscription`.
+  2. Read `hosting.monitoring`, which is `{ alarms, alarmTopics }`, instead of `hosting.monitoringTopic`.
+  3. To route alarms to an existing SNS topic, call `hosting.monitoring.alarms.forEach(a => a.addAlarmAction(new cw_actions.SnsAction(myTopic)))`.
 
-  `AWS/CloudFront` metrics publish only in us-east-1 and a CloudWatch alarm
-  cannot watch a metric cross-region, so off-region the CloudFront 5xx alarm
-  never fired (it sat at `OK` under `treatMissingData: NOT_BREACHING`).
-  Off-region deployments now **always** place the CloudFront alarm in a
-  synthesized `<stackName>-CfMonitoring-<addr>` us-east-1 stack with its own
-  encrypted SNS topic; `monitoring.subscriptions` are applied to that topic
-  too. Off-region placement is always on; the only escape is when it is
-  genuinely impossible. When the region resolves but the account is
-  unresolved (a single-synth multi-account pipeline), the us-east-1 support
-  stack cannot be built, so the CloudFront alarm is skipped with a loud synth
-  warning and all other alarms are kept, rather than throwing. Set
-  `env: { account, region }` to enable CloudFront coverage.
+  Off-region deployments place the CloudFront 5xx alarm in a synthesized `<stackName>-CfMonitoring-<addr>` us-east-1 stack. See #481.
 
-  Migration: replace `monitoring: { snsTopicArn }` with
-  `monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }`
-  (or a `UrlSubscription`). Two escape paths cover what `subscriptions` no
-  longer does directly:
-
-  - **Route alarms to an existing/central SNS topic:**
-    `hosting.monitoring.alarms.forEach(a => a.addAlarmAction(new cw_actions.SnsAction(myTopic)))`.
-  - **Resource-target (Lambda/SQS) subscriptions:** still valid on the
-    regional topic via `hosting.monitoring.alarmTopics[].addSubscription(...)`.
-    Only the automatic cross-region fan-out to the us-east-1 CloudFront topic
-    drops them (that would need an unresolvable cross-region reference).
-
-  See `docs/DECISIONS.md` D-016 for the always-on and warn-and-skip rationale.
-
-  `@aws-blocks/core` surfaces `monitoring.subscriptions` and the
-  `monitoring` attribute in place of `monitoringTopic`.
-
-- 5515483: fix(hosting): fail-closed SSR cache key + per-credential cache-key options
-
-  Ensures cacheable SSR responses on compute deployments are keyed per credential, and adds the controls to include credentials in the SSR cache key.
-
-  **BREAKING:** existing configs that set `cdn.ssrDefaultTtl > 0` now fail synth (`SsrCacheKeyCredentialsRequiredError`) until they include a credential in the SSR cache key. Enabling `ssrDefaultTtl > 0` makes SSR responses without an explicit `Cache-Control` header cacheable and shared at the CloudFront edge, keyed only on the Next.js router headers — not on `Authorization` or session cookies (CloudFront ignores `Vary`).
-
-  Migration — pick one:
-  - Add `cacheKeyCookies: ['<your session cookie>']` and/or `cacheKeyHeaders: ['authorization']` so cached responses are keyed per credential; or
-  - Remove `ssrDefaultTtl` (and ensure personalized routes emit `Cache-Control: private`).
-
-  - **Fail-closed guard on `cdn.ssrDefaultTtl`.** Synth throws unless `cacheKeyCookies` and/or `cacheKeyHeaders` is set, so credentials are in the cache key before per-credential responses can be cached. An unresolved-token TTL is treated as `> 0` (fail closed).
-  - **New `cdn.cacheKeyCookies` and `cdn.cacheKeyHeaders` options.** Add your session cookie name(s) and/or credential-bearing header(s) (e.g. `'authorization'`) to the SSR cache key so authenticated responses are cached per credential. `'accept-encoding'` is rejected (handled by the brotli/gzip flags), and at most 8 caller cookies are allowed (CloudFront's 10-cookie cap, 2 reserved for Next.js preview mode). The cookie/header caps are resolved via `QuotaBudget` (`quotas.cacheKeyCookies` / `quotas.cacheKeyHeaders`) so a granted quota increase raises them.
-  - **Shared-route cache key on compute deploys.** Compute deploys route every request through a single default cache behavior, so `cacheKeyCookies`/`cacheKeyHeaders` would key all routes per credential. The edge router now strips the configured cookies and `authorization` on static and image routes so shared assets keep a shared cache key, while SSR/compute routes stay keyed per credential.
-  - **Cache-key JSDoc** on `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` documenting how credentials enter the cache key and safe usage.
-  - **`@aws-blocks/core`:** `Hosting` exposes `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` as top-level props and forwards them to the CDN cache-key config.
-
-  Note: any route that sets cookies via `Set-Cookie`, or otherwise varies per user without opting into the cache key, must emit `Cache-Control: private` so its response is not cached as a single shared entry at the edge.
+- 5515483: **Breaking: a config that sets `cdn.ssrDefaultTtl > 0` fails synth with `SsrCacheKeyCredentialsRequiredError` until the SSR cache key includes a credential.** Add `cacheKeyCookies: ['<your session cookie>']` or `cacheKeyHeaders: ['authorization']`, or remove `ssrDefaultTtl` and make personalized routes emit `Cache-Control: private`.
 
 ### Patch Changes
 
-- 773cef2: fix(astro): allow an empty `dist/client` for pure-SSR builds
-
-  A server/hybrid Astro app with no static assets — no `public/` files and no
-  prerendered pages — produces an empty `dist/client`. The adapter treated that as
-  a missing build output and threw `AstroBuildOutputMissingError`, blocking synth
-  and deploy. `dist/server/entry.mjs` is the real required artifact; an empty (or
-  absent) `dist/client` is valid, since CloudFront routes every request to the SSR
-  Lambda. The adapter now requires only the server entry and ensures `dist/client`
-  exists (creating it when absent, with a build-log breadcrumb) instead of failing.
-
-- 6b7fe4c: fix(hosting): retain the ISR tag-table seed custom resource on stack delete
-
-  The `IsrTagTableSeed` custom resource is backed by a Lambda through a CDK
-  `Provider`. On stack delete CloudFormation tore the provider's framework Lambda
-  down before it sent the custom resource its `Delete`, so the delete invoke hit
-  an already-gone function, received no response, and hung to the 30-minute
-  custom-resource timeout -- failing the whole stack delete with `DELETE_FAILED`
-  and re-failing identically on every retry. The seed custom resource now carries
-  `RemovalPolicy.RETAIN`, so CloudFormation drops it on delete without a delete
-  invoke and the stack tears down cleanly. This is behavior-preserving: the
-  OpenNext `dynamodb-provider` `remove()` path is a no-op, and the seeded rows
-  live only in the ISR tag table, which is destroyed with the stack -- so
-  retaining the custom resource orphans nothing.
-
-- dae7a86: fix(hosting): warn when a compute resource pins an end-of-life Node.js runtime
-
-  `resolveRuntime` still accepts an explicitly pinned `nodejs18.x` or `nodejs20.x`
-  (so an existing/deployed function isn't hard-broken at synth), but both are past
-  their AWS Lambda deprecation dates (Node 18: Apr 2025; Node 20: Apr 2026). It now
-  emits a CDK synth-time **deprecation warning** for those runtimes, pointing at
-  `nodejs22.x` / `nodejs24.x` (or omitting the runtime to use the default). A
-  supported runtime, or omitting it, warns nothing; the accepted set and the
-  hard error for unrecognized runtimes are unchanged.
-
-- 7b7a59f: fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
-
-  - **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
-    schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
-    schedule-group pattern).
-  - **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
-    policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
-    conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.
+- 773cef2: The Astro adapter accepts an empty or absent `dist/client` for a pure-SSR build instead of throwing `AstroBuildOutputMissingError`. It requires only `dist/server/entry.mjs`.
+- 6b7fe4c: A stack delete completes instead of hanging on the `IsrTagTableSeed` custom resource and failing with `DELETE_FAILED`.
+- dae7a86: Synth emits a deprecation warning when a compute resource pins `nodejs18.x` or `nodejs20.x`. Use `nodejs22.x` or `nodejs24.x`, or omit the runtime to use the default.
+- 7b7a59f: The EventBridge Scheduler role's trust policy is limited to schedules in the stack's account and region. Hosting removes a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key policy.
 
 ## 0.3.1
 
 ### Patch Changes
 
 - 2806ae2: Ensure the hosting route cutover waits for the resolved client configuration deployment.
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
 
 ## 0.3.0
 
 ### Minor Changes
 
-- f2f186c: fix(hosting): DeleteOldBuilds no longer expires the build that is currently served (#480)
-
-  The `DeleteOldBuilds` S3 lifecycle rule expired every object under `builds/`
-  after `buildRetentionDays` (default 30), including the build that CloudFront KVS
-  `meta.b` currently points to. An app that did not deploy within the retention
-  window had its live build's objects expired out from under an otherwise-healthy
-  stack — the router kept rewriting to the now-empty prefix, so every static path
-  returned 403 (hosting ≤ 0.1.4) or 404 (≥ 0.1.5) while the API path stayed 200.
-  Recovery required a redeploy.
-
-  **Fix.** The lifecycle rule now matches only objects tagged
-  `aws-blocks:build-state=superseded`. At the KVS cutover, after the pointer flips
-  to the new build, the cutover handler tags the _outgoing_ build's objects
-  superseded (best-effort; list + tag/untag only — the handler is granted **no** S3
-  delete-object permission). The live build is never tagged, so it is never expired,
-  regardless of deploy cadence. Superseded builds are still cleaned up after
-  `buildRetentionDays`. S3 lifecycle `TagFilters` are inclusion-only (there is no
-  "NOT tagged" predicate), which is why the superseded build is tagged rather than
-  the live build excluded.
-
-  **Rollback-safety hardening.** The same cutover also _clears_ the build-state tag
-  on the _incoming_ build's objects, symmetric to tagging the outgoing one. Without
-  this, a rollback that re-points `meta.b` back to a retained build that was tagged
-  superseded by an earlier cutover would hand the now-live build to
-  `DeleteOldBuilds` — #480 again. Clearing is best-effort and uses
-  `s3:DeleteObjectTagging` (tags only, never objects).
-
-  **`buildRetentionDays` is now configurable from `@aws-blocks/core`.** Previously
-  `HostingProps` dropped it (only `retainOnDelete` was forwarded), so the only way
-  to change retention was an L1 bucket override. It now flows through to the
-  hosting bucket lifecycle rule. Must be at least `skewProtection.maxAge`
-  (converted to days) or synth throws `InvalidSkewProtectionMaxAgeError`, as
-  before.
-
-  **New advisory guard.** An optional `storage.deployIntervalDays` hint emits a
-  synth-time **warning** (never an error) when the deploy cadence is at or beyond
-  `buildRetentionDays`, i.e. when superseded builds could age out before the next
-  deploy and shrink the rollback window. The live build is unaffected, so this is
-  a rollback-window note, not a correctness gate.
-
-  Pre-1.0 `minor` per this repo's convention: the change alters the synthesized
-  lifecycle rule and the `KvKeys` custom resource (a benign in-place bucket-config
-  - Lambda-role update on the next deploy; no bucket replacement), and adds a new
-    IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
-    scoped to `builds/*`) to the
-    cutover handler. Build artifacts uploaded before the upgrade carry no
-    `build-state` tag and are therefore never expired by the new rule — including
-    the live build — so the upgrade cannot delete a running build; from the next
-    deploy onward each superseded build is tagged and reclaimed normally.
+- f2f186c: The `DeleteOldBuilds` lifecycle rule expires only superseded builds after `buildRetentionDays`, never the build that is currently served. `buildRetentionDays` is now configurable from `@aws-blocks/core`.
 
 ### Patch Changes
 
-- 1da58fd: `HostingConstruct`: retain the CDKBucketDeployment custom resources so they're skipped on stack teardown. A BucketDeployment custom resource runs a delete-time handler (object cleanup / CloudFront invalidation — aws-cdk#15891, aws-cdk#23708); when it fails it wedges the whole stack in `DELETE_FAILED`, orphaning the CloudFront distribution. Retaining the CRs removes them from the teardown path so the stack — and its distribution — delete cleanly (object cleanup is handled by the bucket's `autoDeleteObjects` / sandbox teardown). Observed leaking distributions on the high-volume Amplify SSR-adapter e2e (`deployment-type=standalone`), which consumes this construct.
-- 4b74c7f: feat(hosting,pipeline): managed-value JSON codec + a public per-stage post-deploy hook
-
-  **`@aws-blocks/hosting` — managed-value JSON codec.** `secret()`/`config()` markers
-  are branded with a `Symbol` (and may carry a non-serializable `schema`), so they do
-  not survive `JSON.stringify`/`JSON.parse` — the brand is dropped and
-  `isManagedValue()` then returns false. Any consumer that carries a config object
-  containing markers across a JSON boundary (e.g. serializing per-stage config into a
-  build environment variable and reading it back in a later phase) now has a lossless
-  round-trip: `encodeManagedValue`/`decodeManagedValue`, the `managedValueReplacer` /
-  `managedValueReviver` for use with `JSON.stringify`/`JSON.parse`, plus
-  `isManagedValueJSON`, `ManagedValueJSON`, `MANAGED_VALUE_JSON_TAG`,
-  `MANAGED_VALUE_JSON_VERSION`, and the typed `ManagedValueCodecError`. The wire form
-  is a versioned, cross-build compatibility boundary: `decodeManagedValue` accepts
-  `unknown` and validates exhaustively — throwing `ManagedValueCodecError` on an
-  unsupported version, unknown kind, or malformed value — while the reviver leaves
-  anything that is not an exact wire value untouched (a tagged object carrying extra
-  fields is not mistaken for a marker, so no data is silently dropped). A marker's
-  `schema` object is not serializable and is not transported, but its operational bit
-  is, so a schema-bearing marker round-trips **without silently changing runtime
-  behavior** (the far side still JSON-parses the stored value); deep re-validation
-  still requires re-declaring the schema on the far side.
-
-  **`@aws-blocks/pipeline` — `postStage` hook.** New optional `postStage` prop on
-  `PipelineProps`. It is invoked once per stage with the stage, its config, and the
-  resolved pipeline source (`PostStageContext`), and its returned steps are attached
-  as that stage's post-deploy steps. When the stage also has a `bakeTime`, the bake
-  step is made to depend on the hook's steps, so baking begins only after they
-  complete rather than racing them in parallel. This lets a higher-level construct run
-  a second per-stage deploy phase (one that needs the first phase's outputs) without
-  matching internal construct names to rediscover the stage's source.
-
-  Both additions are backward compatible — new exports and one new optional prop.
+- 1da58fd: `HostingConstruct` retains the CDKBucketDeployment custom resources, so a failed delete-time handler no longer leaves the stack in `DELETE_FAILED` on teardown.
+- 4b74c7f: Adds `encodeManagedValue`, `decodeManagedValue`, `managedValueReplacer`, and `managedValueReviver` to `@aws-blocks/hosting`, so `secret()` and `config()` markers survive a JSON round-trip. `PipelineProps` takes an optional `postStage` hook that returns each stage's post-deploy steps.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 9d4ccea: Add `secret()` / `config()` support to hosting and pipeline for self-hosted deployments — externalized values that are never hardcoded in source, committed to git, or written into the CloudFormation template.
-
-  **Two intent functions; the store is implied by which you call.**
-
-  - **`secret('KEY')` → AWS Secrets Manager** — for sensitive values (API keys, tokens, credentials).
-  - **`config('KEY')` → SSM Parameter Store** (free tier) — for non-sensitive externalized values (feature flags, a custom domain, a connection ARN).
-
-  The developer never selects a store; it is derived from the function (`storeForKind`), so the CLI write, the IAM grant, the synth-time fetch, and the runtime read can never disagree.
-
-  **Runtime read — two getters, one per store.** `getSecret('KEY')` reads Secrets Manager; `getConfig('KEY')` reads SSM. Each reads its own injected locator env var (`HOSTING_SECRET_PARAM_<KEY>` vs `HOSTING_CONFIG_PARAM_<KEY>`), so the store is unambiguous. Both read `process.env.KEY` first, so **local dev needs no AWS** (put the value in a `.env` file). Values are fetched + decrypted on first use, cached (per-kind `cacheTtlSeconds` for rotation without a cold start; otherwise cached for the process lifetime), and never enter the template. The getters live on the **CDK-free `@aws-blocks/hosting` entry** — the value API (`secret`/`config`/`getSecret`/`getConfig`) is the package's `.`, and its module graph pulls in no CDK, no `fast-glob`, and no `node:fs`, so importing it into an SSR/runtime bundle (including the edge runtime) is safe. Build-time tooling lives off `.` so it never enters a runtime bundle: the CDK construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI + typegen engines on `@aws-blocks/hosting/scripts`. (`@aws-blocks/core` already exports a backend `getConfig`, so import the hosting getters from `@aws-blocks/hosting`.)
-
-  **CDK wiring.** In `Hosting` `environment` (and `domain`) a `secret()`/`config()` marker injects only the store _locator_ and grants the compute role least-privilege read (`secretsmanager:GetSecretValue` / `ssm:GetParameter`, scoped to the exact ARN) + `kms:Decrypt` (conditioned on `kms:ViaService`). When a `stage` is set the grant covers BOTH the stage locator `<prefix>/<stage>/<key>` and the shared fallback `<prefix>/<key>` (the fallback read is what lets a stage fall back to a shared value), so treat the shared entry as readable by every stage sharing that prefix. A **synth-time** position — `domain.domainName` — accepts only `config()` (or a plain string), never `secret()`: the value is resolved via an SDK read and **inlined as a literal into the template** (a domain must be a literal before CloudFront/ACM), so a secret there would defeat its own purpose; a domain is public anyway. Synth resolution is async, so use `await Hosting.create(...)`. (Runtime `environment` markers still accept both `secret()` and `config()` — those inject only the locator and never inline.) Per-kind namespace/cache config is set via the separate `secretStore` / `configStore` props (`{ prefix, stage, cacheTtlSeconds }`), defaulting to the neutral `/hosting/secrets` and `/hosting/config` prefixes.
-
-  **Namespacing (avoid cross-app collisions).** A **Blocks** app is scoped automatically: the `Hosting` / `Pipeline` blocks and the `npm run secret` / `config` CLIs default to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`, where `stackId` is the app's stable id from the committed `.blocks/config.json`. Both the CLI and the CDK synth read that same file, so two Blocks apps in one account/region never collide, and the write and the read can never diverge (when the file is absent — e.g. a bare test — both sides fall back to the unscoped `/blocks/*` identically). `stackId` is stage-independent (prod and sandbox share it; use the opt-in `stage` segment for per-stage values). A **standalone** hosting/pipeline app (the framework-neutral leaf) has no `.blocks/config.json`, so its defaults (`/hosting/secrets`, `/hosting/config`) stay account-global — give each app its own `secretStore.prefix` / `configStore.prefix` (and matching CLI `--prefix`) when more than one deploys to an account. Use `--region` (or `AWS_REGION`) to write the value in the same region the app deploys to.
-
-  **Bring-your-own (BYO).** `environment` (hosting) and `buildSecrets` (pipeline) also accept an existing CDK `ISecret` / `IParameter` handle alongside the managed markers: the construct grants read via the handle and injects its locator, so `getSecret`/`getConfig` resolve it identically — managed _provisions_, BYO _references_.
-
-  **Pipeline.** `source.connectionArn` accepts a `config()` marker (resolved to a literal at synth; a connection ARN is a reference inlined into the template, so `secret()` is a type error there — same rule as `domain`). `buildSecrets` accepts `secret()` markers or BYO `ISecret` handles and wires them as CodeBuild `SECRETS_MANAGER` env vars fetched at build time (masked in logs, never inlined) — build-time credentials are secrets, so this surface is Secrets-Manager-only. Namespace config via `secretStore` / `configStore`.
-
-  **CLI.** `secret set|list|remove` (Secrets Manager) and `config set|list|remove` (SSM), sharing one engine (`setValue`/`listValues`/`removeValue`/`runValueCli`). Blocks apps get `npm run secret` / `npm run config` (scoped per app to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`); standalone/pipeline apps get the `hosting-secret` and `hosting-config` bins. A **secret** value is never read from argv/shell history — `secret set` takes it from a hidden prompt or `--value-stdin` (a positional value is a hard error); a non-sensitive **config** value may be passed positionally. `list` prints names only, never values. All commands accept `--prefix`, `--stage`, and `--region` (write to the same region the app deploys to).
-
-  **Type-safe reads (zero code) — `getSecret` / `getConfig` autocomplete + typo errors.** The runtime getters are typed against two augmentable registries (`HostingSecretRegistry` / `HostingConfigRegistry`): empty by default they accept any `string` (unchanged, non-breaking), and once populated they narrow to your declared keys — editor autocomplete, and a typo (or reading a `config` key via `getSecret`, i.e. the wrong store) becomes a compile error. You populate them with **no code change** via the new `hosting-typegen` CLI (`npm run typegen`, `--watch` to regenerate on save, `--check` for CI): it statically scans your `secret('...')` / `config('...')` calls (TypeScript compiler API — no app execution, no AWS credentials) and generates a `.d.ts` (`.blocks/hosting-values.d.ts`) that augments the `@aws-blocks/hosting` entry (where the getters live), narrowing them to your declared keys. The generated file is derived from your `secret()`/`config()` calls, and `--check` fails CI when it's stale. Add `.blocks/**/*.d.ts` to your tsconfig `include`. In a Blocks app this is automatic: the dev server (`npm run dev`) auto-detects `secret()`/`config()` usage and runs the generate-and-watch step itself (a no-op when the app declares no secrets, and non-fatal), so keys update as you type with no second command; standalone hosting apps use `hosting-typegen --watch`.
-
-  **Typed, parsed values via a schema.** `secret('KEY', { schema })` / `config('KEY', { schema })` accept any Standard Schema (Zod, Valibot, ArkType — typed as `StandardSchemaV1`, library-neutral). `typegen` builds a TypeScript `Program`, infers the schema's output type, and inlines it into the generated `.d.ts`, so **`getSecret`/`getConfig` return the inferred type** (e.g. `const { beta } = await getConfig('FEATURE_FLAGS')`) instead of `string` — no `JSON.parse(...)` and no `any`. At runtime the value is JSON-parsed (a per-key flag is injected at synth); the schema itself isn't shipped to the runtime, so this is parse-to-type, not a deep re-validation across the bundle boundary.
-
-  **Templates.** `@aws-blocks/create-blocks-app` templates scaffold a `secret` script (`npm run secret`) wired to the Blocks CLI, and a `typegen` script (`npm run typegen` → `runTypegenCli` from `@aws-blocks/blocks/scripts`) with `.blocks/**/*.d.ts` added to the tsconfig `include`, so a newly-created app can manage secrets and get type-safe `getSecret`/`getConfig` out of the box.
+- 9d4ccea: Adds `secret('KEY')` and `config('KEY')` to hosting and pipeline, which keep values in AWS Secrets Manager and SSM Parameter Store for `getSecret('KEY')` and `getConfig('KEY')` to read at runtime. Set values with `npm run secret` and `npm run config`, and run `npm run typegen` for typed keys.
 
 ## 0.1.10
 
 ### Patch Changes
 
-- dd2350b: Trim the `KvKeys` custom resource IAM policy to true least privilege: it now grants only `cloudfront-keyvaluestore:DescribeKeyValueStore` and `UpdateKeys` — the two actions the deploy-time handler actually calls. The previously-granted `ListKeys`, `GetKey`, `PutKey`, and `DeleteKey` are dropped.
-
-  This also makes the hosting stack deployable under restrictive Service Control Policies (SCPs) / permission boundaries that deny `cloudfront-keyvaluestore:ListKeys`, which previously blocked the deploy.
-
-  Behavior is preserved: `ListKeys` was only used to diff against the live store on Create, but the route-table `KeyValueStore` is created fresh with no `ImportSource`, so it is empty at Create time — the handler now diffs Create against `{}`. The Update path still diffs against the prior template's entries and Delete still drains via `deleteDrainSet()`, neither of which used `ListKeys`.
+- dd2350b: The `KvKeys` custom resource IAM policy grants only `cloudfront-keyvaluestore:DescribeKeyValueStore` and `UpdateKeys`. With this policy, the hosting stack deploys under Service Control Policies or permission boundaries that deny `cloudfront-keyvaluestore:ListKeys`.
 
 ## 0.1.9
 
 ### Patch Changes
 
-- 940956e: fix(hosting): encrypt the alarm SNS topic by default, with a key policy CloudWatch can actually use
-
-  The monitoring construct's auto-created alarm topic was unencrypted. It now gets
-  a dedicated customer-managed KMS key (`MonitoringAlarmTopicKey`) whose policy
-  grants `cloudwatch.amazonaws.com` `kms:Decrypt` + `kms:GenerateDataKey*` in
-  addition to the usual account-root administration statement.
-
-  Both halves matter. Encrypting the topic makes hosting secure-by-default, and
-  the CloudWatch grant is what keeps alarms working once it is encrypted: when an
-  SNS topic used as a CloudWatch alarm action is KMS-encrypted, the key policy
-  must grant the `cloudwatch.amazonaws.com` service principal, because CloudWatch
-  calls KMS **directly** (not via SNS) and an account-root `kms:*` statement does
-  not cover AWS service principals. Without the grant, CloudWatch's publish fails
-  with `KMSAccessDenied` and notifications are dropped silently — the alarm still
-  transitions to ALARM in the console, so the only symptom is the notification
-  that never arrives.
-
-  An AWS-managed key (`alias/aws/sns`) cannot be used instead: its key policy is
-  not editable and does not grant CloudWatch, so a customer-managed key is the
-  only option that can carry the grant.
-
-  The grant is scoped to just those two actions for that one service principal on
-  a single-purpose key, plus a `StringEqualsIfExists` guard on `aws:SourceAccount`
-  against cross-account confused-deputy use. `IfExists` is deliberate:
-  `aws:SourceAccount` is only populated on direct service-principal calls, and a
-  hard `StringEquals` would reintroduce the very silent deny this grant exists to
-  prevent.
-
-  No configuration changes: encryption is unconditional, with no opt-out knob to
-  weaken it. The only API addition is a read-only `encryptionKey` accessor on
-  `MonitoringConstruct`, alongside the existing `topic` and `alarms`, so callers
-  can grant additional publishers on the key. Callers who need different key
-  management continue to pass their own `snsTopic` / `snsTopicArn` and own that
-  topic's encryption. Note the KMS key adds roughly $1/month per stack, and
-  monitoring is on by default; `monitoring: { enabled: false }` or a BYO topic
-  avoids it.
-
-- 4981137: fix(hosting): disable installLatestAwsSdk on the CDN invalidation custom resource
-
-  The `DeployInvalidation` `AwsCustomResource` in `CdnConstruct` left
-  `installLatestAwsSdk` at its CDK default of `true`. That default makes the
-  custom-resource provider Lambda `npm install` the AWS SDK at invoke time,
-  adding roughly 15-30s of cold start and forcing a 512MB memory floor on the
-  provider function.
-
-  Nothing here needs a newer SDK than the runtime ships. The resource makes a
-  single `CloudFront.createInvalidation` call — a long-stable API already bundled
-  in the Lambda runtime's AWS SDK v3. And unlike a one-off resource, this one
-  fires on _every_ hosting deploy (its `CallerReference`/`physicalResourceId` are
-  keyed on `buildId`), so the install cost was paid on every deploy rather than
-  once.
-
-  Setting `installLatestAwsSdk: false` removes that per-deploy penalty and also
-  silences CDK's `installLatestAwsSdkNotSpecified` warning for this construct.
-  No public API or template change beyond the `InstallLatestAwsSdk: false`
-  property on the synthesized `Custom::AWS` resource; invalidation behavior,
-  IAM policy, and deploy ordering are unchanged.
-
-- 5c58c53: fix(hosting): deploy SSR framework Lambdas on nodejs24.x and throw on unrecognized runtimes instead of silently falling back to nodejs20.x
-
-  SSR framework compute (Nuxt/Nitro, Astro, SvelteKit, Next.js regional) now runs on
-  `nodejs24.x` via a shared `FRAMEWORK_COMPUTE_RUNTIME` constant, and `resolveRuntime()`
-  recognizes `nodejs24.x`, defaults to it when no runtime is declared, and throws
-  `UnsupportedRuntimeError` for unrecognized runtimes rather than silently returning
-  Node 20. Lambda@Edge compute (`FRAMEWORK_EDGE_COMPUTE_RUNTIME`) is bumped to
-  `nodejs24.x` as well: Lambda@Edge draws Node.js versions from the same managed runtime
-  table as regional Lambda, where `nodejs24.x` is supported and `nodejs20.x` is already
-  past deprecation. The OpenNext edge bundle banner patch was revalidated — the crash it
-  works around comes from ES Module namespace exports being non-writable per spec, not
-  from any Node-20-specific behavior.
+- 940956e: The monitoring construct's alarm SNS topic is encrypted with a dedicated KMS key, `MonitoringAlarmTopicKey`, available as `encryptionKey` on `MonitoringConstruct`. The key adds roughly $1/month per stack, and `monitoring: { enabled: false }` or your own `snsTopic` avoids it.
+- 4981137: The CDN invalidation custom resource sets `installLatestAwsSdk: false`, which removes roughly 15-30s of cold start from every hosting deploy. The only template change is the `InstallLatestAwsSdk: false` property on the `Custom::AWS` resource.
+- 5c58c53: SSR framework Lambdas and Lambda@Edge compute run on `nodejs24.x`. `resolveRuntime()` defaults to `nodejs24.x` and throws `UnsupportedRuntimeError` for an unrecognized runtime instead of falling back to Node 20.
 
 ## 0.1.8
 
 ### Patch Changes
 
-- 0284e5b: fix(hosting): serve HTML from the current build after a deploy (fixes returning-visitor blank page)
-
-  Returning visitors — browsers holding a `__dpl` skew-protection cookie from a
-  previous build — got a blank page on their first load after every deploy (a
-  second reload fixed it). The KVS router's viewer-request function honored the
-  `__dpl` cookie for **all** URIs including HTML, so a returning visitor was served
-  the **old** build's HTML, while the viewer-response function stamped `__dpl` with
-  the **current** build on every HTML response. The old HTML references
-  content-hashed assets that only exist under the old build's prefix; with the
-  cookie now advanced to the new build, those asset requests were rewritten to
-  `/builds/<newBuildId>/…<oldHash>` (which does not exist) and failed (403 on
-  0.1.4, 404 on ≥ 0.1.5), rendering a blank page.
-
-  The viewer-request function now resolves HTML documents from the current build
-  (`meta.b`), never a pinned cookie build, while assets keep honoring the cookie.
-  HTML, cookie, and referenced assets therefore always agree on one build
-  generation. Mid-session visitors stay safe: asset requests keep honoring their
-  old cookie and old `builds/<id>/` prefixes are retained (`prune: false`), so an
-  already-loaded page keeps working until the next HTML navigation lands the
-  visitor consistently on the current build.
+- 0284e5b: After a deploy, HTML is served from the current build, so a returning visitor with a `__dpl` cookie from a previous build no longer gets a blank page. Assets keep honoring the cookie.
 
 ## 0.1.7
 
 ### Patch Changes
 
-- b09e568: Add a SvelteKit framework adapter. SvelteKit apps are now auto-detected (via
-  `@sveltejs/kit`) and deployed through `@sveltejs/adapter-node` running on Lambda
-  behind the Lambda Web Adapter (the existing `http-server` compute path), fronted
-  by CloudFront + S3. Supports SSR pages, `+server.js` endpoints, form actions,
-  server `load`, `hooks.server`, streaming, prerendered/SSG pages (served frozen
-  from S3), custom headers, cookies, redirects, `error()`, and `paths.base`. A
-  transparent build bridge wires `@sveltejs/adapter-node` when the app hasn't
-  configured it, so no manual setup is required. Patch (not minor) per the
-  pre-1.0 caret convention — the change is additive and backward-compatible.
+- b09e568: Adds a SvelteKit framework adapter. SvelteKit apps are detected through `@sveltejs/kit` and deployed with `@sveltejs/adapter-node` on Lambda, fronted by CloudFront and S3, with no manual setup.
 
 ## 0.1.6
 
 ### Patch Changes
 
-- 9586841: docs(hosting): document custom domain configuration (Route 53 and bring-your-own DNS)
+- 9586841: The docs cover custom domain configuration with Route 53 and bring-your-own DNS.
 
 ## 0.1.5
 
 ### Patch Changes
 
-- 71eb746: Fix eleven reproducible hosting issues:
-
-  - **Astro SSR `/_image` content-type**: the SSR bundle now ships a linux-x64 `sharp` (installed post-build into `dist/server/node_modules`, wasm fallback pruned, ~19.5 MB), so Astro's default `sharp` image service works on Lambda and `/_image` returns a real optimized image with a correct MIME (`image/png`/`image/webp`) instead of the `noop` passthrough's `content-type: image/null`. Gated on the app using the sharp service; apps that pick `noop`/custom are skipped. A dedicated image Lambda isn't feasible for Astro (it fuses `/_image` into the SSR bundle via the `astro:assets` virtual module, unlike Nuxt IPX / OpenNext).
-
-  - **Next image optimizer on Next 15.x**: the `fetchInternalImage` arity patch was gated on an inverted version assumption (the `maximumResponseBody` parameter was added in Next 16, not 15.5). It now only applies on Next ≥ 16, so local image optimization no longer 500s on Next 15.x apps. Renamed `patchImageOptimizerForNext155` → `patchImageOptimizerForNext16`.
-  - **Image optimizer on disallowed types (SVG)**: an untrusted SVG (with `dangerouslyAllowSVG` disabled) now fails closed with its real `400` status instead of a blanket `500` — OpenNext was catching Next's 400 in a generic block that discarded the status.
-  - **SPA hashed assets**: the SPA adapter now marks Vite's content-hashed `assets/*` bundles `immutable` (`immutablePaths: ['assets/*']`) instead of leaving them in the revalidation-only cache tier.
-  - **Missing static assets**: the OAC bucket policy now grants `s3:ListBucket` so a missing key returns a clean `404 NoSuchKey` instead of leaking `403 AccessDenied` XML to the viewer.
-  - **RSC prefetch cache efficiency**: the SSR cache policy excludes Next's random `_rsc` prefetch query param from the cache key (`denyList('_rsc')`), so prefetches of the same page share one edge cache entry.
-  - **Wildcard redirects**: Next `:path*` named-catch-all redirects are now lifted to the edge router (converted to `/*`), with a bare-prefix companion redirect, so they no longer leak the literal `:path*` token in `Location`.
-  - **Route-table budget**: `TooManyRoutesError` now names which table (routes/redirects/headers) exceeded the budget and calls out `trailingSlash: true` as the likely driver, and the previously-hardcoded 64-chunk cap is now tunable via the `quotas.maxRouteChunks` hosting prop (default 64) for very large sites with measured edge-function headroom.
-  - **Nuxt ISR/SWR on-demand pages**: when ISR/SWR is active (`manifest.cache` set), route coalescing now folds a prerendered static sibling group into a single `parent/*` **compute** wildcard (instead of a static one), so a non-prebuilt on-demand child renders at the SSR Lambda instead of hard-404ing from S3 — while the route table stays bounded (one row per parent), avoiding the CloudFront-Function compute-limit 503 a non-coalesced fan-out would cause.
-  - **CloudFront S3-origin policy**: every behavior whose origin is S3 — the default behavior AND the edge-route (`runtime: 'edge'`) behavior — now uses a synthesized custom origin request policy instead of the managed `ALL_VIEWER_EXCEPT_HOST_HEADER`, which CloudFront rejects on S3 origins (`InvalidRequest` at distribution create). The sentinel behaviors keep the managed policy (their origins are the tagged server/image custom origins, not S3). A regression guard asserts no S3-origin behavior references a managed origin request policy.
-  - **Nuxt IPX remote images**: the IPX image Lambda now rides the shared SSR API Gateway (via a dedicated `<baseURL>/{proxy+}` resource) instead of an OAC Function URL, so an unencoded `://` in a remote source path no longer breaks SigV4 (was `403 InvalidSignatureException`); and the IPX runtime is configured with `httpStorage` scoped to the allowlisted domains so allowlisted remote images resolve instead of `404 IPX_RESOURCE_NOT_FOUND`.
-
-- 71eb746: Verify the Next.js adapter against OpenNext 4.0.x. An OpenNext 4.0.3 integration deploy confirmed all four bundle patches (streaming wrapper, edge-bundle process banner, `fetchInternalImage` arity insertion, and SVG-status catch rewrite) still match the 4.0.x minified shape, and the live app served optimized rasters, a fail-closed SVG (400), edge routes, and redirects with no regressions. `VERIFIED_OPENNEXT_RANGE` now covers `>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0` so apps on OpenNext 4.0.x no longer trip the out-of-range warning.
+- 71eb746: Hosting fixes eleven issues, among them Astro SSR `/_image` content types, the image optimizer on Next 15.x, wildcard redirects, and Nuxt IPX remote images. A missing static asset returns `404 NoSuchKey`, and the new `quotas.maxRouteChunks` hosting prop raises the 64-chunk route cap.
+- 71eb746: `VERIFIED_OPENNEXT_RANGE` covers `>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0`, so apps on OpenNext 4.0.x no longer trip the out-of-range warning.
 
 ## 0.1.4
 
 ### Patch Changes
 
-- 9075b81: Fix four hosting correctness bugs:
-
-  - **Base path is now a first-class `Hosting` prop, and Nuxt `app.baseURL` is modelled.** Added a caller-declared `basePath` option to `Hosting` (e.g. `{ basePath: '/app' }`) — the recommended, framework-agnostic source of truth that CloudFront behaviors are prefixed with (plus a root→`/<basePath>/` 308 redirect). When the prop is omitted, the Nitro adapter now detects Nuxt's `app.baseURL` from the build output and sets `manifest.basePath` (parity with Next `basePath` / Astro `base`); previously it was silently dropped, so a Nuxt app with a base path deployed broken — pages rendered but their hashed `/<base>/_nuxt/*` assets 404'd (no hydration). If a base path is detected in the prerendered output but can't be read, synth fails loud instead of shipping a broken site.
-  - **Per-pattern header rules delegate to the SSR runtime instead of competing for CloudFront behavior slots.** For SSR (compute) deploys, a header rule whose pattern has no dedicated behavior is no longer wired as its own CloudFront behavior — the request falls through to the catch-all SSR Lambda, which already emits the framework's `headers()` / `routeRules` at runtime (CloudFront caches the response including those headers). This removes redundant behaviors that burned the scarce ~25-behavior budget and re-asserted a header the origin already sets, and it means SSR header rules can never trip the behavior cap. For **static-only** deploys (S3 origin, no runtime to emit the header) the cap still applies: a rule that would exceed it throws if it sets a security header (CSP, HSTS, X-Frame-Options, … — a lost CSP otherwise looks like a successful deploy) and is dropped with a warning if it's cosmetic.
-  - **config.json deploy ordering is now wired correctly.** The resolved `config.json` deployment now depends on the asset deployments so the build's placeholder config can't clobber it. The previous `tryFindChild('AssetDeployment')` never matched the real child ids and the dependency was silently never created.
-  - **AWS service quotas are now centrally accounted, configurable, and degrade gracefully.** A new `QuotaBudget` module centralizes the previously-scattered, hardcoded limits (CloudFront cache behaviors, Lambda@Edge associations, and the account-wide response-headers-policy quota — the last of which was previously unguarded and blew up opaquely at deploy time). Three things change:
-    - **Configurable:** a new `quotas` prop on `Hosting` (`{ cacheBehaviors?, edgeFunctions?, headerPolicies? }`) lets accounts that have been granted a Service Quota increase raise the corresponding ceiling, instead of hitting a hardcoded throw at the AWS default. Each field documents that synth cannot verify the real granted quota, so an over-set value just moves the failure to deploy time.
-    - **Graceful degradation (SSR):** when prerendered pages would exceed the behavior budget on a compute deploy, the lowest-priority pages are demoted to the SSR runtime (served by the catch-all Lambda) instead of failing the build — deterministically, and never touching hashed-asset prefixes, edge routes, image-opt, or non-default compute origins.
-    - **Grouping (static-only):** when co-located sibling pages would exceed the budget on a static deploy (no runtime to demote to), they collapse into one `<parent>/*` behavior — lossless, since every path under the parent resolves from S3 either way.
-    - **Deploy-fail guards for hard limits:** the static-asset upload Lambda (CDK's `BucketDeployment`) is now sized to 1024 MB / 1024 MiB `/tmp` (up from CDK's 128 MB / 512 MiB defaults, which large sites silently overran with an opaque CloudFormation failure), overridable via `storage.deployment`. Synth also now emits a warning as a stack approaches CloudFormation's hard 500-resource-per-stack limit, so the operator can split the stack before a deploy fails opaquely.
+- 9075b81: Adds `basePath` and `quotas` options to `Hosting`, and the Nitro adapter detects Nuxt's `app.baseURL`. SSR header rules no longer take CloudFront behavior slots, and pages over the behavior budget are demoted to SSR or grouped instead of failing the build.
 
 ## 0.1.3
 
 ### Patch Changes
 
-- 162c47d: fix(hosting): stop hardcoding image-optimization Lambda reserved concurrency
-
-  The image-optimization Lambda hardcoded `reservedConcurrency: 10`, which made `cdk deploy` fail on fresh AWS accounts (the default account-level unreserved-concurrency limit is also 10, so reserving all 10 drops the account below its required minimum and Lambda returns a 400). It now defaults to no reservation and exposes `compute.imageOptimization.reservedConcurrency` so operators with headroom can still cap it.
+- 162c47d: The image-optimization Lambda no longer reserves concurrency by default. The hardcoded `reservedConcurrency: 10` made `cdk deploy` fail on fresh AWS accounts, and you can set `compute.imageOptimization.reservedConcurrency` to cap it.
 
 ## 0.1.2
 
 ### Patch Changes
 
-- 42adb51: Fix multi-page routing for static sites (Astro static, SSGs). The L3 no longer infers SPA-vs-multi-page from the presence of error pages; adapters now declare `staticAssets.spaFallback` explicitly. The Astro adapter sets `spaFallback: false` (static Astro is always multi-page), and the generic adapter sources it from the framework contract (`spa` → single-page, `static` → multi-page). Multi-page static sites without their own `404.html` now get a built-in default 404 page (served at HTTP 404) instead of CloudFront's raw error. Adds a `hosting-ssr-astro` e2e test app.
-
-  **Migration**: If you were passing `framework: 'static'` and relied on SPA-fallback routing (extensionless paths → /index.html), switch to `framework: 'spa'`. `framework: 'static'` now always produces multi-page directory-index resolution.
-
-- 061a0b2: fix(hosting): make redeploys atomic by uploading assets before the CloudFront build-id cutover, eliminating the 403 window for new visitors during deployment
+- 42adb51: `framework: 'static'` always produces multi-page routing, and a multi-page site without its own `404.html` gets a built-in default 404 page. If you relied on SPA-fallback routing with `framework: 'static'`, switch to `framework: 'spa'`.
+- 061a0b2: A redeploy uploads assets before the CloudFront build-id cutover, so new visitors no longer get a 403 during a deployment.
 
 ## 0.1.1
 
 ### Patch Changes
 
-- 270c049: docs: scrub and port documentation from internal staging repo
+- 270c049: Ports documentation from the internal staging repo.
 - c0558f3: Minor improvements
 
 ## 0.1.0

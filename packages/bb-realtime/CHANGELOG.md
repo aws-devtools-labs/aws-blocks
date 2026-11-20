@@ -1,1102 +1,183 @@
-# @aws-blocks/bb-realtime
+# @aws-cdk-blocks/bb-realtime
 
 ## 1.0.0
 
-### Major Changes
+The first stable release. The changes since 1.0.0-rc.2 are listed below. The notes for every other change since 0.x are under 1.0.0-rc.0, 1.0.0-rc.1 and 1.0.0-rc.2.
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+### Changes since `@aws-blocks/bb-realtime` 0.x
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+- The package is now `@aws-cdk-blocks/bb-realtime`. Install it in place of `@aws-blocks/bb-realtime`, and change the import specifiers.
+- 42b84b2: Add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names.
+- eb60b04: Bind channel handles to the signed-in user, re-check subscriptions on ping, and add `revokeAccess()`.
+- d354055: The connection token key now follows `defaults.secretsStore`.
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
-
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
-
-### Minor Changes
-
-- 42b84b2: feat(bb-realtime): add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names
-
-  A channel handle's token authorizes its channel and every `/`-separated sub-channel under it, so a handle for `tenants/acme` also opens `tenants/acme/billing`. This was not documented, so a naming scheme that nests one principal's channels under another's could hand out more access than intended.
-
-  - **`getChannel()` takes an optional `{ scope }`.** `'subtree'` is the default and keeps today's behaviour. `{ scope: 'exact' }` mints a token that authorizes the channel only; a subscribe to any sub-channel with it is rejected. `GetChannelOptions` is exported from `@aws-cdk-blocks/bb-realtime` and `aws-cdk-blocks`.
-  - **Tokens stay compatible.** The default token is byte-for-byte the format issued before, so tokens from an older deployment keep validating with the same scope. An exact token carries its channel under a new `exact` key instead of `channel`, so a deployment from before this release refuses it (the handle stops working) rather than granting it sub-channel access, for example on a warm container during an update or after a rollback. Native clients pass tokens through unchanged.
-  - **Channel names are validated.** `publish()`, `subscribe()` and `getChannel()` now throw `RealtimeErrors.ValidationFailed` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a channel that isn't a string or a number (`undefined`, `null`, an object). `/` between non-empty segments is still allowed, and a number is validated as its string form. If your app builds channel names from user input, check that the result can't be empty or contain these segments.
-  - **bb-agent `stream()` and `resume()`** throw `AgentErrors.InvalidUsage` before dispatching a turn when the `channelId` and `userId` don't form a valid channel name (for example a `channelId` of `a//b` or a `userId` of `..`), instead of returning a stream whose chunks all fail to publish.
-  - **The `default` and `react` create-blocks-app templates** pass `encodeURIComponent(user.username)` as the channel name, so a username can't add `/` segments.
-  - **Server-side `subscribe()`** now uses an exact token for its own WebSocket subscription; it only ever subscribes to that one channel, so nothing changes for callers.
-
-  The README's new "Sub-channels and access" section explains how a channel name maps to access, with the per-tenant pitfall as the example. Use `{ scope: 'exact' }` whenever a sub-channel of a handle's channel can belong to someone else.
-
-- eb60b04: feat(bb-realtime): bind channel handles to the signed-in user, re-check subscriptions on ping, and add `revokeAccess()`
-
-  - **`getChannel(namespace, channel, { principal })`** takes the signed-in user's id (at most 256 characters) and signs it into the handle's connect and channel tokens. The server accepts a channel token only on a connection opened with a connect token for the same user, on every subscribe and resubscribe. A handle without `principal` works as before for any holder. Pass the session's user id (`user.userSub`) for every channel that belongs to a user. The client keeps one socket per endpoint and user.
-  - **Subscriptions are re-checked on every keep-alive ping and at fan-out.** The subscription record keeps the token's expiry, issue time, id and principal. `publish()` skips, and removes, subscriptions whose token has expired or whose access was revoked, so a client that never pings stops receiving as well. A subscription ends, and the client is sent an error frame with a `code` (`token_expired`, `principal_mismatch` or `access_revoked`), when its token has expired, its principal no longer matches the connection's, or access was revoked. A channel subscribed with `refresh` renews an expired token in place, without `onDisconnect`; other ended subscriptions report `onDisconnect('error')`. Previously a subscription stayed live for as long as the connection kept pinging.
-  - **`rt.revokeAccess(principal)`** (new) refuses every handle minted for that user before the call, on connect and subscribe at once; open subscriptions stop receiving messages published after the call, and the client is told on the connection's next ping (within about 9 minutes). The app's `refresh` endpoint must also refuse that user. It stores a short-lived record in the existing connections table; no new resource is added. Handles minted after the call work.
-  - **Breaking: token format.** Tokens now carry `iat` and `jti` (and `sub` with a principal), and tokens without them are refused. Handles issued before the upgrade stop working; clients that pass `refresh` recover on their next reconnect, others must call your API method again.
-  - A handle is still a bearer credential: binding keeps a channel token from being used on a connection opened for another user or for no user. A handler from before this change does not enforce binding or revocation, so a rollback drops them.
-  - A channel path with an empty, `.` or `..` segment sent over the WebSocket is now rejected with `Invalid channel`, as `getChannel()` already rejects such names.
-  - The README and DESIGN document that API Gateway throttles WebSocket traffic per stage and that there is no per-connection limit.
-
-- d354055: The connection token key now follows `defaults.secretsStore`. Sandbox stacks keep the SSM SecureString, and their template does not change.
-
-  **Behavior change on upgrade for production stacks:** with `BlocksPresets.production`, the key moves to a new Secrets Manager secret with a new value. Open WebSocket connections keep working. On their next reconnect, clients that pass `refresh` to `subscribe()` get new tokens; clients without it receive `onDisconnect('error')` and must call `getChannel()` again. To keep the existing key, set `secretsStore: 'ssm'` in `defaults` before you deploy this version; synth then emits the `@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox` warning. The old SSM parameter is deleted by the deploy.
-
-### Patch Changes
+### Since 1.0.0-rc.2
 
 - 63e571c: Use AWS CDK Blocks consistently in starter apps, CLI messages, package metadata, and documentation. Package imports and commands are unchanged.
-- d01c34c: Export types that public signatures already use
-
-  - **Exported types (type-only, additive).** `@aws-cdk-blocks/bb-agent` now exports `AgentBase` (the base class of `Agent`, as a type), `ConversationManagerConfig`, `MessageMetadata`, `GuardrailsConfig` and `InferenceConfig`; `@aws-blocks/bb-data` exports `WhereClause` (the type of `QueryOpts.where`) and `Operator` (its per-field operators); `@aws-cdk-blocks/bb-realtime` exports `InferMessage`; `@aws-cdk-blocks/core` exports `ApiNamespaceConstructor` (the type of `ApiNamespace`) and `AsyncAPI` (the type of an `ApiNamespace` instance). These already appeared in the packages' public signatures but could not be named by apps.
-  - **No type changes.** `registerSdkIdentifiers` and `getAllSdkIdentifiers` in `@aws-cdk-blocks/core` spell their identifier record as `Record<string, string>` instead of a private alias of the same type.
-
-- b2eb306: A specific IPv6 `BLOCKS_DEV_HOST` (for example `fd00::1`) now admits the local realtime WebSocket from its bracketed origin (`http://[fd00::1]:3000`).
-- bfaddeb: In local dev, a second subscriber to a channel that is already subscribed on the same connection now gets its `established` promise resolved. Before, only the first subscriber per channel was confirmed, so `await sub.established` on any later subscriber never settled. Each subscriber now sends its own subscribe request, as on AWS.
-- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
-- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
-- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
-
-  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
-
-  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
-
-  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
-
-  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
-
-- 0ff1e1f: docs: the Realtime docs state the channel-name limits directly
-
-  Channel names have no segment-count or per-segment length limit; the byte limits are the only size limits.
-
-- 0b422ee: docs: the README separates the AWS behavior (publish-time checks, revocation, reconnect exhaustion) from the local WebSocket server, and lists `revokeAccess` among the runtime-only methods.
-- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
-- 6d3077e: refactor: move the conversation, message, job-status and connection tables to `KVStore` with a declared key
-
-  `Agent`, `AsyncJob` and `Realtime` now compose `KVStore` from `@aws-cdk-blocks/bb-kv-store` instead of `DistributedTable`. The tables keep their names, key schemas, TTL attributes and items, so a deployed stack updates in place. No public API of these blocks changes. Expired job-status records and connection records are now hidden from every read in both runtimes.
-
-  The connections store of `Realtime` now has one schema for synth and for run time, and it states the type of each field. The stores of `Agent` and `Realtime` take their options from one place for both entry points, as `AsyncJob` does, so the table that the CDK entry provisions is the table that the runtime reads. The key types of the provisioned tables do not change.
-
-- 10eb382: A server-side subscriber (`getChannel(...).subscribe(handler)` or `realtime.subscribe(...)` in the backend) now runs its handler once per published message on AWS, as it already did locally. When the publish came from the subscriber's own process, the handler used to run twice: once through the in-process emitter and once through the subscriber's own WebSocket.
-- 6bac1c9: The WebSocket handler (deployed and local dev) now checks the channel in `subscribe` and `unsubscribe` messages before using it. It must be a channel path of the form `getChannel()` returns (`<instance>/<namespace>/<channel>`, at most 1024 bytes); otherwise a subscribe gets `{ type: 'error', message: 'Invalid channel' }` and an unsubscribe is ignored. A subscribe also requires a channel token: the connect token only authorizes opening the connection, as documented. A subscribe without a token (or with a token that isn't a string) now gets `{ type: 'error', channel, message: 'Unauthorized: missing token' }` from the deployed handler too, as it already did in local dev. Channel handles returned by `getChannel()` are unaffected.
-- Updated dependencies [63e571c]
-- Updated dependencies [cad7bb8]
-- Updated dependencies [d01c34c]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [c67048e]
-- Updated dependencies [a5a5dd3]
-- Updated dependencies [e529b00]
-- Updated dependencies [b2eb306]
-- Updated dependencies [fbe48c5]
-- Updated dependencies [c42ba42]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [3081521]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [99638ca]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [0b422ee]
-- Updated dependencies [d01c34c]
-- Updated dependencies [d01c34c]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0b422ee]
-- Updated dependencies [d01c34c]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [e529b00]
-- Updated dependencies [c672712]
-- Updated dependencies [c9d73a8]
-- Updated dependencies [d1a473f]
-- Updated dependencies [92798e1]
-- Updated dependencies [92798e1]
-- Updated dependencies [d8a86ee]
-- Updated dependencies [c607deb]
-- Updated dependencies [836af43]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [2095f31]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [da7eb93]
-- Updated dependencies [3259d83]
-- Updated dependencies [70ea280]
-- Updated dependencies [d354055]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [23692f1]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/bb-kv-store@1.0.0
-  - @aws-cdk-blocks/bb-lambda-compute@1.0.0
-  - @aws-cdk-blocks/bb-logger@1.0.0
-  - @aws-cdk-blocks/bb-secret@1.0.0
-  - @aws-cdk-blocks/core@1.0.0
 
 ## 1.0.0-rc.2
 
 ### Patch Changes
 
-- 0b422ee: docs: the README separates the AWS behavior (publish-time checks, revocation, reconnect exhaustion) from the local WebSocket server, and lists `revokeAccess` among the runtime-only methods.
-- Updated dependencies [cad7bb8]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-- Updated dependencies [0b422ee]
-  - @aws-cdk-blocks/core@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
-  - @aws-cdk-blocks/bb-secret@1.0.0-rc.2
+- 0b422ee: The README separates the AWS behavior from the local WebSocket server and lists `revokeAccess` among the runtime-only methods.
 
 ## 1.0.0-rc.1
 
 ### Patch Changes
 
-- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
-- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
-- Updated dependencies [e529b00]
-- Updated dependencies [fbe48c5]
-- Updated dependencies [c42ba42]
-- Updated dependencies [3081521]
-- Updated dependencies [e529b00]
-- Updated dependencies [c9d73a8]
-- Updated dependencies [23692f1]
-  - @aws-cdk-blocks/core@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-secret@1.0.0-rc.1
-  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.1
+- e529b00: The README error examples import the error constants and `isBlocksError` from `aws-cdk-blocks`, which works in backend and client code.
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`, and existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
 
 ## 1.0.0-rc.0
 
 ### Major Changes
 
-- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+- e50b9e9: **Breaking: every published package moves from the `@aws-blocks` scope to `@aws-cdk-blocks`, and `@aws-blocks/blocks` becomes the unscoped `aws-cdk-blocks`.**
 
-  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+  To upgrade:
 
-  ```diff
-   {
-     "dependencies": {
-  -    "@aws-blocks/blocks": "<your range>",
-  -    "@aws-blocks/core": "<your range>"
-  +    "aws-cdk-blocks": "<your range>",
-  +    "@aws-cdk-blocks/core": "<your range>"
-     }
-   }
-  ```
+  1. In `package.json`, replace `@aws-blocks/blocks` with `aws-cdk-blocks` and every other `@aws-blocks/` name with `@aws-cdk-blocks/`, for example `@aws-cdk-blocks/core`.
+  2. Make the same replacement in the specifier of every import.
+  3. Change each `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the `@aws-cdk-blocks/` prefix, or `cdk synth --strict` fails on the warning.
+  4. Keep the CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` in `cdk.json` as it is, because renaming it makes CloudFormation replace the cluster.
+  5. If you publish a block, move its dependency from `@aws-blocks/core` to `@aws-cdk-blocks/core`.
 
-  ```diff
-  -import { KVStore } from '@aws-blocks/blocks';
-  +import { KVStore } from 'aws-cdk-blocks';
-
-  -import { ApiNamespace } from '@aws-blocks/core';
-  +import { ApiNamespace } from '@aws-cdk-blocks/core';
-  ```
-
-  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
-
-  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
-
-  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
-
-  The old `@aws-blocks/*` packages stop receiving releases.
+  No export or option moved, and the old `@aws-blocks/*` packages stop receiving releases.
 
 ### Minor Changes
 
-- 42b84b2: feat(bb-realtime): add `getChannel(namespace, channel, { scope: 'exact' })` and validate channel names
+- 42b84b2: Adds `getChannel(namespace, channel, { scope: 'exact' })`, whose token authorizes the channel only and none of its sub-channels. `publish()`, `subscribe()`, and `getChannel()` throw `RealtimeErrors.ValidationFailed` for a channel name that is empty or has an empty, `.`, or `..` segment.
 
-  A channel handle's token authorizes its channel and every `/`-separated sub-channel under it, so a handle for `tenants/acme` also opens `tenants/acme/billing`. This was not documented, so a naming scheme that nests one principal's channels under another's could hand out more access than intended.
+- eb60b04: **Breaking: Realtime tokens now carry `iat` and `jti`, and handles issued before the upgrade stop working.**
 
-  - **`getChannel()` takes an optional `{ scope }`.** `'subtree'` is the default and keeps today's behaviour. `{ scope: 'exact' }` mints a token that authorizes the channel only; a subscribe to any sub-channel with it is rejected. `GetChannelOptions` is exported from `@aws-cdk-blocks/bb-realtime` and `aws-cdk-blocks`.
-  - **Tokens stay compatible.** The default token is byte-for-byte the format issued before, so tokens from an older deployment keep validating with the same scope. An exact token carries its channel under a new `exact` key instead of `channel`, so a deployment from before this release refuses it (the handle stops working) rather than granting it sub-channel access, for example on a warm container during an update or after a rollback. Native clients pass tokens through unchanged.
-  - **Channel names are validated.** `publish()`, `subscribe()` and `getChannel()` now throw `RealtimeErrors.ValidationFailed` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a channel that isn't a string or a number (`undefined`, `null`, an object). `/` between non-empty segments is still allowed, and a number is validated as its string form. If your app builds channel names from user input, check that the result can't be empty or contain these segments.
-  - **bb-agent `stream()` and `resume()`** throw `AgentErrors.InvalidUsage` before dispatching a turn when the `channelId` and `userId` don't form a valid channel name (for example a `channelId` of `a//b` or a `userId` of `..`), instead of returning a stream whose chunks all fail to publish.
-  - **The `default` and `react` create-blocks-app templates** pass `encodeURIComponent(user.username)` as the channel name, so a username can't add `/` segments.
-  - **Server-side `subscribe()`** now uses an exact token for its own WebSocket subscription; it only ever subscribes to that one channel, so nothing changes for callers.
+  To upgrade:
 
-  The README's new "Sub-channels and access" section explains how a channel name maps to access, with the per-tenant pitfall as the example. Use `{ scope: 'exact' }` whenever a sub-channel of a handle's channel can belong to someone else.
+  1. Pass the session's user id, `user.userSub`, as `principal` in `getChannel(namespace, channel, { principal })` for every channel that belongs to a user.
+  2. To revoke a user's access, call the new `rt.revokeAccess(principal)`, and make your app's `refresh` endpoint refuse that user too.
 
-- eb60b04: feat(bb-realtime): bind channel handles to the signed-in user, re-check subscriptions on ping, and add `revokeAccess()`
+  Clients that pass `refresh` recover on their next reconnect, and other clients must call your API method again. Subscriptions are re-checked on every keep-alive ping and at fan-out.
 
-  - **`getChannel(namespace, channel, { principal })`** takes the signed-in user's id (at most 256 characters) and signs it into the handle's connect and channel tokens. The server accepts a channel token only on a connection opened with a connect token for the same user, on every subscribe and resubscribe. A handle without `principal` works as before for any holder. Pass the session's user id (`user.userSub`) for every channel that belongs to a user. The client keeps one socket per endpoint and user.
-  - **Subscriptions are re-checked on every keep-alive ping and at fan-out.** The subscription record keeps the token's expiry, issue time, id and principal. `publish()` skips, and removes, subscriptions whose token has expired or whose access was revoked, so a client that never pings stops receiving as well. A subscription ends, and the client is sent an error frame with a `code` (`token_expired`, `principal_mismatch` or `access_revoked`), when its token has expired, its principal no longer matches the connection's, or access was revoked. A channel subscribed with `refresh` renews an expired token in place, without `onDisconnect`; other ended subscriptions report `onDisconnect('error')`. Previously a subscription stayed live for as long as the connection kept pinging.
-  - **`rt.revokeAccess(principal)`** (new) refuses every handle minted for that user before the call, on connect and subscribe at once; open subscriptions stop receiving messages published after the call, and the client is told on the connection's next ping (within about 9 minutes). The app's `refresh` endpoint must also refuse that user. It stores a short-lived record in the existing connections table; no new resource is added. Handles minted after the call work.
-  - **Breaking: token format.** Tokens now carry `iat` and `jti` (and `sub` with a principal), and tokens without them are refused. Handles issued before the upgrade stop working; clients that pass `refresh` recover on their next reconnect, others must call your API method again.
-  - A handle is still a bearer credential: binding keeps a channel token from being used on a connection opened for another user or for no user. A handler from before this change does not enforce binding or revocation, so a rollback drops them.
-  - A channel path with an empty, `.` or `..` segment sent over the WebSocket is now rejected with `Invalid channel`, as `getChannel()` already rejects such names.
-  - The README and DESIGN document that API Gateway throttles WebSocket traffic per stage and that there is no per-connection limit.
-
-- d354055: The connection token key now follows `defaults.secretsStore`. Sandbox stacks keep the SSM SecureString, and their template does not change.
-
-  **Behavior change on upgrade for production stacks:** with `BlocksPresets.production`, the key moves to a new Secrets Manager secret with a new value. Open WebSocket connections keep working. On their next reconnect, clients that pass `refresh` to `subscribe()` get new tokens; clients without it receive `onDisconnect('error')` and must call `getChannel()` again. To keep the existing key, set `secretsStore: 'ssm'` in `defaults` before you deploy this version; synth then emits the `@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox` warning. The old SSM parameter is deleted by the deploy.
+- d354055: **Breaking: with `BlocksPresets.production`, the connection token key moves to a new Secrets Manager secret with a new value, and the deploy deletes the old SSM parameter.** To keep the existing key, set `secretsStore: 'ssm'` in `defaults` before you deploy this version. Otherwise, on their next reconnect, clients that do not pass `refresh` to `subscribe()` receive `onDisconnect('error')` and must call `getChannel()` again. Sandbox stacks do not change.
 
 ### Patch Changes
 
-- d01c34c: Export types that public signatures already use
-
-  - **Exported types (type-only, additive).** `@aws-cdk-blocks/bb-agent` now exports `AgentBase` (the base class of `Agent`, as a type), `ConversationManagerConfig`, `MessageMetadata`, `GuardrailsConfig` and `InferenceConfig`; `@aws-blocks/bb-data` exports `WhereClause` (the type of `QueryOpts.where`) and `Operator` (its per-field operators); `@aws-cdk-blocks/bb-realtime` exports `InferMessage`; `@aws-cdk-blocks/core` exports `ApiNamespaceConstructor` (the type of `ApiNamespace`) and `AsyncAPI` (the type of an `ApiNamespace` instance). These already appeared in the packages' public signatures but could not be named by apps.
-  - **No type changes.** `registerSdkIdentifiers` and `getAllSdkIdentifiers` in `@aws-cdk-blocks/core` spell their identifier record as `Record<string, string>` instead of a private alias of the same type.
-
+- d01c34c: Adds exports for the types `AgentBase`, `ConversationManagerConfig`, `MessageMetadata`, `GuardrailsConfig`, and `InferenceConfig` in `@aws-cdk-blocks/bb-agent`, `InferMessage` in `@aws-cdk-blocks/bb-realtime`, and `ApiNamespaceConstructor` and `AsyncAPI` in `@aws-cdk-blocks/core`.
 - b2eb306: A specific IPv6 `BLOCKS_DEV_HOST` (for example `fd00::1`) now admits the local realtime WebSocket from its bracketed origin (`http://[fd00::1]:3000`).
-- bfaddeb: In local dev, a second subscriber to a channel that is already subscribed on the same connection now gets its `established` promise resolved. Before, only the first subscriber per channel was confirmed, so `await sub.established` on any later subscriber never settled. Each subscriber now sends its own subscribe request, as on AWS.
-- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
+- bfaddeb: In local dev, a second subscriber to a channel that is already subscribed on the same connection gets its `established` promise resolved. Before, `await sub.established` on any later subscriber never settled.
 
-  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
+- 703238f: **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.**
 
-  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
+  To upgrade:
 
-  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
+  1. Rename the `aws-blocks/` directory to `cdk-blocks/`.
+  2. Change the `"workspaces"` entry that names it.
+  3. Change the `"name"` in its `cdk-blocks/package.json` to `cdk-blocks`.
+  4. Change every `from 'aws-blocks'` import to import `cdk-blocks`.
+  5. Rename an `aws-blocks/migrations` directory or set an explicit migrations path, because `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`.
 
-  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
+  The reserved URL namespace, such as `/aws-blocks/api` and `/aws-blocks/auth/*`, keeps its path, so deployed routes and OAuth callback URLs keep working.
 
-- 0ff1e1f: docs: the Realtime docs state the channel-name limits directly
-
-  Channel names have no segment-count or per-segment length limit; the byte limits are the only size limits.
-
-- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
-- 6d3077e: refactor: move the conversation, message, job-status and connection tables to `KVStore` with a declared key
-
-  `Agent`, `AsyncJob` and `Realtime` now compose `KVStore` from `@aws-cdk-blocks/bb-kv-store` instead of `DistributedTable`. The tables keep their names, key schemas, TTL attributes and items, so a deployed stack updates in place. No public API of these blocks changes. Expired job-status records and connection records are now hidden from every read in both runtimes.
-
-  The connections store of `Realtime` now has one schema for synth and for run time, and it states the type of each field. The stores of `Agent` and `Realtime` take their options from one place for both entry points, as `AsyncJob` does, so the table that the CDK entry provisions is the table that the runtime reads. The key types of the provisioned tables do not change.
-
-- 10eb382: A server-side subscriber (`getChannel(...).subscribe(handler)` or `realtime.subscribe(...)` in the backend) now runs its handler once per published message on AWS, as it already did locally. When the publish came from the subscriber's own process, the handler used to run twice: once through the in-process emitter and once through the subscriber's own WebSocket.
-- 6bac1c9: The WebSocket handler (deployed and local dev) now checks the channel in `subscribe` and `unsubscribe` messages before using it. It must be a channel path of the form `getChannel()` returns (`<instance>/<namespace>/<channel>`, at most 1024 bytes); otherwise a subscribe gets `{ type: 'error', message: 'Invalid channel' }` and an unsubscribe is ignored. A subscribe also requires a channel token: the connect token only authorizes opening the connection, as documented. A subscribe without a token (or with a token that isn't a string) now gets `{ type: 'error', channel, message: 'Unauthorized: missing token' }` from the deployed handler too, as it already did in local dev. Channel handles returned by `getChannel()` are unaffected.
-- Updated dependencies [d01c34c]
-- Updated dependencies [75c5d98]
-- Updated dependencies [5f55dac]
-- Updated dependencies [2eb62fa]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [c67048e]
-- Updated dependencies [a5a5dd3]
-- Updated dependencies [b2eb306]
-- Updated dependencies [703238f]
-- Updated dependencies [45a05d1]
-- Updated dependencies [1de6ea4]
-- Updated dependencies [aaf419f]
-- Updated dependencies [5938d8b]
-- Updated dependencies [a5e754b]
-- Updated dependencies [f133ff8]
-- Updated dependencies [9ebf67a]
-- Updated dependencies [76fd75c]
-- Updated dependencies [3ae8592]
-- Updated dependencies [e5822ed]
-- Updated dependencies [3ae8592]
-- Updated dependencies [9059918]
-- Updated dependencies [5f55dac]
-- Updated dependencies [4665f81]
-- Updated dependencies [1deb34b]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [41968b7]
-- Updated dependencies [8894669]
-- Updated dependencies [b2eb306]
-- Updated dependencies [0cf1aa2]
-- Updated dependencies [15e65b4]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [5f55dac]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [c1fabce]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [81113a3]
-- Updated dependencies [c045273]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [369b175]
-- Updated dependencies [d7f62f3]
-- Updated dependencies [3be61fa]
-- Updated dependencies [36888a1]
-- Updated dependencies [fcf087d]
-- Updated dependencies [2c9005f]
-- Updated dependencies [384827f]
-- Updated dependencies [58daa51]
-- Updated dependencies [6151940]
-- Updated dependencies [b7c262c]
-- Updated dependencies [73feb71]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [d46dfaf]
-- Updated dependencies [ebfe2ed]
-- Updated dependencies [99660fd]
-- Updated dependencies [c1fabce]
-- Updated dependencies [5f55dac]
-- Updated dependencies [5f55dac]
-- Updated dependencies [cd533c0]
-- Updated dependencies [44c7377]
-- Updated dependencies [1ec956f]
-- Updated dependencies [c1fabce]
-- Updated dependencies [4d81f11]
-- Updated dependencies [072c3ff]
-- Updated dependencies [c67048e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [227a856]
-- Updated dependencies [afad513]
-- Updated dependencies [ba80bbd]
-- Updated dependencies [05a88e1]
-- Updated dependencies [f32185c]
-- Updated dependencies [f32185c]
-- Updated dependencies [9801a5b]
-- Updated dependencies [a86bccb]
-- Updated dependencies [b2eb306]
-- Updated dependencies [df25d97]
-- Updated dependencies [201e59e]
-- Updated dependencies [5f55dac]
-- Updated dependencies [99638ca]
-- Updated dependencies [a5f39c3]
-- Updated dependencies [d01c34c]
-- Updated dependencies [d01c34c]
-- Updated dependencies [5f55dac]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [0ff1e1f]
-- Updated dependencies [d01c34c]
-- Updated dependencies [f7e28b4]
-- Updated dependencies [93d533a]
-- Updated dependencies [adb6077]
-- Updated dependencies [60360c1]
-- Updated dependencies [dd1c554]
-- Updated dependencies [8ece10a]
-- Updated dependencies [c672712]
-- Updated dependencies [d1a473f]
-- Updated dependencies [92798e1]
-- Updated dependencies [92798e1]
-- Updated dependencies [d8a86ee]
-- Updated dependencies [c607deb]
-- Updated dependencies [836af43]
-- Updated dependencies [4e92168]
-- Updated dependencies [bfdd06f]
-- Updated dependencies [6d3077e]
-- Updated dependencies [6d3077e]
-- Updated dependencies [e1e4844]
-- Updated dependencies [2095f31]
-- Updated dependencies [e50b9e9]
-- Updated dependencies [6d3077e]
-- Updated dependencies [80ce128]
-- Updated dependencies [da7eb93]
-- Updated dependencies [3259d83]
-- Updated dependencies [70ea280]
-- Updated dependencies [d354055]
-- Updated dependencies [d354055]
-- Updated dependencies [58817b0]
-- Updated dependencies [e286b16]
-- Updated dependencies [c00ab16]
-- Updated dependencies [58980c7]
-  - @aws-cdk-blocks/core@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-secret@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-logger@1.0.0-rc.0
-  - @aws-cdk-blocks/bb-lambda-compute@1.0.0-rc.0
+- 0ff1e1f: The Realtime docs state the channel-name limits directly. Channel names have no segment-count or per-segment length limit, and the byte limits are the only size limits.
+- e8673cd: The docs and `UnsupportedCompute` errors state that `AsyncJob` and `CronJob` support Lambda and container delivery, while `Realtime` requires default Lambda compute. Omitting container concurrency allows five in-flight deliveries per job per instance, not one per vCPU, and the docs now say so.
+- 6d3077e: `Agent`, `AsyncJob`, and `Realtime` compose `KVStore` instead of `DistributedTable`, and a deployed stack updates in place. Every read hides expired job-status records and connection records.
+- 10eb382: A server-side subscriber runs its handler once per published message on AWS, as it already did locally. The handler used to run twice when the publish came from the subscriber's own process.
+- 6bac1c9: The WebSocket handler rejects a `subscribe` whose channel is not a path that `getChannel()` returns with `{ type: 'error', message: 'Invalid channel' }`. A subscribe without a channel token gets `{ type: 'error', channel, message: 'Unauthorized: missing token' }` from the deployed handler too.
 
 ## 0.5.0
 
 ### Minor Changes
 
-- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
-
-  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
-  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
-  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
-  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
-  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
-  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
-
-  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
+- 88747f5: A Building Block's mock entry throws when it is loaded in a deployed environment, so bundle your backend with the `aws-runtime` export condition. `@aws-blocks/core/bb-utils` exports the check as `assertNotMockInDeployedEnv(bbName)`.
 
 ### Patch Changes
 
 - 8cff0bb: The published package now includes `USE-CASES.md`, so the link to it from the README resolves.
-- 943d405: fix: error constants can be imported in frontend code
-
-  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
-  package's `browser` entry. Some of those imports failed the frontend build:
-
-  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
-    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
-    `@aws-blocks/bb-logger`. They are now exported.
-  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
-    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
-    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
-  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
-    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
-    server's constants instead of keeping their own copies.
-  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
-    server build and failed to bundle. It now has one.
-
-  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
-  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
-
-- 943d405: fix: export types missing from the `cdk` entry point
-
-  Some types exported by the default entry point of `@aws-blocks/bb-realtime` were missing from its `cdk` entry, so
-  backend code importing them failed to type-check under that condition — for example,
-  `import type { SubscribeOptions } from '@aws-blocks/bb-realtime'`.
-
-  The `cdk` entry now exports `RealtimeChannelDescriptor`, `SubscribeOptions`, `DisconnectReason`.
-
-- 48c35f6: Two Building Blocks that would handle the same Lambda event now fail `cdk synth`, instead of deploying and then failing every request on cold start. This covers two `AsyncJob`s whose queue names collide, and two `CronJob`s or `Realtime` blocks that end up with the same scope-qualified id (for example `x-y`/`z` and `x`/`y-z`). The error names the event key and both blocks.
-
-  `registerConfig()` now also fails synth when another construct has already registered the same config key for the same backend with a different value, naming the key and both constructs; before, the second value silently replaced the first and both blocks read the same resource at runtime. Config keys built from a block id fold case and map every non-alphanumeric character to `_`, so ids such as `orders-a` and `orders_a` (or `Orders` and `orders`) collided this way: rename one of the blocks. Registering a key again from the same construct, or with the same value, is unaffected. Keys shared by design keep their last-one-wins behaviour: `Hosting`'s `BLOCKS_PUBLIC_ORIGIN` / `CORS_HOSTING_ORIGINS`, the dashboard URL, and `AppSetting`'s `BLOCKS_SSM_PARAM_*` key.
-
-- d366907: chore: manual dependency bump (2026-10-19)
-- 92c4b20: Docs: correct the README "Runtime only" note — a data method called during CDK synth throws an explicit `<Class>.<method>() cannot be called during CDK synth` error, not `<x>.<method> is not a function`.
+- 943d405: Frontend code can import Building Block error constants, such as `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, `LoggingErrors`, and `RealtimeErrors`, to match errors with `isBlocksError`. `CronJobErrors.ScheduleNotSupported` is no longer `undefined` in the browser.
+- 943d405: The `cdk` entry of `@aws-blocks/bb-realtime` exports `RealtimeChannelDescriptor`, `SubscribeOptions`, and `DisconnectReason`, so backend code that imports them type-checks.
+- 48c35f6: Two Building Blocks that would handle the same Lambda event, or that register the same config key with different values, fail `cdk synth`. Ids such as `orders-a` and `orders_a` collide on the config key, so rename one of the blocks.
+- d366907: Updates dependencies in a manual bump dated 2026-10-19.
+- 92c4b20: The README "Runtime only" note states that a data method called during CDK synth throws `<Class>.<method>() cannot be called during CDK synth`.
 - 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
-- Updated dependencies [0765f84]
-- Updated dependencies [5572341]
-- Updated dependencies [43603b0]
-- Updated dependencies [88747f5]
-- Updated dependencies [1076ccc]
-- Updated dependencies [928c48a]
-- Updated dependencies [4d5ea86]
-- Updated dependencies [90c1b12]
-- Updated dependencies [943d405]
-- Updated dependencies [50b8c94]
-- Updated dependencies [a3969b5]
-- Updated dependencies [943d405]
-- Updated dependencies [a3969b5]
-- Updated dependencies [48c35f6]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [9a32674]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8c73a24]
-- Updated dependencies [48c35f6]
-- Updated dependencies [4553866]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [54e9443]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d366907]
-- Updated dependencies [91ed1fc]
-- Updated dependencies [48c35f6]
-- Updated dependencies [d062eeb]
-- Updated dependencies [c22eeee]
-- Updated dependencies [1546160]
-- Updated dependencies [e68e653]
-- Updated dependencies [92c4b20]
-- Updated dependencies [1d8ed6c]
-- Updated dependencies [9c96135]
-- Updated dependencies [63b154f]
-- Updated dependencies [8565ef7]
-- Updated dependencies [ce5dfa9]
-- Updated dependencies [515089c]
-- Updated dependencies [dde6340]
-- Updated dependencies [7477b6e]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [6a53068]
-- Updated dependencies [dd5e807]
-- Updated dependencies [db15b5e]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [48c35f6]
-- Updated dependencies [72e3259]
-- Updated dependencies [d79a0bd]
-- Updated dependencies [48c35f6]
-- Updated dependencies [8565ef7]
-- Updated dependencies [48c35f6]
-- Updated dependencies [0d4ede3]
-- Updated dependencies [63b154f]
-- Updated dependencies [b6b8ade]
-- Updated dependencies [82ea78a]
-- Updated dependencies [e44ac0c]
-- Updated dependencies [33e8d73]
-- Updated dependencies [b003705]
-- Updated dependencies [48c35f6]
-  - @aws-blocks/core@0.8.0
-  - @aws-blocks/bb-app-setting@0.4.0
-  - @aws-blocks/bb-distributed-table@0.3.0
-  - @aws-blocks/bb-lambda-compute@0.7.0
-  - @aws-blocks/bb-logger@0.3.0
 
 ## 0.4.0
 
 ### Minor Changes
 
-- da6d4c7: Scope shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay independent.
-
-  - **Registries** (config, compute, dashboard, tracer, VPC requirements) now key on the backend root, resolved by walking the construct tree (`getBlocksRoot`), not on `cdk.Stack.of(scope)`.
-  - **Shared-infra Building Blocks** now provision and dedup their per-backend resources under the backend root: the realtime WebSocket API, the cron scheduler role, and the agent AgentCore runtime grants. Previously a second backend in the same stack could attach to the first's shared infra — most seriously, the agent's Bedrock grants could land on the wrong backend's execution role.
-  - **RawRoute** registrations are tagged with their owning backend root; `Hosting` now adds CloudFront behaviors only for routes owned by the backend its distribution fronts, instead of every route in the process-global registry. The per-owner tag also scopes duplicate-route detection, so two backends may register the same method+path.
-  - **`Hosting` now registers its origin config against the backend it fronts.** `BLOCKS_PUBLIC_ORIGIN` and `CORS_HOSTING_ORIGINS` are written to the backend named by `props.api`, matching the route-behavior owner — not to `this`, which (when two backends share a stack) resolved via the ambient pointer to the last-created backend and left the fronted backend without its origin config.
-  - The config bucket is parented under the resolved backend root rather than read from an ambient process-global, removing a construction-order hazard.
-  - **Stack-scoped exceptions — these deliberately keep a stable logical ID.** The app-setting secret bulk-init (`BlocksSecretsBulk`) and the distributed-table GSI manager provider (`BlocksGsiProvider`) stay direct stack children. Both are referenced by existing resources through immutable fields (a SecureString's physical name; a custom resource's `ServiceToken`), so a logical-ID change would force a replacement that CloudFormation either rejects (`ServiceToken` is immutable → failed upgrade) or that silently deletes the SecureString. Keeping them stack-scoped preserves the logical ID; their deploy-time IAM is still scoped (lazily) to only the parameters/tables that register. (Joins the API Gateway account resource as a documented stack-scoped exception.)
-
-  **Compatibility.** Single-`BlocksStack` apps (the common case) are byte-identical — no resource replacement. Apps that embed a `BlocksBackend` inside a customer `cdk.Stack` and use **realtime** or **cron** will see those resources re-parent from the stack to the backend construct, which CloudFormation treats as a replacement on upgrade; neither carries persistent data. For realtime specifically, the WebSocket API URL changes and its stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>` — scripts that read that output by name must update. Secret AppSettings and GSI-backed tables are **not** affected (their shared resources stay stack-scoped).
+- da6d4c7: **Breaking: shared Blocks resources are scoped to the `BlocksStack` or `BlocksBackend` instead of the enclosing `cdk.Stack`.** An app that embeds a `BlocksBackend` inside a customer `cdk.Stack` and uses realtime or cron sees those resources replaced on upgrade. For realtime, the WebSocket API URL changes and the stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>`, so update scripts that read that output by name. Single-`BlocksStack` apps see no resource replacement.
 
 ### Patch Changes
 
-- 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
-- 38ce80c: fix: the local dev surface is no longer reachable from the network or from other websites
-
-  - **Dev server binds loopback.** `npm run dev` now listens on `127.0.0.1` instead of every
-    interface. It serves your whole API against local mock data with no authentication, so it
-    must not be reachable from other machines. For a container or remote devbox, opt in with
-    `BLOCKS_DEV_HOST=0.0.0.0` (or `startDevServer({ host })`); a warning is printed when the host
-    isn't loopback.
-  - **Local realtime WebSocket matches the deployed one.** A client-sent `publish` was broadcast
-    to every subscriber with no authorization. The deployed WebSocket has no client publish, so
-    the local server now rejects it as well; publish from the server with `Realtime.publish()`.
-  - **Local realtime tokens are signed with a per-process random secret** instead of a constant
-    published in this repository, so they can't be forged.
-  - **The `/realtime` WebSocket upgrade checks `Origin`.** Only loopback origins can connect, plus
-    the opted-in host: with `BLOCKS_DEV_HOST=0.0.0.0`, a same-origin page opened by IP address; with
-    a concrete `BLOCKS_DEV_HOST` hostname, that hostname. This closes cross-site WebSocket hijacking from any
-    page the developer visits. Non-browser clients that send no `Origin` still connect.
-  - **`GET /aws-blocks/settings` opens an editor only under the local dev server.** It no longer
-    spawns a process or echoes the working directory when the built-in routes run in a deployed
-    Lambda, and it opens the file with `execFile` instead of a shell command.
-  - **The `nextjs` template's frontend dev server binds loopback** (`next dev --hostname
-127.0.0.1`), like the Blocks dev server.
-
-- Updated dependencies [ec7eebe]
-- Updated dependencies [e682ba7]
-- Updated dependencies [e7e96e6]
-- Updated dependencies [9ebda66]
-- Updated dependencies [78f4396]
-- Updated dependencies [440ecce]
-- Updated dependencies [92fa27b]
-- Updated dependencies [1a5c18e]
-- Updated dependencies [4ae500e]
-- Updated dependencies [6d764f7]
-- Updated dependencies [4fe7be4]
-- Updated dependencies [5d6656a]
-- Updated dependencies [60616b1]
-- Updated dependencies [a50fb46]
-- Updated dependencies [8a1a4a9]
-- Updated dependencies [38ce80c]
-- Updated dependencies [94a914a]
-- Updated dependencies [cb0ec01]
-- Updated dependencies [005c095]
-- Updated dependencies [b8649dc]
-- Updated dependencies [2da2fd4]
-- Updated dependencies [66f4be2]
-- Updated dependencies [32a4b73]
-- Updated dependencies [da6d4c7]
-- Updated dependencies [e3e5e22]
-- Updated dependencies [ec7eebe]
-- Updated dependencies [e9241b5]
-- Updated dependencies [f1eb149]
-- Updated dependencies [122c49c]
-- Updated dependencies [7c19c4f]
-  - @aws-blocks/core@0.7.0
-  - @aws-blocks/bb-lambda-compute@0.6.0
-  - @aws-blocks/bb-app-setting@0.3.2
-  - @aws-blocks/bb-distributed-table@0.2.2
-  - @aws-blocks/bb-logger@0.2.2
+- 023f02c: An internal refactor routes the remaining per-package errors through core's `blocksError`. Two realtime timeout rejections that were unbranded are now wire-safe.
+- 38ce80c: `npm run dev` listens on `127.0.0.1` instead of every interface, and the local realtime WebSocket rejects a client-sent `publish` and checks `Origin`. For a container or remote devbox, set `BLOCKS_DEV_HOST=0.0.0.0`, and publish from the server with `Realtime.publish()`.
 
 ## 0.3.0
 
 ### Minor Changes
 
-- f1d2cd5: feat(bb-realtime): production Realtime middleware now auto-reconnects and resubscribes after an unexpected WebSocket drop
-
-  The production (`aws-middleware`) Realtime transport previously gave up when the WebSocket
-  closed unexpectedly (e.g. an API Gateway idle timeout or an abnormal `1006` closure) — only the
-  local mock middleware recovered. It now transparently reconnects with exponential backoff (capped
-  retries), rebuilds the socket URL from the retained connection token, and resubscribes every active
-  channel by replaying its stored per-channel token so the server can re-authorize. The keep-alive
-  ping timer is re-armed on the fresh socket. Only a client-initiated teardown — unsubscribing the last
-  channel (or the internal reset/give-up paths) — is treated as terminal; an unexpected drop reconnects on ANY close code, including a clean `1000`/`1005`.
-
-  `SubscribeOptions` gains an optional `onReconnect` callback, fired once after a successful
-  reconnect for a channel once THAT channel's resubscribe has been re-confirmed by the server
-  (after the corresponding `onDisconnect` for the drop that triggered it; never on the initial
-  subscribe). Callbacks are routed per-channel: a channel whose resubscribe is rejected (e.g. a
-  stale replayed token) receives `onDisconnect('error')` and NOT `onReconnect`, and never sees a
-  sibling channel's rejection.
-
-  This change is behavior-additive: existing `subscribe(handler)` / `SubscribeOptions` callers are
-  unaffected and need no changes. Note for maintainers: on a `0.x` package this ships as a `minor`
-  per this repo's convention (minor is the breaking/behavior-change channel pre-1.0), since it alters
-  the runtime reconnect behavior of the production transport.
-
-- de3c17c: feat(bb-realtime): refresh channel/connect tokens on reconnect so subscriptions outlive token TTLs
-
-  Adds an optional `refresh` callback to `SubscribeOptions`:
-
-  ```ts
-  refresh?: () => Promise<RealtimeChannelDescriptor>;
-  ```
-
-  A reconnect opens a _new_ WebSocket, which means API Gateway re-checks the
-  connect token (carried in the socket URL, validated at `$connect`, ~2h TTL) and
-  the server re-checks the channel token on resubscribe (~1h TTL, per `utils.ts`
-  `mintChannelToken`'s 3600s default). Until now both the AWS and mock middlewares
-  replayed the _original_ stored `wsUrl` + channel token on every reconnect, so a
-  reconnect more than ~1h after the descriptor was minted failed (the channel
-  token had expired and the resubscribe was rejected), and more than ~2h after
-  failed to even open the socket (`$connect` 403). Token minting is server-only
-  (it needs the signing secret), so the client cannot re-sign locally — it must
-  re-call the server method that produced the descriptor.
-
-  When `refresh` is provided, both middlewares now call it **before** opening the
-  reconnect socket (never on the initial subscribe), then open with the fresh
-  connect token in the URL and resubscribe each channel with its fresh channel
-  token. `refresh` is registered per-channel: a connection multiplexing several
-  channels re-mints every live channel's token in parallel on reconnect (the
-  instance-scoped connect token taken from any one of them), and a channel whose
-  refresh fails falls back to its stored token with a channel-scoped rejection
-  rather than dropping its siblings. The refresh-before-open ordering is required
-  because the connect token lives in the socket URL and is validated at `$connect`,
-  so it must be fresh at construction time. If `refresh` rejects, the middleware
-  does not crash: it surfaces the failure via the existing `onDisconnect('error')`
-  path and falls back to the normal exponential-backoff reconnect so a later
-  attempt can retry.
-
-  Fully backward compatible: with no `refresh` callback, a reconnect replays the
-  stored `wsUrl` + token exactly as before, and the initial (non-reconnect) open
-  stays synchronous and unchanged.
-
-  This is a `minor` bump. `@aws-blocks/bb-realtime` is pre-1.0, where `minor` is
-  this repo's signal for an API addition; the new option is optional and additive,
-  and existing behavior is unchanged when it is omitted.
+- f1d2cd5: The production Realtime middleware reconnects with exponential backoff and resubscribes every active channel after an unexpected WebSocket drop. Adds an optional `onReconnect` callback to `SubscribeOptions`, fired once the server confirms a channel's resubscribe after a reconnect.
+- de3c17c: Adds an optional `refresh` callback to `SubscribeOptions`. When you provide it, a reconnect calls it first and uses the fresh connect and channel tokens, so a subscription can outlive the token TTLs.
 
 ### Patch Changes
 
-- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-
-  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
-  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
-  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
-  and exports `installClientUserAgent`, an SDK middleware that appends the validated
-  token to the outgoing user agent. The 12 participating Building Blocks install it,
-  so native attribution rides the SDK user-agent chain AWS service telemetry already
-  counts. The Kotlin runtime already sends the header, so Kotlin
-  callers are attributed as soon as this ships; Swift and Dart follow.
-
-- cbedb3c: fix(bb-realtime): validate publish size against the 128 KiB message quota, not the 32 KiB frame quota
-
-  `publish` rejected payloads above 32 KiB, API Gateway's WebSocket _frame_ size — but a
-  message is reassembled from multiple frames, so the real limit is the 128 KiB message
-  quota. Messages between 32 KiB and 128 KiB were refused client-side even though API
-  Gateway would have delivered them. The serialized envelope is now checked against
-  131,072 bytes: 131,072 is accepted and 131,073 is rejected.
-
-- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-
-  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-
-  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-
-  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-
-  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-
-  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-
-  ## Breaking change (why `@aws-blocks/core` is a minor)
-
-  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-
-  ```ts
-  // before — message collapses to "Internal error" on the client
-  throw new Error("Todo not found");
-
-  // after — status, message, and name all reach the client
-  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
-  ```
-
-  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
-
-- Updated dependencies [0e18d5b]
-- Updated dependencies [5501cb6]
-- Updated dependencies [b58f248]
-- Updated dependencies [39628cb]
-- Updated dependencies [d4b32f2]
-- Updated dependencies [a649895]
-- Updated dependencies [27646ac]
-- Updated dependencies [5515483]
-- Updated dependencies [757d4a9]
-- Updated dependencies [a23b8d8]
-- Updated dependencies [9e02b82]
-- Updated dependencies [465a002]
-  - @aws-blocks/bb-app-setting@0.3.1
-  - @aws-blocks/core@0.6.0
-  - @aws-blocks/bb-distributed-table@0.2.1
-  - @aws-blocks/bb-lambda-compute@0.5.1
-  - @aws-blocks/bb-logger@0.2.1
+- 757d4a9: `@aws-blocks/core` forwards the `x-blocks-user-agent` header that native clients send into the AWS SDK user agent, and exports the `installClientUserAgent` SDK middleware. Kotlin callers are attributed first, and Swift and Dart follow.
+- cbedb3c: `publish` accepts messages up to 131,072 bytes, the 128 KiB message quota of API Gateway. Before, it rejected payloads above 32 KiB.
+- a23b8d8: **Breaking: a plain `Error` thrown from an API method reaches the client as a generic `500` with `"Internal error"` instead of its raw message.** To send a specific status, name, and message to the client, throw an `ApiError`, for example `new ApiError("Todo not found", 404, { name: "TodoNotFoundException" })`. Building Block errors keep their name and message on the wire.
 
 ## 0.2.1
 
 ### Patch Changes
 
-- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-
-  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
-  discovery tag plus 2–5 functional keywords describing the package's domain and the
-  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
-  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
-  API, or behavior change.
-
-- 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
-- 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-
-  Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-
-  **Building Blocks declare VPC requirements via the constructor, not a method.**
-  `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
-  requirements (a value, or a callback for values that depend on `fullId`) and
-  registers them in a central per-stack registry. This keeps the compile-time
-  forcing the previous `abstract getVpcRequirements()` provided — a block can't
-  silently omit its requirements — without a standing method on every subclass, and
-  gives the framework one place to read, deduplicate, and answer "does anything here
-  need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-
-  **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
-  function without a VPC declares `requiresVpc: true`; when one is needed and the
-  customer didn't bring their own, Blocks lazily creates a single shared VPC
-  (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
-  emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
-  bring-your-own override.
-
-  **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
-  `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
-  Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
-  compliance requirement to use specific subnets. Omit it to keep the default
-  (prefer isolated, fall back to `private-with-egress`).
-
-- 302090a: Local dev server: handle raw-socket errors during the WebSocket upgrade instead of crashing.
-
-  The `upgrade` handlers routed the HTTP upgrade without attaching an `'error'` listener to the raw `net.Socket` first. A stale WebSocket client that reset its connection inside the upgrade window emitted ECONNRESET on a socket with no handler, so Node's default unhandled-`'error'` behaviour killed the dev server process right after port bind. Both upgrade paths now attach `socket.on('error', () => socket.destroy())` as their first statement, the HTTP server answers malformed/aborted requests via a `clientError` handler, and the `noServer` `WebSocketServer` logs server-level errors rather than throwing. The fix is scoped to the vulnerable socket — a genuine error anywhere else still crashes as before.
-
-- Updated dependencies [7b86b8e]
-- Updated dependencies [2806ae2]
-- Updated dependencies [f552ebe]
-- Updated dependencies [9aa0814]
-- Updated dependencies [012cd89]
-- Updated dependencies [5eee114]
-- Updated dependencies [d7312f9]
-- Updated dependencies [21443ba]
-- Updated dependencies [acd1628]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [6496713]
-- Updated dependencies [302090a]
-  - @aws-blocks/bb-app-setting@0.3.0
-  - @aws-blocks/core@0.5.0
-  - @aws-blocks/bb-distributed-table@0.2.0
-  - @aws-blocks/bb-lambda-compute@0.5.0
-  - @aws-blocks/bb-logger@0.2.0
+- 5eee114: Every published package carries an npm `keywords` array with the shared `aws-blocks` tag, so `npm search keywords:aws-blocks` finds it.
+- 6496713: Replaces `registerVpcEndpoint` with `registerVpcGatewayEndpoint` and `registerVpcInterfaceEndpoint`, and reduces `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`.
+- 6496713: A Building Block passes its VPC requirements to the `BuildingBlockScope` constructor, and Blocks creates one shared VPC when a block declares `requiresVpc: true` and you bring none. `Database` accepts an optional `subnets` placement for its Aurora cluster.
+- 302090a: The local dev server no longer crashes when a WebSocket client resets its connection during the upgrade.
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 4a830a6: feat: route event-block resources to their resolved compute
-
-  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
-  compute resolved at synth rather than the stack's shared handler:
-
-  - AsyncJob attaches its SQS event source to the resolved compute's function;
-  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
-  - Realtime binds its shared WebSocket API integrations to the stack's **default**
-    compute (its routes are a stack-level singleton) and grants `postToConnection`
-    to the shared execution role, so `publish()` works from any compute.
-
-  Each block requires a Lambda compute today and fails at synth with a typed
-  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
-  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
-  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
-  when two copies of `bb-lambda-compute` resolve in one dependency tree.
-
-  On the default single-Lambda setup the resolved/default compute is the stack's
-  default, whose function is the shared handler — so this is non-breaking with no
-  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
-  execution role rather than the handler directly.
-
-  New public surface (hence `minor`):
-
-  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
-    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
-    (the single env-var-key sanitizer both config writers and runtime readers use).
-  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
-    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
-  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
-    error member.
-
-  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
-  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
-  Test-only change — no runtime behavior change to the Agent.
+- 4a830a6: AsyncJob, CronJob, and Realtime attach their resources to a compute resolved at synth, and fail synth with an `UnsupportedCompute` error on anything but a Lambda compute. `@aws-blocks/core` exports `blocksError(name, message)` and `sanitizeConfigKey(id)`.
 
 ### Patch Changes
 
-- c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
+- c45eb92: **Breaking: `BlocksDefaults` gains three required fields, `logRetention`, `throttling`, and `accessLogging`, and the presets now throttle the API stages and replace the shared handler Lambda log group.**
 
-  `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
+  To upgrade:
 
-  - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
-  - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
-  - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
+  1. Add the three fields to any hand-written literal `BlocksDefaults` object, which is not needed when you spread a `BlocksPresets` preset.
+  2. If your app serves above 1000 rps / 2000 burst in production, raise the limit with `defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`.
+  3. Delete the old `/aws/lambda/<fn>` log group manually if you want its history gone.
 
-  Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
-
-  **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
-
-  **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
-
-  **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
-
-  **⚠️ Behavior changes on upgrade:**
-  - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
-  - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
-  - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
-  - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
-
-  `bb-dashboard` now points its log widgets at the framework-owned handler log
-  group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
-  `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
-  CDK-generated name, so the old convention would leave the "Recent Errors" /
-  "Log Volume" widgets querying an empty group.
-
-  Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
-
-- Updated dependencies [df667c5]
-- Updated dependencies [df667c5]
-- Updated dependencies [64ddd74]
-- Updated dependencies [df667c5]
-- Updated dependencies [646614b]
-- Updated dependencies [c45eb92]
-- Updated dependencies [8de4a56]
-- Updated dependencies [4a830a6]
-- Updated dependencies [f2f186c]
-- Updated dependencies [46b7c89]
-- Updated dependencies [1da58fd]
-  - @aws-blocks/core@0.4.0
-  - @aws-blocks/bb-logger@0.1.6
-  - @aws-blocks/bb-distributed-table@0.1.7
-  - @aws-blocks/bb-app-setting@0.2.1
-  - @aws-blocks/bb-lambda-compute@0.4.0
+  Sandbox is capped at 200 rps / 400 burst, and Blocks-managed log groups keep events for `ONE_WEEK` in sandbox and `ONE_YEAR` in production.
 
 ## 0.1.5
 
-### Patch Changes
-
-- Updated dependencies [1ff9d03]
-- Updated dependencies [5798492]
-- Updated dependencies [08ab129]
-- Updated dependencies [f00adb0]
-- Updated dependencies [f00adb0]
-- Updated dependencies [309a236]
-- Updated dependencies [08ab129]
-- Updated dependencies [9d4ccea]
-- Updated dependencies [5bfae0a]
-- Updated dependencies [0ac3879]
-- Updated dependencies [e4dac4a]
-  - @aws-blocks/bb-app-setting@0.2.0
-  - @aws-blocks/core@0.3.0
-  - @aws-blocks/bb-distributed-table@0.1.6
-  - @aws-blocks/bb-logger@0.1.5
+Dependency updates only.
 
 ## 0.1.4
 
 ### Patch Changes
 
 - 406ba89: Align local Realtime WebSocket message envelopes with the AWS runtime by using `data` for published messages.
-- Updated dependencies [7b4c62d]
-- Updated dependencies [5262062]
-- Updated dependencies [3614a09]
-- Updated dependencies [5262062]
-- Updated dependencies [5071079]
-- Updated dependencies [8966cfb]
-- Updated dependencies [b11a75b]
-  - @aws-blocks/core@0.2.0
-  - @aws-blocks/bb-distributed-table@0.1.5
-  - @aws-blocks/bb-app-setting@0.1.4
-  - @aws-blocks/bb-logger@0.1.4
 
 ## 0.1.3
 
 ### Patch Changes
 
-- 5491cae: Harden subscription token validation. Connect tokens now use a `$connect` suffix that prevents them from being reused as channel subscription tokens via prefix matching. Channel tokens remain valid as connect tokens. Backward-compatible during rollout.
+- 5491cae: Connect tokens use a `$connect` suffix, so they cannot be reused as channel subscription tokens. Channel tokens remain valid as connect tokens.
 
 ## 0.1.2
 
 ### Patch Changes
 
-- ba3bf7b: docs: add per-package DESIGN.md documents
-
-  Adds a `DESIGN.md` to each building-block package describing its architecture, API surface, mock implementation, and key design decisions.
-
-  - Each document is cross-checked against the current source so identifiers, environment variables, error names, and described behavior match the implementation.
-  - Each `DESIGN.md` is listed in its package's `files` array so it ships on npm alongside `README.md`.
-  - For consistency, `bb-auth-cognito`'s document lives at the package root like every other package.
-  - Bumps the umbrella `@aws-blocks/blocks` package so its bundled `docs/` — assembled from these block READMEs at build time — republishes with a fresh version. Its packed content changes whenever the READMEs change, but the version was previously left untouched, which tripped the publish integrity guard.
-
-- Updated dependencies [ba3bf7b]
-  - @aws-blocks/bb-app-setting@0.1.3
-  - @aws-blocks/bb-distributed-table@0.1.3
-  - @aws-blocks/bb-logger@0.1.2
+- ba3bf7b: Adds a `DESIGN.md` to each building-block package that describes its architecture, API surface, mock implementation, and key design decisions. It ships on npm alongside `README.md`.
 
 ## 0.1.1
 
 ### Patch Changes
 
-- 270c049: docs: scrub and port documentation from internal staging repo
+- 270c049: Ports documentation from the internal staging repo.
 - c0558f3: Minor improvements
-- Updated dependencies [270c049]
-- Updated dependencies [c0558f3]
-  - @aws-blocks/core@0.1.1
-  - @aws-blocks/bb-app-setting@0.1.1
-  - @aws-blocks/bb-distributed-table@0.1.1
-  - @aws-blocks/bb-logger@0.1.1
 
 ## 0.1.0
 
