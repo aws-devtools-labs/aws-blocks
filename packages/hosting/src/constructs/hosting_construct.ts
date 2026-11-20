@@ -86,7 +86,7 @@ import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
 import { cloudFrontDoor } from './cloudfront_door.js';
 import { buildFrontDoor, doorRoutingOf } from './custom_door.js';
-import { BLOCKS_API_SUBTREE, buildDoorInput } from './door_input.js';
+import { BLOCKS_API_SUBTREE, buildDoorInput, LEGACY_BLOCKS_API_SUBTREE } from './door_input.js';
 import {
   APP_ROUTER_FILE,
   APP_ROUTER_HANDLER,
@@ -2835,7 +2835,11 @@ export class HostingConstruct extends Construct {
       headers: plan.routes.headers,
       errorPages: { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) },
       ...(props.backendApi?.url
-        ? { apiPaths: [...new Set([BLOCKS_API_SUBTREE, ...(props.backendApi.paths ?? [])])] }
+        ? {
+            apiPaths: [
+              ...new Set([BLOCKS_API_SUBTREE, LEGACY_BLOCKS_API_SUBTREE, ...(props.backendApi.paths ?? [])]),
+            ],
+          }
         : {}),
       image: hasImage,
       ...(hasImage ? {} : { imageFallback: { hosts: imageRemoteHosts(manifest), pathPrefixes: imagePathEndpoints(manifest) } }),

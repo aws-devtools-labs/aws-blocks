@@ -28,7 +28,7 @@ import { type DoorInput, defineFrontDoor, type EntryOrigin, type FrontDoor } fro
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 import { SSR_CACHE_GUARD_HANDLER_FILE, SSR_CACHE_GUARD_NODE_OPTION } from './ssr_cache_guard.js';
 
-const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api';
 
 type Template_ = ReturnType<typeof Template.fromStack>;
 type FnResource = {
@@ -187,6 +187,10 @@ describe("HostingConstruct — a door with routing: 'app'", () => {
 		assert.equal(env.ASSET_KEY_PREFIX, 'builds/approute-spa');
 		assert.ok(env.ASSET_BUCKET);
 		assert.ok(env.API_GW_BASE, 'the backend base, for the same-origin API');
+		// It forwards the backend subtree and its legacy alias, as every door does.
+		const apiPaths = /const ROUTER_API_PATHS = (\[[^\n]*\]);/.exec(router.Properties.Code.ZipFile ?? '')?.[1];
+		assert.ok(apiPaths, 'the router lists its API paths');
+		assert.deepEqual(JSON.parse(apiPaths), ['/cdk-blocks/*', '/aws-blocks/*', '/hooks/*']);
 		// The router is the build cutover: it updates only after every upload.
 		for (const upload of uploads(t)) assert.ok(router.DependsOn?.includes(upload), `depends on ${upload}`);
 		// It reads the assets bucket.
