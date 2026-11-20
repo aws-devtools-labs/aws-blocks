@@ -9,7 +9,7 @@ Find your app's shape below and apply the edits. Every other file is unchanged.
 | 0.1.0 to 0.1.19 | `BlocksStack.create() requires a \`defaults\` field` (older releases: `TypeError: Cannot read properties of undefined (reading 'vpc')`) |
 | 0.1.20 to 0.2.0 | `error TS2339: Property 'handler' does not exist on type 'BlocksStack'` |
 | 0.3.0 and later | Nothing to change |
-| Any version before the `cdk-blocks/` rename | `Cannot find module 'aws-blocks'` |
+| Any version before the `cdk-blocks/` rename | `not inside an AWS Blocks app: no package.json with a cdk-blocks/ directory at or above <dir>` (older wrapper apps: `Cannot find module '<root>/cdk-blocks/index.ts'` on `npm run deploy`) |
 
 A deploy can fail with `CloudFormation cannot update a stack when a custom-named resource requires replacing` on the table of a `KVStore`. The cause is then the `KVStore` release, not the template. See [A `KVStore` from release 0.4.0 or earlier](#a-kvstore-from-release-040-or-earlier-custom-named-resource-requires-replacing).
 
@@ -17,7 +17,7 @@ An app with a `DistributedDatabase` keeps its Aurora DSQL cluster when the block
 
 ## Rename `aws-blocks/` to `cdk-blocks/`
 
-The scaffolded backend folder is `cdk-blocks/`. An app scaffolded before the rename keeps `aws-blocks/`, and its frontend cannot resolve the backend until the folder, the workspace that names it and the imports move together. `cdk-blocks migrate` rewrites script wrappers only; it does not move the folder or rewrite imports.
+The scaffolded backend folder is `cdk-blocks/`. An app scaffolded before the rename keeps `aws-blocks/`, which resolves as it stands; the folder, the workspace that names it and the imports then have to move together, because a frontend cannot resolve the backend while only some of them have moved. `npm run migrate` rewrites script wrappers only; it does not move the folder or rewrite imports.
 
 From the app root:
 
@@ -133,7 +133,7 @@ A `Database` with no `cluster` option owns an Aurora DSQL cluster, as `Distribut
    import { Database, sql } from 'aws-cdk-blocks';
 
    // Before: const ledger = new DistributedDatabase(scope, 'ledger', { migrationsPath: './aws-blocks/dsql-migrations' });
-   const ledger = new Database(scope, 'ledger', { migrationsPath: './aws-blocks/dsql-migrations' });
+   const ledger = new Database(scope, 'ledger', { migrationsPath: './cdk-blocks/dsql-migrations' });
    ```
 
    `query`, `queryOne`, `execute`, `transaction`, and `sql` take the same arguments. `DatabaseErrors` has every name of `DistributedDatabaseErrors`.
