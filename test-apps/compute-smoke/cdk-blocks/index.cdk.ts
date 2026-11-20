@@ -29,7 +29,7 @@ const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
 // The suite's variant axis: each CI leg deploys this same app with
 // COMPUTE_API_FRONT_DOOR set (as E2E Hosting does with HOSTING_COMPUTE_TYPE); the
-// legs that run are the `e2e-compute-smoke` matrix in pr-checks.yml (apigateway
+// legs that run are the `e2e-compute-smoke` matrix in pr-e2e-compute.yml (apigateway
 // and cloudfront). Each test module declares the legs it applies to.
 const FRONT_DOORS = ['apigateway', 'cloudfront'] as const;
 const apiFrontDoor = (process.env.COMPUTE_API_FRONT_DOOR ?? 'cloudfront') as (typeof FRONT_DOORS)[number];

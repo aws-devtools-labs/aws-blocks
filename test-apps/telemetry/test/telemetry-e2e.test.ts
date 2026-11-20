@@ -409,7 +409,7 @@ const DESTROY_TIMEOUT_MS = 20 * 60_000;
  * it passes. The sandbox group, the longer AWS group, has taken 10–21 min in
  * CI when it passed; this leaves room for one destroy in it to use its whole
  * DESTROY_TIMEOUT_MS, and stays below the 1 h AWS session of the
- * `e2e-telemetry` job in .github/workflows/pr-checks.yml (60 min
+ * `e2e-telemetry` job in .github/workflows/pr-e2e.yml (60 min
  * `timeout-minutes`). Cancelling a case does not stop the command it spawned
  * ({@link runCommand} stops it only at its own `timeoutMs`).
  */

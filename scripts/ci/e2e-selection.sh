@@ -2,8 +2,9 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Picks the E2E jobs PR Checks runs (the detect-changes job in
-# .github/workflows/pr-checks.yml, which documents the E2E trailer).
+# Picks the E2E jobs the PR workflows run (the detect-changes job in
+# .github/workflows/pr-checks.yml, which documents the E2E trailer, and its
+# copies in pr-e2e.yml, pr-e2e-hosting.yml and pr-e2e-compute.yml).
 #
 # Usage: e2e-selection.sh <base-ref>, run in a checkout of the PR head.
 #
@@ -68,7 +69,7 @@ fi
 # lock, and test nothing. So it is left out, also when the trailer names it,
 # until the root test:e2e:sandbox:vpc script runs anything else. A pre or post
 # hook on either script counts as running something. Before switching the
-# tests on, read the concurrency note on e2e-sandbox-vpc in pr-checks.yml.
+# tests on, read the concurrency note on e2e-sandbox-vpc in pr-e2e.yml.
 # Switching them on, or removing the suite, is tracked in
 # https://github.com/aws-devtools-labs/aws-blocks/issues/987. The skip is a
 # warning annotation, so a skipped E2E VPC Smoke doesn't read as a normal one.

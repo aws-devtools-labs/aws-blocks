@@ -9,7 +9,7 @@ inputs:
   offset:
     description: >-
       Added to the PR number before the mod, so the jobs of one run can use
-      different accounts (the E2E Hosting legs do, see pr-checks.yml). Keep a
+      different accounts (the E2E Hosting legs do, see pr-e2e-hosting.yml). Keep a
       job's offset fixed: changing it moves the job's stacks to another account.
     required: false
     default: '0'
