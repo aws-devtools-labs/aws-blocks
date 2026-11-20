@@ -310,9 +310,22 @@ survive.
 
 ### The ALB and API Gateway doors: rules and limits
 
-**Static files.** The asset proxy answers like the CloudFront door: a missing
-file 404s (the SPA fallback is for extensionless paths only), and each file
-keeps the `Cache-Control` it was uploaded with. It also:
+**Static files.** As on the CloudFront door, a missing file 404s (the SPA
+fallback is for extensionless paths only), and each file keeps the
+`Cache-Control` it was uploaded with. The body differs: the asset proxy
+answers a miss with the app's 404 page (see error pages below), or a plain
+`Not Found` (`text/plain`) when there is none. The CloudFront door serves
+files straight from S3, so where it has no 404 page to map the miss to (an app
+with a server and no `errorPages.notFound`, or an SPA whose build ships no 404
+page), the miss gets S3's own `NoSuchKey` error: a `404` with an
+`application/xml` body that names the requested key under the build's prefix
+(`builds/<buildId>/…`) and carries S3's request ids. That is a known
+limitation, not a leak: the bucket stays private behind origin access control,
+the build id already appears in asset URLs, and the request ids grant no
+access. A server app's own not-found page (the one its framework renders)
+covers page routes only: a missing file under the framework's asset paths
+(`/_next/static/…`, `/assets/…`) goes to S3 and never reaches the server. The
+asset proxy also:
 
 - percent-decodes the path (`/My%20Resume.pdf`), and answers 400 for a dot
   segment, an encoded slash or backslash, or a malformed escape;
@@ -620,10 +633,26 @@ const blocksStack = await BlocksStack.create(app, stackName, {
 - Outside `us-east-1`, an Edge route adds a separate `us-east-1` support stack
   for the Lambda@Edge function, so bootstrap `us-east-1` too
   (`npx cdk bootstrap aws://<account>/us-east-1`).
+- The support stack's name comes from CDK: `edge-lambda-stack-<hash>`, where
+  the hash is derived from the app stack's construct path, so the name says
+  nothing about the app it belongs to. To give it one, set `edgeStackId` on
+  `HostingConstruct`. `Hosting` from `@aws-cdk-blocks/core` names it
+  `<id>-edge` when the backend has `defaults.appIdentity` (see the core
+  README's "Running many apps in one AWS account").
+- To find the support stack, list the app's stacks from the app directory
+  (`NODE_OPTIONS="--conditions=cdk" npx cdk ls`): it's the `us-east-1` stack
+  whose id starts with `edge-lambda-stack-` (or your `edgeStackId`). The app
+  stack depends on it, so it is deployed first and deleted last.
 - `npm run sandbox:destroy` deletes every stack the sandbox deploys, the
   `us-east-1` support stack included.
 - `npm run destroy` passes no stack selection, so the CDK CLI refuses to
-  destroy an app with more than one top-level stack.
+  destroy an app with more than one top-level stack. Delete the app stack
+  first, then the support stack, by name, with
+  `NODE_OPTIONS="--conditions=cdk" npx cdk destroy <stack>` or in the
+  CloudFormation console (`us-east-1`). Lambda@Edge keeps replicas of
+  the function for a while after the distribution is deleted, and the
+  function can't be deleted until CloudFront removes them (this can take a
+  few hours), so if the support stack fails to delete, retry later.
 
 ## SSR compute: Lambda or Lambda Web Functions
 
@@ -815,6 +844,48 @@ without it. While it is set:
   config don't send the `x-blocks-front-door` marker and would hit the per-IP
   rate limit. The next deploy attaches it;
 - synth warns (`@aws-cdk-blocks/hosting:AcceptLegacyVerifyHeader`).
+
+### Header hygiene
+
+Hosting removes response headers that name internal resources, and keeps the
+request ids that the services in front of the server add. A request id names
+one request, so AWS Support can trace it; it grants no access.
+
+| Header | Added by | Door | Hosting |
+|---|---|---|---|
+| `lambda-web-logstream` (the log stream and revision) | Lambda Web Functions | CloudFront | Removed by the response headers policy Hosting creates (see [SSR compute](#ssr-compute-lambda-or-lambda-web-functions)) |
+| `lambda-web-request-id` | Lambda Web Functions | CloudFront | Kept |
+| `x-amzn-requestid`, `x-amz-apigw-id` | API Gateway REST API: the server origin (`compute.type: 'lambda'`), or the `apiGateway` door with `api: 'rest'` | CloudFront, `apiGateway` | Kept |
+| `apigw-requestid` | API Gateway HTTP API | `apiGateway` (`api: 'http'`) | Kept |
+
+An app that doesn't want the request ids in its responses can remove them on
+the CloudFront door with a response headers policy of its own, passed as
+`frontDoor.features.responseHeadersPolicy`. Your policy replaces the one
+Hosting picks, so give it the security headers you want, and with Web
+Functions keep `lambda-web-logstream` in `removeHeaders`:
+
+```ts
+import { Duration } from 'aws-cdk-lib';
+import { HeadersFrameOption, HeadersReferrerPolicy, ResponseHeadersPolicy } from 'aws-cdk-lib/aws-cloudfront';
+
+const headers = new ResponseHeadersPolicy(stack, 'Headers', {
+	securityHeadersBehavior: {
+		strictTransportSecurity: { accessControlMaxAge: Duration.days(365), override: false },
+		contentTypeOptions: { override: true },
+		frameOptions: { frameOption: HeadersFrameOption.SAMEORIGIN, override: false },
+		xssProtection: { protection: true, modeBlock: true, override: false },
+		referrerPolicy: { referrerPolicy: HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN, override: false },
+	},
+	removeHeaders: ['x-amz-apigw-id', 'lambda-web-request-id', 'lambda-web-logstream'],
+});
+// frontDoor: { features: { responseHeadersPolicy: headers } }
+```
+
+- CloudFront can't remove `x-amzn-requestid`: it is on CloudFront's list of
+  headers a response headers policy can't remove, and a policy that lists it
+  fails to deploy.
+- The `apiGateway` door has no response headers policy, so its request ids
+  stay.
 
 ## Build retention & rollback
 
