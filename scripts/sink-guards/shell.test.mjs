@@ -71,7 +71,7 @@ const ALLOWLIST = [
 		reason: 'Maintainer planning script: every gh command is a literal in this file, interpolating only the ORG constant and numeric ids.',
 	},
 	{
-		at: 'scripts/publish/publish.ts:107',
+		at: 'scripts/publish/publish.ts:110',
 		reason: 'The only value is a mkdtemp() directory under os.tmpdir() that this script just created, double-quoted.',
 	},
 ];

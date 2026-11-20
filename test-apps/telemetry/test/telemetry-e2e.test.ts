@@ -1326,7 +1326,7 @@ function sandboxLifecycleSuites(): void {
     afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
     after(() => releaseSandboxFirstCreate());
 
-    test('FAIL: no creds emits sandbox/FAIL', async () => {
+    test('FAIL: no creds emits sandbox:deploy/FAIL', async () => {
       tmpHome = createTmpDir('sandbox-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
@@ -1337,13 +1337,13 @@ function sandboxLifecycleSuites(): void {
 
       assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox FAIL should emit telemetry');
       const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.command, 'sandbox:deploy');
       assert.strictEqual(body.event.state, 'FAIL');
       assert.ok(body.event.error, 'FAIL should carry error info');
       assertDelivered(result.stderr, 'sandbox FAIL');
     });
 
-    test('SUCCESS: sandbox deploys and emits sandbox/SUCCESS', async () => {
+    test('SUCCESS: sandbox deploys and emits sandbox:deploy/SUCCESS', async () => {
       tmpHome = createTmpDir('sandbox-success');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
@@ -1374,7 +1374,7 @@ function sandboxLifecycleSuites(): void {
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.command, 'sandbox:deploy');
       assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 2000): ${result.stdout.slice(-2000)}\nstderr(last 2000): ${result.stderr.slice(-2000)}`);
       assert.strictEqual(body.event.error, undefined);
       assertDelivered(result.stderr, 'sandbox SUCCESS');

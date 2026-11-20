@@ -25,7 +25,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -109,6 +109,14 @@ function capture(
   }).trim();
 }
 
+/** Every install path of `name` in the app's package-lock.json. */
+function installedPaths(appDir: string, name: string): string[] {
+  const lock = JSON.parse(readFileSync(join(appDir, "package-lock.json"), "utf-8")) as {
+    packages?: Record<string, unknown>;
+  };
+  return Object.keys(lock.packages ?? {}).filter((path) => path.endsWith(`node_modules/${name}`));
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -124,7 +132,12 @@ function main(): void {
   const npmrcPath = join(workDir, ".npmrc");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    // `npm run canary` exports a lowercase npm_config_userconfig (~/.npmrc).
+    // npm reads both spellings and the one later in the environment wins, and
+    // the scaffold's own `npm install` inherits a reordered environment, so set
+    // both: otherwise the app installs from the public registry.
     NPM_CONFIG_USERCONFIG: npmrcPath,
+    npm_config_userconfig: npmrcPath,
     npm_config_cache: join(workDir, ".npm-cache"),
     // The template e2e uses node:test; keep the runner output clean.
     NODE_OPTIONS: "--test-reporter=spec",
@@ -175,6 +188,21 @@ function main(): void {
       scaffoldArgs.push("--template", args.template);
     }
     run(createCmd, scaffoldArgs, { cwd: workDir, env });
+
+    // ── One copy of @aws-cdk-blocks/core ────────────────────────
+    // core keeps module-level registries (SDK identifiers, the branded-error
+    // class), so a second copy splits them: getSdkIdentifiers() returns {} and
+    // `instanceof ApiError` fails. npm nests core under every block when a
+    // scaffold's devDependency conflicts with core's optional-peer chain
+    // (unctx → unplugin → vitest pins @types/node), so check the installed tree.
+    console.log("\n=== Verify a single @aws-cdk-blocks/core install ===");
+    const corePaths = installedPaths(appDir, "@aws-cdk-blocks/core");
+    if (corePaths.length !== 1) {
+      throw new Error(
+        `expected one @aws-cdk-blocks/core in node_modules, found ${corePaths.length}:\n  ${corePaths.join("\n  ")}`,
+      );
+    }
+    console.log(`  ${corePaths[0]}`);
 
     // ── Build ───────────────────────────────────────────────
     console.log("\n=== Build scaffolded app ===");
