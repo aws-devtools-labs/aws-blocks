@@ -30,7 +30,7 @@
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "@aws-cdk-blocks/core": "1.0.0-rc.2",
+    "@aws-cdk-blocks/core": "1.0.0",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0"
   }

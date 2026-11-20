@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/bb-metrics",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "metrics",
@@ -45,8 +45,8 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-cdk-blocks/core": "^1.0.0-rc.2",
-    "@aws-cdk-blocks/bb-logger": "^1.0.0-rc.2"
+    "@aws-cdk-blocks/core": "^1.0.0",
+    "@aws-cdk-blocks/bb-logger": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/bb-kv-store",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "key-value",
@@ -47,8 +47,8 @@
     "test": "node --test --test-concurrency=1 dist/index.test.js dist/parity.test.js dist/item-size.test.js dist/ttl.test.js dist/mock-file.test.js dist/types.test.js dist/readme.generated.test.js dist/user-agent.test.js dist/index.cdk.test.js dist/gsi-manager-lambda.test.js dist/legacy/runtime.test.js dist/legacy/cdk.test.js"
   },
   "dependencies": {
-    "@aws-cdk-blocks/core": "^1.0.0-rc.2",
-    "@aws-cdk-blocks/bb-logger": "^1.0.0-rc.2",
+    "@aws-cdk-blocks/core": "^1.0.0",
+    "@aws-cdk-blocks/bb-logger": "^1.0.0",
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-dynamodb": "^3.1156.0",
     "@aws-sdk/lib-dynamodb": "^3.1156.0",

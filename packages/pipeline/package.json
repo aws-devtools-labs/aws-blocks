@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/pipeline",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws/cdk-blocks.git",
@@ -41,7 +41,7 @@
     "dev": "tsc --build --watch"
   },
   "dependencies": {
-    "@aws-cdk-blocks/hosting": "^1.0.0-rc.1"
+    "@aws-cdk-blocks/hosting": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
