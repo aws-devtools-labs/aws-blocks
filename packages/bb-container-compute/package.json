@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/bb-container-compute",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "compute",
@@ -49,7 +49,7 @@
     "test": "node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
-    "@aws-cdk-blocks/core": "^1.0.0-rc.2",
+    "@aws-cdk-blocks/core": "^1.0.0",
     "esbuild": "^0.28.2"
   },
   "devDependencies": {

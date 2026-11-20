@@ -1,5 +1,477 @@
 # @aws-blocks/auth-common
 
+## 1.0.0
+
+### Major Changes
+
+- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+
+  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+
+  ```diff
+   {
+     "dependencies": {
+  -    "@aws-blocks/blocks": "<your range>",
+  -    "@aws-blocks/core": "<your range>"
+  +    "aws-cdk-blocks": "<your range>",
+  +    "@aws-cdk-blocks/core": "<your range>"
+     }
+   }
+  ```
+
+  ```diff
+  -import { KVStore } from '@aws-blocks/blocks';
+  +import { KVStore } from 'aws-cdk-blocks';
+
+  -import { ApiNamespace } from '@aws-blocks/core';
+  +import { ApiNamespace } from '@aws-cdk-blocks/core';
+  ```
+
+  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
+
+  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
+
+  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
+
+  The old `@aws-blocks/*` packages stop receiving releases.
+
+### Minor Changes
+
+- 5f55dac: Add `AuthErrors`, the shared vocabulary of auth error names, with the `AuthErrorName` type and the `isAuthError()` / `isAuthErrorName()` guards. Match an auth failure by name with `isAuthError(e, AuthErrors.NotAuthenticated)` — it works the same on the server and in the browser, and an unknown or misspelled name is a compile error. `Auth` throws these names, as `AuthCognito` and `AuthOIDC` did. A sign-in provider that cannot sign anyone in (a configuration that is unusable at runtime, an unreachable provider, or a Cognito-federated provider under `npm run dev`) fails with `ProviderUnavailableException` (`AuthErrors.ProviderUnavailable`); the name reaches native clients as is.
+
+  The `BlocksAuth` `requireAuth` documentation now states the 401 error name correctly: `NotAuthenticatedException` (the removed `AuthBasic` threw `SessionExpiredException`).
+
+- 5f55dac: **Breaking: `AuthBasic`, `AuthCognito` and `AuthOIDC` are removed. Use `Auth`.** The `@aws-blocks/bb-auth-basic`, `@aws-blocks/bb-auth-cognito` and `@aws-blocks/bb-auth-oidc` packages are no longer part of AWS Blocks and receive no further releases. `Auth` (`@aws-cdk-blocks/bb-auth`, also exported from `aws-cdk-blocks`) replaces all three.
+
+  `aws-cdk-blocks` no longer exports `AuthBasic`, `AuthBasicErrors`, `AuthCognito`, `AuthCognitoErrors`, `AuthOIDC`, `AuthOIDCErrors`, `cognitoFederated`, `customOidc`, `google`, or the types `AuthBasicOptions`, `AuthBasicUser`, `AuthCognitoOptions`, `AuthFlowType`, `CognitoUser`, `MFAPreference`, `AuthOIDCErrorName` and `OIDCUser`. `getSdkIdentifiers()` no longer has overloads for `AuthCognito` and `AuthOIDC`; `getSdkIdentifiers(auth)` returns `{ userPoolId, clientId, region, hostedUiDomain, hostedUiClientId }`, every field optional: an `Auth` without a user pool (a `store: 'builtin'` block) registers none of them, and `hostedUiDomain` / `hostedUiClientId` are set only when a provider federates through Cognito.
+
+  **How to migrate.** From your app's root, run the codemod, then follow `MIGRATION.md` in `@aws-cdk-blocks/bb-auth`:
+
+  ```bash
+  npx @aws-cdk-blocks/bb-auth migrate --dry-run   # preview the changes
+  npx @aws-cdk-blocks/bb-auth migrate             # rewrite the files
+  ```
+
+  It rewrites imports, class names, options, renamed methods and error names, never changes a block's id, and leaves a `TODO(aws-blocks-auth-migrate)` comment wherever you have to decide something. Keep every block's id exactly as it is: the id names the deployed resources, and changing it replaces the user pool and deletes its users.
+
+  - **`AuthCognito`:** switching to `Auth` with the same id keeps your user pool, its users and their signed-in sessions.
+  - **`AuthOIDC`:** directly federated providers keep working and users keep their `userId`, but everyone signs in once more. A `cognitoFederated()` provider's user pool is replaced, so those users get a new `userId`; `MIGRATION.md` shows how to re-key their data.
+  - **`AuthBasic`:** there is no upgrade path for its users. Amazon Cognito can't import its password hashes, so every user signs up again. An existing `AuthBasic` session cookie is signed out and cleared on the next request, never an error.
+
+  **`BlocksAuth.requireRole(context, role)` is now required** (`@aws-cdk-blocks/auth-common`). It was optional only because `AuthBasic` and `AuthOIDC` had no roles. If you implement `BlocksAuth` yourself, add `requireRole`: throw 401 `NotAuthenticatedException` when there is no session and 403 `NotAuthorizedException` when the user isn't in `role`.
+
+  Telemetry: `@aws-cdk-blocks/core` no longer counts `AuthBasic`, `AuthCognito` and `AuthOidc` as official Building Blocks; `Auth` is.
+
+- 5f55dac: feat(bb-auth): show local social and SAML sign-in as unavailable
+
+  In `npm run dev`, Cognito managed login does not exist, so the providers of a block on the default (Cognito) store — social, SAML and `type: 'oidc'` — cannot sign anyone in. `getAuthState()` marks their `signIn:<id>` actions with a new optional `AuthAction.unavailable` reason — for example "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally." — and the `Authenticator` renders those buttons disabled, with the reason as a hint. A browser that navigates to the sign-in route anyway gets an explanatory HTML page instead of raw JSON, unless the URL asks for `?format=json`, as the sign-out route already allows. API clients get a `501` JSON error named `ProviderUnavailableException`, whose message says the configuration is fine and the provider works after deploy.
+
+- 1c7e0dd: `@aws-cdk-blocks/auth-common/cookies` adds `isLocalDevRequest(ctx)`, the per-request `isLocalhost` input for the session-cookie security policy. It is `true` only when the process itself is local, as reported by `getDeploymentType()` from deploy configuration, and the request comes from a loopback origin. On deployed compute it is always `false`, so a request that sends `Origin: http://localhost` cannot drop `Secure` (or, with `crossDomain: true`, `Partitioned`) from the cookie. `isLoopbackRequest(ctx)` stays exported and unchanged.
+- 5f55dac: `Auth` refreshes a session consistently when requests overlap, and reports a sign-out that could not invalidate the server-side session.
+
+  - **Session refresh.** Several requests can refresh one session at once (parallel calls when its access token expires, possibly on different Lambda instances), and `signOut()` can delete it mid-refresh. Both refresh writes are now conditional on the session row the request read. A refresh that completes after `signOut()` no longer restores the session: nothing is written and the cookie is cleared. A request whose own refresh is rejected, or whose write loses to a concurrent refresh, is served the session that refresh wrote, instead of deleting or overwriting it.
+  - **Sign-out.** `signOut()` clears the session cookie first, so the device is signed out whatever happens next. If the session row can't then be deleted (a transient session-store failure), or the session secret can't be resolved to identify it, it reports the new `AuthErrors.SignOutIncomplete` (`SignOutIncompleteException`, 503) instead of success, because a copy of the cookie keeps authenticating until the session ends on its own: `auth.signOut(ctx)` rejects with it, `setAuthState({ action: 'signOut' })` returns a signed-out state with `errorName: 'SignOutIncompleteException'`, and `POST /cdk-blocks/auth/signout` answers `503 { error, name }` to an API client (a browser form still lands on `postSignOutPath`). The browser redirect client's `signOut()` rejects with that `ApiError`. A failed session read no longer stops the delete; it only skips `onSignOut` and the upstream sign-out. The store error is logged server-side, never sent.
+  - `@aws-cdk-blocks/auth-common` adds `SignOutIncomplete` to `AuthErrors`.
+
+- 5f55dac: A signed-in user can enrol an authenticator app (TOTP) through `auth.createApi()`, with no backend code: `setAuthState` takes `setUpTotp`, `verifyTotpSetup`, `getMfaPreference` and `updateMfaPreference` actions. `setUpTotp` returns a state whose `verifyTotpSetup` action carries the shared secret (`sharedSecret`) and an `otpauth://` URI (`otpauthUri`, the QR code's content) as hidden fields; the other actions return the user's MFA settings, one `updateMfaPreference` action per change they can make. A wrong code is `retriable`; a caller who is not signed in gets the `NotAuthenticatedException` state. Replacing an enrolled authenticator and setting a factor `'DISABLED'` need a recent sign-in (`session.freshAgeSeconds`); a stale session gets the `ReauthenticationRequiredException` state, so a stolen session cookie cannot swap the authenticator or turn MFA off. The actions follow the block's options, in the frontend too: `setUpTotp` / `verifyTotpSetup` need `mfa` on with `'TOTP'` in `mfa.types` (`TotpEnabled<O>`), the preference actions need `mfa` on and take only the factors in `mfa.types`; untyped callers get `MfaNotEnabledException` or `InvalidParameterException`. The new `mfa.totpIssuer` option sets the issuer authenticator apps show (default: the root `Scope` id).
+
+  `MfaSettings(authApi, options?)` (from `aws-cdk-blocks/ui`, `@aws-cdk-blocks/bb-auth/ui` or `@aws-cdk-blocks/auth-common/ui`) is the enrolment panel for an account page: the setup key, an `otpauth://` link and, with `renderQrCode`, a QR code from the library of your choice, then the code form and the preference buttons, each a `<form>` with stable `mfa-settings-*` test hooks. It leaves the shared auth-state store alone, so a mounted `Authenticator` is unaffected; the `Authenticator`'s signed-in card does not change.
+
+  Native clients: the `setAuthState` input union gains the four actions (additive). Code that matches exhaustively over that input needs the new cases: an exhaustive Swift `switch` over the `Input` enum, a Kotlin `when` over the sealed input class used as an expression, and a Dart `switch` over the sealed input class.
+
+  Dev-server logs redact `otpauth` fields (`otpauthUri` embeds the TOTP secret).
+
+- 5f55dac: feat(auth-common): `subscribeAuthState`, `getAuthStateSnapshot` and a shared auth-state store behind `submitAuthAction`; sign-in/out reaches every component and tab exactly once
+
+  Custom sign-in forms now stay in sync with the rest of the page. Calling `authApi.setAuthState(...)` directly changes the session but notifies nothing on the client, so `onAuthChange`, `AuthenticatedContent` and `AccountMenuBar` kept showing the old state until a reload — most visibly after a custom sign-out.
+
+  - `submitAuthAction(authApi, input)` (new in this release, see its own entry) now also writes the shared store and notifies everything that renders auth: a sign-in or sign-out reaches every `onAuthChange` subscriber in this tab and in other tabs, exactly once. It resolves to the same `AuthState` `setAuthState` returns; a `retriable` result (wrong password, bad code) changes nothing, so you can keep the current form and show the error. Outside a browser it is just the RPC. Use it for sign-in and sign-out alike.
+  - `subscribeAuthState(authApi, listener)` and `getAuthStateSnapshot(authApi)` expose the shared auth state as a store, including mid-flow steps such as a confirm-code challenge, ready for React's `useSyncExternalStore`:
+
+    ```ts
+    useSyncExternalStore(
+      (cb) => subscribeAuthState(authApi, cb),
+      () => getAuthStateSnapshot(authApi),
+      () => null,
+    );
+    ```
+
+  - The `Authenticator` and `AccountMenuBar` now submit through `submitAuthAction`. Mid-flow challenge steps no longer broadcast a spurious signed-out `null` to `onAuthChange` subscribers, and a sign-in or sign-out in another tab triggers one `getAuthState()` refetch however many `Authenticator`s are mounted. A failed automatic sign-in after sign-up confirmation now shows its error instead of leaving the Continue step on screen, and two mounted `Authenticator`s no longer both redeem it.
+  - `AccountMenuBar`'s Sign Out follows a `signOut` action that carries a `url` (a federated session that must also end at the identity provider) as a form submit, as the `Authenticator` already does.
+
+  `subscribeAuthState` and `getAuthStateSnapshot` are exported, alongside `submitAuthAction`, from `aws-cdk-blocks/ui` and `@aws-cdk-blocks/auth-common/ui`. `data-testid` hooks and action and field names are unchanged.
+
+  The cross-tab broadcast gains one optional field, so two auth APIs on a page no longer wake each other's subscribers. `broadcastAuthChange(user, api?)` takes an optional second argument; with it, the message carries `api` (the RPC namespace of that API) and only that API's `onAuthChange` subscribers receive it. A message without `api`, from an older bundle or a call without the argument, still reaches every API, and older readers ignore the extra field. `submitAuthAction` tags its broadcasts this way when the API client reports its namespace, which the `@aws-cdk-blocks/core` API clients of this release do. `AuthStateApi` and `AuthState` also take optional type parameters (`AuthStateApi<I, U>`, `AuthState<U>`, defaulting to today's types, so existing code compiles unchanged), with `AuthUserOf<A>` naming an API's user type, and `AuthUser` has an optional `displayName`; their own entries describe them. The custom-UI guide (`CUSTOMIZING-AUTH-UI.md`) now ships with `@aws-cdk-blocks/bb-auth` instead of `@aws-cdk-blocks/auth-common`.
+
+- 93d533a: Add `allowPlainHttp`, an explicit opt-out for builders who need a plain-HTTP front door in production. A production synth fails for a door that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP; this option is the migration for an app that serves plain HTTP on a network path it trusts, such as an internal ALB reached only inside a private network, or TLS ended upstream by a proxy or another load balancer.
+
+  - **The option.** The `alb` and `custom` doors (`AlbDoorOptions`, `CustomDoorOptions`) and the stacked door (`CloudFrontOverRouterFrontDoor`) take `allowPlainHttp?: boolean` (default `false`). With `allowPlainHttp: true`, a production synth that would fail with `PlainHttpFrontDoorError` or `OriginSecretOverPlainHttpError` succeeds and warns instead.
+  - **The warning.** `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` names what travels in cleartext. Acknowledge it with `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`.
+  - **Sessions.** For the `alb` and `custom` doors, `Hosting` also registers the config entry `BLOCKS_ALLOW_PLAIN_HTTP`. With it, `Auth` issues its same-origin session cookie without `Secure` instead of throwing `AuthErrors.InsecureTransport`. The cookie helpers in `@aws-cdk-blocks/auth-common/cookies` read it fail-closed, from loaded config only on deployed compute: a missing or malformed value still refuses.
+
+  To keep serving plain HTTP in production, add `allowPlainHttp: true` to the door and acknowledge the warning; the deploy and `Auth`'s sign-in then behave as they did before plain-HTTP doors were limited to sandbox deploys. Without the option nothing changes: a sandbox deploy, HTTPS doors and the `'none'` door behave as before.
+
+- adb6077: Front doors that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP now synthesize only in a sandbox deploy (the `sandboxMode` context the sandbox scripts pass). A production synth fails; a sandbox synth warns as before.
+
+  - **The ALB door without a certificate.** `{ kind: 'alb' }` with no `certificate` and `features.domain`, serving an app with an API, fails synth with `PlainHttpFrontDoorError`. So does a `{ kind: 'custom', door }` whose URL is `http://` with an API; serve it over HTTPS (return an `https://` url). To fix the ALB door, give it a `certificate` and `features.domain` (an HTTPS listener; port 80 redirects to 443), or use the CloudFront or stacked door. A sandbox deploy warns (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`). The `'none'` door is unchanged: it warns in every stage.
+  - **The stacked door's edge → router hop.** `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` requires an encrypted edge → router hop for the router's `x-blocks-origin-verify` header. With an internet-facing router and no router certificate, synth fails with `OriginSecretOverPlainHttpError`. To fix it, give the router a `certificate` and `features.router.domain` (the edge → router hop becomes HTTPS :443), or set `internal: true` (the edge reaches the router through a CloudFront VPC origin on the AWS network). A sandbox deploy warns (`@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp`).
+  - **Sessions over plain HTTP.** `Auth` issues a session over a plain-HTTP front door only in a sandbox deploy, where its same-origin cookie omits `Secure` as before. Outside a sandbox it refuses: the cookie helpers in `@aws-cdk-blocks/auth-common/cookies` (`resolveCookieSecurity`, `buildCookieSecurityAttrs`) throw the new `AuthErrors.InsecureTransport` (`InsecureTransportException`, HTTP 500 from `Auth`), and no `Set-Cookie` line is written. `Auth` checks this before it stores a session, so a refused sign-in writes nothing and revokes the engine's tokens. Clearing cookies (`Max-Age=0`) are still written, so sign-out and `deleteUser` keep working; `CookieSecurityInput` gains an optional `clearing` flag for them. Deployed compute whose config doesn't name a sandbox counts as production. Cross-domain cookies, HTTPS doors and local development are unchanged.
+
+  Compatibility: these are behaviour changes for production apps on a plain-HTTP door. An app that deploys to production behind `{ kind: 'alb' }` without a certificate (with an API), or behind the stacked door with an internet-facing router and no router certificate, no longer synthesizes until it makes one of the changes above; that also covers `Auth` behind such a door, whose sign-in used to set a cookie without `Secure`. Every other front door is unchanged.
+
+  The `@aws-cdk-blocks/hosting` README also gains a table of where TLS ends on each front door (viewer hop, origin hop, and the secret header each door's origin requires), and a table of the plain-HTTP shapes that are sandbox-only.
+
+### Patch Changes
+
+- 63e571c: Use AWS CDK Blocks consistently in starter apps, CLI messages, package metadata, and documentation. Package imports and commands are unchanged.
+- 5f55dac: The `Authenticator` renders each action as a `<form>`, so browsers and password managers see the username and password fields together (Chrome no longer warns that the password inputs are not in a form). Enter in any field or a click on the button submits it once, and it never reloads the page; native validation is off, so the server's error is the one shown. Inputs carry `autocomplete` hints by default: `username`, `current-password` (`new-password` on sign-up and for a new password), `one-time-code` for codes, `email` for an email field and `tel` for `phone_number`. A field override's `autocomplete` still wins. Because each action is a form, a `<button>` without a `type` inside a field's `render` override now submits the action (the HTML default, `type="submit"`); give a button that should not submit `type="button"`. The `data-testid` hooks are unchanged; `authenticator-action-<action>` is now the `<form>` element.
+- 5f55dac: The cookie helpers' documentation now names `bb-auth` as their caller and refers to `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc` as the removed blocks they replaced.
+- 5f55dac: Auth broadcasts are tagged per API, so `onAuthChange` for one API no longer receives another API's user. With two auth blocks on one page, signing in to one no longer hands its user to the other's listener (typed as the other's user), in this window or in another tab, and the other block's store no longer refetches.
+
+  `submitAuthAction` tags its sign-in and sign-out messages with the RPC namespace of the API it ran on (a generated client now answers `Symbol.for('aws-blocks.apiNamespace')` with it), and `broadcastAuthChange(user, api)` takes an optional `api` to do the same. An untagged message still reaches every API's listeners: `broadcastAuthChange(user)` without an `api`, and a message from a tab running an older `@aws-cdk-blocks/auth-common`. An API that is not a generated client (a hand-written `AuthStateApi`) has no namespace: `submitAuthAction` on it sends untagged broadcasts, and its listeners and store receive every message, tagged or untagged. The message format (the `blocks-auth` channel and the `blocks-auth-change` window event, `{ type: 'auth-change', user }`) only gains the optional `api` field, so tabs running an older bundle keep working.
+
+- 5f55dac: Docs: the `AuthFieldOverride` reference documentation no longer names `bb-auth-supabase`, a package AWS Blocks does not ship.
+- 5f55dac: The client auth-state store (`subscribeAuthState`, `getAuthStateSnapshot`, the `Authenticator`) and `onAuthChange` now end at the session's real state when requests overlap: another tab's broadcast, a hydration still in flight, answers that arrive out of order, and failed requests.
+
+  - Answers are ordered by the session cookie they reflect: a `getAuthState()` counts from when it was sent, a sign-in or sign-out result from when it arrived. A cross-tab refetch that answers late no longer replaces a newer sign-in or sign-out in this tab.
+  - A challenge step, a failed sign-in or a resend stays on screen over a signed-out session, so another tab's sign-out no longer cancels this tab's MFA step. It is dropped once the session is seen signed in after it was sent, so a resend that races another tab's sign-in ends signed in instead of on the code form.
+  - When the answers conflict, the store re-reads the session with one extra `getAuthState()` and keeps showing what it showed until that answer lands: an MFA step while it still shows a user whose session may have timed out (the step is shown once the read confirms the session ended), and a sign-in or sign-out that another request was sent during. If that re-read fails, the store keeps showing what it showed until the next broadcast, submit or reload: the signed-in state after a session timeout, or an MFA step this tab holds after another tab signed in.
+  - `onAuthChange` follows the store, so it ends where `subscribeAuthState` does. It still gets another tab's broadcast at once; the store's refetch then corrects it if the session changed again in between. An answer older than that broadcast never replaces it, so when the refetch fails the broadcast stands (a sign-out stays a sign-out on a network blip). It gets `null` when an MFA step replaces a timed-out session.
+  - Each API with an `onAuthChange` subscriber now sends one `getAuthState()` per broadcast from another tab, also on pages with only `AuthenticatedContent` or `AccountMenuBar` (before, only store subscribers and the `Authenticator` did). A broadcast that names the user the tab already shows, while it is in no sign-in step and has no request in flight, is not refetched, so another tab's failed sign-in (which re-broadcasts `null`) or a repeat sign-in of the same user costs no request.
+  - When a refetch for another tab's broadcast fails, `onAuthChange` keeps the broadcast: if another tab's late sign-out broadcast arrives after this tab signed in and its refetch fails, `onAuthChange` shows `null` while the store shows the sign-in, until the next broadcast, submit or reload.
+  - `submitAuthAction` does not broadcast a `signedIn` / `signedOut` result the store does not show: a failed sign-in sent before the session was seen signed in, or one that arrives under a signed-in state the store is re-reading.
+  - A failed request still never empties the store or masks an answer still in flight: a hydration lands even when a cross-tab refetch fails.
+
+  No public API or wire-format changes.
+
+- 5f55dac: `auth.createApi()` is typed by the block's options, so the frontend gets the same gates as the server-side methods, and the signed-in user with its own groups and attributes.
+
+  - **Actions.** `setAuthState` takes `AuthActionInputOf<O>`: the password actions (`signIn`, `signUp`, `confirmSignUp`, `resendSignUpCode`, `autoSignIn`, `resetPassword`, `confirmResetPassword`, `confirmSignIn`) need email + password, the passkey actions need `passkeys`, and `confirmSignIn` takes only the challenges the configuration can produce: the MFA challenges follow `mfa.types` (and `mfaType` is one of them), and the first-factor ones need `users.authFlow: 'USER_AUTH'`. On an `emailPassword: false` block, `authApi.setAuthState({ action: 'signIn', username, password })` and `submitAuthAction(authApi, { action: 'signIn', … })` are compile errors. A setting the compiler cannot see (the wide `Auth` type, a `boolean`-typed option, a union `authFlow`, a wrapped pool, `mfa.types` typed `MfaFactor[]`) keeps its actions.
+  - **User.** `AuthState.user` is `AuthStateUser<O>`: the signed-in `AuthenticatedUser` (`groups` typed by `users.groups`, `attributes`, `userSub`, `signInProvider`) without the server-only `claims` and `federatedIdentity`. `onAuthChange`, `AuthenticatedContent`, `subscribeAuthState`, `getAuthStateSnapshot` and `submitAuthAction` pass it on, so `onAuthChange(authApi, (user) => user?.groups)` compiles with no cast and no `api.me()` endpoint. `AuthUserOf<typeof authApi>` names the type.
+  - **`@aws-cdk-blocks/auth-common`.** `AuthStateApi` and `AuthState` now take these as optional type parameters (`AuthStateApi<I, U>`, `AuthState<U>`), defaulting to `AuthActionInput` and `AuthUser`, so code that names them, and helpers such as `Authenticator(api)`, accept every narrowed API unchanged; `AuthStateUser` is an `AuthUser`. A custom renderer that builds a wide `AuthActionInput` from runtime `action.fields` takes the API as a plain `AuthStateApi`, as `Authenticator` does. `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`, `onAuthChange` and `AuthenticatedContent` are now generic over the API you pass (`submitAuthAction<A extends AuthStateApi<never>>(api: A, input: Parameters<A['setAuthState']>[0])`), and type-check on TypeScript 5.0 and later.
+  - **Federated sign-in** is not a `setAuthState` action: it is a browser redirect, the `signIn:<id>` action's `url`. `FederatedActionNameOf<O>` types those names.
+  - **Native clients.** The narrowing is TypeScript-only. The OpenRPC spec describes `setAuthState`'s input and `AuthState` in their wide form, so differently configured blocks generate the same native types; the server enforces each block's configuration.
+
+  New types: `AuthActionInputOf<O>`, `AuthStateApiOf<O>`, `AuthStateUser<O>`, `ConfirmSignInInputOf<O>`, `FederatedActionNameOf<O>` and `AuthUserOf<A>`.
+
+- 5f55dac: `Auth` names the option that is off when an untyped caller (plain JavaScript, or a native client generated from the wide spec) sends an action the block does not offer, before the session check or any Cognito call. A passkey action (`signInWithPasskey`, `startPasskeyRegistration`, `completePasskeyRegistration`, `listPasskeys`, `deletePasskey`) or a `confirmSignIn` `webauthn` challenge on a block without `passkeys` answers `PasskeysNotEnabledException` (409). A `confirmSignIn` MFA challenge (`code`, `mfaType`, `totpSetup`, `email`) with MFA off answers `MfaNotEnabledException` (409). A factor outside `mfa.types`, or a `password` / `firstFactor` challenge without `users.authFlow: 'USER_AUTH'`, answers `InvalidParameterException` naming the option. A block that wraps a pool with `userPool: Auth.fromExisting(…)` keeps every challenge.
+
+  The runtime backstops of the MFA methods (`setUpTotp`, `verifyTotpSetup`, `updateMfaPreference`, `getMfaPreference`) throw `MfaNotEnabledException` with MFA off, and those of the passkey methods throw `PasskeysNotEnabledException` without `passkeys`. `WebAuthnNotEnabledException` is Cognito's answer for a user pool without a WebAuthn configuration.
+
+  `@aws-cdk-blocks/auth-common`'s `AuthErrors` gains `PasskeysNotEnabled` and `MfaNotEnabled`.
+
+- 5f55dac: The sign-in UI now shows a signed-in user's email address instead of a generated id. When users sign in with their email or phone number (`users: { signInWith: ['email'] }`), Amazon Cognito gives each user a generated username (a UUID), and the `Authenticator` and `AccountMenuBar` showed that UUID ("Signed in as: 815424a9-…").
+
+  `AuthState.user` now has an optional `displayName`, which `Auth` sets in the signed-in state:
+
+  - a username the user chose stays as it is;
+  - otherwise it is the user's email address, then their phone number (each skipped if the session's ID token marks it unverified, as it does for an email the user changed with `updateUserAttributes` and hasn't confirmed yet), then `preferred_username`, then the username.
+
+  The `Authenticator` and `AccountMenuBar` show `displayName`, and fall back to `username` when it is absent. `displayName` is for display only, so keep keying data on `userId` / `userSub`. Only the signed-in caller's own state carries it, never a signed-out or mid-sign-in state. Users returned by `requireAuth()` and `getCurrentUser()` don't have it; read `user.attributes.email` on the server instead.
+
+  The `auth` template's status line now shows `displayName` directly.
+
+- 5f55dac: feat(bb-auth): `Auth` options: a block-level `store` and one `providers` map
+
+  `Auth` options start with where your users live. A block-level `store` picks it, and every sign-in provider goes in one `providers` map, keyed by provider id and tagged with its `type`:
+
+  ```ts
+  // The default store (omit `store`): users live in a Cognito user pool.
+  const auth = new Auth(scope, "auth", {
+    providers: {
+      google: {
+        type: "google",
+        clientId: "your-google-client-id",
+        clientSecret: googleSecret,
+      },
+      entra: {
+        type: "oidc",
+        issuer: "https://login.microsoftonline.com/<tenant>/v2.0",
+        clientId: "entra-client-id",
+        clientSecret: entraSecret,
+      },
+      corp: {
+        type: "saml",
+        metadataUrl: "https://idp.example.com/saml/metadata",
+      },
+    },
+  });
+
+  // store: 'builtin': no user pool; your backend verifies each provider itself.
+  const sso = new Auth(scope, "sso", {
+    store: "builtin",
+    providers: {
+      okta: {
+        type: "oidc",
+        issuer: "https://dev-12345.okta.com",
+        clientId: "0oa-your-client-id",
+      },
+      github: github({ clientId: "Iv1.abc", clientSecret: githubSecret }),
+    },
+    // Both blocks have providers, so this one gets its own sign-in routes.
+    redirects: {
+      callbackPath: "/cdk-blocks/auth/sso/callback",
+      signOutPath: "/cdk-blocks/auth/sso/signout",
+    },
+  });
+  ```
+
+  - **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` needs no options): email + password, `mfa`, `passkeys`, `admin`, `userPool`, `email`, and `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. A `type: 'oidc'` entry federates through Cognito and requires `clientSecret`. A social entry is keyed by its type (`google: { type: 'google', … }`).
+  - **`store: 'builtin'`**: no user pool. Users live at their identity provider, and the block keeps only its session table. `providers` of `type: 'oidc'` (`clientSecret` optional, so public PKCE-only clients work), `github()` / `customOauth2()` (`type: 'oauth2'`) and `stubIdp()` (`type: 'stub'`). `users` takes only `groups`, `allowBearerAuth: true` accepts the provider's access token, and `validateUser` runs at sign-in only. `emailPassword` (other than `false`), `mfa`, `passkeys`, `admin`, `userPool` and `codeDelivery` don't apply, and the signed-in user's `signInProvider` is one of the block's provider ids (never `'password'`).
+  - **One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. Use two `Auth` blocks, each with its own session cookie and `createApi()`, and let the frontend pick one per sign-in. When both have `providers`, give the second its own `redirects.callbackPath` / `signOutPath`, as `sso` above does.
+  - **Checked at compile time, and again at runtime.** A wrong combination is a compile error. Most name the fix in their type, such as `ERROR_needs_store_cognito<'emailPassword'>` under `store: 'builtin'`. `stubIdp()`, `github()` or `customOauth2()` on the default store is a compile error too (`'"stub"' is not assignable to '"oidc"'`): add `store: 'builtin'`. The constructor rejects the same combinations with a readable message in `npm run dev`, at synth and in Lambda. It also rejects what the compiler can't see, such as options built from JSON, a `providers` value that isn't an object of provider entries, or a social entry keyed differently from its type. A default-store block with `emailPassword: false` and no provider fails in `npm run dev`, at synth and in Lambda.
+  - **Editor help on a `'builtin'` block.** The options it refuses (`mfa`, `admin`, `userPool`, `users.signInWith`, …) are marked `@deprecated`, so completions list them last and struck through; `emailPassword` stays unmarked, since `false` is allowed. `allowBearerAuth: { clientIds }` there names the fix (`ERROR_needs_store_cognito<'allowBearerAuth (object form)'>`). A `providers` map picked per environment (`isProd ? { okta: … } : { local: stubIdp() }`) keeps both provider ids narrow for `getSignInUrl()` and `requireRole()`.
+  - **Checked at synth.** On both stores, synth checks `redirects` (`callbackPath` / `signOutPath` must be explicit paths under `/cdk-blocks/auth/`, not the bare prefix) and `postSignInPath` / `postSignOutPath`, and rejects a provider id containing `/`. Two blocks of one backend that would mount the same sign-in or sign-out routes (both with `providers` on the default `redirects`), or two `stubIdp()` providers under the same key, fail synth naming both blocks, and at runtime the stub case names the fix rather than a bare `DuplicateRouteException`. A plain string as a `'builtin'` provider's `clientSecret` is refused at construction. On the default store, a `type: 'oidc'` entry with an empty or falsy `clientSecret` (`''`, `0`, `false`), or an `attributesRequestMethod` other than `'GET'` / `'POST'`, is refused at construction in `npm run dev`, at synth and in Lambda.
+  - **Docs and messages.** `allowBearerAuth` and `validateUser` say that a bearer token is verified per request and does not run `validateUser`, so gate per request when you rely on it. An option error never echoes a string value longer than 8 characters, including a `store` or a provider `type` (a misplaced token prints as `a string (40 characters)`). A provider whose id names an `Object.prototype` member (such as `constructor`) gets the default label "Sign in with Constructor".
+  - **`bb-auth migrate`** rewrites `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks to this shape. A block constructed from a class the app re-exports through its own module (`export { AuthBasic } from '@aws-blocks/bb-auth-basic'`, `export *` of an old package) gets the same option mapping, kept defaults and TODOs as a direct import. `AuthBasic` blocks keep their password policy: each character class it left unset is written as `false` (`Auth` requires all four by default). A local `export { AuthCognitoErrors }` of a renamed import becomes `export { AuthErrors as AuthCognitoErrors }`. An `AuthOIDC` `providers` array with a spread is kept as is, with a TODO. Each moved `stubIdp()` gets a TODO that `Auth` refuses it on a production deployment, and `stubIdp({ name: 'dev' })` becomes `stubIdp()`. A provider factory called outside the block, a `require()` of an old package, and an `AuthBasicUser` import in a project that never reads `createdAt` get accurate TODOs (none, for the last). `migrate <path>` with a path that doesn't exist exits 2.
+  - **Stable identifiers.** Construct ids, user-id formats (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'builtin'` users), the session format, and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`) depend on the provider keys and block ids, not on how the options are written. An `AuthCognito` app keeps its construct ids, so nothing deployed is replaced.
+
+  Also updated: the umbrella README's sign-in method guide (`aws-cdk-blocks`), the `Auth` snippet and RLS notes in the generated `MIGRATION_GUIDE.md` from `db pull` (`@aws-blocks/bb-data`), the `Secret` README's provider-secret note (`@aws-cdk-blocks/bb-secret`), the scaffolded `AGENTS.md` (`@aws-cdk-blocks/create-blocks-app`), and the `AuthAction.unavailable` example (`@aws-cdk-blocks/auth-common`), whose hint reads "…or use stubIdp() in a store: 'builtin' block locally."
+
+- 5f55dac: Fixes made to `AuthCognito`, `AuthOIDC` and `AuthBasic` since their last release (`bb-auth-cognito` 0.2.0, `bb-auth-oidc` 0.3.0, `bb-auth-basic` 0.2.0) ship in `Auth`, which replaces them in this release. If you upgrade an `AuthCognito`, `AuthOIDC` or `AuthBasic` app to `Auth`, this is what changes for you compared with those versions.
+
+  **Security (from `AuthCognito`)**
+
+  - After `autoSignIn`, the auto-sign-in cookie (which holds the encrypted sign-up password) is actually cleared in the browser. Before, writing the session cookie overwrote the clear, so the cookie stayed for up to 15 minutes.
+  - IAM and credential errors from AWS (for example `AccessDeniedException`) no longer send their message, which names your function's role ARN and AWS account ID, to the client. The client gets a generic message with HTTP 500, and the full detail goes to the block's logger. No error message that contains an ARN or account ID reaches the client.
+  - A client can no longer tell whether an account exists. On any user pool, including one adopted with `fromExisting` that doesn't enable `PreventUserExistenceErrors`, an unknown user gets exactly the same sign-in error as a wrong password (`NotAuthorizedException`, 401, "Incorrect username or password"). The same applies to a disabled user. `resendSignUpCode` succeeds for an unknown user. `confirmSignUp` and `confirmResetPassword` answer an unknown user like a wrong code (`CodeMismatchException`). `resetPassword` returns plausible delivery details instead of an empty or placeholder destination. Both the local mock and AWS behave this way. `auth.admin.*` still reports `UserNotFoundException`.
+
+  **Behaviour (from `AuthCognito`)**
+
+  - Refreshed ID tokens are verified the same way as at sign-in. A token that fails verification signs the user out and clears the session cookie.
+  - Errors raised by the block itself keep their status. For example, "Cognito returned no tokens" is a 500, and an SRP challenge is a non-retriable 501 (it was reported as a retriable 400).
+  - `InternalErrorException` from Cognito is a retriable 500 instead of a non-retriable 400.
+  - In the local mock, masked phone numbers keep the leading `+` (`+*******0100`), matching Cognito.
+
+  **Behaviour (from `main`'s synth guards, #824)**
+
+  - Calling a runtime method of `Auth` (for example `auth.requireAuth()` or `auth.admin`) at the top level of a backend module, which runs it during `cdk synth`, throws the actionable `Auth.<method>() cannot be called during CDK synth` error that every Building Block gives, instead of a `TypeError`. `AuthOIDC.signInRoutePath()` has no `Auth` equivalent to make synth-safe: `Auth`'s sign-in routes are fixed (`/cdk-blocks/auth/signin/<provider>`).
+
+  **Released in those versions (#840, #903, #887)**
+
+  - `AuthBasic` gained server-side revocation of a signed-out session token (#840) and an opt-in per-username sign-in lockout (#903). Neither ships in `Auth`, which replaces `AuthBasic`: `Auth`'s `signOut()` deletes the session row, so a replayed cookie is already rejected, and Cognito applies its own sign-in throttling to repeated failed password attempts.
+  - `AuthOIDC`'s signed state and session cookies use Node's built-in `base64url` (#887). `Auth` already encodes its state envelope and cookies that way, so nothing changes for you.
+
+  **Released in those versions (#949, #827, #510, #1032, #1042, browser error constants)**
+
+  - `AuthBasic` capped failed guesses against one verification code at 5 (#949). `Auth`'s sign-up and password-reset codes are Amazon Cognito's, which limits repeated failed code attempts itself; the local mock does not cap them.
+  - `AuthOIDC`'s `cdk` and `aws-runtime` entries gained the `OIDCClient` type (#827). `Auth` has no `OIDCClient` (federated sign-in buttons come from `getAuthState()`), and every `Auth` entry exports the same types.
+  - `AuthBasic`'s same-origin session cookie dropped `Secure` behind a plain-HTTP front door such as a TLS-less ALB (#510). So does `Auth`, which reads the front door's scheme from `BLOCKS_PUBLIC_ORIGIN`, never from a request header.
+  - `AuthBasic` and `AuthCognito`'s browser stubs no longer imported `ApiNamespace`, so their error constants could be imported in frontend code. `Auth`'s browser entry never imported it: `import { AuthErrors } from '@aws-cdk-blocks/bb-auth'` bundles for the browser.
+  - `AuthOIDC`'s mock cookie secret became random per project (#1032). `Auth`'s local session secret already was. `Auth`'s mock entry also fails closed on deployed compute, like every Building Block's.
+  - `AuthOIDC` limited `stubIdp()` to local development and sandbox deployments (#1042). So does `Auth` (see the `stubIdp()` changeset).
+
+  **Released in those versions (#1050)**
+
+  - `AuthOIDC`'s `cognitoFederated()` app client registered only an `https://localhost` placeholder callback URL, so Cognito answered `redirect_mismatch` for a deployed app (#1050 fixed it and added `additionalCallbackUrls` / `additionalLogoutUrls`). `Auth`'s hosted-UI app client registers the backend's API URL and the public origin `Hosting` registers as its callback and sign-out URLs, so a deployed `Auth` app signs in through Cognito. `Auth` has no `additionalCallbackUrls` / `additionalLogoutUrls` options.
+
+  **Released in those versions (#1120)**
+
+  - `AuthBasic`'s browser entry gained the `AuthActionInput` type, which its server entry and README already had (#1120). `Auth` does not re-export `@aws-cdk-blocks/auth-common`'s types from any entry: import `AuthActionInput` from `aws-cdk-blocks` (the migrate codemod says so). Every `Auth` entry, the browser one included, exports the same types, including the options-narrowed `AuthActionInputOf<O>`.
+
+  **From `main` after those releases (#1085, #1253, #1257, #1296, #1288, #1203)**
+
+  - `AuthBasic` invalidates every outstanding session when a user resets their password (#1085). So does `Auth`, which replaces `AuthBasic`: a completed `confirmResetPassword` signs the user out everywhere, locally and on AWS (see the `bb-auth` changeset on password resets).
+
+  - `AuthBasic` reads its session cookie by exact name (#1253): a cookie whose name only ends with the session cookie's name can no longer supply or shadow it, and the scope id is matched literally. `Auth` already reads every cookie this way (anchored to a cookie boundary, name regex-escaped).
+
+  - `AuthBasic` and `AuthCognito` no longer let a request header decide whether the session cookie is `Secure` (#1257): on a deployed stack, a request that sent `Origin: http://localhost` got a cookie without `Secure` (and, with `crossDomain: true`, without `Partitioned`). `Auth` decides it the same way, from deploy configuration, for every cookie it sets (see the `bb-auth` changeset on the `Secure` cookie flag).
+
+  - `AuthBasic` can emit sign-in metrics you can alarm on (#1296): with a `Metrics` instance as its `metrics` option, every `signIn` emits a `SignInSuccess`, `SignInFailure` or `SignInLocked` count with an `AuthBlock` dimension. This is not yet in `Auth`, which replaces `AuthBasic`: `Auth` has no `metrics` option, and emits no sign-in metrics. `Auth`'s sign-in can take more than one step (an MFA or passkey challenge, `autoSignIn`, a federated callback), and lockout is Amazon Cognito's rather than the block's, so what each metric counts is still to be decided.
+
+  - `AuthCognito`'s `DESIGN.md` gave its session cookie as `SameSite=None; Partitioned` (#1288); it is `SameSite=Lax` by default, and `SameSite=None; Partitioned` only with `crossDomain: true`. `Auth`'s `DESIGN.md` already describes its cookie that way (D-007), with the opt-in at `session: { crossDomain: true }`.
+
+  - `AuthOIDC`'s docs name the `npm run secret` CLI (#1203) when they say it does not manage the SSM SecureString behind a `secret: true` `AppSetting`. `Auth`'s README already says how to set each kind of provider secret: `npm run secret` for a `Secret`, and `aws ssm put-parameter` for an `AppSetting`.
+
+  **From `main` after those releases (#1314, #1312, #1337, #1362, #885, #1401, #1414)**
+
+  - `AuthCognito` makes its session refresh writes conditional on the record each request read (#1314). So does `Auth` (see the `bb-auth` changeset on session refresh): a refresh that finishes after sign-out no longer restores the session, and overlapping refreshes no longer delete or overwrite each other. `Auth` already kept a session through a transient refresh failure (throttling, a Cognito 5xx, a network error) and ended it only when Cognito rejected the refresh token or the user.
+
+  - `AuthOIDC` reports `SignOutIncompleteException` (503) when sign-out cannot delete the session row (#1312). So does `Auth`, for every session it issues: `AuthErrors.SignOutIncomplete`, on `signOut()`, on `setAuthState({ action: 'signOut' })` and on the sign-out route (see the `bb-auth` changeset on sign-out).
+
+  - `AuthBasic`'s docs now describe local development correctly (#1337): its users, codes and secret live in `.cdk-blocks/local/data/` and survive a dev server restart. `Auth`'s README already says its local user pool lives in `.cdk-blocks/local/data/<fullId>/state.json`, so its users survive a restart.
+
+  - `AuthBasic`'s lockout window test was stabilized (#1362). `Auth` has no per-username lockout (Amazon Cognito throttles repeated failed sign-ins itself), so there is no such test.
+
+  - `AuthBasic`, `AuthCognito` and `AuthOIDC` stopped sending the raw text of an unexpected error to the client (#885). `Auth` already reported such an error as `InternalErrorException` with a fixed message (and withholds an `ApiError` message that names AWS resources), in `setAuthState()`, the RPC methods and the sign-in routes, including an error thrown by a `codeDelivery` or `onSignIn` hook; an `ApiError` thrown by a hook keeps its status, name and message.
+
+  - `defaults.permissionsBoundary` coverage gained a synth test for `AuthOIDC` (#1401). `Auth` has the same test, on both stores: every IAM role a `store: 'builtin'` block or a Cognito-store block with a federated provider creates carries the boundary and is listed in the stack's IAM report.
+
+  - `AuthOIDC` loads its stub IdP engine only in sandbox deployments (#1414). `Auth` already did: its AWS entry imports the stub engine dynamically, only for a `stubIdp()` provider on a sandbox deployment, and serves no stub routes on any other deployment; a new test checks that the AWS entry has no static import path to the engine. `Auth` has no `getClient()`, so the rest of that change does not apply.
+
+  **Docs (from `AuthOIDC`)**
+
+  - Federating a provider through Cognito does not add MFA, adaptive authentication or brute-force protection to its sign-in: for federated users, Amazon Cognito delegates authentication to the identity provider and offers no extra authentication factors, device tracking or threat protection. The `Auth` README says so and tells you to enforce MFA at the IdP (for example Google 2-Step Verification, or your Okta / Microsoft Entra ID MFA policy). `AuthOIDC`'s docs had claimed otherwise.
+  - `@aws-cdk-blocks/auth-common`: the error-name mapping table in `DESIGN.md` lists the AWS credential and IAM error names that `Auth` (like `AuthCognito`) can report.
+
+  **Internal**
+
+  - The tests that pinned what `AuthCognito` deploys — the CloudFormation identity of its user pool, app client, groups, session table and session secret, its config keys and its session cookie name, plus `AuthOIDC`'s deployed resources — and the offline tests of the Cognito runtime against a stubbed client (sign-in, sign-up, sign-out, refresh, cookie verification, error mapping, live group checks) now run against `Auth`, with `AuthCognito`'s side frozen from its final source. No runtime or infrastructure change.
+
+- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
+
+  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
+
+  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
+
+  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
+
+  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
+
+- 1de6ea4: The framework's reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/cdk-blocks/auth/*`, `/cdk-blocks/settings`, `/cdk-blocks/dashboard`, ...). The old `/aws-blocks/` prefix stays served as an alias with the same handlers: the runtime (Lambda, container and dev server) treats `/aws-blocks/...` as `/cdk-blocks/...`, the shared API gateway and the Hosting front doors route both, so already-deployed clients, mobile apps and registered auth callbacks keep working. Clients, generated config and defaults use `/cdk-blocks/`.
+
+  `BLOCKS_RPC_PREFIX` and `BLOCKS_AUTH_PREFIX` now hold the new prefix, and `canonicalBlocksPath()` maps a legacy path to its canonical one.
+
+  **Upgrade:**
+
+  - The default `redirects.callbackPath` of an `Auth` with `providers` becomes `/cdk-blocks/auth/callback`. An external identity provider (OIDC, Google, ...) that only allows the old `/aws-blocks/auth/callback` redirect URI must have the new one registered, or set `redirects.callbackPath: '/aws-blocks/auth/callback'` to keep the old one.
+  - A custom front door or an explicit `apiPaths` that routes `/aws-blocks/*` by hand must also route `/cdk-blocks/*` (or use `cf.apiBehaviors(origins.api)`), or the upgraded frontend's API calls won't reach the backend. A custom front door that records only `/aws-blocks/*` as wired now fails synth with `ProxySameOriginApi`; one that wires only `/cdk-blocks/*` gets a warning that legacy `/aws-blocks/*` clients are not routed.
+  - The built-in CloudFront front door adds one cache behavior (`/aws-blocks/*`). An app already at the distribution's cache-behavior quota (25 by default) needs to free a behavior or raise the quota, or the upgrade fails (at synth when container namespaces add direct behaviors, else at deploy).
+
+  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`. Native clients move tokens stored under a block's old `/aws-blocks/` keys to its new keys, so an upgrade keeps their session.
+
+  The Admin UI calls `/cdk-blocks/api` and retries at `/aws-blocks/api` only when an older dev server answers 404 without a JSON-RPC envelope, so it still works with that server and never runs a method twice.
+
+  A `ContainerCompute` keeps the logical ID and priority of each API listener rule it deployed under `/aws-blocks/api/<name>`, so the upgrade updates the rule's path to `/cdk-blocks/api/<name>` in place rather than replacing it.
+
+- 5f55dac: Docs and editor hover text now point at `Auth`, the single authentication Building Block, instead of the removed `AuthBasic`, `AuthCognito` and `AuthOIDC`. The `aws-cdk-blocks` README adds a "Choosing a sign-in method" table comparing email + password, social, OIDC verified by your backend (`store: 'builtin'`), OIDC through Cognito, and SAML by Cognito free tier, offline support and user-pool features. The `hasAuthError` example in `@aws-cdk-blocks/core` now matches `AuthErrors.NotAuthorized`.
+- 0ff1e1f: docs: the Auth docs describe the installed version
+
+  The design notes state how `Auth` works instead of what the earlier auth blocks did and which PR changed it. Statements a migrating app relies on stay: the construct ids of the user pool, app client and session secret, the cookie and local-state formats, `userId`, action names and error names match `AuthCognito`'s. The `errorName` example in the auth-common README uses `NotAuthorizedException`, an `AuthErrors` value.
+
+- 6ae587a: Document `Auth` setup, options and error handling. Sessions default to 30 days, users sign in again after migrating from `AuthCognito`, and `rememberDevice` on AWS reports `InvalidParameterException` (501). The `auth-common` README lists the auth error names and shows how browser clients can match them.
+- Updated dependencies [63e571c]
+- Updated dependencies [cad7bb8]
+- Updated dependencies [d01c34c]
+- Updated dependencies [75c5d98]
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [c67048e]
+- Updated dependencies [e529b00]
+- Updated dependencies [b2eb306]
+- Updated dependencies [c42ba42]
+- Updated dependencies [703238f]
+- Updated dependencies [45a05d1]
+- Updated dependencies [1de6ea4]
+- Updated dependencies [aaf419f]
+- Updated dependencies [5938d8b]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [4665f81]
+- Updated dependencies [1deb34b]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [41968b7]
+- Updated dependencies [8894669]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [3081521]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [5f55dac]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [81113a3]
+- Updated dependencies [c045273]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [384827f]
+- Updated dependencies [58daa51]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [73feb71]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [99660fd]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [cd533c0]
+- Updated dependencies [44c7377]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [4d81f11]
+- Updated dependencies [072c3ff]
+- Updated dependencies [c67048e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [227a856]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [a5f39c3]
+- Updated dependencies [0b422ee]
+- Updated dependencies [d01c34c]
+- Updated dependencies [5f55dac]
+- Updated dependencies [0ff1e1f]
+- Updated dependencies [d01c34c]
+- Updated dependencies [f7e28b4]
+- Updated dependencies [93d533a]
+- Updated dependencies [adb6077]
+- Updated dependencies [60360c1]
+- Updated dependencies [dd1c554]
+- Updated dependencies [8ece10a]
+- Updated dependencies [c607deb]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [6d3077e]
+- Updated dependencies [e1e4844]
+- Updated dependencies [2095f31]
+- Updated dependencies [e50b9e9]
+- Updated dependencies [6d3077e]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [23692f1]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-cdk-blocks/core@1.0.0
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

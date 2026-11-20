@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/hosting",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "hosting",

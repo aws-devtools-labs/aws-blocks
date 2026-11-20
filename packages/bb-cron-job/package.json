@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/bb-cron-job",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "cron",
@@ -46,11 +46,11 @@
     "test": "node --test --test-force-exit dist/index.mock.test.js dist/schedule.test.js dist/schedule-validate.test.js && node --conditions=cdk --test --test-force-exit dist/index.cdk.test.js && node --conditions=aws-runtime --test --test-force-exit dist/index.aws.test.js"
   },
   "dependencies": {
-    "@aws-cdk-blocks/bb-async-job": "^1.0.0-rc.2",
-    "@aws-cdk-blocks/bb-container-compute": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/bb-logger": "^1.0.0-rc.2",
-    "@aws-cdk-blocks/bb-lambda-compute": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/core": "^1.0.0-rc.2"
+    "@aws-cdk-blocks/bb-async-job": "^1.0.0",
+    "@aws-cdk-blocks/bb-container-compute": "^1.0.0",
+    "@aws-cdk-blocks/bb-logger": "^1.0.0",
+    "@aws-cdk-blocks/bb-lambda-compute": "^1.0.0",
+    "@aws-cdk-blocks/core": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

@@ -1,5 +1,229 @@
 # @aws-blocks/bb-async-job
 
+## 1.0.0
+
+### Major Changes
+
+- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+
+  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+
+  ```diff
+   {
+     "dependencies": {
+  -    "@aws-blocks/blocks": "<your range>",
+  -    "@aws-blocks/core": "<your range>"
+  +    "aws-cdk-blocks": "<your range>",
+  +    "@aws-cdk-blocks/core": "<your range>"
+     }
+   }
+  ```
+
+  ```diff
+  -import { KVStore } from '@aws-blocks/blocks';
+  +import { KVStore } from 'aws-cdk-blocks';
+
+  -import { ApiNamespace } from '@aws-blocks/core';
+  +import { ApiNamespace } from '@aws-cdk-blocks/core';
+  ```
+
+  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
+
+  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
+
+  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
+
+  The old `@aws-blocks/*` packages stop receiving releases.
+
+### Patch Changes
+
+- 63e571c: Use AWS CDK Blocks consistently in starter apps, CLI messages, package metadata, and documentation. Package imports and commands are unchanged.
+- 6423964: Clarify in the README that `maxRetries` counts total deliveries including the first (`3` = one attempt plus two retries), matching the queue's `maxReceiveCount`.
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
+- 3ae8592: fix(bb-container-compute): deploys no longer reset an autoscaled container's task count
+
+  A container `Compute` with autoscaling no longer declares a task count in its
+  CloudFormation template. Before, every deploy that changed the app's code reset
+  the running task count to `minInstances`, stopping tasks that were running jobs.
+
+  Running jobs also get longer to finish when a task is stopped by a deploy or by
+  scale-in: the container now waits up to 120 seconds (the AWS Fargate maximum),
+  up from 25 seconds. A job still running after that is stopped and retried.
+
+  The `bb-compute`, `bb-async-job` and `bb-cron-job` READMEs now say that a deploy
+  restarts a job still running after that window, and that the restart counts as
+  one of the job's attempts.
+
+- 0b422ee: docs: locally a failed delivery is retried at once and an exhausted job is logged, not queued. On AWS the retry wait is `900 + maxBatchingWindowSeconds` seconds on a Lambda compute and about 2 minutes on a container compute.
+- 0ff1e1f: docs: the AsyncJob and CronJob design docs describe the installed version
+
+  Batch limits, status tracking and per-job grants are stated as current behaviour instead of how they changed.
+
+- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
+- 6d3077e: refactor: move the conversation, message, job-status and connection tables to `KVStore` with a declared key
+
+  `Agent`, `AsyncJob` and `Realtime` now compose `KVStore` from `@aws-cdk-blocks/bb-kv-store` instead of `DistributedTable`. The tables keep their names, key schemas, TTL attributes and items, so a deployed stack updates in place. No public API of these blocks changes. Expired job-status records and connection records are now hidden from every read in both runtimes.
+
+  The connections store of `Realtime` now has one schema for synth and for run time, and it states the type of each field. The stores of `Agent` and `Realtime` take their options from one place for both entry points, as `AsyncJob` does, so the table that the CDK entry provisions is the table that the runtime reads. The key types of the provisioned tables do not change.
+
+- Updated dependencies [63e571c]
+- Updated dependencies [cad7bb8]
+- Updated dependencies [d01c34c]
+- Updated dependencies [75c5d98]
+- Updated dependencies [5f55dac]
+- Updated dependencies [2eb62fa]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [6236bf9]
+- Updated dependencies [c67048e]
+- Updated dependencies [a5a5dd3]
+- Updated dependencies [e529b00]
+- Updated dependencies [b2eb306]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [703238f]
+- Updated dependencies [45a05d1]
+- Updated dependencies [1de6ea4]
+- Updated dependencies [aaf419f]
+- Updated dependencies [5938d8b]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [76fd75c]
+- Updated dependencies [3ae8592]
+- Updated dependencies [2b250f8]
+- Updated dependencies [e5822ed]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [5f55dac]
+- Updated dependencies [4665f81]
+- Updated dependencies [1deb34b]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [41968b7]
+- Updated dependencies [8894669]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [15e65b4]
+- Updated dependencies [3081521]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [5f55dac]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [81113a3]
+- Updated dependencies [c045273]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [369b175]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [384827f]
+- Updated dependencies [58daa51]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [73feb71]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [d46dfaf]
+- Updated dependencies [ebfe2ed]
+- Updated dependencies [99660fd]
+- Updated dependencies [c1fabce]
+- Updated dependencies [5f55dac]
+- Updated dependencies [5f55dac]
+- Updated dependencies [cd533c0]
+- Updated dependencies [44c7377]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [4d81f11]
+- Updated dependencies [072c3ff]
+- Updated dependencies [c67048e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [227a856]
+- Updated dependencies [afad513]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [f32185c]
+- Updated dependencies [f32185c]
+- Updated dependencies [9801a5b]
+- Updated dependencies [a86bccb]
+- Updated dependencies [b2eb306]
+- Updated dependencies [df25d97]
+- Updated dependencies [201e59e]
+- Updated dependencies [5f55dac]
+- Updated dependencies [99638ca]
+- Updated dependencies [a5f39c3]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [d01c34c]
+- Updated dependencies [d01c34c]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [5f55dac]
+- Updated dependencies [0ff1e1f]
+- Updated dependencies [0ff1e1f]
+- Updated dependencies [d01c34c]
+- Updated dependencies [f7e28b4]
+- Updated dependencies [93d533a]
+- Updated dependencies [adb6077]
+- Updated dependencies [60360c1]
+- Updated dependencies [dd1c554]
+- Updated dependencies [8ece10a]
+- Updated dependencies [e529b00]
+- Updated dependencies [c672712]
+- Updated dependencies [c9d73a8]
+- Updated dependencies [d1a473f]
+- Updated dependencies [92798e1]
+- Updated dependencies [92798e1]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [c607deb]
+- Updated dependencies [836af43]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [6d3077e]
+- Updated dependencies [6d3077e]
+- Updated dependencies [e1e4844]
+- Updated dependencies [8a5726c]
+- Updated dependencies [2095f31]
+- Updated dependencies [e50b9e9]
+- Updated dependencies [6d3077e]
+- Updated dependencies [80ce128]
+- Updated dependencies [d354055]
+- Updated dependencies [58817b0]
+- Updated dependencies [23692f1]
+- Updated dependencies [e286b16]
+- Updated dependencies [c00ab16]
+- Updated dependencies [58980c7]
+  - @aws-cdk-blocks/bb-container-compute@1.0.0
+  - @aws-cdk-blocks/bb-kv-store@1.0.0
+  - @aws-cdk-blocks/bb-lambda-compute@1.0.0
+  - @aws-cdk-blocks/bb-logger@1.0.0
+  - @aws-cdk-blocks/core@1.0.0
+
 ## 1.0.0-rc.2
 
 ### Patch Changes

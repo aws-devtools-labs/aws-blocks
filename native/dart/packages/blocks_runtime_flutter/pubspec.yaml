@@ -24,6 +24,9 @@ dev_dependencies:
   # 2.16.2 or later, which compiles against it. ^2.14.0 admits both, so no cap
   # is needed.
   build_runner: ^2.14.0
+  # The generated test/flutter_secure_store_test.mocks.dart imports it (for
+  # SecureStorageUpgradeStatus, added in 2.1.0), so pub publish needs it declared.
+  flutter_secure_storage_platform_interface: ^2.1.0
   flutter_test:
     sdk: flutter
   http: ^1.2.0

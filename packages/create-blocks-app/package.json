@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/create-blocks-app",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "cli",
@@ -33,8 +33,8 @@
     "minimatch": "^11.0.4"
   },
   "devDependencies": {
-    "aws-cdk-blocks": "^1.0.0-rc.2",
-    "@aws-cdk-blocks/hosting": "^1.0.0-rc.1",
+    "aws-cdk-blocks": "^1.0.0",
+    "@aws-cdk-blocks/hosting": "^1.0.0",
     "@types/node": "^20.19.43",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

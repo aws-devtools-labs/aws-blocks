@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/bb-auth",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "authentication",
@@ -65,12 +65,12 @@
     "test": "node --test --test-concurrency=1 dist/*.test.js && node --conditions=aws-runtime --test --test-concurrency=1 dist/session-secret.aws-runtime.test.js dist/user-agent.aws-runtime.test.js"
   },
   "dependencies": {
-    "@aws-cdk-blocks/auth-common": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/bb-app-setting": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/bb-kv-store": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/bb-logger": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/bb-secret": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/core": "^1.0.0-rc.1",
+    "@aws-cdk-blocks/auth-common": "^1.0.0",
+    "@aws-cdk-blocks/bb-app-setting": "^1.0.0",
+    "@aws-cdk-blocks/bb-kv-store": "^1.0.0",
+    "@aws-cdk-blocks/bb-logger": "^1.0.0",
+    "@aws-cdk-blocks/bb-secret": "^1.0.0",
+    "@aws-cdk-blocks/core": "^1.0.0",
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
     "@aws-sdk/client-secrets-manager": "^3.1156.0",
