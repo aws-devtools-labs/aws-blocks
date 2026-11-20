@@ -15,6 +15,4 @@
 "@aws-cdk-blocks/bb-secret": patch
 ---
 
-docs: import error constants from `aws-cdk-blocks` in the README examples
-
-The error examples in the READMEs of `Agent`, `AppSetting`, `AsyncJob`, `Auth`, `CronJob`, `Dashboard`, `EmailClient`, `FileBucket`, `KnowledgeBase`, `Logger`, `Metrics`, `Realtime` and `Secret`, and the `hasAuthError` example in the core README, imported the error constants and `isBlocksError` from the block's own package and `@aws-cdk-blocks/core`. An app made with `npm create @aws-cdk-blocks/blocks-app` does not declare those packages. The examples now import from `aws-cdk-blocks`, and the same line works in backend and client code.
+docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
