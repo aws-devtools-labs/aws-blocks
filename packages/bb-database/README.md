@@ -149,7 +149,7 @@ These errors are not for `catch`. Fix the cause.
 | `error.name` | Cause |
 |---|---|
 | `DatabaseConfigurationError` | A setup mistake: a duplicate id, a missing `migrationsPath`. |
-| `MigrationValidationError` | A migration file finding: a `dsql-lint` finding, or a DSQL-only form in a file for an `aurora` cluster. |
+| `MigrationValidationError` | A `dsql-lint` finding in a `dsql` migration, or a DSQL-only form, a statement PostgreSQL refuses inside a transaction, or explicit transaction control in an `aurora` migration. |
 | `DsqlValidationError` | A `dsql-lint` finding in a handler's statement. |
 | `MigrationFailedException` | A migration failure. |
 
@@ -373,7 +373,24 @@ cdk-blocks/migrations/
     001_events.sql
 ```
 
-Write the files for the cluster's engine. The block runs them unchanged.
+Write the files for the cluster's engine. The only substitution is [`${app_role}`](#the-app-role-in-a-migration).
+
+### The app role in a migration
+
+A file names the role that the app's statements run as with `${app_role}`. Before the file runs, every occurrence is replaced with that role's quoted name, so one file works in every place it runs:
+
+| Where the file runs | `${app_role}` becomes |
+|---|---|
+| A cluster the block provisions, on AWS | `"blocks_app_{cluster}"`, the role the migration function creates for the cluster before any file runs (see [Access through the AWS SDK](#access-through-the-aws-sdk)) |
+| Local mode (`npm run dev`, `npm run db -- types --block`) | `"blocks_app_local"` |
+| An [existing database](#existing-database) (a deploy, `npm run db migrate`) | The role of the connection string |
+
+```sql
+-- cdk-blocks/migrations/app/003_roles.sql
+GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;
+```
+
+The replacement is plain text, in string literals and comments too. Nothing else in a file is replaced, and the file's hash is of the text as you wrote it.
 
 ### On a `dsql` cluster
 
@@ -447,7 +464,7 @@ On a `dsql` cluster the file resumes where it stopped. A failed index build or c
 
 On an [existing database](#existing-database):
 
-- The files run as written. The block does not check them, and PostgreSQL reports what it refuses.
+- The block substitutes [`${app_role}`](#the-app-role-in-a-migration) but does not validate the SQL. PostgreSQL reports what it refuses.
 - Each pending file is one transaction, and the file is recorded in that same transaction. Of two runs at the same time, one commits, and the other is rolled back and says so.
 - The server ends a transaction that sits idle for a minute, so a run that stops in the middle of a file does not keep its locks.
 - A deploy runs the files in a function outside any VPC, with the stored connection string. A failure stops the deploy and names the file, the statement, the SQLSTATE and the server's message.
@@ -633,6 +650,20 @@ Each transaction on the returned object starts with one statement, `SELECT set_c
 - **Write a policy so that it accepts an empty claims setting.** After a transaction that set the claims, PostgreSQL leaves `request.jwt.claims` on that connection as an empty string, and `''::jsonb` is an error. A later statement on the block itself then fails with `QueryFailed` instead of reading no rows, when the connection role is one that policies apply to. Write `nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'`. A cluster that the block provisions gives every connection the default `{}`; a transaction pooler does not keep such a default.
 - **A statement can undo the switch** with `RESET ROLE` inside its own transaction. The app writes the SQL, so this is a rule for the app's own statements, not a boundary.
 
+On an `aurora` cluster that the block provisions, the app connects as the cluster's app role, which owns nothing, so `asUser()` already filters rows. Use `asRole()` there for policies written for a role. Create the role, give it what the policies need, and grant it to the app role, all in a migration; the app role exists before the first file runs, so this works from the first deploy:
+
+```sql
+-- cdk-blocks/migrations/app/003_roles.sql
+CREATE ROLE authenticated NOLOGIN;
+GRANT USAGE ON SCHEMA app TO authenticated; -- the block's schema (db.schemaName): its id on a shared cluster
+GRANT SELECT ON todos TO authenticated;
+CREATE POLICY todos_owner ON todos FOR SELECT TO authenticated
+  USING (user_id = nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub');
+GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;
+```
+
+A role belongs to the cluster, not to a block: create it in the migrations of one block on the cluster.
+
 With Kysely, `new DatabaseDialect(db.asRole('authenticated', claims))` needs no transaction of your own; it is a dialect, and so a Kysely instance, per request. To keep one instance for the database, set the identity inside a transaction:
 
 ```ts
@@ -653,6 +684,14 @@ const mine = await kysely.transaction().execute(async (trx) => {
 
 `getSdkIdentifiers(db)` from `@aws-cdk-blocks/core` returns the block's `clusterId` and `schemaName`. In a deployed Lambda it also returns the cluster's `clusterEndpoint` and `region`, which is what a `DsqlSigner` (`dsql`) or an RDS `Signer` from `@aws-sdk/rds-signer` (`aurora`, port 5432) needs to open your own `pg` connection as the same role. `getSdkIdentifiers` from `aws-cdk-blocks` types this result.
 
+On a cluster the block provisions it also returns `roleName`, the PostgreSQL role the block connects as: `blocks_app_local` in local mode, and on AWS `blocks_app_` followed by the cluster's full id in lower case, with `_` for every character other than a letter or a digit. When that name is longer than 63 characters it is `blocks_app_` and the first 12 hex characters of the SHA-256 of the full id. A block on an existing database or a `LegacyDatabaseCluster` connects as the role of its connection and has no `roleName`. In a migration, write [`${app_role}`](#the-app-role-in-a-migration) instead of the name.
+
+```ts
+import { getSdkIdentifiers } from 'aws-cdk-blocks';
+
+const { roleName, schemaName } = getSdkIdentifiers(db); // roleName: 'blocks_app_local' under npm run dev
+```
+
 ## What it provisions (AWS)
 
 Per cluster, whether a block owns it or a `DatabaseCluster` declares it:
@@ -669,10 +708,10 @@ A `LegacyDatabaseCluster` declares what `Database` of `@aws-blocks/bb-data` 0.5.
 
 Per block: one CloudFormation custom resource that applies its migrations, and one S3 asset with the migration files when it has any.
 
-The migration Lambda also creates a per-cluster database role for the app:
+On a provisioned cluster, the migration Lambda sets up the [app role](#access-through-the-aws-sdk) in two stages:
 
-- It maps the role to IAM: `AWS IAM GRANT` to the execution role on `dsql`; `GRANT rds_iam` on `aurora`, where the `rds-db:connect` grant decides who gets a token for it.
-- It grants the role `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE, SELECT` on its sequences.
+- Before any migration file runs, it creates the per-cluster app role if needed and maps it to IAM: `AWS IAM GRANT` to the execution role on `dsql`; `GRANT rds_iam` on `aurora`, where the `rds-db:connect` grant decides who gets a token for it.
+- After the files run, it grants the role `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE, SELECT` on its sequences.
 - DDL needs the admin token, which only the migration Lambdas hold.
 
 ## Scaling and cost (AWS)
@@ -682,11 +721,15 @@ The migration Lambda also creates a per-cluster database role for the app:
 - **Migration Lambdas.** They run only during deploys.
 - **Cluster quota.** A `Database` that owns its cluster takes one slot of the account's [cluster quota](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/CHAP_quotas.html); blocks on a shared `DatabaseCluster` take one together.
 
+A connection to an `aurora` cluster is closed ten seconds after its last statement while the function is running, so a cluster at `minCapacity: 0` can pause between requests (an open connection keeps it running); the next request reconnects. A frozen Lambda execution environment keeps its socket until it is thawed or reclaimed, so the pause can come later than five minutes after the last request.
+
 ## Local development
 
 Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.cdk-blocks/local/data/`, with one schema per block, as on AWS. The data directory is `.cdk-blocks/local/data/{fullId}/pglite/` for a block that owns its cluster, and `.cdk-blocks/local/data/{clusterFullId}/pglite/` for a `DatabaseCluster`.
 
 A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text) and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). An `aurora` cluster is PostgreSQL on both sides and needs neither. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them.
+
+On an `aurora` cluster, a migration can run `CREATE EXTENSION` for these extensions locally. PGlite includes them and Aurora PostgreSQL supports them: `amcheck`, `bloom`, `btree_gin`, `btree_gist`, `citext`, `cube`, `dict_int`, `dict_xsyn`, `earthdistance`, `fuzzystrmatch`, `hstore`, `intarray`, `isn`, `lo`, `ltree`, `moddatetime`, `pg_buffercache`, `pg_freespacemap`, `pg_trgm`, `pg_visibility`, `pgcrypto`, `seg`, `tablefunc`, `tcn`, `tsm_system_rows`, `tsm_system_time`, `unaccent` and `uuid-ossp`. An extension that PGlite lacks fails locally even though Aurora has it. `vector` (pgvector) is one: the migration fails with `extension "vector" is not available`, and the message lists the extensions above. `pg_stat_statements` is not loaded locally either. A `dsql` cluster has no extensions, and `CREATE EXTENSION` fails `dsql-lint`.
 
 On both kinds, your statements run locally as a plain database role with the grants the deployed app role gets: `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables. Migrations run as the admin. PostgreSQL therefore refuses the same statements in both places, with `QueryFailed`: DDL and `TRUNCATE` outside a migration, and any read of the migration ledger (`_migrations`, `_migration_progress`). A Row Level Security policy on a table of an `aurora` cluster applies to your statements under `npm run dev` as it does on AWS.
 

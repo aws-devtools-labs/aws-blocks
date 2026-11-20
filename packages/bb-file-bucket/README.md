@@ -171,8 +171,7 @@ Returned by `getFileHandle()` and `createUploadHandle()`. A handle returned from
 Match an error by name with `isBlocksError`:
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { FileBucketErrors } from '@aws-cdk-blocks/bb-file-bucket';
+import { FileBucketErrors, isBlocksError } from 'aws-cdk-blocks';
 ```
 
 | Constant | `error.name` | Thrown when |

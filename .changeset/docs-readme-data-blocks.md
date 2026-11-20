@@ -7,7 +7,7 @@
 "aws-cdk-blocks": patch
 ---
 
-docs(bb-kv-store, bb-database, bb-file-bucket, bb-app-setting, bb-secret): the READMEs of the data blocks correct their errors tables and document counters in `KVStore`, `AppSetting.fromExisting` and how a `secret: true` setting gets its value.
+docs: correct the data blocks' error tables, explain concurrent counters in `KVStore`, and document how to import an existing `AppSetting` and set the value of a `secret: true` setting.
 
 **`KVStore`**
 

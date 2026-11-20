@@ -11,6 +11,8 @@ A single application secret backed by AWS Secrets Manager.
 ## Quick start
 
 ```typescript
+import { Secret } from 'aws-cdk-blocks';
+
 const stripeKey = new Secret(scope, 'stripe-api-key');
 
 // In a server-side billing job, never an API method that returns the key.
@@ -45,15 +47,14 @@ const secret = new Secret(scope, id, options?)
 | `schema` | `StandardSchemaV1<T>` | — | Runtime validation schema (Zod, Valibot, ArkType). Infers `T`, treats the stored value as JSON, and validates on `get()`/`put()`. Omit for an opaque `string`. |
 | `secret` | `ExternalSecretRef` | — | Wrap an existing Secrets Manager secret from `Secret.fromExisting(arn)` instead of creating one. |
 | `generate` | `boolean` | `false` | When `true`, seed a random value on first create (for a signing/HMAC key that only needs to exist). Otherwise the secret starts empty and `get()` returns `null` until set. Don't combine with `schema`. |
-| `cacheTtlSeconds` | `number` | `300` | Seconds the runtime reuses a cached value before re-fetching. `0` disables caching. `put()` clears the cache. Ignored by the mock. |
+| `cacheTtlSeconds` | `number` | `300` | Seconds each instance reuses a cached value before re-fetching. A successful `put()` clears only the calling instance's cache; other instances keep their entries until they expire. `0` disables caching. Ignored by the mock. |
 | `removalPolicy` | `'destroy' \| 'retain'` | stack `defaults` | Override the stack-wide removal default for the created secret. Ignored by the mock and when wrapping an existing secret. |
 | `logger` | `ChildLogger` | error-level logger | Logger for internal operations. |
 
 ### Read-only by default (`allowRuntimeWrite`)
 
 ```typescript
-// Read-only (default): no put(). Set the value out-of-band, read it with get().
-const stripeKey = new Secret(scope, 'stripe-api-key');
+// The quick start's stripeKey is read-only. Set it out-of-band, then read it.
 const key = await stripeKey.get();
 // stripeKey.put('…')  ❌ compile error — put is absent
 
@@ -65,11 +66,21 @@ await token.put('t-abc123');
 
 ## Errors
 
-Match an error by name with `isBlocksError`:
+When rotating the writable `token` above, distinguish a missing secret from other write failures:
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { SecretErrors } from '@aws-cdk-blocks/bb-secret';
+import { isBlocksError, SecretErrors } from 'aws-cdk-blocks';
+
+async function rotateToken(nextValue: string): Promise<void> {
+  try {
+    await token.put(nextValue);
+  } catch (e: unknown) {
+    if (isBlocksError(e, SecretErrors.SecretNotFound)) {
+      throw new Error('Token rotation failed: the Secrets Manager secret does not exist.', { cause: e });
+    }
+    throw e;
+  }
+}
 ```
 
 | Constant | `error.name` | Thrown when |
@@ -153,7 +164,7 @@ Every AWS CDK Blocks app exposes a built-in `/cdk-blocks/settings` route. Deploy
 Give the secret an explicit, stable `name` and set/rotate it with the standard AWS CLI.
 
 ```typescript
-const stripeKey = new Secret(scope, 'stripe-key', { name: 'my-app/stripe-key' });
+const namedStripeKey = new Secret(scope, 'stripe-key', { name: 'my-app/stripe-key' });
 ```
 
 ```bash
@@ -198,10 +209,7 @@ A key the app generates and rotates itself is **one** `Secret` with `generate: t
 
 ```typescript
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { CronJob } from '@aws-cdk-blocks/bb-cron-job';
-import { KVStore, KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
-import { Secret } from '@aws-cdk-blocks/bb-secret';
-import { isBlocksError } from '@aws-cdk-blocks/core';
+import { CronJob, isBlocksError, KVStore, KVStoreErrors, Secret } from 'aws-cdk-blocks';
 
 const signingKey = new Secret(scope, 'signing-key', { generate: true, allowRuntimeWrite: true });
 const rotations = new KVStore(scope, 'signing-key-rotations'); // one marker per tick, never key material
@@ -258,7 +266,7 @@ For anything deeper than the current/previous pair (full history, custom staging
 ## What it provisions (AWS)
 
 - **Encryption:** KMS at rest, using the default `aws/secretsmanager` key.
-- **IAM:** the construct grants the shared execution role `secretsmanager:GetSecretValue` + `ListSecretVersionIds` scoped to the single secret (not a wildcard), and `PutSecretValue` only when `allowRuntimeWrite: true`.
+- **IAM:** For a secret you declare, the shared execution role gets `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret` and `secretsmanager:ListSecretVersionIds` on that secret. Framework-generated keys in Secrets Manager get only `secretsmanager:GetSecretValue`. With `allowRuntimeWrite: true`, CDK also grants `secretsmanager:PutSecretValue`, `secretsmanager:UpdateSecret` and `secretsmanager:UpdateSecretVersionStage` on the secret. When CDK knows the encryption key, it grants KMS decrypt for reads and encrypt for writes via Secrets Manager. For an imported ARN, see [Wrap an existing secret](#wrap-an-existing-secret).
 - **Removal policy:** follows the stack-wide `defaults` (production retains, sandbox destroys); override per-instance with `removalPolicy`.
 - **Tags:** BB-created secrets are tagged `aws-blocks-stack=<stackName>` (join the settings resource group); `fromExisting` secrets are not tagged.
 

@@ -72,8 +72,7 @@ With `kmsKeyArn`:
 Match an error by name with `isBlocksError`:
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { AppSettingErrors } from '@aws-cdk-blocks/bb-app-setting';
+import { AppSettingErrors, isBlocksError } from 'aws-cdk-blocks';
 ```
 
 | Constant | `error.name` | Thrown when |
@@ -116,6 +115,8 @@ const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: '/my-app-db-url',
 ## Examples
 
 ### Typed Object with Schema
+
+This example uses the `auth` block and its `admin` group from [Quick start](#quick-start).
 
 ```typescript
 import { z } from 'zod';

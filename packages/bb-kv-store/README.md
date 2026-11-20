@@ -96,7 +96,7 @@ The mock and browser runtimes ignore `protection`, `pointInTimeRecovery`, and `e
 
 ## Errors
 
-Match an error by name with `isBlocksError`.
+Match an error by name with `isBlocksError`. See the catch in [Rewrite a store of strings as objects](#rewrite-a-store-of-strings-as-objects).
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
@@ -120,13 +120,16 @@ It is also thrown for a bad expiry.
 `InvalidQueryException` is thrown for:
 
 - a bad key
-- a bad `where`: a partition value or a sort value of the wrong type, a sort condition that does not exist, or a `between` with its bounds reversed
+- a missing `where`, or a partition key not given as `{ equals: value }`
+- a partition value or sort operand of the wrong type
+- more than one sort condition, an unknown sort condition, or a `between` with its bounds reversed
 - an unknown index
 - an `order` that is not `'asc'` or `'desc'`
 - a bad `limit`
 - a bad cursor
 - an `indexes` option that is not an object
 - `ifValueEquals` with an object
+- an empty `ifFieldEquals`
 - a batch that repeats a key within one DynamoDB request (25 writes or 100 reads)
 
 ## Keys
@@ -269,10 +272,33 @@ A conditional write is atomic for its item, on AWS and in the local mock. No oth
 
 There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on [`Database`](../bb-database/README.md#transactions).
 
-There is no atomic increment. To keep a counter that several writers change, use one of:
+There is no atomic increment. For a shared counter, read its value and write the increment only if the value has not changed. Give the counter no expiry: `get()` hides expired items that write conditions still see.
 
-- A loop. `get()` the item and compute the new value. Use `put()` with `ifNotExists: true` if the item was absent, or compare the value you read with `ifValueEquals` or `ifFieldEquals`. On `KVStoreErrors.ConditionalCheckFailed`, start again at `get()`; even if a competing writer created the item (`retriable: false`), you can now read and increment it. Do not repeat the stale `put()`. Give the counter no expiry: `get()` hides expired items that conditions still see (see [Expiry](#expiry)).
-- One item per event. Aggregate the items with `query()`.
+```typescript
+import { isBlocksError, KVStoreErrors } from 'aws-cdk-blocks';
+
+const counters = new KVStore<number>(scope, 'counters');
+
+async function increment(name: string): Promise<number> {
+	for (let attempt = 0; attempt < 10; attempt++) {
+		const current = await counters.get(name);
+		const next = (current ?? 0) + 1;
+		try {
+			await counters.put(name, next, current === null ? { ifNotExists: true } : { ifValueEquals: current });
+			return next;
+		} catch (e: unknown) {
+			if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+		}
+	}
+	throw new Error(`Could not increment ${name} after 10 attempts`);
+}
+
+await increment('visits');
+```
+
+If another writer creates the counter first, the failed create has `retriable: false`. The loop does not repeat that `put()`: it reads the new value and computes a new increment.
+
+Alternatively, write one item per event in a store with a `key` such as `{ partitionKey: 'counterId', sortKey: 'eventId' }`. To get the total, use `query()` on the counter's partition and count the items. Each total reads every event for that counter and is eventually consistent on AWS.
 
 ## Read consistency
 
@@ -472,7 +498,7 @@ for await (const { value, expiresAt } of todos.scan()) {
 
 Release 0.4.0 or earlier keeps each item as `{ pk, value: <JSON text>, ttl? }`. This release keeps one attribute for each field, under another key attribute. DynamoDB cannot change the key of a table, so a `KVStore` of this release cannot take over the table of such a store. The deploy fails with `CloudFormation cannot update a stack when a custom-named resource requires replacing`, and the table keeps its items.
 
-`LegacyKVStore` keeps the old table usable during the upgrade. It has the four data methods of release 0.4.0, `get`, `put`, `delete`, and `scan`, so the code that calls the old store runs as before. You copy the data into a `KVStore` with a new id in your own code.
+`LegacyKVStore` keeps the old table usable during the upgrade. It has the four data methods of release 0.4.0: `get`, `put`, `delete`, and `scan`. Two things differ: `scan` takes `limit` and `cursor` and returns `expiresAt` for items with an expiry; `get` now defaults to a strongly consistent read, which uses twice the read capacity. Pass `{ consistentRead: false }` to keep eventually consistent reads. You copy the data into a `KVStore` with a new id in your own code.
 
 `LegacyKVStore` is deprecated and frozen. Use it only for this upgrade. It gets no new features, and a later release can remove it. Use `KVStore` for new data. When the data is in the new store, remove the `LegacyKVStore` from your app.
 
