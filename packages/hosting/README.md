@@ -394,6 +394,15 @@ used, else a DNS-validated regional certificate (needs `hostedZone` /
 `hostedZoneId`). Without a hosted zone, point your DNS at the ALB (the
 `AlbDnsName` output).
 
+**ALB URL case.** Without a domain, the app's URL (`HostingUrl`) is the ALB's
+DNS name, which keeps the capitals of the load balancer's generated name
+(`http://my-app-Hosti-AbCd-123.us-west-2.elb.amazonaws.com`); CloudFormation
+can't change the case of that value. A browser sends the host in lower case in
+its `Origin` header. The backend's CORS check compares the origin
+case-insensitively, and `FileBucket` writes its `corsRules` origins in lower
+case, so the URL works as copied in both. Lower-case it yourself anywhere else
+that compares origins exactly.
+
 **Internal ALB.** `internal: true` with the default VPC places the ALB in
 isolated private subnets (the VPC still has no NAT gateway). With your own VPC,
 it goes in that VPC's private subnets. The API forwarder isn't VPC-attached: it

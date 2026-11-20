@@ -33,6 +33,11 @@ export interface FileBucketOptions {
 	 * Ignored when `bucket` wraps an existing bucket — configure CORS on that
 	 * bucket itself.
 	 *
+	 * Each `allowedOrigins` entry is written in lower case, as a browser sends
+	 * the scheme and host in its `Origin` header (S3 matches them
+	 * case-sensitively): an ALB door's `HostingUrl`, which keeps the capitals of
+	 * the load balancer's DNS name, matches as copied.
+	 *
 	 * @example
 	 * ```ts
 	 * new FileBucket(scope, 'uploads', {

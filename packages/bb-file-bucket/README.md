@@ -294,6 +294,7 @@ const bucket = new FileBucket(scope, 'uploads', {
 - `GET` covers `download()` and `fetch()` on a `getUrl()` URL; `PUT` covers `upload()` and a `putUrl()` URL.
 - `allowedHeaders` must list every header the browser sends, such as the `Content-Type` that `upload()` sends. S3 rejects the preflight of a `PUT` with a header that is not allowed.
 - `allowedOrigins` entries are S3 origin strings (scheme + host + port, no trailing slash), optionally with a single `*` wildcard such as `https://*.example.com` — not the regex patterns used by `defaults.allowedOrigins`.
+- `allowedOrigins` entries are written to the bucket in lower case, the case a browser sends in its `Origin` header (S3 compares them case-sensitively). An ALB door's `HostingUrl` keeps the capitals of the load balancer's generated name (`http://my-app-Hosti-AbCd-123.us-west-2.elb.amazonaws.com`); copied as is, it still matches.
 - Use exact origins for `PUT`, `POST`, and `DELETE`. The synth check (see [CorsRule](#corsrule)) catches only a bare `'*'` origin; a partial wildcard such as `https://*` is not caught, so avoid it for mutating methods.
 - Plain navigations to a `getUrl()` URL (`<img src>`, `<a href>`) are not CORS requests and work without a rule; `fetch()`, `download()`, and `upload()` do need one.
 - `exposedHeaders` (for example `ETag` or `x-amz-version-id`) is only needed when custom `fetch()` code reads response headers; the built-in handles don't. Every `PUT` preflights, so a `maxAge` (for example `3000`) saves a round trip per upload.
