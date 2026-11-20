@@ -343,7 +343,12 @@ semantics, using the same matching code:
   A spliced target's leading slashes or backslashes collapse to one slash,
   so `/old//evil.example` never becomes `Location: //evil.example`. Each
   redirect source routes to the asset proxy through an ALB listener rule,
-  an HTTP API route or a REST resource;
+  an HTTP API route or a REST resource. A Nuxt / Nitro `redirect` route
+  rule sends what Nitro sends: `'/blog/**': { redirect: '/posts/**' }`
+  redirects `/blog/a/b` to `/posts/a/b`, a destination without `/**` is
+  sent as written, and the status defaults to 307. A rule the door can't
+  reproduce (a destination ending in a single `*`) is left to the Nitro
+  server;
 - header rules: every matching rule is added to a successful response (not to
   a redirect or an error, as at the CloudFront edge);
 - error pages: a missing static file answers with the 404 page (status 404),
