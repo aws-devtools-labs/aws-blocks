@@ -63,6 +63,23 @@ describe('getMockDataDir', () => {
 		assert.ok(existsSync(join(LEGACY_MOCK_DATA_DIR, 'app-todos', 'store.json')));
 	});
 
+	void it('carries long FileBucket filenames and metadata without leaving staging files', () => {
+		const fullId = 'app-uploads';
+		const key = `${'x'.repeat(216)}.pdf`;
+		const metadata = '{"contentType":"application/pdf"}';
+		const legacy = join(project, LEGACY_MOCK_DATA_DIR, fullId);
+		mkdirSync(join(legacy, 'content'), { recursive: true });
+		mkdirSync(join(legacy, 'meta'), { recursive: true });
+		writeFileSync(join(legacy, 'content', key), 'file contents');
+		writeFileSync(join(legacy, 'meta', `${key}.json`), metadata);
+
+		const dir = getMockDataDir(scope(fullId));
+		assert.equal(readFileSync(join(dir, 'content', key), 'utf-8'), 'file contents');
+		assert.equal(readFileSync(join(dir, 'meta', `${key}.json`), 'utf-8'), metadata);
+		assert.deepStrictEqual(readdirSync(join(dir, 'content')), [key]);
+		assert.deepStrictEqual(readdirSync(join(dir, 'meta')), [`${key}.json`]);
+	});
+
 	void it('carries a shared root file across even after a per-block call ran first', () => {
 		// The regression this exists for: a per-block call creates the data root as
 		// a side effect of `recursive: true`, so a carry-over gated on "did I just
@@ -75,7 +92,8 @@ describe('getMockDataDir', () => {
 
 	void it('never replaces what is already in the new location', () => {
 		seedLegacy();
-		const root = getMockDataDir(scope('app-todos'), { root: true });
+		const root = join(project, MOCK_DATA_DIR);
+		mkdirSync(root, { recursive: true });
 		writeFileSync(join(root, 'settings.json'), '{"keep":"me"}');
 		assert.equal(
 			readFileSync(join(getMockDataDir(scope('app-todos'), { root: true }), 'settings.json'), 'utf-8'),
