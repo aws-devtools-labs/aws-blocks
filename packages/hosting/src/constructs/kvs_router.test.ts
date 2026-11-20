@@ -11,6 +11,7 @@
 //      sandbox with a fake `cloudfront` module + a KVS stub seeded from
 //      buildKvsEntries, so the actual edge logic (glob matching, trailing-slash
 //      normalization, skew-cookie gating) is exercised end-to-end.
+import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -63,13 +64,16 @@ async function runRequestFn(
       selectedOrigin = id;
     },
   };
-  const body = code.replace(/^import cf from 'cloudfront';\n?/, '');
+  const body = code
+    .replace(/^import cf from 'cloudfront';\n?/, '')
+    .replace(/^import crypto from 'crypto';\n?/m, '');
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const factory = new Function(
     'cf',
+    'crypto',
     `${body}\nreturn handler;`,
   );
-  const handler = factory(cf);
+  const handler = factory(cf, { createHash });
   const output = await handler({ request });
   return { output, selectedOrigin };
 }
@@ -356,9 +360,10 @@ void describe('generated request fn — image origin basePath strip', () => {
 });
 
 void describe('generated request fn — image Accept in the cache key', () => {
-  // The image route shares the default behavior's cache key. The router copies
-  // the viewer's Accept into a cache-key header, so a viewer that can't decode
-  // (or rejects) WebP/AVIF never gets the cached copy made for one that can.
+  // The image route shares the default behavior's cache key. The router writes
+  // one Accept value for the origin and keys on a digest of that same value, so
+  // a viewer that can't decode (or rejects) WebP/AVIF never gets the cached copy
+  // made for one that can, and the optimizer negotiates on what the key covers.
   const manifest = baseManifest({
     routes: [
       { pattern: '/_next/image*', target: 'image-optimization' },
@@ -367,34 +372,44 @@ void describe('generated request fn — image Accept in the cache key', () => {
   });
   const entries = buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: true });
   const code = generateKvsRouterRequestCode({ imageAcceptKey: true });
-  const imageRequest = (headers: Record<string, { value: string }>) =>
-    runRequestFn(code, entries, {
+  type Header = { value: string; multiValue?: { value: string }[] };
+  const imageRequest = (headers: Record<string, Header>, fnCode = code, fnEntries = entries) =>
+    runRequestFn(fnCode, fnEntries, {
       uri: '/_next/image',
       querystring: { url: { value: '%2Fphoto.png' }, w: { value: '640' }, q: { value: '75' } },
       headers: { host: { value: 'x.test' }, ...headers },
       cookies: {},
     });
+  const digest = (value: string) => createHash('sha256').update(value).digest('base64url');
+  /** The origin-bound Accept and the cache key must come from one value. */
+  const assertKeyMatchesAccept = (headers: Record<string, Header>) => {
+    assert.ok(headers.accept, 'Accept reaches the origin');
+    assert.equal(headers.accept.multiValue, undefined, 'Accept reaches the origin as one field');
+    assert.deepEqual(headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: digest(headers.accept.value) });
+  };
 
   for (const accept of ['image/avif,image/webp,image/apng,*/*;q=0.8', 'image/webp,*/*', '*/*']) {
-    void it(`sets ${IMAGE_ACCEPT_CACHE_KEY_HEADER} to the viewer's Accept: ${accept}`, async () => {
+    void it(`keys on a digest of the Accept the origin receives: ${accept}`, async () => {
       const { output, selectedOrigin } = await imageRequest({ accept: { value: accept } });
       assert.equal(selectedOrigin, ORIGIN_ID.image);
-      assert.deepEqual(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: accept });
+      assert.deepEqual(output.headers.accept, { value: accept });
+      assertKeyMatchesAccept(output.headers);
     });
   }
 
   void it('sends no image key header for a viewer that sends no Accept', async () => {
     const { output } = await imageRequest({});
     assert.equal(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], undefined);
+    assert.equal(output.headers.accept, undefined);
   });
 
   void it('replaces an image key header the viewer sent on an image route', async () => {
     const forged = await imageRequest({
       accept: { value: '*/*' },
-      [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: 'image/webp' },
+      [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: digest('image/webp') },
     });
-    assert.deepEqual(forged.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: '*/*' });
-    const noAccept = await imageRequest({ [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: 'image/webp' } });
+    assertKeyMatchesAccept(forged.output.headers);
+    const noAccept = await imageRequest({ [IMAGE_ACCEPT_CACHE_KEY_HEADER]: { value: digest('image/webp') } });
     assert.equal(noAccept.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], undefined);
   });
 
@@ -404,8 +419,8 @@ void describe('generated request fn — image Accept in the cache key', () => {
     // never get the WebP cached for the first.
     const first = await imageRequest({ accept: { value: 'image/png,image/webp' } });
     const second = await imageRequest({ accept: { value: 'image/png,image/webp;q=0' } });
-    assert.ok(first.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER]);
-    assert.ok(second.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER]);
+    assertKeyMatchesAccept(first.output.headers);
+    assertKeyMatchesAccept(second.output.headers);
     assert.notDeepEqual(
       first.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER],
       second.output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER],
@@ -421,11 +436,50 @@ void describe('generated request fn — image Accept in the cache key', () => {
     );
   });
 
-  void it('keys on every Accept field when the viewer repeats the header', async () => {
+  void it('sends repeated Accept fields to the origin as the one combined value it keys on', async () => {
+    // An origin that reads only one field (the IPX adapter reads event.headers)
+    // would otherwise negotiate on the last range while the key covers all.
     const { output } = await imageRequest({
-      accept: { value: 'image/png', multiValue: [{ value: 'image/png' }, { value: 'image/webp;q=0' }] },
-    } as Record<string, { value: string }>);
-    assert.deepEqual(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], { value: 'image/png,image/webp;q=0' });
+      accept: { value: 'image/png;q=0.5', multiValue: [{ value: 'image/webp' }, { value: 'image/png;q=0.5' }] },
+    });
+    assert.deepEqual(output.headers.accept, { value: 'image/webp,image/png;q=0.5' });
+    assertKeyMatchesAccept(output.headers);
+    const oneField = await imageRequest({ accept: { value: 'image/webp,image/png;q=0.5' } });
+    assert.deepEqual(oneField.output.headers, output.headers);
+  });
+
+  void it('keeps the key a fixed size, so a long Accept is not forwarded twice', async () => {
+    // The origin gets the full Accept once; the key header is a digest, so an
+    // 11 KiB Accept does not reach the regional API at twice its size.
+    const long = Array.from({ length: 1100 }, (_, i) => `image/x-${i};q=0.1`).join(',');
+    assert.ok(long.length > 11 * 1024);
+    const { output } = await imageRequest({ accept: { value: long } });
+    assert.deepEqual(output.headers.accept, { value: long });
+    assertKeyMatchesAccept(output.headers);
+    assert.ok(output.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER].value.length <= 64);
+  });
+
+  void it('keeps Accept on an image route when cacheKeyHeaders lists it', async () => {
+    // cacheKeyHeaders entries are dropped on shared (static/image) routes, but
+    // the optimizer needs Accept to negotiate; it is not a credential.
+    const withAcceptKey = buildKvsEntries({
+      manifest,
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: true,
+      cacheKeyHeaders: ['Accept', 'x-auth'],
+    });
+    for (const fnCode of [code, generateKvsRouterRequestCode()]) {
+      const { output } = await imageRequest(
+        { accept: { value: 'image/webp,*/*' }, 'x-auth': { value: 't0ken' } },
+        fnCode,
+        withAcceptKey,
+      );
+      assert.deepEqual(output.headers.accept, { value: 'image/webp,*/*' });
+      assert.equal(output.headers['x-auth'], undefined, 'credential headers are still dropped');
+    }
+    const { output } = await imageRequest({ accept: { value: 'image/webp,*/*' } }, code, withAcceptKey);
+    assertKeyMatchesAccept(output.headers);
   });
 
   void it('drops an image key header the viewer sent on a page route, so it cannot split the page cache', async () => {

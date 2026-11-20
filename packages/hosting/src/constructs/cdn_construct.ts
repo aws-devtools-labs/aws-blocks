@@ -818,9 +818,9 @@ export class CdnConstruct extends Construct {
       'next-router-segment-prefetch',
       'next-action',
     ];
-    // With an image origin, the router copies the viewer's Accept into
-    // IMAGE_ACCEPT_CACHE_KEY_HEADER on image routes (and drops it on all
-    // others). Image requests reach the image origin through the default
+    // With an image origin, the router writes a digest of the Accept value it
+    // sends the image origin into IMAGE_ACCEPT_CACHE_KEY_HEADER on image routes
+    // (and drops that header on all others). Image requests reach the image origin through the default
     // behavior, so this cache policy is their cache key: without the header the
     // first viewer's format would be served to every later one (CloudFront
     // ignores `Vary: Accept`). `accept` itself stays out of the key, so pages
