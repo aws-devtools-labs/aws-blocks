@@ -455,7 +455,7 @@ export function localNotApplicableReason(pillar: CloudOnlyPillar): string {
 		case 'deployments':
 			return 'A local run is not a deployment: deploy history is written only by npm run sandbox and npm run deploy. Select a deployed stage to see its history.';
 		case 'resources':
-			return 'Resources are read from a deployed CloudFormation stack, and a local run creates none. Select a deployed stage, or open Blocks to see what your app declares.';
+			return 'Resources are read from a deployed CloudFormation stack, and a local run creates none. Select a deployed stage, or open CDK Blocks to see what your app declares.';
 		case 'cost':
 			return 'Running locally is not billed, so there is no cost to attribute. Select a deployed stage to see its spend.';
 		case 'usage':

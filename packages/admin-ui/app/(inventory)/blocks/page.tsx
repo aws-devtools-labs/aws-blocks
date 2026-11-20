@@ -175,7 +175,7 @@ function BlockCard({
 				) : (
 					<p className={reason === 'unmatched' ? 'text-xs text-warn-fg' : 'text-xs text-fg-dim'}>
 						{reason === 'no-own-resources' &&
-							`An ${block.type} owns no resources of its own — its methods are served by the shared Blocks API group, so it is never matched to a block-specific group. This says nothing about whether ${stage} is deployed.`}
+							`An ${block.type} owns no resources of its own — its methods are served by the shared CDK Blocks API group, so it is never matched to a block-specific group. This says nothing about whether ${stage} is deployed.`}
 						{reason === 'not-deployed' &&
 							`Declared in source. Nothing is deployed for ${stage}, so there is no resource group to match it to yet.`}
 						{reason === 'unmatched' &&
@@ -277,7 +277,7 @@ export default function BlocksPage() {
 	return (
 		<div className="space-y-6">
 			<div className="flex flex-wrap items-center gap-4">
-				<h1 className="text-lg font-semibold tracking-tight">Blocks</h1>
+				<h1 className="text-lg font-semibold tracking-tight">CDK Blocks</h1>
 				{scanned && (
 					<span className="text-sm text-fg-soft">
 						{blocks.length} block{blocks.length === 1 ? '' : 's'} declared in{' '}
@@ -321,10 +321,10 @@ export default function BlocksPage() {
 					<CardHeader>
 						<CardTitle className="text-base">
 							{data.blocksErrorCode === 'NOT_A_BLOCKS_PROJECT'
-								? 'Not a Blocks project'
+								? 'Not a CDK Blocks project'
 								: data.blocksErrorCode === 'PARSE_FAILED'
 									? 'Could not parse the block declarations'
-									: 'Blocks unavailable'}
+									: 'CDK Blocks unavailable'}
 						</CardTitle>
 						<CardDescription>{data.blocksError}</CardDescription>
 					</CardHeader>

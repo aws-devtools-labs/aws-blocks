@@ -179,7 +179,7 @@ async function refuseWhenDevServerUp(context: LocalWriteContext): Promise<LocalW
 	if (!serverUp) return undefined;
 	return refuse(
 		'LOCAL_SERVER_RUNNING',
-		'The local Blocks dev server is running and holds this store in memory, so an edit to the file ' +
+		'The local CDK Blocks dev server is running and holds this store in memory, so an edit to the file ' +
 			'would be overwritten on its next write. Stop the dev server, or make the change through the ' +
 			'RPC playground, then retry.',
 	);

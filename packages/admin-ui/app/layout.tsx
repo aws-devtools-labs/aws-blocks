@@ -12,8 +12,8 @@ import { Providers } from './providers';
 import './globals.css';
 
 export const metadata: Metadata = {
-	title: 'Blocks Dashboard',
-	description: 'Admin UI for Blocks applications',
+	title: 'CDK Blocks Dashboard',
+	description: 'Admin UI for CDK Blocks applications',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
