@@ -116,3 +116,32 @@ describe('PGlite cluster transaction handle lifecycle', () => {
 		assert.notStrictEqual(await Promise.race([_closeAllPgliteClusters().then(() => 'closed'), timeout]), 'timeout');
 	});
 });
+
+describe('PGlite cluster extensions', () => {
+	test('an aurora cluster reopens a data directory whose tables use an extension', async () => {
+		const dir = join(DATA_DIR, `ext${++counter}`, 'pglite');
+		const first = sharedPgliteCluster(dir, 'aurora');
+		const engine = first.forSchema('public');
+		await asAdmin(engine, [
+			'CREATE EXTENSION citext',
+			'CREATE TABLE t (email CITEXT)',
+			"INSERT INTO t VALUES ('Ada@Example.com')",
+		]);
+		await first.destroy();
+
+		// A new instance on the same directory: the citext type's functions must load again.
+		const again = sharedPgliteCluster(dir, 'aurora').forSchema('public');
+		const rows = await again.asAdmin(() => again.query("SELECT email FROM t WHERE email = 'ada@example.com'"));
+		assert.deepStrictEqual(rows, [{ email: 'Ada@Example.com' }]);
+	});
+
+	test('a dsql cluster loads no extension', async () => {
+		const engine = cluster().forSchema('public');
+		await assert.rejects(asAdmin(engine, ['CREATE EXTENSION citext']), (e: unknown) => {
+			assert.ok(isBlocksError(e, DatabaseErrors.QueryFailed));
+			const root = e instanceof Error ? e.cause : undefined;
+			assert.ok(root instanceof Error && /extension "citext" is not available$/.test(root.message), String(root));
+			return true;
+		});
+	});
+});

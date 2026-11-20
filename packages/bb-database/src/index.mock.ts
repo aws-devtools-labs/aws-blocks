@@ -51,7 +51,8 @@ function pgliteEngine(dataDir: string, kind: ClusterType, schemaName: string): S
  * express configuration. Part of the `Database` block, not a block on its own.
  *
  * Locally it is one PGlite under `.cdk-blocks/local/data/{fullId}/pglite/`, with DSQL's checks
- * and limits when the type is `dsql`.
+ * and limits when the type is `dsql`. When the type is `aurora`, a migration can create the
+ * contrib extensions that PGlite and Aurora PostgreSQL both have, such as `citext` and `pgcrypto`.
  *
  * @example
  * const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });

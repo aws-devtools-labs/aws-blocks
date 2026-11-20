@@ -106,9 +106,24 @@ PostgreSQL then enforces locally what it enforces on AWS. DDL and `TRUNCATE` in 
 
 **Switching the session user.** The engine switches the session's user as it switches the `search_path`. It issues `SET SESSION AUTHORIZATION` before a top-level statement or a `BEGIN`, tracks the current user so that an unchanged user costs no statement, sets the user again after a `SAVEPOINT`, and restores it before the `RELEASE`. The statement names the role each time, because `RESET SESSION AUTHORIZATION` does not return a PGlite session to its own user. The statement is `SET SESSION AUTHORIZATION` and not `SET ROLE`, so that a `SET ROLE` in application SQL is checked against the application role's memberships, as on AWS.
 
+**Extensions.** PGlite ships PostgreSQL's contrib extensions as separate bundles, and an instance can create only the ones passed to it at construction. The PGlite of an `aurora` cluster gets the extensions that PGlite 0.5 ships and that Aurora PostgreSQL 16 and 17 list as supported (`AURORA_LOCAL_EXTENSIONS` in `src/engines/pglite-extensions.ts`): `amcheck`, `bloom`, `btree_gin`, `btree_gist`, `citext`, `cube`, `dict_int`, `dict_xsyn`, `earthdistance`, `fuzzystrmatch`, `hstore`, `intarray`, `isn`, `lo`, `ltree`, `moddatetime`, `pg_buffercache`, `pg_freespacemap`, `pg_trgm`, `pg_visibility`, `pgcrypto`, `seg`, `tablefunc`, `tcn`, `tsm_system_rows`, `tsm_system_time`, `unaccent` and `uuid-ossp`. A migration still runs `CREATE EXTENSION`, as on AWS. The PGlite of a `dsql` cluster gets none, and `dsql-lint` rejects `CREATE EXTENSION` before PGlite sees it.
+
+Left out:
+
+- `file_fdw`, `pageinspect`, `pg_surgery` and `pg_walinspect`. PGlite ships them, and Aurora does not list them.
+- `auto_explain`. It is a module loaded with `LOAD`, not an extension; Aurora sets it in a parameter group.
+- `pg_stat_statements`. PGlite writes it into `shared_preload_libraries` in the data directory's `postgresql.conf`, and the directory then fails to open without it. `npm run db -- status` opens a copy of the directory without extensions.
+- `vector` (pgvector). It is not in the `@electric-sql/pglite` 0.5 package.
+
+`moddatetime`'s bundle also contains `autoinc`, `insert_username` and `refint`, which Aurora does not list, so these three can be created locally and fail on AWS.
+
+The set is loaded at every start, not only when a migration names an extension. A directory whose tables use an extension must load it again on every later start, and the cluster is created before it knows which blocks, and so which migration files, it will serve. A test can also create an extension at run time. The cost, measured on PGlite 0.5.11 (Apple M3 Pro, Node 22, median of six runs): reopening an existing data directory takes about 330 ms with the set and 150 ms without it. A new directory takes about 1.4 s either way, most of it `initdb`.
+
+An extension that is not in the set fails with PostgreSQL's `extension "x" is not available` (SQLSTATE `0A000`). On an `aurora` cluster the cluster adds to that message that PGlite does not include the extension, and the list of the ones it does.
+
 **Rules by cluster type.** `RulesEngine` wraps each local engine and implements `simulateConflict()`.
 
-- On an `aurora` cluster it does nothing else. PGlite is PostgreSQL, as the cluster is. The PGlite cluster installs no `sys` stub and strips no `ASYNC`, so a DSQL form fails locally as it does on Aurora.
+- On an `aurora` cluster it does nothing else. PGlite is PostgreSQL, as the cluster is, with the extensions above. The PGlite cluster installs no `sys` stub and strips no `ASYNC`, so a DSQL form fails locally as it does on Aurora.
 - On a `dsql` cluster it also runs `dsql-lint` on each distinct statement (section 5.1) and enforces the per-transaction limits. It runs the two asynchronous DDL forms synchronously by removing the `ASYNC` keyword. The cluster installs a stub of DSQL's `sys` schema at init: `sys.wait_for_job()` returns `true` and `sys.jobs` is empty. A job wait copied from the AWS examples therefore runs and does nothing.
 
 `src/runtime/construction.ts` checks the cluster options once for every entry point. A capacity or backup value that the service rejects stops `npm run dev` before it stops a deploy.
@@ -414,7 +429,7 @@ Provisioned clusters:
 |---|---|---|
 | Concurrency | Serialized per cluster (one PGlite session) | Concurrent. DSQL can raise `40001` at commit. Aurora raises it under `SERIALIZABLE` only |
 | DSQL feature gaps (`dsql` only) | `dsql-lint` rejects them before PGlite | DSQL rejects them (`42501`, reported as `QueryFailed`) |
-| PostgreSQL features of an `aurora` cluster (triggers, PL/pgSQL, extensions) | PGlite runs them. An extension that PGlite lacks fails locally first | Aurora PostgreSQL 17 |
+| PostgreSQL features of an `aurora` cluster (triggers, PL/pgSQL, extensions) | PGlite runs them, with the extensions in section 4.1. An extension that PGlite lacks, such as `vector`, fails locally first | Aurora PostgreSQL 17 |
 | `ASYNC` DDL | Runs synchronously. The job wait does nothing. `sys.wait_for_job()` returns `true` and `sys.jobs` is empty | DSQL returns a job id. The runner polls `sys.jobs` every 30 seconds for up to 55 minutes |
 | 3,000-row and 10 MiB transaction limits (`dsql` only) | Enforced by `RulesEngine`, cascades counted, size approximated | Enforced by DSQL (`54000`). Both are reported as `TransactionRowLimitExceeded` |
 | `simulateConflict()` | Available | Throws |
