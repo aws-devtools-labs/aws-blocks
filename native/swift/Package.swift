@@ -45,7 +45,7 @@ let package = Package(
         .plugin(
             name: "BlocksCodegenCommandPlugin",
             capability: .command(
-                intent: .custom(verb: "generate-code-from-blocks-spec", description: "Generate Swift code from Blocks spec."),
+                intent: .custom(verb: "generate-code-from-blocks-spec", description: "Generate Swift code from AWS CDK Blocks spec."),
                 permissions: [.writeToPackageDirectory(reason: "Writes generated Models.swift and API.swift into the target source directory")]
             ),
             dependencies: ["swift-code-generator"],

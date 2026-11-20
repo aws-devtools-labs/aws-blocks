@@ -439,7 +439,7 @@ describe('resolveNamespaceRoutes', () => {
 	});
 
 	// An unassigned namespace (no `_compute` up its scope chain) resolves to the
-	// default compute too; that needs a real Blocks root, so it is covered by the
+	// default compute too; that needs a real CDK Blocks root, so it is covered by the
 	// create()-level test in blocks-stack.test.ts.
 	test('skips namespaces on the default compute', () => {
 		const { stack, defaultCompute } = computes('RoutesDefault');

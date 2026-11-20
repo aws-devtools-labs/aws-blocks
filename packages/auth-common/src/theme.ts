@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Framework-neutral design-token layer for the shared Blocks UI.
+ * Framework-neutral design-token layer for the shared CDK Blocks UI.
  *
- * The Blocks UI components ({@link Authenticator}, {@link AccountMenuBar})
+ * The CDK Blocks UI components ({@link Authenticator}, {@link AccountMenuBar})
  * are vanilla-DOM factories that drop into any host page — lit-html,
  * vanilla, React, Next.js. Rather than ask every host to remember to
  * import a stylesheet (a template that forgets renders unstyled), the
@@ -24,7 +24,7 @@ export const THEME_STYLE_ID = 'bb-ui-theme';
 
 /**
  * The design-token stylesheet: CSS custom properties plus the base
- * component classes (`.bb-*`) the Blocks UI renders against.
+ * component classes (`.bb-*`) the CDK Blocks UI renders against.
  *
  * Exported as a string so a host that DOES want a bundled stylesheet (or
  * a build step that extracts CSS) can read it directly, and so tests can
@@ -338,7 +338,7 @@ export const THEME_CSS: string = `
  * Idempotent and SSR-safe: a second call is a no-op (keyed on
  * {@link THEME_STYLE_ID}), and a non-DOM environment (no `document`)
  * returns silently so server-side rendering of a host page doesn't throw.
- * Every Blocks UI factory calls this before building its DOM, so the
+ * Every CDK Blocks UI factory calls this before building its DOM, so the
  * tokens are always present by the time the component paints.
  */
 export function injectTheme(): void {

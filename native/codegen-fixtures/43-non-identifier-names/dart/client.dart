@@ -334,7 +334,7 @@ class Servers {
 }
 
 
-// --- Blocks Client ---
+// --- CDK Blocks Client ---
 
 class Blocks {
   late final Api api;

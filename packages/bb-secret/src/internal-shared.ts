@@ -10,7 +10,7 @@
  */
 
 /**
- * A key that AWS Blocks generates for one of its own Building Blocks (for
+ * A key that CDK Blocks generates for one of its own Building Blocks (for
  * example the `Realtime` connection token key). Returned by `frameworkKey()`.
  *
  * @internal

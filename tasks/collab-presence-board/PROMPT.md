@@ -1,6 +1,6 @@
 # Task: Collaborative Presence Board
 
-Build a shared presence board in this AWS Blocks app. Each visitor picks a name and "joins"; everyone with the app open sees the live roster of who's present, updated in real time. The roster also survives a page reload.
+Build a shared presence board in this CDK Blocks app. Each visitor picks a name and "joins"; everyone with the app open sees the live roster of who's present, updated in real time. The roster also survives a page reload.
 
 The shared board itself — registering, deduping, storing, and reading back the roster — must run through an **`api` namespace** backed by real framework blocks (a **kv-store** block, with a `schema` and a `key`, for the durable roster, a **realtime** block for fan-out). The page is a thin client over that API plus the realtime channel.
 

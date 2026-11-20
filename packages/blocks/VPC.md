@@ -27,7 +27,7 @@ endpoint, dropping this example to ~$61/month. Only CloudWatch Logs (Lambda log
 delivery) and the free S3 gateway endpoint (config/secrets/migrations at cold
 start) are always added.
 
-> **Most AWS Blocks apps don't need a VPC.** All Blocks communicate with AWS services over HTTPS through public endpoints by default. A VPC adds cost and complexity — only use one when you have a specific requirement for it.
+> **Most AWS CDK Blocks apps don't need a VPC.** All Building Blocks communicate with AWS services over HTTPS through public endpoints by default. A VPC adds cost and complexity — only use one when you have a specific requirement for it.
 
 ## When to Use a VPC
 
@@ -38,8 +38,8 @@ start) are always added.
 - You need security group rules to restrict traffic between services
 
 **Don't use a VPC when:**
-- You're building a standard web app with Blocks' built-in data stores (KVStore, Database)
-- Your only AWS interactions are through Blocks (they handle connectivity automatically)
+- You're building a standard web app with CDK Blocks' built-in data stores (KVStore, Database)
+- Your only AWS interactions are through Building Blocks (they handle connectivity automatically)
 - You want to minimize cost and operational complexity
 - You're prototyping or building an MVP
 
@@ -60,10 +60,10 @@ await BlocksStack.create(app, stackName, {
 });
 ```
 
-AWS Blocks handles:
+CDK Blocks handles:
 - **Lambda placement** in private subnets (configurable via `subnets`)
 - **VPC endpoint provisioning** based on which BBs are in scope (DynamoDB, S3, SSM, Secrets Manager, SQS, Bedrock, etc.)
-- **Security group wiring** (e.g., Blocks Lambda → endpoints on port 443)
+- **Security group wiring** (e.g., CDK Blocks Lambda → endpoints on port 443)
 
 ### Bring Your Own VPC
 
@@ -87,7 +87,7 @@ const sharedVpc = ec2.Vpc.fromLookup(lookupStack, 'SharedVpc', { vpcId: 'vpc-abc
 
 await BlocksStack.create(app, stackName, {
   ...,
-  defaults: { ...BlocksPresets.production, vpc: { network: sharedVpc } },  // Blocks provisions endpoints automatically
+  defaults: { ...BlocksPresets.production, vpc: { network: sharedVpc } },  // CDK Blocks provisions endpoints automatically
 });
 ```
 
@@ -102,17 +102,17 @@ await BlocksStack.create(app, stackName, {
 });
 ```
 
-Your endpoints' security groups must then admit everything Blocks places in the VPC:
-the Blocks Lambda security group, and the security group of any compute a BB
+Your endpoints' security groups must then admit everything CDK Blocks places in the VPC:
+the CDK Blocks Lambda security group, and the security group of any compute a BB
 provisions itself and registers as an endpoint client (`endpointClientSecurityGroups`
 in its VPC requirements). For each registered group, synth emits a
 `blocks:vpc:endpoint-client-unadmitted` warning naming that security group by
 construct path. Allow inbound 443 from that group on your endpoints' security
-group. Blocks cannot tell whether your endpoint already admits the group, so it
+group. CDK Blocks cannot tell whether your endpoint already admits the group, so it
 does not fail the synth. Until the rule exists, that compute cannot reach the
 endpoints.
 
-The warning keeps firing on every synth once you have added the rule, because Blocks
+The warning keeps firing on every synth once you have added the rule, because CDK Blocks
 still cannot see your endpoint's rules. Acknowledge it in your app, which covers
 that scope and every scope under it:
 
@@ -131,10 +131,10 @@ here.
 
 `Database` and `DatabaseCluster` create nothing in the VPC and need no VPC
 endpoint. The app reaches the cluster over the cluster's public endpoint, so the
-Blocks runtime must be placed in subnets with an outbound route: the default
+CDK Blocks runtime must be placed in subnets with an outbound route: the default
 `PRIVATE_WITH_EGRESS` selection, or public subnets. Synth fails when the selected
 subnets have no egress route, and emits a `blocks:vpc:egress-unverified` warning
-when Blocks cannot determine whether they have one (for example, an imported VPC
+when CDK Blocks cannot determine whether they have one (for example, an imported VPC
 whose subnets are not known at synth).
 
 ## Configuration Options
@@ -145,7 +145,7 @@ interface BlocksVpcOptions {
   network: ec2.IVpc;
 
   /**
-   * Subnet selection for Lambda and all Blocks-managed compute placement.
+   * Subnet selection for Lambda and all CDK Blocks-managed compute placement.
    * Any subnets you select must belong to `network`; this is not validated at
    * synth (CDK can't check an imported subnet), so a mismatch surfaces as a
    * CloudFormation error at deploy.

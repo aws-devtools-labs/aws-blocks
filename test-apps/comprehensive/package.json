@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Comprehensive test application for Blocks - covers all Building Blocks",
+  "description": "Comprehensive test application for AWS CDK Blocks - covers all Building Blocks",
   "workspaces": [
     "cdk-blocks"
   ],

@@ -41,7 +41,7 @@ function envKey(fullId: string, suffix: string): string {
 // ── Chunking config builder ────────────────────────────────────────────────
 
 /**
- * Convert the Blocks `ChunkingConfig` to the Bedrock `ChunkingConfigurationProperty`.
+ * Convert the CDK Blocks `ChunkingConfig` to the Bedrock `ChunkingConfigurationProperty`.
  * Maps strategy names and default values to the Bedrock-specific format.
  */
 function buildChunkingConfig(config?: ChunkingConfig): bedrock.CfnDataSource.ChunkingConfigurationProperty {

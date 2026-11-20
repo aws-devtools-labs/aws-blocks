@@ -203,7 +203,7 @@ function formatUserAgentChain(chain: [string, string][]): string {
 const warnedDeprecatedGuardrails = new WeakSet<ModelConfig>();
 
 /**
- * Maps Blocks' ModelConfig to the corresponding Strands model provider.
+ * Maps CDK Blocks' ModelConfig to the corresponding Strands model provider.
  * The developer configures one unified ModelConfig shape — this factory
  * translates it to BedrockModel, OpenAIModel, or CannedProvider internally.
  *

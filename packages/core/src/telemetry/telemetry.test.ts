@@ -853,7 +853,7 @@ describe('telemetry/identifiers first-run notice', () => {
     assert.ok(notice.includes('cdk cli-telemetry --disable'), notice);
     assert.ok(notice.includes('export CDK_DISABLE_CLI_TELEMETRY=1'), notice);
     assert.ok(notice.includes('https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out'), notice);
-    assert.doesNotMatch(notice, /AWS_BLOCKS_DISABLE_TELEMETRY|blocks-telemetry/, 'the Blocks opt-out is gone');
+    assert.doesNotMatch(notice, /AWS_BLOCKS_DISABLE_TELEMETRY|blocks-telemetry/, 'the AWS CDK Blocks opt-out is gone');
 
     rmSync(tmp, { recursive: true, force: true });
   });

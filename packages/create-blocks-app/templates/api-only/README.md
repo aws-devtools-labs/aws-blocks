@@ -1,6 +1,6 @@
-# Blocks API-Only Application
+# AWS CDK Blocks API-Only Application
 
-A headless JSON API service on AWS CDK Blocks — no frontend. The starting point for a
+A headless JSON API service on CDK Blocks — no frontend. The starting point for a
 backend behind a mobile app, a CLI, or a third-party client. Ships a public
 health check plus an auth-gated CRUD resource with per-user isolation.
 

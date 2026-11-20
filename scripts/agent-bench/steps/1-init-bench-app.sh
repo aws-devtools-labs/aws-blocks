@@ -74,8 +74,8 @@ cat > package.json <<'EOF'
 { "name": "bench-workdir", "private": true, "version": "0.0.0" }
 EOF
 
-# Seed a CANARY telemetry installation-id BEFORE the first Blocks CLI runs so
-# the Blocks Telemetry service can recognize and EXCLUDE this bench's traffic
+# Seed a CANARY telemetry installation-id BEFORE the first CDK Blocks CLI runs so
+# the CDK Blocks Telemetry service can recognize and EXCLUDE this bench's traffic
 # from real usage metrics. Both create-blocks-app and @aws-cdk-blocks/core read
 # ~/.cdk-blocks/telemetry/installation-id and reuse it when present, so seeding it
 # once here tags every event from the scaffold, build, and runtime as a canary.

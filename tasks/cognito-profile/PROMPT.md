@@ -1,6 +1,6 @@
 # Task: Email Sign-Up Profile
 
-Build a sign-up / sign-in flow in this AWS Blocks app. A new visitor enters their email and a password, receives a one-time verification code by email, enters the code, and lands on a profile page that shows who they're signed in as. A returning visitor signs in with their email and password. They can sign out.
+Build a sign-up / sign-in flow in this CDK Blocks app. A new visitor enters their email and a password, receives a one-time verification code by email, enters the code, and lands on a profile page that shows who they're signed in as. A returning visitor signs in with their email and password. They can sign out.
 
 This flow deploys as is: the app's auth block confirms sign-ups with a code that Cognito emails with its default sender, so no extra AWS setup is needed.
 

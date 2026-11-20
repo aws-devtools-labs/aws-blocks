@@ -26,7 +26,7 @@
  *      and so are more behaviors from `cf.behaviors` / `cf.apiBehaviors` than
  *      a distribution allows by default.
  *
- * There is no feature check: AWS Blocks does not verify that a door applies
+ * There is no feature check: CDK Blocks does not verify that a door applies
  * the features the app asked for (`input.features`) — the door's author owns
  * that. The wiring check covers only routing, because a door that doesn't
  * route to the assets or the API cannot serve the app at all.

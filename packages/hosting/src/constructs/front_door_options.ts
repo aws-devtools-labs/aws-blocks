@@ -85,7 +85,7 @@ export type HostingLoggingConfig = {
  * and the CloudFront origin read it through a CloudFormation dynamic
  * reference, so it never appears in the template.
  *
- * When the door has a Blocks-managed web ACL (`waf: { enabled: true }`), the
+ * When the door has a CDK Blocks-managed web ACL (`waf: { enabled: true }`), the
  * same rules (AWS managed common and known-bad-inputs rules plus the per-IP
  * rate limit) also run on each REST API stage in a REGIONAL web ACL, with its
  * logs in CloudWatch Logs, so a call made straight to the `execute-api` URL
@@ -283,7 +283,7 @@ export type ApiGatewayDoorFeatures<TDomain = HostingDomainConfig> = {
  * `skewProtection` unless `enabled: false` (on by default, `maxAge` resolved),
  * and `domain` / `geoRestriction` when set.
  *
- * AWS Blocks does not check that the door applies them.
+ * CDK Blocks does not check that the door applies them.
  */
 export type CustomDoorFeatures<TDomain = HostingDomainConfig> = {
   /** Custom domain(s), with `wwwRedirect` → `input.features.domain`. */

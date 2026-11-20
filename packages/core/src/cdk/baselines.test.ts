@@ -397,7 +397,7 @@ describe('BlocksBackend', () => {
 		});
 		claimBaseline({ scope: new Construct(backend, 'kept'), file: claimed });
 		const error = synthError(app) ?? '';
-		assert.match(error, /Blocks stack 'Host-Blocks': no block with fullId 'Host-Blocks-gone'/);
+		assert.match(error, /AWS CDK Blocks stack 'Host-Blocks': no block with fullId 'Host-Blocks-gone'/);
 		assert.doesNotMatch(error, /Host-Blocks-kept|Host-unrelated/);
 	});
 });

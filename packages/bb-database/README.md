@@ -133,7 +133,7 @@ import { DatabaseErrors, isBlocksError } from 'aws-cdk-blocks';
 | Constant | `error.name` | Thrown when | Retried automatically |
 |---|---|---|---|
 | `DatabaseErrors.ConnectionFailed` | `ConnectionFailedException` | The connection to the cluster failed or was lost (SQLSTATE class `08`), or was never made: the address did not answer, the server certificate was not accepted, or the login was refused. The function's log names which | A lost connection, for a single `query` or `execute`: once, on a fresh connection. Inside a transaction, and for a connection that was never made: no |
-| `DatabaseErrors.TransactionFailed` | `TransactionFailedException` | The callback threw an error that is not an `ApiError`, a Blocks error or a database error, or a statement reached the transaction after it ended (a promise the callback did not await) | No |
+| `DatabaseErrors.TransactionFailed` | `TransactionFailedException` | The callback threw an error that is not an `ApiError`, a CDK Blocks error or a database error, or a statement reached the transaction after it ended (a promise the callback did not await) | No |
 | `DatabaseErrors.UniqueConstraintViolation` | `UniqueConstraintViolationException` | SQLSTATE `23505` (HTTP 409) | No |
 | `DatabaseErrors.NotNullViolation` | `NotNullViolationException` | A required value is missing: SQLSTATE `23502` (HTTP 400) | No |
 | `DatabaseErrors.CheckViolation` | `CheckViolationException` | A value breaks a `CHECK` constraint: SQLSTATE `23514` (HTTP 400) | No |
@@ -471,7 +471,7 @@ On an [existing database](#existing-database):
 - A file made by `pg_dump` runs too: its session settings are reset before the commit, and its `SET transaction_timeout` line is skipped on a server older than PostgreSQL 17.
 - A file's own `SET` of a limit that the run applies is skipped, so that the limit holds for the whole file: `idle_in_transaction_session_timeout` in every run, and `statement_timeout` and `transaction_timeout` in a deploy.
 
-An app that used `@aws-blocks/bb-data` with `fromExisting()` in an earlier AWS CDK Blocks release:
+An app that used `@aws-blocks/bb-data` with `fromExisting()` in an earlier CDK Blocks release:
 
 - keeps its migration files and its `_migrations` table. Point `migrationsPath` at the same directory (`./migrations`), and no file runs a second time.
 - has its connection string in SSM as `/<stackName>-db-url`, which is what `name: 'db-url'` reads.
@@ -551,7 +551,7 @@ DSQL uses [optimistic concurrency](https://docs.aws.amazon.com/aurora-dsql/lates
 - The wait before a re-run is the same in local mode and on AWS.
 - A single `query` or `execute` outside a transaction is always retried (see [Errors](#errors)).
 - A transaction may change at most 3,000 rows (cascaded deletes included) and 10 MiB of data. Past either it fails with `TransactionRowLimitExceeded` and nothing is kept. Split bulk work into batches.
-- A throw inside the callback rolls the transaction back. An `ApiError`, a branded Blocks error or a `DatabaseErrors` error reaches the caller unchanged. Any other error becomes `TransactionFailed` and its text stays on the server.
+- A throw inside the callback rolls the transaction back. An `ApiError`, a branded CDK Blocks error or a `DatabaseErrors` error reaches the caller unchanged. Any other error becomes `TransactionFailed` and its text stays on the server.
 - Inside the callback, `shop.query()`, `shop.queryOne()` and `shop.execute()` on the block that opened the transaction run in it, as `tx` does. Prefer `tx`: it shows the transaction where the statement is written.
 
 ```ts

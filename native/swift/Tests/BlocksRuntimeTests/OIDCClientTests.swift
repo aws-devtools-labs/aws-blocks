@@ -452,7 +452,7 @@ final class OIDCClientTests: XCTestCase {
     }
 
     func testRawRouteKeepsANamelessMessageOutOfErrorName() async {
-        // A Blocks route that answers with a message and no `name`
+        // A CDK Blocks route that answers with a message and no `name`
         // (`{ error: 'Missing required fields' }`): the message is detail, not a name.
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["error": "Missing required fields"]

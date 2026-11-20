@@ -1,5 +1,5 @@
 name: blocks_codegen
-description: Code generator for Blocks client SDK — reads OpenRPC spec and generates typed Dart clients.
+description: Code generator for AWS CDK Blocks client SDK — reads OpenRPC spec and generates typed Dart clients.
 version: 0.2.0
 homepage: https://docs.aws.amazon.com/blocks/latest/devguide
 repository: https://github.com/aws-devtools-labs/aws-blocks

@@ -120,7 +120,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('returns results for a matching query', async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('Blocks framework');
+        const results = await api.kbRetrieve('AWS CDK Blocks framework');
         assert.ok(Array.isArray(results), 'results should be an array');
         assert.ok(results.length > 0, 'should return at least one result');
       });
@@ -138,7 +138,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('folder metadata is correct for faq docs', async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('frequently asked questions Blocks', { maxResults: 20 });
+        const results = await api.kbRetrieve('frequently asked questions AWS CDK Blocks', { maxResults: 20 });
         const faqResults = results.filter((r: any) => r.metadata.folder === 'faq');
         assert.ok(faqResults.length > 0, 'should have results from faq folder');
         for (const r of faqResults) {
@@ -160,7 +160,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('source is an S3 URI on AWS', { skip: isLocal && 'S3 URIs only in sandbox/production' }, async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('Blocks framework');
+        const results = await api.kbRetrieve('AWS CDK Blocks framework');
         assert.ok(results.length > 0, 'should have results');
         for (const r of results) {
           assert.ok(r.source.startsWith('s3://'), `source should be an S3 URI, got: ${r.source}`);
@@ -177,13 +177,13 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('maxResults limits results', async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('Blocks', { maxResults: 2 });
+        const results = await api.kbRetrieve('AWS CDK Blocks', { maxResults: 2 });
         assert.ok(results.length <= 2, `maxResults=2 should return at most 2 results, got ${results.length}`);
       });
 
       test('metadata filter narrows results to faq folder', async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('Blocks', {
+        const results = await api.kbRetrieve('AWS CDK Blocks', {
           maxResults: 50,
           filter: { folder: { equals: 'faq' } },
         });
@@ -195,7 +195,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('metadata filter narrows results to guides folder', async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('Blocks', {
+        const results = await api.kbRetrieve('AWS CDK Blocks', {
           maxResults: 50,
           filter: { folder: { equals: 'guides' } },
         });
@@ -223,7 +223,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('filter by customer metadata category=deployment returns only matching docs', async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('Blocks application', {
+        const results = await api.kbRetrieve('AWS CDK Blocks application', {
           maxResults: 50,
           filter: { category: { equals: 'deployment' } },
         });
@@ -244,7 +244,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('auto-generated folder metadata still works alongside customer sidecars', async () => {
         const api = getApi();
-        const results = await api.kbRetrieve('frequently asked questions Blocks', {
+        const results = await api.kbRetrieve('frequently asked questions AWS CDK Blocks', {
           maxResults: 50,
           filter: { folder: { equals: 'faq' } },
         });

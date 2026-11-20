@@ -40,7 +40,7 @@ export interface AuthUser {
 }
 
 /**
- * Common interface for all Blocks auth Building Blocks.
+ * Common interface for all CDK Blocks auth Building Blocks.
  *
  * Auth BBs extend `Scope` and implement `BlocksAuth`. This ensures a consistent
  * API for server-side auth checks and a uniform client-side experience

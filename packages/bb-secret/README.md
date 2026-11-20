@@ -294,6 +294,6 @@ To simulate an externally set secret in a local test, add the value under that k
 
 Delete the key to simulate an unset secret (`get()` returns `null`). A value written this way replaces only the current value — it is not recorded as a version, so to exercise `get({ version: 'previous' })` locally, rotate with `put()`. A `generate: true` secret seeds its random value only when its key is absent, so a value you write before the backend starts is kept.
 
-## Keys AWS CDK Blocks generates for its own blocks
+## Keys CDK Blocks generates for its own blocks
 
-AWS CDK Blocks stores the keys it generates for its own blocks (the `Auth` session secret and the `Realtime` connection token key) where the stack's `defaults.secretsStore` says: a `Secret` in Secrets Manager (`'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset). The setting does not change the defaults of a `Secret` you declare.
+CDK Blocks stores the keys it generates for its own blocks (the `Auth` session secret and the `Realtime` connection token key) where the stack's `defaults.secretsStore` says: a `Secret` in Secrets Manager (`'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset). The setting does not change the defaults of a `Secret` you declare.

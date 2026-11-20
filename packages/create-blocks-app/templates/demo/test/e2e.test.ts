@@ -30,7 +30,7 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 // the local auth block just issued for `name` (it finds the block's .cdk-blocks/local/data/
 // files itself). On AWS, Cognito emails it instead.
 
-// Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
@@ -113,7 +113,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `greet`/`setValue`/`getValue` with your own methods.
-test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
+test('app: server serves its AWS CDK Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -203,7 +203,7 @@ test('auth: sign up with the emailed code, then call a protected method', async 
   const state = await authApi.setAuthState({ action: 'autoSignIn', username });
   assert.strictEqual(state.state, 'signedIn');
 
-  const todo = await api.createTodo('Try AWS Blocks', 1);
+  const todo = await api.createTodo('Try AWS CDK Blocks', 1);
   assert.ok(todo.userSub, "the todo is keyed on the owner's userSub");
   await api.deleteTodo(todo.todoId);
 });

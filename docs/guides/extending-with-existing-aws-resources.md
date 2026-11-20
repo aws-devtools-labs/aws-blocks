@@ -1,18 +1,18 @@
-# Extending Blocks with Existing AWS Resources
+# Extending AWS CDK Blocks with Existing AWS Resources
 
-This guide is for teams adopting Blocks into an **existing CDK app** —
-brownfield AWS accounts where Blocks needs to coexist with stacks, resources,
+This guide is for teams adopting CDK Blocks into an **existing CDK app** —
+brownfield AWS accounts where CDK Blocks needs to coexist with stacks, resources,
 and conventions you already maintain. It assumes you're comfortable with the
-CDK lifecycle (`cdk synth` / `cdk deploy`) and are wondering how Blocks fits
+CDK lifecycle (`cdk synth` / `cdk deploy`) and are wondering how CDK Blocks fits
 into stacks and constructs you already own.
 
-Blocks gives you four mechanisms, each suited to a different brownfield
+CDK Blocks gives you four mechanisms, each suited to a different brownfield
 situation:
 
 | # | Pattern | One-liner |
 |---|---|---|
-| 1 | **CDK in Blocks** | Bring your own CDK resource (or whole stack) and wire it to the Blocks runtime via `executionRole` (IAM) and `registerConfig` (config) |
-| 2 | **`fromExisting` on a BB** | Point a Blocks BB at a pre-deployed AWS resource (DynamoDB table, S3 bucket, Cognito) — keeps mocks, skips provisioning |
+| 1 | **Embed CDK resources** | Bring your own CDK resource (or whole stack) and wire it to the CDK Blocks runtime via `executionRole` (IAM) and `registerConfig` (config) |
+| 2 | **`fromExisting` on a BB** | Point a Building Block at a pre-deployed AWS resource (DynamoDB table, S3 bucket, Cognito) — keeps mocks, skips provisioning |
 | 3 | **Custom BB** | Author your own Building Block inside your monorepo (or publish to npm) when no first-party BB exists |
 | 4 | **Vendorize** | Eject a first-party BB's source into `vendor/` and own it outright |
 
@@ -21,36 +21,36 @@ situation:
 There's no "always start with #1" rule — the right choice depends on what's
 actually constraining you. Use this to weigh the tradeoffs:
 
-| | Pattern 1: CDK in Blocks | Pattern 2: `fromExisting` | Pattern 3: Custom BB | Pattern 4: Vendorize |
+| | Pattern 1: Embed CDK resources | Pattern 2: `fromExisting` | Pattern 3: Custom BB | Pattern 4: Vendorize |
 |---|---|---|---|---|
 | **Effort to set up** | Low (raw CDK + SDK) | Lowest (one factory call) | Medium (author a set of three files) | Low (single `vendorize` command) |
 | **Ongoing maintenance** | You own the integration glue | None — BB owns the runtime | You own the BB | Medium — re-sync diffs from upstream |
 | **Automatic mocking support** | ❌ | ✅ | ✅ | ✅ |
-| **BB ownership** | 🔴 You | 🟢 AWS Blocks | 🟠 You | 🟡 You (seeded by AWS Blocks) |
+| **BB ownership** | 🔴 You | 🟢 CDK Blocks | 🟠 You | 🟡 You (seeded by CDK Blocks) |
 | **Typed API at call sites** | ❌ raw `process.env.X` + SDK | ✅ BB's typed surface | ✅ You design it | ✅ Same as upstream |
 | **Upstream upgrade story** | N/A — your code, your rules | Free — re-deploy, no code change | Free — your BB, you upgrade | Manual — re-sync diffs from upstream |
 
-**✅ Use Pattern 1 (CDK in Blocks) when:**
+**✅ Use Pattern 1 (Embed CDK resources) when:**
 - The resource has no first-party BB (queues today, custom services, third-party APIs)
 - You want minimal lift and accept SDK-shaped call sites
 - The integration is one-off — no second caller in sight
 
-**❌ Don't use Pattern 1 (CDK in Blocks) when:**
+**❌ Don't use Pattern 1 (Embed CDK resources) when:**
 - You'd write the same `process.env.X` + SDK boilerplate in two or more files
 - You want mockable tests without stubbing AWS SDK calls — *unless* local mocking isn't required for this resource, or you're comfortable detecting local dev mode and writing your own mocks
 
 **✅ Use Pattern 2 (`fromExisting`) when:**
-- The resource type already has a Blocks BB with a `fromExisting` factory (`KVStore`, `FileBucket`, `Auth`)
-- You want to apply the runtime logic from an existing Blocks BB to a resource created outside of Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
+- The resource type already has a Building Block with a `fromExisting` factory (`KVStore`, `FileBucket`, `Auth`)
+- You want to apply the runtime logic from an existing Building Block to a resource created outside of CDK Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
 
 **❌ Don't use Pattern 2 (`fromExisting`) when:**
 - The BB's API doesn't expose what you need (e.g. you need DynamoDB Streams but `KVStore` doesn't surface them)
-- You want Blocks to manage the resource for you going forward (then create a fresh BB instance instead)
+- You want CDK Blocks to manage the resource for you going forward (then create a fresh BB instance instead)
 - The resource is in another AWS account (`fromTableName` / `fromBucketName` can't introspect cross-account — fall back to Pattern 1)
 
 **✅ Use Pattern 3 (Custom BB) when:**
 - You're doing Pattern 1 more than once for the same resource type
-- You want call sites to look like Blocks calls, not raw SDK calls
+- You want call sites to look like Building Block calls, not raw SDK calls
 - You want the integration testable in mock mode
 
 **❌ Don't use Pattern 3 (Custom BB) when:**
@@ -64,28 +64,28 @@ actually constraining you. Use this to weigh the tradeoffs:
 
 **❌ Don't use Pattern 4 (Vendorize) when:**
 - A custom wrapping BB (Pattern 3) would solve the problem
-- You can land the change upstream — open a PR to Blocks instead
+- You can land the change upstream — open a PR to CDK Blocks instead
 
 ---
 
-## Pattern 1: CDK in Blocks
+## Pattern 1: Embed CDK resources
 
-Blocks gives you two CDK shapes for embedding it in your infrastructure. Both
+CDK Blocks gives you two CDK shapes for embedding it in your infrastructure. Both
 expose the same `.executionRole` (for IAM) and work with `registerConfig` (for
 runtime config) — pick
-based on whether Blocks gets its own stack or shares one with your existing
+based on whether CDK Blocks gets its own stack or shares one with your existing
 infra.
 
 | Shape | What it is | When to use |
 |---|---|---|
-| **`BlocksStack`** | A whole new `cdk.Stack` containing the Blocks Lambda + API Gateway | Greenfield, or you want Blocks isolated in its own deploy unit |
-| **`BlocksBackend`** | A `Construct` (Lambda + API Gateway) you drop *into* an existing stack | Brownfield — you already have stacks and want Blocks to live alongside your other Lambdas |
+| **`BlocksStack`** | A whole new `cdk.Stack` containing the CDK Blocks Lambda + API Gateway | Greenfield, or you want CDK Blocks isolated in its own deploy unit |
+| **`BlocksBackend`** | A `Construct` (Lambda + API Gateway) you drop *into* an existing stack | Brownfield — you already have stacks and want CDK Blocks to live alongside your other Lambdas |
 
 Once instantiated, you can:
 
-- attach IAM policies to the role every Blocks compute assumes
+- attach IAM policies to the role each compute resource assumes
   (`blocksStack.executionRole.addToPrincipalPolicy(...)`)
-- grant access to any CDK resource you create alongside Blocks
+- grant access to any CDK resource you create alongside CDK Blocks
   (`myQueue.grantSendMessages(blocksStack.executionRole)`)
 - pass config to the runtime (`registerConfig(blocksStack, 'MY_KEY', value)`) —
   every compute loads it into `process.env` at cold start, before your backend
@@ -122,7 +122,7 @@ export const blocksStack = await BlocksStack.create(app, 'my-app', {
 // Pretend this queue was created by another stack you don't own.
 const externalQueue = new sqs.Queue(blocksStack, 'external-queue');
 
-// Grant the Blocks runtime permission to send to it, and pass it the URL.
+// Grant the CDK Blocks runtime permission to send to it, and pass it the URL.
 externalQueue.grantSendMessages(blocksStack.executionRole);
 registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 ```
@@ -150,7 +150,7 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 ### Example B: `BlocksBackend` inside an existing stack (true brownfield)
 
 You already maintain `MyApiStack` with five Lambdas, a DynamoDB table, and
-an existing API Gateway. You want Blocks to add a typed RPC API alongside,
+an existing API Gateway. You want CDK Blocks to add a typed RPC API alongside,
 deploying as part of the *same* stack — no second CloudFormation stack to
 operate.
 
@@ -168,7 +168,7 @@ export class MyApiStack extends cdk.Stack {
     // ... your existing Lambdas, tables, etc. ...
     const externalQueue = new sqs.Queue(this, 'work-queue');
 
-    // Drop Blocks into this stack as a single Construct.
+    // Drop CDK Blocks into this stack as a single Construct.
     const blocks = await BlocksBackend.create(this, 'BlocksApi', {
       backendHandlerPath: join(__dirname, 'cdk-blocks/index.handler.ts'),
       backendCDKPath: join(__dirname, 'cdk-blocks/index.ts'),
@@ -189,12 +189,12 @@ time. Otherwise the surface is identical to `BlocksStack`.
 
 ### What this gives you
 
-- Full access to *any* AWS resource — Blocks models nothing about it.
-- Plain CDK on the infra side, plain SDK on the runtime side. No Blocks-specific API.
+- Full access to *any* AWS resource — CDK Blocks models nothing about it.
+- Plain CDK on the infra side, plain SDK on the runtime side. No CDK Blocks-specific API.
 
 ### What it costs
 
-- **No *automatic* mocking** supported by the Blocks platform. `npm run dev`
+- **No *automatic* mocking** supported by the CDK Blocks platform. `npm run dev`
   will call real SQS. Tests against `api.enqueue` hit AWS unless you stub the
   SDK yourself.
 - **No type-level guarantees** that env vars exist. `process.env.EXTERNAL_QUEUE_URL!`
@@ -203,7 +203,7 @@ time. Otherwise the surface is identical to `BlocksStack`.
 If you do this more than once, jump to [Pattern 3](#pattern-3-custom-bb) — a small
 custom BB makes both problems disappear.
 
-### Reaching the other direction (Blocks → CDK)
+### Reaching the other direction (CDK Blocks → CDK)
 
 `BlocksStack` is a regular `Stack`. Each Building Block becomes a `Construct`
 underneath it. You can find them by their scope path and inspect or extend the
@@ -216,7 +216,7 @@ const kvNode = blocksStack.node.findChild('my-app').node.findChild('sessions');
 ```
 
 Use this for cross-stack references, additional alarms, custom backups, etc. Do
-**not** mutate Blocks-managed resources (e.g. flipping billing modes) — that
+**not** mutate CDK Blocks-managed resources (e.g. flipping billing modes) — that
 path is explicitly unsupported and what vendorize ([Pattern 4](#pattern-4-vendorize))
 exists for.
 
@@ -294,7 +294,7 @@ a `KVStore` created has.
 - **No accidental mutation.** The BB will *not* modify the wrapped resource —
   no schema changes and no resource policy edits. The only IAM change is the
   grant on `blocksStack.executionRole` described above.
-- Typed API parity with a Blocks-managed resource — call sites don't know the
+- Typed API parity with a CDK Blocks-managed resource — call sites don't know the
   difference.
 
 ### What it costs
@@ -309,7 +309,7 @@ a `KVStore` created has.
 
 When no `fromExisting` exists for the resource you need, write a small Building
 Block in your own monorepo. It's a set of three files following the same
-shape as Blocks' first-party BBs:
+shape as CDK Blocks' first-party BBs:
 
 ```
 my-app/
@@ -323,7 +323,7 @@ my-app/
 │       └── tsconfig.json
 ```
 
-The three files map to Blocks' execution contexts via [package export
+The three files map to CDK Blocks' execution contexts via [package export
 conditions:
 
 | File | When it runs | Picked by |
@@ -334,7 +334,7 @@ conditions:
 
 ### Skeleton
 
-**`src/index.cdk.ts`** — provisions the queue, grants the Blocks runtime access,
+**`src/index.cdk.ts`** — provisions the queue, grants the CDK Blocks runtime access,
 and surfaces config with `registerConfig`:
 
 ```ts
@@ -426,7 +426,7 @@ export class Queue extends Scope {
 ```
 
 **`package.json`** — the export conditions are the whole point. This shape
-matches Blocks' first-party BBs (e.g. `@aws-cdk-blocks/bb-kv-store`):
+matches CDK Blocks' first-party BBs (e.g. `@aws-cdk-blocks/bb-kv-store`):
 
 ```json
 {
@@ -493,7 +493,7 @@ it's the same shape as the skeleton above.
 
 A custom BB doesn't have to live inside your monorepo forever. The same
 package shape works as a public npm dependency — that's how every first-party
-Blocks BB ships. Once your BB is generally useful, you can publish it.
+Building Block ships. Once your BB is generally useful, you can publish it.
 
 **Recommended convention** for discoverability:
 
@@ -507,14 +507,14 @@ Blocks BB ships. Once your BB is generally useful, you can publish it.
 }
 ```
 
-Tagging with **`aws-blocks`** in `keywords` lets others find Blocks-compatible
+Tagging with **`aws-blocks`** in `keywords` lets others find CDK Blocks-compatible
 BBs by searching npm:
 
 ```bash
 npm search keywords:aws-blocks
 ```
 
-`aws-blocks` is the confirmed discovery tag — every first-party Blocks package
+`aws-blocks` is the confirmed discovery tag — every first-party CDK Blocks package
 carries it, so tagging your BB with it makes it discoverable alongside them.
 You can optionally add functional keywords describing what your BB does (e.g.
 `queue`), but `aws-blocks` is the one that matters for discovery. Keep keywords
@@ -523,7 +523,7 @@ accurate to what your BB actually implements rather than aspirational.
 **A few things to get right before publishing:**
 
 - Pin `peerDependencies` for `aws-cdk-lib` and `constructs` to the same
-  versions Blocks itself uses (check `packages/bb-kv-store/package.json` for
+  versions CDK Blocks itself uses (check `packages/bb-kv-store/package.json` for
   the current pin).
 - Don't bundle `@aws-sdk/*` — list them as `dependencies` and let consumers'
   Lambda bundlers de-duplicate.
@@ -543,12 +543,12 @@ accurate to what your BB actually implements rather than aspirational.
     }
   }
   ```
-  Blocks' build system relies on the `cdk` and `aws-runtime` conditions to
+  CDK Blocks' build system relies on the `cdk` and `aws-runtime` conditions to
   pick the right entry point.
 
-### Deploying to a compute target Blocks doesn't own
+### Deploying to a compute target CDK Blocks doesn't own
 
-Blocks' own deploy path (`npm run deploy` / `npm run sandbox`, and the
+CDK Blocks' own deploy path (`npm run deploy` / `npm run sandbox`, and the
 Lambda, container, and AgentCore computes it provisions) bundles your backend
 with the `aws-runtime` export condition for you.
 
@@ -592,17 +592,17 @@ Without it, module resolution falls back to each Building Block's `default`
 export — the mock entry — and the bundle runs in-memory local-dev stubs instead
 of the real AWS implementations.
 
-Building Blocks fail closed on compute that Blocks configures: when a BB's mock
+Building Blocks fail closed on compute that CDK Blocks configures: when a BB's mock
 entry is loaded in a deployed environment it throws instead of silently running
 the mock. Where that surfaces depends on the compute: on container and
 AgentCore computes the process fails at start, while on Lambda the backend is
 imported lazily on the first invocation (`createLambdaHandler`), so the deploy
 itself succeeds and every request then returns an error. A deployed environment is detected from the
-`BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` variables, which Blocks sets only
+`BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` variables, which CDK Blocks sets only
 on compute it configures, so the check works the same on Lambda, ECS/Fargate,
 and AgentCore — it is not Lambda-specific. Local dev and tests are unaffected.
 
-On compute Blocks doesn't configure, those variables are not set unless you set
+On compute CDK Blocks doesn't configure, those variables are not set unless you set
 them yourself, so this check does not run there. In that case your bundler
 configuration — resolving the `aws-runtime` condition as shown above — is what
 keeps the mock entries out of your deployed artifact.
@@ -710,7 +710,7 @@ TypeScript autocomplete on the return value of `getSdkIdentifiers()` shows exact
 
 ### Detecting the execution environment
 
-When using raw SDK calls alongside Blocks, you often need to know whether
+When using raw SDK calls alongside CDK Blocks, you often need to know whether
 you're running locally (`npm run dev`) or deployed in Lambda. AWS Lambda
 automatically populates `AWS_LAMBDA_FUNCTION_NAME` in every execution
 environment — use it as a reliable signal:
@@ -719,7 +719,7 @@ environment — use it as a reliable signal:
 const IS_DEPLOYED = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 ```
 
-This lets you branch behavior for local development without Blocks needing to
+This lets you branch behavior for local development without CDK Blocks needing to
 know about your integration:
 
 ```ts
@@ -747,19 +747,19 @@ development.
 
 ## Brownfield checklist
 
-When introducing Blocks into an existing AWS account:
+When introducing CDK Blocks into an existing AWS account:
 
 - **Identify what's mockable.** Inventory which existing resources have a BB
   with a `fromExisting` factory ([Pattern 2](#pattern-2-fromexisting-on-a-building-block));
   those are your highest-leverage integrations.
-- **Wire perms via `blocksStack.executionRole`** ([Pattern 1](#pattern-1-cdk-in-blocks))
-  for everything else. Resist the urge to mutate Blocks-managed resources from
+- **Wire perms via `blocksStack.executionRole`** ([Pattern 1](#pattern-1-embed-cdk-resources))
+  for everything else. Resist the urge to mutate CDK Blocks-managed resources from
   outside the BB — that's vendorize territory.
 - **Create a per-app BB package** the moment a Pattern-1 integration has
   >1 caller or feels load-bearing. The custom BB upgrade
   ([Pattern 3](#pattern-3-custom-bb)) is much cheaper than retrofitting later.
 - **Reserve vendorize for genuine forks.** If you ship two patches that "should
-  be upstream," consider opening a PR to Blocks instead of staying vendored.
+  be upstream," consider opening a PR to CDK Blocks instead of staying vendored.
 
 For the underlying design rationale, see
 `docs/tech-design/10-infra-interoperability.md` (see source repo).

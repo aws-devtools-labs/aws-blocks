@@ -109,7 +109,7 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			assert.strictEqual((await api.authCRequireRole('admins')).username, u);
 
 			// Delete the user out from under the live session. deleteUser does NOT
-			// revoke the Blocks session, so requireAuth still succeeds off the record,
+			// revoke the CDK Blocks session, so requireAuth still succeeds off the record,
 			// but the live AdminListGroupsForUser now throws UserNotFoundException.
 			// The guard must fail closed with its own 403 NotAuthorizedException —
 			// not leak Cognito's 404 (which breaks the documented 401/403 contract
@@ -131,7 +131,7 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			assert.strictEqual(await api.authCCheckAuth(), true);
 
 			// AdminUserGlobalSignOut revokes the user's REFRESH tokens at Cognito.
-			// The Blocks session's already-issued ACCESS token stays valid until
+			// The CDK Blocks session's already-issued ACCESS token stays valid until
 			// it expires, so `checkAuth` (which validates the access token) does
 			// NOT flip to false immediately — this differs from the mock, which
 			// deletes the server-side session record. The immediate-revocation

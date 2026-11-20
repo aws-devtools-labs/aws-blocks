@@ -1,6 +1,6 @@
 # Architectural Decisions
 
-This document records significant decisions made during AWS Blocks development, including rationale and alternatives considered. This document should be updated when the technical design changes.
+This document records significant decisions made during AWS CDK Blocks development, including rationale and alternatives considered. This document should be updated when the technical design changes.
 
 ## Format
 
@@ -1468,7 +1468,7 @@ A scaffolded app keeps its backend in `cdk-blocks/`, and the frontend imports it
 ## D-029: The Harbor agent check runs pull request code next to model credentials, behind one human approval
 
 **Date**: 2026-11-16
-**Authors:** AWS Blocks maintainers
+**Authors:** CDK Blocks maintainers
 
 ### Context
 The Harbor agent check (`.github/workflows/harbor-agent-check.yml`) is an optional, non-required benchmark dispatched by hand from `main` for an open PR. It builds the PR head and its merge-base in an isolated, credential-free container, then runs Claude Code against the packed packages in an `arm × trial` matrix. In that benchmark job the PR's packages are installed into the task image, so their install and build scripts run in the same container as a Bedrock session that the agent can read. This is not a hostile-code sandbox: until the session expires, PR code can use the credentials and the network.

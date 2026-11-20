@@ -43,7 +43,7 @@ export interface BlocksVpcOptions {
 	network: ec2.IVpc;
 
 	/**
-	 * Subnet selection for Lambda and Blocks-managed compute placement.
+	 * Subnet selection for Lambda and CDK Blocks-managed compute placement.
 	 *
 	 * Any subnets you select must belong to {@link network}. This is not
 	 * validated at synth — CDK can't check it for an imported subnet (which
@@ -90,7 +90,7 @@ export interface VpcRequirements {
 	 */
 	requiresVpc?: boolean;
 	/**
-	 * Whether the BB's **parent runtime** — the shared Blocks handler Lambda (or,
+	 * Whether the BB's **parent runtime** — the shared CDK Blocks handler Lambda (or,
 	 * in future, a container) that executes this BB's operations — must be able to
 	 * reach the internet (outbound egress) for the BB to work at runtime.
 	 *
@@ -116,9 +116,9 @@ export interface VpcRequirements {
 	requiresEgress?: boolean;
 	/**
 	 * Security groups of compute the BB provisions **itself** (not the shared
-	 * Blocks runtime) that must reach the Blocks-managed interface endpoints —
+	 * CDK Blocks runtime) that must reach the CDK Blocks-managed interface endpoints —
 	 * e.g. a Lambda the BB places in the shared VPC. The endpoint
-	 * security group admits only the Blocks Lambda SG by default (see
+	 * security group admits only the CDK Blocks Lambda SG by default (see
 	 * `finalizeVpc`), so without this registration such compute cannot reach the
 	 * endpoints and fails at runtime. Each listed security group gets a 443
 	 * ingress rule on the endpoint security group; when `provisionEndpoints` is
@@ -183,7 +183,7 @@ export interface VpcContext {
 	 * - `'provided'` — the customer passed it via `defaults.vpc.network`. An
 	 *   explicit choice, so **stateful** Building Blocks (e.g. `Database`) place
 	 *   their resources in it, exactly as before.
-	 * - `'derived'` — Blocks created it automatically because some block required
+	 * - `'derived'` — CDK Blocks created it automatically because some block required
 	 *   a VPC (today: a container compute). Stateless compute (Lambda, the
 	 *   container) shares it, but a stateful block must **not** auto-join a derived
 	 *   VPC: doing so would move an existing cluster into a new VPC on a routine

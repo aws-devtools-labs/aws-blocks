@@ -25,7 +25,7 @@ export type DashboardCommand = 'serve' | 'doctor';
 
 export interface DashboardOptions {
 	/**
-	 * Root of the Blocks app (where package.json and .cdk-blocks/ live). When
+	 * Root of the CDK Blocks app (where package.json and .cdk-blocks/ live). When
 	 * omitted the project is discovered from the working directory (or from
 	 * `--project`). An explicit value here wins over both and is used verbatim.
 	 */
@@ -258,10 +258,10 @@ function tryResolve(projectRoot: string, specifier: string): string | undefined 
 async function installAdminUi(projectRoot: string, specifier: string): Promise<string> {
 	const manualHint = `Install it manually with: npm install --save-dev ${ADMIN_UI_PACKAGE}`;
 	if (!process.stdin.isTTY || !process.stdout.isTTY) {
-		throw new Error(`The Blocks dashboard requires ${ADMIN_UI_PACKAGE}, which is not installed. ${manualHint}`);
+		throw new Error(`The AWS CDK Blocks dashboard requires ${ADMIN_UI_PACKAGE}, which is not installed. ${manualHint}`);
 	}
 
-	console.log(`The Blocks dashboard is served by ${ADMIN_UI_PACKAGE}, which is not installed yet.`);
+	console.log(`The AWS CDK Blocks dashboard is served by ${ADMIN_UI_PACKAGE}, which is not installed yet.`);
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	const answer = (await rl.question('Install it now as a dev dependency? (one-time) [Y/n] ')).trim().toLowerCase();
 	rl.close();
@@ -285,7 +285,7 @@ async function installAdminUi(projectRoot: string, specifier: string): Promise<s
 }
 
 /**
- * Decides which Blocks app the command acts on.
+ * Decides which CDK Blocks app the command acts on.
  *
  * An explicit `options.projectRoot` is a programmatic caller (the template's
  * own `scripts/dashboard.ts` wrapper knows exactly where it lives), so it is
@@ -305,8 +305,8 @@ function resolveProjectRoot(options: DashboardOptions, args: DashboardArgs): str
 
 	if (resolution.shadowed.length > 0) {
 		console.warn(
-			`Using the Blocks project at ${resolution.project.path}; ` +
-				`passed over ${resolution.shadowed.length} other Blocks project(s):`,
+			`Using the AWS CDK Blocks project at ${resolution.project.path}; ` +
+				`passed over ${resolution.shadowed.length} other CDK Blocks project(s):`,
 		);
 		for (const other of resolution.shadowed) console.warn(`  ${other}`);
 	}
@@ -322,7 +322,7 @@ const DOCTOR_MARKS: Record<DoctorCheckStatus, string> = {
 
 /** Renders a report as aligned `<mark> <label> — <detail>` lines. */
 function formatDoctorReport(report: DoctorReport): string {
-	const lines = [`Blocks doctor — ${report.projectName} (${report.projectRoot}, via ${report.projectVia})`];
+	const lines = [`AWS CDK Blocks doctor — ${report.projectName} (${report.projectRoot}, via ${report.projectVia})`];
 	const width = report.checks.reduce((max, check) => Math.max(max, check.label.length), 0);
 	for (const check of report.checks) {
 		lines.push(`${DOCTOR_MARKS[check.status]} ${check.label.padEnd(width)} — ${check.detail}`);
@@ -395,7 +395,7 @@ export async function dashboard(options: DashboardOptions = {}) {
 		});
 
 		const url = buildDashboardUrl(server.url, token);
-		console.log(`Blocks dashboard running at ${server.url} (bound to 127.0.0.1)`);
+		console.log(`AWS CDK Blocks dashboard running at ${server.url} (bound to 127.0.0.1)`);
 		console.log(url);
 		if (open) openDashboardUrl(url);
 		console.log('Press Ctrl+C to stop.');

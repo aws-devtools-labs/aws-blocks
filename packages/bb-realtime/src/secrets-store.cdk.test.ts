@@ -129,7 +129,7 @@ test('sandbox preset: token-secret is the SSM SecureString written by the secret
 	);
 });
 
-/** The functions that load the Blocks config (the computes), with their environment. */
+/** The functions that load the CDK Blocks config (the computes), with their environment. */
 function computeEnvironments(resources: Record<string, CfnResource>): Record<string, unknown>[] {
 	return ofType(resources, 'AWS::Lambda::Function')
 		.map((f) => (f.Properties?.Environment as { Variables?: Record<string, unknown> } | undefined)?.Variables ?? {})

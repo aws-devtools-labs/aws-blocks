@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Browser stub — __BB_CLASS__ runs server-side only. Per the AWS Blocks
+// Browser stub — __BB_CLASS__ runs server-side only. Per the CDK Blocks
 // convention this entry re-exports the block's public types + error constants so
 // isomorphic/bundled client code type-checks; the methods live on the server
 // (mock/aws) entries and are absent here.

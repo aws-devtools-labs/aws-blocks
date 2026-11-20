@@ -58,7 +58,7 @@ export class Agent extends BuildingBlockScope {
 			},
 		});
 
-		// The agent loop runs on the AgentCore Runtime (as the shared Blocks execution role) and
+		// The agent loop runs on the AgentCore Runtime (as the shared CDK Blocks execution role) and
 		// streams to the browser over Realtime. AgentCoreRuntime co-bundles the app backend,
 		// provisions the runtime, adds the bedrock-agentcore trust + Bedrock to the shared role, and
 		// injects the config location so the container loads the same app config as the handler

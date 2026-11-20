@@ -368,7 +368,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ['docs'],
 		group: 'Develop',
-		summary: 'Read the AWS CDK Blocks docs: a block, an export or option, one section, or a search',
+		summary: 'Read the CDK Blocks docs: a block, an export or option, one section, or a search',
 		description: [
 			'Print the docs that ship in aws-cdk-blocks, looked up by name.',
 			'',

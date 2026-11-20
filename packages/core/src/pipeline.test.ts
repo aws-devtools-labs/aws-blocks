@@ -17,10 +17,10 @@ function minimalStageFactory(scope: cdk.Stage, stageConfig: PipelineStageConfig)
 }
 
 // B2: the core Pipeline wrapper must resolve values from the SAME namespace the
-// Blocks CLI writes (`/blocks/*`), not the leaf-neutral `/hosting/*` — otherwise
+// CDK Blocks CLI writes (`/blocks/*`), not the leaf-neutral `/hosting/*` — otherwise
 // `npm run config -- set CONNECTION_ARN` writes one name and the deploy reads
 // another. The leaf default is `/hosting/config`; the wrapper must pin `/blocks/config`.
-void describe('core Pipeline pins the Blocks namespace', () => {
+void describe('core Pipeline pins the CDK Blocks namespace', () => {
 	afterEach(() => _setSynthSecretFetcher(null));
 
 	void it('resolves a config() connectionArn under /blocks/config by default', async () => {
@@ -34,7 +34,7 @@ void describe('core Pipeline pins the Blocks namespace', () => {
 			branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
 			stageFactory: minimalStageFactory,
 		});
-		// The Blocks CLI writes /blocks/config/CONNECTION_ARN; the wrapper must read it there.
+		// The CDK Blocks CLI writes /blocks/config/CONNECTION_ARN; the wrapper must read it there.
 		assert.deepStrictEqual(seen, ['/blocks/config/CONNECTION_ARN']);
 	});
 

@@ -276,8 +276,8 @@ function inferSchemaOutput(
 /**
  * The tsconfig that compiles `file`, found the way an editor finds it: the nearest
  * `tsconfig.json`, or, when that one does not list the file, the project it references
- * that does. A root that only lists project references (create-vite apps, the AWS
- * Blocks Vite templates) lists no file itself, so its own options are TypeScript's
+ * that does. A root that only lists project references (create-vite apps, the
+ * CDK Blocks Vite templates) lists no file itself, so its own options are TypeScript's
  * defaults, not the app's.
  */
 function configFor(
@@ -563,7 +563,7 @@ export interface WatchOptions extends GenerateOptions {
 	readonly signal?: AbortSignal;
 	/**
 	 * `unref()` the watchers/timers so they never keep the process alive on their own.
-	 * Use when embedding in a longer-lived host (e.g. the Blocks dev server) so the
+	 * Use when embedding in a longer-lived host (e.g. the CDK Blocks dev server) so the
 	 * watcher can't block the host's shutdown. Leave `false` for the standalone
 	 * `--watch` CLI, whose only job is to stay alive and watch. @default false
 	 */

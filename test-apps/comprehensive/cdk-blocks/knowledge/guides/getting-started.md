@@ -2,7 +2,7 @@
 
 ## Installation
 
-Install the Blocks framework using npm. The Blocks package re-exports all Building Blocks so you only need a single dependency for most projects.
+Install the AWS CDK Blocks framework using npm. The CDK Blocks package re-exports all Building Blocks so you only need a single dependency for most projects.
 
 ## Creating Your First App
 
@@ -22,4 +22,4 @@ Organize your documents into subfolders to automatically assign metadata. For ex
 
 ## Deployment
 
-Blocks automatically handles deployment to AWS. Your local folder of documents gets synced to S3, and Bedrock Knowledge Bases handles chunking, embedding, and indexing. The retrieve API works identically in both local and production environments.
+CDK Blocks automatically handles deployment to AWS. Your local folder of documents gets synced to S3, and Bedrock Knowledge Bases handles chunking, embedding, and indexing. The retrieve API works identically in both local and production environments.

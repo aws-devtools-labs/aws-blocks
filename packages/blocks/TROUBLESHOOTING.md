@@ -132,10 +132,10 @@ Without a frontend (`--no-frontend`, `"frontend": false`, or no `next` / `vite` 
 
 | Response | Cause | Fix |
 |----------|-------|-----|
-| 403 `Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-cdk-blocks/core` README, "Local Development") |
-| 404 `The AWS Blocks JSON-RPC API expects POST, not GET.` | An RPC path was requested with another method, for example by opening it in a browser | Call it with `POST` (see [RPC Wire Protocol](#rpc-wire-protocol)) |
+| 403 `Forbidden: the AWS CDK Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-cdk-blocks/core` README, "Local Development") |
+| 404 `The AWS CDK Blocks JSON-RPC API expects POST, not GET.` | An RPC path was requested with another method, for example by opening it in a browser | Call it with `POST` (see [RPC Wire Protocol](#rpc-wire-protocol)) |
 | 403 `{"error":"Forbidden: cross-origin request rejected"}` | A `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` names another site | Call from a loopback origin or the host in `BLOCKS_DEV_HOST`; see the `@aws-cdk-blocks/core` README, "Local Development", for the allowed origins |
-| 415 `Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json` | A JSON-RPC call sent without `Content-Type: application/json` | Send that header (with `curl`, `-H 'Content-Type: application/json'`); the generated clients already do |
+| 415 `Unsupported Media Type: the AWS CDK Blocks JSON-RPC API expects Content-Type: application/json` | A JSON-RPC call sent without `Content-Type: application/json` | Send that header (with `curl`, `-H 'Content-Type: application/json'`); the generated clients already do |
 
 ## Auth cookies not persisting
 

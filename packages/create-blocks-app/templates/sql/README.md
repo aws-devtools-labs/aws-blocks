@@ -1,6 +1,6 @@
-# Blocks SQL Application
+# AWS CDK Blocks SQL Application
 
-Backend-only TypeScript API on a PostgreSQL database — the AWS CDK Blocks
+Backend-only TypeScript API on a PostgreSQL database — the CDK Blocks
 `Database` Building Block on Aurora DSQL. Relational modeling with foreign keys,
 transactions, and version-controlled SQL migrations. No frontend included.
 

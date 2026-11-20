@@ -20,7 +20,7 @@ mechanical, easy-to-get-subtly-wrong work a generator should own.
 
 ## 2. What constitutes a Block (analyses #1–#2)
 
-From the tech design (`08-building-block-architecture.md`, KIT = AWS Blocks) and the
+From the tech design (`08-building-block-architecture.md`, KIT = AWS CDK Blocks) and the
 implemented reality (`AGENTS.md`, `bb-kv-store`):
 
 A BB bundles **three/four implementations behind one strongly-typed import**, selected

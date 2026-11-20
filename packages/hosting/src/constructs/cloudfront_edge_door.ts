@@ -317,7 +317,7 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     const additionalBehaviors: Record<string, BehaviorOptions> = {};
     for (const [pattern, target] of plan.behaviors) additionalBehaviors[pattern] = behaviorFor(target);
     const distribution = new Distribution(scope, 'CfOverAlb', {
-      comment: 'Blocks composed CF → ALB edge (static from S3, the rest through the ALB router)',
+      comment: 'AWS CDK Blocks composed CF → ALB edge (static from S3, the rest through the ALB router)',
       // A site without a server has nothing per-visitor behind the router
       // default (static files the behavior budget left out, and the API, which
       // sends no `Cache-Control` so is never cached): no cookies in its key.

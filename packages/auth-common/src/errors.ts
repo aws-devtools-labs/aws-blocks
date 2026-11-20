@@ -4,7 +4,7 @@
 import { isBlocksError } from '@aws-cdk-blocks/core';
 
 /**
- * The canonical auth error vocabulary shared by AWS Blocks auth Building Blocks.
+ * The canonical auth error vocabulary shared by CDK Blocks auth Building Blocks.
  *
  * Each value is the `name` of the `ApiError` an auth BB throws (and the
  * `errorName` it puts on a failed `AuthState`). Errors cross the wire by

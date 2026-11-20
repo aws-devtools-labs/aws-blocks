@@ -165,7 +165,7 @@ async function startContainer(serveApi: boolean): Promise<ContainerChild> {
 		});
 
 	const started = { process: child, httpPort, readinessPort, output: () => output, waitForOutput, exited };
-	await waitForOutput('[Blocks container] parent up');
+	await waitForOutput('[AWS CDK Blocks container] parent up');
 	return started;
 }
 

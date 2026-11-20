@@ -50,7 +50,7 @@ function writeCdkConfig(path: string, value: boolean | string): void {
   writeFileSync(path, JSON.stringify({ context: { [CDK_TELEMETRY_CONTEXT_KEY]: value } }));
 }
 
-describe('CDK CLI telemetry opt-out disables Blocks telemetry (shared case table)', () => {
+describe('CDK CLI telemetry opt-out disables CDK Blocks telemetry (shared case table)', () => {
   it('pins the shared case table contents', () => {
     assert.deepStrictEqual(
       cases.map((c) => [c.name, c.cdkEnv, c.cdkJson, c.cdkContextJson, c.userCdkJson, c.expected]),

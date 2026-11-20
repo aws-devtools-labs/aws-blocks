@@ -405,7 +405,7 @@ describe('retrieve (SDK-mocked)', () => {
 
 // ── Error classification — ValidationException ─────────────────────────────
 //
-// SDK exceptions are mapped to Blocks error constants based on the actual
+// SDK exceptions are mapped to CDK Blocks error constants based on the actual
 // cause, not just the exception name. ValidationException is especially
 // ambiguous — Bedrock throws it for invalid filters, over-long queries, and
 // malformed requests alike — so a content/query error must never be reported

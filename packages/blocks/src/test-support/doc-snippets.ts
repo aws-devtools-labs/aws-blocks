@@ -282,7 +282,7 @@ function analyze(block: Block): Analysis {
 	return { block, blocksImports, blocksNames, declared, modules, uses, completeFile, browserImports };
 }
 
-/** Compiler options of an AWS Blocks app (strict, ESM, bundler resolution, default conditions). */
+/** Compiler options of a CDK Blocks app (strict, ESM, bundler resolution, default conditions). */
 const COMPILER_OPTIONS: ts.CompilerOptions = {
 	strict: true,
 	noEmit: true,
@@ -360,7 +360,7 @@ export function checkDocs(
 			.filter((b) => b.mode !== 'skip')
 			.map(analyze),
 	);
-	// Undeclared names resolve against the umbrella first, then Blocks packages, then anything else the docs import.
+	// Undeclared names resolve against the umbrella first, then CDK Blocks packages, then anything else the docs import.
 	const imported = [...new Set(perDoc.flat().flatMap((a) => [...a.modules]))].filter(
 		(m) => !entrySpecifiers.includes(m),
 	);

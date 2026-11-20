@@ -85,7 +85,7 @@ interface Esbuild {
  * 3. **Neither** — throws an error naming the missing bundle and how to restore it.
  *
  * **esbuild comes from the app.** Step 2 resolves `esbuild` from the vendorized
- * package's location, i.e. from the app's `node_modules`. Every AWS Blocks app
+ * package's location, i.e. from the app's `node_modules`. Every CDK Blocks app
  * already has it (the default compute bundles the app's handler with
  * `NodejsFunction`); when it is missing, synth fails with the install command.
  *

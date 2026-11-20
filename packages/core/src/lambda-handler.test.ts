@@ -2041,7 +2041,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
   });
 });
 
-describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
+describe('buildEventUrl — behind a CDK Blocks CloudFront front door', () => {
   // CloudFront forwards the gateway's own Host; the door stamps the viewer's host as
   // x-blocks-public-host, and the backend's config lists the hosts its doors serve.
   const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
@@ -2288,7 +2288,7 @@ describe('createLambdaHandler — RawRoute ctx.request.url on a deployed stage',
     assert.strictEqual(base, 'http://localhost:3000');
   });
 
-  it("behind a Blocks CloudFront front door: ctx.request.url is the viewer's URL, the base URL stays the gateway's", async () => {
+  it("behind a CDK Blocks CloudFront front door: ctx.request.url is the viewer's URL, the base URL stays the gateway's", async () => {
     const previous = process.env.BLOCKS_PUBLIC_HOSTS;
     process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net';
     try {

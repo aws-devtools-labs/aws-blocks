@@ -259,7 +259,7 @@ class KotlinCodeGenerator(
             model.hasOidcTransferable()
         ) {
             warnings.add(
-                "Your Blocks spec includes OIDC auth, but no relay target is configured. " +
+                "Your AWS CDK Blocks spec includes OIDC auth, but no relay target is configured. " +
                     "OIDC operations will not be available. To enable OIDC, add to your build.gradle.kts:\n\n" +
                     "  cdkBlocks {\n" +
                     "      oidc {\n" +

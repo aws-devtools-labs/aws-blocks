@@ -167,7 +167,7 @@ function findRoot(scope: IConstruct): BaselineRoot | undefined {
 
 /**
  * `<dirname(backendHandlerPath)>/baselines/<stack>` — where the baselines of
- * one Blocks stack/backend live.
+ * one CDK Blocks stack/backend live.
  *
  * @param options.backendHandlerPath - The stack's `backendHandlerPath`. Resolved
  *   against the working directory when relative (it is absolute in every template).
@@ -271,7 +271,7 @@ function scan(state: BaselineRoot): Finding[] {
 function orphanMessage(stackName: string, fullId: string, file: string, guard: BaselineRemovalGuard): string {
 	const env = `${guard.rebaselineEnv}=${fullId}`;
 	return [
-		`Blocks stack '${stackName}': no block with fullId '${fullId}' exists in this app any more, but its committed baseline`,
+		`AWS CDK Blocks stack '${stackName}': no block with fullId '${fullId}' exists in this app any more, but its committed baseline`,
 		`${display(file)} says it owns a stateful resource.`,
 		`If you deploy this, CloudFormation will delete ${guard.deletes}.`,
 		'',
@@ -312,13 +312,13 @@ export function addOrphanedBaselineCheck(root: Construct, backendHandlerPath: st
 				switch (finding.kind) {
 					case 'unreadable':
 						errors.push(
-							`Blocks stack '${name}': the baseline ${display(finding.file)} cannot be read, so it cannot be checked. ` +
+							`AWS CDK Blocks stack '${name}': the baseline ${display(finding.file)} cannot be read, so it cannot be checked. ` +
 								'Restore it from version control (or delete it if no block of this stack wrote it).',
 						);
 						break;
 					case 'newerVersion':
 						errors.push(
-							`Blocks stack '${name}': the baseline ${display(finding.file)} uses format version ${finding.version}, ` +
+							`AWS CDK Blocks stack '${name}': the baseline ${display(finding.file)} uses format version ${finding.version}, ` +
 								`written by a newer version of @aws-cdk-blocks/core or of the Building Block that owns it; this version ` +
 								`reads versions 1 to ${BASELINE_FORMAT_VERSION}, so it cannot tell whether the file guards a resource. ` +
 								'Upgrade @aws-cdk-blocks/core (and aws-cdk-blocks) to match. The file is left as it is.',
@@ -326,7 +326,7 @@ export function addOrphanedBaselineCheck(root: Construct, backendHandlerPath: st
 						break;
 					case 'invalidVersion':
 						errors.push(
-							`Blocks stack '${name}': the baseline ${display(finding.file)} is not a valid baseline file: its ` +
+							`AWS CDK Blocks stack '${name}': the baseline ${display(finding.file)} is not a valid baseline file: its ` +
 								`\`version\` is ${JSON.stringify(finding.version)}, but must be a whole number from 1. ` +
 								'Restore it from version control. The file is left as it is.',
 						);

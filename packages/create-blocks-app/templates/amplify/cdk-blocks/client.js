@@ -1,7 +1,7 @@
 // ============================================================
-// Blocks Client for Amplify Gen 2
+// CDK Blocks Client for Amplify Gen 2
 //
-// This file configures the Blocks typed client with:
+// This file configures the CDK Blocks typed client with:
 // - API URL from amplify_outputs.json
 // - Automatic Cognito token injection via middleware
 //
@@ -16,10 +16,10 @@ import outputs from '../amplify_outputs.json';
 
 const BLOCKS_API_URL = outputs.custom?.blocks_api_url;
 if (!BLOCKS_API_URL) {
-  throw new Error('Blocks API URL not found in amplify_outputs.json. Did you deploy the backend?');
+  throw new Error('AWS CDK Blocks API URL not found in amplify_outputs.json. Did you deploy the backend?');
 }
 
-// Attach Cognito bearer token to every Blocks API call
+// Attach Cognito bearer token to every CDK Blocks API call
 registerMiddleware({
   async onRequest(req) {
     const session = await fetchAuthSession();

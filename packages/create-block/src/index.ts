@@ -126,7 +126,7 @@ async function ask(message: string, fallback: string): Promise<string> {
 }
 
 /**
- * Walk up from `startDir` looking for the AWS Blocks monorepo root: a directory
+ * Walk up from `startDir` looking for the CDK Blocks monorepo root: a directory
  * whose `package.json` declares a `workspaces` array that includes
  * `packages/blocks`, and which actually contains `packages/blocks`. Returns the
  * root path in contributor mode, or `null` (external mode).
@@ -166,7 +166,7 @@ export function normalizeWorkspaces(ws: unknown): string[] {
 
 /**
  * Walk up from `startDir` for a *customer* monorepo root: a `package.json` that
- * declares npm `workspaces` but is NOT the AWS Blocks framework repo (that's
+ * declares npm `workspaces` but is NOT the CDK Blocks framework repo (that's
  * contributor mode). Returns `{ root, pkg }` or `null` (→ standalone external).
  */
 export async function findCustomerWorkspaceRoot(startDir: string): Promise<{ root: string; pkg: WorkspacePkg } | null> {
@@ -701,7 +701,7 @@ export function parseArgs(argv: string[]): CliOptions {
 
 function printUsage(): void {
 	console.log(`
-create-block — scaffold a new AWS Blocks Building Block
+create-block — scaffold a new AWS CDK Blocks Building Block
 
 Usage:
   npm create @aws-cdk-blocks/block@latest <ClassName> [options]
@@ -791,7 +791,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	// Detect mode: AWS Blocks monorepo (contributor) → customer workspace → standalone.
+	// Detect mode: CDK Blocks monorepo (contributor) → customer workspace → standalone.
 	const monorepoRoot = await findMonorepoRoot(cwd);
 	const customer = monorepoRoot ? null : await findCustomerWorkspaceRoot(cwd);
 	const mode: Mode = monorepoRoot ? 'contributor' : customer ? 'customer' : 'external';

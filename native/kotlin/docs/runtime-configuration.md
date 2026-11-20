@@ -74,7 +74,7 @@ does not already do that for you.
 **On desktop, a session survives a restart only when you set it.** Android gives each application a
 private sandbox and iOS a Keychain access group, so both ignore the value. A desktop machine gives
 an application no private storage at all — `$HOME` is shared by every process you run — so without
-an id there is nowhere to put the data that another Blocks application could not also reach. The
+an id there is nowhere to put the data that another AWS CDK Blocks application could not also reach. The
 session is held in memory for the life of the process instead, and the user signs in again on the
 next launch. There is no error and no warning, so if sign-in is not surviving a restart, this is
 why.
@@ -164,6 +164,6 @@ gone.
 ## Upgrading from a release that wrote to `~/.blocks` directly
 
 Versions of this runtime that predate `applicationId` wrote the cookie jar to `~/.blocks/cookies`,
-with no per-application component, so every Blocks application run by one OS user shared it. Those
+with no per-application component, so every CDK Blocks application run by one OS user shared it. Those
 entries are not read and not migrated, so a signed-in user signs in once more after upgrading. The
 old `~/.blocks/cookies` directory is not removed; delete it by hand if you want it gone.

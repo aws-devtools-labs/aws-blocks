@@ -3000,7 +3000,9 @@ void describe('pinNextBuildId', () => {
     fs.writeFileSync(configFile, original);
     assert.ok(pinNextBuildId(tmpDir, 'fixed'));
     // The build was killed: the restore never ran.
-    assert.notStrictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+    const wrapper = fs.readFileSync(configFile, 'utf-8');
+    assert.ok(wrapper.includes('// AWS Blocks: deterministic build ID (restored after the build).\n'));
+    assert.ok(wrapper.includes(`// AWS Blocks: pinned by pid ${process.pid}.\n`));
     assert.strictEqual(restorePinnedNextConfig(tmpDir), true);
     assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
     assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));

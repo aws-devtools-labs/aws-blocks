@@ -122,7 +122,7 @@ export function migrateLegacySandboxDir(projectRoot?: string): void {
 
 	console.error(
 		`ℹ️  Copied this app's sandbox state from ${LEGACY_SANDBOX_DIR}/ to ${BLOCKS_SANDBOX_DIR}/ (${copied.join(', ')}). ` +
-			`The old directory is left as it is; you can delete it once no older AWS Blocks version runs in this checkout.`,
+			`The old directory is left as it is; you can delete it once no older AWS CDK Blocks version runs in this checkout.`,
 	);
 }
 

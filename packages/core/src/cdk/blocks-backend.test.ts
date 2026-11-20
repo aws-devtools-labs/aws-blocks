@@ -208,7 +208,7 @@ describe('shared execution role', () => {
 			'core must not trust bedrock-agentcore by default (no agent → no AgentCore trust)',
 		);
 
-		// The Blocks handler references the shared role, not an auto-generated one.
+		// The CDK Blocks handler references the shared role, not an auto-generated one.
 		template.hasResourceProperties('AWS::Lambda::Function', {
 			Role: { 'Fn::GetAtt': [blocksRoleId, 'Arn'] },
 		});
@@ -305,7 +305,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
 	});
 
 	test('nested stack: fullId stays token-free (regression for #714 / Amplify Gen2)', async () => {
-		// Amplify Gen2 wires Blocks into a NestedStack via backend.createStack('blocks').
+		// Amplify Gen2 wires CDK Blocks into a NestedStack via backend.createStack('blocks').
 		// A NestedStack has a tokenized stackName that only resolves at deploy time —
 		// embedding it in fullId broke construct IDs with
 		// "ID components may not include unresolved tokens".

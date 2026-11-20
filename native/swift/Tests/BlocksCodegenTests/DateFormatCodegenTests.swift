@@ -129,7 +129,7 @@ final class DateFormatCodegenTests: XCTestCase {
 
     // MARK: - Compiled and run
 
-    /// Builds the generated module and calls it against a local JSON-RPC server that sends what AWS Blocks
+    /// Builds the generated module and calls it against a local JSON-RPC server that sends what CDK Blocks
     /// sends: dates as ISO 8601 strings. Checks what each request sent, and what each result decoded to.
     func testDatesCrossTheWireAsISOStrings() throws {
         #if os(macOS)

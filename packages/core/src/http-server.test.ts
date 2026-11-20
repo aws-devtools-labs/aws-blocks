@@ -1352,7 +1352,7 @@ describe('buildRequestUrl', () => {
   });
 });
 
-describe('buildRequestUrl — behind a Blocks CloudFront front door', () => {
+describe('buildRequestUrl — behind a CDK Blocks CloudFront front door', () => {
   // The door stamps the viewer's host as x-blocks-public-host; the backend's config
   // lists the hosts its doors serve.
   const VIEWER = 'd111.cloudfront.net';

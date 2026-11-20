@@ -29,11 +29,11 @@ test.afterAll(() => {
   } catch { /* best effort */ }
 });
 
-test.describe('Amplify + Blocks Interop', () => {
+test.describe('Amplify + CDK Blocks Interop', () => {
   test('1. Public API — greet works without auth', async ({ page }) => {
     await page.goto('/');
     await page.click('#btn-greet');
-    await expect(page.locator('#greeting')).toContainText('Hello from Blocks', { timeout: 10000 });
+    await expect(page.locator('#greeting')).toContainText('Hello from CDK Blocks', { timeout: 10000 });
   });
 
   test('2. Sign in and call protected API (KV Store)', async ({ page }) => {

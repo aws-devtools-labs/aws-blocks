@@ -92,7 +92,7 @@ class OidcClient<P : OidcProvider> internal constructor(
     @InternalBlocksApi
     var platformLauncher: OidcPlatformLauncher = createPlatformLauncher()
 
-    // Blocks backend does not append padding
+    // CDK Blocks backend does not append padding
     private val base64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.PRESENT_OPTIONAL)
 
     /**

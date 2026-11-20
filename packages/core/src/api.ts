@@ -29,7 +29,7 @@ export type BlocksContext = {
      * of the path the app routes on. To sub-route under a wildcard, use
      * `params['*']`.
      *
-     * Behind a Blocks CloudFront front door (the `apiFrontDoor: 'cloudfront'`
+     * Behind a CDK Blocks CloudFront front door (the `apiFrontDoor: 'cloudfront'`
      * distribution, or `Hosting`'s CloudFront door), Lambda and container handlers
      * alike see the URL the client called: the distribution's domain or the custom
      * domain it was called at (`https://app.example.com/cdk-blocks/api/orders`).

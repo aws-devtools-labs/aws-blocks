@@ -74,7 +74,7 @@ async function getTaskCredentials() {
 	const full = process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
 	if (!rel && !full) {
 		throw new Error(
-			'[Blocks bootstrap] no ECS container credentials endpoint — AWS_CONTAINER_CREDENTIALS_RELATIVE_URI/FULL_URI unset. ' +
+			'no ECS container credentials endpoint — AWS_CONTAINER_CREDENTIALS_RELATIVE_URI/FULL_URI unset. ' +
 				'This script expects to run as an ECS task with a task role.',
 		);
 	}
@@ -180,7 +180,7 @@ async function main() {
 	];
 	if (!bucket || !region || files.some((f) => !f.key)) {
 		throw new Error(
-			`[Blocks bootstrap] missing config: BLOCKS_CODE_BUCKET=${bucket} AWS_REGION=${region} ` +
+			`missing config: BLOCKS_CODE_BUCKET=${bucket} AWS_REGION=${region} ` +
 				`MAIN_KEY=${files[0].key} WORKER_KEY=${files[1].key} PKG_KEY=${files[2].key}`,
 		);
 	}
@@ -197,7 +197,7 @@ async function main() {
 		writeFileSync(`${APP_DIR}/${name}`, body);
 	}
 
-	console.log('[Blocks bootstrap] app bundles fetched; starting parent process');
+	console.log('[AWS CDK Blocks bootstrap] app bundles fetched; starting parent process');
 
 	// Exec the parent. Inherit stdio so container logs flow to the awslogs driver,
 	// and forward signals so ECS task stop drains gracefully.
@@ -212,6 +212,6 @@ async function main() {
 }
 
 main().catch((err) => {
-	console.error('[Blocks bootstrap] fatal:', err);
+	console.error('[AWS CDK Blocks bootstrap] fatal:', err);
 	process.exit(1);
 });

@@ -92,7 +92,7 @@ export type ScalingSignal =
  * `minInstances`/`maxInstances` bound the running task count. `strategy` (one
  * signal or several) drives scaling between them; with several, scale-out
  * follows whichever signal demands the most instances and scale-in requires all
- * to agree. Omit `strategy` and Blocks infers one by workload — queue depth for
+ * to agree. Omit `strategy` and CDK Blocks infers one by workload — queue depth for
  * a compute that drains AsyncJob queues, CPU otherwise.
  */
 export interface ContainerScaling {
@@ -157,10 +157,10 @@ export interface ContainerComputeOptions {
 	scaling?: ContainerScaling;
 	/**
 	 * The container image to run, as a public or ECR registry URI. Used verbatim
-	 * (pulled by ECS at task start — Blocks builds no image, so deploying needs no
+	 * (pulled by ECS at task start — CDK Blocks builds no image, so deploying needs no
 	 * local Docker).
 	 *
-	 * Your application code is NOT baked into this image; Blocks delivers it
+	 * Your application code is NOT baked into this image; CDK Blocks delivers it
 	 * separately and the container fetches it at boot. So the image only has to
 	 * provide the **runtime environment**: it must have a **Node 24** runtime on
 	 * `PATH` (matching the Lambda runtime), plus any system libraries your handlers
@@ -170,10 +170,10 @@ export interface ContainerComputeOptions {
 	 * ECS pulls the image at every task start, and the container runs with the
 	 * stack's shared execution role, so pin a custom image by digest
 	 * (`registry/repo@sha256:<digest>`) rather than a tag that can be
-	 * re-pushed. Blocks uses this value verbatim.
+	 * re-pushed. CDK Blocks uses this value verbatim.
 	 *
 	 * @default `public.ecr.aws/docker/library/node:24-slim` — a stock, public,
-	 * AWS-hosted Node 24 image. Must be arm64-compatible (Blocks runs Fargate on
+	 * AWS-hosted Node 24 image. Must be arm64-compatible (CDK Blocks runs Fargate on
 	 * Graviton); multi-arch images resolve automatically. The default is pinned
 	 * by digest, so it doesn't change between deploys. The default image runs
 	 * as its unprivileged `node` user (uid/gid 1000), not root; a custom image
