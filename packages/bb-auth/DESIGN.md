@@ -156,7 +156,7 @@ With `audit` set, `AuthBase` writes one record per session lifecycle event throu
 - **Fields the event does not know are left out**, not written as `undefined`, so a record's keys say what was known.
 - **Best-effort.** `auditEvent` swallows a logger error: an audit sink that is down must not fail a sign-in or a sign-out. The first failure per block is logged once at `warn` (error name only), so a broken sink can be told from a quiet day.
 - **`deleteUser` ends one session.** It deletes the calling session's row. The user's other rows end on their next request, when `onAccount` meets `UserNotFoundException`, and that deletion writes no record. Revoking them up front would need `deleteByUsername`'s table scan, which stays admin-only.
-- **Not covered:** what never reaches `AuthBase`: failed attempts on Cognito's managed login page (a success comes back through the callback and is recorded), calls a client makes to Cognito directly, and a refresh failure that ends a session. Cognito records its own API calls in CloudTrail. Within `AuthBase`, a sign-out whose cookie fails verification (tampered, or signed with another secret) ends nothing and writes no record, like a sign-out with no cookie.
+- **Not covered:** what never reaches `AuthBase`: failed attempts on Cognito's managed login page (a success comes back through the callback and is recorded), calls a client makes to Cognito directly, and a refresh failure that ends a session. Cognito records its own API calls and managed-login requests in CloudTrail, and with `activityLog` exports its scored sign-in events to the block's log group ([below](#cognitos-activity-log-activitylog--cdkactivity-logts)). Within `AuthBase`, a sign-out whose cookie fails verification (tampered, or signed with another secret) ends nothing and writes no record, like a sign-out with no cookie.
 
 Tests: `audit.test.ts` (each event against the fake engines, including a wrong challenge answer, an insecure-transport refusal and a `validateUser` rejection; the local pool's `admin.revokeUserSessions` by email and `deleteUser`; `audit: true` through the real logger's JSON line; no secrets in any record; nothing written with the option off; a throwing audit logger that changes no result and warns once).
 
@@ -473,6 +473,23 @@ Each fails at synth with the reason: an unsupported `users.authFlow`; `passkeys`
 - **What it unlocks:** EMAIL MFA and the `EMAIL_OTP` first factor, which Cognito sends only through SES, are allowed on a block-created pool once `email` is set ([Synth-time checks](#synth-time-checks)).
 - **Not checked at synth:** whether the identity is verified, or whether the SES account is still in the sandbox (it then delivers only to verified recipients). A synth can't see the account; the README's checklist says to do both before launch. This matches `EmailClient`, which states the same prerequisite.
 - **Nothing at runtime.** Neither engine reads `email`: the AWS engine's calls are the same and Cognito picks the sender, and the local pool delivers codes through `codeDelivery`.
+
+### Cognito's activity log (`activityLog` — `cdk/activity-log.ts`)
+
+`activityLog: true` exports Cognito's user-activity log (`userAuthEvents`, `INFO`): the per-event threat-protection records `AdminListUserAuthEvents` also returns. It covers what never reaches `AuthBase` (the gap in [Audit records](#audit-records-audit)). Cognito writes these only on the Plus plan with threat protection active ([Exporting user pool logs](https://docs.aws.amazon.com/cognito/latest/developerguide/exporting-quotas-and-usage.html)), so the option adds three things:
+
+| Resource | Value | Why |
+|---|---|---|
+| Pool `UserPoolAddOns` | `AdvancedSecurityMode: AUDIT` (CDK `standardThreatProtectionMode: AUDIT_ONLY`) | Audit-only scores and logs each sign-in but takes no action, so sign-in and the engines are unchanged. Full-function mode can block a sign-in or require MFA, which the runtime would have to handle; it is not offered. |
+| `activity-log` (`AWS::Logs::LogGroup`) | `/aws/vendedlogs/cognito/<fullId>/user-activity`, the stack's `logRetention`, the pool's resolved removal policy | Under `/aws/vendedlogs/`, CloudWatch Logs authorizes the delivery without adding the group to the account's log resource policy, which is capped at 5120 characters. The removal policy is set explicitly: CDK's default for a log group is `RETAIN`, and a retained group keeps its fixed name, so a destroyed sandbox could not be deployed again. A character a log-group name can't hold becomes `-`. |
+| `activity-log-delivery` (`AWS::Cognito::LogDeliveryConfiguration`) | `userAuthEvents`, `INFO`, to that group | The one destination user-activity logs allow. |
+
+- **Off by default, and unset changes nothing.** With threat protection unset CDK emits no `UserPoolAddOns`, so the zero-config template stays `AuthCognito`'s (`property-snapshot.cdk.test.ts`).
+- **Not guarded.** `UserPoolAddOns` and the delivery update in place ("Update requires: No interruption"), and neither is one of the [immutability guard](#immutability-guard)'s four properties. Turning the option on keeps every logical id and physical name, and `UserPoolAddOns` is the only pool property that changes (`activity-log.cdk.test.ts`).
+- **No IAM in the stack.** Cognito delivers through its own service-linked role. The deploying role needs the CloudWatch Logs delivery permissions the guide lists (`logs:CreateLogDelivery`, `logs:PutResourcePolicy` and others); CDK's default deployment role has them. The backend Lambda's role is unchanged.
+- **Refused at synth** (`assertActivityLog`): a plan other than `'plus'` (the message names the plan it got and the pricing page) and a wrapped pool (`userPool`), whose add-ons belong to its owner. A `store: 'builtin'` block is refused earlier, in every layer, from the shared option validator (`COGNITO_ONLY_KEYS`), and typed as `ERROR_needs_store_cognito<'activityLog'>`.
+- **Coverage.** Threat protection scores `USER_PASSWORD_AUTH` / `USER_SRP_AUTH` and managed login, and not federated sign-in ([threat protection](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-settings-threat-protection.html)); its documentation does not list `USER_AUTH`. Not checked against a live pool yet.
+- **Nothing at runtime.** Neither engine reads `activityLog`, and the local pool ignores it.
 
 ### Immutability guard
 

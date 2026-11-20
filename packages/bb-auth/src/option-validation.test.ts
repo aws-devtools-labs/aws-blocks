@@ -843,6 +843,7 @@ describe('boolean options are type-checked, not only key-checked', () => {
 		['session.crossDomain', (v) => ({ session: { crossDomain: v } })],
 		['users.caseSensitive', (v) => ({ users: { caseSensitive: v } })],
 		['deletionProtection', (v) => ({ deletionProtection: v })],
+		['activityLog', (v) => ({ activityLog: v })],
 	];
 
 	for (const [path, build] of booleans) {

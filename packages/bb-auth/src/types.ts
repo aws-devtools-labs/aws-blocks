@@ -455,6 +455,44 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 	featurePlan?: 'lite' | 'essentials' | 'plus';
 
 	/**
+	 * Export Cognito's own user-activity log to a CloudWatch log group this
+	 * stack owns: one `INFO` record per sign-in, sign-out or password operation
+	 * Cognito's threat protection scores, with its risk assessment, device and
+	 * location. That includes what the `audit` records can't see: attempts on
+	 * the managed login page and calls a client makes to Cognito directly. It
+	 * covers username-password sign-in (`USER_PASSWORD_AUTH`, the default) and
+	 * managed login; Cognito's threat protection doesn't score federated
+	 * sign-ins, and its documentation doesn't list `users.authFlow: 'USER_AUTH'`.
+	 * Off by default.
+	 *
+	 * ⚠️ **This option is a pricing decision.** Cognito writes these logs only
+	 * on the Plus plan with threat protection on, so it requires
+	 * `featurePlan: 'plus'` (checked at synth), which is billed per monthly
+	 * active user, plus CloudWatch Logs ingestion. It turns threat protection on
+	 * in audit-only mode: Cognito scores each sign-in but never blocks or
+	 * challenges one, so sign-in behaves exactly as before.
+	 *
+	 * The log group is `/aws/vendedlogs/cognito/<fullId>/user-activity`, kept for
+	 * the stack's `logRetention` and removed with the pool's removal policy; the
+	 * CDK `Auth` exposes it as `activityLogGroup`. Cognito identifies users by
+	 * `sub` there, as in the `audit` records. Turning it on or off later updates
+	 * the pool in place: no user, session or token is affected.
+	 *
+	 * Only for a pool this block creates: a pool wrapped with `userPool` keeps
+	 * its owner's settings (synth refuses `activityLog` there), and on a
+	 * `store: 'builtin'` block, which has no pool, it is a compile error.
+	 * Locally (`npm run dev`) it does nothing.
+	 *
+	 * @example
+	 * ```ts
+	 * new Auth(scope, 'auth', { featurePlan: 'plus', activityLog: true });
+	 * ```
+	 *
+	 * @default false
+	 */
+	activityLog?: boolean;
+
+	/**
 	 * Send the user pool's email (sign-up and password-reset codes, email MFA,
 	 * the `EMAIL_OTP` first factor) through your own Amazon SES identity instead
 	 * of Cognito's default sender.
@@ -586,6 +624,8 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	userPool?: ERROR_needs_store_cognito<'userPool'>;
 	/** @deprecated A Cognito feature plan needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
+	/** @deprecated Cognito's activity-log export needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	activityLog?: ERROR_needs_store_cognito<'activityLog'>;
 	/** @deprecated An SES email sender needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	email?: ERROR_needs_store_cognito<'email'>;
 }

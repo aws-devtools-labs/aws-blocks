@@ -48,6 +48,8 @@ import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import type * as logs from 'aws-cdk-lib/aws-logs';
+import { assertActivityLog, mapThreatProtection, provisionActivityLog } from './cdk/activity-log.js';
 import { lazyBackendApiUrl } from './cdk/api-url.js';
 import { authRoutes, stubProviders } from './cdk/auth-routes.js';
 import {
@@ -158,6 +160,12 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	public readonly hostedUiClient?: cognito.IUserPoolClient;
 	/** The hosted-UI domain (`domain`). `undefined` exactly when {@link Auth.hostedUiClient} is. */
 	public readonly userPoolDomain?: cognito.UserPoolDomain;
+	/**
+	 * The log group Cognito exports the pool's user-activity log to
+	 * (`activity-log`), for metric filters or a subscription. `undefined` unless
+	 * {@link CognitoAuthOptions.activityLog} is on.
+	 */
+	public readonly activityLogGroup?: logs.ILogGroup;
 
 	/**
 	 * Reference an existing Cognito user pool. Returns a reference object to pass
@@ -205,6 +213,8 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		}
 		// The SES sender: only for a pool this block creates, and well-formed.
 		assertEmailSender(this.fullId, opts, needsPool);
+		// Cognito's activity-log export: Plus plan, and a pool this block creates.
+		assertActivityLog(this.fullId, opts);
 		// Extra bearer clients: literal Cognito client ids. (A pool-less `store: 'builtin'` block cannot set
 		// them: assertKnownAuthOptions refuses `allowBearerAuth` as an object there.)
 		assertBearerClientIds(this.fullId, opts);
@@ -274,6 +284,9 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 							: undefined,
 						// Pinned explicitly — see `mapFeaturePlan`.
 						featurePlan: mapFeaturePlan(opts.featurePlan),
+						// Audit-only with `activityLog`; unset emits no `UserPoolAddOns`, so the
+						// zero-config pool stays `AuthCognito`'s.
+						standardThreatProtectionMode: mapThreatProtection(opts),
 						// SES sender. Unset emits no `EmailConfiguration` (Cognito's
 						// default sender), so the zero-config pool stays `AuthCognito`'s.
 						email: mapEmailSender(opts.email, cdk.Stack.of(this).region),
@@ -319,6 +332,12 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			// CDK's own SMS role (phone sign-in / verification, SMS MFA): scope its
 			// trust to this account's user pools. See src/cdk/sms-role.ts.
 			if (pool instanceof cognito.UserPool) scopeSmsRoleTrust(pool);
+			if (opts.activityLog === true && pool instanceof cognito.UserPool) {
+				this.activityLogGroup = provisionActivityLog(this, pool, this.fullId, {
+					retention: this.defaults.logRetention,
+					removalPolicy: resolveRemovalPolicy(opts.removalPolicy, this.defaults.removalPolicy),
+				});
+			}
 
 			// ── 1b. validateUser's PreSignUp trigger ────────────────────
 			// Only when the option is set and the pool is ours; otherwise nothing

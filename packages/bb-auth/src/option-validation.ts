@@ -175,14 +175,15 @@ interface GroupOrBooleanSpec {
 /**
  * An options group must be walked (not `'value'`), so its own keys are checked
  * too; a group that also accepts a boolean must type-check it (`orBoolean`).
- * A `boolean` option must be `'boolean'`, so its value is type-checked.
+ * A `boolean` option must be `'boolean'`, so its value is type-checked, also
+ * when the other store types it as an option error (`activityLog`).
  */
 type SpecFor<V> =
 	true extends IsGroup<NonNullable<V>>
 		? [Extract<NonNullable<V>, boolean>] extends [never]
 			? Exclude<Spec, 'value' | 'boolean'>
 			: GroupOrBooleanSpec
-		: [NonNullable<V>] extends [boolean]
+		: [Exclude<NonNullable<V>, { readonly __blocksOptionError: string }>] extends [boolean]
 			? 'boolean'
 			: Exclude<Spec, 'boolean'>;
 
@@ -450,6 +451,7 @@ export const AUTH_OPTIONS_SHAPE = {
 	removalPolicy: 'value',
 	deletionProtection: 'boolean',
 	featurePlan: 'value',
+	activityLog: 'boolean',
 	email: { object: EMAIL_SENDER },
 	logger: 'value',
 	audit: 'value',
@@ -765,6 +767,7 @@ export const COGNITO_ONLY_KEYS = [
 	'admin',
 	'userPool',
 	'featurePlan',
+	'activityLog',
 	'email',
 	'codeDelivery',
 	'totpVerification',
