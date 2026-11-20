@@ -306,7 +306,7 @@ function resolveProjectRoot(options: DashboardOptions, args: DashboardArgs): str
 	if (resolution.shadowed.length > 0) {
 		console.warn(
 			`Using the AWS CDK Blocks project at ${resolution.project.path}; ` +
-				`passed over ${resolution.shadowed.length} other AWS CDK Blocks project(s):`,
+				`passed over ${resolution.shadowed.length} other CDK Blocks project(s):`,
 		);
 		for (const other of resolution.shadowed) console.warn(`  ${other}`);
 	}

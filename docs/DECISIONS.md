@@ -1,6 +1,6 @@
 # Architectural Decisions
 
-This document records significant decisions made during CDK Blocks development, including rationale and alternatives considered. This document should be updated when the technical design changes.
+This document records significant decisions made during AWS CDK Blocks development, including rationale and alternatives considered. This document should be updated when the technical design changes.
 
 ## Format
 

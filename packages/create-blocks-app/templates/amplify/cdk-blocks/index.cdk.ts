@@ -1,5 +1,5 @@
 /**
- * CDK Blocks entry point for Amplify Gen 2 integration.
+ * CDK Blocks CDK entry point for Amplify Gen 2 integration.
  *
  * This file is imported by amplify/blocks.ts to wire CDK Blocks into the Amplify backend.
  * It is NOT a standalone CDK app — Amplify's `ampx` CLI orchestrates synthesis.

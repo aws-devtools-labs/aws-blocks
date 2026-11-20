@@ -1,6 +1,6 @@
 # Building Block API Design Guidelines
 
-This document provides API design guidance for CDK Blocks Building Blocks and defines the template used for preliminary BB design documents (`BB-*.md`).
+This document provides API design guidance for AWS CDK Blocks Building Blocks and defines the template used for preliminary BB design documents (`BB-*.md`).
 
 ## Part 1: API Design Guidance
 

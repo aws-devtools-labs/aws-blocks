@@ -1,6 +1,6 @@
 # blocks_codegen
 
-Code generator for the Blocks Dart SDK. Reads an OpenRPC spec and writes one Dart file: an API class per namespace, a `Blocks` facade, models, sealed classes for unions, and enums.
+Code generator for the AWS CDK Blocks Dart SDK. Reads an OpenRPC spec and writes one Dart file: an API class per namespace, a `Blocks` facade, models, sealed classes for unions, and enums.
 
 ## Usage
 

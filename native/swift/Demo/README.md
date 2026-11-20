@@ -29,7 +29,7 @@ mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
 npm run dev
 ```
 
-The Blocks API runs on `http://localhost:3001`. The dev-server console prints sign-up verification codes instead of sending email.
+The AWS CDK Blocks API runs on `http://localhost:3001`. The dev-server console prints sign-up verification codes instead of sending email.
 
 ## 2. Generate the Spec File
 

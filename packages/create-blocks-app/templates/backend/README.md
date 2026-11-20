@@ -1,6 +1,6 @@
-# Blocks Backend Application
+# AWS CDK Blocks Backend Application
 
-Backend-only TypeScript API with AWS CDK Blocks — no frontend included.
+Backend-only TypeScript API with CDK Blocks — no frontend included.
 
 ## Getting Started
 

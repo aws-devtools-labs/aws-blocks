@@ -235,7 +235,7 @@ Skip this for a Next.js app: `next build` ignores project references when it typ
 
   Then add `{ "path": "../shared" }` to `references` in `cdk-blocks/tsconfig.json`, and `{ "path": "./shared" }` to those of `tsconfig.app.json`.
 - A backend method whose signature uses a Node type, such as one that returns a `Buffer`, reads as `any` in the frontend, with no error (`skipLibCheck` hides it). Return plain JSON-serializable values from API methods.
-- [TROUBLESHOOTING.md](../../packages/blocks/TROUBLESHOOTING.md#typescript-errors-in-aws-blocks-from-the-frontend) lists the errors of this layout, including `TS2742` under pnpm.
+- [TROUBLESHOOTING.md](../../packages/blocks/TROUBLESHOOTING.md#typescript-errors-in-cdk-blocks-from-the-frontend) lists the errors of this layout, including `TS2742` under pnpm.
 
 ## Keep the next upgrade from surprising you
 

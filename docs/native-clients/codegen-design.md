@@ -1,6 +1,6 @@
 # Native Client Codegen — Design
 
-This is the design rationale for how CDK Blocks serves typed native clients (Swift, Kotlin, Dart) from a TypeScript API. It documents *why* the pipeline is shaped the way it is. For *how to write APIs that codegen well*, see [`schema-generation-guide-for-devs.md`](./schema-generation-guide-for-devs.md).
+This is the design rationale for how AWS CDK Blocks serves typed native clients (Swift, Kotlin, Dart) from a TypeScript API. It documents *why* the pipeline is shaped the way it is. For *how to write APIs that codegen well*, see [`schema-generation-guide-for-devs.md`](./schema-generation-guide-for-devs.md).
 
 ---
 
