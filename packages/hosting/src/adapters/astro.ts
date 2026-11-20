@@ -34,6 +34,7 @@ import { emitTrailingSlashRedirects } from './shared/trailing_slash.js';
 import { warnIfVercelCron } from './shared/feature_warnings.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import fg from 'fast-glob';
 import semver from 'semver';
 import { createJiti } from 'jiti';
@@ -208,6 +209,7 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
           clientDir,
           serverDir,
           output,
+          pagesDir: path.join(resolveSrcDir(projectDir, config.srcDir), 'pages'),
         });
 
   // Astro's `/_image` endpoint runs INSIDE the SSR Lambda (no separate image
@@ -346,6 +348,12 @@ type AstroConfigShape = {
      */
     service?: { entrypoint?: string; config?: unknown };
   };
+  /**
+   * The project's source directory (default `./src`). Its `pages/` folder is
+   * checked before a `public/` folder is routed to S3 as a whole (see
+   * {@link publicFileRoutes}).
+   */
+  srcDir?: string | URL;
 };
 
 /**
@@ -1063,13 +1071,15 @@ const buildSsrManifest = (input: {
   clientDir: string;
   serverDir: string;
   output: AstroOutput;
+  /** The project's `src/pages` folder, for {@link publicFileRoutes}. */
+  pagesDir: string;
 }): DeployManifest => {
   // P1.6: bare and subtree forms are emitted unconditionally for
   // prerendered routes; the `emitTrailingSlashRedirects` post-pass
   // produces the canonical 308 if the user wants one. The
   // `trailingSlash` mode is read at the top-level adapter and used
   // there, not here.
-  const { distDir, clientDir, serverDir, output } = input;
+  const { distDir, clientDir, serverDir, output, pagesDir } = input;
 
   // bundle: dist/  — so the Lambda zip has `server/` and `client/` as
   // siblings; @astrojs/node's standalone runtime walks `import.meta.url`
@@ -1162,10 +1172,73 @@ const buildSsrManifest = (input: {
     }
   }
 
+  // The files Astro copies from `public/` into `dist/client/` (robots.txt,
+  // favicons, downloads) are static too: route them to S3 so no front door
+  // sends them through the SSR server (see `publicFileRoutes`).
+  routes.push(...publicFileRoutes(clientDir, pagesDir));
+
   routes.push({ pattern: '/*', target: 'default' });
   manifest.routes = dedupeRoutes(routes);
 
   return manifest;
+};
+
+/** The project's source directory: `srcDir` from astro.config (a path or a `file:` URL), default `<project>/src`. */
+const resolveSrcDir = (projectDir: string, srcDir: string | URL | undefined): string => {
+  if (srcDir instanceof URL) return srcDir.protocol === 'file:' ? fileURLToPath(srcDir) : path.join(projectDir, 'src');
+  if (typeof srcDir === 'string' && srcDir.length > 0) {
+    return srcDir.startsWith('file:') ? fileURLToPath(srcDir) : path.resolve(projectDir, srcDir);
+  }
+  return path.join(projectDir, 'src');
+};
+
+/** Root-level HTML files that are never a file route: the index (the server's `/`) and the error pages. */
+const ROOT_AND_ERROR_HTML = new Set(['index.html', '404.html', '500.html']);
+
+/**
+ * Static (S3) routes for the top-level entries of an SSR build's
+ * `dist/client/` that come from `public/`, so every front door serves them
+ * from the assets bucket instead of the SSR server (which, behind a proxy
+ * door, also caps a response at the door's limit — 1 MB behind an ALB).
+ *
+ *   - a file → `/<name>` (an exact path, so it never shadows a page; Astro
+ *     itself serves a public file ahead of a page with the same path);
+ *   - a folder → `/<name>/*`, only when no page can render under it: the
+ *     folder holds no HTML (prerendered pages are routed one by one above),
+ *     and `src/pages` has no `<name>` entry and no top-level dynamic page
+ *     (`[slug].astro`, `[...path]/`). Otherwise the folder stays with the
+ *     server, which serves its files as before. Without a readable
+ *     `src/pages` (routes injected by integrations only) no folder is routed.
+ *
+ * `_astro/` (hashed assets) is routed by the caller.
+ */
+const publicFileRoutes = (clientDir: string, pagesDir: string): RouteBehavior[] => {
+  if (!fs.existsSync(clientDir)) return [];
+  let pageEntries: string[] | undefined;
+  try {
+    pageEntries = fs.readdirSync(pagesDir);
+  } catch {
+    pageEntries = undefined;
+  }
+  const hasDynamicTopLevelPage = pageEntries?.some((name) => name.startsWith('[')) ?? true;
+  const pageClaims = (name: string): boolean =>
+    pageEntries === undefined ||
+    hasDynamicTopLevelPage ||
+    pageEntries.some((entry) => entry === name || entry.startsWith(`${name}.`));
+  const routes: RouteBehavior[] = [];
+  for (const entry of fs.readdirSync(clientDir, { withFileTypes: true })) {
+    if (entry.name === '_astro') continue;
+    if (entry.isFile()) {
+      if (ROOT_AND_ERROR_HTML.has(entry.name)) continue;
+      routes.push({ pattern: `/${entry.name}`, target: 'static' });
+      continue;
+    }
+    if (!entry.isDirectory()) continue;
+    const holdsHtml = fg.sync('**/*.html', { cwd: path.join(clientDir, entry.name), dot: true }).length > 0;
+    if (holdsHtml || pageClaims(entry.name)) continue;
+    routes.push({ pattern: `/${entry.name}/*`, target: 'static' });
+  }
+  return routes;
 };
 
 const detectErrorPages = (
