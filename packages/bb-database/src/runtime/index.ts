@@ -179,7 +179,7 @@ async function runTransaction<T>(
 	}
 }
 
-// An ApiError, a branded Blocks error or one of DatabaseErrors passes through. Anything else (a driver
+// An ApiError, a branded CDK Blocks error or one of DatabaseErrors passes through. Anything else (a driver
 // error, a plain Error) becomes TransactionFailed so its text never leaves the server.
 function asTransactionError(e: unknown): Error {
 	const error = asError(e);

@@ -292,7 +292,7 @@ export type HostingProps = {
    * ```
    *
    * @remarks The marker form (`secret()` / `config()`) is wired by the
-   * `HostingConstruct` / Blocks `Hosting` today; `defineHosting` gains it with the
+   * `HostingConstruct` / CDK Blocks `Hosting` today; `defineHosting` gains it with the
    * Amplify hosting integration.
    */
   environment?: Record<string, string>;

@@ -710,7 +710,7 @@ With `allowBearerAuth: true`, the guards also accept `Authorization: Bearer <acc
 - With `allowBearerAuth: { clientIds }` (default store only): also access tokens from other app clients of the same pool, for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)).
 - The session cookie wins when a request carries both.
 - A bearer token stays valid after `signOut()` until it expires.
-- The AWS CDK Blocks native SDKs use the session cookie, not a bearer token.
+- The CDK Blocks native SDKs use the session cookie, not a bearer token.
 
 Details: [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth--bearerts).
 
@@ -1124,7 +1124,7 @@ final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.okta, launch
 
   A `clientIds` entry can be a literal id or a CDK token: the block forwards the list through its deployed config, so a token resolves at deploy time.
 
-  **A pool Amplify Gen 2 created** (or any pool created elsewhere in the same CDK app): wrap it with `Auth.fromExisting` and pass the ids as tokens. The backend module is loaded while the CDK app synthesizes, so hand them over before creating the Blocks backend:
+  **A pool Amplify Gen 2 created** (or any pool created elsewhere in the same CDK app): wrap it with `Auth.fromExisting` and pass the ids as tokens. The backend module is loaded while the CDK app synthesizes, so hand them over before creating the CDK Blocks backend:
 
   ```typescript
   // amplify/blocks.ts

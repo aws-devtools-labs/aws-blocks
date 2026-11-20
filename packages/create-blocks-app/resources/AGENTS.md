@@ -5,13 +5,13 @@
 - **Backend:** `cdk-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'cdk-blocks'`
 - **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class from `aws-cdk-blocks`, along with the block's errors constant where it has one there (e.g. `KVStore`, `KVStoreErrors`; `Realtime`, `Compute` and `Tracer` come without one); browser code and tests import client helpers from `aws-cdk-blocks/client`.
-- **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
+- **Tests:** Run `test/e2e.test.ts` with `npm run test:e2e`. When the API changes, update the tests to exercise the new behavior; keep the `test/` directory and the `test:e2e` script.
 - **Script names:** In an existing project, look in `package.json` under `scripts` for the `aws-cdk-blocks/run` entry with the matching trailing command. Use its actual script name if an overlay preserved an existing name.
-- **AWS CDK Blocks docs:** `npm run docs` is the docs command for this app's Building Blocks and AWS CDK Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npm run docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`npm run docs KVStore -- --section local` for how it behaves on your machine), `npm run docs:api KVStore` prints exact signatures, `npm run docs -- --exports [filter]` lists what you can import and from which entry, `npm run docs:search <term>` searches all the docs, and `npm run docs -- --help` shows every option.
+- **AWS CDK Blocks docs:** `npm run docs` is the docs command for this app's Building Blocks and CDK Blocks APIs. It answers types, signatures and how a block behaves, so there's no need to open the packages' source unless necessary. With no arguments it lists the blocks; name one or more blocks or APIs to print their docs: `npm run docs KVStore Auth`. A name can be a block, an export, a type, a function, an option or a method (`ApiError`, `AuthState`, `submitAuthAction`, `ifFieldEquals`, `Secret.get`): it prints the import line, the declaration and the docs about it. `--section <topic>` prints the part of a block's docs about a topic (`npm run docs KVStore -- --section local` for how it behaves on your machine), `npm run docs:api KVStore` prints exact signatures, `npm run docs -- --exports [filter]` lists what you can import and from which entry, `npm run docs:search <term>` searches all the docs, and `npm run docs -- --help` shows every option.
 
 ## Framework model
 
-These are the load-bearing facts about how a Blocks app fits together. Knowing them up front means you do **not** have to reverse-engineer the wiring or read every block doc before you can build.
+These are the load-bearing facts about how a CDK Blocks app fits together. Knowing them up front means you do **not** have to reverse-engineer the wiring or read every block doc before you can build.
 
 ### Backend defines APIs; the frontend imports the same names as a typed client
 
@@ -105,7 +105,7 @@ When the app is complete, a signed-out user reaches the sign-in form from the fi
 
 ### The deployed frontend finds the backend on its own
 
-You do **not** wire an API URL into the frontend. The imported client resolves the API endpoint itself at runtime: locally, the dev server serves the backend and its config together (`npm run dev` in a fresh app, or `npm run dev:server` when Blocks was added to an existing project; it exposes `/.blocks-sandbox/config.json`); once deployed, the client reads the config served from the hosting origin, where the frontend and API sit same-origin. So build against the imported client and let the framework resolve the URL — don't hardcode one or curl-hunt for the API base.
+You do **not** wire an API URL into the frontend. The imported client resolves the API endpoint itself at runtime: locally, the dev server serves the backend and its config together (`npm run dev` in a fresh app, or `npm run dev:server` when CDK Blocks was added to an existing project; it exposes `/.blocks-sandbox/config.json`); once deployed, the client reads the config served from the hosting origin, where the frontend and API sit same-origin. So build against the imported client and let the framework resolve the URL — don't hardcode one or curl-hunt for the API base.
 
 ### Minimal end-to-end example
 
@@ -201,14 +201,14 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 ## Workflow
 
 1. Make changes to backend (`cdk-blocks/index.ts`) or frontend (`src/`)
-2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on the dev port (`package.json` `"blocks.dev.port"`, see step 3), wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes. When a test run started its own server, it has stopped it by the time it exits, so there is nothing to stop or check afterwards.
+2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on the dev port (`package.json` `"blocks.dev.port"`, see step 3), wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes. When a test run started its own server, it has stopped it by the time it exits, so there is nothing to stop or check afterwards. Run the local tests before `npm run deploy`; the scaffolded suite uses mocks without AWS credentials when `TEST_URL` is unset. If you added tests that require external access and cannot run them, tell the user what was not verified before deploying. After a frontend change, also check the page in a browser.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.
    - Run `npm run test:e2e` as often as needed; it reuses the server running on the `package.json` `"blocks.dev.port"` (default 3000, or 3001 for a backend-only app), and calls only that server, also after a deploy. To use another port, set it there rather than passing `npm run dev -- --port`, so the tests and `npm run dev:stop` find the same server. To run the tests against a deployed app instead, set `TEST_URL` to the URL its API is under (the frontend URL `npm run deploy` prints, or the API URL without `/cdk-blocks/api`).
    - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
    - Restart only to check restart or persistence behavior (local data in `.cdk-blocks/local/data/` survives restarts). Add no sleeps or port checks: the test setup already waits for readiness.
    - Read a block doc section once. Open `.d.ts` files or source only for a concrete unanswered question or an observed error.
-4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
+4. Do NOT use curl or fetch against the local API as the functional test: add the check to `test/e2e.test.ts`; raw calls are for troubleshooting connectivity or checking a deployed app.
 
 ### Calling the API directly (troubleshooting only)
 
@@ -224,13 +224,13 @@ curl -X POST http://localhost:3000/cdk-blocks/api \
 - `params` is a positional array.
 - Errors return HTTP `200` with an `{"error":{...}}` body — check the body, not the status.
 - Auth is an `HttpOnly` session cookie: save it on sign-in with `curl -c cookies.txt` and resend it with `-b cookies.txt`.
-- More examples: `npm run docs troubleshooting` (see the **AWS CDK Blocks docs** bullet above).
+- More examples: `npm run docs troubleshooting` (see the **CDK Blocks docs** bullet above).
 
 ## Rules
 
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
 - **To store data, use `KVStore`** — for app records you list or query as a collection (todos, notes, orders), give the store a `schema` and a `key`; for values you read and write by one key (settings, flags, caches, sessions, per-user preferences), use it with no options. Decide before you create the store: a store cannot change its key. It is constructed with a `Scope` and used inside your API methods; read its docs (`npm run docs KVStore`, with `--api` for exact signatures) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is `npm run docs`.
-- **The framework model above covers the common path.** Read a block's own docs (`npm run docs <Block>...`, with `--api` for exact signatures) when you need a block's specific API surface (see the **AWS CDK Blocks docs** bullet).
+- **The framework model above covers the common path.** Read a block's own docs (`npm run docs <Block>...`, with `--api` for exact signatures) when you need a block's specific API surface (see the **CDK Blocks docs** bullet).
 
 ## Deploying (requires AWS credentials)
 
@@ -244,7 +244,7 @@ curl -X POST http://localhost:3000/cdk-blocks/api \
 
 If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile, the deployment Region and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script. If the message first lists `aws configure set region <region> --profile <name>`, that command changes the user's AWS config: include it when you ask, and run it before the sign-in.
 
-If either command stops with `CDK is not bootstrapped in Region <region> of account <account-id>`, the message includes the command that fixes it: `npx cdk bootstrap aws://<account-id>/<region> --app=`, run from the project directory. Bootstrapping is needed once per account and Region, takes a few minutes, and creates IAM roles and other resources in the user's account: ask the user before you run it, then re-run the npm script.
+If either command stops with `CDK is not bootstrapped in Region <region> of account <account-id>`, copy the bootstrap command it prints, including `--profile` if present. This specific preflight error always includes the command. For other CDK errors, inspect the output rather than guessing a bootstrap command. Bootstrapping creates IAM roles and other resources in the user's account: ask the user before running it. Run it once per account and Region from the project directory, then re-run the npm script.
 
 Before deploying, both commands print `Deployment target: <credentials>, Region <region>`, where the credentials are for example `AWS profile <name>` or `access keys in AWS_ACCESS_KEY_ID`, then the account name and plan. When the credentials are the AWS-managed role of the new AWS sign-up experience, a link to `https://settings.aws.com/billing` follows; other accounts get no link. The deploy does not pause: if the credentials or Region are not the ones the user expects, stop the command (Ctrl-C) and ask. `Account name: not available` or `Account plan: not available` is not an error: the deploy continues. Never change a spend limit yourself. When the output has the billing link, give it to the user, and ask them to verify in AWS Settings that the project they manage matches the CLI deployment target. If the user signs in with `aws login`, the profile Region must be set to the project's Region before sign-in (`aws configure set region <region> --profile <name>`); after changing it, they run `aws login` again.
 
@@ -256,7 +256,7 @@ If you will immediately self-test the frontend, add `npm run deploy -- --wait-li
 
 **Stack naming.** The deploy scripts name stacks from `stackId` in `.cdk-blocks/config.json` (generated at scaffold time, e.g. `my-app-a3x9kf`): production is `<stackId>-prod`, sandbox is `<stackId>-<username>-<random>`. Use these names when inspecting stacks (e.g. `aws cloudformation describe-stacks --stack-name <stackId>-prod`). To rename, edit `stackId`; for computed names, edit `cdk-blocks/index.cdk.ts`. A stack name must not start with `aws` in any letter case: the deploy stops at synth with an error that names the fix.
 
-## Blocks CLI
+## CDK Blocks CLI
 
 Run the npm scripts from the app root. They load the installed `aws-cdk-blocks/run` entry without downloading a CLI. Pass positional arguments directly (`npm run docs KVStore`) and put flags after `--` (`npm run dev -- --port 4000`).
 

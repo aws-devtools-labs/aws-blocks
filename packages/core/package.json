@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/core",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "keywords": [
     "aws-blocks",
     "framework",
@@ -26,6 +26,7 @@
   "files": [
     "dist",
     "README.md",
+    "SHARED-ACCOUNT.md",
     "src",
     "!src/**/*.test.json",
     "LICENSE"

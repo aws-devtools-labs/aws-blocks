@@ -21,7 +21,7 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
-// Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
@@ -92,7 +92,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `greet` with your own methods.
-test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
+test('app: server serves its AWS CDK Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });

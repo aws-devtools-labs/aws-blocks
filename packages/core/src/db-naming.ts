@@ -7,7 +7,7 @@
  * connection string.
  *
  * The connection-string parameter name is **stack-scoped** (embeds the
- * deployment's stack name), so two Blocks apps in the same account + region +
+ * deployment's stack name), so two CDK Blocks apps in the same account + region +
  * stage get distinct names and cannot overwrite each other's credentials.
  *
  * One call site computes the name: the sandbox cleanup (`deleteSandboxSecrets`

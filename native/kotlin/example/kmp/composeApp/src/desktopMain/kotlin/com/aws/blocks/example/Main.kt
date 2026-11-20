@@ -7,7 +7,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 
 fun main() = application {
-    Window(onCloseRequest = ::exitApplication, title = "Blocks KMP Example") {
+    Window(onCloseRequest = ::exitApplication, title = "AWS CDK Blocks KMP Example") {
         App()
     }
 }

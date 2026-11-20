@@ -657,7 +657,7 @@ export class KnowledgeBase extends Scope {
 	/**
 	 * List the data source's ingestion jobs (most recent first) and return the
 	 * latest summary, or `undefined` when none exist yet. SDK errors are mapped
-	 * to Blocks error constants via {@link mapSdkError}.
+	 * to CDK Blocks error constants via {@link mapSdkError}.
 	 */
 	private async fetchLatestIngestionJob(
 		knowledgeBaseId: string,

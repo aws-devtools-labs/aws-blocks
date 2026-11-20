@@ -84,7 +84,7 @@ describe('create-blocks-app template .gitignore covers secrets', () => {
       }
     });
 
-    // Adding AWS Blocks to an existing project ignores `node_modules` too; keep the two in step.
+    // Adding CDK Blocks to an existing project ignores `node_modules` too; keep the two in step.
     it(`template "${name}" ignores node_modules`, () => {
       copyFileSync(join(templateDir, 'gitignore'), join(repo, '.gitignore'));
       assert.strictEqual(checkIgnore('node_modules/pkg/index.js').status, 0);
@@ -92,7 +92,7 @@ describe('create-blocks-app template .gitignore covers secrets', () => {
   }
 });
 
-// Adding Blocks to an existing project patches its .gitignore instead of
+// Adding CDK Blocks to an existing project patches its .gitignore instead of
 // copying a template one, so the scaffolder has to add the same patterns.
 describe('create-blocks-app adds secret patterns to an existing project .gitignore', () => {
   const CLI_PATH = join(__dirname, 'index.js');

@@ -43,7 +43,9 @@ describe('root help', () => {
 	});
 
 	it('shows the version, global options and the exit codes', () => {
-		assert.match(help, /^CDK Blocks tasks 1\.2\.3\n/);
+		assert.match(help, /^AWS CDK Blocks tasks 1\.2\.3\n/);
+		assert.match(help, /\bdocs +Read the CDK Blocks docs:/);
+		assert.match(help, /\bdocs:search +Search the CDK Blocks docs/);
 		assert.match(help, /-C, --cwd <dir>/);
 		assert.match(help, /--no-input/);
 		assert.match(help, /Exit codes: 0 success, 1 failed, 2 usage error, 130 interrupted, 143 stopped by SIGTERM\./);

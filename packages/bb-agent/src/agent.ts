@@ -231,7 +231,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	protected log: ChildLogger;
 
 	/**
-	 * @param scope - Blocks scope parent (determines resource naming and CDK discovery)
+	 * @param scope - CDK Blocks scope parent (determines resource naming and CDK discovery)
 	 * @param id - unique agent ID (used in resource names, keep short for AppSync namespace limits)
 	 * @param config - developer-facing agent configuration
 	 * @param modelConfig - which model to use, picked by subclass (model.local or model.deployed)

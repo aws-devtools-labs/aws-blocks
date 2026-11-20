@@ -1,11 +1,21 @@
 # Harbor agent check
 
-An opt-in, **non-required** GitHub Actions check for AWS CDK Blocks PRs. It packs the PR head and
+An opt-in GitHub Actions check for CDK Blocks PRs; it is not a required check. It packs the PR head and
 its merge-base, then asks Claude Code to create a todo app, add due dates and add labels in one
-resumed session per trial. The default is one trial per arm (**n=1**): that report is
-descriptive, not a statistical claim. More trials give pass-rate intervals and metric
-differences with uncertainty (see [Trials and statistics](#trials-and-statistics)). Nothing is
+resumed session per trial. The default is one trial per arm
+(see [Trials and statistics](#trials-and-statistics)). Nothing is
 deployed.
+
+## Run the check
+
+Dispatch the workflow from `main` for an open PR. `trials` is optional (1 to 50, default 1):
+
+```sh
+gh workflow run harbor-agent-check.yml --repo aws/cdk-blocks --ref main -f pr_number=123 -f trials=5
+```
+
+The model jobs start after one blocks-team approval (see [Approving a run](#approving-a-run)).
+A new dispatch for the same PR cancels the running one.
 
 ## What runs
 
@@ -24,8 +34,8 @@ deployed.
    saves a [phase snapshot](#phase-snapshots), checks package provenance, runs `npm run build`,
    starts `npm run dev` as `node` and drives Chromium (`ui.mjs`) through every behavior added so
    far. Contract controls are located by accessible name among form fields only. It then checks
-   that the records it created appear under the app's Blocks mock data directory (`.cdk-blocks/local/data`), a
-   heuristic that catches storage outside Blocks but not a backend writing its own files there.
+   that the records it created appear under the app's CDK Blocks mock data directory (`.cdk-blocks/local/data`), a
+   heuristic that catches storage outside CDK Blocks but not a backend writing its own files there.
    Finally it restarts the server and checks the records again in a fresh browser context.
 6. Each trial uploads its allowlisted result as artifact `harbor-result-<arm>-<trial>` and, when
    configured, its redacted raw trace to a [private bucket](#private-traces).
@@ -56,13 +66,14 @@ triggered. It is reported, never required.
 
 ## Package provenance
 
-Each arm has a loopback registry (`registry.mjs`) that serves only that arm's `@aws-cdk-blocks/*`
-tarballs and logs requests. Third-party packages come from public npm. `provenance.py` requires
-that the scaffolder tarball was served and that every installed `@aws-cdk-blocks/*` package in the
-app has the arm's lockfile version, registry URL and integrity, was served, and matches the
-packed bytes. The backend must import `@aws-cdk-blocks/*` and expose an `ApiNamespace`.
+Each arm has a loopback registry (`registry.mjs`) that serves that arm's `aws-cdk-blocks`
+and `@aws-cdk-blocks/*` tarballs and logs requests. Third-party packages come from public
+npm. `provenance.py` checks that the scaffolder was served and verifies installed CDK Blocks
+packages against the arm's registry and packed bytes. The backend can import the umbrella
+or scoped CDK Blocks packages and must expose an `ApiNamespace`.
 
-Byte-identical packages in both arms make the run an **A/A infrastructure demonstration**.
+When both arms pack byte-identical packages the run compares the harness with itself (A/A):
+any difference between arms is noise.
 
 ## Accounting
 
@@ -72,13 +83,13 @@ change, missing counter or decrease stays unavailable, never zero. Rows with a f
 incomplete phase are marked not comparable.
 
 List-price cost (the CLI's estimate, not AWS billing) depends on whose prompt cache served a
-prefix: a session that starts while another has the same prefix cached reads it instead of
-writing it, and a long tool call can let a cache entry expire. The primary metric is therefore
-**cache-neutral cost**: each call's context growth priced as a cache write, the rest of its
-processed input as a cache read, and output at the output price, from the per-call usage in the
-stream and the list prices in `pins.py`. *Input processed* (input + cache write + cache read) is
-reported alongside. New input and cache read stay as descriptive columns and are not compared
-across arms.
+prefix, so it is not the primary metric. The report shows:
+
+- **Cache-neutral cost**, the primary metric: each call's context growth priced as a cache write,
+  the rest of its processed input as a cache read, and output at the output price, from the
+  per-call usage in the stream and the list prices in `pins.py`.
+- *Input processed* (input + cache write + cache read), reported alongside.
+- New input and cache read, as descriptive columns that are not compared across arms.
 
 Each result also records the storage block the backend constructs (`kv_store`,
 `distributed_table`, `database`, `file_bucket`, `multiple`, `none` or
@@ -88,18 +99,21 @@ within-block difference when both arms have at least 3 passes.
 
 Bounds: 200 turns and 25 minutes per phase, 5 minutes per verifier, 100 minutes per Harbor
 process, 110 minutes per trial job. No retries. Claude Code also stops a session at
-`--max-budget-usd 10`, its own list-price estimate (passing sessions use about 1.30 USD for all
-three phases); this bounds a runaway session, not what the credentials allow.
+`--max-budget-usd 10`, its own list-price estimate; this bounds a runaway session, not what the
+credentials allow.
 
-In CI the Bedrock session lasts `HARBOR_SESSION_SECONDS` (2,700 s, in the workflow; the run step
-took at most 1,125 s, p95 882 s, over 284 trials). `run.py --credentials-expire-at` stops Harbor at
+In CI the Bedrock session lasts `HARBOR_SESSION_SECONDS` (2,700 s, set in the workflow).
+`run.py --credentials-expire-at` stops Harbor at
 that deadline and records the trial as an infrastructure error (`outlived_credentials`), since its
-late phases could fail on expired credentials alone. The session is tied to the run step: it is
-assumed directly before that step, it is no longer than `run.py`'s own 6,000 s Harbor timeout, and
-the step's `timeout-minutes` (47) stops it about 2 minutes after the session ends (the test
-allows at most 180 s).
-`scripts/ci/harbor-credentials.test.mjs` checks all three. A run that finishes early does not
-revoke the session: it stays valid until it expires.
+late phases could fail on expired credentials alone. The session is tied to the run step.
+`scripts/ci/harbor-credentials.test.mjs` checks three invariants:
+
+- The session is assumed directly before the run step.
+- The session is no longer than `run.py`'s own 6,000 s Harbor timeout.
+- The step's `timeout-minutes` (47) stops it about 2 minutes after the session ends (the test
+  allows at most 180 s).
+
+A run that finishes early does not revoke the session: it stays valid until it expires.
 
 ## Trials and statistics
 
@@ -132,8 +146,7 @@ directory but with `.cdk-blocks/local/data` and the lockfile, plus `verifier-sta
 verifier's record list seeded by the earlier phases. Writing it first means it exists whether
 the checks pass, fail or time out; a snapshot error is logged and never fails the phase. Harbor
 moves each phase's `/logs/verifier` into `steps/<phase>/verifier/`, so every phase keeps its own
-snapshot. Restoring one and running a phase's verifier against other packages is the planned
-cross-version replay. `public_result.py` reads only fixed JSON fields, so snapshots are never
+snapshot. `public_result.py` reads only fixed JSON fields, so snapshots are never
 published; they travel only inside the private trace.
 
 ## Private traces
@@ -155,7 +168,7 @@ such as snapshots are unpacked and redacted per member. Symlinks and special fil
 Values are never printed. Other secrets the agent may have produced, or encodings of these
 values, are not detected.
 
-Only then does a fresh `configure-aws-credentials` assume the writer role (1 hour) and upload
+Only then does a fresh `configure-aws-credentials` assume the writer role (900 seconds) and upload
 with `aws s3 cp`. The role may write anywhere under `harbor/v1/`, and the bucket is unversioned,
 so an overwrite would destroy an earlier trace: each trial's session therefore carries an inline
 policy limiting it to its own `run`/`attempt`/`arm`/`trial` prefix. The bucket name is masked in
@@ -183,18 +196,31 @@ PATH="$PWD/.harbor-bench/venv/bin:$PATH" python3 scripts/harbor-bench/calibrate.
 session token); a profile without an expiry cannot flag trials that outlived their credentials.
 Local runs need no S3 bucket or other AWS resources beyond Bedrock access.
 
-`--dry-run` stops after preparing the work dirs and writing `plan.json`: no image build,
-credentials or model calls. A paid run writes `summary.md` and `summary.json`: the aggregate
-report, per-metric coefficients of variation (per arm and pooled), pooled pass rates, the A/A
-differences (their intervals should include zero), and trials per arm for 80% power to detect
-10, 20 and 30% median changes, estimated by resampling the pilot through the report's own
-bootstrap-median rule, plus a two-proportion estimate for a 20-point pass-rate drop. Per trial it also
-records wall time, the host's 1-minute load average (start, end, sampled mean and max), since
-contention biases seconds and timeouts, and whether the trial outlived its exported
-credentials. Such trials count as infrastructure errors and are excluded from pass rates and
-power estimates (`results/` marks them; the raw result stays in the work dir). Raw work dirs,
-redacted `traces/<arm>-<trial>.tar.gz` and `results/` stay under `--output` on the local
-machine: `calibrate.py` never uploads.
+`--dry-run` stops after preparing the work dirs and writing `plan.json`: it skips
+the Docker image build, AWS profile export and model calls. Without `--registry`,
+it still runs the selected revision's npm install, build and pack scripts on the
+host. Use a trusted revision or supply a trusted prepacked registry.
+
+A paid run writes `summary.md` and `summary.json`:
+
+- the aggregate report;
+- per-metric coefficients of variation (per arm and pooled);
+- pooled pass rates;
+- the A/A differences (their intervals should include zero);
+- trials per arm for 80% power to detect 10, 20 and 30% median changes, estimated by resampling
+  the pilot through the report's own bootstrap-median rule;
+- a two-proportion estimate for a 20-point pass-rate drop.
+
+Per trial it also records:
+
+- wall time;
+- the host's 1-minute load average (start, end, sampled mean and max), since contention biases
+  seconds and timeouts;
+- whether the trial outlived its exported credentials. Such trials count as infrastructure
+  errors and are excluded from pass rates and power estimates (`results/` marks them; the raw
+  result stays in the work dir).
+
+Raw work dirs, redacted `traces/<arm>-<trial>.tar.gz` and `results/` stay under `--output`.
 
 ## Repository setup
 
@@ -215,49 +241,47 @@ machine: `calibrate.py` never uploads.
   owner-enforced, encrypted, TLS-only, expiring objects). Unset means traces stay on the runner
   and are discarded.
 
-```sh
-gh workflow run harbor-agent-check.yml --repo aws/cdk-blocks --ref main -f pr_number=123 -f trials=5
-```
+## Approving a run
 
 PR code is built without credentials, but every file packed into the arm's registry, package
-source included, runs in the approved model job: review the candidate before approving. The run
-summary lists the exact revisions and the PR's changed files (at most 50 rows, then "+N more").
-Files that change install or build behavior, or CI config, are marked `!` and listed first:
-anything under `.github/` or a `scripts/` directory at any depth, any `package.json`, lockfile,
-`tsconfig*.json`, `.npmrc` or `.nvmrc`. An unmarked file still runs with the model credentials.
-This workflow, its harness and its task come from the dispatching `main` commit, so a PR's changes
-under `.github/` and `scripts/harbor-bench/` take effect only after merge. When the API lists only
-part of a large PR, the note above the table says how many files were not checked. `changed-files.mjs`
-builds that table from the main checkout, never from the PR. A new dispatch for the same PR cancels
-the running one.
+source included, runs in the approved model job. **Review the candidate before approving.**
+
+- The run summary lists the exact revisions and the PR's changed files (at most 50 rows, then
+  "+N more").
+- Files that change install or build behavior, or CI config, are marked `!` and listed first:
+  anything under `.github/` or a `scripts/` directory at any depth, any `package.json`, lockfile,
+  `tsconfig*.json`, `.npmrc` or `.nvmrc`.
+- An unmarked file still runs with the model credentials.
+- This workflow, its harness and its task come from the dispatching `main` commit, so a PR's
+  changes under `.github/` and `scripts/harbor-bench/` take effect only after merge.
+- When the API lists only part of a large PR, the note above the table says how many files were
+  not checked.
+- `changed-files.mjs` builds that table from the main checkout, never from the PR.
 
 ## Security boundaries
 
 The container gets only the model role's STS credentials, via exec environment. `run.py` strips
 GitHub and OIDC variables before starting Harbor; only the report job can write to the PR.
 Artifacts contain phase metrics, package hashes, tool-name-only traces and fixed verifier check
-IDs, never prompts, commands, output, app files or exception text. Raw traces go only to the
-private bucket, with the model credentials redacted, and the trace role is assumed only after
-the agent's containers are gone. This is not a hostile-code sandbox: the agent can read its
-model credentials and use the network until the session expires, at most `HARBOR_SESSION_SECONDS`
-after it starts, and it stays valid for that long even if the run ends early. The inline session
+IDs, never prompts, commands, output, app files or exception text. This is not a hostile-code
+sandbox: the agent can read its
+model credentials and use the network until the session expires (`HARBOR_SESSION_SECONDS`; see
+[Accounting](#accounting)). The inline session
 policy limits it to invoking the pinned model. Each benchmark job has its own session; the matrix
 has no `max-parallel`, so one run with `trials=N` holds up to 2N sessions at once (100 at the
 50-trial maximum), and runs for different PRs can overlap.
 
 The task runs with `network_mode = "public"`. At run time the container needs Bedrock Runtime in
 `us-east-1` for the agent's model calls and `registry.npmjs.org` for the generated app's
-third-party dependencies (`@aws-cdk-blocks` packages come from the local registry inside the
-container), and the app's own install scripts may download more (for example, Playwright browsers
+third-party dependencies, and the app's own install scripts may download more (for example,
+Playwright browsers
 when the agent runs `playwright install` in its project). The pinned Harbor revision also has an
 `allowlist` mode for Docker, enforced by a sidecar transparent proxy and nftables rules. It is not
-used yet: it adds a third-party proxy image pulled at run time, depends on the runner kernel's
-nftables support, fails the trial when that is missing, and changes what the agent can install
-mid-measurement. Moving to it needs a dispatched run that shows unchanged pass rates.
+used.
 
-The CLI budget cap (`--max-budget-usd 10`) is Claude Code's own list-price estimate for one
-session. It does not apply to calls the agent or PR code makes with the credentials directly, and
-nothing in this repository limits Bedrock spend. The AWS account that hosts `AWS_ROLE_ARN` must
+Nothing in this repository limits Bedrock spend: the CLI budget cap (see
+[Accounting](#accounting)) does not apply to calls the agent or PR code makes with the
+credentials directly. The AWS account that hosts `AWS_ROLE_ARN` must
 have its own control, configured outside this repository: an AWS Budgets budget on Bedrock cost
 for that account with a budget action that applies a deny policy for `bedrock:InvokeModel*` to the
 role (or a service control policy that does the same) when the limit is reached. A budget that only
@@ -273,8 +297,8 @@ the name is assembled at runtime from parts. Changes to `main` go through review
 (repository admins can bypass that review), so a new `harbor-bench` reference needs that review
 instead of a per-run approval.
 
-D-029 in [`docs/DECISIONS.md`](../../docs/DECISIONS.md) records this trade-off and what would
-change it.
+Before changing the approval gate, the session length or the network mode, read D-029 in
+[`docs/DECISIONS.md`](../../docs/DECISIONS.md): it records the conditions for revisiting each.
 
 ## Local verification
 

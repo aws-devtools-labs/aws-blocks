@@ -20,7 +20,7 @@ export interface BlocksThrottling {
 }
 
 /**
- * Where AWS Blocks stores the secrets it generates for its own Building Blocks.
+ * Where CDK Blocks stores the secrets it generates for its own Building Blocks.
  *
  * - `'ssm'`: an SSM Parameter Store SecureString (standard tier, encrypted
  *   with the `aws/ssm` key).
@@ -99,17 +99,17 @@ export interface BlocksDefaults {
 	pointInTimeRecovery: boolean | { retentionDays: number };
 
 	/**
-	 * How long CloudWatch Logs keeps log events written by Blocks-managed log
+	 * How long CloudWatch Logs keeps log events written by CDK Blocks-managed log
 	 * groups (the core handler Lambda, migration/GSI Lambdas, hosting compute,
 	 * `bb-logger`, and API Gateway access logs) before expiring them. Without a
 	 * retention set, AWS keeps log events forever, which grows cost unbounded —
-	 * every Blocks-managed log group reads this default so retention is applied
+	 * every CDK Blocks-managed log group reads this default so retention is applied
 	 * consistently.
 	 */
 	logRetention: RetentionDays;
 
 	/**
-	 * Request-rate limits applied to every Blocks-managed API Gateway stage: the
+	 * Request-rate limits applied to every CDK Blocks-managed API Gateway stage: the
 	 * core shared REST API stage and the `bb-realtime` WebSocket stage. Protects
 	 * the backend from runaway clients and caps blast radius.
 	 * The sandbox preset caps tighter (200/400) than production (1000/2000) so a
@@ -119,7 +119,7 @@ export interface BlocksDefaults {
 	throttling: BlocksThrottling;
 
 	/**
-	 * Whether to emit structured JSON access logs from every Blocks-managed API
+	 * Whether to emit structured JSON access logs from every CDK Blocks-managed API
 	 * Gateway stage to a dedicated CloudWatch log group (retention follows
 	 * {@link logRetention}).
 	 *
@@ -127,10 +127,10 @@ export interface BlocksDefaults {
 	 * (`defaults: { ...BlocksPresets.production, accessLogging: true }`). It is
 	 * off by default (rather than on for production) because enabling it
 	 * provisions the account-level API Gateway CloudWatch Logs role, which is an
-	 * account/region-level singleton: a second Blocks stack in the same
+	 * account/region-level singleton: a second CDK Blocks stack in the same
 	 * account+region that also enables access logging can repoint that role on
 	 * deploy or, on teardown, leave the survivor's access logging broken.
-	 * Enabling it is therefore safe for **one Blocks stack per region** — see
+	 * Enabling it is therefore safe for **one CDK Blocks stack per region** — see
 	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
 	 *
 	 * Because a durable deployment then has no request-level audit trail, a
@@ -161,7 +161,7 @@ export interface BlocksDefaults {
 	accessLogging: boolean;
 
 	/**
-	 * Whether every Blocks-provisioned `FileBucket` ships S3 server access logs to
+	 * Whether every CDK Blocks-provisioned `FileBucket` ships S3 server access logs to
 	 * a dedicated, locked-down log bucket (expired after {@link logRetention}). A
 	 * per-block `accessLogging` option always wins.
 	 *
@@ -182,7 +182,7 @@ export interface BlocksDefaults {
 	storageAccessLogging?: boolean;
 
 	/**
-	 * Where AWS Blocks stores the secrets it generates for its own Building
+	 * Where CDK Blocks stores the secrets it generates for its own Building
 	 * Blocks: the `Auth` session secret and the `Realtime` connection token key.
 	 * Secrets you declare yourself (your own `AppSetting`, `Secret`, or a value
 	 * passed in at the CDK layer) are not affected.
@@ -216,17 +216,17 @@ export interface BlocksDefaults {
 
 	/**
 	 * Place the app's compute and VPC-resident resources in a VPC. Pass a
-	 * standard CDK VPC — Blocks handles Lambda placement, endpoint provisioning
+	 * standard CDK VPC — CDK Blocks handles Lambda placement, endpoint provisioning
 	 * (based on which Building Blocks are in scope), and security-group wiring.
 	 *
 	 * Omit for no VPC (the preset default — Lambda runs in the AWS-managed
-	 * network). A Building Block that can't function without a VPC causes Blocks
+	 * network). A Building Block that can't function without a VPC causes CDK Blocks
 	 * to derive one on demand even when this is unset.
 	 */
 	vpc?: BlocksVpcOptions;
 
 	/**
-	 * An IAM **permissions boundary** attached to every IAM role AWS Blocks
+	 * An IAM **permissions boundary** attached to every IAM role CDK Blocks
 	 * creates for this stack/backend — the shared execution role every handler
 	 * runs as, block-owned helper roles (migration, Bedrock, scheduler, …), the
 	 * CDK custom-resource / `BucketDeployment` / log-retention roles a block
@@ -234,7 +234,7 @@ export interface BlocksDefaults {
 	 * `us-east-1` edge stack).
 	 *
 	 * A boundary is a **ceiling, never a grant**: a role's effective permissions
-	 * are the intersection of its own policies and the boundary. Blocks still
+	 * are the intersection of its own policies and the boundary. CDK Blocks still
 	 * grants each role what it needs; anything the boundary doesn't allow is
 	 * denied at runtime (`AccessDenied`), however it was granted.
 	 *
@@ -257,31 +257,32 @@ export interface BlocksDefaults {
 	 * **Scope.** On a `BlocksStack` it applies to every role in the stack. On an
 	 * embedded `BlocksBackend` it applies to the backend's subtree plus the
 	 * stack-level CDK singleton roles its blocks add; roles your own stack
-	 * already had are not touched. Stacks Blocks doesn't create are out of scope
+	 * already had are not touched. Stacks CDK Blocks doesn't create are out of scope
 	 * — apply a boundary to those yourself with
 	 * `iam.PermissionsBoundary.of(stack).apply(policy)`.
 	 *
 	 * **Interaction with CDK's `@aws-cdk/core:permissionsBoundary` context.**
 	 * The context applies a boundary to every role in every stack of the app.
-	 * When both are set, this option wins for the roles AWS Blocks creates (the
+	 * When both are set, this option wins for the roles CDK Blocks creates (the
 	 * context still applies everywhere else), and synth emits a warning. Either
-	 * one alone bounds every Blocks role.
+	 * one alone bounds every CDK Blocks role.
 	 *
 	 * **One policy for many apps.** A platform can share a single boundary policy
 	 * across every app in an account by writing it with policy variables, e.g.
 	 * `arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}-*`, and tagging each
-	 * app's stack with its `app` name — {@link app} does the tagging, and the core
-	 * README section "Running many apps in one AWS account" documents such a
+	 * app's stack with its `app` name — {@link app} does the tagging, and
+	 * `SHARED-ACCOUNT.md` in `@aws-cdk-blocks/core` (linked from the core README
+	 * section "Running many apps in one AWS account") documents such a
 	 * policy for the platform to write and own. The policy (by name, ARN or
-	 * `IManagedPolicy`) is referenced as-is; Blocks never rewrites its document.
-	 * The synth-time IAM report lists every Blocks role with its boundary and tags,
+	 * `IManagedPolicy`) is referenced as-is; CDK Blocks never rewrites its document.
+	 * The synth-time IAM report lists every CDK Blocks role with its boundary and tags,
 	 * so a pipeline can check both. See the core README section "Running many apps
 	 * in one AWS account".
 	 *
 	 * It caps the blast radius of the shared role; it doesn't split it — every
-	 * Blocks handler still runs as the same role, under the same boundary.
+	 * CDK Blocks handler still runs as the same role, under the same boundary.
 	 *
-	 * @example Cap every Blocks role with a platform-owned boundary policy
+	 * @example Cap every CDK Blocks role with a platform-owned boundary policy
 	 * ```ts
 	 * export const blocksStack = await BlocksStack.create(app, 'my-app', {
 	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -350,7 +351,7 @@ export interface BlocksDefaults {
 	 * and deploys them through one pipeline. Unset in both {@link BlocksPresets};
 	 * unset leaves synthesized templates unchanged.
 	 *
-	 * When set, AWS Blocks:
+	 * When set, CDK Blocks:
 	 * - tags every resource it creates, and every IAM role (including roles in
 	 *   helper stacks such as the `us-east-1` edge stack), with
 	 *   `app=<id>` ({@link BLOCKS_APP_TAG_KEY}), at a priority above the default
@@ -376,8 +377,9 @@ export interface BlocksDefaults {
 	 * a per-app CloudFormation execution role that only creates bounded roles
 	 * tagged as this app, and a deploy guard that keeps the app's deploy role on
 	 * its own stacks. Each app has its own CDK bootstrap, with the app id as its
-	 * qualifier. The platform writes and owns the three policies; the core README
-	 * section "Running many apps in one AWS account" documents each of them, and
+	 * qualifier. The platform writes and owns the three policies; `SHARED-ACCOUNT.md`
+	 * in `@aws-cdk-blocks/core` (linked from the core README section "Running many
+	 * apps in one AWS account") documents each of them, and
 	 * how a pipeline runs synth, which fails on any violation, and confirms the report's
 	 * `app.id`.
 	 *
@@ -397,7 +399,7 @@ export interface BlocksDefaults {
 	appIdentity?: BlocksAppIdentity;
 }
 
-/** The tag key AWS Blocks stamps with {@link BlocksAppIdentity.id} on every resource and role. */
+/** The tag key CDK Blocks stamps with {@link BlocksAppIdentity.id} on every resource and role. */
 export const BLOCKS_APP_TAG_KEY = 'app';
 
 /**
@@ -413,7 +415,7 @@ export interface BlocksAppIdentity {
 	 * app's qualifier: one bootstrap per app, and no two apps share one.
 	 *
 	 * Some ids are reserved, because the app's `<id>-…` / `<id>/…` names would
-	 * include names other apps, AWS Blocks, CDK or AWS share: `cdk` (every app's
+	 * include names other apps, CDK Blocks, CDK or AWS share: `cdk` (every app's
 	 * CDK bootstrap, `cdk-<qualifier>-…`, and CDK's `/cdk/…` parameters), `blocks`,
 	 * `secrets` and `config` (Hosting's `secret()` / `config()` values under
 	 * `blocks/…`), `amplify`, `cf`, `sagemaker` (those services' own buckets and
@@ -474,7 +476,7 @@ export const BlocksPresets = {
 		throttling: { rateLimit: 1000, burstLimit: 2000 },
 		// Off by default even in production: enabling access logging mutates the
 		// account/region-level API Gateway CloudWatch role (a singleton). Opt in
-		// per stack once you've confirmed a single Blocks stack owns it in the
+		// per stack once you've confirmed a single CDK Blocks stack owns it in the
 		// region — see the `accessLogging` field doc.
 		accessLogging: false,
 		secretsStore: 'secrets-manager',

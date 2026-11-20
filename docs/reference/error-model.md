@@ -1,6 +1,6 @@
 # Error model
 
-How AWS Blocks errors are named, thrown, sent to the client and caught. The short version: a Building Block error is identified by its **`name`**, a Building Block constant such as `ConditionalCheckFailedException`. The same `isBlocksError(e, SomeErrors.Foo)` call matches it on the server and in the browser.
+How AWS CDK Blocks errors are named, thrown, sent to the client and caught. The short version: a Building Block error is identified by its **`name`**, a Building Block constant such as `ConditionalCheckFailedException`. The same `isBlocksError(e, SomeErrors.Foo)` call matches it on the server and in the browser.
 
 The decisions behind this are [D-003](../DECISIONS.md) (the `name` crosses the wire) and [G6](../design/API-DESIGN.md) (typed error constants). The code lives in `packages/core/src/errors.ts` and `packages/core/src/rpc.ts`.
 
@@ -28,7 +28,7 @@ export const KVStoreErrors = {
 } as const;
 ```
 
-Keys drop the `Exception` suffix. Values keep it, and the value is what `error.name` is compared against. Reuse an AWS SDK name when it describes something the customer asked for (a conditional write that failed). Use an AWS Blocks name when the AWS one is a generic bucket (`ValidationException`) or describes infrastructure the block hides.
+Keys drop the `Exception` suffix. Values keep it, and the value is what `error.name` is compared against. Reuse an AWS SDK name when it describes something the customer asked for (a conditional write that failed). Use a CDK Blocks name when the AWS one is a generic bucket (`ValidationException`) or describes infrastructure the block hides.
 
 The local mock and the AWS runtime throw the same names, so code that catches an error works the same in local development and in AWS. The `parity.test.ts` suites in `bb-kv-store` and `bb-file-bucket` check this for those blocks.
 

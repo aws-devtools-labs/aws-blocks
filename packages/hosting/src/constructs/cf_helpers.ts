@@ -3,7 +3,7 @@
 
 /**
  * `cf.*` — CloudFront helpers for a free-form front door, and the wiring record
- * behind the one check AWS Blocks runs on a bring-your-own door.
+ * behind the one check CDK Blocks runs on a bring-your-own door.
  *
  * The helpers do two things:
  *   1. turn an origin from the {@link DoorInput} into a CloudFront origin and
@@ -11,7 +11,7 @@
  *      redirects, per-pattern headers and error pages the way the built-in
  *      CloudFront door does (`cf.redirects`, `cf.headers`, `cf.errorPages`), and
  *      declare a post-upload invalidation (`cf.invalidate`);
- *   2. RECORD what they wired. After `build` returns, AWS Blocks reads that
+ *   2. RECORD what they wired. After `build` returns, CDK Blocks reads that
  *      record to confirm the static assets are reachable and, when the app has
  *      an API, that the API paths really reach the API (see `custom_door.ts`).
  *
@@ -262,7 +262,7 @@ export interface CloudFrontHelpers {
    * plus 502/503/504 for an app without a server — as on the built-in
    * CloudFront door), and the behaviors that serve the pages from the static
    * assets. Each response points at the page's own `app.errorPages` key under
-   * the assets origin (e.g. `/404.html`, or `/_not_found.html` for AWS Blocks'
+   * the assets origin (e.g. `/404.html`, or `/_not_found.html` for CDK Blocks'
    * default page). Records the error pages (and the assets origin) as wired.
    * Empty when the app has none.
    *

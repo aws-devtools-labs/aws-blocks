@@ -2,7 +2,7 @@
 
 Key-value and document storage backed by DynamoDB, with optional secondary indexes.
 
-**When to use:** Any data that you read by key. With no options, `KVStore` is a string-keyed store for caches, sessions, feature flags, and config values. With a `schema` and a `key`, it holds app records that you list or query as a collection, such as todos, orders, or messages. Add `indexes` to read the same records by other fields.
+**When to use:** Any data that you read by key. [Pick a form](#pick-a-form) lists the three forms.
 
 **Declare a key for anything you list.** A store fixes its key when you create it. A store with a string key reads one item for each key, and it cannot list its keys in order or by prefix.
 
@@ -12,9 +12,9 @@ The examples import from the umbrella package `aws-cdk-blocks`, which every app 
 
 > Design and mock parity details: [DESIGN.md](./DESIGN.md)
 
-## Pick a form
+For an app that has a `KVStore` from release 0.4.0 or earlier, see [Upgrade from release 0.4.0 or earlier](#upgrade-from-release-040-or-earlier).
 
-Pick the form by how you read the data.
+## Pick a form
 
 | You read the data | Form | Examples |
 |---|---|---|
@@ -71,8 +71,6 @@ const store = new KVStore(scope, id, options?)
 | `KVStore.fromExisting(tableName)` | `ExternalTableRef` | Refer to a DynamoDB table that exists. |
 | `KVStore.fromKmsKey(keyArn)` | `ExternalKmsKeyRef` | Refer to a KMS key that exists. |
 
-For an app that has a `KVStore` from release 0.4.0 or earlier, see [Upgrade from release 0.4.0 or earlier](#upgrade-from-release-040-or-earlier).
-
 `Results` is an `AsyncIterable` of `{ key, value, expiresAt }` entries with one more property, `cursor`. `expiresAt` is present when the item has an expiry. Collect it with `await Array.fromAsync(results)` or read it with `for await`.
 
 **Runtime only.** The data methods run at request time. Call them inside an `ApiNamespace` method, a `RawRoute` handler, a job handler, or a runtime script. Do not call them at the top level of `cdk-blocks/index.ts`. Top-level code runs during CDK synth, where a data method throws an `Error` that reads `KVStore.<method>() cannot be called during CDK synth`. You can construct the block at module scope.
@@ -81,20 +79,58 @@ For an app that has a `KVStore` from release 0.4.0 or earlier, see [Upgrade from
 
 ### Options
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `schema` | `StandardSchemaV1` | Validates every `put` and sets the value types. Required for `key`, `indexes`, and `ttl`. |
-| `key` | `{ partitionKey, sortKey? }` | Names the fields of the value that form the key. Each field is required in the schema and holds a string or a number. The schema must state which: a field that accepts a number is a number key, and any other field is a string key. Without `key`, the key is a string. |
-| `indexes` | `Record<string, { partitionKey, sortKey? }>` | Secondary indexes over fields of the value. |
-| `ttl` | field name | Names the number field of the value that holds the expiry, in Unix epoch seconds. Without `ttl`, the block keeps the expiry outside the value. |
-| `readValidation` | `'off' \| 'coerce' \| 'strict'` | How a read reconciles a stored value with `schema`. Defaults to `'coerce'`. See [Reads and schema changes](#reads-and-schema-changes). |
-| `protection` | `'disposable' \| 'retained' \| 'locked'` | How hard the table is to destroy. Defaults to the stack `defaults`. |
-| `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | Continuous backups. Defaults to the stack `defaults`. |
-| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | The key for encryption at rest. Defaults to `'aws-managed'`. |
-| `table` | `ExternalTableRef` | Use a table that exists. See [Use a table that exists](#use-a-table-that-exists). |
-| `logger` | `ChildLogger` | A logger for internal operations. Defaults to a logger at warn level. |
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `schema` | `StandardSchemaV1` | none | Validates every `put` and sets the value types. Required for `key`, `indexes`, and `ttl`. |
+| `key` | `{ partitionKey, sortKey? }` | a string key | Names the fields of the value that form the key. Each field is required in the schema and holds a string or a number. The schema must state which: a field that accepts a number is a number key, and any other field is a string key. |
+| `indexes` | `Record<string, { partitionKey, sortKey? }>` | none | Secondary indexes over fields of the value. |
+| `ttl` | field name | none | Names the number field of the value that holds the expiry, in Unix epoch seconds. Without `ttl`, the block keeps the expiry outside the value. |
+| `readValidation` | `'off' \| 'coerce' \| 'strict'` | `'coerce'` | How a read reconciles a stored value with `schema`. See [Reads and schema changes](#reads-and-schema-changes). |
+| `protection` | `'disposable' \| 'retained' \| 'locked'` | the stack `defaults` | How hard the table is to destroy. See [Durability and security defaults](#durability-and-security-defaults). |
+| `pointInTimeRecovery` | `boolean \| { retentionDays: number }` | the stack `defaults` | Continuous backups. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | `'aws-managed'` | The key for encryption at rest. |
+| `table` | `ExternalTableRef` | a new table | Use a table that exists. See [Use a table that exists](#use-a-table-that-exists). |
+| `logger` | `ChildLogger` | a logger at warn level | A logger for internal operations. |
 
 The mock and browser runtimes ignore `protection`, `pointInTimeRecovery`, and `encryption`.
+
+## Errors
+
+Match an error by name with `isBlocksError`. See the catch in [Rewrite a store of strings as objects](#rewrite-a-store-of-strings-as-objects).
+
+| Constant | `error.name` | Thrown when |
+|----------|--------------|-------------|
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
+| `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value or an expiry is not valid. The causes are listed below. |
+| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape. The causes are listed below. |
+| `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
+| `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |
+
+`ValidationFailedException` is thrown for a value that:
+
+- fails the schema
+- disagrees with its key
+- has a `_bkv_` field or a `__proto__` field
+- has an empty string in a key field or an indexed field
+- has a key or indexed field over DynamoDB's size limit (2,048 bytes for a partition key, 1,024 for a sort key)
+- nests lists or maps more than 32 levels deep
+
+It is also thrown for a bad expiry.
+
+`InvalidQueryException` is thrown for:
+
+- a bad key
+- a missing `where`, or a partition key not given as `{ equals: value }`
+- a partition value or sort operand of the wrong type
+- more than one sort condition, an unknown sort condition, or a `between` with its bounds reversed
+- an unknown index
+- an `order` that is not `'asc'` or `'desc'`
+- a bad `limit`
+- a bad cursor
+- an `indexes` option that is not an object
+- `ifValueEquals` with an object
+- an empty `ifFieldEquals`
+- a batch that repeats a key within one DynamoDB request (25 writes or 100 reads)
 
 ## Keys
 
@@ -112,7 +148,10 @@ await todos.get({ userId: 'alice', todoId: '001' });
 
 A key field cannot hold an empty string.
 
-The key is the identity of an item. `get`, `put`, `delete`, and the conditions `ifNotExists` and `ifExists` match the whole key. The whole key is the partition field, and the sort field if the store has one. In a store with a sort field, the sort field is unique only in its partition. Two items can have the same `todoId` if they have different `userId` values. To make one field unique in the whole store, make it the partition field of a key with no sort field. To list the items by another field, add an index.
+- `get`, `put`, `delete`, and the conditions `ifNotExists` and `ifExists` match the whole key: the partition field, and the sort field if the store has one.
+- A sort field is unique only in its partition.
+- To make one field unique in the whole store, make it the partition field of a key with no sort field.
+- To list the items by another field, add an index.
 
 ### Branded key fields
 
@@ -190,7 +229,7 @@ await sessions.put({ sessionId: 's1' }, { userId: 'alice', expiresAt: Math.floor
 
 Do not change `ttl` on a deployed store. Items from before the change would keep their expiry in the old attribute and stop expiring. To change it, copy the items to a new store. See [Move a store between forms](#move-a-store-between-forms).
 
-Expiry controls how long data stays. It does not control access. Check on every read that a session or a token is still valid.
+Expiry controls how long data stays. It does not control access. To revoke a session or a token before it expires, delete the item.
 
 ## Conditional writes
 
@@ -229,19 +268,47 @@ Use `ifFieldEquals` for an object value and `ifValueEquals` for any other value.
 
 The error has a `retriable` flag. It is true when a value check took part in a failed `put`, and when a failed `delete` had a value check and no `ifExists`. When `retriable` is true, read the item again and retry. A failed `ifNotExists` or `ifExists` alone is not retriable.
 
-A conditional write is atomic for its item. No other write to that item lands between the call's check and its write. On AWS, each call is one DynamoDB `PutItem` or `DeleteItem` with a condition expression. The local mock runs the check and the write with no `await` in between, so no other request runs between them.
+A conditional write is atomic for its item, on AWS and in the local mock. No other write to that item lands between the call's check and its write.
 
 There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on [`Database`](../bb-database/README.md#transactions).
 
+There is no atomic increment. For a shared counter, read its value and write the increment only if the value has not changed. Give the counter no expiry: `get()` hides expired items that write conditions still see.
+
+```typescript
+import { isBlocksError, KVStoreErrors } from 'aws-cdk-blocks';
+
+const counters = new KVStore<number>(scope, 'counters');
+
+async function increment(name: string): Promise<number> {
+	for (let attempt = 0; attempt < 10; attempt++) {
+		const current = await counters.get(name);
+		const next = (current ?? 0) + 1;
+		try {
+			await counters.put(name, next, current === null ? { ifNotExists: true } : { ifValueEquals: current });
+			return next;
+		} catch (e: unknown) {
+			if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+		}
+	}
+	throw new Error(`Could not increment ${name} after 10 attempts`);
+}
+
+await increment('visits');
+```
+
+If another writer creates the counter first, the failed create has `retriable: false`. The loop does not repeat that `put()`: it reads the new value and computes a new increment.
+
+Alternatively, write one item per event in a store with a `key` such as `{ partitionKey: 'counterId', sortKey: 'eventId' }`. To get the total, use `query()` on the counter's partition and count the items. Each total reads every event for that counter and is eventually consistent on AWS.
+
 ## Read consistency
 
-`get` is a strongly consistent read by default. It returns a value that a `put` wrote a moment before. A consistent read uses twice the read capacity. Pass `{ consistentRead: false }` where a stale value is acceptable.
+`get` is a strongly consistent read by default. A consistent read uses twice the read capacity. Pass `{ consistentRead: false }` where a stale value is acceptable.
 
 `getBatch`, `scan`, and `query` are eventually consistent. A `query` on an index is always eventually consistent. The local mock is always strongly consistent.
 
 ## Query
 
-`query` reads the items of one partition in sort order. The store needs a `key` with a sort field, or an index.
+The store needs a `key` with a sort field, or an index.
 
 ```typescript
 for await (const { key, value } of todos.query({
@@ -279,6 +346,8 @@ const lastHour = readings.query({
 });
 ```
 
+## Scan
+
 `scan` reads the whole table and has no prefix option. Prefer `get` or `query`. `scan` takes these options.
 
 | Field | Required | Description |
@@ -289,7 +358,7 @@ const lastHour = readings.query({
 
 ## Pages
 
-`query` and `scan` return a `cursor`. Pass it to the same call to read the next page, in this request or in a later one. The cursor is `undefined` when the read reached the end. A `cursor` of `undefined` starts at the first entry, so a client can pass back the `cursor` of the page before as it is. A `cursor` of `null` also starts at the first entry, because an option with the value `null` counts as an option that you did not pass.
+`query` and `scan` return a `cursor`. Pass it to the same call to read the next page, in this request or in a later one. The cursor is `undefined` when the read reached the end. A `cursor` of `undefined` or `null` starts at the first entry, so a client can pass back the `cursor` of the page before as it is.
 
 ```typescript
 import { ApiNamespace, Auth } from 'aws-cdk-blocks';
@@ -304,12 +373,6 @@ export const todoApi = new ApiNamespace(scope, 'todo-api', (context) => ({
 		const entries = await Array.fromAsync(page);
 		return { todos: entries.map((entry) => entry.value), cursor: page.cursor };
 	},
-	async addTodo(title: string) {
-		const user = await auth.requireAuth(context);
-		const todoId = crypto.randomUUID();
-		await todos.put({ userId: user.userSub, todoId }, { title, done: false, version: 1 }, { ifNotExists: true });
-		return { todoId };
-	},
 }));
 ```
 
@@ -319,13 +382,10 @@ A cursor holds key values in a readable encoding. It is not a secret and not a p
 
 ## Indexes
 
-An index reads the same items by other fields of the value. `indexes` needs a `schema`.
-
 - An index field holds a string or a number. The schema states which, as for a key field.
 - An index holds an item only when each indexed field is present, is not an empty string, and has the declared type. `put` rejects an empty string in an indexed field.
 - To keep an item out of an index, leave the field out. Don't set it to `null`. On AWS, DynamoDB rejects a `put` whose indexed field holds `null` or a value of the other type with a `ValidationException`. The local mock accepts that write, so the error shows only on AWS.
 - An index query returns whole items, because every index that the block creates holds all fields of the value. A table from `fromExisting` keeps the indexes you gave it.
-- A read from an index is eventually consistent.
 - A store can have up to 20 indexes.
 - To add or remove an index, change `indexes` and deploy. DynamoDB fills a new index from the items that exist. On a large table that takes minutes to hours.
 
@@ -360,32 +420,6 @@ A `put` always validates against `schema`. A stored item can still differ from t
 
 `'coerce'` keeps stored fields that the schema does not declare, so a read followed by a `put` does not delete them. A default reaches the table only when you `put` the value back.
 
-## Errors
-
-Match an error by name with `isBlocksError`.
-
-| Constant | `error.name` | Thrown when |
-|----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
-| `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, has a `__proto__` field, has an empty string in a key field or an indexed field, has a key or indexed field over DynamoDB's size limit (2,048 bytes for a partition key, 1,024 for a sort key), or nests lists or maps more than 32 levels deep. Also a bad expiry. |
-| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where` (this includes a partition value or a sort value of the wrong type, a sort condition that does not exist, and a `between` with its bounds reversed), an unknown index, an `order` that is not `'asc'` or `'desc'`, a bad `limit`, a bad cursor, an `indexes` option that is not an object, `ifValueEquals` with an object, or a batch that repeats a key within one DynamoDB request (25 writes or 100 reads). |
-| `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
-| `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |
-
-```typescript
-import { isBlocksError, KVStoreErrors } from 'aws-cdk-blocks';
-
-try {
-	await cache.put('lock:report', 'worker-3', { ifNotExists: true });
-} catch (e: unknown) {
-	if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) {
-		// another worker holds the lock
-	} else {
-		throw e;
-	}
-}
-```
-
 ## Use a table that exists
 
 Pass the table name and the `key` that matches the table. The block does not create, change, or delete that table, and it ignores `protection`, `pointInTimeRecovery`, and `encryption` for it.
@@ -416,6 +450,8 @@ You own the indexes and the TTL setting of that table.
 A string has no fields, so an index cannot read it. Do the move in three steps.
 
 ```typescript
+import { isBlocksError, KVStoreErrors } from 'aws-cdk-blocks';
+
 const memberSchema = z.object({ name: z.string(), email: z.string() });
 type Member = z.infer<typeof memberSchema>;
 
@@ -436,8 +472,6 @@ for await (const { key, value, expiresAt } of members.scan()) {
 // Step 3. When no strings remain, add the schema, and then the index:
 // new KVStore(scope, 'members', { schema: memberSchema, indexes: { byEmail: { partitionKey: 'email' } } });
 ```
-
-In step 1, the code that reads the store must accept both shapes.
 
 ### Copy a store to a new key
 
@@ -464,7 +498,7 @@ for await (const { value, expiresAt } of todos.scan()) {
 
 Release 0.4.0 or earlier keeps each item as `{ pk, value: <JSON text>, ttl? }`. This release keeps one attribute for each field, under another key attribute. DynamoDB cannot change the key of a table, so a `KVStore` of this release cannot take over the table of such a store. The deploy fails with `CloudFormation cannot update a stack when a custom-named resource requires replacing`, and the table keeps its items.
 
-`LegacyKVStore` keeps the old table usable during the upgrade. It has the four data methods of release 0.4.0, `get`, `put`, `delete`, and `scan`, so the code that calls the old store runs as before. You migrate the data into a `KVStore` with a new id, in your own code, however is appropriate for your app.
+`LegacyKVStore` keeps the old table usable during the upgrade. It has the four data methods of release 0.4.0: `get`, `put`, `delete`, and `scan`. Two things differ: `scan` takes `limit` and `cursor` and returns `expiresAt` for items with an expiry; `get` now defaults to a strongly consistent read, which uses twice the read capacity. Pass `{ consistentRead: false }` to keep eventually consistent reads. You copy the data into a `KVStore` with a new id in your own code.
 
 `LegacyKVStore` is deprecated and frozen. Use it only for this upgrade. It gets no new features, and a later release can remove it. Use `KVStore` for new data. When the data is in the new store, remove the `LegacyKVStore` from your app.
 
@@ -475,7 +509,7 @@ Release 0.4.0 or earlier keeps each item as `{ pk, value: <JSON text>, ttl? }`. 
 | `scan(options?)` | `Results` | Read every entry of the old store, with its expiry. Takes `limit`, `cursor`, and `includeExpired`. |
 | `delete(key, conditions?)` | `Promise<void>` | Remove a key from the old store. Takes the conditions `ifExists` and `ifValueEquals`. |
 
-`put` validates the value with the `schema`. With both `put` conditions, the write goes ahead if the key is absent or its value matches. With both `delete` conditions, both must hold. Two things differ from release 0.4.0: `scan` takes `limit` and `cursor` and returns `expiresAt`, and `get` is a consistent read by default.
+`put` validates the value with the `schema`. With both `put` conditions, the write goes ahead if the key is absent or its value matches. With both `delete` conditions, both must hold.
 
 ### What to know before you start
 
@@ -503,13 +537,13 @@ const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
 
 The deploy creates the table of `prefs`. It does not change the table of `oldPrefs`, and the app's role keeps its access to that table.
 
-`LegacyKVStore` takes the options that `KVStore` took in release 0.4.0: `ttl`, `removalPolicy`, `deletionProtection`, `pointInTimeRecovery`, `encryption`, `table`, `schema`, and `logger`. Keep each option that the old store had, with its value, also a `KVStore.fromExisting()` table and a `KVStore.fromKmsKey()` key. The block declares the old table from them, and a changed or missing option makes CloudFormation change that table.
+`LegacyKVStore` takes the options that `KVStore` took in release 0.4.0: `ttl`, `removalPolicy`, `deletionProtection`, `pointInTimeRecovery`, `encryption`, `table`, `schema`, and `logger`. Pass exactly the options that the old store had, with their values, including a `KVStore.fromExisting()` table and a `KVStore.fromKmsKey()` key. The block declares the old table from them, and a changed or missing option makes CloudFormation change that table.
 
 ### Step 2. Migrate the data
 
-Migrate the data however is appropriate for your app. The block does not copy the items, and it does not carry a write from one store to the other.
+The block does not copy the items, and it does not carry a write from one store to the other.
 
-Steps that are suitable for some migrations are as follows:
+One way to migrate while the app stays live:
 
 1. Deploy the app with reads that try the new store first and then the old one, and with writes that go to the new store.
 2. Copy the items of the old store to the new store, in a handler or a job, for example an `AsyncJob`.
@@ -521,7 +555,7 @@ A copy uses these tools:
 - **`put` of the `KVStore`** takes `expiresAt`, so a copied entry keeps its expiry. With `ifNotExists` it keeps a value that the new store has, so a copy is safe to run again.
 - **`AsyncJob`** runs a copy outside a request. Each run can copy one page, and submit the next run with the cursor.
 
-These steps do not fit every app. While the app reads both stores, these limits apply:
+While the app reads both stores, these limits apply:
 
 - A read that falls back to the old store returns the old value of a key that the new store does not have. This is the case after a delete, and after a value with an expiry expires.
 - A condition on the new store does not see the old store. A `put` with `ifNotExists` goes ahead for a key that only the old store has.
@@ -534,25 +568,14 @@ When the data is in the new store, remove the `LegacyKVStore` line and the code 
 
 ## Best practices
 
-- Declare a `key` for anything that you list.
-- Take the partition of user data from the signed-in user, not from the request.
 - Give a store that accepts user input a `schema`.
-- Choose a partition field that spreads the data, such as `userId` or `tenantId`.
-- Use a sort field for range queries, such as a timestamp.
-- Declare indexes for the access patterns that you know when you create the store.
-- Use `{ ifNotExists: true }` for a create that is safe to repeat.
-- Use `ifFieldEquals` with a version field when several writers can change one item.
-- Store one kind of entity in each store.
-- Prefer `get` and `query` to `scan`.
+- Take the partition of user data from the signed-in user, not from the request.
 
 ## Scaling and cost (AWS)
 
-- **Billing.** On-demand. You pay for each read and each write, with no capacity to manage. See [DynamoDB pricing](https://aws.amazon.com/dynamodb/pricing/on-demand/).
-- **Reads.** A consistent `get` uses twice the read capacity of an eventually consistent read.
+- **Billing.** On-demand. You pay for each read and each write. See [DynamoDB pricing](https://aws.amazon.com/dynamodb/pricing/on-demand/).
 - **Indexes.** Each index adds a write for every item that it holds.
 - **Latency.** Single-digit milliseconds for a read or a write by key.
-- **Limits.** 400 KB for each item, and 20 indexes for each store.
-- **Replication.** DynamoDB keeps the data in three Availability Zones of the Region.
 
 ## Durability and security defaults
 
@@ -583,14 +606,10 @@ const audit = new KVStore(scope, 'audit', {
 
 ## Local development
 
-The mock keeps data on disk in `.cdk-blocks/local/data/{fullId}/`, so data stays across restarts of the dev server. To delete it, run `rm -rf .cdk-blocks/local/data .bb-data`. The data file is `store.json`, with a version field.
+The mock keeps data on disk in `.cdk-blocks/local/data/{fullId}/store.json`, so data stays across restarts of the dev server. To delete it, run `rm -rf .cdk-blocks/local/data .bb-data`.
 
 The mock applies the schema, the conditions, expiry, the 400 KB limit (measured the way DynamoDB measures it), DynamoDB's key and nesting limits, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.
 
-The mock handles a data file of an earlier release as follows:
-
-- It converts a `store.json` of an earlier `KVStore`, or a `data.json` of `DistributedTable`, when it first loads the file.
-- It keeps a copy of the `store.json` from before the conversion as `store.json.bak`.
-- It renames a file that it cannot read to a `.bak` file and logs a warning. It does not write over that file.
+The mock converts a data file of an earlier release when it first loads the file, and keeps a copy of the `store.json` from before the conversion as `store.json.bak`. It renames a file that it cannot read to a `.bak` file and logs a warning. It does not write over that file.
 
 The mock keeps the store in the memory of the dev server, and reads `store.json` only when it constructs the store. Two processes on the same `.cdk-blocks/local/data` folder (two dev servers, or a script beside the dev server) do not see the writes of the other process, and can write over them.

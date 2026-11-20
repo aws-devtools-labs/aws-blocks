@@ -142,7 +142,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     });
 
     it('stacked (the ALB router): the raw routes reach the backend', () => {
-      // The Blocks layer builds the stacked door's router as `{ kind: 'alb' }`.
+      // The CDK Blocks layer builds the stacked door's router as `{ kind: 'alb' }`.
       const { t } = synth(spaManifest(), { kind: 'alb' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       assert.ok(albRulePaths(t).includes('/hooks/door-probe'));
     });

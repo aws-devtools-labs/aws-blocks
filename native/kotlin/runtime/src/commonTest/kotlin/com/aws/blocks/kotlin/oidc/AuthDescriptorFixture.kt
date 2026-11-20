@@ -16,7 +16,7 @@ import kotlinx.serialization.json.putJsonObject
 internal val fixtureServer = BlocksServer("local", "http://localhost:3001/cdk-blocks/api")
 
 /**
- * The `oidc/client` descriptor an AWS Blocks `Auth` block's `createOidcApi().getClient()` returns
+ * The `oidc/client` descriptor a CDK Blocks `Auth` block's `createOidcApi().getClient()` returns
  * for routes under [base], the directory of `redirects.callbackPath`, and sign-out at [signOutPath].
  * [sessionPath] is sent as the backend sends it; pass `null` for a backend from before it did.
  */

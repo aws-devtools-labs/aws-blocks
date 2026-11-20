@@ -23,7 +23,7 @@ describe('normalizeDescription', () => {
       input: 'Full PostgreSQL database — connects via `fromExisting()`.',
       expected: 'Full PostgreSQL database — connects via fromExisting().',
     },
-    { name: 'strips bold', input: 'The **compute** for Blocks.', expected: 'The compute for Blocks.' },
+    { name: 'strips bold', input: 'The **compute** for AWS CDK Blocks.', expected: 'The compute for AWS CDK Blocks.' },
     { name: 'strips emphasis', input: 'A *fast* store.', expected: 'A fast store.' },
     { name: 'reduces a link to its label', input: 'See [the docs](https://x.dev/a_b) first.', expected: 'See the docs first.' },
     { name: 'collapses newlines and runs of spaces', input: 'A store\n  backed   by S3.', expected: 'A store backed by S3.' },

@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Blocks-owned namespaces for hosting values.
+ * CDK Blocks-owned namespaces for hosting values.
  *
  * The mechanism (markers, resolvers, path/env naming) lives in the
  * framework-neutral `@aws-cdk-blocks/hosting` package, which defaults to neutral
- * `/hosting/secrets` and `/hosting/config` prefixes so a non-Blocks consumer
- * never inherits Blocks branding.
+ * `/hosting/secrets` and `/hosting/config` prefixes so a standalone consumer
+ * never inherits CDK Blocks branding.
  *
- * This module is the ONE place Blocks pins its own namespaces. The prefixes are
+ * This module is the ONE place CDK Blocks pins its own namespaces. The prefixes are
  * **scoped to the app's stable `stackId`** (from the committed `.cdk-blocks/config.json`)
  * — `/blocks/<stackId>/secrets` (Secrets Manager) and `/blocks/<stackId>/config`
- * (SSM Parameter Store) — so two Blocks apps in one account/region never collide.
+ * (SSM Parameter Store) — so two CDK Blocks apps in one account/region never collide.
  *
  * Both sides derive the scope from the SAME source: the out-of-band CLI
  * (`npm run secret`/`config`) and the CDK synth both call {@link blocksStoreConfig},
@@ -29,10 +29,10 @@ import type { StoreConfig } from '@aws-cdk-blocks/hosting/constructs';
 import { secretStoreLocator } from '@aws-cdk-blocks/hosting';
 import { getStackId } from './scripts/stack-id.js';
 
-/** Base Blocks prefix for `secret()` values (Secrets Manager); scoped by `stackId`. */
+/** Base CDK Blocks prefix for `secret()` values (Secrets Manager); scoped by `stackId`. */
 export const BLOCKS_SECRET_PARAMETER_PREFIX = '/blocks/secrets';
 
-/** Base Blocks prefix for `config()` values (SSM Parameter Store); scoped by `stackId`. */
+/** Base CDK Blocks prefix for `config()` values (SSM Parameter Store); scoped by `stackId`. */
 export const BLOCKS_CONFIG_PARAMETER_PREFIX = '/blocks/config';
 
 /**
@@ -49,20 +49,20 @@ function resolveStackId(explicit?: string): string | undefined {
 	}
 }
 
-/** The Blocks `secret()` prefix, scoped to `stackId` when available. */
+/** The CDK Blocks `secret()` prefix, scoped to `stackId` when available. */
 export function blocksSecretPrefix(stackId?: string): string {
 	const id = resolveStackId(stackId);
 	return id ? `/blocks/${id}/secrets` : BLOCKS_SECRET_PARAMETER_PREFIX;
 }
 
-/** The Blocks `config()` prefix, scoped to `stackId` when available. */
+/** The CDK Blocks `config()` prefix, scoped to `stackId` when available. */
 export function blocksConfigPrefix(stackId?: string): string {
 	const id = resolveStackId(stackId);
 	return id ? `/blocks/${id}/config` : BLOCKS_CONFIG_PARAMETER_PREFIX;
 }
 
 /**
- * The **actual store name** of a Blocks `secret()` key in AWS Secrets Manager —
+ * The **actual store name** of a CDK Blocks `secret()` key in AWS Secrets Manager —
  * routed through {@link secretStoreLocator} so it matches exactly what the CLI
  * writes, the IAM grant scopes to, and the runtime resolver reads. Secrets Manager
  * names are slash-free at the root, so this is `blocks/<stackId>/secrets/<KEY>`
@@ -76,7 +76,7 @@ export function blocksSecretParameterName(key: string, stackId?: string): string
 }
 
 /**
- * The **actual store name** of a Blocks `config()` key in SSM Parameter Store —
+ * The **actual store name** of a CDK Blocks `config()` key in SSM Parameter Store —
  * routed through {@link secretStoreLocator} for consistency with the CLI/grant/
  * runtime path. SSM keeps the leading-slash path.
  *
@@ -87,7 +87,7 @@ export function blocksConfigParameterName(key: string, stackId?: string): string
 }
 
 /**
- * The Blocks store config passed to the shared hosting engine — `stackId`-scoped
+ * The CDK Blocks store config passed to the shared hosting engine — `stackId`-scoped
  * prefixes (falling back to the unscoped base when `.cdk-blocks/config.json` is absent).
  * Both the CLI and the CDK synth call this, so they resolve identical names.
  */

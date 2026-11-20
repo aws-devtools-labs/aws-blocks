@@ -28,9 +28,27 @@
  */
 
 import { loadConfigToProcessEnv } from '@aws-cdk-blocks/core';
+import { isConfigResolved } from '@aws-cdk-blocks/core/internal';
 import { BedrockAgentCoreApp } from 'bedrock-agentcore/runtime';
 import { getAgentInstance } from './agent.js';
-import { handleInvocation, requestSchema } from './agentcore-invocation.js';
+import {
+	backendLoader,
+	ConfigNotReadyError,
+	handleInvocation,
+	type InvocationAck,
+	requestSchema,
+	type TurnRunner,
+} from './agentcore-invocation.js';
+
+function registeredAgent(agentId: string): TurnRunner {
+	const agent = getAgentInstance(agentId);
+	if (!agent) {
+		throw new Error(
+			`No Agent registered with id '${agentId}'. Ensure the backend module constructs it at import time.`,
+		);
+	}
+	return agent;
+}
 
 /**
  * Serve a registered Agent on the AgentCore harness.
@@ -46,18 +64,66 @@ import { handleInvocation, requestSchema } from './agentcore-invocation.js';
  */
 export function serve(agentId = process.env.BB_AGENT_ID): void {
 	if (!agentId) throw new Error('BB_AGENT_ID is required (fullId of the target Agent).');
-	const agent = getAgentInstance(agentId);
-	if (!agent) {
-		throw new Error(
-			`No Agent registered with id '${agentId}'. Ensure the backend module constructs it at import time.`,
-		);
-	}
+	const agent = registeredAgent(agentId);
 
 	const app = new BedrockAgentCoreApp({
 		invocationHandler: {
 			requestSchema,
-			process: (request, context): ReturnType<typeof handleInvocation> => handleInvocation(agent, app, request, context),
+			process: (request, context): InvocationAck => handleInvocation(agent, app, request, context),
 		},
+	});
+
+	app.run();
+}
+
+/**
+ * Load the app config, import the developer's backend, and serve its Agent on the AgentCore
+ * harness. This is what the co-bundle (agentcore-bundle.ts) and `main()` run.
+ *
+ * Same cold-start contract as the Lambda handler: the config (BB resource identifiers, the
+ * Realtime callback URL) goes into process.env BEFORE the backend is imported, so BB
+ * constructors can resolve it.
+ *
+ * The config file is uploaded by a deployment that is not ordered before the Runtime, so this
+ * process can start before the file is readable. The harness therefore starts at once, and the
+ * config + backend load is repeated on each invocation until the config is readable. An
+ * invocation that arrives before that fails (the caller's `stream()` rejects) instead of running
+ * a turn that has no Realtime callback URL to publish to.
+ *
+ * `loadBackend` must import the backend into the same bb-agent module instance as this
+ * function (see {@link serve} for why).
+ *
+ * @param loadBackend - imports the developer's backend module, which constructs the Agent
+ * @param agentId - fullId of the target Agent (defaults to process.env.BB_AGENT_ID)
+ */
+export function serveBackend(loadBackend: () => Promise<unknown>, agentId = process.env.BB_AGENT_ID): void {
+	if (!agentId) throw new Error('BB_AGENT_ID is required (fullId of the target Agent).');
+	const loadAgent = backendLoader({
+		loadConfig: loadConfigToProcessEnv,
+		// An app without a config location, or with an empty config file, is resolved; only a
+		// file that is not readable yet leaves the config unresolved after a load.
+		configMissing: () =>
+			Boolean(process.env.BLOCKS_CONFIG_BUCKET && process.env.BLOCKS_CONFIG_KEY) && !isConfigResolved(),
+		loadBackend: async () => {
+			await loadBackend();
+			return registeredAgent(agentId);
+		},
+	});
+
+	const app = new BedrockAgentCoreApp({
+		invocationHandler: {
+			requestSchema,
+			process: async (request, context): Promise<InvocationAck> =>
+				handleInvocation(await loadAgent(), app, request, context),
+		},
+	});
+
+	// Load now so the first invocation does not pay for it. A config that is not readable yet
+	// is retried by the invocations; any other failure (a backend that does not import, no
+	// registered Agent) is rethrown and stops the process, as it did before the harness started.
+	loadAgent().catch((err: unknown) => {
+		if (!(err instanceof ConfigNotReadyError)) throw err;
+		console.warn(`[Blocks] ${err.message}`);
 	});
 
 	app.run();
@@ -66,28 +132,21 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 /**
  * Standalone launch: load config, import the developer backend by path, then serve.
  * Used when the artifact runs this file directly with BB_AGENT_BACKEND_MODULE pointing at the
- * backend. When an app co-bundles the backend with `serve` (agentcore-bundle.ts), it calls
- * `serve()` directly instead and this `main()` is not the entry.
+ * backend. When an app co-bundles the backend with `serveBackend` (agentcore-bundle.ts), it
+ * calls `serveBackend()` directly instead and this `main()` is not the entry.
  */
 export async function main(): Promise<void> {
-	// Same cold-start contract as the Lambda handler: pull BB resource identifiers
-	// (table names, bucket names, Realtime callback URL) into process.env before importing
-	// the backend, so BB constructors can resolve them.
-	await loadConfigToProcessEnv();
-
 	const backendModule = process.env.BB_AGENT_BACKEND_MODULE;
 	if (!backendModule)
 		throw new Error('BB_AGENT_BACKEND_MODULE env var is required (path to the developer backend module).');
 
 	// Import the developer backend — constructing the real Agent, which registers itself.
-	await import(backendModule);
-
-	serve();
+	serveBackend(() => import(backendModule));
 }
 
 // Auto-run the standalone launch path ONLY when a backend module path is provided.
-// The co-bundle path (agentcore-bundle.ts) imports `serve` and invokes it directly after
-// importing the backend inline, and does NOT set BB_AGENT_BACKEND_MODULE — so `main()` must
+// The co-bundle path (agentcore-bundle.ts) imports `serveBackend` and invokes it directly,
+// and does NOT set BB_AGENT_BACKEND_MODULE — so `main()` must
 // not fire there (it would double-serve and throw on the missing env var).
 if (process.env.BB_AGENT_BACKEND_MODULE) {
 	void main();

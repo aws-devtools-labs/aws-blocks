@@ -1,5 +1,11 @@
 # @aws-blocks/create-blocks-app
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the README tables the options (including `--skip-install` and `-y`) and the scripts of each mode. The scaffolded `AGENTS.md` asks agents to run the e2e test before deploying and to add API checks to the e2e suite.
+
 ## 1.0.0-rc.1
 
 ### Minor Changes

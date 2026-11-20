@@ -1,6 +1,6 @@
 # blocks_codegen
 
-Code generator for the Blocks Dart SDK. Reads an OpenRPC spec and generates a fully typed Dart client with sealed classes, enums, maps, and transferable hydration.
+Code generator for the AWS CDK Blocks Dart SDK. Reads an OpenRPC spec and writes one Dart file: an API class per namespace, a `Blocks` facade, models, sealed classes for unions, and enums.
 
 ## Usage
 
@@ -42,18 +42,21 @@ targets:
 
 Dart declares a union's arm classes at the top level, named `<Value><Suffix>`
 (`signUp` in an `…Input` union is `SignUpInput`). When two distinct unions
-have an arm of one name, the union with the smallest origin keeps it: its
-origins' keys (`schema:<Name>` for a schema, `<method>#param:<name>` or
-`<method>#result` for an inline union, over every namespace that declares
-it), with every `schema:` key ranked before every method key and keys of one
-kind compared as strings, so spec order never decides. To pin the short name
-on a union, declare it as a named schema. The other union's arm
-takes its namespace's prefix (`AuthCognitoApiSignUpInput`), or, when that is
-taken or the union is a `$ref` schema, its union's name
-(`AuthInputSignUp`). A union added later with a smaller origin (an `authApi`
-namespace beside `authCognitoApi`) takes the short name over, renaming the
-other union's arm. The codegen warns about each rename; pass
-`--fail-on-collision` to make it an error.
+have an arm of one name:
+
+- The union with the smallest origin keeps the name. An origin key is
+  `schema:<Name>` for a schema, `<method>#param:<name>` or `<method>#result`
+  for an inline union, over every namespace that declares the union.
+- Every `schema:` key ranks before every method key, and keys of one kind
+  compare as strings, so spec order never decides.
+- The other union's arm takes its namespace's prefix
+  (`AuthCognitoApiSignUpInput`), or, when that is taken or the union is a
+  `$ref` schema, its union's name (`AuthInputSignUp`).
+- A union added later with a smaller origin (an `authApi` namespace beside
+  `authCognitoApi`) takes the short name over, renaming the other union's arm.
+- The codegen warns about each rename; pass `--fail-on-collision` to make it
+  an error.
+- To pin the short name on a union, declare it as a named schema.
 
 A method whose result is an OIDC client that names its providers gets a
 provider enum named `<Api class><Method>Provider` (`AuthApiGetClientProvider`
@@ -62,7 +65,8 @@ for `auth.getClient`, and for `auth.get_client`) and returns
 that name, the enum is `<Api class><Method>ResultProvider` and the codegen
 warns. A provider name that isn't an identifier is camel-cased like an enum
 value (`login.gov` is `loginGov`) and keeps its name as the value's
-`providerName`.
+`providerName`. `TypedOidcClient` is described in the `blocks_runtime` README
+under [Typed OIDC providers](../blocks_runtime/README.md#typed-oidc-providers).
 
 ## License
 

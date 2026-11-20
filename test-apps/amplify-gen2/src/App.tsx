@@ -120,7 +120,7 @@ export default function App() {
 
   return (
     <div style={{ maxWidth: 500, margin: '2rem auto', fontFamily: 'system-ui' }}>
-      <h1>Amplify + Blocks</h1>
+      <h1>Amplify + CDK Blocks</h1>
 
       <section>
         <h2>Public</h2>

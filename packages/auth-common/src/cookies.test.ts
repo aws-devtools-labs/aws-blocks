@@ -17,7 +17,7 @@ import {
 
 /**
  * Run `fn` as if on deployed compute: the two variables synth stamps on every
- * Blocks-configured compute, which `getDeploymentType()` reads.
+ * CDK Blocks-configured compute, which `getDeploymentType()` reads.
  */
 function withDeployedEnv(fn: () => void): void {
 	const keys = ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY'] as const;

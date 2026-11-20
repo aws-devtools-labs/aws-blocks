@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "E2E test app for Blocks Hosting — Next.js SSR deployment",
+  "description": "E2E test app for AWS CDK Blocks Hosting — Next.js SSR deployment",
   "workspaces": [
     "cdk-blocks"
   ],
@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@aws-cdk-blocks/bb-auth": "1.0.0-rc.1",
-    "aws-cdk-blocks": "1.0.0-rc.1",
+    "aws-cdk-blocks": "1.0.0-rc.2",
     "@aws-cdk-blocks/hosting": "1.0.0-rc.1",
     "next": "^16.4.6",
     "react": "^19.3.1",

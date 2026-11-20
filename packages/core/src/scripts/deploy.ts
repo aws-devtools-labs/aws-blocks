@@ -361,7 +361,7 @@ async function runDeploy(options: DeployOptions) {
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, OUTPUTS_FILE.production), 'utf-8'));
     // `--all` can write more than one stack's outputs (e.g. the us-east-1
     // CloudFront-alarm monitoring stack). Pick the group that carries `ApiUrl`
-    // — the main Blocks stack, which also holds the Hosting outputs — rather
+    // — the main CDK Blocks stack, which also holds the Hosting outputs — rather
     // than relying on the write order of the outputs file. Falls back to the
     // first group so a single-stack app is unchanged.
     const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];

@@ -136,7 +136,7 @@ jobs:
           set -euo pipefail
           mkdir -m 700 "$GNUPGHOME"
           SIGNING_SECRET=$(aws secretsmanager get-secret-value \
-            --secret-id awsmobilesdk/android/signing \
+            --secret-id cdkblocks/kotlin/signing \
             --query SecretString --output text)
 
           mask() {
@@ -164,9 +164,8 @@ jobs:
           gpg --batch --list-secret-keys --with-subkey-fingerprints --keyid-format=long
 
           # The trailing "!" pins the exact key rather than letting gpg choose a
-          # subkey. gpg fails outright if that key cannot sign, which is the point:
-          # keyId comes from a secret written for a different signing implementation
-          # and is not guaranteed to name a key gpg will use.
+          # subkey, so every signature comes from the key keyId names. gpg fails
+          # outright if that key cannot sign, rather than falling back.
           SIGNER=()
           if [ -n "$KEY_ID" ]; then SIGNER=(--local-user "${KEY_ID}!"); fi
 

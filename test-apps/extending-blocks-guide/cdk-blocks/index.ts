@@ -36,7 +36,7 @@ const users = new KVStore(scope, 'users', {
 // ── Pattern 3: custom BB ─────────────────────────────────────────────────────
 const work = new Queue(scope, 'work');
 
-// ── Pattern 1: raw CDK in Blocks (env var injected by index.cdk.ts) ─────────
+// ── Pattern 1: raw CDK in CDK Blocks (env var injected by index.cdk.ts) ─────────
 const rawSqs = new SQSClient({});
 
 export const api = new ApiNamespace(scope, 'api', () => ({

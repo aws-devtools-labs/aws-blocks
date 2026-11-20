@@ -10,7 +10,7 @@ import { type KmsBlockIdentity, type KmsEncryptionOption, resolveKmsEncryption }
 
 export type { ExternalKmsKeyRef } from './kms-encryption.js';
 
-/** The per-block durability/encryption options every Blocks DynamoDB table reads. */
+/** The per-block durability/encryption options every CDK Blocks DynamoDB table reads. */
 export interface DynamoDbProtectionOptions {
 	readonly encryption?: KmsEncryptionOption;
 	readonly pointInTimeRecovery?: boolean | { retentionDays: number };
@@ -43,7 +43,7 @@ export interface ResolvedDynamoDbProtection {
 
 /**
  * Resolve the shared DynamoDB protection knobs — point-in-time recovery and
- * encryption — that `bb-kv-store` exposes. It is the only Blocks-provisioned
+ * encryption — that `bb-kv-store` exposes. It is the only CDK Blocks-provisioned
  * DynamoDB table (every form of `KVStore` shares it); keeping the resolver here
  * rather than in the block keeps the behaviour (and its warnings) in one place.
  *

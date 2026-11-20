@@ -59,7 +59,7 @@ class LegacyAuthApi {
 }
 
 
-// --- Blocks Client ---
+// --- CDK Blocks Client ---
 
 class Blocks {
   late final AuthApi auth;

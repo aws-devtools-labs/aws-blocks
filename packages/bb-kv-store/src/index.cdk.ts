@@ -42,7 +42,7 @@ export class KVStore<
 	 * Reference an existing DynamoDB table instead of provisioning a new one.
 	 * Matches the factory that the runtime build exposes, so the same code works in
 	 * both contexts. The customer must make sure that the existing table already has
-	 * the key schema that the `key` option names, and any required indexes. Blocks
+	 * the key schema that the `key` option names, and any required indexes. CDK Blocks
 	 * will not modify the table when this factory is used.
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
@@ -56,7 +56,7 @@ export class KVStore<
 	 * one key (and one monthly charge).
 	 *
 	 * @param keyArn - ARN of a KMS key you already own. Because this is an imported
-	 *   key, Blocks can only attach IAM-side grants to this stack's execution role.
+	 *   key, CDK Blocks can only attach IAM-side grants to this stack's execution role.
 	 *   It cannot edit the key's own key policy. For the table to read and write
 	 *   through the key, that key policy must already allow this stack's execution
 	 *   role. The policy can name the role directly, or it can delegate to account
@@ -152,7 +152,7 @@ export class KVStore<
 		}
 
 		// PITR + encryption resolve through the one helper in
-		// @aws-cdk-blocks/core/cdk/internal shared by every Blocks-provisioned
+		// @aws-cdk-blocks/core/cdk/internal shared by every CDK Blocks-provisioned
 		// DynamoDB table, so blocks can't drift.
 		const protection = resolveDynamoDbProtection(this, config, this.defaults, {
 			warningPrefix: '@aws-cdk-blocks/bb-kv-store',
@@ -337,7 +337,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const sandboxTableArns: string[] = [];
 	const sandboxKeyArns: string[] = [];
 
-	// Everything added to the stack below is AWS Blocks' own (marked at the end).
+	// Everything added to the stack below is CDK Blocks' own (marked at the end).
 	const stackChildrenBefore = new Set(stack.node.children);
 
 	// Own the GSI-manager Lambdas' log groups so their retention follows the
@@ -449,7 +449,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 
 	// The shared GSI-manager functions and provider sit at stack scope but belong
 	// to the block, so the service-principal trust check treats their roles as
-	// AWS Blocks roles rather than the app's.
+	// CDK Blocks roles rather than the app's.
 	markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
 
 	(stack as unknown as Record<symbol, SharedGsiProvider>)[GSI_PROVIDER_KEY] = shared;

@@ -1,5 +1,16 @@
 # @aws-blocks/bb-metrics
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: `namespace` defaults to the block's `fullId`. `InvalidNamespace` is thrown by `new Metrics(...)` at run time and in local dev, not during synth.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

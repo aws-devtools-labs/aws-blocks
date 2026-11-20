@@ -39,7 +39,7 @@ const externalQueue = new sqs.Queue(blocksStack, 'external-queue');
 externalQueue.grantSendMessages(blocksStack.executionRole);
 registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
-// Pattern 2 fixtures: two DynamoDB tables that pretend to predate Blocks.
+// Pattern 2 fixtures: two DynamoDB tables that pretend to predate CDK Blocks.
 // We pre-pinned the physical names above so each KVStore.fromExisting could
 // pass them through at synth time.
 //

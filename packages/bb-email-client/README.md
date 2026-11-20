@@ -4,7 +4,11 @@ Transactional email sending via Amazon SES.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
-## Usage
+> **Never pass caller input straight to `send()` or `sendBatch()` from an `ApiNamespace` method.**
+> That is an open relay. Gate the method with `auth.requireAuth(context)` and build the message on
+> the server: see [Security](#security-dont-expose-sending-as-an-open-relay).
+
+## Quick start
 
 ```typescript
 import { EmailClient } from '@aws-cdk-blocks/bb-email-client';
@@ -23,7 +27,7 @@ const { messageId } = await emailClient.send({
 });
 console.log('Sent:', messageId);
 
-// Send a batch of emails (uses SES SendBulkEmail API with inline templates — no setup required)
+// Send a batch of emails
 const result = await emailClient.sendBatch([
   { to: 'alice@example.com', subject: 'Hi Alice', body: 'Hello!' },
   { to: 'bob@example.com', subject: 'Hi Bob', body: 'Hello!' },
@@ -33,28 +37,120 @@ const failed = result.results.filter(r => r.status === 'failed').length;
 console.log(`Sent: ${sent}, Failed: ${failed}`);
 ```
 
+## API
+
+### `new EmailClient(scope, id, options)`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `fromAddress` | `string` | required | Verified sender email address |
+| `replyTo` | `string[]` | none | Reply-to addresses |
+| `configurationSet` | `string` | none | SES configuration set name |
+| `maxBatchSize` | `number` | `100` | Most messages one `sendBatch()` call accepts (positive integer). An invalid value throws `InvalidInputException` from the constructor, and at synth |
+| `logger` | `ChildLogger` | a `Logger` at `error` level | Logger for the block's internal operations |
+
+#### Reserved sender domains
+
+`fromAddress` must be on a domain SES can verify. Reserved domains can never be verified:
+`example.com`, `example.net`, `example.org` and their subdomains, and anything under
+`.test`, `.example`, `.invalid` or `.localhost` (RFC 2606 and RFC 6761).
+
+- Deployed: every send from a reserved-domain sender fails with `DomainNotVerifiedException`.
+- Synth: the warning `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, in sandbox and production
+  alike. A `replyTo` address on such a domain gets `@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`.
+  They are warnings, not errors: the app still synthesizes and deploys.
+- Local mock: accepts the address.
+
+If the sender is deliberate (for example a stack that never sends), acknowledge it:
+
+```typescript
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-email-client:UnverifiableSender');
+```
+
+### `emailClient.send(message): Promise<SendResult>`
+
+Send to one or more recipients. Returns `{ messageId: string }`.
+
+`message` is an `EmailMessage`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `to` | `string \| string[]` | Recipient address(es) |
+| `subject` | `string` | Subject line |
+| `body` | `string` | Plain text body |
+| `html` | `string?` | HTML body (optional) |
+| `cc` | `string[]?` | CC addresses (optional) |
+| `bcc` | `string[]?` | BCC addresses (optional) |
+
+### `emailClient.sendBatch(messages): Promise<SendBatchResult>`
+
+Send several `EmailMessage`s in one call through the SES `SendBulkEmail` API. No stored SES
+template is required. The block splits the batch into `SendBulkEmail` calls of at most 50
+destinations.
+
+Returns `{ results: Array<{ status, messageId?, error? }> }`.
+
+A call takes at most `maxBatchSize` messages (default 100). A larger batch throws
+`InvalidInputException` (`Batch size 101 exceeds the maximum of 100 messages.`) and nothing is
+sent. To send more, split the messages across calls, or raise `maxBatchSize` for a trusted
+server-side job; keep the default on anything reachable from the internet.
+
+Send failures, including failures of the whole SES request, are reported per entry in
+`results` (with `status: 'failed'`). SES failures use a block-authored `error` string
+(e.g. `EmailSendFailedException: Email send failed (MESSAGE_REJECTED).`), not the raw SES error.
+Validation failures can include the rejected address.
+
+A message without `html` is sent as plain text only, as with `send()`: its `body` is never used
+as an HTML part. Messages that fail validation (see below) are marked `failed` and not sent.
+Messages with `html` are sent in their own `SendBulkEmail` calls, before the text-only ones, so the
+order messages go out (and use up the SES sending rate) can differ from the input order; `results`
+stays in input order.
+
+### Input validation
+
+`send()` and `sendBatch()` validate each message the same way locally and when deployed, before
+calling SES:
+
+- every address (To, CC, BCC, `fromAddress` and `replyTo`) must be a valid email address, either
+  bare (`jane@example.com`) or with a display name made of plain words or one quoted string
+  (`Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`). The address is checked as
+  given: surrounding whitespace and control characters are rejected;
+- at most 50 recipients per message (To + CC + BCC combined);
+- the subject must be a single line: CR, LF and other control characters (C0, DEL, C1, U+2028
+  and U+2029) are rejected, not stripped. Remove line breaks from a subject built from user
+  input before sending;
+- at most 40 MB per message.
+
+A malformed address, too many recipients or a control character in the subject throws `InvalidInputException`; an oversized message
+throws `EmailSendFailedException`. In `sendBatch()` the message is marked `failed` instead.
+
+## Errors
+
+Match with `isBlocksError(e, EmailErrors.<Constant>)`. Import both `isBlocksError` and `EmailErrors` from `aws-cdk-blocks`.
+
+| Constant | `error.name` | Thrown when |
+|----------|--------------|-------------|
+| `EmailErrors.InvalidInput` | `InvalidInputException` | A malformed address, a control character in the subject, more than 50 recipients, a batch larger than `maxBatchSize`, an invalid `maxBatchSize`, or SES rejects the request as invalid |
+| `EmailErrors.SendFailed` | `EmailSendFailedException` | A message over 40 MB, SES rejects the message, or any other send failure |
+| `EmailErrors.DomainNotVerified` | `DomainNotVerifiedException` | The sending domain or address is not verified in SES |
+| `EmailErrors.AccountPaused` | `AccountSendingPausedException` | AWS has paused or suspended the account's sending |
+| `EmailErrors.RateLimited` | `RateLimitedException` | SES throttles the request. Transient: retry after a backoff |
+
+The local mock throws only `InvalidInput` and `SendFailed`, from input validation.
+
+Raw SES errors can name identities, regions, configuration sets and account state. The block logs them server-side and keeps the original error on the non-enumerable `cause` of a mapped error. Validation messages can include an address from server configuration or a private recipient list. Return an application-safe message instead of forwarding validation errors or failed batch entries verbatim.
+
 ## Security: don't expose sending as an open relay
 
 Every `ApiNamespace` method is a public, internet-reachable endpoint with no auth by default. A
-method that passes caller input straight to `send()` or `sendBatch()` is an **open relay**: anyone
+method that passes caller input straight to `send()` or `sendBatch()` is an open relay: anyone
 who finds the endpoint can send mail of their choosing, to recipients of their choosing, from your
 verified domain. That burns your SES sending quota, can get your account's sending paused, and
 damages your domain's reputation.
 
-Don't do this:
-
-```typescript
-import type { EmailMessage } from '@aws-cdk-blocks/bb-email-client';
-
-// ❌ Open relay: anyone on the internet chooses the recipient and the content
-export const api = new ApiNamespace(scope, 'api', () => ({
-  async sendEmail(message: EmailMessage) {
-    return await emailClient.send(message);
-  },
-}));
-```
-
-Instead, gate the method with `auth.requireAuth(context)` from an auth block, and build the
+Gate the method with `auth.requireAuth(context)` from an auth block, and build the
 message on the server so the caller can't choose the recipients or the content:
 
 ```typescript
@@ -67,7 +163,7 @@ const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth');
 // App-owned profile data, keyed by the user's `userSub`. The app writes each user's address here.
 const profiles = new KVStore<{ email: string }>(scope, 'profiles');
-// fromAddress must be on a domain verified in SES (see "Reserved sender domains" below).
+// fromAddress must be on a domain verified in SES (see "Reserved sender domains").
 const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@your-verified-domain.com' });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -85,14 +181,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-Authentication alone does not stop a signed-in user from sending a lot of mail. `sendBatch()` takes
-at most `maxBatchSize` messages per call (default 100), which bounds what a single request can send
-but not how many requests a caller makes. The block does not rate-limit callers, by design: only
-your method knows who the caller is, so only your method can decide what a limit is keyed on. If a
-gated method still sends on the caller's behalf, add your own per-user limit. If you skip it, the
-cost lands on your AWS account. Mail goes out under your own verified SES identity, so the
-resulting bounces and complaints count against your domain's reputation, and SES can put your
-account under review, pause its sending, or suspend it.
+### Per-user send limit
+
+Authentication alone does not stop a signed-in user from sending a lot of mail:
+
+- `sendBatch()` caps one call at `maxBatchSize` messages, not how many calls a caller makes.
+- The block does not rate-limit callers: only your method knows who the caller is.
+- If a gated method still sends on the caller's behalf, add your own per-user limit. Without it,
+  the cost lands on your AWS account, bounces and complaints count against your domain's
+  reputation, and SES can put your account under review, pause its sending, or suspend it.
 
 One way to add the limit is a per-user counter in a `KVStore` with TTL turned on. Key the counter
 by user and time window, so each window starts on a fresh key and the old one expires on its own,
@@ -125,131 +222,11 @@ async function takeSendSlot(userSub: string): Promise<void> {
 Call `await takeSendSlot(user.userSub)` right after `auth.requireAuth(context)` in the method above,
 before `emailClient.send()`.
 
-## API
+## Scaling and cost (AWS)
 
-### `new EmailClient(scope, id, options)`
+An SES sandbox account sends 1 email per second. Request production access for higher throughput.
 
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `fromAddress` | `string` | ✅ | Verified sender email address |
-| `replyTo` | `string[]` | ❌ | Reply-to addresses |
-| `configurationSet` | `string` | ❌ | SES configuration set name |
-| `maxBatchSize` | `number` | ❌ | Most messages one `sendBatch()` call accepts (positive integer, default `100`). An invalid value throws `InvalidInputException` from the constructor, and at synth |
-
-#### Reserved sender domains
-
-`fromAddress` must be on a domain SES can verify. A sender on a reserved domain
-(`example.com`, `example.net`, `example.org` and their subdomains, or anything under
-`.test`, `.example`, `.invalid` or `.localhost`, per RFC 2606 and RFC 6761) can never be
-verified, so every send from it fails with `DomainNotVerifiedException` once deployed.
-Synth flags it with the warning `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, in
-sandbox and production alike; a `replyTo` address on such a domain gets
-`@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`. They are warnings, not errors: the
-app still synthesizes and deploys, and the local mock still accepts the address. If the
-sender is deliberate (for example a stack that never sends), acknowledge it:
-
-```typescript
-import { Annotations } from 'aws-cdk-lib';
-
-Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-email-client:UnverifiableSender');
-```
-
-### `emailClient.send(message): Promise<SendResult>`
-
-Send to one or more recipients. Returns `{ messageId: string }`.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `message.to` | `string \| string[]` | Recipient address(es) |
-| `message.subject` | `string` | Subject line |
-| `message.body` | `string` | Plain text body |
-| `message.html` | `string?` | HTML body (optional) |
-| `message.cc` | `string[]?` | CC addresses (optional) |
-| `message.bcc` | `string[]?` | BCC addresses (optional) |
-
-### `emailClient.sendBatch(messages): Promise<SendBatchResult>`
-
-Send multiple messages using the SES `SendBulkEmail` API with inline templates.
-No stored SES template is required — each message's subject, body, and HTML are passed
-directly via `TemplateContent`.
-
-Returns `{ results: Array<{ status, messageId?, error? }> }`.
-
-A call takes at most `maxBatchSize` messages (default 100). A larger batch throws
-`InvalidInputException` (`Batch size 101 exceeds the maximum of 100 messages.`) and nothing is
-sent. To send more, split the messages across calls, or raise `maxBatchSize` for a trusted
-server-side job; keep the default on anything reachable from the internet.
-
-Apart from that, never throws on send failures. Both partial and total failures are reported per-entry in the
-`results` array (with `status: 'failed'`). A failed entry's `error` is a stable message naming
-the error code or the SES entry status (e.g. `EmailSendFailedException: Email send failed (MESSAGE_REJECTED).`);
-the raw SES error text is logged server-side, not returned.
-
-A message without `html` is sent as plain text only, as with `send()`: its `body` is never used
-as an HTML part. Messages that fail validation (see below) are marked `failed` and not sent.
-Messages with `html` are sent in their own `SendBulkEmail` calls, before the text-only ones, so the
-order messages go out (and use up the SES sending rate) can differ from the input order; `results`
-stays in input order.
-
-Each message in the array is an `EmailMessage` (same type as `send()`):
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `to` | `string \| string[]` | Recipient address(es) |
-| `subject` | `string` | Subject line |
-| `body` | `string` | Plain text body |
-| `html` | `string?` | HTML body (optional) |
-| `cc` | `string[]?` | CC addresses (optional) |
-| `bcc` | `string[]?` | BCC addresses (optional) |
-
-### Input validation
-
-`send()` and `sendBatch()` validate each message the same way locally and when deployed, before
-calling SES:
-
-- every address (To, CC, BCC, `fromAddress` and `replyTo`) must be a valid email address, either
-  bare (`jane@example.com`) or with a display name made of plain words or one quoted string
-  (`Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`). The address is checked as
-  given: surrounding whitespace and control characters are rejected;
-- at most 50 recipients per message (To + CC + BCC combined);
-- the subject must be a single line: CR, LF and other control characters (C0, DEL, C1, U+2028
-  and U+2029) are rejected, not stripped. Remove line breaks from a subject built from user
-  input before sending;
-- at most 40 MB per message.
-
-A malformed address, too many recipients or a control character in the subject throws
-`InvalidInputException`; an oversized message
-throws `EmailSendFailedException`. In `sendBatch()` the message is marked `failed` instead.
-
-## Error Handling
-
-```typescript
-import { EmailErrors, isBlocksError } from 'aws-cdk-blocks';
-
-try {
-  await emailClient.send({ to: 'user@example.com', subject: 'Hi', body: 'Hello' });
-} catch (e: unknown) {
-  if (isBlocksError(e, EmailErrors.SendFailed)) {
-    // General send failure — the SES error is logged server-side and kept on `e.cause`
-  }
-  if (isBlocksError(e, EmailErrors.InvalidInput)) {
-    // Malformed input (e.g. invalid email address)
-  }
-  if (isBlocksError(e, EmailErrors.DomainNotVerified)) {
-    // Sending domain not verified in SES
-  }
-  if (isBlocksError(e, EmailErrors.AccountPaused)) {
-    // Account sending is paused by AWS
-  }
-  if (isBlocksError(e, EmailErrors.RateLimited)) {
-    // Transient — safe to retry after backoff
-  }
-}
-```
-
-Each error's message is a stable, Building Block-authored string, so it is safe to forward to a client. The raw SES error (which can name identities, regions, configuration sets and account state) is logged through the block's logger and kept on the error's non-enumerable `cause` for server-side diagnostics.
-
-## Local Development
+## Local development
 
 In local dev mode (`npm run dev`), emails are:
 - Logged to the console as a block (body and HTML truncated):
@@ -262,37 +239,3 @@ In local dev mode (`npm run dev`), emails are:
   ```
 - Persisted to `.cdk-blocks/local/data/{fullId}/emails.json` for inspection
 - Validated with the same checks as the deployed client, so an address or message rejected locally is rejected the same way when deployed
-
-## Package Export Conditions
-
-This package uses a custom `"cdk"` export condition:
-
-```json
-{
-  "exports": {
-    ".": {
-      "cdk": "./dist/index.cdk.js",
-      "aws-runtime": "./dist/index.aws.js",
-      "default": "./dist/index.mock.js"
-    }
-  }
-}
-```
-
-> **Note:** The `"cdk"` condition is a Blocks framework convention, resolved by the Blocks build
-> toolchain (tsx with `--conditions=cdk`). It is **not** a built-in Node.js condition and will
-> not resolve in standard `node` or `ts-node` unless you pass `--conditions=cdk` explicitly.
-
-## Limits
-
-- **Per-message recipients**: 50 recipients max per message (To + CC + BCC combined)
-- **Batch size**: at most `maxBatchSize` messages per `sendBatch()` call (default 100); a larger batch is rejected before anything is sent
-- **Batch API destinations**: 50 destinations per `SendBulkEmail` API call (handled automatically via chunking)
-- **Message size**: 40 MB per message
-- **SES sandbox rate**: 1 email/sec (request production access for higher throughput)
-
-> **Note:** Both the mock and the AWS runtime enforce the per-message recipient and size limits
-> locally before calling SES (see [Input validation](#input-validation)): `send()` throws, and
-> `sendBatch()` records the violation as a failed entry in `results`.
-
-

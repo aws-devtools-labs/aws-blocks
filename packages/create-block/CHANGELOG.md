@@ -1,5 +1,11 @@
 # @aws-blocks/create-block
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: The generated block README has an `## Errors` table seeded with `InvalidInput`, a `Default` column in the options table, and `TODO` markers on the paragraphs to replace.
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

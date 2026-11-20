@@ -61,7 +61,7 @@ tokens, AWS recommends Secrets Manager
 ([*Where should I store my application data?*](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)).
 So the customer-facing recommendation is: **`Secret` for production secrets;
 `AppSetting(secret: true)` only as a free, encrypted fallback for a low-value
-secret** (e.g. a prototype). The user-facing docs phrase this in Blocks terms
+secret** (e.g. a prototype). The user-facing docs phrase this in AWS CDK Blocks terms
 (`Secret` / `AppSetting`) and link out to that AWS page rather than naming the
 services inline.
 

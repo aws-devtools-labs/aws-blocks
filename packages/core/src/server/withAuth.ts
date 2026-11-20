@@ -259,7 +259,7 @@ export interface WithAuthOptions {
  *
  * In SSR server components, browser cookies aren't automatically forwarded
  * to API calls. This wrapper reads cookies and makes them available to
- * all Blocks API calls within the callback via `AsyncLocalStorage`.
+ * all CDK Blocks API calls within the callback via `AsyncLocalStorage`.
  *
  * **Resolution order:**
  * 1. Explicit `cookies` parameter (framework-agnostic)
@@ -276,7 +276,7 @@ export interface WithAuthOptions {
  * | Next.js | `next/headers` | Works out of the box. |
  * | Nuxt/Nitro | Nitro async context (via `unctx`) | Requires `nitro: { experimental: { asyncContext: true } }` in `nuxt.config.ts`. With the flag off the provider returns `undefined` and emits a one-time warning naming the missing config. |
  *
- * @param fn - Async function containing Blocks API calls that need auth.
+ * @param fn - Async function containing CDK Blocks API calls that need auth.
  * @param cookies - Optional explicit cookie string. If omitted, auto-detects
  *   from the request context or registered providers. Pass this for frameworks
  *   without a registered provider (or use `registerCookieProvider` to add one).

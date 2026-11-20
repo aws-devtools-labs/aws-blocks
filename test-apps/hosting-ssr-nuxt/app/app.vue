@@ -1,5 +1,5 @@
 <script setup lang="ts">
-useHead({ title: 'Blocks Blog' });
+useHead({ title: 'AWS CDK Blocks Blog' });
 </script>
 
 <template>
@@ -7,7 +7,7 @@ useHead({ title: 'Blocks Blog' });
     <header :style="{ marginBottom: '2rem', borderBottom: '1px solid #eee', paddingBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }">
       <div>
         <h1 :style="{ margin: 0 }">
-          <NuxtLink to="/" :style="{ textDecoration: 'none', color: 'inherit' }">✍️ Blocks Blog</NuxtLink>
+          <NuxtLink to="/" :style="{ textDecoration: 'none', color: 'inherit' }">✍️ CDK Blocks Blog</NuxtLink>
           <span :style="{ marginLeft: '0.5rem', fontSize: '0.75rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: '#00DC82', color: '#000', fontWeight: 'normal', verticalAlign: 'middle' }">Nuxt</span>
         </h1>
         <p :style="{ color: '#666', margin: '0.25rem 0 0' }">Nuxt 4 (Nitro) · SSR Hosting E2E Test</p>

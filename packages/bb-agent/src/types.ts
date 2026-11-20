@@ -52,7 +52,7 @@ export interface ModelConfig {
 	 * filters, denied topics and prompt-attack filter. The deployed agent is granted
 	 * `bedrock:ApplyGuardrail` on this guardrail.
 	 *
-	 * Create the guardrail outside AWS Blocks (console, CLI or a CDK `CfnGuardrail`) and pass
+	 * Create the guardrail outside CDK Blocks (console, CLI or a CDK `CfnGuardrail`) and pass
 	 * its id or ARN and a version.
 	 *
 	 * @example

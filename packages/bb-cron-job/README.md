@@ -2,25 +2,15 @@
 
 Scheduled task execution backed by EventBridge Scheduler and Lambda, or a container compute for long-running jobs.
 
-> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+**When to use:** Work that runs on a fixed schedule: cleanup, report generation, cache warming, data synchronization.
 
-## Quick Reference
-
-**Common Operations → Configuration**
-
-| What you want | How to configure |
-|---------------|-----------------|
-| Run every N minutes | `schedule: 'rate(5 minutes)'` |
-| Run every hour | `schedule: 'rate(1 hour)'` |
-| Run daily at 9 AM UTC | `schedule: 'cron(0 9 * * ? *)'` |
-| Run daily at 9 AM Pacific | `schedule: 'cron(0 9 * * ? *)', timezone: 'America/Los_Angeles'` |
-| Pass data to handler | `input: { mode: 'full' }` |
-| Disable until manually triggered | `enabled: false` |
-| Run a job longer than 15 minutes | `compute: containerCompute, timeoutSeconds: 7200` (see [Running on a container compute](#running-on-a-container-compute)) |
+**When NOT to use:** Work started by a request or an event: use `AsyncJob`. `CronJob` has no runtime methods, so code cannot start a run.
 
 **Keywords:** cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval
 
-## Quick Start
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
+## Quick start
 
 ```typescript
 import { Scope } from '@aws-cdk-blocks/core';
@@ -37,34 +27,65 @@ const cleanup = new CronJob(scope, 'cleanup', {
 });
 ```
 
-## When to Use
+## API
 
-- Running periodic cleanup tasks (expired sessions, stale data)
-- Generating scheduled reports
-- Cache warming on a timer
-- Data synchronization between systems
-- Periodic health checks or monitoring
+`new CronJob<T>(scope, id, options)`. `T` is the type of `input`. The constructor declares the schedule and the handler; the instance has no methods to call at runtime.
 
-## When NOT to Use
-
-- One-off async tasks triggered by events or user actions → use `AsyncJob`
-- Reacting to data changes → use event subscriptions on the relevant Building Block
-
-## Options
+### Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `schedule` | `string` | (required) | Cron or rate expression (see Schedule Expressions below) |
-| `handler` | `(event: CronJobEvent<T>) => Promise<void>` | (required) | Function to execute on each invocation. Must be idempotent. |
-| `enabled` | `boolean` | `true` | Whether the schedule is active |
+| `schedule` | `string` | (required) | Cron or rate expression (see [Schedule expressions](#schedule-expressions)) |
+| `handler` | `(event: CronJobEvent<T>) => Promise<void>` | (required) | Function to execute on each invocation. Must be idempotent: delivery is at-least-once. |
+| `enabled` | `boolean` | `true` | `false` deploys the schedule in the `DISABLED` state: it does not fire, on AWS or locally. There is no way to run a disabled job by hand. |
 | `description` | `string` | — | Human-readable description of the job |
-| `timezone` | `string` | `'UTC'` | IANA timezone for cron expressions (e.g., `'America/Los_Angeles'`) |
+| `timezone` | `string` | `'UTC'` | IANA timezone for cron expressions (e.g., `'America/Los_Angeles'`). Rate expressions ignore it. |
 | `input` | `T` | — | Static payload passed to the handler on every invocation |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations; defaults to a Logger at error level |
-| `compute` | `Compute` | the scope's compute | The `Compute` to run the handler on: serverless for its own function, container for long-running work (see Running on Its Own Compute) |
+| `compute` | `Compute` | the scope's compute | The `Compute` to run the handler on: serverless for its own function, container for long-running work (see [Running on its own compute](#running-on-its-own-compute)) |
 | `timeoutSeconds` | `number` | — | Wall-clock limit for one tick. On a container the runtime terminates the tick's worker at the deadline; on serverless it's bounded by the function timeout. |
 
-## Running on Its Own Compute
+### Handler event
+
+The handler receives a `CronJobEvent<T>` with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scheduledTime` | `string` | ISO 8601 timestamp of the scheduled invocation time |
+| `jobName` | `string` | The CronJob's fully-qualified id |
+| `input` | `T` | Static input configured on the CronJob (`undefined` when no input is provided) |
+
+## Errors
+
+```typescript
+import { CronJobErrors } from 'aws-cdk-blocks';
+```
+
+| Constant | `error.name` | Thrown when |
+|----------|--------------|-------------|
+| `CronJobErrors.InvalidSchedule` | `InvalidScheduleExpression` | Construction (local) or synth: an invalid rate expression, unrecognized expression, or cron with the wrong field count. With six cron fields, synth leaves field values to EventBridge; the local parser also checks the fields it simulates. |
+| `CronJobErrors.InvalidTimezone` | `InvalidTimezoneExpression` | Construction (local) or synth time: `timezone` is not a valid IANA timezone. |
+| `CronJobErrors.ScheduleNotSupported` | `ScheduleNotSupportedInMock` | Local mock only, at construction: a valid cron expression uses `L`, `W` or `#` in a day field. The schedule deploys and runs on AWS; the mock cannot simulate it. |
+| `CronJobErrors.UnsupportedCompute` | `UnsupportedComputeException` | Synth time: the resolved compute is not a serverless or container compute, or belongs to another backend. |
+
+## Schedule expressions
+
+Rate: `rate(<n> <unit>)`, where the unit is `minute`, `hour` or `day`, singular for 1 and plural otherwise: `rate(1 hour)`, `rate(5 minutes)`, `rate(7 days)`.
+
+Cron: AWS EventBridge cron format (6 fields): `cron(minute hour day-of-month month day-of-week year)`
+
+```
+cron(0 9 * * ? *)       → daily at 9:00 AM
+cron(0 */2 * * ? *)     → every 2 hours
+cron(30 9 ? * MON-FRI *) → weekdays at 9:30 AM
+cron(0 0 1 * ? *)       → first day of every month at midnight
+```
+
+Use `?` for either day-of-month or day-of-week (one must be `?`).
+
+Cron expressions are evaluated in `timezone`: `schedule: 'cron(0 9 * * ? *)', timezone: 'America/Los_Angeles'` runs daily at 9:00 AM Pacific.
+
+## Running on its own compute
 
 By default the handler runs on its scope's compute, which is the app's default
 compute unless the scope sets one (`new Scope(id, { parent, compute })`). Pass a
@@ -106,107 +127,23 @@ new CronJob(scope, 'nightly-rebuild', {
 });
 ```
 
-On a container, the schedule sends each tick to a queue owned by an internal
-`AsyncJob`, and the container drains it. A tick gets the same delivery as a
-container `AsyncJob`:
+A container inherited from the scope works the same way. For `scaling.minInstances`,
+which decides how soon a tick starts and what the container costs between ticks,
+see [Compute scaling](../bb-compute/README.md#scaling).
 
-1. Each tick runs in its own worker thread, and `timeoutSeconds` is hard-enforced
-   (the worker is terminated at the deadline).
-2. A tick that throws or times out is retried, up to 3 attempts in total, then
-   moved to a dead-letter queue. That matches the serverless path's 3 attempts.
-3. The container keeps at least `minInstances` tasks running between ticks. Use
-   `1` or more for most jobs, so a tick starts within seconds. Those tasks run,
-   and are billed, around the clock, even for a job that runs once a night. Use
-   `minInstances: 0` only for a long-running job that can tolerate a late start:
-   the container then scales to zero between ticks, and each tick has to start a
-   task first. That usually takes a few minutes, and for a job that runs less than
-   every six hours it can take up to about 20 minutes.
-4. A deploy that changes your code restarts a tick that is still running after
-   about 2 minutes. The tick runs again from the start, and the restart counts as
-   one of its 3 attempts.
+## Delivery and retries
 
-A container inherited from the scope works the same way. Locally, every job
-runs in the dev server whatever its compute. See `@aws-cdk-blocks/bb-compute`.
+| Compute | Delivery | When the handler fails |
+|---------|----------|------------------------|
+| Serverless | EventBridge Scheduler invokes the compute's function directly. | Lambda's async invoke retry policy retries twice with exponential backoff. After that the error is logged to CloudWatch. |
+| Container | The schedule sends each tick to the queue of an internal `AsyncJob`, and the container drains it. Each tick runs in its own worker thread. | A tick that throws or times out is retried, up to 3 attempts in total, then moved to a dead-letter queue. |
 
-## Schedule Expressions
-
-### Rate Expressions
-
-Simple interval-based schedules:
-
-```
-rate(1 minute)
-rate(5 minutes)
-rate(1 hour)
-rate(12 hours)
-rate(1 day)
-rate(7 days)
-```
-
-### Cron Expressions
-
-AWS EventBridge cron format (6 fields): `cron(minute hour day-of-month month day-of-week year)`
-
-```
-cron(0 9 * * ? *)       → daily at 9:00 AM
-cron(0 */2 * * ? *)     → every 2 hours
-cron(30 9 ? * MON-FRI *) → weekdays at 9:30 AM
-cron(0 0 1 * ? *)       → first day of every month at midnight
-```
-
-Use `?` for either day-of-month or day-of-week (one must be `?`).
-
-## Handler Event
-
-The handler receives a `CronJobEvent<T>` with:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `scheduledTime` | `string` | ISO 8601 timestamp of the scheduled invocation time |
-| `jobName` | `string` | The CronJob's fully-qualified id |
-| `input` | `T` | Static input configured on the CronJob (`undefined` when no input is provided) |
-
-## Error Constants
-
-```typescript
-import { CronJobErrors } from 'aws-cdk-blocks';
-
-CronJobErrors.InvalidSchedule  // schedule expression is not a valid cron or rate format
-CronJobErrors.InvalidTimezone  // timezone string is not a valid IANA timezone
-CronJobErrors.UnsupportedCompute // unsupported compute or compute from another backend (synth time)
-```
-
-`InvalidSchedule` and `InvalidTimezone` are thrown at construction time (fail-fast validation).
-
-## Compute Compatibility
-
-CronJob targets its own `compute`, or inherits its scope's compute:
-
-- **Lambda:** EventBridge Scheduler invokes the resolved compute's function directly.
-- **Container:** Scheduler sends each tick to an internal AsyncJob's queue, which
-  the container drains. See [Running on a container compute](#running-on-a-container-compute).
-
-Other compute types, and computes from another backend, fail at synth time with
-`UnsupportedComputeException`. Locally, handlers run in the dev server regardless
-of compute selection; this does not reproduce container worker isolation or timeouts.
+- **Overlap:** If a handler runs longer than the schedule interval, the next invocation starts while the previous is still running, on a serverless and on a container compute (a container runs up to its concurrency limit of ticks at once). Design for overlap or implement application-level locking with `KVStore`.
+- **Deploys (container):** A deploy that changes your code restarts a tick that is still running after about 2 minutes. The tick runs again from the start, and the restart counts as one of its 3 attempts.
 
 ## Examples
 
-### Cron Schedule with Timezone
-
-```typescript
-const dailyReport = new CronJob(scope, 'daily-report', {
-  schedule: 'cron(0 9 * * ? *)',
-  timezone: 'America/Los_Angeles',
-  description: 'Generate and email daily analytics report at 9 AM Pacific',
-  handler: async (event) => {
-    const data = await analytics.query({ date: event.scheduledTime });
-    await email.send('team@example.com', 'Daily Report', formatReport(data));
-  },
-});
-```
-
-### Typed Input
+### Typed input
 
 ```typescript
 new CronJob<{ keys: string[] }>(scope, 'cache-warmer', {
@@ -220,92 +157,23 @@ new CronJob<{ keys: string[] }>(scope, 'cache-warmer', {
 });
 ```
 
-### Disabled Job (Manual-Only in Dev)
+To run one handler on several schedules, create one `CronJob` per schedule and vary `input`.
 
-```typescript
-const migration = new CronJob(scope, 'data-migration', {
-  schedule: 'rate(1 day)',
-  enabled: false,
-  handler: async () => {
-    await migrateRecords();
-  },
-});
-```
+## What it provisions (AWS)
 
-### Handler Accessing Other Building Blocks
+- **EventBridge Schedule:** One `AWS::Scheduler::Schedule` per CronJob instance, named after the CronJob's `fullId` (truncated to 64 chars).
+- **IAM role:** One EventBridge Scheduler role per backend, with access to each job's target: `lambda:InvokeFunction` for serverless jobs or `sqs:SendMessage` for container jobs. Its trust policy is limited to schedules in the stack's account and region.
+- **Serverless jobs:** Each schedule targets its resolved function. No dedicated Lambda is created per job.
+- **Container jobs:** An internal `AsyncJob` with its queue and dead-letter queue. The schedule targets the queue.
 
-```typescript
-const store = new KVStore(scope, 'sessions');
-
-const sessionCleanup = new CronJob(scope, 'session-cleanup', {
-  schedule: 'rate(1 hour)',
-  handler: async () => {
-    const now = Date.now();
-    for await (const session of store.scan()) {
-      if (session.expiresAt < now) {
-        await store.delete(session.key);
-      }
-    }
-  },
-});
-```
-
-### Multiple Schedules for One Handler
-
-```typescript
-const syncHandler = async (event: CronJobEvent<{ mode: string }>) => {
-  if (event.input.mode === 'incremental') await syncIncremental();
-  else await syncFull();
-};
-
-new CronJob<{ mode: string }>(scope, 'sync-hourly', {
-  schedule: 'rate(1 hour)',
-  input: { mode: 'incremental' },
-  handler: syncHandler,
-});
-
-new CronJob<{ mode: string }>(scope, 'sync-daily', {
-  schedule: 'cron(0 9 * * ? *)',
-  input: { mode: 'full' },
-  handler: syncHandler,
-});
-```
-
-## Best Practices
-
-- **Idempotency:** EventBridge provides at-least-once delivery. Design handlers to tolerate duplicate invocations.
-- **Rate expressions** for simple intervals; **cron expressions** for precise timing.
-- **Concurrent executions:** If a handler runs longer than the schedule interval, the next invocation starts while the previous is still running. Design for overlap or implement application-level locking with `KVStore`. This holds on a container compute too: a container runs up to its concurrency limit of ticks at once.
-- **Failure handling:** On a serverless compute, handler exceptions are retried by Lambda's built-in async invoke retry policy (2 retries with exponential backoff). After retries exhaust, the error is logged to CloudWatch. On a container compute, a failed tick is retried by its queue (3 attempts in total), then moved to a dead-letter queue.
-
-## Local Development
+## Local development
 
 In local dev mode, CronJob runs schedules in-process:
 
-- Rate schedules up to the timer limit (2^31-1 ms, about 24.8 days) use `setInterval`
-- Longer rate schedules wait in `setTimeout` steps toward an absolute fire time, fire, then schedule the first slot still in the future, so slots missed during a clock jump (for example sleep) are not run
-- Cron schedules calculate the next fire time with timezone support and use `setTimeout`
+- Rate and cron schedules fire on their real schedule, with `timezone` applied to cron expressions. If a tick was due while the process was suspended (for example, during machine sleep), the job runs once on wake and skips the other missed slots.
 - Console logs when the job fires: `[CronJob:{id}] triggered at {timestamp}`
-- When `enabled: false`, the schedule does not run automatically
-- Failed handlers are logged with a warning that AWS would retry
-
-## AWS Deployment
-
-Automatically provisions:
-
-- **EventBridge Schedule:** One `AWS::Scheduler::Schedule` per CronJob instance
-- **Lambda compute (serverless jobs):** Each schedule targets its resolved function. No dedicated Lambda is created per job.
-- **IAM role:** Per-backend EventBridge Scheduler role with access to each job's target: `lambda:InvokeFunction` for Lambda jobs or `sqs:SendMessage` for container jobs. Its trust policy is limited to schedules in the stack's account and region (`aws:SourceAccount` + `aws:SourceArn` matching `schedule-group/*`).
-- **Schedule name:** Derived from the CronJob's `fullId` (truncated to 64 chars)
-- **On a container compute:** The schedule targets the main SQS queue of an internal `AsyncJob` instead of a Lambda function. The runner also owns a dead-letter queue, but the schedule does not target it. The scheduler role gets `sqs:SendMessage` on the main queue in place of `lambda:InvokeFunction`.
-
-## Key Distinction from AsyncJob
-
-CronJob is a **pure infrastructure declaration** — the constructor defines the schedule and handler. There are no runtime methods like `submit()` or `submitBatch()`. The handler runs on the schedule automatically.
-
-| | CronJob | AsyncJob |
-|-|---------|----------|
-| Trigger | Time-based (cron/rate) | Programmatic (`submit()`) |
-| Runtime methods | None | `submit()`, `submitBatch()` |
-| Use case | Periodic recurring tasks | One-off event-driven work |
-| AWS service | EventBridge Scheduler | SQS with Lambda or container compute |
+- When `enabled: false`, the job is registered and the schedule does not run.
+- A failed handler is logged with a warning that AWS would retry. The mock does not retry it.
+- Handlers run in the dev server whatever the compute: a container compute's worker isolation and `timeoutSeconds` are not reproduced.
+- A cron expression that uses `L`, `W` or `#` throws `CronJobErrors.ScheduleNotSupported` (see [Errors](#errors)). Deploy to a sandbox to exercise it.
+- The mock ignores the year field: `cron(0 0 1 1 ? 2030)` fires every January 1 locally.

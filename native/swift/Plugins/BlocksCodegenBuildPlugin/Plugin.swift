@@ -11,7 +11,7 @@ import Foundation
 let blocksCodegenConfigName = "blocks.codegen.json"
 
 /// A build plugin that automatically generates typed Swift models and API methods
-/// from a Blocks spec file (`blocks.spec.json`) at build time.
+/// from a CDK Blocks spec file (`blocks.spec.json`) at build time.
 ///
 /// Add this plugin to your target and include `blocks.spec.json` in your source files.
 /// The generated `Models.swift` and `API.swift` will be compiled as part of the target.
@@ -43,7 +43,7 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
 
         return [
             .buildCommand(
-                displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
+                displayName: "Generate AWS CDK Blocks API from \(specFile.url.lastPathComponent)",
                 executable: generatorTool.url,
                 arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
                     + [configFile?.url.path(percentEncoded: false)].compactMap { $0 },
@@ -81,7 +81,7 @@ extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
 
         return [
             .buildCommand(
-                displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
+                displayName: "Generate AWS CDK Blocks API from \(specFile.url.lastPathComponent)",
                 executable: generatorTool.url,
                 arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
                     + [configFile?.url.path(percentEncoded: false)].compactMap { $0 },

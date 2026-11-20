@@ -177,7 +177,7 @@ describe('LambdaCompute', () => {
 
 	test('throws when created outside a BlocksStack/BlocksBackend', () => {
 		// With no real BlocksStack/BlocksBackend in the tree or as the ambient
-		// owner (a plain cdk.Stack exposes none of backendHandlerPath / a Blocks
+		// owner (a plain cdk.Stack exposes none of backendHandlerPath / a CDK Blocks
 		// identity), the compute cannot derive its entry or BLOCKS_STACK_NAME and
 		// fails at construction.
 		const app = new cdk.App();

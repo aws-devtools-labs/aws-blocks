@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Persistent test infrastructure for AWS Blocks E2E tests (deploy once, do not tear down)",
+  "description": "Persistent test infrastructure for AWS CDK Blocks E2E tests (deploy once, do not tear down)",
   "scripts": {
     "build": "tsc --build",
     "deploy": "npx cdk deploy --app 'npx tsx vpc-test-stack.ts'",

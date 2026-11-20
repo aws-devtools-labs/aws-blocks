@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "E2E test app for Blocks Hosting — Astro static multi-page deployment",
+  "description": "E2E test app for AWS CDK Blocks Hosting — Astro static multi-page deployment",
   "workspaces": [
     "cdk-blocks"
   ],
@@ -23,7 +23,7 @@
     "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "aws-cdk-blocks": "1.0.0-rc.1"
+    "aws-cdk-blocks": "1.0.0-rc.2"
   },
   "devDependencies": {
     "@astrojs/preact": "^4.1.3",

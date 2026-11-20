@@ -4,12 +4,12 @@
 //
 // In a STATIC build this page is rendered once at build time; live data
 // must be fetched from the browser at runtime. This page exists mainly so
-// the e2e suite can prove the single-origin Blocks API proxy works
+// the e2e suite can prove the single-origin CDK Blocks API proxy works
 // (`/cdk-blocks/api` on the same CloudFront domain, no CORS).
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="Astro on Blocks — Posts + API">
+<Layout title="Astro on AWS CDK Blocks — Posts + API">
   <h1 data-testid="page-id">Posts</h1>
   <p data-testid="posts-marker">
     The backend is reachable at the relative path <code>/cdk-blocks/api</code>

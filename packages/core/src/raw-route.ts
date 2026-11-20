@@ -203,7 +203,7 @@ function getState(): RawRouteRegistryState {
     state.copies += 1;
     if (state.copies > 1) {
       console.warn(
-        `AWS Blocks: ${state.copies} copies of @aws-cdk-blocks/core loaded in this process. ` +
+        `AWS CDK Blocks: ${state.copies} copies of @aws-cdk-blocks/core loaded in this process. ` +
           'They now share one RawRoute registry, but duplicate copies indicate a ' +
           'dependency-tree problem — deduplicate @aws-cdk-blocks/core.',
       );

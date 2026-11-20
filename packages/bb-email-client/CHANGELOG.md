@@ -1,5 +1,16 @@
 # @aws-blocks/bb-email-client
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the "Package Export Conditions" section, which did not match the package manifest, is removed.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

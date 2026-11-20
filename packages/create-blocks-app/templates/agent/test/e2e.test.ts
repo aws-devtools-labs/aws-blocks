@@ -50,7 +50,7 @@ async function signUpAndSignIn() {
   return await authApi.setAuthState({ action: 'autoSignIn', username: creds.username });
 }
 
-// Wait for the Blocks server to be ready without depending on the sample API,
+// Wait for the CDK Blocks server to be ready without depending on the sample API,
 // and record which runtime it reports.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
@@ -127,7 +127,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace the sample methods with your own.
-test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
+test('app: server serves its AWS CDK Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });

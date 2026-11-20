@@ -52,7 +52,7 @@ export class RawRoute extends Scope {
 
   constructor(scope: ScopeParent, id: string, options: RawRouteOptions) {
     super(id, { parent: scope });
-    // First-party construct: its roles are AWS Blocks' own (see isAppOwnedRole).
+    // First-party construct: its roles are CDK Blocks' own (see isAppOwnedRole).
     markBlocksOwned(this);
     this.path = resolveRoutePath(scope, id, options);
     // Tag the route with its owning backend root so Hosting can filter the

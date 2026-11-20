@@ -1,6 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-// Verifier self-test fixture only. Never supplied to the coding agent or used as a Blocks implementation.
+// Verifier self-test fixture only. Never supplied to the coding agent or used as a CDK Blocks implementation.
 import http from 'node:http';
 import fs from 'node:fs';
 let items=[];

@@ -1,10 +1,8 @@
-# Blocks Next.js App
+# AWS CDK Blocks Next.js App
 
-A Next.js 16 App Router frontend on AWS CDK Blocks. Shows both halves of the App
-Router calling the same Blocks backend: a **Server Component** that fetches on
+A Next.js 16 App Router frontend on CDK Blocks. Shows both halves of the App
+Router calling the same CDK Blocks backend: a **Server Component** that fetches on
 the server, and a **Client Component** that calls the API from the browser.
-
-> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template nextjs`
 
 ## Getting Started
 
@@ -12,7 +10,6 @@ the server, and a **Client Component** that calls the API from the browser.
 npm run dev          # Start the Next.js dev server (mocks, no AWS needed)
 npm run test:e2e     # Run the e2e test against the dev server
 npm run sandbox      # Deploy to AWS sandbox
-npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`.
@@ -27,68 +24,40 @@ Open http://localhost:3000 after `npm run dev`.
 | `src/app/layout.tsx` | Root layout |
 | `src/app/error.tsx` | Route-level error boundary (catches what a section boundary doesn't) |
 | `src/app/section-boundary.tsx` | Per-section error boundary, so one failing section doesn't take down the page |
-| `test/e2e.test.ts` | Boots the dev server and checks the home page, Blocks config, and sample API |
+| `test/e2e.test.ts` | Boots the dev server and checks the home page, CDK Blocks config, and sample API |
 
 ## What's Included
 
 - **App Router** — Server + Client Components in `src/app/`.
-- **Blocks API** — a public `api` namespace (`greet`, `getServerTime`); no auth
-  by default. Add an auth block and call `requireAuth(context)` first to gate a
-  method (see the block's README).
+- **CDK Blocks API** — a public `api` namespace (`greet`, `getServerTime`); no auth
+  by default. To gate a method, add `Auth` and call
+  `await auth.requireAuth(context)` first (`npm run docs Auth`).
 - **Standalone output** — `next.config.ts` sets `output: 'standalone'` so the
   build packages for Lambda deployment.
 - **One `tsconfig.json`**: it typechecks `src/` and `cdk-blocks/` together,
   with Node types global, so `src/` can use `process` without an error, even in a
-  Client Component. The Vite templates give the backend a TypeScript project of
-  its own instead, but `next build` ignores project references when it
-  type-checks ([vercel/next.js#67372](https://github.com/vercel/next.js/issues/67372)),
-  so it would check `cdk-blocks/` with this `tsconfig.json` either way.
+  Client Component.
 
 ## Commands
 
+`npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands. Specific to this app:
+
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Next.js dev server with mock storage |
-| `npm run dev:stop` | Stop the local dev server this app started |
-| `npm run test:e2e` | Boot the dev server and check the home page, Blocks config, and sample API |
-| `npm run typecheck` | TypeScript type checking |
 | `npm run build` | `next build` (standalone output) |
 | `npm run start` | Serve the production build locally |
-| `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
-| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
-| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
-| `npm run deploy` | Full production deploy |
-| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
-| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
-| `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
-| `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
-| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
 
-Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
-The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
-`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
 
-The home-page and Blocks config checks do not depend on the sample page title or API methods.
-A separate `greet` test validates the sample API in a freshly scaffolded app.
+## Tests
+
+The home-page and CDK Blocks config checks do not depend on the sample page title or API methods.
+A separate `greet` test validates the sample API.
 When you replace the sample API, update or delete that test to exercise your own methods.
-Add assertions for your own page content and behavior as you customize the app.
 To test an already-running app, set `TEST_URL` to its base URL; it must serve
 both the home page and `/.blocks-sandbox/config.json`. The sample API test uses
 the API URL from that config, including when it points to a separate backend.
 
-## Stack naming
-
-Your CloudFormation stack names are derived from the `stackId` in
-`.cdk-blocks/config.json`, generated at scaffold time from your project name plus a
-random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
-and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`cdk-blocks/index.cdk.ts` for dynamic naming logic.
-
 ## For Agents
 
 Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.
-
-**Do not use local files or in-memory storage** — use Building Blocks for all
-data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). The backend lives in `cdk-blocks/index.ts`; the frontend calls
-it from `src/app/`. Test via `npm run test:e2e`.

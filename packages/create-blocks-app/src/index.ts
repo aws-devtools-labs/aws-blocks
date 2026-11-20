@@ -321,8 +321,8 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
 // ─── Shared workspace helper ─────────────────────────────────────────────────
 
 /**
- * Secret and key-material patterns every Blocks app git-ignores. The templates
- * ship them in their `gitignore`; adding Blocks to an existing project appends
+ * Secret and key-material patterns every CDK Blocks app git-ignores. The templates
+ * ship them in their `gitignore`; adding CDK Blocks to an existing project appends
  * any that are missing, whatever the caller passes. Keep in step with the
  * template gitignores — `templates-security-defaults.test.ts` checks both.
  */
@@ -715,7 +715,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     console.error('To scaffold a fresh AWS CDK Blocks app, choose a different template:');
     console.error('  npx @aws-cdk-blocks/create-blocks-app my-app --template default');
     console.error('');
-    console.error('To integrate Blocks into an existing project, run this from');
+    console.error('To integrate CDK Blocks into an existing project, run this from');
     console.error('the project root:');
     console.error('  npx @aws-cdk-blocks/create-blocks-app');
     process.exit(1);
@@ -806,7 +806,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   // The template's local dev port: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
-  console.log('\n✓ AWS CDK Blocks app created!');
+  console.log('\n✓ CDK Blocks app created!');
   console.log(`\nNext steps:`);
   console.log(`  cd ${quoteForShell(targetDir)}`);
   if (skipInstall) {
@@ -836,11 +836,11 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('\n🔍 Detected Amplify Gen 2 project (amplify/backend.ts found)\n');
   console.log('This will add AWS CDK Blocks to your existing Amplify project:');
   console.log('');
-  console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
-  console.log('  CREATE  amplify/blocks.ts     (wires Blocks into Amplify backend)');
+  console.log('  CREATE  cdk-blocks/           (CDK Blocks backend workspace)');
+  console.log('  CREATE  amplify/blocks.ts     (wires CDK Blocks into Amplify backend)');
   console.log('  MODIFY  amplify/backend.ts    (adds import for blocks.ts)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
-  console.log('  MODIFY  .gitignore            (adds Blocks entries, node_modules if missing, and secret and key-material patterns)');
+  console.log('  MODIFY  .gitignore            (adds CDK Blocks entries, node_modules if missing, and secret and key-material patterns)');
   console.log('  CREATE  amplify.yml           (or modify existing — adds CDK conditions)');
   console.log('');
   console.log('No changes will be committed. Review the diff before committing.');
@@ -852,7 +852,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     process.exit(0);
   }
 
-  console.log('\n📦 Scaffolding Blocks...\n');
+  console.log('\n📦 Scaffolding CDK Blocks...\n');
 
   // 1. Copy cdk-blocks/ template. Its package.json declares its own
   // `@aws-cdk-blocks/*` placeholders, which the published CLI stamps too; they are
@@ -897,11 +897,11 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   await cp(blocksTsSrc, blocksTsDest);
   console.log('  ✓ Created amplify/blocks.ts');
 
-  // 3. Modify amplify/backend.ts — add Blocks initialization at the end
+  // 3. Modify amplify/backend.ts — add CDK Blocks initialization at the end
   const backendTsPath = join(targetDir, 'amplify', 'backend.ts');
   let backendTs = await readFile(backendTsPath, 'utf-8');
   if (!backendTs.includes('./blocks')) {
-    const blocksSnippet = `\n// Blocks integration — adds Building Blocks to your Amplify backend\nimport { initBlocks } from './blocks.js';\nawait initBlocks(backend);\n`;
+    const blocksSnippet = `\n// CDK Blocks integration — adds Building Blocks to your Amplify backend\nimport { initBlocks } from './blocks.js';\nawait initBlocks(backend);\n`;
     let patched = false;
 
     if (!backendTs.includes('export const backend') && !backendTs.includes('export { backend }')) {
@@ -937,7 +937,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     }
   }
 
-  // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
+  // 4. Add CDK Blocks workspace (package.json, .gitignore, deps, install)
   const standalone = JSON.parse(await readFile(join(__dirname, '../templates/default/package.json'), 'utf-8'));
   const clientScript = 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx cdk-blocks/scripts/generate-client.ts';
   const scripts = await addBlocksWorkspace(targetDir, {
@@ -960,7 +960,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'help', 'db', 'migrate']
         .map(name => [name, standalone.scripts[name]])),
     },
-    // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
+    // The CDK Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
     // so `"frontend": false` stops the dev task from detecting the app's vite or next.
     // `"generateClient": false` keeps the overlay's own cdk-blocks/client.js (the Cognito token
     // and the amplify_outputs.json API URL): the dev server would replace it with the generic one.
@@ -974,32 +974,32 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   // 5. Handle amplify.yml
   await handleAmplifyYml(targetDir);
 
-  console.log('\n✓ Blocks integrated with your Amplify Gen 2 app!\n');
+  console.log('\n✓ CDK Blocks integrated with your Amplify Gen 2 app!\n');
   console.log('Next steps:');
-  console.log(`  npm run ${scripts.sandbox}  # Deploy Amplify + Blocks to sandbox`);
-  console.log(`  npm run ${scripts['blocks:dev']}  # Run Blocks local dev server`);
+  console.log(`  npm run ${scripts.sandbox}  # Deploy Amplify + CDK Blocks to sandbox`);
+  console.log(`  npm run ${scripts['blocks:dev']}  # Run CDK Blocks local dev server`);
   console.log(`  npm run ${scripts['generate-client']}  # Regenerate the Amplify-aware client`);
   console.log(`  npm run ${scripts.help}  # List CDK Blocks tasks`);
   printTaskNames(scripts);
-  console.log('Your Blocks API is available at the /api endpoint alongside your Amplify backend.');
+  console.log('Your CDK Blocks API is available at the /api endpoint alongside your Amplify backend.');
   console.log('');
   printTypeScriptSteps(amplifyPkg);
   printMigrationInstructions(scripts.sandbox, standalone.scripts.sandbox);
 }
 
 function printMigrationInstructions(sandboxTask: string, standaloneSandboxScript: string) {
-  console.log('─── Migration to Blocks-native (optional) ────────────────────────');
+  console.log('─── Migration to CDK Blocks-native (optional) ────────────────────────');
   console.log('');
-  console.log('To make your app "Blocks-native with Amplify as a guest":');
+  console.log('To make your app "CDK Blocks-native with Amplify as a guest":');
   console.log('');
   console.log('1. Move CDK orchestration from amplify/backend.ts to cdk-blocks/index.cdk.ts');
   console.log('   - Use BlocksStack.create() instead of BlocksBackend.create()');
-  console.log('   - Import Amplify resources into the Blocks stack');
+  console.log('   - Import Amplify resources into the CDK Blocks stack');
   console.log('');
-  console.log(`2. Run the sandbox through Blocks: replace the Amplify command in the \`${sandboxTask}\` script with:`);
+  console.log(`2. Run the sandbox through CDK Blocks: replace the Amplify command in the \`${sandboxTask}\` script with:`);
   console.log(`   ${standaloneSandboxScript}`);
   console.log(`   Then use \`npm run ${sandboxTask}\`.`);
-  console.log('   - Blocks sandbox uses CDK directly (no Amplify CLI dependency)');
+  console.log('   - CDK Blocks sandbox uses CDK directly (no Amplify CLI dependency)');
   console.log('');
   console.log('3. Update amplify.yml to use CDK deploy directly:');
   console.log('   backend.phases.build.commands:');
@@ -1091,10 +1091,10 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add an AWS CDK Blocks backend to your project:');
   console.log('');
-  console.log('  CREATE  cdk-blocks/           (Blocks backend workspace)');
+  console.log('  CREATE  cdk-blocks/           (CDK Blocks backend workspace)');
   console.log('  CREATE  cdk.json              (CDK configuration)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
-  console.log('  MODIFY  .gitignore            (adds Blocks entries, node_modules if missing, and secret and key-material patterns)');
+  console.log('  MODIFY  .gitignore            (adds CDK Blocks entries, node_modules if missing, and secret and key-material patterns)');
   console.log('');
 
   const proceed = skipConfirm || await confirm('Proceed?');
@@ -1103,7 +1103,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     process.exit(0);
   }
 
-  console.log('\n📦 Adding Blocks backend...\n');
+  console.log('\n📦 Adding CDK Blocks backend...\n');
 
   // From the published CLI, check the `@aws-cdk-blocks/*` placeholder below has a
   // range before anything is written (addBlocksWorkspace stamps it later).
@@ -1144,7 +1144,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     console.log('  ⚠ cdk.json already exists, skipping');
   }
 
-  // 3. Add Blocks workspace (package.json, .gitignore, deps, install).
+  // 3. Add CDK Blocks workspace (package.json, .gitignore, deps, install).
   // Source devDeps versions from the template's package.json — single source of truth.
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
   const tplDevDeps = templatePkg.devDependencies || {};
@@ -1169,7 +1169,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   });
   await tailorTaskExamples(awsBlocksDest, scripts, ['index.ts', 'index.cdk.ts']);
 
-  console.log('\n✓ AWS CDK Blocks backend added to your project!\n');
+  console.log('\n✓ CDK Blocks backend added to your project!\n');
   console.log('Next steps:');
   console.log(`  npm run ${scripts.sandbox}  # Deploy backend to your AWS sandbox`);
   console.log(`  npm run ${scripts['dev:server']}  # Run local dev server`);
@@ -1252,19 +1252,19 @@ async function printUsage() {
 
   console.log(`Usage: create-blocks-app [directory] [options]
 
-Create a new AWS CDK Blocks app or add AWS CDK Blocks to an existing project.
+Create a new AWS CDK Blocks app or add it to an existing project.
 
 The mode is auto-detected based on the target directory:
 
   1. Amplify project detected (amplify/backend.ts exists):
-     Integrates Blocks into your Amplify Gen 2 backend.
+     Integrates CDK Blocks into your Amplify Gen 2 backend.
 
   2. Existing project detected (package.json exists, no Amplify):
      Adds the cdk-blocks/ backend workspace to your project.
      Works with any framework — Vite, Next.js, SvelteKit, Astro, etc.
 
   3. Empty or new directory:
-     Creates a standalone Blocks starter app from a template. A directory
+     Creates a standalone CDK Blocks starter app from a template. A directory
      that contains only benign metadata (e.g. .git, editor config) or an
      INSTRUCTIONS.md is still treated as empty; any other pre-existing file
      blocks scaffolding so it is never overwritten.
@@ -1289,9 +1289,9 @@ ${templateList}
   -h, --help             Show this help message
 
 Examples:
-  npx @aws-cdk-blocks/create-blocks-app                            Add Blocks to current project
-  npx @aws-cdk-blocks/create-blocks-app .                          Add Blocks to current project
-  npx @aws-cdk-blocks/create-blocks-app my-app                     Create a standalone Blocks starter app
+  npx @aws-cdk-blocks/create-blocks-app                            Add CDK Blocks to current project
+  npx @aws-cdk-blocks/create-blocks-app .                          Add CDK Blocks to current project
+  npx @aws-cdk-blocks/create-blocks-app my-app                     Create a standalone CDK Blocks starter app
   npx @aws-cdk-blocks/create-blocks-app . --yes --template nextjs  Non-interactive scaffold with the Next.js template
 `);
 }
@@ -1382,7 +1382,7 @@ async function create() {
     console.error('To add AWS CDK Blocks to an existing project, run from the project root:');
     console.error('  npx @aws-cdk-blocks/create-blocks-app');
     console.error('');
-    console.error('To create a fresh AWS CDK Blocks app, specify a new directory:');
+    console.error('To create a fresh CDK Blocks app, specify a new directory:');
     console.error('  npx @aws-cdk-blocks/create-blocks-app my-app');
     process.exit(1);
   }, { template: templateName, templateVersion: templatePkgVersion });

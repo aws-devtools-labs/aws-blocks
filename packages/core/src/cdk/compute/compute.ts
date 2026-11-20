@@ -70,7 +70,7 @@ export type ComputeApiIngress =
 	  };
 
 /**
- * Base class for a Blocks *compute* — a runtime that executes handler code
+ * Base class for a CDK Blocks *compute* — a runtime that executes handler code
  * (Lambda today; containers later). A compute owns the physical function/service
  * plus its ingress, and receives config via {@link setEnv}.
  *
@@ -142,7 +142,7 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 
 	constructor(id: string, options?: ScopeOptions) {
 		super(id, options);
-		// A compute is AWS Blocks' own: its roles (function and task roles) are
+		// A compute is CDK Blocks' own: its roles (function and task roles) are
 		// framework roles for the service-principal trust check.
 		markBlocksOwned(this);
 		// Self-register on the owning stack so finalize steps (config, tracing,

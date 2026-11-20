@@ -113,9 +113,9 @@ Keep the old table with `LegacyKVStore`, and migrate its items to a `KVStore` wi
    const prefs = new KVStore<Prefs>(scope, 'prefs-v2');
    ```
 
-   Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete`, and `scan` of release 0.4.0, so code that still calls the old store keeps working.
+   Deploy. The deploy goes through: it creates the table of `prefs-v2` and doesn't change the old one. `LegacyKVStore` has the `get`, `put`, `delete`, and `scan` of release 0.4.0. Its `scan` adds `limit`, `cursor`, and expiry metadata; its `get` defaults to a strongly consistent read at twice the read capacity. Pass `{ consistentRead: false }` to keep eventually consistent reads.
 
-2. Migrate the data however is appropriate for your app. `LegacyKVStore` does not copy the items. The [`KVStore` README](../../packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier) lists the tools for a copy and steps that are suitable for some migrations.
+2. Migrate the data however is appropriate for your app. `LegacyKVStore` does not copy the items. The [`KVStore` README](../../packages/bb-kv-store/README.md#step-2-migrate-the-data) describes one way to migrate while the app stays live and explains its limits.
 
 3. When the data is in the new store, remove the `LegacyKVStore` line and any read of the old store, and deploy. The old table leaves the stack. A table with a removal policy of `destroy` is deleted. A retained table, which is the default of the production preset, stays in your account until you delete it.
 
@@ -167,13 +167,13 @@ Run `cdk diff` before you deploy. The [`Database` README](../../packages/bb-data
 This one is optional: nothing stops working if you skip it. It is for:
 
 - an app scaffolded from a Vite template (`default`, `bare`, `react`, `auth`, `agent`, `demo`) whose `tsconfig.json` still lists `cdk-blocks/**/*` in `include`, and
-- a project you added AWS Blocks to, when its frontend `tsconfig` sets `types` (such as create-vite's `"types": ["vite/client"]`) and `tsc` reports `error TS2591: Cannot find name 'process'` in `cdk-blocks/`.
+- a project you added AWS CDK Blocks to, when its frontend `tsconfig` sets `types` (such as create-vite's `"types": ["vite/client"]`) and `tsc` reports `error TS2591: Cannot find name 'process'` in `cdk-blocks/`.
 
 The frontend imports the backend (`import { api } from 'cdk-blocks'`), so its `tsconfig` typechecks the backend source with the frontend's settings. A single `tsconfig.json` with Node types makes that pass, but it also lets browser code use `process` or `Buffer` without an error. Current templates make the backend a TypeScript project of its own, with Node types, and the frontend reads it through a [project reference](https://www.typescriptlang.org/docs/handbook/project-references.html). `tsc -b` builds the backend's declarations into `node_modules/.tmp/` first.
 
 Skip this for a Next.js app: `next build` ignores project references when it type-checks, so it checks `cdk-blocks/` with the app's `tsconfig.json` either way, and that needs Node types (a `tsconfig.json` that sets no `types` has them). Skip it for a backend-only app (`backend`, `api-only`, `sql`, `cron`, `observability`, `observability`) too: all its code runs on Node.
 
-### An app from a Blocks Vite template
+### An app from a CDK Blocks Vite template
 
 1. Copy the TypeScript files of a fresh scaffold of the same template (pass its name to `--template`), made in a folder outside your app (on Windows, pick another folder than `/tmp`):
 
@@ -197,7 +197,7 @@ Skip this for a Next.js app: `next build` ignores project references when it typ
 
 ### Any other project
 
-1. Give the backend its own project: copy [the default template's `cdk-blocks/tsconfig.json`](../../packages/create-blocks-app/templates/default/cdk-blocks/tsconfig.json) into `cdk-blocks/`. Adding AWS Blocks to a project with `create-blocks-app` already wrote it. Make sure `@types/node` is in your `devDependencies`.
+1. Give the backend its own project: copy [the default template's `cdk-blocks/tsconfig.json`](../../packages/create-blocks-app/templates/default/cdk-blocks/tsconfig.json) into `cdk-blocks/`. Adding CDK Blocks to a project with `create-blocks-app` already wrote it. Make sure `@types/node` is in your `devDependencies`.
 
 2. In the `tsconfig` that compiles the code importing `cdk-blocks` (`tsconfig.app.json` in a create-vite app, otherwise `tsconfig.json`), add:
 
@@ -235,7 +235,7 @@ Skip this for a Next.js app: `next build` ignores project references when it typ
 
   Then add `{ "path": "../shared" }` to `references` in `cdk-blocks/tsconfig.json`, and `{ "path": "./shared" }` to those of `tsconfig.app.json`.
 - A backend method whose signature uses a Node type, such as one that returns a `Buffer`, reads as `any` in the frontend, with no error (`skipLibCheck` hides it). Return plain JSON-serializable values from API methods.
-- [TROUBLESHOOTING.md](../../packages/blocks/TROUBLESHOOTING.md#typescript-errors-in-aws-blocks-from-the-frontend) lists the errors of this layout, including `TS2742` under pnpm.
+- [TROUBLESHOOTING.md](../../packages/blocks/TROUBLESHOOTING.md#typescript-errors-in-cdk-blocks-from-the-frontend) lists the errors of this layout, including `TS2742` under pnpm.
 
 ## Keep the next upgrade from surprising you
 

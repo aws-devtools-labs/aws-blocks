@@ -1,21 +1,18 @@
-# Blocks SQL Application
+# AWS CDK Blocks SQL Application
 
-Backend-only TypeScript API on a PostgreSQL database — the AWS CDK Blocks
+Backend-only TypeScript API on a PostgreSQL database — the CDK Blocks
 `Database` Building Block on Aurora DSQL. Relational modeling with foreign keys,
 transactions, and version-controlled SQL migrations. No frontend included.
 
-> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template sql`
+## Getting Started
 
-## For Coding Agents
+```bash
+npm run dev         # Local dev server on http://localhost:3001 (long-running)
+npm run test:e2e    # Run end-to-end tests against the dev server
+npm run sandbox     # Deploy to AWS sandbox (Aurora DSQL)
+```
 
-**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.**
-
-**After making code changes, always run `npm run typecheck` to verify TypeScript types are correct.**
-
-The `Database` API and migration model are documented in
-`npm run docs Database`.
-
-## What ships
+## What's Included
 
 - **`cdk-blocks/index.ts`** — a relational **notebooks → notes** API: create/list
   notebooks, add/list notes, and delete a notebook (with its notes, in one
@@ -67,45 +64,37 @@ data: the block does not move rows between clusters. See "Which cluster" and
 
 ## Commands
 
-```bash
-npm run typecheck   # Check TypeScript types (run after code changes)
-npm run dev         # Local dev server on http://localhost:3001 (long-running)
-npm run dev:stop    # Stop the dev server this app started
-npm run sandbox     # Deploy to AWS sandbox (Aurora DSQL)
-npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
-npm run deploy      # Deploy to production
-npm run test:e2e    # Run end-to-end tests against the dev server
-npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
-npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
-npm run secret set KEY # Set a secret (also list, remove KEY)
-npm run config set KEY value # Set a config value (also list, remove KEY)
-npm run typegen          # Regenerate secret/config key types; run once and commit .cdk-blocks/hosting-values.d.ts before gating CI on -- --check
-```
+`npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
-The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
-`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
+
+After code changes, run `npm run typecheck`: `npm run test:e2e` does not type-check.
 
 ### RPC endpoint (local dev)
 
+Tests and TypeScript callers import the typed client (`import { api } from 'cdk-blocks'`). Call the endpoint directly only to troubleshoot connectivity; `AGENTS.md` describes the request format, the error responses and the session cookie.
+
 ```bash
-# JSON-RPC 2.0 at POST /cdk-blocks/api. Auth methods are on the auth namespace.
+# JSON-RPC 2.0 at POST /cdk-blocks/api. Auth methods are on the auth namespace (authApi);
+# every api method needs the session cookie of a signed-in user.
 curl -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.listNotebooks","params":[],"id":1}'
-# method = "<namespace>.<methodName>"; params = positional array.
-# Errors return HTTP 200 with an {"error":{...}} body (JSON-RPC), not a non-2xx status.
 ```
-
-## Stack naming
-
-Your CloudFormation stack names derive from the `stackId` in
-`.cdk-blocks/config.json`, generated at scaffold time. Edit `stackId` to rename, or
-`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## Adding a frontend later
 
-This template is backend-only. The `backend` template's README documents adding a
-Vite/React frontend and `Hosting` — the same steps apply here.
+This template is backend-only. To add a frontend, add `Hosting` to
+`cdk-blocks/index.cdk.ts` (`npm run docs core -- --section Hosting`) and remove
+`"frontend": false` from the dev server settings in `package.json` (`AGENTS.md`
+describes them). For a wired example, scaffold the `react` template in another
+directory and compare its `package.json`, `vite.config.ts` and
+`cdk-blocks/index.cdk.ts`:
 
-**Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more).**
+```bash
+npx @aws-cdk-blocks/create-blocks-app my-app --template react
+```
+
+## For Agents
+
+Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.

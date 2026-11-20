@@ -1,6 +1,6 @@
 # Deployment Tutorial
 
-This tutorial walks you through the complete deployment process for Blocks applications from local development to production.
+This tutorial walks you through the complete deployment process for AWS CDK Blocks applications from local development to production.
 
 ## Setting Up Your Environment
 
@@ -12,7 +12,7 @@ Run your application locally first using the mock runtime. The mock implementati
 
 ## Deploying with CDK
 
-The Blocks CDK integration synthesizes a CloudFormation template from your Building Block definitions and deploys it. Each Building Block translates to the appropriate AWS resources automatically. The deploy command handles S3 bucket creation, Lambda function packaging, DynamoDB table provisioning, and knowledge base ingestion in a single atomic operation.
+The CDK Blocks CDK integration synthesizes a CloudFormation template from your Building Block definitions and deploys it. Each Building Block translates to the appropriate AWS resources automatically. The deploy command handles S3 bucket creation, Lambda function packaging, DynamoDB table provisioning, and knowledge base ingestion in a single atomic operation.
 
 ## Post-Deployment Verification
 

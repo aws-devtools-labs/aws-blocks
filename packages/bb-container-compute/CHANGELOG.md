@@ -1,5 +1,14 @@
 # @aws-blocks/bb-container-compute
 
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- 0b422ee: docs: the options, defaults and scaling rules are in the `bb-compute` README.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+
 ## 1.0.0-rc.0
 
 ### Major Changes

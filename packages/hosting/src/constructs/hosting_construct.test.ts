@@ -418,7 +418,7 @@ void describe('HostingConstruct — SSR mode', () => {
   });
 
   void it('accepts compute.timeout as a plain number (seconds) and coerces to Duration', () => {
-    // Regression: AWS Blocks bug-bash repro showed `timeout: 30`
+    // Regression: CDK Blocks bug-bash repro showed `timeout: 30`
     // (a plain number) reaching the L3 from a permissive JS-compiled
     // wrapper and crashing synth deep in aws-cdk-lib with
     // `props.timeout.toSeconds is not a function`. The L3 surface

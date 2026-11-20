@@ -23,7 +23,7 @@
  * constructs every Building Block and registers each AsyncJob), then looks the
  * job up by `fullId` and runs it. The parent → worker message carries only
  * serializable data (`{ jobFullId, record }`); the worker → parent reply is
- * `{ ok }` or `{ error }`. The handler's *own* Blocks calls (e.g. `bucket.put`)
+ * `{ ok }` or `{ error }`. The handler's *own* CDK Blocks calls (e.g. `bucket.put`)
  * run against real AWS from inside the worker using the task role — no bridge
  * needed for those, because the worker is a full runtime.
  *
@@ -146,7 +146,7 @@ function jobWorkerEntry(): string {
 	const entry = process.env.BLOCKS_JOB_WORKER_ENTRY;
 	if (!entry) {
 		throw new Error(
-			'[Blocks container] BLOCKS_JOB_WORKER_ENTRY is not set — the job worker bundle path must be provided by the image entry.',
+			'[AWS CDK Blocks container] BLOCKS_JOB_WORKER_ENTRY is not set — the job worker bundle path must be provided by the image entry.',
 		);
 	}
 	return entry;
@@ -295,12 +295,12 @@ export async function runContainer(options: RunContainerOptions = {}): Promise<v
 		try {
 			handles.push(starter());
 		} catch (err) {
-			console.error('[Blocks container] poller failed to start:', err);
+			console.error('[AWS CDK Blocks container] poller failed to start:', err);
 		}
 	}
 
 	console.log(
-		`[Blocks container] parent up (compute=${getContainerComputeId() ?? 'unknown'}, pollers=${handles.length}, api=${api ? 'on' : 'off'})`,
+		`[AWS CDK Blocks container] parent up (compute=${getContainerComputeId() ?? 'unknown'}, pollers=${handles.length}, api=${api ? 'on' : 'off'})`,
 	);
 
 	await new Promise<void>((resolve) => {
@@ -308,7 +308,7 @@ export async function runContainer(options: RunContainerOptions = {}): Promise<v
 		const shutdown = async (signal: string) => {
 			if (shuttingDown) return;
 			shuttingDown = true;
-			console.log(`[Blocks container] ${signal} received — draining (grace ${DRAIN_GRACE_MS}ms)`);
+			console.log(`[AWS CDK Blocks container] ${signal} received — draining (grace ${DRAIN_GRACE_MS}ms)`);
 			// Stop pulling new work immediately.
 			await Promise.allSettled(handles.map((h) => h.stop()));
 			// Let in-flight workers and API requests finish within the grace window.

@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "E2E test app for Blocks Hosting — Nuxt SSR (Nitro adapter) deployment",
+  "description": "E2E test app for AWS CDK Blocks Hosting — Nuxt SSR (Nitro adapter) deployment",
   "workspaces": [
     "cdk-blocks"
   ],
@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@aws-cdk-blocks/bb-auth": "1.0.0-rc.1",
-    "aws-cdk-blocks": "1.0.0-rc.1",
+    "aws-cdk-blocks": "1.0.0-rc.2",
     "nuxt": "^4.6.3",
     "vue": "^3.5.44"
   },

@@ -90,7 +90,7 @@ export function anyRequirementNeedsVpc(scope: Construct): boolean {
  * Get the framework-owned VPC for a stack, creating one on first use.
  *
  * VPC is a **derived** resource: when a Building Block (or, later, a container
- * compute) requires one and the customer didn't bring their own, Blocks
+ * compute) requires one and the customer didn't bring their own, CDK Blocks
  * materializes a sensible default here, so the whole app shares a
  * single VPC. Keyed by a Symbol on the stack so it's a true singleton: the first
  * caller creates, everyone else reuses. Passing a customer VPC (`vpc:` prop)
@@ -122,14 +122,14 @@ export function getOrCreateVpc(scope: Construct): ec2.IVpc {
 }
 
 /**
- * Initialize VPC support on a Blocks scope (BlocksStack or BlocksBackend).
+ * Initialize VPC support on a CDK Blocks scope (BlocksStack or BlocksBackend).
  * Creates the security group, sets VPC context, and returns the VpcContext
  * that is used for Lambda placement configuration.
  *
  * Called during setupBlocksInfra when `vpc` prop is present.
  *
  * @param source - Where the VPC came from: `'provided'` (customer passed
- *   `defaults.vpc`) or `'derived'` (Blocks created it because a block required
+ *   `defaults.vpc`) or `'derived'` (CDK Blocks created it because a block required
  *   one). Stamped on the context so a stateful block can refuse to auto-join a
  *   derived VPC — see {@link VpcContext.source}. Defaults to `'provided'`, since
  *   the backend's own call sites only run on the customer-provided path.
@@ -149,7 +149,7 @@ export function initializeVpc(
 	// honored — per-BB `requiresEgress` validation catches BBs that can't run there.)
 	if (!subnets && !vpcHasRole(vpc, 'private-with-egress')) {
 		throw new Error(
-			`VPC '${vpc.vpcId}' has no private-with-egress subnets, which Blocks uses for Lambda ` +
+			`VPC '${vpc.vpcId}' has no private-with-egress subnets, which AWS CDK Blocks uses for Lambda ` +
 				`placement by default. Add a PRIVATE_WITH_EGRESS subnet tier (a private subnet with a ` +
 				`NAT gateway), or pass 'vpc.subnets' to choose a different placement explicitly. ` +
 				`See packages/blocks/VPC.md.`,
@@ -239,7 +239,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 			if (placementHasEgress === false) {
 				throw new Error(
 					`${fullId} requires its runtime to reach the internet (outbound egress), but the ` +
-						`Blocks runtime is placed in subnets with no egress route. ` +
+						`AWS CDK Blocks runtime is placed in subnets with no egress route. ` +
 						`Set 'vpc.subnets' to a 'private-with-egress' (or 'public') selection, or remove ` +
 						`the Building Block that needs it. See packages/blocks/VPC.md.`,
 				);
@@ -249,7 +249,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 				// Don't fabricate a pass/fail — warn so a real mismatch isn't silent.
 				Annotations.of(scope).addWarningV2(
 					'blocks:vpc:egress-unverified',
-					`${fullId} requires runtime egress, but Blocks couldn't determine whether the ` +
+					`${fullId} requires runtime egress, but AWS CDK Blocks couldn't determine whether the ` +
 						`configured subnets provide it (e.g. an imported VPC). Ensure the runtime's subnets ` +
 						`have an outbound internet route. See packages/blocks/VPC.md.`,
 				);
@@ -258,7 +258,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	}
 
 	if (options.provisionEndpoints === false) {
-		// The customer owns the endpoints, so Blocks can't admit BB-provisioned
+		// The customer owns the endpoints, so CDK Blocks can't admit BB-provisioned
 		// compute on them. Say which SGs need admitting rather than let the
 		// compute fail at runtime with a
 		// timeout. The SG is named by construct path, since
@@ -290,7 +290,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 				`${fullId} runs compute in security group '${sg.node.path}' that must reach the ` +
 					`interface VPC endpoints, but 'provisionEndpoints: false' leaves the endpoints to you. ` +
 					`Allow inbound 443 from that security group on your endpoints' security group. ` +
-					`Blocks has added a 443 egress rule to the VPC CIDR on that group so it can ` +
+					`AWS CDK Blocks has added a 443 egress rule to the VPC CIDR on that group so it can ` +
 					`reach them (any address if the VPC has no known CIDR). ` +
 					`Until the inbound rule exists that compute cannot reach the endpoints, so its ` +
 					`first run after this deploy fails; that is expected, not a misconfiguration. ` +
@@ -328,7 +328,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	// Dedicated security group for the interface endpoints. Without an explicit
 	// SG, CDK creates a default that allows 443 from the entire VPC CIDR — on a
 	// bring-your-own VPC that exposes every endpoint to unrelated workloads. Scope
-	// ingress to the Blocks Lambda SG plus the BB-registered client SGs admitted
+	// ingress to the CDK Blocks Lambda SG plus the BB-registered client SGs admitted
 	// below, so only our compute can reach them. The description predates the
 	// client SGs and is kept verbatim, because changing it replaces the group, so
 	// it names fewer sources than the group actually admits: read the ingress
@@ -386,7 +386,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 			privateDnsEnabled: true,
 			securityGroups: [endpointSecurityGroup],
 			// `open: false` suppresses CDK's default "allow 443 from the whole VPC
-			// CIDR" ingress rule. Our dedicated SG already allows 443 from the Blocks
+			// CIDR" ingress rule. Our dedicated SG already allows 443 from the CDK Blocks
 			// Lambda SG and the registered client SGs; without this, CDK would
 			// re-widen access to the entire VPC — the exact broadening this dedicated
 			// SG exists to prevent.

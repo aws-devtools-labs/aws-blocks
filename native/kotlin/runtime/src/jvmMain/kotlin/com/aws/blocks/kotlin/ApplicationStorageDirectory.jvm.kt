@@ -18,7 +18,7 @@ private const val MAX_NAME_LENGTH = 120
  * Where an application's stored data lives: `~/.blocks/<applicationId>`.
  *
  * A desktop OS gives an application no private storage of its own, so the id is what keeps two
- * applications apart. Releases before this one wrote straight into `~/.blocks`, which every Blocks
+ * applications apart. Releases before this one wrote straight into `~/.blocks`, which every CDK Blocks
  * application on the machine therefore shared.
  *
  * The id is reduced to characters a directory name can hold. When that reduction changes anything,

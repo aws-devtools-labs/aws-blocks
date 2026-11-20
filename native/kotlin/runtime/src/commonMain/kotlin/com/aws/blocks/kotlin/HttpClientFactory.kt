@@ -49,7 +49,7 @@ internal fun defaultHttpClient(
             connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MILLIS
             socketTimeoutMillis = DEFAULT_SOCKET_TIMEOUT_MILLIS
         }
-        // Every request carries both headers: the Blocks server reads x-blocks-user-agent;
+        // Every request carries both headers: the CDK Blocks server reads x-blocks-user-agent;
         // direct-to-AWS paths (presigned S3, WebSocket) read the standard User-Agent.
         install(UserAgent) { agent = blocksUserAgentToken }
         install(DefaultRequest) { header("x-blocks-user-agent", blocksUserAgentToken) }

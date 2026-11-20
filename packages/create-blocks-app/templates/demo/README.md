@@ -1,11 +1,8 @@
-# Blocks Demo App
+# AWS CDK Blocks Demo App
 
-A fuller example app on AWS CDK Blocks. It wires together several Building Blocks in
-one place so you can see how they fit: `Auth` for sign-in, a `KVStore` for
-loose key/value data, and a second `KVStore` with a `schema` and a `key` for a
-sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.
-
-> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template demo`
+An example app on CDK Blocks that wires together `Auth`, `KVStore`,
+`FileBucket`, `AppSetting`, `Secret`, `EmailClient`, `AsyncJob`,
+`KnowledgeBase`, `Database` and cookies. Vite + vanilla DOM frontend, no framework.
 
 ## Getting Started
 
@@ -13,10 +10,23 @@ sortable, per-user todo list. Vite + vanilla DOM frontend, no framework.
 npm run dev          # Start local dev server (mocks, no AWS needed)
 npm run test:e2e     # Run API tests
 npm run sandbox      # Deploy to AWS sandbox
-npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`.
+
+## Before deploying to production
+
+Replace the `EMAIL_SENDER` constant in `cdk-blocks/index.ts` with a verified
+SES identity. Its placeholder works locally (the mock sends nothing), but it is
+on the reserved `.invalid` domain, which SES can never verify, so every send
+from it fails on AWS. Synth warns
+(`@aws-cdk-blocks/bb-email-client:UnverifiableSender`) until you do.
+
+This is a demo, not a production authorization model. Use only dummy values
+with the API-key rotation example. Before exposing the app to real users,
+remove the RPC methods that return credentials, restrict shared settings and
+key rotation to trusted operators, and restrict who can send email and to whom.
+Being signed in is not sufficient authorization for these operations.
 
 ## Project Structure
 
@@ -37,20 +47,17 @@ Open http://localhost:3000 after `npm run dev`.
 - **Cookies** — a public round-trip demo (`setCookie` / `getCookie` /
   `deleteCookie`) on a single fixed-name `HttpOnly; SameSite=Lax` cookie. It is
   also `Secure` except on plain-HTTP localhost, the same rule as the auth cookie.
-- **FileBucket, AppSetting, Secret, EmailClient, AsyncJob, KnowledgeBase** —
-  upload/download (paths scoped per user; `getUploadSlot` signs only the
-  content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
-  methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
-  `requireAuth`; `getFlag` and `jobRan` stay public.
-  The EmailClient sender is the `EMAIL_SENDER` constant in `cdk-blocks/index.ts`.
-  Its placeholder works locally (the mock sends nothing), but replace it with a
-  verified SES identity before deploying to production: the placeholder is on the
-  reserved `.invalid` domain, which SES can never verify, so every send from it
-  fails on AWS. Synth warns (`@aws-cdk-blocks/bb-email-client:UnverifiableSender`)
-  until you do.
-- **KVStore with a `schema` and a `key`** — per-user todos, stored as records
-  you list or query as a collection (a store fixes its key when you create
-  it); `listTodos(sortBy)` sorts the list in
+- **FileBucket** — upload/download gated by `requireAuth`, with paths scoped
+  per user; `getUploadSlot` signs only the content types in
+  `ALLOWED_UPLOAD_TYPES`.
+- **AppSetting** — `setFlag` calls `requireAuth`; `getFlag` stays public.
+- **Secret** — the API-key rotation methods, gated by `requireAuth`.
+- **EmailClient** — `sendWelcome`, gated by `requireAuth`. Its sender is
+  `EMAIL_SENDER` (see "Before deploying to production").
+- **AsyncJob** — `runGreetingJob` calls `requireAuth`; `jobRan` stays public.
+- **KnowledgeBase** — `searchDocs`, gated by `requireAuth`.
+- **KVStore with a `schema` and a `key`** — per-user todos;
+  `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
 - **Database** — an atomic SQL money `transfer` between accounts; both
@@ -58,44 +65,12 @@ Open http://localhost:3000 after `npm run dev`.
   Accounts belong to the signed-in user (an `owner` column every query filters
   on), so a caller can only move money between their own accounts.
 
-The API mixes **public** methods (no auth) and **protected** methods (gated by
-`requireAuth`) in one namespace, showing where the auth boundary sits.
-
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Local dev with mock storage |
-| `npm run dev:stop` | Stop the local dev server this app started |
-| `npm run test:e2e` | Test the API via direct imports |
-| `npm run typecheck` | TypeScript type checking |
-| `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
-| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
-| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
-| `npm run deploy` | Full production deploy |
-| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
-| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
-| `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
-| `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
-| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+`npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
-The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
-`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
-
-## Stack naming
-
-Your CloudFormation stack names are derived from the `stackId` in
-`.cdk-blocks/config.json`, generated at scaffold time from your project name plus a
-random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
-and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`cdk-blocks/index.cdk.ts` for dynamic naming logic.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
 
 ## For Agents
 
 Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.
-
-**Do not use local files or in-memory storage** — use Building Blocks for all
-data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
-(frontend). Test via `npm run test:e2e`.

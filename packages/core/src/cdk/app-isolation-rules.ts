@@ -4,14 +4,14 @@
 /**
  * The app-isolation rules behind `defaults.appIdentity`: pure functions over
  * CloudFormation-resolved JSON (no `aws-cdk-lib`), which the synth-time IAM
- * report applies to the roles, policies and resource policies AWS Blocks
+ * report applies to the roles, policies and resource policies CDK Blocks
  * renders for the app's templates (its `violations` list, and the synth failure).
  *
  * Every rule answers "does this reach outside the app?". An app's resources are
  * the ones whose name starts with the app's prefix: `<id>` followed by `-`, `/`
  * or the end of the name (`appa`, `appa-notes`, `/appa/key`). The id can't
  * contain `-`, so `appa-*` never matches another app (`appab-…`). Two namespaces
- * AWS Blocks and CDK pick count the same way: a cross-region reference's SSM
+ * CDK Blocks and CDK pick count the same way: a cross-region reference's SSM
  * parameter (`/cdk/exports/<consumer stack>/…`, checked by the stack name), and
  * Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`, the app's own
  * only when `stackId` is the app id).
@@ -19,12 +19,13 @@
  * These checks are fast feedback, not the boundary: the app's own code runs at
  * synth, so a determined app could get around them. The boundary is IAM (the
  * platform's permissions boundary, per-app execution role and deploy guard; see
- * the core README's "Running many apps in one AWS account").
+ * `SHARED-ACCOUNT.md`, linked from the core README's "Running many apps in one
+ * AWS account").
  *
  * @internal
  */
 
-/** The tag key AWS Blocks stamps with the app id (mirrors `BLOCKS_APP_TAG_KEY`). */
+/** The tag key CDK Blocks stamps with the app id (mirrors `BLOCKS_APP_TAG_KEY`). */
 export const APP_TAG_KEY = 'app';
 
 /**
@@ -40,7 +41,7 @@ export const APP_ID_PATTERN = /^[a-z][a-z0-9]{0,9}$/;
  * platform's policies give an app every name `<id>`, `<id>-…` or `<id>/…` (in
  * the boundary, `${aws:PrincipalTag/app}`, `${APP}-*`, `${APP}/*`; in the
  * execution policy and deploy guard, the same patterns with the id spelled
- * out). These ids turn such a pattern into a namespace other apps, AWS Blocks,
+ * out). These ids turn such a pattern into a namespace other apps, CDK Blocks,
  * CDK or AWS share, so they would give the app access to resources it doesn't
  * own. Matching is case-sensitive and ids are lowercase, so only lowercase names
  * count (`CDKToolkit-…` stacks are safe).
@@ -53,7 +54,7 @@ export const RESERVED_APP_IDS: Readonly<Record<string, string>> = {
 	cdk: "CDK's namespace: every app's bootstrap (`cdk-<qualifier>-…` buckets and roles, `/cdk-bootstrap/…`) and CDK's `/cdk/…` parameters",
 	// `/blocks/${APP}/*` and `blocks/${APP}/*` are Hosting's per-app values; `${APP}/*`
 	// with `blocks` would match all of them.
-	blocks: "AWS Blocks' namespace: every app's Hosting `secret()` / `config()` values (`blocks/<id>/…`)",
+	blocks: "AWS CDK Blocks' namespace: every app's Hosting `secret()` / `config()` values (`blocks/<id>/…`)",
 	// Hosting's values without a `stackId` live under `/blocks/secrets/…` and
 	// `/blocks/config/…`, which `blocks/${APP}/*` would match for these ids.
 	secrets: "Hosting's shared `secret()` namespace for apps without a `stackId` (`blocks/secrets/…`)",
@@ -431,7 +432,7 @@ function scopesWildcard(condition: unknown, actions: string[], id: string): bool
 }
 
 /**
- * Grants AWS Blocks or CDK make that name resources outside the app's prefix,
+ * Grants CDK Blocks or CDK make that name resources outside the app's prefix,
  * but that the generated boundary still caps to the app (or that only touch
  * metadata). Each is listed with its reason; nothing else is exempt.
  *
@@ -485,7 +486,7 @@ function isKnownExemption(actions: string[], name: string, arn = ''): boolean {
 	}
 	// SES sending authorizes against account-level identities and configuration sets
 	// that no app's name or tag scopes; EmailClient grants sending only. An accepted
-	// exception the core README lists under the limits (one app can send as an
+	// exception listed under Limits in SHARED-ACCOUNT.md (one app can send as an
 	// identity another app verified).
 	if (
 		(arn === '*' || /^arn:[^:]*:ses:[^:]*:[^:]*:(identity|configuration-set)\/\*$/.test(arn)) &&

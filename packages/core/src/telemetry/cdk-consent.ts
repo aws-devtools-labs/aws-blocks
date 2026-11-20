@@ -89,12 +89,12 @@ function contextElement(configPath: string): CdkConfigFile | undefined {
  * enable in an earlier file shadows a disable in a later one rather than being
  * outranked by it.
  *
- * The `--context` bag is absent here by construction: the Blocks commands build
+ * The `--context` bag is absent here by construction: the CDK Blocks commands build
  * the `--context` flags they pass to CDK themselves and never pass this key, and
  * the `cdk-blocks` CLI has no flag that would reach it.
  *
  * CDK reads `cdk.json` and `cdk.context.json` relative to its working directory,
- * which for the Blocks commands is the project root they spawn CDK in.
+ * which for the CDK Blocks commands is the project root they spawn CDK in.
  *
  * `resolveDeploymentTarget` in `scripts/deployment-target.ts` walks the same three
  * bags in the same order for the bootstrap qualifier. If CDK changes that order or

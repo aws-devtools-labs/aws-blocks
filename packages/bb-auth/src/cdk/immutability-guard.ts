@@ -26,7 +26,7 @@
  * stack root (like `BlocksSecretsBulk`): new resources only, outside the
  * block's construct subtree, so no existing logical id moves.
  *
- * Not placed in a VPC, like every other Blocks custom-resource Lambda
+ * Not placed in a VPC, like every other CDK Blocks custom-resource Lambda
  * (`BlocksSecretInitFn`, the GSI manager, the OIDC IdP registration): it
  * calls only the CloudFormation and Cognito APIs, over Lambda's own network.
  *
@@ -115,7 +115,7 @@ export function guardUserPool(block: BuildingBlockScope, pool: cognito.IUserPool
 
 // ── Layer 1 ─────────────────────────────────────────────────────────────────
 
-/** The app's `cdk-blocks/` directory and stack name, or `undefined` outside a Blocks stack/backend. */
+/** The app's `cdk-blocks/` directory and stack name, or `undefined` outside a CDK Blocks stack/backend. */
 function baselineLocation(block: BuildingBlockScope): { appDir: string; stack: string } | undefined {
 	let handlerPath: unknown;
 	let stack: string;
@@ -224,7 +224,7 @@ function createGuardResource(
 		handler: 'index.handler',
 		code: deployTimeLambdaCode(LAMBDA),
 		timeout: cdk.Duration.minutes(1),
-		description: 'AWS Blocks Auth: refuses user-pool changes Cognito cannot apply, before the pool update runs.',
+		description: 'AWS CDK Blocks Auth: refuses user-pool changes Cognito cannot apply, before the pool update runs.',
 		logGroup: new logs.LogGroup(stack, GUARD_IDS.functionLogs, {
 			retention: logRetention,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,

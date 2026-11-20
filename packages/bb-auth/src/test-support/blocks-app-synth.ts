@@ -5,7 +5,7 @@
  * Synth harness on a **real** `BlocksStack` (test-only; never imported by an
  * entry file).
  *
- * `guard-synth.ts` builds a plain `cdk.Stack` dressed up as a Blocks stack,
+ * `guard-synth.ts` builds a plain `cdk.Stack` dressed up as a CDK Blocks stack,
  * which is enough for a block's own checks. The stack-level orphaned-baseline
  * check lives in `BlocksStack` itself and must run with no `Auth`
  * block in the app, so this harness goes through `BlocksStack.create()`

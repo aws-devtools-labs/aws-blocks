@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The `cloudfront` tier: a Blocks-managed CloudFront distribution in front of the
+ * The `cloudfront` tier: a CDK Blocks-managed CloudFront distribution in front of the
  * API.
  *
  * By default (`apigateway`) clients call the stack's shared API Gateway REST API
@@ -85,7 +85,7 @@ export const API_BEHAVIOR_OPTIONS = {
 } satisfies AddBehaviorOptions;
 
 /**
- * Viewer-request function on a Blocks CloudFront front door's API behaviors that
+ * Viewer-request function on a CDK Blocks CloudFront front door's API behaviors that
  * reach the shared gateway: stamp the host the viewer called (the distribution's
  * domain or a custom domain) as {@link PUBLIC_HOST_HEADER}, overwriting any client
  * copy. CloudFront forwards the gateway's own `Host` (see
@@ -115,7 +115,7 @@ export function publicHostStamp(scope: Construct, id: string): FunctionAssociati
 	const fn = new CloudFrontFunction(scope, id, {
 		code: FunctionCode.fromInline(PUBLIC_HOST_FUNCTION),
 		runtime: FunctionRuntime.JS_2_0,
-		comment: 'Blocks: stamp the viewer host for the API',
+		comment: 'AWS CDK Blocks: stamp the viewer host for the API',
 	});
 	return [{ function: fn, eventType: FunctionEventType.VIEWER_REQUEST }];
 }
@@ -197,7 +197,7 @@ export function httpOriginFromEndpoint(gatewayUrl: string, customHeaders?: Recor
 /**
  * The header a claiming CloudFront `Hosting` distribution adds to its API origin
  * so the backend's `apiWaf` rate rule can tell its (edge-IP) requests from
- * direct callers. `undefined` unless the backend has a Blocks-managed web ACL
+ * direct callers. `undefined` unless the backend has a CDK Blocks-managed web ACL
  * (a caller-supplied `webAclArn` is attached as-is). Calling it records that the
  * claiming distribution sends the header.
  *
@@ -370,7 +370,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 			functionAssociations: publicHostStamp(this.owner, `${FRONT_DOOR_ID}PublicHost`),
 		};
 		const distribution = new Distribution(this.owner, FRONT_DOOR_ID, {
-			comment: `Blocks API front door for ${stack.stackName}`,
+			comment: `API front door for ${stack.stackName}`,
 			// One catch-all behavior to the shared gateway routes RPC, auth, and raw
 			// routes alike — every namespace on a Lambda compute included, since the
 			// gateway fans those out itself.

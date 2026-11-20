@@ -371,4 +371,4 @@ function initCursorTracking() {
   });
 }
 
-console.log('Blocks Demo loaded - using direct backend imports with Proxy');
+console.log('AWS CDK Blocks Demo loaded - using direct backend imports with Proxy');

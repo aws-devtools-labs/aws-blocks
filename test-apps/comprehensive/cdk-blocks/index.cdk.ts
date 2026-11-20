@@ -16,7 +16,7 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
-// Optional IAM permissions boundary on every role AWS Blocks creates
+// Optional IAM permissions boundary on every role CDK Blocks creates
 // (`-c blocksPermissionsBoundary=<policy name>`). test/iam-boundary-synth.test.ts
 // synthesizes with it set to prove every Building Block's roles are covered.
 const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
@@ -56,7 +56,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
   //
-  // Outside sandbox mode (E2E Production), store the keys Blocks generates in
+  // Outside sandbox mode (E2E Production), store the keys CDK Blocks generates in
   // Secrets Manager, as the production preset does, so that job deploys and
   // exercises that path. The framework key secrets are deleted with the stack,
   // so the stack stays fully deletable.

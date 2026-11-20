@@ -33,7 +33,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * A client hydrated from the `oidc/client` descriptor an AWS Blocks `Auth` block's
+ * A client hydrated from the `oidc/client` descriptor a CDK Blocks `Auth` block's
  * `createOidcApi().getClient()` returns: the block's federation routes under one base path, and
  * its providers. The keys and paths are exactly what `packages/bb-auth` emits
  * (`oidc-client-api.test.ts` pins that side).

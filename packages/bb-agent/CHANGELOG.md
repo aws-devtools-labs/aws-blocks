@@ -1,5 +1,22 @@
 # @aws-blocks/bb-agent
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- cad7bb8: Fix the Agent on AgentCore Runtime failing every turn with `BLOCKS_RT_CALLBACK_URL not set` after a first deploy. The Runtime could start before the deployment uploaded the app config file, and then kept the empty config. The Runtime now loads the config again on each invocation until the file is readable, and imports the backend only after that. A turn that arrives earlier is rejected, so `stream()` throws instead of saving an error message.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-file-bucket@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-realtime@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

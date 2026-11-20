@@ -1,5 +1,16 @@
 # @aws-blocks/bb-file-bucket
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: no method throws `FileBucketErrors.FileNotFound` or `FileTooLarge`. `get()` returns `null` for a missing file, and an upload over `maxUploadBytes` throws `ValidationFailed`, matched with `isBlocksError(e, 'ValidationFailed')`.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
 ## 1.0.0-rc.1
 
 ### Patch Changes

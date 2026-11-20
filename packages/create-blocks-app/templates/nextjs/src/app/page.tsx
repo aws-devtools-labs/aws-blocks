@@ -3,7 +3,7 @@ import { api } from 'cdk-blocks';
 import { ClientGreeting } from './client';
 import { SectionBoundary } from './section-boundary';
 
-// Opt out of static prerendering — the Blocks API URL is only available at
+// Opt out of static prerendering — the CDK Blocks API URL is only available at
 // request time (Lambda env vars), not at build time during `cdk deploy`.
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +42,7 @@ export default function Home() {
 
       <section>
         <h2>Client Component</h2>
-        <p>This component runs in the browser and calls the Blocks API:</p>
+        <p>This component runs in the browser and calls the CDK Blocks API:</p>
         <SectionBoundary>
           <ClientGreeting />
         </SectionBoundary>

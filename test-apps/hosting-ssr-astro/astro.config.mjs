@@ -5,7 +5,7 @@ import { defineConfig } from 'astro/config';
 import preact from '@astrojs/preact';
 
 // `output` defaults to 'static' (no `output:` field) — Astro prerenders
-// every page to its own `<path>/index.html` at build time. The Blocks Astro
+// every page to its own `<path>/index.html` at build time. The CDK Blocks Astro
 // adapter detects the static `dist/` and emits a static-only DeployManifest
 // (no SSR Lambda) with `staticAssets.spaFallback: false`, so the L3 uses
 // directory-index resolution (each route serves its own page) rather than

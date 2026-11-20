@@ -72,7 +72,7 @@ export function apiNamespaceFilterFromEnv(
   if (raw === undefined || raw === '') {
     if (self === undefined) return undefined;
     throw new Error(
-      `[Blocks] ${API_COMPUTE_ID_KEY} is set but ${API_NAMESPACE_COMPUTES_KEY} is missing: this compute can't tell ` +
+      `[AWS CDK Blocks] ${API_COMPUTE_ID_KEY} is set but ${API_NAMESPACE_COMPUTES_KEY} is missing: this compute can't tell ` +
         'which API namespaces it serves, so it serves none until both are deployed',
     );
   }
@@ -97,7 +97,7 @@ function parsePlacement(raw: string): Record<string, string> {
     !Object.values(parsed).every((v) => typeof v === 'string')
   ) {
     throw new Error(
-      `[Blocks] ${API_NAMESPACE_COMPUTES_KEY} must be a JSON object mapping API namespace names to compute ids`,
+      `[AWS CDK Blocks] ${API_NAMESPACE_COMPUTES_KEY} must be a JSON object mapping API namespace names to compute ids`,
     );
   }
   return parsed as Record<string, string>;

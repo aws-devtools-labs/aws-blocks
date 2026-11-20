@@ -209,7 +209,7 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 	// First secret in this stack — create all shared infrastructure
 	state = { params: [{ name: parameterName, keyId }] };
 	(stack as any)[SECRET_BULK_KEY] = state;
-	// Everything added to the stack below is AWS Blocks' own (marked at the end).
+	// Everything added to the stack below is CDK Blocks' own (marked at the end).
 	const stackChildrenBefore = new Set(stack.node.children);
 
 	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
@@ -338,6 +338,6 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 	});
 	// The shared secret-init function, provider and custom resource sit at stack
 	// scope but belong to the block, so the service-principal trust check treats
-	// their roles as AWS Blocks roles rather than the app's.
+	// their roles as CDK Blocks roles rather than the app's.
 	markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
 }

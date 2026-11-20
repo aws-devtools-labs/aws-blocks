@@ -69,7 +69,7 @@ export {
 export { registerSharedConfig } from './config-registry.js';
 export { getBlocksRoot, getOrCreateOnRoot } from './root-registry.js';
 
-// Shared DynamoDB protection resolver for the Blocks-provisioned DynamoDB
+// Shared DynamoDB protection resolver for the CDK Blocks-provisioned DynamoDB
 // table (bb-kv-store). Framework-internal: a refactor
 // seam, not a customer-facing surface, so it lives here rather than on the
 // public `@aws-cdk-blocks/core/cdk` barrel (which `aws-cdk-blocks` re-exports).
@@ -110,14 +110,14 @@ export {
 	scopeProviderWaiterTrust,
 	sourceScopedConditions,
 } from './service-principal-trust.js';
-// Marks a construct (and every role under it) as created by AWS Blocks, for the
+// Marks a construct (and every role under it) as created by CDK Blocks, for the
 // service-principal trust check's ownership split. Used by first-party blocks
 // that add constructs at stack scope on a block's behalf (bb-app-setting,
 // bb-kv-store) or carry no official bbName at synth (the
 // `DatabaseCluster` of bb-database).
 export { markAddedChildrenBlocksOwned, markBlocksOwned } from './blocks-roles.js';
 // The service-agnostic half of the above: the `encryption` option parser, also
-// used by bb-file-bucket (S3) so every Blocks storage resource accepts the same
+// used by bb-file-bucket (S3) so every CDK Blocks storage resource accepts the same
 // `'aws-managed' | 'customer-managed' | fromKmsKey(arn)` values.
 export {
 	type KmsBlockIdentity,

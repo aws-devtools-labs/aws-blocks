@@ -1,4 +1,4 @@
-# Static-analysis ruleset for this Blocks native Dart package.
+# Static-analysis ruleset for this CDK Blocks native Dart package.
 #
 # Builds on the standard `package:lints/recommended.yaml` base and layers on
 # strict type-checking flags plus an opinionated set of lint rules. `lints` is

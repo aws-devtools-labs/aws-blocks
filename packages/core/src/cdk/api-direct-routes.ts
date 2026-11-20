@@ -173,7 +173,7 @@ export function addDirectApiBehaviors(
 	const forwardedHost = new cloudfront.Function(distribution, 'ApiForwardedHost', {
 		code: cloudfront.FunctionCode.fromInline(FORWARDED_HOST_FUNCTION),
 		runtime: cloudfront.FunctionRuntime.JS_2_0,
-		comment: 'Blocks: stamp the viewer host for container API origins',
+		comment: 'AWS CDK Blocks: stamp the viewer host for container API origins',
 	});
 	// One VPC origin per listener, shared by the namespaces it serves.
 	const originsByListener = new Map<string, cloudfront.IOrigin>();

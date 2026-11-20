@@ -54,7 +54,7 @@ void describe('collectSynthMarkers()', () => {
 	});
 });
 
-void describe('resolveSecretsAtSynth() — Blocks namespaces', () => {
+void describe('resolveSecretsAtSynth() — CDK Blocks namespaces', () => {
 	void it('config marker resolves under /blocks/config (SSM leading-slash)', async () => {
 		const seen: string[] = [];
 		const resolved = await resolveSecretsAtSynth([config('DOMAIN_PROD')], async (name) => {

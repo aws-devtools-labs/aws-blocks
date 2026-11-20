@@ -64,7 +64,7 @@ async function resolveApiUrl(): Promise<string> {
   function validateAndCache(url: unknown, source: string): string {
     if (!url || typeof url !== 'string' || isInvalidUrl(url)) {
       throw new Error(
-        `Blocks API URL is not configured (source: ${source}). Ensure BLOCKS_API_URL environment variable is set ` +
+        `AWS CDK Blocks API URL is not configured (source: ${source}). Ensure BLOCKS_API_URL environment variable is set ` +
         'or config.json is deployed. Run with --conditions=cdk during CDK synthesis.',
       );
     }
@@ -81,16 +81,16 @@ async function resolveApiUrl(): Promise<string> {
     // build is running inside `cdk synth` and the URL is not usable yet.
     if (/\$\{Token\[/.test(url)) {
       throw new Error(
-        'Blocks API URL contains unresolved CDK tokens. This usually means a ' +
+        'AWS CDK Blocks API URL contains unresolved CDK tokens. This usually means a ' +
         'Server Component is being statically prerendered during `next build` ' +
         'inside `cdk deploy`.\n' +
         'Fix: add `export const dynamic = \'force-dynamic\';` to any page ' +
-        'that calls the Blocks API so Next.js skips prerendering it.',
+        'that calls the CDK Blocks API so Next.js skips prerendering it.',
       );
     }
 
     const validated = validateAndCache(url, 'env BLOCKS_API_URL');
-    console.log('[Blocks] Using API (env BLOCKS_API_URL):', validated);
+    console.log('[AWS CDK Blocks] Using API (env BLOCKS_API_URL):', validated);
     return validated;
   }
 
@@ -99,7 +99,7 @@ async function resolveApiUrl(): Promise<string> {
     try {
       const config = JSON.parse(process.env.BLOCKS_CONFIG);
       const validated = validateAndCache(config.apiUrl, 'env BLOCKS_CONFIG');
-      console.log('[Blocks] Using API (env BLOCKS_CONFIG):', validated);
+      console.log('[AWS CDK Blocks] Using API (env BLOCKS_CONFIG):', validated);
       return validated;
     } catch {
       // Malformed BLOCKS_CONFIG — fall through
@@ -141,7 +141,7 @@ async function resolveApiUrl(): Promise<string> {
       }
       try {
         const validated = validateAndCache(config.apiUrl, 'config.json file');
-        console.log('[Blocks] Using API (config.json file):', validated);
+        console.log('[AWS CDK Blocks] Using API (config.json file):', validated);
         return validated;
       } catch {
         // No usable apiUrl in the file — fall through, as before
@@ -155,7 +155,7 @@ async function resolveApiUrl(): Promise<string> {
     if (response.ok) {
       const config = await response.json();
       const validated = validateAndCache(config.apiUrl, 'config.json fetch');
-      console.log('[Blocks] Using API (config.json fetch):', validated);
+      console.log('[AWS CDK Blocks] Using API (config.json fetch):', validated);
       return validated;
     }
   } catch {
@@ -164,7 +164,7 @@ async function resolveApiUrl(): Promise<string> {
   
   // Fallback — no config found
   throw new Error(
-    'Blocks API URL not configured. Ensure:\n' +
+    'AWS CDK Blocks API URL not configured. Ensure:\n' +
     '1. A dev server is running (`npm run dev` writes .cdk-blocks-sandbox/config.json), OR\n' +
     '2. BLOCKS_API_URL is set (Hosting sets it on SSR functions), OR\n' +
     `3. config.json is served at ${BLOCKS_SANDBOX_PREFIX}/config.json (the dev server and Hosting serve it)` +
@@ -178,7 +178,7 @@ async function resolveApiUrl(): Promise<string> {
 // --- Middleware ---
 
 /**
- * A Blocks request object passed through middleware before being sent.
+ * A CDK Blocks request object passed through middleware before being sent.
  * Middleware can inspect or modify any of these properties before the
  * request is dispatched to the server.
  */

@@ -692,7 +692,7 @@ describe('the baseline file', () => {
 		assert.deepStrictEqual(poolWarnings(result), []);
 	});
 
-	test('outside a Blocks stack (no backendHandlerPath) no file is written and synth passes', () => {
+	test('outside a CDK Blocks stack (no backendHandlerPath) no file is written and synth passes', () => {
 		const result = synthGuarded({ build: asBuild(GUARDED['sign-in attributes (signInWith)'].build) });
 		assert.ok(result.ok, result.stderr);
 	});

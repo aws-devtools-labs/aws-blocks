@@ -4,7 +4,7 @@
 
 import { execSync } from 'node:child_process';
 
-console.log('🧹 Cleaning up Blocks processes...');
+console.log('🧹 Cleaning up AWS CDK Blocks processes...');
 
 const ports = [3000, 3001, 3002, 3003];
 for (const port of ports) {

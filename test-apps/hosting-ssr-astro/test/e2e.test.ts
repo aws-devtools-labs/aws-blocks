@@ -223,7 +223,7 @@ test.describe('Astro static multi-page — caching & API', () => {
     }
   });
 
-  // The Blocks backend is reachable through the SAME CloudFront domain at
+  // The CDK Blocks backend is reachable through the SAME CloudFront domain at
   // the relative /cdk-blocks/api path (single-origin, no CORS).
   test('single-origin /cdk-blocks/api reaches the backend', async ({ request }) => {
     const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {

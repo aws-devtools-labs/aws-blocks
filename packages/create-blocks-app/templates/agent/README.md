@@ -1,13 +1,9 @@
-# Blocks Agent App
+# AWS CDK Blocks Agent App
 
-A frontend on AWS CDK Blocks with an **AI Agent** — model inference and tool
-calling — end to end. Locally the agent runs on the
-built-in **`canned` provider**: a deterministic, keyword-driven fake model that
-speaks the real model-stream protocol with no AWS and no LLM, so `npm run dev`
-and the e2e tests are fully reproducible. On deploy it runs against Amazon
-Bedrock. Vite + vanilla DOM frontend.
-
-> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template agent`
+A frontend on CDK Blocks with an **AI Agent** — model inference and tool
+calling — end to end. Locally the agent runs on the built-in `canned` provider
+(no AWS, no LLM); deployed, it runs against Amazon Bedrock. Vite + vanilla DOM
+frontend.
 
 ## Getting Started
 
@@ -15,7 +11,6 @@ Bedrock. Vite + vanilla DOM frontend.
 npm run dev          # Start local dev server (canned model, no AWS needed)
 npm run test:e2e     # Run API tests
 npm run sandbox      # Deploy to AWS sandbox (real Bedrock model)
-npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`, sign in, then chat. Ask the
@@ -39,54 +34,24 @@ provider in `cdk-blocks/index.ts`. The deployed model is `model.deployed`
 
 ## What's Included
 
-- **Agent** — model inference + tool calling. The `chat` method runs one
-  turn server-side (`stream()` + `complete()`) and returns the final text; the
-  browser gets request/response (subscribe to the Realtime channel for token
-  streaming — see the Agent BB README). Each turn is independent: to keep
-  history across turns, create a conversation with `createConversationId()`
-  and pass its id to `stream()` (see the Agent BB README).
-- **A tool with a side effect** — `saveNote` writes into the KVStore. The e2e
-  asserts the note landed, proving the model requested the call and the handler
-  ran end to end.
+- **Agent** — model inference + tool calling.
+  - The `chat` method runs one turn server-side (`stream()` + `complete()`)
+    and returns the final text, so the browser gets request/response.
+  - For token streaming, subscribe to the Realtime channel (`npm run docs Agent`).
+  - Each turn is independent. To keep history across turns, create a
+    conversation with `createConversationId()` and pass its id to `stream()`.
+- **A tool with a side effect** — `saveNote` writes into the KVStore;
+  `test/e2e.test.ts` checks that the note is there.
 - **Auth** — `chat` is gated by `auth.requireAuth(context)`, so each turn
   is tied to a signed-in user. Sign-up confirms the email with a 6-digit code,
   which `npm run dev` prints in its terminal locally.
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Local dev with the canned model + mock storage |
-| `npm run dev:stop` | Stop the local dev server this app started |
-| `npm run test:e2e` | Test the API via direct imports |
-| `npm run typecheck` | TypeScript type checking |
-| `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
-| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
-| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
-| `npm run deploy` | Full production deploy |
-| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
-| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
-| `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
-| `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
-| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+`npm run help` lists every command. `AGENTS.md` covers the development, test and deploy commands.
 
-Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
-The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
-`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
-
-## Stack naming
-
-Your CloudFormation stack names are derived from the `stackId` in
-`.cdk-blocks/config.json`, generated at scaffold time from your project name plus a
-random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
-and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`cdk-blocks/index.cdk.ts` for dynamic naming logic.
+`npm run typegen` regenerates the secret and config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`.
 
 ## For Agents
 
 Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>...` prints their docs (`npm run docs -- --help` for more). `AGENTS.md` explains the rest.
-
-**Do not use local files or in-memory storage** — use Building Blocks for all
-data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
-(frontend). Test via `npm run test:e2e`.
