@@ -642,20 +642,25 @@ dependencies bundled:
   format, and adds one build-only Vite plugin, which sets
   `ssr.noExternal: true`. When the command leaves the config unclear (for
   example `--config` given twice, or an option the preload doesn't know), the
-  build runs unchanged and says so. Nothing in
-  your project is written or renamed, so builds that overlap are safe and a
-  `cdk watch` sees no change. Your own adapter-node setup and the adapter's
-  transparent build are treated the same.
+  build runs unchanged and says so. Nothing in your project is written or
+  renamed, so builds that overlap are safe and a `cdk watch` sees no change.
+  Your own adapter-node setup and the adapter's transparent build are treated
+  the same.
 - After the build, synth resolves every module the server in `build/` loads,
   the way Node.js does from the importing file and only inside `build/`
-  (`exports`, `main`, and the target file has to exist), and also checks the
-  files those resolve to. It fails with `SvelteKitUnbundledDependencyError`,
-  naming each missing module with the file that imports it, for example a
-  package you list in `ssr.external`. Remove it from `ssr.external`, or, for a
-  build whose config the preload couldn't tell, set `ssr: { noExternal: true }`
-  yourself. A dynamic `import()` or `require()`
-  that the code handles failing (in a `try` with a `catch`, or with a
-  `.catch()`) is optional and doesn't fail synth.
+  (`exports`, `imports`, `main`, the CommonJS file lookup, and the target file
+  has to exist; a symlink or relative path that leads outside `build/` counts
+  as missing), and also checks the files those resolve to. A CommonJS
+  `require()` of the AWS SDK v3 (`@aws-sdk/*`) passes, as the Lambda Node.js
+  runtime provides it on `NODE_PATH`; an ESM `import` of it needs a copy in
+  `build/`, as ESM doesn't read `NODE_PATH`. The check fails with
+  `SvelteKitUnbundledDependencyError`, naming each missing module with the file
+  that imports it, for example a package you list in `ssr.external`. Remove it
+  from `ssr.external`, or, for a build whose config the preload couldn't tell,
+  set `ssr: { noExternal: true }` yourself. A dynamic `import()` or `require()`
+  that the code handles failing (a `require()` in a `try` with a `catch`, an
+  `import()` awaited there, or either with a `.catch()`) is optional and
+  doesn't fail synth.
 - `npm run destroy` skips this check, so a build left from before can't block
   deleting the stack.
 

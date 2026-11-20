@@ -20,17 +20,24 @@
  * Checking ({@link unresolvedServerImports}): the server files of `build/` are
  * parsed (not pattern-matched, so text in a string or a comment is no import),
  * and every module they load is resolved the way Node.js does from the
- * importing file, staying inside `build/`: a package's `exports` (with the
- * `import` or `require` condition), else its `main`, and the target file has to
- * exist. A resolved file inside `build/` is checked in turn, so a shipped
- * package that imports a missing one is caught too. A dynamic `import()` or a
- * `require()` that the code handles failing (inside a `try` with a `catch`, or
- * with a `.catch()`/rejection handler) is an optional load and never fails the
- * check.
+ * importing file's real path, staying inside `build/`: relative paths, exact
+ * built-ins only (`buffer/` is the npm package), a package's `exports` (with
+ * the `import` or `require` condition) or `imports` for `#` specifiers, else
+ * the ESM legacy `main` or the CommonJS file and directory lookup, and the
+ * target file has to exist. A target whose real path is outside `build/` (a
+ * relative path or a symlink leading out) counts as missing, as the function
+ * doesn't ship it. A resolved file inside `build/` is checked in turn, so a
+ * shipped package that imports a missing one is caught too. A `require()` of
+ * the AWS SDK v3, which the Lambda runtime provides on `NODE_PATH`, is
+ * accepted; an ESM `import` of it is not, as ESM never reads `NODE_PATH`. A
+ * dynamic `import()` or a `require()` that the code handles failing (a
+ * `require()` inside a `try` with a `catch`, an `import()` awaited there, or
+ * either with a `.catch()`/rejection handler) is an optional load and never
+ * fails the check.
  */
 
 import * as fs from 'node:fs';
-import { builtinModules } from 'node:module';
+import { isBuiltin } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -258,15 +265,19 @@ const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'Ar
 
 /**
  * Whether the code handles a dynamic load (`node`, with its `ancestors`,
- * outermost first) failing: it sits in the `try` block of a statement with a
- * `catch` in the same function, or its promise gets a `.catch()` or a
- * `.then()` rejection handler (through any `.then()`/`.finally()` chain).
+ * outermost first) failing: its promise gets a `.catch()` or a `.then()`
+ * rejection handler (through any `.then()`/`.finally()` chain), or it sits in
+ * the `try` block of a statement with a `catch` in the same function. A
+ * `require()` throws there synchronously; an `import()` rejects later, so a
+ * `try` only handles it when the promise (or its chain) is awaited right
+ * there: `try { return import('x') } catch {}` lets the rejection escape.
  */
 const isHandledLoad = (node: AstNode, ancestors: AstNode[]): boolean => {
   let current: AstNode = node;
-  for (let i = ancestors.length - 1; i >= 1; i--) {
-    const member = ancestors[i];
-    const call = ancestors[i - 1];
+  let parentIndex = ancestors.length - 1;
+  while (parentIndex >= 1) {
+    const member = ancestors[parentIndex];
+    const call = ancestors[parentIndex - 1];
     if (member?.type !== 'MemberExpression' || member.object !== current) break;
     if (call?.type !== 'CallExpression' || call.callee !== member) break;
     const property = member.property as AstNode;
@@ -275,10 +286,16 @@ const isHandledLoad = (node: AstNode, ancestors: AstNode[]): boolean => {
     if (name === 'then' && (call.arguments as unknown[]).length >= 2) return true;
     if (name !== 'then' && name !== 'finally') break;
     current = call;
-    i--;
+    parentIndex -= 2;
   }
-  let child: AstNode = node;
-  for (let i = ancestors.length - 1; i >= 0; i--) {
+  let child: AstNode = current;
+  if (node.type === 'ImportExpression') {
+    const awaited = ancestors[parentIndex];
+    if (awaited?.type !== 'AwaitExpression' || awaited.argument !== current) return false;
+    child = awaited;
+    parentIndex--;
+  }
+  for (let i = parentIndex; i >= 0; i--) {
     const parent = ancestors[i];
     if (!parent) break;
     if (FUNCTION_TYPES.has(parent.type)) return false;
@@ -352,9 +369,6 @@ export const moduleRefs = (source: string): ModuleRef[] | undefined => {
   return refs;
 };
 
-/** Node's built-in modules, without the `node:` prefix. */
-const BUILTIN_MODULES = new Set(builtinModules);
-
 /** The package a bare import specifier names (`@scope/pkg/sub` → `@scope/pkg`). */
 const packageOfSpecifier = (specifier: string): string => {
   const parts = specifier.split('/');
@@ -364,16 +378,26 @@ const packageOfSpecifier = (specifier: string): string => {
 const isRelative = (specifier: string): boolean =>
   specifier.startsWith('./') || specifier.startsWith('../') || specifier === '.' || specifier === '..';
 
-/** A specifier the check leaves alone: built-ins, `#` package imports, URLs, absolute paths. */
+/**
+ * A specifier the check leaves alone: an exact built-in (`fs/promises` is one,
+ * `buffer/` is the npm package), a `node:` one, URLs and absolute paths.
+ */
 const isIgnoredSpecifier = (specifier: string): boolean =>
   specifier.length === 0 ||
-  specifier.startsWith('#') ||
   specifier.startsWith('/') ||
   specifier.startsWith('node:') ||
   /\s/.test(specifier) ||
   /^[a-z][a-z0-9+.-]*:/i.test(specifier) ||
-  BUILTIN_MODULES.has(specifier) ||
-  BUILTIN_MODULES.has(packageOfSpecifier(specifier));
+  isBuiltin(specifier);
+
+/**
+ * A module that the Lambda Node.js runtime provides, so `build/` doesn't have
+ * to: the AWS SDK for JavaScript v3, which every runtime the framework compute
+ * uses (`FRAMEWORK_COMPUTE_RUNTIME`, nodejs18.x and later) includes on
+ * `NODE_PATH`. Only a CommonJS `require()` (`createRequire` included) searches
+ * `NODE_PATH`; an ESM `import` never does, so it still needs a copy in `build/`.
+ */
+const isRuntimeProvided = (ref: ModuleRef): boolean => ref.kind === 'require' && ref.specifier.startsWith('@aws-sdk/');
 
 const isFile = (p: string): boolean => {
   try {
@@ -383,24 +407,76 @@ const isFile = (p: string): boolean => {
   }
 };
 
-/** CommonJS file lookup: the path, then with an extension, then a directory's `index`. */
-const resolveCommonJsFile = (p: string): string | undefined =>
-  [p, `${p}.js`, `${p}.json`, `${p}.cjs`, `${p}.node`, path.join(p, 'index.js'), path.join(p, 'index.json')].find(isFile);
-
-const CONDITIONS: Record<ModuleRef['kind'], ReadonlySet<string>> = {
-  import: new Set(['node', 'import', 'default']),
-  require: new Set(['node', 'require', 'default']),
+const isDirectory = (p: string): boolean => {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
 };
 
-/** Resolve a package `exports` target (a string, a condition object, or a fallback array). */
-const resolveExportTarget = (target: unknown, conditions: ReadonlySet<string>, star: string | undefined): string | undefined => {
+type Manifest = { main?: unknown; exports?: unknown; imports?: unknown };
+
+/** The package.json in `dir`, `undefined` when there is none or it doesn't parse. */
+const readManifest = (dir: string): Manifest | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Manifest) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const mainOf = (manifest: Manifest | undefined): string | undefined =>
+  typeof manifest?.main === 'string' && manifest.main.length > 0 ? manifest.main : undefined;
+
+// Node.js CommonJS lookup (LOAD_AS_FILE, LOAD_INDEX, LOAD_AS_DIRECTORY in the modules docs).
+const loadAsFile = (p: string): string | undefined => [p, `${p}.js`, `${p}.json`, `${p}.node`].find(isFile);
+const loadIndex = (p: string): string | undefined =>
+  ['index.js', 'index.json', 'index.node'].map((f) => path.join(p, f)).find(isFile);
+const loadAsDirectory = (p: string): string | undefined => {
+  const main = mainOf(readManifest(p));
+  if (main === undefined) return loadIndex(p);
+  const m = path.join(p, main);
+  return loadAsFile(m) ?? loadIndex(m) ?? loadIndex(p);
+};
+const resolveCommonJsPath = (p: string): string | undefined => loadAsFile(p) ?? loadAsDirectory(p);
+
+/** ESM `LEGACY_MAIN_RESOLVE`: a package without `exports`, imported by its name. */
+const legacyMainResolve = (pkgDir: string, manifest: Manifest | undefined): string | undefined => {
+  const main = mainOf(manifest);
+  const m = main === undefined ? undefined : path.join(pkgDir, main);
+  const guesses = m
+    ? [m, `${m}.js`, `${m}.json`, `${m}.node`, path.join(m, 'index.js'), path.join(m, 'index.json'), path.join(m, 'index.node')]
+    : [];
+  return [...guesses, path.join(pkgDir, 'index.js')].find(isFile);
+};
+
+/** Node.js's default conditions for each kind of load (`module-sync` from Node.js 22.12). */
+const CONDITIONS: Record<ModuleRef['kind'], ReadonlySet<string>> = {
+  import: new Set(['node', 'import', 'module-sync', 'default']),
+  require: new Set(['node', 'require', 'module-sync', 'default']),
+};
+
+/**
+ * Resolve an `exports`/`imports` target (a string, a condition object, or a
+ * fallback array). A target is package-relative (`./…`); an `imports` target
+ * may also name a package (`allowBare`).
+ */
+const resolveTarget = (
+  target: unknown,
+  conditions: ReadonlySet<string>,
+  star: string | undefined,
+  allowBare: boolean,
+): string | undefined => {
   if (typeof target === 'string') {
-    if (!target.startsWith('./')) return undefined;
+    const bare = allowBare && !target.startsWith('.') && !target.startsWith('/') && !/^[a-z][a-z0-9+.-]*:/i.test(target);
+    if (!target.startsWith('./') && !bare) return undefined;
     return star === undefined ? target : target.split('*').join(star);
   }
   if (Array.isArray(target)) {
     for (const item of target) {
-      const resolved = resolveExportTarget(item, conditions, star);
+      const resolved = resolveTarget(item, conditions, star, allowBare);
       if (resolved !== undefined) return resolved;
     }
     return undefined;
@@ -408,51 +484,100 @@ const resolveExportTarget = (target: unknown, conditions: ReadonlySet<string>, s
   if (typeof target === 'object' && target !== null) {
     for (const [condition, value] of Object.entries(target)) {
       if (!conditions.has(condition)) continue;
-      const resolved = resolveExportTarget(value, conditions, star);
+      const resolved = resolveTarget(value, conditions, star, allowBare);
       if (resolved !== undefined) return resolved;
     }
   }
   return undefined;
 };
 
-/** Resolve `subpath` (`.` or `./x`) through a package's `exports`, including `*` patterns. */
-const resolveExports = (exports: unknown, subpath: string, conditions: ReadonlySet<string>): string | undefined => {
-  const isSubpathMap =
-    typeof exports === 'object' && exports !== null && !Array.isArray(exports) && Object.keys(exports).some((k) => k.startsWith('.'));
-  const map: Record<string, unknown> = isSubpathMap ? (exports as Record<string, unknown>) : { '.': exports };
-  if (Object.hasOwn(map, subpath)) return resolveExportTarget(map[subpath], conditions, undefined);
+/** Resolve `key` through a subpath map (`exports` or `imports`), including `*` patterns. */
+const resolveSubpathMap = (
+  map: Record<string, unknown>,
+  key: string,
+  conditions: ReadonlySet<string>,
+  allowBare: boolean,
+): string | undefined => {
+  if (Object.hasOwn(map, key) && !key.includes('*')) return resolveTarget(map[key], conditions, undefined, allowBare);
   const patterns = Object.keys(map)
-    .filter((key) => key.includes('*'))
+    .filter((k) => k.includes('*'))
     .sort((a, b) => b.indexOf('*') - a.indexOf('*') || b.length - a.length);
-  for (const key of patterns) {
-    const [prefix = '', suffix = ''] = key.split('*');
-    if (subpath.startsWith(prefix) && subpath.endsWith(suffix) && subpath.length >= key.length - 1) {
-      return resolveExportTarget(map[key], conditions, subpath.slice(prefix.length, subpath.length - suffix.length));
+  for (const pattern of patterns) {
+    const [prefix = '', suffix = ''] = pattern.split('*');
+    if (key.startsWith(prefix) && key.endsWith(suffix) && key.length >= pattern.length - 1) {
+      return resolveTarget(map[pattern], conditions, key.slice(prefix.length, key.length - suffix.length), allowBare);
     }
   }
   return undefined;
 };
 
-/** Resolve `subpath` inside the package at `pkgDir` to an existing file. */
-const resolveInPackage = (pkgDir: string, subpath: string, kind: ModuleRef['kind']): string | undefined => {
-  let manifest: { exports?: unknown; main?: unknown } = {};
-  try {
-    manifest = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf-8')) as typeof manifest;
-  } catch {
-    // No or unreadable package.json: Node.js falls back to the file layout.
+/** Resolve `subpath` (`.` or `./x`) through a package's `exports` to an existing file. */
+const resolveExportsFile = (pkgDir: string, exports: unknown, subpath: string, kind: ModuleRef['kind']): string | undefined => {
+  const isSubpathMap =
+    typeof exports === 'object' && exports !== null && !Array.isArray(exports) && Object.keys(exports).some((k) => k.startsWith('.'));
+  const map: Record<string, unknown> = isSubpathMap ? (exports as Record<string, unknown>) : { '.': exports };
+  const target = resolveSubpathMap(map, subpath, CONDITIONS[kind], false);
+  if (target === undefined) return undefined;
+  const file = path.join(pkgDir, target);
+  return isFile(file) ? file : undefined;
+};
+
+const isInside = (root: string, p: string): boolean => p === root || p.startsWith(root + path.sep);
+
+/**
+ * Resolve a bare specifier from `fromDir` through the `node_modules`
+ * directories above it, never above `buildDir`. ESM stops at the first
+ * package directory it finds (`PACKAGE_RESOLVE`); CommonJS
+ * (`LOAD_NODE_MODULES`) only stops there when the package has `exports`, and
+ * otherwise looks further up when that copy has no module for the specifier.
+ */
+const resolvePackage = (buildDir: string, fromDir: string, specifier: string, kind: ModuleRef['kind']): string | undefined => {
+  const pkg = packageOfSpecifier(specifier);
+  const subpath = `.${specifier.slice(pkg.length)}`;
+  for (let dir = fromDir; ; dir = path.dirname(dir)) {
+    const pkgDir = path.join(dir, 'node_modules', pkg);
+    if (kind === 'require') {
+      if (path.basename(dir) !== 'node_modules') {
+        const manifest = readManifest(pkgDir);
+        if (manifest?.exports !== undefined && manifest.exports !== null) {
+          return resolveExportsFile(pkgDir, manifest.exports, subpath, kind);
+        }
+        const found = resolveCommonJsPath(path.join(dir, 'node_modules', specifier));
+        if (found) return found;
+      }
+    } else if (isDirectory(pkgDir)) {
+      const manifest = readManifest(pkgDir);
+      if (manifest?.exports !== undefined && manifest.exports !== null) {
+        return resolveExportsFile(pkgDir, manifest.exports, subpath, kind);
+      }
+      if (subpath === '.') return legacyMainResolve(pkgDir, manifest);
+      const file = path.join(pkgDir, subpath);
+      return isFile(file) ? file : undefined;
+    }
+    if (dir === buildDir || path.dirname(dir) === dir || !isInside(buildDir, dir)) return undefined;
   }
-  if (manifest.exports !== undefined && manifest.exports !== null) {
-    const target = resolveExports(manifest.exports, subpath, CONDITIONS[kind]);
+};
+
+/**
+ * Resolve a `#` specifier through the `imports` of the package that contains
+ * `fromFile` (Node.js `PACKAGE_IMPORTS_RESOLVE`): the nearest package.json,
+ * not past a `node_modules` directory or above `buildDir`.
+ */
+const resolvePackageImport = (buildDir: string, fromFile: string, ref: ModuleRef): string | undefined => {
+  for (let dir = path.dirname(fromFile); isInside(buildDir, dir) && path.basename(dir) !== 'node_modules'; dir = path.dirname(dir)) {
+    if (!isFile(path.join(dir, 'package.json'))) {
+      if (dir === buildDir) return undefined;
+      continue;
+    }
+    const imports = readManifest(dir)?.imports;
+    if (typeof imports !== 'object' || imports === null || Array.isArray(imports)) return undefined;
+    const target = resolveSubpathMap(imports as Record<string, unknown>, ref.specifier, CONDITIONS[ref.kind], true);
     if (target === undefined) return undefined;
-    const file = path.join(pkgDir, target);
+    if (!target.startsWith('./')) return resolvePackage(buildDir, dir, target, ref.kind);
+    const file = path.join(dir, target);
     return isFile(file) ? file : undefined;
   }
-  if (subpath === '.') {
-    const main = typeof manifest.main === 'string' && manifest.main.length > 0 ? path.join(pkgDir, manifest.main) : undefined;
-    return (main ? resolveCommonJsFile(main) : undefined) ?? resolveCommonJsFile(path.join(pkgDir, 'index'));
-  }
-  const file = path.join(pkgDir, subpath);
-  return kind === 'require' ? resolveCommonJsFile(file) : isFile(file) ? file : undefined;
+  return undefined;
 };
 
 /**
@@ -462,14 +587,17 @@ const resolveInPackage = (pkgDir: string, subpath: string, kind: ModuleRef['kind
 const resolveRef = (buildDir: string, fromFile: string, ref: ModuleRef): string | undefined => {
   if (isRelative(ref.specifier)) {
     const file = path.resolve(path.dirname(fromFile), ref.specifier);
-    return ref.kind === 'require' ? resolveCommonJsFile(file) : isFile(file) ? file : undefined;
+    return ref.kind === 'require' ? resolveCommonJsPath(file) : isFile(file) ? file : undefined;
   }
-  const pkg = packageOfSpecifier(ref.specifier);
-  const subpath = `.${ref.specifier.slice(pkg.length)}`;
-  for (let dir = path.dirname(fromFile); ; dir = path.dirname(dir)) {
-    const pkgDir = path.join(dir, 'node_modules', pkg);
-    if (fs.existsSync(pkgDir)) return resolveInPackage(pkgDir, subpath, ref.kind);
-    if (dir === buildDir || path.dirname(dir) === dir || !dir.startsWith(buildDir)) return undefined;
+  if (ref.specifier.startsWith('#')) return resolvePackageImport(buildDir, fromFile, ref);
+  return resolvePackage(buildDir, path.dirname(fromFile), ref.specifier, ref.kind);
+};
+
+const realpath = (p: string): string | undefined => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return undefined;
   }
 };
 
@@ -478,12 +606,12 @@ const resolveRef = (buildDir: string, fromFile: string, ref: ModuleRef): string 
  * provide, each with the file (relative to `build/`) that loads it first. The
  * server files are every script outside `client/`, `prerendered/` and
  * `node_modules/`; files they reach inside `build/` (a shipped package
- * included) are checked in turn. A relative import that doesn't resolve is
- * left to the build; an optional load (see the module header) never counts.
+ * included) are checked in turn. A relative import counts like a package
+ * one; an optional load (see the module header) never counts.
  * @internal exported for unit tests.
  */
 export const unresolvedServerImports = (buildDir: string): Map<string, string> => {
-  const root = path.resolve(buildDir);
+  const root = realpath(path.resolve(buildDir)) ?? path.resolve(buildDir);
   const queue = fg.sync('**/*.{js,mjs,cjs}', {
     cwd: root,
     absolute: true,
@@ -492,23 +620,27 @@ export const unresolvedServerImports = (buildDir: string): Map<string, string> =
   const seen = new Set<string>();
   const unresolved = new Map<string, string>();
   for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
-    const normalized = path.resolve(file);
-    if (seen.has(normalized) || !/\.[cm]?js$/.test(normalized)) continue;
-    seen.add(normalized);
-    const refs = moduleRefs(fs.readFileSync(normalized, 'utf-8'));
+    // Node.js resolves a module's imports from its real path.
+    const real = realpath(file);
+    if (real === undefined || seen.has(real) || !/\.[cm]?js$/.test(real)) continue;
+    seen.add(real);
+    const refs = moduleRefs(fs.readFileSync(real, 'utf-8'));
     if (!refs) {
-      process.stderr.write(`⚠️  Could not parse build/${path.relative(root, normalized)} to check its imports.\n`);
+      process.stderr.write(`⚠️  Could not parse build/${path.relative(root, real)} to check its imports.\n`);
       continue;
     }
     for (const ref of refs) {
       if (isIgnoredSpecifier(ref.specifier)) continue;
-      const target = resolveRef(root, normalized, ref);
-      if (target) {
-        queue.push(target);
+      const target = resolveRef(root, real, ref);
+      const realTarget = target === undefined ? undefined : realpath(target);
+      // A target outside build/ (a relative path or a symlink leading out) isn't shipped.
+      if (realTarget !== undefined && isInside(root, realTarget)) {
+        queue.push(realTarget);
         continue;
       }
-      if (isRelative(ref.specifier) || ref.optional || unresolved.has(ref.specifier)) continue;
-      unresolved.set(ref.specifier, path.relative(root, normalized).replace(/\\/g, '/'));
+      if (realTarget === undefined && isRuntimeProvided(ref)) continue;
+      if (ref.optional || unresolved.has(ref.specifier)) continue;
+      unresolved.set(ref.specifier, path.relative(root, real).replace(/\\/g, '/'));
     }
   }
   return unresolved;

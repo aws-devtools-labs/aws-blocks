@@ -50,6 +50,7 @@ const scaffold = (dir: string, opts: { adapterWired?: boolean; viteConfig?: stri
   fs.writeFileSync(path.join(buildDir, 'client', '_app', 'immutable', 'chunk.abc.js'), '//');
   fs.mkdirSync(path.join(buildDir, 'server', 'chunks'), { recursive: true });
   fs.writeFileSync(path.join(buildDir, 'index.js'), "import { handler } from './handler.js';\nimport http from 'node:http';\n");
+  fs.writeFileSync(path.join(buildDir, 'handler.js'), 'export const handler = () => {};\n');
   fs.writeFileSync(path.join(buildDir, 'server', 'index.js'), "import 'fs';\nexport const x = 'y';\n");
 };
 
@@ -241,6 +242,130 @@ void describe('sveltekitAdapter — server dependencies in build/', () => {
     scaffold(tmp);
     writeServerChunk(tmp, "try { await import('cookie'); } finally { console.log('x'); }\n");
     assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('cookie'));
+  });
+
+  void it('rejects a relative import that build/ does not ship', () => {
+    scaffold(tmp);
+    fs.rmSync(path.join(tmp, 'build', 'handler.js'));
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      rejects('./handler.js (imported from build/index.js)'),
+    );
+  });
+
+  void it('rejects an import that resolves outside build/, through a relative path or a symlink', () => {
+    const outside = path.join(tmp, 'outside');
+    fs.mkdirSync(path.join(outside, 'linked-pkg'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'lib.js'), 'export const lib = 1;\n');
+    fs.writeFileSync(path.join(outside, 'linked-pkg', 'package.json'), JSON.stringify({ exports: './index.js' }));
+    fs.writeFileSync(path.join(outside, 'linked-pkg', 'index.js'), 'export {};\n');
+    const chunks = path.join(tmp, 'build', 'server', 'chunks');
+    for (const [source, named] of [
+      ["import { lib } from '../../../outside/lib.js';\n", '../../../outside/lib.js'],
+      ["import { lib } from './lib.js';\n", './lib.js'],
+      ["import 'linked-pkg';\n", 'linked-pkg'],
+    ]) {
+      fs.rmSync(path.join(tmp, 'build'), { recursive: true, force: true });
+      scaffold(tmp);
+      fs.symlinkSync(path.join(outside, 'lib.js'), path.join(chunks, 'lib.js'));
+      fs.mkdirSync(path.join(tmp, 'build', 'node_modules'), { recursive: true });
+      fs.symlinkSync(path.join(outside, 'linked-pkg'), path.join(tmp, 'build', 'node_modules', 'linked-pkg'));
+      writeServerChunk(tmp, source);
+      assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects(named), source);
+    }
+  });
+
+  void it('deploys an import through a symlink that stays inside build/', () => {
+    scaffold(tmp);
+    const chunks = path.join(tmp, 'build', 'server', 'chunks');
+    fs.writeFileSync(path.join(tmp, 'build', 'server', 'shared.js'), 'export const shared = 1;\n');
+    fs.symlinkSync(path.join(tmp, 'build', 'server', 'shared.js'), path.join(chunks, 'alias.js'));
+    writeServerChunk(tmp, "import { shared } from './alias.js';\nexport { shared };\n");
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('rejects a dynamic import that a try returns without awaiting, as its rejection escapes the catch', () => {
+    scaffold(tmp);
+    writeServerChunk(
+      tmp,
+      [
+        "export const a = async () => { try { return import('returned-peer'); } catch { return null; } };",
+        "export const b = () => { try { const p = import('unawaited-peer'); return p; } catch { return null; } };",
+        '',
+      ].join('\n'),
+    );
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('returned-peer', 'unawaited-peer'));
+  });
+
+  void it('deploys a dynamic import that a try awaits, and a require that a try surrounds', () => {
+    scaffold(tmp);
+    writeServerChunk(
+      tmp,
+      [
+        "export const a = async () => { try { return await import('awaited-peer'); } catch { return null; } };",
+        "export const b = async () => { try { return await import('chained-peer').then((m) => m.default); } catch { return null; } };",
+        "export const c = () => { try { return require('sync-peer'); } catch { return null; } };",
+        '',
+      ].join('\n'),
+    );
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('reads a trailing slash as the npm package, not the built-in: require("buffer/")', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "const { Buffer } = require('buffer/');\nconst fsp = require('fs/promises');\nmodule.exports = { Buffer, fsp };\n");
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('buffer/'));
+    ship('', 'buffer', { 'package.json': JSON.stringify({ main: 'index.js' }), 'index.js': 'exports.Buffer = 1;\n' });
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('resolves require("pkg/subdir") through the subdirectory package.json main, as Node.js does', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "module.exports = require('pkg/subdir');\n");
+    ship('', 'pkg', {
+      'package.json': JSON.stringify({ main: 'index.js' }),
+      'index.js': 'module.exports = 1;\n',
+      'subdir/package.json': JSON.stringify({ main: 'lib/entry.js' }),
+      'subdir/lib/entry.js': 'module.exports = 2;\n',
+    });
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('rejects require("./x") when only x.cjs exists, as Node.js adds .js, .json and .node only', () => {
+    scaffold(tmp);
+    fs.writeFileSync(path.join(tmp, 'build', 'server', 'chunks', 'helper.cjs'), 'module.exports = 1;\n');
+    writeServerChunk(tmp, "module.exports = require('./helper');\n");
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('./helper'));
+  });
+
+  void it('lets require() look further up when the nearest node_modules copy has no module, as CommonJS does', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "module.exports = require('dup');\n");
+    fs.mkdirSync(path.join(tmp, 'build', 'server', 'node_modules', 'dup'), { recursive: true });
+    ship('', 'dup', { 'package.json': JSON.stringify({ main: 'index.js' }), 'index.js': 'module.exports = 1;\n' });
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+  });
+
+  void it('resolves a package-internal # import through the package.json imports field', () => {
+    scaffold(tmp);
+    writeServerChunk(tmp, "import 'with-imports';\n");
+    ship('', 'with-imports', {
+      'package.json': JSON.stringify({ type: 'module', exports: './index.js', imports: { '#internal/*': './lib/*.js' } }),
+      'index.js': "import '#internal/util';\n",
+      'lib/util.js': 'export {};\n',
+    });
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+    fs.rmSync(path.join(tmp, 'build', 'node_modules', 'with-imports', 'lib', 'util.js'));
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('#internal/util'));
+  });
+
+  void it('accepts a require() of the AWS SDK v3 that the Lambda Node.js runtime provides, not an import of it', () => {
+    scaffold(tmp);
+    // CommonJS require() searches NODE_PATH, which includes the runtime's SDK; an ESM import never does.
+    writeServerChunk(tmp, "const { S3Client } = require('@aws-sdk/client-s3');\nmodule.exports = S3Client;\n");
+    assert.doesNotThrow(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
+    writeServerChunk(tmp, "import { S3Client } from '@aws-sdk/client-s3';\nconst v2 = require('aws-sdk');\nexport { S3Client, v2 };\n");
+    assert.throws(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }), rejects('@aws-sdk/client-s3', 'aws-sdk'));
   });
 
   void it('checks the require calls of a shipped CommonJS dependency, except a guarded optional one', () => {

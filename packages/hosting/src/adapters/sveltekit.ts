@@ -481,7 +481,7 @@ const assertServerDependenciesBundled = (buildDir: string): void => {
   throw new HostingError('SvelteKitUnbundledDependencyError', {
     message:
       `The SvelteKit server imports modules that the deployed server function would not have: ${listed}. ` +
-      'The function ships build/ without node_modules.',
+      'The function ships build/ without node_modules, and without what a symlink or relative path in it leads to outside build/.',
     resolution:
       'Remove these packages from `ssr.external` in your Vite config so the build bundles them, ' +
       'and rebuild (a build reused with BLOCKS_SKIP_FRONTEND_BUILD may predate the bundling). ' +
