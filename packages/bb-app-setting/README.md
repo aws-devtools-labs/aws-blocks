@@ -58,8 +58,7 @@ For example, `Auth` reads both when an `AppSetting` is passed as an identity pro
 ### Error Handling
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { AppSettingErrors } from '@aws-cdk-blocks/bb-app-setting';
+import { AppSettingErrors, isBlocksError } from 'aws-cdk-blocks';
 
 try {
   await setting.put(value);

@@ -144,7 +144,7 @@ In AWS, `receiveCount` is the SQS `ApproximateReceiveCount` attribute, and the n
 ## Error Constants
 
 ```typescript
-import { AsyncJobErrors } from '@aws-cdk-blocks/bb-async-job';
+import { AsyncJobErrors } from 'aws-cdk-blocks';
 
 AsyncJobErrors.PayloadTooLarge    // payload > 256 KB
 AsyncJobErrors.BatchEmpty         // submitBatch([]) called with no items

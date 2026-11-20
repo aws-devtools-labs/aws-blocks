@@ -1327,8 +1327,8 @@ function subpathsOf(index: DocsIndex, name: string): [string, boolean][] {
  * How code imports `publicName`. From aws-cdk-blocks when it exports the name (`backend`): a type with
  * `import type`, which browser code and tests can use too (the import is erased, and TypeScript reads the types
  * entry); a value in backend code, with the aws-cdk-blocks/client import for browser code and tests when that
- * entry has it, since their browser condition gets no value from aws-cdk-blocks. Otherwise from each subpath
- * entry that exports it.
+ * entry has it and the browser build of aws-cdk-blocks does not (that build has only the client-safe values).
+ * Otherwise from each subpath entry that exports it.
  */
 function importLine(index: DocsIndex, publicName: string, backend: boolean, kind: NameKind): string {
 	const from = (entry: string, type: boolean) => `import ${type ? 'type ' : ''}{ ${publicName} } from '${entry}';`;
@@ -1504,7 +1504,7 @@ function exportsList(index: DocsIndex, filters: string[]): ExportsAnswer {
 		const external = [...index.externals]
 			.filter(([n, x]) => has(n) || has(x.from))
 			.map(([n, x]) => `${n} (from ${x.from})`);
-		// Declared by a block that aws-cdk-blocks does not re-export it from: RealtimeErrors of bb-realtime.
+		// Declared by a block that aws-cdk-blocks does not re-export it from: BatchSubmitFailedError of bb-async-job.
 		const unexported = [...index.declarations]
 			.filter(([n]) => has(n))
 			.flatMap(([n, ds]) =>
@@ -1554,7 +1554,7 @@ function exportsList(index: DocsIndex, filters: string[]): ExportsAnswer {
 	let browser: string | undefined;
 	if (index.entries) {
 		const values = [...index.entries.browserMain].filter(([, type]) => !type).map(([name]) => name);
-		browser = `Browser code and tests (npm run test:e2e runs tsx -C browser) get ${values.length ? `only ${values.join(', ')}` : 'no value'} from ${BLOCKS} (import type of its types works); they import values from ${CLIENT}.`;
+		browser = `Browser code and tests (npm run test:e2e runs tsx -C browser) get ${values.length ? `only ${values.join(', ')}` : 'no value'} from ${BLOCKS} (import type of its types works); they import ${values.length ? 'other values' : 'values'} from ${CLIENT}.`;
 	}
 	const foot = `Its declaration and docs: ${CLI} <name>`;
 	if (wanted.length) {
