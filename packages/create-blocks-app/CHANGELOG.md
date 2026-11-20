@@ -1,5 +1,33 @@
 # @aws-blocks/create-blocks-app
 
+## 1.0.0-rc.1
+
+### Minor Changes
+
+- c42ba42: **Breaking: the hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.**
+
+  To upgrade an existing app:
+
+  1. Move the config file: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`. Then delete the empty `.blocks/` folder. Do not run `git mv .blocks .cdk-blocks`, because it nests the old folder inside the new one when `.cdk-blocks/` already exists.
+  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`. Without this change, `getSecret()` and `getConfig()` lose their key types.
+  3. Run `npm run typegen` and commit `.cdk-blocks/hosting-values.d.ts`.
+
+  Local data, the local database included, is copied to the new location the first time each block opens its store. `.bb-data/` stays in place. `.cdk-blocks/local/` ignores itself, so it needs no `.gitignore` rule.
+
+  An app that still has `.blocks/config.json` deploys and destroys as before. The telemetry first-run notice prints once more after the upgrade. Pull request #1607 has the full notes.
+
+### Patch Changes
+
+- e9c1bd4: The `nextjs` template's `tsconfig.json` now includes the `ESNext` library, so a backend that lists items with `Array.fromAsync(...)`, as the Building Block docs do, type-checks in `next build`. It stopped at `ES2022`, and `next build` failed with `TS2550: Property 'fromAsync' does not exist on type 'ArrayConstructor'`.
+- b47e4c7: Open the Dashboard block's route during local development to see configured metrics, find local observability output, and launch the Admin UI without deploying. The Admin UI starts new sessions on local data and defers AWS reads until a cloud stage is selected.
+- c9d73a8: fix(create-blocks-app): a new app now installs one copy of `@aws-cdk-blocks/core`.
+
+  The templates declared `@types/node` `^20.19.43`, which made npm install a separate copy of `core` under each block. The copies did not share state, so `getSdkIdentifiers()` returned `{}` and app code could not import `@aws-cdk-blocks/core`. The templates now declare `@types/node` `^22.12.0`.
+
+  To fix an existing app, make the same change in its `package.json` and run `npm install`.
+
+- e529b00: fix(blocks): client code can now import the block error constants, `isBlocksError`, and `ApiError` from `aws-cdk-blocks`. Before, `import { KVStoreErrors } from 'aws-cdk-blocks'` type-checked and then failed in the browser with `does not provide an export named 'KVStoreErrors'`. The Building Block classes and `sql` are still server-only, so browser code uses `import type` for their types. `aws-cdk-blocks` now also exports `RealtimeErrors`.
+
 ## 1.0.0-rc.0
 
 ### Major Changes
