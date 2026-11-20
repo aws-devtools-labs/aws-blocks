@@ -85,11 +85,11 @@ cd my_app
 ```yaml
 # pubspec.yaml
 dependencies:
-  blocks_runtime: ^0.2.0
-  blocks_runtime_flutter: ^0.2.0
+  blocks_runtime: ^1.0.0
+  blocks_runtime_flutter: ^1.0.0
 
 dev_dependencies:
-  blocks_codegen: ^0.2.0
+  blocks_codegen: ^1.0.0
   build_runner: ^2.14.0
 ```
 
@@ -180,8 +180,8 @@ A Flutter app needs no code for this. Add the dependency:
 
 ```yaml
 dependencies:
-  blocks_runtime: ^0.2.0
-  blocks_runtime_flutter: ^0.2.0
+  blocks_runtime: ^1.0.0
+  blocks_runtime_flutter: ^1.0.0
 ```
 
 and build the client as usual, before or after `runApp`. The app does not have to call `WidgetsFlutterBinding.ensureInitialized()` first:

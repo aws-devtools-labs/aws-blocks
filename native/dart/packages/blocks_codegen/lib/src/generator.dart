@@ -12,7 +12,7 @@ import 'model.dart';
 /// `BlocksClient.call`, …). Each generated library names it in its header.
 /// Raise it with the runtime release that adds an API the output starts using,
 /// together with the `blocks_runtime` constraint in `pubspec.yaml`.
-const minimumRuntimeVersion = '0.2.0';
+const minimumRuntimeVersion = '1.0.0';
 
 /// Generates Dart source code from a [CodegenModel].
 class DartCodeGenerator {
