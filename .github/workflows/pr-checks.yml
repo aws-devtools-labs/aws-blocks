@@ -723,7 +723,10 @@ jobs:
       - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
-      - run: npm run build
+      # build:e2e leaves out the scaffolders and the admin UI, which no deploy
+      # uses. The AWS E2E jobs below build the same way, except Telemetry E2E,
+      # which runs the scaffolder.
+      - run: npm run build:e2e
 
       - name: Configure AWS credentials
         uses: ./.github/actions/e2e-aws-credentials
@@ -824,7 +827,7 @@ jobs:
       - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:e2e
 
       - name: Configure AWS credentials
         uses: ./.github/actions/e2e-aws-credentials
@@ -929,7 +932,7 @@ jobs:
       - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:e2e
 
       - name: Configure AWS credentials
         uses: ./.github/actions/e2e-aws-credentials
@@ -1091,7 +1094,7 @@ jobs:
       - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:e2e
 
       - name: Configure AWS credentials
         uses: ./.github/actions/e2e-aws-credentials
@@ -1179,7 +1182,7 @@ jobs:
       - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:e2e
 
       - name: Install pg_dump 18 (for the run-all baseline E2E)
         # The runner's default pg_dump may be older than the Supabase server, and
@@ -1351,7 +1354,7 @@ jobs:
       - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:e2e
 
       # This leg's account: the PR's, moved by the leg's account-offset.
       - id: e2e-slot
