@@ -1,10 +1,10 @@
-# AWS Blocks Swift – Agent Guide
+# AWS CDK Blocks Swift – Agent Guide
 
 Context for AI coding agents working in this directory.
 
 ## Project Overview
 
-A Swift Package that generates type-safe Swift client code from an OpenRPC specification, plus a runtime library that executes the generated code against an AWS Blocks backend. Three targets:
+A Swift Package that generates type-safe Swift client code from an OpenRPC specification, plus a runtime library that executes the generated code against an AWS CDK Blocks backend. Three targets:
 
 - **BlocksCodegen** — pure Swift: parser → model builder → Swift code generator. Ships as a SwiftPM target, invoked via the `swift-code-generator` executable or the `BlocksCodegenCommandPlugin` build plugin.
 - **BlocksRuntime** — iOS + macOS: HTTP client (one per generated `Blocks`), WebSocket-backed realtime channels, file upload/download handles, Keychain cookie store.

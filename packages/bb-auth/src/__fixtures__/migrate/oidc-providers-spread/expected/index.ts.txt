@@ -1,7 +1,7 @@
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 // TODO(aws-blocks-auth-migrate): google() is gone in Auth: a generic OIDC provider is a plain { type: 'oidc', issuer, clientId, clientSecret? } entry in providers.
-import { Auth, google, stubIdp } from '@aws-blocks/bb-auth';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Auth, google, stubIdp } from '@aws-cdk-blocks/bb-auth';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
 
 const scope = new Scope('app');
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });

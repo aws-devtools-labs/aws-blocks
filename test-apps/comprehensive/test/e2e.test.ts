@@ -12,8 +12,8 @@ import type {
   authSocialApi as authSocialApiType,
   isolatedApi as isolatedApiType,
   strictStatusApi as strictStatusApiType,
-} from 'aws-blocks';
-import { ApiError } from '@aws-blocks/core';
+} from 'cdk-blocks';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
 import { codePoller } from './poll-for-code.js';
@@ -61,7 +61,7 @@ import { testApiUrl } from './api-url.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
+const backendPath = join(__dirname, '..', 'cdk-blocks', 'index.cdk.ts');
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
@@ -69,7 +69,7 @@ let isolatedApi: typeof isolatedApiType;
 let strictStatusApi: typeof strictStatusApiType;
 let authSocialApi: typeof authSocialApiType;
 let authStateApis: AuthStateApis;
-let appModule: typeof import('aws-blocks');
+let appModule: typeof import('cdk-blocks');
 let protectApis: ProtectApis;
 let authTotpApis: AuthTotpApis;
 
@@ -164,7 +164,7 @@ test.before(async () => {
 
   // Import API after config is written, pinned to the target of BLOCKS_TEST_ENV (see testApiUrl).
   process.env.BLOCKS_API_URL = testApiUrl();
-  const module = await import('aws-blocks');
+  const module = await import('cdk-blocks');
   appModule = module;
   api = module.api;
   isolatedApi = module.isolatedApi;
@@ -217,7 +217,7 @@ test.after(async (t) => {
   // even when every test passed.
   //
   // Which module owns that pool is environment-dependent. Under `tsx -C browser`
-  // `import 'aws-blocks'` resolves (via the package's `browser` export) to the
+  // `import 'cdk-blocks'` resolves (via the package's `browser` export) to the
   // generated client.js, which side-effect-imports the realtime client
   // middleware — bb-realtime/mock-middleware locally, bb-realtime/aws-middleware
   // on sandbox/production. We reset BOTH, best-effort: a dynamic import of the
@@ -225,7 +225,7 @@ test.after(async (t) => {
   // live sockets, and the other module's reset is a harmless no-op over an empty
   // pool. Doing this as a dynamic (not top-level) import keeps the inactive
   // module out of the response-hydration chain during the tests themselves.
-  for (const spec of ['@aws-blocks/bb-realtime/mock-middleware', '@aws-blocks/bb-realtime/aws-middleware']) {
+  for (const spec of ['@aws-cdk-blocks/bb-realtime/mock-middleware', '@aws-cdk-blocks/bb-realtime/aws-middleware']) {
     try {
       const mw = await import(spec);
       (mw as { __resetConnectionsForTest?: () => void }).__resetConnectionsForTest?.();
@@ -280,7 +280,7 @@ if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
 // before the background suites below start, because once they overlap a full
 // purge could delete a code one of them is waiting to read (basic-auth.test.ts
 // covers the per-user purge). Locally it also sweeps the records earlier runs
-// left in .bb-data/.
+// left in .cdk-blocks/local/data/.
 test('Auth - full purge clears every code record and leaves other keys alone', { skip: ENV !== 'local' && 'codeDelivery is mock-only; deployed Auth emails the code' }, async () => {
   const stamp = Date.now().toString(36);
   const username = `purge-probe-${stamp}`;

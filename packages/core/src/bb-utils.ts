@@ -5,9 +5,14 @@
  * Utilities for Building Block authors.
  *
  * Used by standard BBs and available to customers writing custom Building Blocks.
- * Not part of the main '.' export — import from '@aws-blocks/core/bb-utils'.
+ * Not part of the main '.' export — import from '@aws-cdk-blocks/core/bb-utils'.
  */
-export { getMockDataDir } from './common/mock-data.js';
+export {
+  getMockDataDir,
+  LEGACY_MOCK_DATA_DIR,
+  MOCK_DATA_DIR,
+  MockDataDirError,
+} from './common/mock-data.js';
 export { assertNotMockInDeployedEnv } from './common/runtime-guard.js';
 export { API_NAMESPACE_DISCOVER, API_NAMESPACE_MARKER } from './api.js';
 export { EventSourceMapping } from './lambda-handler.js';
@@ -19,7 +24,7 @@ export { getRequestBaseUrl } from './common/request-base-url.js';
 // here so BB authors get it alongside the other BB utilities.
 export { sanitizeConfigKey } from './common/config.js';
 // Internal: the per-call fetch store the generated client reads and
-// `@aws-blocks/blocks/utils`'s createTestClient sets (see client/fetch-store.ts).
+// `aws-cdk-blocks/utils`'s createTestClient sets (see client/fetch-store.ts).
 export { CLIENT_FETCH_STORE } from './client/fetch-store.js';
 // Escape helpers for building regular expressions and HTML from values that
 // aren't constants (configuration, request data, file paths).

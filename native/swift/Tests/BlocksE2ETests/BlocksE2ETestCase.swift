@@ -26,7 +26,7 @@ enum AuthErrorNames {
 class BlocksE2ETestCase: XCTestCase {
     static let blocksUrl: String = ProcessInfo.processInfo.environment["BLOCKS_URL"]
         .flatMap { $0.isEmpty ? nil : $0 }
-        ?? "http://localhost:3001/aws-blocks/api"
+        ?? "http://localhost:3001/cdk-blocks/api"
 
     static let server: BlocksServer = .init(name: "e2e", url: blocksUrl)
 
@@ -67,7 +67,7 @@ class BlocksE2ETestCase: XCTestCase {
     }
 
     /// The pre-provisioned, confirmed user a deployed backend signs in instead of signing up
-    /// (seeded by `test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts`).
+    /// (seeded by `test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts`).
     func returningUser() -> (username: String, password: String) {
         let env = ProcessInfo.processInfo.environment
         let username = env["COGNITO_TEST_USERNAME"].flatMap { $0.isEmpty ? nil : $0 } ?? "e2e-returning-user"

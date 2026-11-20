@@ -12,7 +12,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createHmac } from 'node:crypto';
 import { WebSocket } from 'ws';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { attach, closeWebSocketServer } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';

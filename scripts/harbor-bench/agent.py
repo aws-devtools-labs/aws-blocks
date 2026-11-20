@@ -52,7 +52,7 @@ class HarborBlocksClaude(ClaudeCode):
         ))
         await self.exec_as_agent(environment, command=(
             'for i in {1..30}; do '
-            'curl -fsS http://localhost:4873/registry/@aws-blocks/create-blocks-app >/dev/null '
+            'curl -fsS http://localhost:4873/registry/@aws-cdk-blocks/create-blocks-app >/dev/null '
             '&& exit 0; sleep 1; done; exit 1'
         ))
 

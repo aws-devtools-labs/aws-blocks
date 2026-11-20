@@ -3,7 +3,7 @@
 
 /** Runs with the `tsx` loader and `--conditions=cdk`, started by `npm run sandbox:destroy`. */
 
-import { destroySandbox } from '@aws-blocks/core/scripts';
+import { destroySandbox } from '@aws-cdk-blocks/core/scripts';
 import { exitWithError } from './fail.js';
 
 const { backendPath, invocation } = JSON.parse(process.argv[2]) as { backendPath: string; invocation?: string };

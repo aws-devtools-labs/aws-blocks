@@ -18,10 +18,10 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import type { BlocksContext } from '@aws-blocks/core';
-import { isBlocksError } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { signSessionId } from './cookies.js';
 import { AuthErrors } from './index.aws.js';
 import type { SessionStore } from './sessions.js';
@@ -37,8 +37,8 @@ import {
 
 const DEFAULT_TTL = 30 * 86400;
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** Signed in, but the stored access token has already expired. */
 async function signedInWithExpiredAccess(opts: { refreshToken?: string | null } = {}) {

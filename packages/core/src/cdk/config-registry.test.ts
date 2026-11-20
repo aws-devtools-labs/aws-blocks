@@ -26,7 +26,7 @@ afterEach(() => {
 	delete (globalThis as any).CURRENT_BLOCKS_STACK;
 });
 
-// A real app's compute comes from @aws-blocks/bb-lambda-compute, which core's own tests can't
+// A real app's compute comes from @aws-cdk-blocks/bb-lambda-compute, which core's own tests can't
 // depend on. This is the same shape: a Compute that owns a real Lambda function and injects config
 // via addEnvironment — enough for finalizeConfigRegistry to stamp BLOCKS_CONFIG_BUCKET/KEY on it.
 class TestCompute extends ComputeBase {

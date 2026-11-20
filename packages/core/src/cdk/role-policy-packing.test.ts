@@ -579,7 +579,7 @@ describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 // ── Wiring into the shared execution role ─────────────────────────────────
 
 // Same inline default-compute stub as permissions-boundary.test.ts: core's tests
-// can't depend on @aws-blocks/bb-lambda-compute.
+// can't depend on @aws-cdk-blocks/bb-lambda-compute.
 class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 

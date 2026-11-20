@@ -1,6 +1,6 @@
 # create-block — Design
 
-`@aws-blocks/create-block` scaffolds a new Building Block (`bb-*`) package and, in
+`@aws-cdk-blocks/create-block` scaffolds a new Building Block (`bb-*`) package and, in
 the AWS Blocks monorepo, wires it into every registration touchpoint. This
 documents the internals; see [`README.md`](./README.md) for usage.
 
@@ -58,7 +58,7 @@ markers so re-running never double-adds.
 The templates pin monorepo-internal versions, which don't match the published
 registry. So:
 
-- **contributor** re-pins `@aws-blocks/*` deps to the monorepo's **current local**
+- **contributor** re-pins `@aws-cdk-blocks/*` deps to the monorepo's **current local**
   versions (`^x.y.z`, matching sibling BBs) so npm links the workspace copies.
 - **customer / external** re-pin them to the **latest published** versions
   (`npm view`, falling back to `latest` offline), and rewrite `prebuild` to a

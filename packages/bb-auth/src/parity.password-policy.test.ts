@@ -18,7 +18,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { CLIENT_ERROR_MESSAGES, passwordPolicyMessage } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
 import { Auth as AwsAuth } from './index.aws.js';
@@ -26,8 +26,8 @@ import { Auth as MockAuth } from './index.mock.js';
 import { cognitoError, makeAwsAuth, wireView } from './test-support/aws-harness.js';
 import type { CodeDeliveryPurpose, CognitoAuthOptions, PasswordPolicy } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const GOOD = 'Passw0rd!long';
 const WEAK = 'weak';

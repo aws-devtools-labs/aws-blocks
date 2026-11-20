@@ -21,7 +21,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ApiError, type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
+import { ApiError, type BlocksContext, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { SignJWT } from 'jose';
 import { bearerClientIdsConfigKey, federationConfigKeys } from './cdk/contract.js';
 import { Auth, AuthErrors } from './index.aws.js';
@@ -37,9 +37,10 @@ import { FakeIdp as OidcIdp } from './test-support/fake-idp.js';
 
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const ISSUER = `https://cognito-idp.${TEST_REGION}.amazonaws.com/${TEST_POOL_ID}`;
 const HOSTED_UI_CLIENT_ID = 'bearerhosteduiclient0000';

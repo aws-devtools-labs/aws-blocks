@@ -19,9 +19,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { Scope, getSdkIdentifiers } from '@aws-blocks/core';
-import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Scope, getSdkIdentifiers } from '@aws-cdk-blocks/core';
+import { FileBucket } from '@aws-cdk-blocks/bb-file-bucket';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type { SnapshotManifest, SnapshotStorage } from '@strands-agents/sdk';
 import type { S3StorageConfig } from '@strands-agents/sdk/session/s3-storage';
 import { createDeployedSnapshotStorage } from './agent.aws.js';

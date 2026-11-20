@@ -114,7 +114,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -150,6 +150,9 @@ import {
 	USAGE,
 	UsageError,
 	upgradeRevisionErrors,
+	type BlocksNames,
+	blocksNamesFromUmbrella,
+	retargetBlocksImports,
 } from './upgrade-in-place/lib.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -344,6 +347,17 @@ async function removeCreatedBaseTree(opts: HarnessOptions): Promise<void> {
 }
 
 /**
+ * What `treeRoot` calls this repo's packages, from its own umbrella manifest.
+ * The base revision predates the rename, so this differs between the two trees.
+ */
+function blocksNamesIn(treeRoot: string): BlocksNames {
+	const manifest = join(treeRoot, 'packages', 'blocks', 'package.json');
+	const name: unknown = JSON.parse(readFileSync(manifest, 'utf-8')).name;
+	if (typeof name !== 'string' || name === '') throw new Error(`${manifest} states no package name`);
+	return blocksNamesFromUmbrella(name);
+}
+
+/**
  * Copy the fixture app into `treeRoot/test-apps/.upgrade-in-place/<variant>/`.
  * Inside the checkout so every import resolves against THAT checkout's
  * `node_modules`; no package.json of its own, so `npx` inside `deploy()` finds
@@ -351,27 +365,36 @@ async function removeCreatedBaseTree(opts: HarnessOptions): Promise<void> {
  */
 function materializeApp(treeRoot: string, variant: Variant): string {
 	const dir = join(treeRoot, MATERIALIZED_DIR, variant);
+	const names = blocksNamesIn(treeRoot);
+	// One copy of each app file is written into BOTH checkouts, and the base revision
+	// predates the rename, so every specifier is retargeted to the names that tree
+	// actually publishes.
+	const copy = (src: string, dest: string): void =>
+		writeFileSync(dest, retargetBlocksImports(readFileSync(src, 'utf-8'), names));
 	rmSync(dir, { recursive: true, force: true });
-	for (const sub of ['aws-blocks', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
-	copyFileSync(join(APP_TEMPLATE_DIR, 'index.cdk.ts'), join(dir, 'aws-blocks', 'index.cdk.ts'));
+	for (const sub of ['cdk-blocks', 'scripts', '.cdk-blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	copy(join(APP_TEMPLATE_DIR, 'index.cdk.ts'), join(dir, 'cdk-blocks', 'index.cdk.ts'));
 	// The BEFORE backend is stored as `.ts.txt`: it imports `@aws-blocks/bb-auth-cognito`, which
 	// exists only in the pre-refactor checkout, so nothing in this workspace may compile or resolve it.
 	const backend = variant === 'auth-cognito' ? 'backend.auth-cognito.ts.txt' : `backend.${variant}.ts`;
-	copyFileSync(join(APP_TEMPLATE_DIR, backend), join(dir, 'aws-blocks', 'index.ts'));
+	copy(join(APP_TEMPLATE_DIR, backend), join(dir, 'cdk-blocks', 'index.ts'));
 	if (variant === 'auth-cognito') assertOldBlockFromBaseTree(dir, treeRoot);
 	writeFileSync(
-		join(dir, 'aws-blocks', 'index.handler.ts'),
-		"import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';\n\n" +
-			"export const handler = createLambdaHandler(() => import('./index.js'));\n",
+		join(dir, 'cdk-blocks', 'index.handler.ts'),
+		retargetBlocksImports(
+			"import { createLambdaHandler } from 'aws-cdk-blocks/lambda-handler';\n\n" +
+				"export const handler = createLambdaHandler(() => import('./index.js'));\n",
+			names,
+		),
 	);
-	copyFileSync(join(APP_TEMPLATE_DIR, 'deploy.ts'), join(dir, 'scripts', 'deploy.ts'));
-	copyFileSync(join(APP_TEMPLATE_DIR, 'destroy.ts'), join(dir, 'scripts', 'destroy.ts'));
+	copy(join(APP_TEMPLATE_DIR, 'deploy.ts'), join(dir, 'scripts', 'deploy.ts'));
+	copy(join(APP_TEMPLATE_DIR, 'destroy.ts'), join(dir, 'scripts', 'destroy.ts'));
 	writeFileSync(
 		join(dir, 'cdk.json'),
-		`${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk aws-blocks/index.cdk.ts` }, null, 2)}\n`,
+		`${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk cdk-blocks/index.cdk.ts` }, null, 2)}\n`,
 	);
 	writeFileSync(
-		join(dir, '.blocks', 'config.json'),
+		join(dir, '.cdk-blocks', 'config.json'),
 		`${JSON.stringify({ stackId: 'bb-test-upgrade', telemetry: { enabled: false } }, null, 2)}\n`,
 	);
 	return dir;
@@ -386,7 +409,7 @@ function materializeApp(treeRoot: string, variant: Variant): string {
 function assertOldBlockFromBaseTree(appDir: string, treeRoot: string): void {
 	let resolved: string;
 	try {
-		resolved = realpathSync(createRequire(join(appDir, 'aws-blocks', 'index.ts')).resolve(LEGACY_PACKAGE_NAME));
+		resolved = realpathSync(createRequire(join(appDir, 'cdk-blocks', 'index.ts')).resolve(LEGACY_PACKAGE_NAME));
 	} catch (error) {
 		throw new UsageError(
 			`the pre-refactor app cannot resolve ${LEGACY_PACKAGE_NAME} from ${treeRoot} (run its npm ci + build): ${String(error)}`,

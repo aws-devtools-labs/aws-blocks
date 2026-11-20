@@ -10,8 +10,8 @@
 
 import assert from 'node:assert';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { Secret } from '@aws-blocks/bb-secret';
-import { ApiError, type BlocksContext, isBlocksError, isWireSafeError, Scope } from '@aws-blocks/core';
+import { Secret } from '@aws-cdk-blocks/bb-secret';
+import { ApiError, type BlocksContext, isBlocksError, isWireSafeError, Scope } from '@aws-cdk-blocks/core';
 import { resolveProviders } from './auth-base.js';
 import { DirectFederationEngine, pkceChallenge } from './engines/federation-direct.js';
 import { idpRefusedMessage } from './engines/idp-callback-error.js';
@@ -69,12 +69,12 @@ async function signIn(
 	engine: DirectFederationEngine,
 	claims: Record<string, unknown> = { email: 'ada@example.com', name: 'Ada' },
 ): Promise<FederatedIdentity> {
-	const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
+	const start = ctxFor(`${APP}/cdk-blocks/auth/signin/okta`);
 	const authorizeUrl = await engine.buildSignInUrl(start, {});
 	const code = idp.authorize(authorizeUrl, 'user-1', claims);
 	const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
 	const callback = ctxFor(
-		`${APP}/aws-blocks/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+		`${APP}/cdk-blocks/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
 		pendingCookie(start),
 	);
 	return engine.completeSignIn(callback);
@@ -119,13 +119,13 @@ describe('DirectFederationEngine', () => {
 
 	test('a public (PKCE-only) client: discovery, PKCE S256, verified ID token, `<iss>:<sub>` identity, groupsClaim', async () => {
 		const { engine } = makeEngine(okta());
-		const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
+		const start = ctxFor(`${APP}/cdk-blocks/auth/signin/okta`);
 		const authorizeUrl = new URL(await engine.buildSignInUrl(start, {}));
 		assert.strictEqual(authorizeUrl.origin + authorizeUrl.pathname, `${idp.issuer}/authorize`);
 		const p = authorizeUrl.searchParams;
 		assert.strictEqual(p.get('response_type'), 'code');
 		assert.strictEqual(p.get('client_id'), 'client-1');
-		assert.strictEqual(p.get('redirect_uri'), `${APP}/aws-blocks/auth/callback`);
+		assert.strictEqual(p.get('redirect_uri'), `${APP}/cdk-blocks/auth/callback`);
 		assert.strictEqual(p.get('scope'), 'openid email profile');
 		assert.strictEqual(p.get('code_challenge_method'), 'S256');
 		assert.ok(p.get('state') && p.get('nonce') && p.get('code_challenge'));
@@ -167,7 +167,8 @@ describe('DirectFederationEngine', () => {
 			'the log names the unset secret',
 		);
 
-		// Set it (locally: the Secret's `.bb-data` store): the next sign-in reads it — `null` was not memoized.
+		// Set it (locally: the Secret's `.cdk-blocks/local/data` store): the next sign-in reads it — `null` was not
+		// memoized.
 		await secret.put('sm-s3cret');
 		const identity = await signIn(idp, engine);
 		assert.strictEqual(identity.kind, 'direct');
@@ -219,23 +220,23 @@ describe('DirectFederationEngine', () => {
 
 	test('callback checks: state mismatch, missing cookie, IdP error, another provider', async () => {
 		const { engine } = makeEngine(okta());
-		const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
+		const start = ctxFor(`${APP}/cdk-blocks/auth/signin/okta`);
 		const authorizeUrl = await engine.buildSignInUrl(start, {});
 		const cookie = pendingCookie(start);
 		const code = idp.authorize(authorizeUrl);
 		await assert.rejects(
-			engine.completeSignIn(ctxFor(`${APP}/aws-blocks/auth/callback?code=${code}&state=forged`, cookie)),
+			engine.completeSignIn(ctxFor(`${APP}/cdk-blocks/auth/callback?code=${code}&state=forged`, cookie)),
 			rejectsWith(AuthErrors.InvalidState),
 		);
 		await assert.rejects(
-			engine.completeSignIn(ctxFor(`${APP}/aws-blocks/auth/callback?code=${code}&state=x`)),
+			engine.completeSignIn(ctxFor(`${APP}/cdk-blocks/auth/callback?code=${code}&state=x`)),
 			rejectsWith(AuthErrors.InvalidCallback),
 		);
 		const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
 		await assert.rejects(
 			engine.completeSignIn(
 				ctxFor(
-					`${APP}/aws-blocks/auth/callback?error=access_denied&error_description=nope&state=${encodeURIComponent(state)}`,
+					`${APP}/cdk-blocks/auth/callback?error=access_denied&error_description=nope&state=${encodeURIComponent(state)}`,
 					cookie,
 				),
 			),
@@ -249,25 +250,25 @@ describe('DirectFederationEngine', () => {
 		// A tampered cookie does not verify.
 		const tampered = `${cookie.slice(0, -2)}xx`;
 		await assert.rejects(
-			engine.completeSignIn(ctxFor(`${APP}/aws-blocks/auth/callback?code=${code}&state=x`, tampered)),
+			engine.completeSignIn(ctxFor(`${APP}/cdk-blocks/auth/callback?code=${code}&state=x`, tampered)),
 			rejectsWith(AuthErrors.InvalidCallback),
 		);
 		// The callback clears the pending cookie (single use).
-		const cb = ctxFor(`${APP}/aws-blocks/auth/callback?code=${code}&state=x`, cookie);
+		const cb = ctxFor(`${APP}/cdk-blocks/auth/callback?code=${code}&state=x`, cookie);
 		await assert.rejects(engine.completeSignIn(cb));
 		assert.ok(cb.response.headers.getSetCookie().some((l) => l.startsWith('authpending_') && /Max-Age=0/.test(l)));
 	});
 
 	test('an IdP error is honoured only with the pending state — a forged one is InvalidState', async () => {
 		const { engine } = makeEngine(okta());
-		const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
+		const start = ctxFor(`${APP}/cdk-blocks/auth/signin/okta`);
 		const authorizeUrl = await engine.buildSignInUrl(start, {});
 		const cookie = pendingCookie(start);
 		const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
 		const forged = `error=access_denied&error_description=${encodeURIComponent('Your account is suspended. Call +1-555-0100.')}`;
 		for (const query of [forged, `${forged}&state=`, `${forged}&state=${encodeURIComponent(`${state}x`)}`]) {
 			await assert.rejects(
-				engine.completeSignIn(ctxFor(`${APP}/aws-blocks/auth/callback?${query}`, cookie)),
+				engine.completeSignIn(ctxFor(`${APP}/cdk-blocks/auth/callback?${query}`, cookie)),
 				(e: unknown) => {
 					rejectsWith(AuthErrors.InvalidState, 400)(e);
 					assert.ok(e instanceof Error && !e.message.includes('+1-555'), query);
@@ -279,7 +280,7 @@ describe('DirectFederationEngine', () => {
 
 	test('a state of another length or encoding is InvalidState, never a throw of its own', async () => {
 		const { engine } = makeEngine(okta());
-		const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
+		const start = ctxFor(`${APP}/cdk-blocks/auth/signin/okta`);
 		const authorizeUrl = await engine.buildSignInUrl(start, {});
 		const cookie = pendingCookie(start);
 		const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
@@ -287,7 +288,7 @@ describe('DirectFederationEngine', () => {
 		for (const bad of [state.slice(0, -1), `${state}x`, `${state.slice(0, -1)}é`, 'é']) {
 			await assert.rejects(
 				engine.completeSignIn(
-					ctxFor(`${APP}/aws-blocks/auth/callback?code=${code}&state=${encodeURIComponent(bad)}`, cookie),
+					ctxFor(`${APP}/cdk-blocks/auth/callback?code=${code}&state=${encodeURIComponent(bad)}`, cookie),
 				),
 				rejectsWith(AuthErrors.InvalidState, 400),
 			);
@@ -307,10 +308,10 @@ describe('DirectFederationEngine', () => {
 		const authorizeUrl = await engine.buildSignInUrl(ctxFor(`${APP}/x`), {});
 		const code = idp.authorize(authorizeUrl);
 		await assert.rejects(
-			engine.exchangeCode(ctxFor(`${APP}/aws-blocks/auth/exchange`), {
+			engine.exchangeCode(ctxFor(`${APP}/cdk-blocks/auth/exchange`), {
 				code,
 				codeVerifier: 'not-the-verifier-that-matches-the-challenge-at-all',
-				redirectUri: `${APP}/aws-blocks/auth/callback`,
+				redirectUri: `${APP}/cdk-blocks/auth/callback`,
 				nonce: new URL(authorizeUrl).searchParams.get('nonce') ?? '',
 			}),
 			rejectsWith(AuthErrors.IdpError),
@@ -411,7 +412,7 @@ describe('DirectFederationEngine', () => {
 			sub: 'user-2',
 			claims: {},
 		});
-		const identity = await engine.exchangeCode(ctxFor(`${APP}/aws-blocks/auth/exchange`), {
+		const identity = await engine.exchangeCode(ctxFor(`${APP}/cdk-blocks/auth/exchange`), {
 			code,
 			codeVerifier: verifier,
 			redirectUri: `${APP}/app/callback`,
@@ -566,7 +567,7 @@ describe('DirectFederationEngine', () => {
 		] as const;
 		for (const c of cases) {
 			const { engine, entries } = makeEngine(okta());
-			const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
+			const start = ctxFor(`${APP}/cdk-blocks/auth/signin/okta`);
 			const authorizeUrl = await engine.buildSignInUrl(start, {});
 			const cookie = pendingCookie(start);
 			const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
@@ -576,7 +577,7 @@ describe('DirectFederationEngine', () => {
 				`state=${encodeURIComponent(state)}`,
 			].join('&');
 			await assert.rejects(
-				engine.completeSignIn(ctxFor(`${APP}/aws-blocks/auth/callback?${query}`, cookie)),
+				engine.completeSignIn(ctxFor(`${APP}/cdk-blocks/auth/callback?${query}`, cookie)),
 				(e: unknown) => {
 					rejectsWith(AuthErrors.IdpError, 400)(e);
 					assert.ok(e instanceof ApiError && isWireSafeError(e), 'wire-safe, so its name reaches the client');
@@ -603,7 +604,7 @@ describe('DirectFederationEngine', () => {
 		const record = recordOf(await signIn(idp, engine));
 		const { logoutUrl } = await engine.signOut(
 			{ kind: 'direct', record },
-			ctxFor(`${APP}/aws-blocks/auth/signout`),
+			ctxFor(`${APP}/cdk-blocks/auth/signout`),
 		);
 		assert.deepStrictEqual(idp.revoked, [record.refreshToken]);
 		assert.ok(logoutUrl);
@@ -644,13 +645,13 @@ describe('DirectFederationEngine', () => {
 				}),
 			},
 		});
-		const start = ctxFor(`${APP}/aws-blocks/auth/signin/gh`);
+		const start = ctxFor(`${APP}/cdk-blocks/auth/signin/gh`);
 		const authorizeUrl = await engine.buildSignInUrl(start, {});
 		assert.strictEqual(new URL(authorizeUrl).searchParams.get('nonce'), null, 'OAuth 2.0 sends no nonce');
 		const code = idp.authorize(authorizeUrl, 'gh-user');
 		const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
 		const identity = await engine.completeSignIn(
-			ctxFor(`${APP}/aws-blocks/auth/callback?code=${code}&state=${state}`, pendingCookie(start)),
+			ctxFor(`${APP}/cdk-blocks/auth/callback?code=${code}&state=${state}`, pendingCookie(start)),
 		);
 		assert.ok(identity.kind === 'direct');
 		assert.strictEqual(identity.issuer, 'oauth2:gh');

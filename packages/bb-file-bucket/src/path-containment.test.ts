@@ -13,7 +13,7 @@ import assert from 'node:assert';
 import { rmSync, existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
-import { Scope, isBlocksError } from '@aws-blocks/core';
+import { Scope, isBlocksError } from '@aws-cdk-blocks/core';
 import { FileBucket } from './index.mock.js';
 import { attach } from './file-server.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
@@ -21,7 +21,7 @@ import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 const scope = new Scope('pc');
 
 function cleanScopeData() {
-	const dir = '.bb-data';
+	const dir = '.cdk-blocks/local/data';
 	try {
 		if (existsSync(dir)) {
 			for (const entry of readdirSync(dir)) {

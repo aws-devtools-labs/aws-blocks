@@ -34,6 +34,7 @@ Each decision follows this structure:
 
 **Date**: 2026-03-31
 **Authors:** wirej
+**Status**: Superseded in part by [D-032](#d-032-one-hidden-project-folder-cdk-blocks-holds-the-local-building-block-data) (2026-11-18, varshpam) — mock data now lives at `.cdk-blocks/local/data/{fullId}/`. The rejected alternative "`.blocks/data/` — extra nesting for no benefit" is superseded, and the Decision's `.bb-data/` paths move under the hidden folder with it; an existing project's data is carried across on first use. The decision below is preserved as originally written.
 
 ### Context
 Building Block mocks need persistent local storage. The POC used in-memory Maps (lost on restart) and the design docs referenced `./bb-data/{fullId}.json` as flat files. We needed a consistent, discoverable convention.
@@ -112,7 +113,7 @@ An intermediate revision of the RPC error-leak sanitizer (`errorResponseFromCatc
 
 **Date**: 2026-04-07
 **Authors:** Jon Wire
-**Status:** Amended by [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) (2026-10-03). The three auth blocks named below were replaced by one block, `Auth` (`@aws-blocks/bb-auth`). The auth-first convention still governs its identifiers — `Auth`, `AuthOptions`, `AuthErrors`, `AuthenticatedUser`; packages `bb-auth`, `auth-common`. The original record follows unchanged.
+**Status:** Amended by [D-023](#d-023-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc) (2026-10-03). The three auth blocks named below were replaced by one block, `Auth` (`@aws-cdk-blocks/bb-auth`). The auth-first convention still governs its identifiers — `Auth`, `AuthOptions`, `AuthErrors`, `AuthenticatedUser`; packages `bb-auth`, `auth-common`. The original record follows unchanged.
 
 ### Context
 Auth Building Blocks span multiple packages (`AuthBasic`, `AuthOIDC`, `AuthCognito`) and share a common interface. We needed a naming convention for the classes, types, and packages.
@@ -218,7 +219,7 @@ All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `
 - `crossDomain: false` (default) → `SameSite=Lax; Secure` (prod) / `SameSite=Lax` (plain-HTTP localhost; `Lax` does not require `Secure`).
 - `crossDomain: true` → `SameSite=None; Secure; Partitioned` (prod) / `SameSite=None; Secure` (localhost; CHIPS `Partitioned` requires HTTPS, so it is dropped).
 
-The attribute selection lives in one shared helper, `@aws-blocks/auth-common/cookies` (`resolveCookieSecurity` / `buildCookieSecurityAttrs`), which every BB calls. A cross-BB parity test asserts identical output for identical inputs so the family converges structurally, not by coincidence of matching strings.
+The attribute selection lives in one shared helper, `@aws-cdk-blocks/auth-common/cookies` (`resolveCookieSecurity` / `buildCookieSecurityAttrs`), which every BB calls. A cross-BB parity test asserts identical output for identical inputs so the family converges structurally, not by coincidence of matching strings.
 
 This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on the single-origin dev proxy: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
 
@@ -431,11 +432,11 @@ earlier planning decisions and removed a released behavior:
 
 **Date**: 2026-06-19
 **Authors:** wirej
-**Status:** Amended by [D-030](#d-030-the-per-deploy-state-directory-is-renamed-and-its-served-url-path-renames-with-it) (2026-11-18, varshpam) — the sandbox identifier now lives in `.cdk-blocks-sandbox/sandbox-id.txt`. The stack-name scheme is unchanged, and `getSandboxId` copies an upgrading app's id forward from the old directory before its get-or-create path could mint a new one. The decision below is preserved as originally written.
+**Status:** Amended by [D-031](#d-031-the-per-deploy-state-directory-is-renamed-the-url-it-is-served-at-is-not) (2026-11-18, varshpam) — the sandbox identifier now lives in `.cdk-blocks-sandbox/sandbox-id.txt`. The stack-name scheme is unchanged, and `getSandboxId` copies an upgrading app's id forward from the old directory before its get-or-create path could mint a new one. The decision below is preserved as originally written.
 
 ### Decision
 
-CloudFormation stack names are derived from a `stackId` stored in `.blocks/config.json` (committed to the repo). The `stackId` is generated once at scaffold time as `<sanitizedName>.slice(0, 16)-<random(6)>`, producing names like `my-app-k7x2mf`.
+CloudFormation stack names are derived from a `stackId` stored in `.cdk-blocks/config.json` (committed to the repo). The `stackId` is generated once at scaffold time as `<sanitizedName>.slice(0, 16)-<random(6)>`, producing names like `my-app-k7x2mf`.
 
 A sanitized name that starts with `aws` in any letter case gets the prefix `app-` before the cut, so `aws-blocks-demo` gives `app-aws-blocks-d-k7x2mf`. AWS Resource Groups refuses a group name that starts with `AWS`, and every stack names two groups after itself (`<stackName>-resources`, `<stackName>-settings`). A name that does not start with `aws` is not changed. A `stackId` written by hand is not changed either: a stack name that starts with `aws` is an error at synth (`cdk synth`, `cdk deploy`), with the two group names and the fix in the message. `cdk destroy` still runs, so a stack that an earlier deploy with such a name left behind can be removed.
 
@@ -445,7 +446,7 @@ Stack name scheme:
 
 The sandbox identifier is generated per-machine and stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
 
-Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/blocks/scripts` and accept an optional `projectRoot` parameter (defaults to `process.cwd()`).
+Both helpers (`getStackId`, `getSandboxId`) are exported from `aws-cdk-blocks/scripts` and accept an optional `projectRoot` parameter (defaults to `process.cwd()`).
 
 ### Rationale
 - **Collision avoidance:** The 6-char hex suffix in `stackId` provides ~16.8M combinations (16⁶), making accidental collisions between same-named apps in a shared account negligible.
@@ -454,11 +455,11 @@ Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/block
 - **Committed vs gitignored:** `stackId` is committed so the whole team and CI deploy to the same production stack. `sandbox-id.txt` is gitignored so each machine gets its own sandbox.
 
 ### References
-- PR #51; `.blocks/config.json` is also used by telemetry (`telemetry.projectId`).
+- PR #51; `.cdk-blocks/config.json` is also used by telemetry (`telemetry.projectId`).
 - Code: `packages/core/src/scripts/stack-id.ts`
 
 ### Migration scope
-This scheme applies to **newly scaffolded apps only**. Existing apps that adopt the new `index.cdk.ts` must set `stackId` in `.blocks/config.json` to their current production stack name **with the `-prod` suffix removed** — since the template appends `-prod` automatically. For example, if your existing stack is `my-blocks-stack-prod`, set `stackId` to `my-blocks-stack`.
+This scheme applies to **newly scaffolded apps only**. Existing apps that adopt the new `index.cdk.ts` must set `stackId` in `.cdk-blocks/config.json` to their current production stack name **with the `-prod` suffix removed** — since the template appends `-prod` automatically. For example, if your existing stack is `my-blocks-stack-prod`, set `stackId` to `my-blocks-stack`.
 
 
 ## D-013: External-DB connections verify TLS by default; CA committed via `db pull`
@@ -553,7 +554,7 @@ because the write side (live environment) and the read side (a ref captured at
 `db pull` time) derived it differently and diverged.
 
 D-012 (PR #51) made the deployment's stack name deterministic and committed
-(`.blocks/config.json`), so it is computable **before** `cdk synth`, not only
+(`.cdk-blocks/config.json`), so it is computable **before** `cdk synth`, not only
 inside the construct tree.
 
 ### Decision
@@ -584,7 +585,7 @@ read name cannot diverge. At runtime the app reads the synth-stamped
   the writer writes directly to the final name before deploy. No CfnOutput
   round-trip, no after-deploy write-back, no in-stack staging-copy custom resource.
 - **Fail fast, not silent:** `getStackName` throws an actionable error when
-  `.blocks/config.json` is missing, rather than falling back to a guessed name.
+  `.cdk-blocks/config.json` is missing, rather than falling back to a guessed name.
 
 ### Alternatives Considered
 
@@ -616,8 +617,8 @@ write-back/staging machinery.
   wiring, so this ships as a patch. Apps with stale generated `supabase.ts` must
   run `npx bb-data pull` to regenerate.
 - **Prerequisite (D-012):** `getStackName` reads `stackId` from
-  `.blocks/config.json`; it throws if absent. Pre-PR #51 apps migrating to this
-  version must first set `stackId` in `.blocks/config.json` (see D-012 "Migration
+  `.cdk-blocks/config.json`; it throws if absent. Pre-PR #51 apps migrating to this
+  version must first set `stackId` in `.cdk-blocks/config.json` (see D-012 "Migration
   scope" for instructions) or deploys will fail at the `ensureSecrets` step.
 - The previous stage-only parameter (`/blocks/{stage}/db-connection-string`) is
   orphaned and self-heals on the next deploy — the old value remains in SSM but is
@@ -733,7 +734,7 @@ A run appends every event it emits to the file it created. The create path keeps
 ### Known limitation
 Ownership is per process, so two runs sharing one `--telemetry-file` path keep only the first run's events: the second gets `EEXIST`, finds the path absent from its own set, and writes nothing. That is D-010 clause 3 applied to a path this process did not create, and it is unchanged by this decision — the behavior is identical before and after.
 
-`create-blocks-app` carries a near-copy of the sink, not an identical one: its event parameter is `Record<string, unknown>` rather than `BlocksTelemetryEvent`, and it imports `dirname` directly instead of `path.dirname`. The duplication is deliberate — that package avoids depending on `@aws-blocks/core`, whose postinstall needs devDependencies absent from a registry install (see that file's header). The header justifies a separate implementation; it does not commit the two to parity.
+`create-blocks-app` carries a near-copy of the sink, not an identical one: its event parameter is `Record<string, unknown>` rather than `BlocksTelemetryEvent`, and it imports `dirname` directly instead of `path.dirname`. The duplication is deliberate — that package avoids depending on `@aws-cdk-blocks/core`, whose postinstall needs devDependencies absent from a registry install (see that file's header). The header justifies a separate implementation; it does not commit the two to parity.
 
 Two asymmetries are left standing on purpose. As of this decision `create-blocks-app` emits one event per process — `trackCommand` has a single call site (`index.ts:781`) and the package declares no `exports` — so its append branch is not reachable in production, and the containment test core carries (`still sends the HTTP event when the append throws`) is not ported to it. Its dispatch also has no enclosing `try/catch`, unlike core's, so a throw escaping the sink would reject `trackCommand`. Both sinks swallow their own errors, so nothing throws today. That gap predates this decision and is unchanged by it.
 
@@ -751,7 +752,7 @@ Two asymmetries are left standing on purpose. As of this decision `create-blocks
 **Authors:** varshpam
 
 ### Context
-D-010 let the `--telemetry-file` sink fire regardless of consent. Building the event is itself a side effect: `getInstallationId()` creates `~/.blocks/telemetry/installation-id` and prints the first-run notice to stderr, and `getProjectId()` persists a project ID into `.blocks/config.json` under the working directory. An opted-out user who passed the flag therefore still got identifier files on disk and the notice printed, which is what the flag was never meant to buy.
+D-010 let the `--telemetry-file` sink fire regardless of consent. Building the event is itself a side effect: `getInstallationId()` creates `~/.cdk-blocks/telemetry/installation-id` and prints the first-run notice to stderr, and `getProjectId()` persists a project ID into `.cdk-blocks/config.json` under the working directory. An opted-out user who passed the flag therefore still got identifier files on disk and the notice printed, which is what the flag was never meant to buy.
 
 ### Decision
 Consent is checked before any event is built, and in `create-blocks-app` again before the event is emitted, because `trackCommand` wraps a command that can run for minutes and an opt-out landing inside that window must still be honored (`core` gets the second check for free, because its `finally` re-enters `buildAndSendEvent`). When telemetry is disabled there is no event, no identifiers persisted, no first-run notice, no file and no HTTP request — `--telemetry-file` does not override opt-out. D-010's remaining points stand as D-017 leaves them: with telemetry enabled the flag is additive to the HTTP send, and a path this run did not create is still skipped.
@@ -791,7 +792,7 @@ A Building Block declares its native packages and transferable bindings under an
 ### Decision
 The scan reads every manifest the spec project can resolve. It is not restricted to the project's own `dependencies`. Generation-time rules bound what a declaration can do, and the authoring guide below specifies them. Publisher trust is bounded by none of them.
 
-Reading every manifest costs one open per installed package — 1804 files from this repo's test app. Only a narrower scan would reduce that, which is the deferred alternative below. A manifest that will not parse is fatal only when its text carries `aws-blocks` as a JSON key, decoding `\uXXXX` first, so a corrupt unrelated dependency cannot stop generation — matching the namespace anywhere in the text would make every `@aws-blocks/*` dependency string and the `aws-blocks` keyword that `create-block` scaffolds fatal when corrupt. A manifest that cannot be read at all is warned and skipped, because that test cannot be run on bytes the walk never obtained, and D-016 already settled that a hard throw is too blunt for a condition the project cannot fix.
+Reading every manifest costs one open per installed package — 1804 files from this repo's test app. Only a narrower scan would reduce that, which is the deferred alternative below. A manifest that will not parse is fatal only when its text carries `aws-blocks` as a JSON key, decoding `\uXXXX` first, so a corrupt unrelated dependency cannot stop generation — matching the namespace anywhere in the text would make every `@aws-cdk-blocks/*` dependency string and the `aws-blocks` keyword that `create-block` scaffolds fatal when corrupt. A manifest that cannot be read at all is warned and skipped, because that test cannot be run on bytes the walk never obtained, and D-016 already settled that a hard throw is too blunt for a condition the project cannot fix.
 
 ### Rationale
 The decision that moved declarations out of a `Scope` call and into `package.json` did so on the grounds that they *are* dependencies: build-related configuration belongs where a node or web app already declares its dependencies. Reading them with Node's own resolution follows from that framing. A direct-dependency filter would treat a declaration as something narrower than a dependency, which is the one thing the carrier decision ruled out.
@@ -916,7 +917,7 @@ What the bound needs is an ordering rather than a margin: 64 characters sits bel
 
 **Date**: 2026-11-05
 **Authors:** phandpau
-**Status:** Amended by [D-030](#d-030-the-per-deploy-state-directory-is-renamed-and-its-served-url-path-renames-with-it) (2026-11-18, varshpam) — both outputs documents now live in `.cdk-blocks-sandbox/`. The closing note that renaming the directory would be "a separate, breaking change" is no longer pending: D-030 is that change. The per-stage split, the file names and the reasoning are unchanged. The decision below is preserved as originally written.
+**Status:** Amended by [D-031](#d-031-the-per-deploy-state-directory-is-renamed-the-url-it-is-served-at-is-not) (2026-11-18, varshpam) — both outputs documents now live in `.cdk-blocks-sandbox/`. The closing note that renaming the directory would be "a separate, breaking change" is no longer pending: D-031 made the rename, and found the breaking half avoidable — the public URL the construct serves stays as it was, so only the private directory moved. The per-stage split, the file names and the reasoning are unchanged. The decision below is preserved as originally written.
 
 ### Context
 `npm run deploy` and `npm run sandbox` both passed `--outputs-file .blocks-sandbox/outputs.json`, so one file held whichever stage deployed last.
@@ -936,14 +937,14 @@ The names live in one place, `OUTPUTS_FILE` in `packages/core/src/scripts/deploy
 ### Rationale
 Two distinct file names are the whole fix, because the write is the CDK CLI's and it cannot be asked to merge. Nothing downstream has to detect or repair a mixed document: a stage's file holds only ever that stage's stacks, and a failed production deploy can only blank production's record.
 
-Both documents stay in `.blocks-sandbox/`. The directory's name is a wart (it holds per-deploy state for every stage, not only the sandbox) but it is already ignored everywhere, while `.blocks/` is committed for the `config.json` carrying the app's stable `stackId` (D-012). A per-deploy, account-specific file placed there would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record. Renaming the directory is a separate, breaking change: the Hosting construct serves it as a public URL path.
+Both documents stay in `.blocks-sandbox/`. The directory's name is a wart (it holds per-deploy state for every stage, not only the sandbox) but it is already ignored everywhere, while `.cdk-blocks/` is committed for the `config.json` carrying the app's stable `stackId` (D-012). A per-deploy, account-specific file placed there would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record. Renaming the directory is a separate, breaking change: the Hosting construct serves it as a public URL path.
 
 An app that upgrades still has a pre-split `outputs.json` on disk, and it can hold production's stack alone. For `cdk-blocks sandbox console` that document is only corroboration for a stack name derived from `sandbox-id.txt`, so the CLI cannot name the wrong stack from it. That is not true of every reader: the public `openConsole({ outputsFile })` still takes the document's first stack, and the Kotlin and Swift example scripts plus any app scaffolded before the CLI call it that way, so those open production until one `npm run sandbox` rewrites the file. A production destroy now removes that entry too, which closes the case where the named stack no longer exists. The CLI tests keep a mixed document as a fixture for both destroy directions.
 
 ### Alternatives Considered
 **Keep one file and choose the right stack when reading it.** Rejected: after a deploy the file physically holds only that invocation's stacks, so there is no second stack to choose between. The other stage's record is gone, not ambiguous.
 
-**Record production's outputs in `.blocks/` instead.** Rejected: that directory is committed, so it would need a per-file ignore everywhere a template or example is scaffolded, and a single omission commits a developer's deployment record.
+**Record production's outputs in `.cdk-blocks/` instead.** Rejected: that directory is committed, so it would need a per-file ignore everywhere a template or example is scaffolded, and a single omission commits a developer's deployment record.
 
 **Rely on `last-deploy.json` alone and leave the shared document as it is.** Rejected: it records only a successful deploy made through the CLI runner, so a failed deploy and an app driven by the old npm-script wrappers leave no entry, and it is owned by the CLI while core and the dashboard sit below it. It remains the right source for what a deploy reported; it is not a substitute for the document being correct.
 
@@ -954,7 +955,7 @@ An app that upgrades still has a pre-split `outputs.json` on disk, and it can ho
 - `packages/core/src/scripts/deploy.ts` — the production write and the post-deploy read
 - `packages/core/src/scripts/sandbox.ts` — the sandbox writes and read, via `outputsFileIn`
 - `packages/blocks/src/cli/commands.ts` — `OUTPUTS_BASENAME`, mirrored rather than imported because core is resolved lazily and version-checked, and pinned against core by a test
-- D-012 — the committed `.blocks/config.json` and the app's stable `stackId`
+- D-012 — the committed `.cdk-blocks/config.json` and the app's stable `stackId`
 
 ## D-023: One auth Building Block: `Auth` replaces `AuthBasic`, `AuthCognito` and `AuthOIDC`
 
@@ -965,12 +966,12 @@ An app that upgrades still has a pre-split `outputs.json` on disk, and it can ho
 AWS Blocks shipped three auth Building Blocks — `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc` — plus `auth-common`. Users could not tell which to pick or why, and nothing in the framework answered the question. The blocks also disagreed on error names and on what `userId` means, and `AuthBasic` and `AuthCognito` used the same cookie name with incompatible payloads.
 
 ### Decision
-Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured through one options object: a block-level `store` and one `providers` map whose entries carry a `type`. [D-024](#d-024-auth-options-store--providers) records that shape.
+Replace all three with one block, `Auth` (`@aws-cdk-blocks/bb-auth`), configured through one options object: a block-level `store` and one `providers` map whose entries carry a `type`. [D-024](#d-024-auth-options-store--providers) records that shape.
 
 - **Two federation engines.** A provider either federates through a Cognito user pool (`store: 'cognito'`, the default) or is verified by your backend directly, with no Cognito involved (`store: 'builtin'`). Google, Facebook, Amazon, Apple and SAML providers always federate through Cognito.
 - **No Cognito resources unless something needs them.** A `store: 'builtin'` block creates no user pool.
 - **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
-- **Hard cutover.** The three old packages are removed in the release that publishes `@aws-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
+- **Hard cutover.** The three old packages are removed in the release that publishes `@aws-cdk-blocks/bb-auth`, with no shims or aliases. The API breaks deliberately: one error vocabulary (`AuthErrors`), one user type, `get*` / `scan*` naming.
 - **`AuthCognito` deployments upgrade in place.** `Auth` keeps `AuthCognito`'s construct ids for the user pool, the app client and the session secret, its pool name and its session format, so an app that switches keeps its user pool and its users. Signed-in sessions do not carry over: the session store is a new table, so each user signs in once (`packages/bb-auth/MIGRATION.md`).
 - **A comparison table answers "which option and why".** It lives in `packages/bb-auth/README.md`, with a short version in the umbrella README.
 
@@ -983,7 +984,7 @@ Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured thr
 ### Alternatives Considered
 - **Keep three blocks and document the choice.** Leaves the decision with the user and keeps three error vocabularies and `userId` meanings.
 - **Route every provider through Cognito.** One token format, but a 200× smaller free tier for OIDC users, no offline federated sign-in and no PKCE-only IdPs.
-- **A deprecation window with runtime aliases.** Doubles the surface to test and keeps the ambiguity alive; the codemod (`npx @aws-blocks/bb-auth migrate`) and `MIGRATION.md` cover the move instead.
+- **A deprecation window with runtime aliases.** Doubles the surface to test and keeps the ambiguity alive; the codemod (`npx @aws-cdk-blocks/bb-auth migrate`) and `MIGRATION.md` cover the move instead.
 
 ### References
 - User doc and comparison table: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#which-option-and-why)
@@ -1429,13 +1430,13 @@ is known, so the candidates are built exactly and compared for equality.
 **Authors:** belaboe, svidgen
 
 ### Context
-A scaffolded app keeps its backend in `aws-blocks/`, and the frontend imports it (`import { api } from 'aws-blocks'`, with `aws-blocks/package.json` exporting `types: ./index.ts`). The frontend's `tsconfig` therefore typechecked backend source, which runs on Node, with the frontend's settings. The templates passed because one root `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error. A frontend `tsconfig` that narrows `types` or `lib`, as create-vite's does, failed inside `aws-blocks/` (`TS2591: Cannot find name 'process'`, `TS2550`).
+A scaffolded app keeps its backend in `cdk-blocks/`, and the frontend imports it (`import { api } from 'cdk-blocks'`, with `cdk-blocks/package.json` exporting `types: ./index.ts`). The frontend's `tsconfig` therefore typechecked backend source, which runs on Node, with the frontend's settings. The templates passed because one root `tsconfig.json` made Node types global, which also let browser code use `process` or `Buffer` without an error. A frontend `tsconfig` that narrows `types` or `lib`, as create-vite's does, failed inside `cdk-blocks/` (`TS2591: Cannot find name 'process'`, `TS2550`).
 
 ### Decision
-- The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) use create-vite's `react-ts` layout. The root `tsconfig.json` lists `tsconfig.app.json` (`src/`, `vite/client` types) and `tsconfig.node.json` (`vite.config.ts`, `test/`, Node types), and both reference a composite `aws-blocks/tsconfig.json` (every backend file plus `.blocks/**/*.d.ts`, Node types, `rootDir: ".."`, declarations under `node_modules/.tmp`).
+- The Vite templates (`default`, `bare`, `react`, `auth`, `agent`, `demo`) use create-vite's `react-ts` layout. The root `tsconfig.json` lists `tsconfig.app.json` (`src/`, `vite/client` types) and `tsconfig.node.json` (`vite.config.ts`, `test/`, Node types), and both reference a composite `cdk-blocks/tsconfig.json` (every backend file plus `.cdk-blocks/**/*.d.ts`, Node types, `rootDir: ".."`, declarations under `node_modules/.tmp`).
 - `typecheck` is `tsc -b --force`, and `build` is `tsc -b --force && vite build`.
 - `nextjs` keeps one `tsconfig.json` with global Node types: `next build` ignores project references when it type-checks. The backend-only templates also keep one, because all their code runs on Node.
-- Adding AWS Blocks to an existing project writes `aws-blocks/tsconfig.json` (none in a Next.js project) and prints the steps. It never edits the project's own `tsconfig`. Apps scaffolded earlier keep working as they are, and `docs/guides/upgrading-older-apps.md` has the steps to move them.
+- Adding AWS Blocks to an existing project writes `cdk-blocks/tsconfig.json` (none in a Next.js project) and prints the steps. It never edits the project's own `tsconfig`. Apps scaffolded earlier keep working as they are, and `docs/guides/upgrading-older-apps.md` has the steps to move them.
 - AGENTS.md's "no client generation step" stays true: editors read the backend source through the reference, and the declarations are written by the typecheck itself, not by a separate AWS Blocks step.
 
 ### Rationale
@@ -1449,13 +1450,13 @@ A scaffolded app keeps its backend in `aws-blocks/`, and the frontend imports it
 - In a new Vite scaffold, a Node global in browser code (`src/`) is a type error.
 - A backend API signature that uses a Node type (for example, returning `Buffer`) reads as `any` in the frontend, hidden by `skipLibCheck`. Backend APIs should return JSON-serializable values.
 - `composite` turns on declaration emit, so an inferred type that names a non-hoisted package fails with `TS2742` (pnpm's default layout). `packages/blocks/TROUBLESHOOTING.md` lists the fixes.
-- Tools that read the root `tsconfig.json` find no compiler options there. The hosting `config()`/`secret()` typegen therefore uses the project that compiles each schema file, and `cdk-blocks` points `tsx` at `aws-blocks/tsconfig.json` through `TSX_TSCONFIG_PATH`.
+- Tools that read the root `tsconfig.json` find no compiler options there. The hosting `config()`/`secret()` typegen therefore uses the project that compiles each schema file, and `cdk-blocks` points `tsx` at `cdk-blocks/tsconfig.json` through `TSX_TSCONFIG_PATH`.
 - Code shared by browser and backend belongs in its own project without Node types, referenced by both. Adding it to the backend project would let Node globals into browser code.
 
 ### Alternatives Considered
-- **A. Global Node types everywhere (the previous templates).** No errors, but browser code can use Node globals unchecked, and a narrower frontend `tsconfig` still fails in `aws-blocks/`. Kept for Next.js only.
-- **B. `/// <reference types="node" />` in `@aws-blocks/blocks`'s published declarations.** Fixes the Node types but not `lib` or strictness differences: in a test, a Vite app with `auth-cognito` went from 11 to 8 errors and still failed.
-- **D. Generated declarations** (`aws-blocks/.types/`, written by `prepare`/`prebuild` hooks and the dev server; the first revision of #1111). Works without changing the frontend `tsconfig`, but adds a generation step with its own freshness logic. In review, its `tsc --build` over a narrow root missed edits to imported modules and dependency changes, and it made the old layout a hard error for existing apps.
+- **A. Global Node types everywhere (the previous templates).** No errors, but browser code can use Node globals unchecked, and a narrower frontend `tsconfig` still fails in `cdk-blocks/`. Kept for Next.js only.
+- **B. `/// <reference types="node" />` in `aws-cdk-blocks`'s published declarations.** Fixes the Node types but not `lib` or strictness differences: in a test, a Vite app with `auth-cognito` went from 11 to 8 errors and still failed.
+- **D. Generated declarations** (`cdk-blocks/.types/`, written by `prepare`/`prebuild` hooks and the dev server; the first revision of #1111). Works without changing the frontend `tsconfig`, but adds a generation step with its own freshness logic. In review, its `tsc --build` over a narrow root missed edits to imported modules and dependency changes, and it made the old layout a hard error for existing apps.
 - **E. Generate an explicit API type or schema** (for example, from `blocks.spec.json`). A much larger change, and TypeScript inference is the source of truth today.
 
 ### References
@@ -1517,10 +1518,11 @@ The bounds today:
 - `scripts/harbor-bench/task/task.toml`
 - `scripts/ci/harbor-approval-gate.test.mjs`, `scripts/ci/harbor-credentials.test.mjs`, `scripts/ci/harbor-packages-isolation.test.mjs`
 
-## D-030: The per-deploy state directory is renamed, and its served URL path renames with it
+## D-031: The per-deploy state directory is renamed; the URL it is served at is not
 
 **Date**: 2026-11-18
 **Authors:** varshpam
+**Status:** Amended 2026-11-19 (varshpam) — the served path does NOT rename. The directory rename stands; the clauses that moved the public URL with it are superseded below, and the accepted breakage they carried no longer applies. Numbered D-031 because another record claimed D-030 concurrently. The Decision, Rationale and Alternatives below are rewritten where the reversal changed them; the Context is preserved as originally written.
 
 ### Context
 `.blocks-sandbox/` held an app's per-deploy state. The name was a wart — it holds state for every stage, not only the sandbox — and D-022 left renaming it open as "a separate, breaking change: the Hosting construct serves it as a public URL path."
@@ -1532,33 +1534,79 @@ The name was also not centralized enough for the compiler to help. `BLOCKS_SANDB
 A second hazard is `sandbox-id.txt`. `getSandboxId` is get-or-create, so an upgraded app that no longer finds that file mints a new id, deploys to a different CloudFormation stack, and leaves the customer's existing sandbox standing in their account — with `npm run sandbox:destroy` reporting nothing to delete, because it keys off the same missing file.
 
 ### Decision
-The directory is `.cdk-blocks-sandbox/`, and the served path renames with it to `/.cdk-blocks-sandbox/config.json`. No compatibility shim and no dual publishing: the old path is not served.
+The directory on disk is `.cdk-blocks-sandbox/`. The path it is published at stays `/.blocks-sandbox/config.json`, unchanged, so no deployed frontend has to be redeployed. The two are separate constants with separate names: `BLOCKS_SANDBOX_DIR` for the developer's private directory, `BLOCKS_SANDBOX_SERVED_DIR` for the public path, and `BLOCKS_SANDBOX_PREFIX` built from the latter so the served path cannot be spelled twice and drift.
 
 It is a **sibling** of `.cdk-blocks/`, not folded into it. Folding was the original proposal, and it is rejected here for a reason that only surfaced on inspection: both directories contain a file named `config.json`, and they are opposites. `.cdk-blocks/config.json` is committed and carries the app's stable `stackId` (D-012); the sandbox `config.json` is gitignored, account-specific, and rewritten by every dev server run. One directory cannot hold both under one name. Beyond the collision, D-022 had already rejected putting per-deploy state in the committed directory: it "would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record." With `sandbox-id.txt` among those files, a single missed ignore makes two developers share one sandbox stack — the orphaned-stack failure the copy-forward below exists to prevent. A sibling directory keeps one gitignore entry and no collision.
 
-Every coupled site moves as one unit, and the ones that publish the path now read `BLOCKS_SANDBOX_DIR` rather than repeating the literal: the CloudFront static behaviour, the S3 key prefix, the invalidation paths, and the build-output site that writes the placeholder into the static directory (a path on disk that becomes the S3 key, so both roles at once). The browser client fetches `BLOCKS_SANDBOX_PREFIX`, which a test pins to `BLOCKS_SANDBOX_DIR` served at the root, so the client and the edge cannot drift.
+Every site that publishes a path reads the served constant, and every site that touches the developer's disk reads the disk constant: the CloudFront static behaviour, the S3 key the resolved config is uploaded to, the invalidation paths, the no-cache path registered for that key, and the liveness probe are published; the pidfile, the dev server's own config write, the sandbox id and the copy-forward are disk. One site is both — the hosting construct writes a placeholder into the static-asset directory on disk and that path becomes the S3 key — and it follows the served name. The committed Next.js route directory keeps the published name too, because the directory name under `src/app` IS the URL, while the literal inside the file reads the renamed disk directory; the two strings in that one file are the split in miniature.
 
 State is copied forward, not abandoned. On the first `dev`, `deploy`, `sandbox` or `destroy` after upgrading — and inside `getSandboxId`, before its get-or-create path can run — each state file is copied from the old directory into the new one: `sandbox-id.txt`, `config.json`, `config.sandbox.json`, `config.production.json`, `outputs.json`, `outputs.production.json`, `last-deploy.json`, and the per-port `dev-server.<port>.pid` files. Copy, never move, so an older toolchain in the same checkout keeps working. The new location wins: a file already there is never overwritten. Per file, never per directory, because the directory also holds the CDK cloud assembly (`cdk.out/`, `sandbox-destroy.out/`), which is large and regenerable. And it fails loudly, naming the file and the orphaned stack, when the project directory is not writable — a copy that fails silently is exactly what mints a new sandbox id.
 
-The accepted cost: a frontend bundle deployed by an earlier version keeps requesting `/.blocks-sandbox/config.json` and cannot resolve its API URL until it is redeployed, and a browser or CloudFront cache can hold that request past the deploy. Preview customers are being asked to migrate, and the rename gives them other work in the same pass.
+There is no accepted breakage. An earlier version of this record moved the published path too and accepted that a frontend bundle deployed before the rebrand could not resolve its API URL until the customer redeployed, with a browser or CloudFront cache able to hold the stale request past the deploy. That cost is withdrawn: a prototype confirmed in review that the URL can stay fixed while only the directory moves, on the dev server and in production, SPA and SSR. Since the rename's only real cost was that breakage, and it is avoidable, it is avoided.
 
 ### Rationale
-Renaming only the disk paths and leaving the URL would have been expressible — the two constants are already separate — but it would have left the published path permanently naming the old brand, and the four publishing sites were literals that no type would have kept honest.
+Renaming only the disk paths leaves the published path naming the old brand, which is a cosmetic cost in a string no customer reads deliberately. Moving it costs a working page. A public URL is an interface, so the brand follows the interface rather than the interface following the brand.
 
-A source-scanning guard carries the invariant instead, because nothing at the type level goes red for a missed literal. It checks both directions: no live reference to the old name survives outside named historical records, and every coupled site carries the current name, pinned by content so a deleted edit fails as loudly as a stale one. It was written and watched fail across all its cases before the rename was made.
+Source-scanning guards carry the invariant instead, because nothing at the type level goes red for a missed literal. One pins every publishing site to the served constant, checks that the two names differ, and refuses a URL-shaped path written on the disk name. The other checks that no filesystem path in shipped source still names the old directory. Both are scoped to shipped source: a test spells both names, because it asserts on each, so a scan over tests could not tell a missed rename from a deliberate published path.
 
 ### Alternatives Considered
-**Keep publishing the old URL while the directory moves on disk.** Rejected: expressible, but it makes the two constants permanently disagree, keeps the old brand in a public path indefinitely, and leaves a second path to support with no date for removing it.
+**Keep publishing the old URL while the directory moves on disk.** ADOPTED (2026-11-19), having first been rejected here. The objection was that the two constants would permanently disagree and the old brand would sit in a public path indefinitely. Both hold and are accepted: the disagreement is the point and is now enforced by a guard, and a brand name in a path no customer reads deliberately is worth less than a page that keeps working.
 
-**Move both and ship a redirect or dual publishing.** Rejected: the static behaviour, the S3 key and the invalidation paths would each need two entries for a window nobody could close, and the preview customers affected are already being asked to migrate.
+**Move both and ship a redirect or dual publishing.** Rejected: the static behaviour, the S3 key and the invalidation paths would each need two entries for a window nobody could close — and keeping the published path fixed costs nothing, so there is nothing to bridge.
 
 **Consolidate only the non-served state and leave `config.json` where it is.** Rejected: it splits one directory's contents across two names by whether they happen to be served, which is invisible to anyone reading the app, and it does not achieve the rename.
 
 **Fold the state into `.cdk-blocks/`.** Rejected: the `config.json` collision above, and D-022's standing objection to per-deploy state in the committed directory.
 
 ### References
-- `packages/core/src/common/constants.ts` (`BLOCKS_SANDBOX_DIR`, `LEGACY_SANDBOX_DIR`), `packages/core/src/constants.ts` (`BLOCKS_SANDBOX_PREFIX`)
+- `packages/core/src/common/constants.ts` (`BLOCKS_SANDBOX_DIR`, `BLOCKS_SANDBOX_SERVED_DIR`, `LEGACY_SANDBOX_DIR`), `packages/core/src/constants.ts` (`BLOCKS_SANDBOX_PREFIX`)
 - `packages/core/src/scripts/migrate-sandbox-dir.ts`, `packages/core/src/scripts/migrate-sandbox-dir.test.ts`
-- `packages/blocks/src/sandbox-dir-coverage.test.ts` (the coupled-site guard)
+- `packages/blocks/src/sandbox-url-decoupling.test.ts` (published path vs disk path), `packages/blocks/src/sandbox-dir-coverage.test.ts` (the rename's own sites)
 - `packages/core/src/hosting.ts` (static behaviour, S3 key prefix, invalidation paths, placeholder write)
 - D-012 (sandbox id and stack naming), D-022 (per-stage outputs, and the clause this change closes)
+
+## D-032: One hidden project folder, `.cdk-blocks/`, holds the local Building Block data
+
+**Date**: 2026-11-18
+**Authors:** varshpam
+
+### Context
+A scaffolded app carried two hidden folders at its root. `.blocks/` held the committed `stackId` (D-012), the telemetry `projectId`, `deploy-history.jsonl`, and Hosting's generated `hosting-values.d.ts`. `.bb-data/` held every Building Block's local state (D-001): each `AppSetting` and `Secret` value, and the local PostgreSQL database.
+
+The name had to change regardless: the project's naming guidance requires the hidden folder to be `.cdk-blocks`. The other per-project hidden folder is consolidated into it in the same change, and an existing project's data is carried across rather than abandoned, so a customer is not left with resources to clean up themselves.
+
+That consolidation is the layout D-001 had considered and rejected as "extra nesting for no benefit", so adopting it reverses a recorded decision rather than filling a gap.
+
+### Decision
+- The hidden folder is `.cdk-blocks/`, holding what `.blocks/` held. An existing app renames its own folder; until it does, deploy and destroy keep working from `.blocks/config.json`, and only when neither file has a `stackId` do they refuse and name the path to create rather than guessing one and creating a second production stack. One read falls back to the pre-rename file, because its failure is silent rather than loud: `getStackId`, since `blocksSecretPrefix` and `blocksConfigPrefix` answer an unresolved id with the unscoped `/blocks/secrets` and `/blocks/config` namespaces. It falls back per key, so a renamed config holding only a telemetry `projectId` does not shadow a legacy `stackId`. Where neither file exists the loud refusal stands.
+- Local Building Block data is `.cdk-blocks/local/data/{fullId}/`, superseding D-001's `.bb-data/`. The name is `data`, which D-001 itself considered; `bb-data` would leak package naming into a path a user sees.
+- An existing project keeps its data. The first use of each block's store, and of the shared `settings.json`, copies that unit across and never overwrites anything already in the new location, and `.bb-data/` is left in place rather than moved, so an older CLI in the same checkout still reads it. Completion is recorded per unit, so data deleted after the upgrade stays deleted.
+- A project directory that cannot be written fails with the path, as `MockDataDirError`, rather than presenting an empty store that looks like a fresh project.
+- The local database travels with the rest of its block's unit, and a copy that did not arrive whole is refused where an incomplete data directory would otherwise be renamed aside and replaced by an empty one.
+- The per-deploy state directory is out of scope here: it is renamed by [D-031](#d-031-the-per-deploy-state-directory-is-renamed-the-url-it-is-served-at-is-not), separately, and it kept the URL path it is served at. This decision therefore covers the hidden config folder and the data consolidation only.
+
+### Rationale
+One hidden folder per project is the point: two gave a user two things to learn, two things to gitignore and two places to look, and the rename was already touching one of them. D-001's objection was that nesting bought nothing, which was true while the folder it would nest under did not exist; `.cdk-blocks/` exists for the committed `config.json`, so the nesting now buys a single directory instead of a second top-level one.
+
+Copying rather than moving is what makes the change safe to ship without a migration step: the legacy path keeps working for an older CLI in the same checkout, and a project that has not run the new version yet is not changed at all. The new location always wins, because the legacy copy stops being written the moment this version runs and is stale from then on.
+
+The loud failures exist because the quiet ones are worse. An unwritable project directory and a half-finished database copy both present as a project with no data, and the next write then starts a second copy of state the customer already had.
+
+### Alternatives Considered
+**`.cdk-blocks/bb-data/`.** Rejected: it carries the package name into a path the user sees, and D-001 had already named `data` as the segment it was weighing.
+
+**Move the data instead of copying it.** Rejected: every reader checks one path, so a move makes an older CLI in the same checkout read an empty directory, and nothing puts the data back.
+
+**Start fresh and let the customer re-enter local state.** Rejected: that state includes every `AppSetting` and `Secret` value and the local database, and for a sandbox it leaves resources in the customer's account that they then have to find and remove.
+
+**Amend D-001 and write no record of its own.** Rejected: the amendment would be the only trace of a decision that also renames a folder five packages reach by separate `join(...)` calls, and D-001 is about mock data alone.
+
+**Consolidate the per-deploy state directory in the same change.** Rejected: the browser client fetches its `config.json` from a served URL path, so the on-disk name is coupled to that path and moving it is its own breaking change. D-030 does it separately.
+
+### References
+- `packages/core/src/common/mock-data.ts` — `MOCK_DATA_DIR`, `LEGACY_MOCK_DATA_DIR`, `MockDataDirError`, and the per-unit carry-over
+- `packages/bb-database/src/engines/pglite-cluster.ts` — the local database's data directory, and the refusal of a half-finished copy
+- `scripts/dot-folder-guard.ts` — `check:dot-folder` and `check:data-ignored`, which fail CI on a reference left at the old name and on the data escaping `.gitignore`
+- D-001 — the superseded `.bb-data/` layout, and the alternative this decision adopts
+- D-012 — the committed `.cdk-blocks/config.json` and the app's stable `stackId`
+- D-022 — the same public-URL constraint that keeps `.blocks-sandbox/` where it is

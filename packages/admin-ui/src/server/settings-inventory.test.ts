@@ -22,7 +22,7 @@ function setting(id: string, declaration: Partial<BlockSettingDeclaration> = {})
 		id,
 		fullId: `shop-${id}`,
 		category: 'config',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 1,
 		setting: {
 			parameterName: `/shop-${id}`,
@@ -42,7 +42,7 @@ function store(id: string): DiscoveredBlock {
 		id,
 		fullId: `shop-${id}`,
 		category: 'data',
-		file: 'aws-blocks/index.ts',
+		file: 'cdk-blocks/index.ts',
 		line: 2,
 	};
 }
@@ -363,9 +363,9 @@ describe('joinSettings', () => {
 	});
 
 	/**
-	 * The mock keys `.bb-data/settings.json` by `fullId`, not by SSM path, so a
-	 * join that used one address space for both modes would report every local
-	 * setting as undeclared and every declaration as absent.
+	 * The mock keys `.cdk-blocks/local/data/settings.json` by `fullId`, not by SSM
+	 * path, so a join that used one address space for both modes would report
+	 * every local setting as undeclared and every declaration as absent.
 	 */
 	it('addresses local mode by fullId, not by parameter path', () => {
 		const inventory = joinSettings({
@@ -417,7 +417,7 @@ describe('joinSettings', () => {
 		assert.deepStrictEqual(inventory.settings[0], {
 			fullId: 'shop-limits',
 			id: 'limits',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 1,
 			address: '/shop-limits',
 			presence: 'present',

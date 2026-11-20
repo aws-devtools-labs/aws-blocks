@@ -16,7 +16,7 @@
  * output, which records each edge's kind (`import-statement`, `require-call`,
  * `dynamic-import`, ...). Every kind except `dynamic-import` loads its target
  * when the importer is evaluated, so all of those are followed as static
- * edges. Third-party and `@aws-blocks/*` packages are left external: this
+ * edges. Third-party and `@aws-cdk-blocks/*` packages are left external: this
  * guard is about this package's own modules.
  */
 

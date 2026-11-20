@@ -4,7 +4,7 @@
 
 /**
  * `hosting-config` — a ready-to-run CLI for **config** values (SSM Parameter
- * Store) in apps that consume `@aws-blocks/hosting` directly. The secret
+ * Store) in apps that consume `@aws-cdk-blocks/hosting` directly. The secret
  * counterpart is `hosting-secret` (AWS Secrets Manager).
  *
  *   npx hosting-config set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>]

@@ -39,8 +39,8 @@ import {
 	registerSdkIdentifiers,
 	Scope,
 	unlockRouteRegistry,
-} from '@aws-blocks/core';
-import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
+} from '@aws-cdk-blocks/core';
+import { createLambdaHandler } from '@aws-cdk-blocks/core/lambda-handler';
 import { resolveProviders } from './auth-base.js';
 import { cognitoConfigKeys, federationConfigKeys } from './cdk/contract.js';
 import { DirectFederationEngine } from './engines/federation-direct.js';
@@ -83,13 +83,14 @@ after(async () => {
 beforeEach(() => {
 	clearRouteRegistry();
 	cognito.reset();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** Point the fake at this test's front door (the CDK layer registers exactly these). */
-function registerFrontDoor(origin: string, signOutPath = '/aws-blocks/auth/signout') {
-	cognito.callbackUrls = [`${origin}/aws-blocks/auth/callback`];
+function registerFrontDoor(origin: string, signOutPath = '/cdk-blocks/auth/signout') {
+	cognito.callbackUrls = [`${origin}/cdk-blocks/auth/callback`];
 	cognito.logoutUrls = [`${origin}${signOutPath}`];
 }
 
@@ -194,7 +195,7 @@ function makeEngine(providerId: string, blockOptions: CognitoAuthOptions = provi
 /** Server-initiated sign-in at the engine level: authorize at the fake, then complete. */
 async function engineSignIn(engine: HostedUiFederationEngine): Promise<FederatedIdentity> {
 	registerFrontDoor(APP);
-	const start = ctxFor(`${APP}/aws-blocks/auth/signin/x`);
+	const start = ctxFor(`${APP}/cdk-blocks/auth/signin/x`);
 	const authorizeUrl = await engine.buildSignInUrl(start, {});
 	const res = await fetch(authorizeUrl, { redirect: 'manual' });
 	assert.strictEqual(res.status, 302, `authorize answered ${res.status}: ${await res.clone().text()}`);
@@ -217,13 +218,13 @@ function scriptUsers() {
 describe('HostedUiFederationEngine — the authorize URL', () => {
 	test('managed login on the domain, hosted-UI client, code + PKCE S256, state in the pending cookie', async () => {
 		const { engine } = makeEngine('google');
-		const start = ctxFor(`${APP}/aws-blocks/auth/signin/google`);
+		const start = ctxFor(`${APP}/cdk-blocks/auth/signin/google`);
 		const url = new URL(await engine.buildSignInUrl(start, { redirectPath: '/home', state: 'app-1' }));
 		assert.strictEqual(`${url.origin}${url.pathname}`, `${cognito.origin}/oauth2/authorize`);
 		const p = url.searchParams;
 		assert.strictEqual(p.get('response_type'), 'code');
 		assert.strictEqual(p.get('client_id'), FAKE_HOSTED_UI_CLIENT_ID, 'the hosted-UI client, never the native one');
-		assert.strictEqual(p.get('redirect_uri'), `${APP}/aws-blocks/auth/callback`);
+		assert.strictEqual(p.get('redirect_uri'), `${APP}/cdk-blocks/auth/callback`);
 		assert.strictEqual(p.get('scope'), 'openid email profile');
 		assert.strictEqual(p.get('identity_provider'), 'Google', 'straight to the IdP');
 		assert.strictEqual(p.get('code_challenge_method'), 'S256');
@@ -344,7 +345,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 		const url = new URL(await engine.buildSignInUrl(start, {}));
 		const state = url.searchParams.get('state') ?? '';
 		const cookie = pendingCookie(start);
-		const cb = (q: string, c?: string) => ctxFor(`${APP}/aws-blocks/auth/callback?${q}`, c);
+		const cb = (q: string, c?: string) => ctxFor(`${APP}/cdk-blocks/auth/callback?${q}`, c);
 		await assert.rejects(
 			engine.completeSignIn(cb(`code=x&state=${encodeURIComponent(`${state}x`)}`, cookie)),
 			rejectsWith(AuthErrors.InvalidState, 400),
@@ -374,7 +375,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 		const url = new URL(await engine.buildSignInUrl(start, {}));
 		const state = url.searchParams.get('state') ?? '';
 		const cookie = pendingCookie(start);
-		const cb = (q: string) => ctxFor(`${APP}/aws-blocks/auth/callback?${q}`, cookie);
+		const cb = (q: string) => ctxFor(`${APP}/cdk-blocks/auth/callback?${q}`, cookie);
 		const forged = `error=invalid_request&error_description=${encodeURIComponent(`PreSignUp failed with error ${FORGED_REJECTION}. `)}`;
 		const plain = `error=access_denied&error_description=${encodeURIComponent(ATTACKER_TEXT)}`;
 		const cases: Record<string, string> = {
@@ -434,7 +435,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 				`state=${encodeURIComponent(state)}`,
 			].join('&');
 			await assert.rejects(
-				engine.completeSignIn(ctxFor(`${APP}/aws-blocks/auth/callback?${query}`, pendingCookie(start))),
+				engine.completeSignIn(ctxFor(`${APP}/cdk-blocks/auth/callback?${query}`, pendingCookie(start))),
 				(e: unknown) => {
 					rejectsWith(AuthErrors.IdpError, 400)(e);
 					assert.ok(e instanceof ApiError);
@@ -464,7 +465,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 		for (const bad of [state.slice(0, -1), `${state}x`, `${state.slice(0, -1)}é`, 'é']) {
 			await assert.rejects(
 				engine.completeSignIn(
-					ctxFor(`${APP}/aws-blocks/auth/callback?code=x&state=${encodeURIComponent(bad)}`, cookie),
+					ctxFor(`${APP}/cdk-blocks/auth/callback?code=x&state=${encodeURIComponent(bad)}`, cookie),
 				),
 				rejectsWith(AuthErrors.InvalidState, 400),
 			);
@@ -496,7 +497,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 			engine.exchangeCode(ctxFor(`${APP}/x`), {
 				code,
 				codeVerifier: 'not-the-verifier-not-the-verifier-not-the-ver',
-				redirectUri: `${APP}/aws-blocks/auth/callback`,
+				redirectUri: `${APP}/cdk-blocks/auth/callback`,
 				nonce: '',
 			}),
 			rejectsWith(AuthErrors.IdpError, 400),
@@ -569,7 +570,7 @@ describe('HostedUiFederationEngine — refresh, revoke, logout', () => {
 	test('signOut revokes the refresh token at /oauth2/revoke and returns the /logout URL', async () => {
 		const { engine } = makeEngine('google');
 		const tokens = await pool(engine);
-		const { logoutUrl } = await engine.signOut({ kind: 'pool', tokens }, ctxFor(`${APP}/aws-blocks/auth/signout`));
+		const { logoutUrl } = await engine.signOut({ kind: 'pool', tokens }, ctxFor(`${APP}/cdk-blocks/auth/signout`));
 		assert.deepStrictEqual(cognito.revoked, [tokens.refreshToken]);
 		assert.ok(logoutUrl);
 		const url = new URL(logoutUrl);
@@ -577,7 +578,7 @@ describe('HostedUiFederationEngine — refresh, revoke, logout', () => {
 		assert.strictEqual(url.searchParams.get('client_id'), FAKE_HOSTED_UI_CLIENT_ID);
 		assert.strictEqual(
 			url.searchParams.get('logout_uri'),
-			`${APP}/aws-blocks/auth/signout`,
+			`${APP}/cdk-blocks/auth/signout`,
 			"the sign-out path the CDK layer registers as the client's logout URL",
 		);
 	});
@@ -692,7 +693,7 @@ function awsAuth<const O extends AuthOptions>(options: O) {
 
 /** Walk a hosted-UI sign-in hop by hop. Returns the authorize URL and the landing response. */
 async function hostedSignIn(browser: TestBrowser, providerId: string) {
-	const start = await browser.fetch(`${server.origin}/aws-blocks/auth/signin/${providerId}`);
+	const start = await browser.fetch(`${server.origin}/cdk-blocks/auth/signin/${providerId}`);
 	assert.strictEqual(start.status, 302, `signin answered ${start.status}: ${await start.clone().text()}`);
 	const authorize = location(start, server.origin);
 	const fromCognito = await browser.fetch(authorize);
@@ -702,7 +703,7 @@ async function hostedSignIn(browser: TestBrowser, providerId: string) {
 }
 
 /** POST the sign-out form (the `<Authenticator>`'s federated sign-out). */
-function signOutForm(browser: TestBrowser, path = '/aws-blocks/auth/signout') {
+function signOutForm(browser: TestBrowser, path = '/cdk-blocks/auth/signout') {
 	return browser.fetch(`${server.origin}${path}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -723,7 +724,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 		const browser = new TestBrowser();
 		const { authorize, landing } = await hostedSignIn(browser, 'google');
 		assert.strictEqual(authorize.searchParams.get('identity_provider'), 'Google');
-		assert.strictEqual(authorize.searchParams.get('redirect_uri'), `${server.origin}/aws-blocks/auth/callback`);
+		assert.strictEqual(authorize.searchParams.get('redirect_uri'), `${server.origin}/cdk-blocks/auth/callback`);
 		assert.strictEqual(landing.status, 302);
 		assert.strictEqual(landing.headers.get('location'), '/');
 		assert.ok(browser.jar.has(`auth_${h.auth.fullId}`), 'the session cookie is set');
@@ -765,7 +766,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 		const logout = new URL(location(out, server.origin));
 		assert.strictEqual(`${logout.origin}${logout.pathname}`, `${cognito.origin}/logout`);
 		assert.strictEqual(logout.searchParams.get('client_id'), FAKE_HOSTED_UI_CLIENT_ID);
-		assert.strictEqual(logout.searchParams.get('logout_uri'), `${server.origin}/aws-blocks/auth/signout`);
+		assert.strictEqual(logout.searchParams.get('logout_uri'), `${server.origin}/cdk-blocks/auth/signout`);
 		assert.strictEqual(cognito.revoked.length, 1);
 		assert.ok(!browser.jar.has(`auth_${h.auth.fullId}`), 'the session cookie is cleared');
 		await assert.rejects(h.auth.requireAuth(browser.context(server.origin)), { status: 401 });
@@ -776,7 +777,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 		assert.strictEqual(back.status, 302);
 		assert.ok(!browser.jar.has(MANAGED_LOGIN_COOKIE), 'the managed-login session is gone');
 		const landingUrl = location(back, logout.toString());
-		assert.strictEqual(landingUrl, `${server.origin}/aws-blocks/auth/signout`);
+		assert.strictEqual(landingUrl, `${server.origin}/cdk-blocks/auth/signout`);
 		const final = await browser.fetch(landingUrl);
 		assert.strictEqual(final.status, 302, 'the sign-out path is served for GET — never a 404');
 		assert.strictEqual(final.headers.get('location'), '/goodbye');
@@ -796,7 +797,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 		const browser = new TestBrowser();
 		await hostedSignIn(browser, 'google');
 		// A local-only sign-out (an API client that ignores the Location header).
-		const out = await browser.fetch(`${server.origin}/aws-blocks/auth/signout`, {
+		const out = await browser.fetch(`${server.origin}/cdk-blocks/auth/signout`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: '{}',
@@ -892,7 +893,7 @@ describe('password + hosted-UI social in one block, direct OIDC in a second bloc
 		const sso = new AwsAuth({ id: `huisso${process.pid}x${++counter}` }, 'sso', {
 			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'okta-client' } },
-			redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+			redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' },
 		});
 		// The AWS layer refuses `http:` issuers (HTTPS only); the fake IdP is plain
 		// HTTP, so swap in the same direct engine class with `allowInsecure` —
@@ -935,14 +936,14 @@ describe('password + hosted-UI social in one block, direct OIDC in a second bloc
 
 		// 2. Direct OIDC: the IdP's own authorize → callback → session; sign-out to its end_session_endpoint.
 		const direct = new TestBrowser();
-		const start = await direct.fetch(`${server.origin}/aws-blocks/auth/sso/signin/okta`);
+		const start = await direct.fetch(`${server.origin}/cdk-blocks/auth/sso/signin/okta`);
 		assert.strictEqual(start.status, 302);
 		const authorizeUrl = location(start, server.origin);
 		assert.ok(authorizeUrl.startsWith(`${idp.issuer}/authorize?`));
 		const code = idp.authorize(authorizeUrl, 'okta-user', { email: 'oz@example.com' });
 		const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
 		const cb = await direct.fetch(
-			`${server.origin}/aws-blocks/auth/sso/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+			`${server.origin}/cdk-blocks/auth/sso/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
 		);
 		assert.strictEqual(cb.status, 302);
 		const oz = await sso.requireAuth(direct.context(server.origin));
@@ -952,7 +953,7 @@ describe('password + hosted-UI social in one block, direct OIDC in a second bloc
 			null,
 			'each block its own session',
 		);
-		const directOut = await signOutForm(direct, '/aws-blocks/auth/sso/signout');
+		const directOut = await signOutForm(direct, '/cdk-blocks/auth/sso/signout');
 		assert.strictEqual(directOut.status, 303);
 		assert.ok(location(directOut, server.origin).startsWith(`${idp.origin}`), 'to the IdP’s end_session_endpoint');
 
@@ -1034,11 +1035,11 @@ describe('validateUser on a federated first sign-in — the PreSignUp trigger (a
 		for (const extra of ['', '&state=attacker-chosen']) {
 			// The victim starts a sign-in (the pending cookie is set) …
 			const browser = new TestBrowser();
-			const start = await browser.fetch(`${server.origin}/aws-blocks/auth/signin/google`);
+			const start = await browser.fetch(`${server.origin}/cdk-blocks/auth/signin/google`);
 			assert.strictEqual(start.status, 302);
 			// … and is sent the attacker's link instead of Cognito's redirect.
 			const res = await browser.fetch(
-				`${server.origin}/aws-blocks/auth/callback?error=invalid_request&error_description=${description}${extra}`,
+				`${server.origin}/cdk-blocks/auth/callback?error=invalid_request&error_description=${description}${extra}`,
 			);
 			assert.strictEqual(res.status, 400, extra || 'no state');
 			const body = await res.json();
@@ -1057,12 +1058,12 @@ describe('validateUser on a federated first sign-in — the PreSignUp trigger (a
 			'Google refused: client 1234567890.apps.googleusercontent.com is not authorized for ada@example.com';
 		// A real sign-in, so the callback carries this browser's own pending state.
 		const browser = new TestBrowser();
-		const start = await browser.fetch(`${server.origin}/aws-blocks/auth/signin/google`);
+		const start = await browser.fetch(`${server.origin}/cdk-blocks/auth/signin/google`);
 		assert.strictEqual(start.status, 302);
 		const state = new URL(location(start, server.origin)).searchParams.get('state') ?? '';
 		assert.ok(state, 'the authorize URL carries a state');
 		const res = await browser.fetch(
-			`${server.origin}/aws-blocks/auth/callback?error=access_denied&error_description=${encodeURIComponent(RAW)}&state=${encodeURIComponent(state)}`,
+			`${server.origin}/cdk-blocks/auth/callback?error=access_denied&error_description=${encodeURIComponent(RAW)}&state=${encodeURIComponent(state)}`,
 		);
 		assert.strictEqual(res.status, 400);
 		const text = await res.text();

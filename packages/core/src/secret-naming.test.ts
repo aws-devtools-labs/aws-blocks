@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { secretStoreLocator } from '@aws-blocks/hosting';
+import { secretStoreLocator } from '@aws-cdk-blocks/hosting';
 import {
 	BLOCKS_CONFIG_PARAMETER_PREFIX,
 	BLOCKS_SECRET_PARAMETER_PREFIX,
@@ -14,10 +14,10 @@ import {
 	blocksStoreConfig,
 } from './secret-naming.js';
 
-// These run with no `.blocks/config.json` in cwd, so they exercise the UNSCOPED
-// fallback. A real Blocks app has the file, so it gets the `stackId`-scoped path
-// (covered by the explicit-stackId cases below).
-void describe('Blocks value namespaces — fallback (no .blocks/config.json)', () => {
+// These run with no `.cdk-blocks/config.json` in cwd, so they exercise the
+// UNSCOPED fallback. A real Blocks app has the file, so it gets the
+// `stackId`-scoped path (covered by the explicit-stackId cases below).
+void describe('Blocks value namespaces — fallback (no .cdk-blocks/config.json)', () => {
 	void it('falls back to the unscoped /blocks/secrets and /blocks/config bases', () => {
 		assert.strictEqual(BLOCKS_SECRET_PARAMETER_PREFIX, '/blocks/secrets');
 		assert.strictEqual(BLOCKS_CONFIG_PARAMETER_PREFIX, '/blocks/config');

@@ -6,6 +6,6 @@ package-lock.json
 build-temp
 .cdk-blocks-sandbox
 cdk.out/
-aws-blocks/client.js
-aws-blocks/blocks.spec.json
-.bb-data/
+cdk-blocks/client.js
+cdk-blocks/blocks.spec.json
+.cdk-blocks/local/data/

@@ -26,7 +26,7 @@ describe('assertDoorConformance', () => {
     assert.ok(result.url);
     assert.ok(result.originHandle.domainName, 'originHandle derived from url');
     assert.ok(wiring.origins.has('assets'));
-    assert.ok(wiring.apiPaths.has('/aws-blocks/*'));
+    assert.ok(wiring.apiPaths.has('/cdk-blocks/*'));
   });
 
   it('fails a door with no service id / no build function (shape)', () => {

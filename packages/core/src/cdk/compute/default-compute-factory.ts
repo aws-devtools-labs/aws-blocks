@@ -9,7 +9,7 @@ import type { BlocksBackend } from '../blocks-backend.js';
 /**
  * Lambda-shaped surface of the default compute that the `handlerLogGroup`
  * accessor on BlocksStack/BlocksBackend reads. The default compute
- * (`LambdaCompute` from `@aws-blocks/bb-lambda-compute`) satisfies this
+ * (`LambdaCompute` from `@aws-cdk-blocks/bb-lambda-compute`) satisfies this
  * structurally, so core exposes that accessor without importing the concrete
  * class.
  *
@@ -28,7 +28,7 @@ export interface LambdaShapedCompute extends ComputeBase {
  * from its props (`CoreBlocksStackProps.defaultComputeFactory`) and calls it to
  * build the default without importing a concrete compute class — the factory is
  * supplied by whoever owns both core and a concrete compute package (the
- * umbrella `@aws-blocks/blocks`, which injects `LambdaCompute`). It lives on
+ * umbrella `aws-cdk-blocks`, which injects `LambdaCompute`). It lives on
  * `CoreBlocksStackProps`/`CoreBlocksBackendProps`, which the umbrella derives
  * from the customer-facing props, so it is absent from `BlocksStackProps` and
  * customers cannot set it.

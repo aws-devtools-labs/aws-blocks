@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AwsIdentity } from '@aws-blocks/core/scripts';
+import type { AwsIdentity } from '@aws-cdk-blocks/core/scripts';
 import {
 	frontendPortWarning,
 	keepsOwnClient,
@@ -273,7 +273,7 @@ function devServerEnv(env: NodeJS.ProcessEnv, options: { backendPath: string; ho
  * Run a lifecycle runner with the app's `tsx`, from the project root (see
  * {@link runnerArgs}). The runner's client generation (core's deploy and
  * sandbox) loads the same `tsx`, and both compile the backend with
- * `aws-blocks/tsconfig.json` when the app has one (see {@link tsxTsconfigEnv}).
+ * `cdk-blocks/tsconfig.json` when the app has one (see {@link tsxTsconfigEnv}).
  */
 function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 	const root = run.cwd ?? ctx.requireRoot();
@@ -333,7 +333,7 @@ async function confirm(
 	return ExitCode.Failure;
 }
 
-/** The production stack name; a CLI error when `.blocks/config.json` is missing. */
+/** The production stack name; a CLI error when `.cdk-blocks/config.json` is missing. */
 async function productionStack(ctx: Context, root: string): Promise<string> {
 	const core = await ctx.core();
 	try {
@@ -437,7 +437,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
 	const portWarning = frontendPortWarning(config);
 	if (portWarning) ctx.out.warn(portWarning);
-	const backendPath = requireFile(join(root, 'aws-blocks', 'index.ts'), 'the backend entry');
+	const backendPath = requireFile(join(root, 'cdk-blocks', 'index.ts'), 'the backend entry');
 	if (ctx.logLevel === 'verbose' || ctx.logLevel === 'debug') {
 		ctx.out.progress(
 			`Frontend: ${config.frontendCommand ?? 'none (backend only)'} (from ${config.source}); port ${config.port ?? 3000}`,
@@ -657,7 +657,7 @@ async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 	const deployOnly = mode !== 'watch';
 	const operation = deployOnly ? `npm run sandbox:${mode}` : 'npm run sandbox';
 	const root = ctx.requireRoot();
-	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const backendPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const config = resolveDevConfig(root);
 	for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
 	const portWarning = deployOnly ? undefined : frontendPortWarning(config);
@@ -686,7 +686,7 @@ async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 			destroyInvocation: invocation(ctx, 'sandbox', 'destroy'),
 			previewInvocation: invocation(ctx, 'sandbox', 'preview'),
 		},
-		env: devServerEnv(ctx.env, { backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
+		env: devServerEnv(ctx.env, { backendPath: join(root, 'cdk-blocks', 'index.ts'), ...devConfig }),
 		// Watch mode runs until stopped. A deploy-only run is not long-running: the CLI does not stop it on a
 		// hangup, but core's sandbox deploy does not defer SIGHUP, so a hangup of the whole process group ends it.
 		longRunning: !deployOnly,
@@ -710,7 +710,7 @@ export function sandboxPreview(ctx: Context): Promise<number> {
 
 export async function sandboxDestroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
-	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const backendPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	if (!existsSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'))) {
 		// The CDK app would create a sandbox id, and `cdk destroy` of a stack that does not exist succeeds.
 		ctx.out.text(
@@ -882,7 +882,7 @@ function waitLiveArgs(flags: CommandInput['flags']): string[] {
 export async function deploy(ctx: Context, input: CommandInput): Promise<number> {
 	const args = waitLiveArgs(input.flags);
 	const root = ctx.requireRoot();
-	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const cdkAppPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
 	ctx.out.progress(`Deploying the production stack ${stack}; ${label}; project ${root}.`);
@@ -906,12 +906,12 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 		);
 	}
 	if (code !== ExitCode.Ok) return code;
-	// CDK deploys the stacks that index.cdk.ts defines, whatever .blocks/config.json says.
+	// CDK deploys the stacks that index.cdk.ts defines, whatever .cdk-blocks/config.json says.
 	const deployed = readLastDeploy(root, 'production')?.stack;
 	if (deployed && deployed !== stack) {
 		ctx.out.error(
-			`Warning: CDK deployed the stack ${deployed}, not ${stack}, which .blocks/config.json names.\n` +
-				`  npm run destroy and npm run whoami use ${stack}; set "stackId" in .blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
+			`Warning: CDK deployed the stack ${deployed}, not ${stack}, which .cdk-blocks/config.json names.\n` +
+				`  npm run destroy and npm run whoami use ${stack}; set "stackId" in .cdk-blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
 		);
 	}
 	emitDeployResult(ctx, root, 'production', 'npm run deploy');
@@ -920,7 +920,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 
 export async function destroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
-	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
+	const cdkAppPath = requireFile(join(root, 'cdk-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
 	// Core's production destroy loads `.env.production`, as its deploy does.
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
@@ -981,18 +981,18 @@ export async function whoami(ctx: Context): Promise<number> {
 		});
 	}
 	let production: string | null = null;
-	let noProduction = '(not in an AWS Blocks app)';
+	let noProduction = '(not in an AWS CDK Blocks app)';
 	if (root) {
 		try {
 			production = core.getStackName({ sandbox: false, projectRoot: root });
 		} catch (error) {
 			// Reported as null, with the reason in the text.
 			const message = error instanceof Error ? error.message : String(error);
-			if (!existsSync(join(root, '.blocks', 'config.json'))) noProduction = '(no .blocks/config.json)';
+			if (!existsSync(join(root, '.cdk-blocks', 'config.json'))) noProduction = '(no .cdk-blocks/config.json)';
 			else if (/not valid JSON/.test(message)) {
-				noProduction = '(invalid .blocks/config.json)';
+				noProduction = '(invalid .cdk-blocks/config.json)';
 				ctx.out.warn(message);
-			} else noProduction = '(no stackId in .blocks/config.json)';
+			} else noProduction = '(no stackId in .cdk-blocks/config.json)';
 		}
 	}
 	const sandboxName = root ? await sandboxStack(ctx, root) : null;
@@ -1010,7 +1010,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		`Identity:    ${result.arn ?? 'unknown'}`,
 		`Credentials: ${result.credentials}`,
 		`Region:      ${region}`,
-		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "npm run sandbox")' : '(not in a CDK Blocks app)')}`,
+		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "npm run sandbox")' : '(not in an AWS CDK Blocks app)')}`,
 		`Production:  ${production ?? noProduction}`,
 	].join('\n');
 	ctx.out.result(result, text);
@@ -1080,11 +1080,11 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 	const root = input.positionals.length === 2 ? (app ?? ctx.startDir) : ctx.requireRoot();
 	// Checked here, as generate spec checks it, so both report a missing backend the same way.
 	const [backendArg, outputArg] = input.positionals;
-	requireFile(backendArg ? resolve(ctx.startDir, backendArg) : join(root, 'aws-blocks', 'index.ts'), 'the backend entry');
-	const output = outputArg ? resolve(ctx.startDir, outputArg) : join(root, 'aws-blocks', 'client.js');
-	if (app && output === join(app, 'aws-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
+	requireFile(backendArg ? resolve(ctx.startDir, backendArg) : join(root, 'cdk-blocks', 'index.ts'), 'the backend entry');
+	const output = outputArg ? resolve(ctx.startDir, outputArg) : join(root, 'cdk-blocks', 'client.js');
+	if (app && output === join(app, 'cdk-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
 		throw new UsageError(
-			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "npm run generate-client" would replace it with the generic client.',
+			'this app generates its own cdk-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "npm run generate-client" would replace it with the generic client.',
 			{ where: [`project: ${app}`], hint: `npm run blocks:generate-client, or npm run generate-client -- --force` },
 		);
 	}
@@ -1092,7 +1092,11 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 		operation: 'npm run generate-client',
 		tool: 'blocks-generate-client',
 		command: process.execPath,
-		args: [join(BLOCKS_DIST, 'generate-client-cli.js'), ...input.positionals.map((p) => resolve(ctx.startDir, p))],
+		args: [
+			join(BLOCKS_DIST, 'generate-client-cli.js'),
+			...input.positionals.map((p) => resolve(ctx.startDir, p)),
+			...telemetryArgs(ctx),
+		],
 		cwd: root,
 		// The worker imports the backend through tsx, so it needs the backend's jsx and paths too.
 		env: tsxTsconfigEnv(root, ctx.env),
@@ -1102,7 +1106,7 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 export function generateSpec(ctx: Context, input: CommandInput): Promise<number> {
 	const [backendArg, outputArg] = input.positionals;
 	// With the backend given, the spec needs no app; its default output sits next to the backend.
-	const backendPath = backendArg ? resolve(ctx.startDir, backendArg) : join(ctx.requireRoot(), 'aws-blocks', 'index.ts');
+	const backendPath = backendArg ? resolve(ctx.startDir, backendArg) : join(ctx.requireRoot(), 'cdk-blocks', 'index.ts');
 	const root = ctx.findRoot();
 	const outputPath = outputArg ? resolve(ctx.startDir, outputArg) : join(dirname(backendPath), 'blocks.spec.json');
 	requireFile(backendPath, 'the backend entry');
@@ -1112,7 +1116,7 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 		// Its own `❌` line says why it failed, as blocks-generate-client's does.
 		tool: 'blocks-generate-spec',
 		options: { backendPath, outputPath },
-		// Importing the backend creates its local mock storage (`.bb-data/`) in the working
+		// Importing the backend creates its local mock storage (`.cdk-blocks/local/data/`) in the working
 		// directory: outside an app, that is the backend's directory, not wherever the user is.
 		cwd: root ?? dirname(backendPath),
 	});
@@ -1152,11 +1156,27 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 	}
 	for (const spec of Array.isArray(flags.module) ? flags.module : []) argv.push('--module', spec);
 	const core = await ctx.core();
+	// `--watch` runs until its signal is aborted, so Ctrl-C (SIGINT) or SIGTERM aborts it here,
+	// as the `hosting-typegen` bin does: the watcher then stops, core's `runTypegenCli` resolves
+	// and records its `generate:types` event, and the CLI exits normally. Without a listener
+	// the signal would kill the process before that. A one-shot run keeps the default
+	// handling, so Ctrl-C still stops it at once.
+	// Stopping the watcher with Ctrl-C or SIGTERM deliberately exits 0 and records SUCCESS,
+	// matching the `hosting-typegen` bin: stopping a watcher is how it normally ends.
+	const controller = flags.watch === true ? new AbortController() : undefined;
+	const abort = (): void => controller?.abort();
+	if (controller) {
+		process.once('SIGINT', abort);
+		process.once('SIGTERM', abort);
+	}
 	let code: number;
 	try {
-		code = await core.runTypegenCli(argv);
+		code = await core.runTypegenCli(argv, controller && { signal: controller.signal });
 	} catch (error) {
 		throw new CliError(error instanceof Error ? error.message : String(error), { cause: error });
+	} finally {
+		process.off('SIGINT', abort);
+		process.off('SIGTERM', abort);
 	}
 	return code === 0 ? ExitCode.Ok : ExitCode.Failure;
 }
@@ -1165,7 +1185,7 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 
 /**
  * The absolute path of a package's bin: from the app's own install first, then
- * from the dependencies of `@aws-blocks/blocks`.
+ * from the dependencies of `aws-cdk-blocks`.
  */
 export function resolvePackageBin(root: string, packageName: string, bin: string): string | undefined {
 	for (const from of [join(root, 'package.json'), fileURLToPath(import.meta.url)]) {
@@ -1205,12 +1225,12 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 		});
 	}
 	const help = input.flags.help === true;
-	// A verb's help works outside an app too, when @aws-blocks/bb-database is installed next to @aws-blocks/blocks.
+	// A verb's help works outside an app too, when @aws-cdk-blocks/bb-database is installed next to aws-cdk-blocks.
 	const root = help ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
-	const cli = resolvePackageBin(root, '@aws-blocks/bb-database', 'bb-database');
+	const cli = resolvePackageBin(root, '@aws-cdk-blocks/bb-database', 'bb-database');
 	if (!cli) {
-		throw new CliError('cannot find the bb-database CLI of @aws-blocks/bb-database.', {
-			hint: 'npm install @aws-blocks/bb-database',
+		throw new CliError('cannot find the bb-database CLI of @aws-cdk-blocks/bb-database.', {
+			hint: 'npm install @aws-cdk-blocks/bb-database',
 		});
 	}
 	// The CLI's own --yes and --no-input are not forwarded with the other tokens, and bb-database has the same

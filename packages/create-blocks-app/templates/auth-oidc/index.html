@@ -5,7 +5,7 @@
   <title>AWS Blocks Auth-OIDC</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <!-- First-paint tokens only. The authoritative token layer (incl. the
-       .bb-* component classes) is @aws-blocks/auth-common's THEME_CSS,
+       .bb-* component classes) is @aws-cdk-blocks/auth-common's THEME_CSS,
        injected by the components at runtime; this inline copy exists so a
        dark-mode user's first paint already uses the dark palette instead of
        flashing white until the deferred module bundle runs. -->
@@ -40,7 +40,7 @@
 </head>
 <body>
   <h1>AWS Blocks — OIDC sign-in</h1>
-  <p>Sign in with the local stub IdP (no real credentials needed in <code>npm run dev</code>). Before deploying to production, point the <code>type: 'oidc'</code> provider in <code>aws-blocks/index.ts</code> at your own identity provider.</p>
+  <p>Sign in with the local stub IdP (no real credentials needed in <code>npm run dev</code>). Before deploying to production, point the <code>type: 'oidc'</code> provider in <code>cdk-blocks/index.ts</code> at your own identity provider.</p>
 
   <div class="section">
     <div id="auth-status">Not signed in</div>

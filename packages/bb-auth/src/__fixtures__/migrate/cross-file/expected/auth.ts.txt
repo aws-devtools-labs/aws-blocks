@@ -1,5 +1,4 @@
-import { Auth } from '@aws-blocks/blocks';
-import { Scope } from '@aws-blocks/blocks';
+import { Auth, Scope } from 'aws-cdk-blocks';
 
 export const scope = new Scope('app');
 export const auth = new Auth(scope, 'auth', { emailPassword: { autoSignIn: false } });

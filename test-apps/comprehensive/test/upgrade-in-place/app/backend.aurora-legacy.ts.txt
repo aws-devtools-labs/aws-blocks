@@ -4,11 +4,11 @@
 // Fixture of `upgrade-sql-blocks.ts --scenario aurora`: the same app on this checkout. The cluster of the
 // earlier block is a `LegacyDatabaseCluster` with the id of that block, and a `Database` with a new id runs on it.
 
-import { ApiNamespace, Database, LegacyDatabaseCluster, Scope, sql } from '@aws-blocks/blocks';
+import { ApiNamespace, Database, LegacyDatabaseCluster, Scope, sql } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
 const cluster = new LegacyDatabaseCluster(scope, 'main');
-const main = new Database(scope, 'main-db', { cluster, migrationsPath: './aws-blocks/migrations' });
+const main = new Database(scope, 'main-db', { cluster, migrationsPath: './cdk-blocks/migrations' });
 
 export const api = new ApiNamespace(scope, 'api', () => ({
 	async dump() {

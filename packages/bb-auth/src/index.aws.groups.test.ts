@@ -15,7 +15,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { isBlocksError, registerSdkIdentifiers } from '@aws-blocks/core';
+import { isBlocksError, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { INTERNAL_ERROR_MESSAGE } from './error-mapping.js';
 import { AuthErrors } from './index.aws.js';
 import {
@@ -27,8 +27,8 @@ import {
 	TEST_POOL_ID,
 } from './test-support/aws-harness.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function groupsReply(...names: string[]) {
 	return { Groups: names.map((GroupName) => ({ GroupName, UserPoolId: TEST_POOL_ID })) };

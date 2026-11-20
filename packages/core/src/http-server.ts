@@ -137,7 +137,7 @@ interface RequestEnv {
 }
 
 /**
- * Serve a backend module (the app's `aws-blocks/index.ts`) over HTTP.
+ * Serve a backend module (the app's `cdk-blocks/index.ts`) over HTTP.
  *
  * Call after config is loaded and the backend is imported. Registers the
  * built-in routes and locks the route registry, as the Lambda handler does on

@@ -26,8 +26,8 @@
 
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/core';
-import { getConfigDeployment, getConfigLocation } from '@aws-blocks/core/cdk';
+import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-cdk-blocks/core';
+import { getConfigDeployment, getConfigLocation } from '@aws-cdk-blocks/core/cdk';
 import {
 	API_LISTENER_PORTS,
 	CONTAINER_HTTP_PORT,
@@ -42,7 +42,7 @@ import {
 	initializeVpc,
 	registerVpcRequirements,
 	sourceScopedConditions,
-} from '@aws-blocks/core/cdk/internal';
+} from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
@@ -153,6 +153,18 @@ function hashPath(value: string): number {
 		hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0;
 	}
 	return hash;
+}
+
+/**
+ * The path a listener rule's construct ID and priority are derived from: the
+ * routed path with the `/cdk-blocks` prefix written as the pre-rename
+ * `/aws-blocks`. Rules deployed before the rename keep their logical ID and
+ * priority, so CloudFormation updates their path condition in place instead of
+ * replacing them, which could fail with `PriorityInUse` if the replacement's
+ * priority hashed onto a rule still deployed. The rule still matches `path`.
+ */
+function ruleIdentityPath(path: string): string {
+	return path.startsWith('/cdk-blocks/') ? `/aws-blocks${path.slice('/cdk-blocks'.length)}` : path;
 }
 
 /**
@@ -545,13 +557,15 @@ export class ContainerCompute extends ComputeBase {
 				);
 			}
 			// Scoped to the shared listener and named after the path alone
-			// (`/aws-blocks/api/render` → `Route-aws-blocks-api-render`), so moving a
-			// namespace to another container compute updates the rule's target in place
-			// rather than replacing it — a new rule couldn't take the priority the old
-			// one still holds until CloudFormation deletes it.
-			const rule = new elbv2.ApplicationListenerRule(listener, `Route${path.replaceAll('/', '-')}`, {
+			// (`/cdk-blocks/api/render` → `Route-aws-blocks-api-render`, keyed by
+			// {@link ruleIdentityPath}), so moving a namespace to another container
+			// compute updates the rule's target in place rather than replacing it — a
+			// new rule couldn't take the priority the old one still holds until
+			// CloudFormation deletes it.
+			const identity = ruleIdentityPath(path);
+			const rule = new elbv2.ApplicationListenerRule(listener, `Route${identity.replaceAll('/', '-')}`, {
 				listener,
-				priority: this.allocateRulePriority(path, listener),
+				priority: this.allocateRulePriority(path, identity, listener),
 				conditions: [elbv2.ListenerCondition.pathPatterns([path])],
 				action: elbv2.ListenerAction.forward([targetGroup]),
 			});
@@ -575,9 +589,11 @@ export class ContainerCompute extends ComputeBase {
 	 * priority even mid-update). Two paths that hash to the same priority fail
 	 * synth: shifting one to a free priority would make it depend on its neighbours,
 	 * and break a later deploy that removes or adds one. Warns once the shared
-	 * listener passes the load balancer's default rule quota.
+	 * listener passes the load balancer's default rule quota. The priority is
+	 * hashed from `identity` ({@link ruleIdentityPath}), so it is the one the path
+	 * had before the `/cdk-blocks` rename; collisions still name `path`.
 	 */
-	private allocateRulePriority(path: string, listener: elbv2.ApplicationListener): number {
+	private allocateRulePriority(path: string, identity: string, listener: elbv2.ApplicationListener): number {
 		// Each priority keeps the path holding it and the path of the compute that routed it,
 		// so a collision names both namespaces and where each one runs.
 		const taken = getOrCreateOnRoot(
@@ -585,7 +601,7 @@ export class ContainerCompute extends ComputeBase {
 			API_RULE_PRIORITIES,
 			() => new Map<number, { path: string; compute: string }>(),
 		);
-		const priority = 1 + (hashPath(path) % MAX_RULE_PRIORITY);
+		const priority = 1 + (hashPath(identity) % MAX_RULE_PRIORITY);
 		const holder = taken.get(priority);
 		if (holder !== undefined) {
 			throw new Error(
@@ -596,7 +612,7 @@ export class ContainerCompute extends ComputeBase {
 		taken.set(priority, { path, compute: this.node.path });
 		if (taken.size === DEFAULT_RULES_PER_LOAD_BALANCER + 1) {
 			cdk.Annotations.of(listener).addWarningV2(
-				'@aws-blocks/bb-container-compute:api-rule-quota',
+				'@aws-cdk-blocks/bb-container-compute:api-rule-quota',
 				`More than ${DEFAULT_RULES_PER_LOAD_BALANCER} container API namespaces share one load balancer, over its ` +
 					`default quota of ${DEFAULT_RULES_PER_LOAD_BALANCER} listener rules: request an increase of "Rules per ` +
 					'Application Load Balancer" before deploying.',

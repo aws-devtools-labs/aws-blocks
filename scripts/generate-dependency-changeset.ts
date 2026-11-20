@@ -3,15 +3,15 @@
 
 /**
  * Write a changeset for dependency bumps so they ship in the next release.
- * Emits a `patch` entry for every published `@aws-blocks/*` package with a
+ * Emits a `patch` entry for every published `@aws-cdk-blocks/*` package with a
  * package.json changed vs the base ref (a dep bump is non-breaking → patch),
- * plus the umbrella `@aws-blocks/blocks` whenever a sibling it re-exports is
+ * plus the umbrella `aws-cdk-blocks` whenever a sibling it re-exports is
  * in the set (its packed content moves with them).
  *
  * Any package.json under packages/<x>/ counts as a change to package <x>, the
  * way changeset-guard.ts maps files to packages: a bump to a create-blocks-app
  * template (packages/create-blocks-app/templates/<t>/package.json) releases
- * @aws-blocks/create-blocks-app, which publishes its templates.
+ * @aws-cdk-blocks/create-blocks-app, which publishes its templates.
  *
  * Packages that a changeset on disk already covers are left out: they release
  * anyway, so a second entry would only add a changelog line. Writes nothing
@@ -34,27 +34,31 @@ import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const CHANGESET_DIR = join(ROOT, ".changeset");
-const UMBRELLA = "@aws-blocks/blocks";
+const UMBRELLA = "aws-cdk-blocks";
 const baseRef = process.argv[2] ?? "origin/main";
 const trigger = process.argv[3] ?? "automated";
 
 const pkgName = (dir: string): string | null => {
 	try {
 		const p = JSON.parse(readFileSync(join(ROOT, "packages", dir, "package.json"), "utf-8"));
-		return !p.private && typeof p.name === "string" && p.name.startsWith("@aws-blocks/") ? p.name : null;
+		if (p.private || typeof p.name !== "string") return null;
+		// The umbrella publishes unscoped, so a scope test alone would never see it change.
+		return p.name.startsWith("@aws-cdk-blocks/") || p.name === UMBRELLA ? p.name : null;
 	} catch {
 		return null; // deleted or unreadable
 	}
 };
 
-/** `@aws-blocks/*` packages named in the frontmatter of the changesets on disk. */
+/** This repo's published packages named in the frontmatter of the changesets on disk. */
 const coveredPackages = (): Set<string> => {
 	const covered = new Set<string>();
 	for (const file of readdirSync(CHANGESET_DIR)) {
 		if (!file.endsWith(".md") || file === "README.md") continue;
 		const frontmatter = readFileSync(join(CHANGESET_DIR, file), "utf-8").match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
 		for (const line of frontmatter.split("\n")) {
-			const pkg = line.match(/['"]?(@aws-blocks\/[^'":\s]+)['"]?\s*:/)?.[1];
+			// The umbrella publishes unscoped, so it has to be matched by name. Anchored at the
+			// line start so a key like `my-aws-cdk-blocks` is not read as the umbrella.
+			const pkg = line.match(/^\s*['"]?(@aws-cdk-blocks\/[^'":\s]+|aws-cdk-blocks)['"]?\s*:/)?.[1];
 			if (pkg) covered.add(pkg);
 		}
 	}

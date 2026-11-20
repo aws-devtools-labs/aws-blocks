@@ -14,9 +14,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import { ApiError, type BlocksContext, clearRouteRegistry, isBlocksError } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { ApiError, type BlocksContext, clearRouteRegistry, isBlocksError } from '@aws-cdk-blocks/core';
+import { getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { pkceChallenge } from './engines/federation-direct.js';
 import { decodePendingAuth, encodePendingAuth } from './engines/pending-auth.js';
 import { stubValueMatches } from './engines/stub-idp.js';
@@ -41,9 +41,10 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function bind(api: AuthStateApi, ctx: BlocksContext): AuthStateApi {
 	const target: unknown = api;
@@ -68,7 +69,7 @@ function makeStubAuth() {
 }
 
 /** Walk the server-initiated flow for `sub` through the picker; returns the final landing response. */
-async function signInThroughPicker(b: TestBrowser, sub: string, signInPath = '/aws-blocks/auth/signin/corp') {
+async function signInThroughPicker(b: TestBrowser, sub: string, signInPath = '/cdk-blocks/auth/signin/corp') {
 	const start = await b.fetch(`${server.origin}${signInPath}`);
 	return continueThroughPicker(b, start, sub);
 }
@@ -77,7 +78,7 @@ async function signInThroughPicker(b: TestBrowser, sub: string, signInPath = '/a
 async function continueThroughPicker(b: TestBrowser, start: Response, sub: string) {
 	assert.strictEqual(start.status, 302, 'the sign-in route redirects to the IdP');
 	const authorize = location(start, server.origin);
-	assert.ok(authorize.startsWith(`${server.origin}/aws-blocks/auth/idp/corp/authorize?`), authorize);
+	assert.ok(authorize.startsWith(`${server.origin}/cdk-blocks/auth/idp/corp/authorize?`), authorize);
 
 	const picker = await b.fetch(authorize);
 	assert.strictEqual(picker.status, 200);
@@ -89,14 +90,14 @@ async function continueThroughPicker(b: TestBrowser, start: Response, sub: strin
 	// Submit the picker the way the browser does: its hidden fields are the authorize parameters.
 	const form = new URLSearchParams(new URL(authorize).searchParams);
 	form.set('sub', sub);
-	const submitted = await b.fetch(`${server.origin}/aws-blocks/auth/idp/corp/authorize`, {
+	const submitted = await b.fetch(`${server.origin}/cdk-blocks/auth/idp/corp/authorize`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/x-www-form-urlencoded' },
 		body: form.toString(),
 	});
 	assert.strictEqual(submitted.status, 302);
 	const callback = location(submitted, server.origin);
-	assert.ok(callback.startsWith(`${server.origin}/aws-blocks/auth/callback?code=`), callback);
+	assert.ok(callback.startsWith(`${server.origin}/cdk-blocks/auth/callback?code=`), callback);
 	return b.fetch(callback);
 }
 
@@ -112,7 +113,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 		assert.ok(b.jar.has(`auth_${auth.fullId}`), 'the session cookie is set');
 		assert.ok(!b.jar.has(`authpending_${auth.fullId}`), 'the pending cookie is consumed');
 
-		const issuer = `${server.origin}/aws-blocks/auth/idp/corp`;
+		const issuer = `${server.origin}/cdk-blocks/auth/idp/corp`;
 		const user = await auth.requireAuth(b.context(server.origin));
 		assert.strictEqual(user.userId, `${issuer}:u-1`, 'userId is <iss>:<sub>');
 		assert.strictEqual(user.userSub, user.userId);
@@ -137,12 +138,12 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 		const signOut = state.actions.find((a) => a.name === 'signOut');
 		assert.deepStrictEqual(
 			{ url: signOut?.url, method: signOut?.method },
-			{ url: '/aws-blocks/auth/signout', method: 'POST' },
+			{ url: '/cdk-blocks/auth/signout', method: 'POST' },
 			'a federated session signs out through the route (so the IdP logout is followed)',
 		);
 
 		// The <Authenticator> submits a real form: the route follows the IdP's end-session endpoint.
-		const out = await b.fetch(`${server.origin}/aws-blocks/auth/signout`, {
+		const out = await b.fetch(`${server.origin}/cdk-blocks/auth/signout`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded' },
 			body: '',
@@ -166,8 +167,8 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 	test('two blocks with a stubIdp() under the same key fail at construction, naming the fix (the stub routes ignore redirects)', () => {
 		const scope = unique();
 		const own = (id: string) => ({
-			callbackPath: `/aws-blocks/auth/${id}/callback`,
-			signOutPath: `/aws-blocks/auth/${id}/signout`,
+			callbackPath: `/cdk-blocks/auth/${id}/callback`,
+			signOutPath: `/cdk-blocks/auth/${id}/signout`,
 		});
 		new Auth(scope, 'one', { store: 'builtin', providers: { corp: stubIdp() }, redirects: own('one') });
 		assert.throws(
@@ -177,7 +178,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 				e.name === 'Error' &&
 				e.message ===
 					"Auth 'two': providers.corp is a stubIdp() provider, but another Auth block already serves a stub IdP under that key " +
-						"(/aws-blocks/auth/idp/corp/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.",
+						"(/cdk-blocks/auth/idp/corp/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.",
 		);
 		// A different key is fine.
 		new Auth(scope, 'three', { store: 'builtin', providers: { staff: stubIdp() }, redirects: own('three') });
@@ -232,7 +233,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 		const landing = await signInThroughPicker(
 			b,
 			'u-1',
-			'/aws-blocks/auth/signin/corp?redirectPath=%2Fdashboard%3Ftab%3D2',
+			'/cdk-blocks/auth/signin/corp?redirectPath=%2Fdashboard%3Ftab%3D2',
 		);
 		assert.strictEqual(landing.headers.get('location'), '/dashboard?tab=2');
 	});
@@ -257,7 +258,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 			'https://evil.example.com/',
 			'javascript:alert(1)',
 		]) {
-			const res = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp?redirectPath=${raw}`);
+			const res = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp?redirectPath=${raw}`);
 			assert.strictEqual(res.status, 400, raw);
 			assert.strictEqual(res.headers.get('location'), null, raw);
 			const body: unknown = await res.json();
@@ -278,7 +279,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 			const landing = await signInThroughPicker(
 				new TestBrowser(),
 				'u-1',
-				`/aws-blocks/auth/signin/corp?redirectPath=${raw}`,
+				`/cdk-blocks/auth/signin/corp?redirectPath=${raw}`,
 			);
 			assert.strictEqual(landing.status, 302, raw);
 			assert.strictEqual(landing.headers.get('location'), expected, raw);
@@ -294,7 +295,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 			redirects: { postSignInPath: '/home' },
 		});
 		const b = new TestBrowser();
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp?redirectPath=%2Fok`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp?redirectPath=%2Fok`);
 		const name = `authpending_${auth.fullId}`;
 		const secret = readMockSessionSecret(getMockDataDir(auth));
 		const pending = decodePendingAuth(b.jar.get(name) ?? '', secret);
@@ -310,7 +311,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 		const auth = makeStubAuth();
 		const b = new TestBrowser();
 		await signInThroughPicker(b, 'u-1');
-		const out = await b.fetch(`${server.origin}/aws-blocks/auth/signout`, {
+		const out = await b.fetch(`${server.origin}/cdk-blocks/auth/signout`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: '{}',
@@ -334,7 +335,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 			},
 		});
 		const b = new TestBrowser();
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		const authorized = await b.fetch(location(start, server.origin));
 		assert.strictEqual(authorized.status, 302, 'no picker');
 		const landing = await b.fetch(location(authorized, server.origin));
@@ -342,7 +343,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 
 		allow = false;
 		const b2 = new TestBrowser();
-		const start2 = await b2.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start2 = await b2.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		const denied = await b2.fetch(location(start2, server.origin));
 		const cb = new URL(location(denied, server.origin));
 		assert.strictEqual(cb.searchParams.get('error'), 'access_denied');
@@ -351,16 +352,16 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 		assert.strictEqual((await res.json()).name, AuthErrors.IdpError);
 	});
 
-	test('users.json in .bb-data/<fullId>/ is the directory when no inline users are given', async () => {
+	test('users.json in .cdk-blocks/local/data/<fullId>/ is the directory when no inline users are given', async () => {
 		const auth = new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
-		const dir = join('.bb-data', auth.fullId);
+		const dir = join('.cdk-blocks/local/data', auth.fullId);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
 			join(dir, 'users.json'),
 			JSON.stringify([{ sub: 'f-1', email: 'f@example.com', name: 'Fixture' }]),
 		);
 		const b = new TestBrowser();
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		const html = await (await b.fetch(location(start, server.origin))).text();
 		assert.match(html, /Fixture/);
 		assert.doesNotMatch(html, /Stub corp User/);
@@ -409,12 +410,12 @@ describe('stub IdP — constant-time binding checks (it can be deployed, so it c
 	test('a wrong verifier of the same length, a wrong client id and a wrong redirect URI are refused at /token', async () => {
 		makeStubAuth();
 		const b = new TestBrowser();
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		const params = new URL(location(start, server.origin)).searchParams;
 		const mint = async () => {
 			const form = new URLSearchParams(params);
 			form.set('sub', 'u-1');
-			const submitted = await b.fetch(`${server.origin}/aws-blocks/auth/idp/corp/authorize`, {
+			const submitted = await b.fetch(`${server.origin}/cdk-blocks/auth/idp/corp/authorize`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/x-www-form-urlencoded' },
 				body: form.toString(),
@@ -422,7 +423,7 @@ describe('stub IdP — constant-time binding checks (it can be deployed, so it c
 			return new URL(location(submitted, server.origin)).searchParams.get('code') ?? '';
 		};
 		const redeem = async (fields: Record<string, string>) =>
-			fetch(`${server.origin}/aws-blocks/auth/idp/corp/token`, {
+			fetch(`${server.origin}/cdk-blocks/auth/idp/corp/token`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/x-www-form-urlencoded' },
 				body: new URLSearchParams({
@@ -452,7 +453,7 @@ describe('stub IdP — constant-time binding checks (it can be deployed, so it c
 
 describe('stub IdP — protocol checks', () => {
 	async function authorizeParams(b: TestBrowser) {
-		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);
+		const start = await b.fetch(`${server.origin}/cdk-blocks/auth/signin/corp`);
 		return new URL(location(start, server.origin)).searchParams;
 	}
 
@@ -462,19 +463,19 @@ describe('stub IdP — protocol checks', () => {
 		const params = await authorizeParams(b);
 		const plain = new URLSearchParams(params);
 		plain.set('code_challenge_method', 'plain');
-		const refused = await b.fetch(`${server.origin}/aws-blocks/auth/idp/corp/authorize?${plain}`);
+		const refused = await b.fetch(`${server.origin}/cdk-blocks/auth/idp/corp/authorize?${plain}`);
 		assert.strictEqual(refused.status, 400);
 
 		// A code minted for one challenge does not redeem with another verifier.
 		const form = new URLSearchParams(params);
 		form.set('sub', 'u-1');
-		const submitted = await b.fetch(`${server.origin}/aws-blocks/auth/idp/corp/authorize`, {
+		const submitted = await b.fetch(`${server.origin}/cdk-blocks/auth/idp/corp/authorize`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded' },
 			body: form.toString(),
 		});
 		const code = new URL(location(submitted, server.origin)).searchParams.get('code') ?? '';
-		const token = await fetch(`${server.origin}/aws-blocks/auth/idp/corp/token`, {
+		const token = await fetch(`${server.origin}/cdk-blocks/auth/idp/corp/token`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded' },
 			body: new URLSearchParams({
@@ -497,14 +498,14 @@ describe('stub IdP — protocol checks', () => {
 		const b = new TestBrowser();
 		const params = await authorizeParams(b);
 		params.set('redirect_uri', 'myapp://callback');
-		const res = await b.fetch(`${server.origin}/aws-blocks/auth/idp/corp/authorize?${params}`);
+		const res = await b.fetch(`${server.origin}/cdk-blocks/auth/idp/corp/authorize?${params}`);
 		assert.strictEqual(res.status, 400);
 		assert.strictEqual((await res.json()).error, 'invalid_request');
 	});
 
 	test('discovery, JWKS and userinfo are real', async () => {
 		makeStubAuth();
-		const issuer = `${server.origin}/aws-blocks/auth/idp/corp`;
+		const issuer = `${server.origin}/cdk-blocks/auth/idp/corp`;
 		const doc = await (await fetch(`${issuer}/.well-known/openid-configuration`)).json();
 		assert.strictEqual(doc.issuer, issuer);
 		assert.deepStrictEqual(doc.code_challenge_methods_supported, ['S256']);
@@ -519,7 +520,7 @@ describe('stub IdP — protocol checks', () => {
 	/** `GET <issuer>/logout` with these query parameters (no redirect following). */
 	function stubLogout(params: Record<string, string>): Promise<Response> {
 		const query = new URLSearchParams(params);
-		return fetch(`${server.origin}/aws-blocks/auth/idp/corp/logout?${query}`, { redirect: 'manual' });
+		return fetch(`${server.origin}/cdk-blocks/auth/idp/corp/logout?${query}`, { redirect: 'manual' });
 	}
 
 	test('/logout redirects only to a registered post_logout_redirect_uri (the app origin + its sign-out paths)', async () => {
@@ -528,7 +529,7 @@ describe('stub IdP — protocol checks', () => {
 			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/goodbye' },
 		});
-		for (const target of [`${server.origin}/goodbye`, `${server.origin}/aws-blocks/auth/signout`]) {
+		for (const target of [`${server.origin}/goodbye`, `${server.origin}/cdk-blocks/auth/signout`]) {
 			const res = await stubLogout({ client_id: 'stub-client-id', post_logout_redirect_uri: target });
 			assert.strictEqual(res.status, 302, target);
 			assert.strictEqual(res.headers.get('location'), target);
@@ -582,8 +583,8 @@ describe('stub IdP — protocol checks', () => {
 });
 
 describe('stub IdP — /authorize accepts only the registered client and redirect URI (RFC 6749 §4.1.2.1)', () => {
-	const CALLBACK = () => `${server.origin}/aws-blocks/auth/callback`;
-	const AUTHORIZE = () => `${server.origin}/aws-blocks/auth/idp/corp/authorize`;
+	const CALLBACK = () => `${server.origin}/cdk-blocks/auth/callback`;
+	const AUTHORIZE = () => `${server.origin}/cdk-blocks/auth/idp/corp/authorize`;
 
 	/** A complete, valid authorize request for the stub client, with `overrides`. */
 	function authorizeQuery(overrides: Record<string, string> = {}): URLSearchParams {
@@ -623,16 +624,16 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 		const port = new URL(server.origin).port;
 		return [
 			'https://evil.example/land',
-			'https://evil.example/aws-blocks/auth/callback',
+			'https://evil.example/cdk-blocks/auth/callback',
 			`${server.origin}/`,
 			`${server.origin}/app/callback`,
-			`${server.origin}/aws-blocks/auth/callback/`,
-			`${server.origin}/aws-blocks/auth/callback?next=x`,
-			`${server.origin}/aws-blocks/auth/callbackx`,
-			`${server.origin}/aws-blocks/auth/signout`,
-			`http://127.0.0.1:1/aws-blocks/auth/callback`,
-			`https://localhost:${port}/aws-blocks/auth/callback`,
-			`http://localhost:${port}@evil.example/aws-blocks/auth/callback`,
+			`${server.origin}/cdk-blocks/auth/callback/`,
+			`${server.origin}/cdk-blocks/auth/callback?next=x`,
+			`${server.origin}/cdk-blocks/auth/callbackx`,
+			`${server.origin}/cdk-blocks/auth/signout`,
+			`http://127.0.0.1:1/cdk-blocks/auth/callback`,
+			`https://localhost:${port}/cdk-blocks/auth/callback`,
+			`http://localhost:${port}@evil.example/cdk-blocks/auth/callback`,
 		];
 	};
 
@@ -735,9 +736,9 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 		new Auth(unique(), 'auth', {
 			store: 'builtin',
 			providers: { corp: stubIdp({ onAuthorize: (r) => r.users[0] }) },
-			redirects: { callbackPath: '/aws-blocks/auth/extras/callback' },
+			redirects: { callbackPath: '/cdk-blocks/auth/extras/callback' },
 		});
-		const custom = `${server.origin}/aws-blocks/auth/extras/callback`;
+		const custom = `${server.origin}/cdk-blocks/auth/extras/callback`;
 		const ok = await getAuthorize(authorizeQuery({ redirect_uri: custom }));
 		assert.strictEqual(ok.status, 302);
 		assert.ok(location(ok, server.origin).startsWith(`${custom}?code=`));
@@ -755,7 +756,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 		});
 		const csrf = 'c'.repeat(40);
 		const relayTo = 'http://127.0.0.1:53682/callback';
-		const paramsRes = await fetch(`${server.origin}/aws-blocks/auth/authorize-params/corp`, {
+		const paramsRes = await fetch(`${server.origin}/cdk-blocks/auth/authorize-params/corp`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ csrf, relayTo }),
@@ -770,7 +771,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 
 		// The SDK builds the authorize URL itself, redirect_uri = the backend's HTTPS callback.
 		const verifier = 'native-verifier-0123456789-abcdefghijklmnopqrstuvwxyz';
-		const callbackUrl = `${server.origin}/aws-blocks/auth/callback`;
+		const callbackUrl = `${server.origin}/cdk-blocks/auth/callback`;
 		const authorize = new URL(params.authorizeUrl);
 		for (const [k, v] of Object.entries({
 			response_type: 'code',
@@ -793,7 +794,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 		const code = back.searchParams.get('code') ?? '';
 
 		const b = new TestBrowser();
-		const exchanged = await b.fetch(`${server.origin}/aws-blocks/auth/exchange`, {
+		const exchanged = await b.fetch(`${server.origin}/cdk-blocks/auth/exchange`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
@@ -813,7 +814,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 		assert.ok(b.jar.has(`auth_${auth.fullId}`), 'the exchange also issues the session cookie');
 
 		// Swift/Dart refresh: `{ refreshToken }` only, at `<exchange>/refresh`.
-		const refreshed = await fetch(`${server.origin}/aws-blocks/auth/exchange/refresh`, {
+		const refreshed = await fetch(`${server.origin}/cdk-blocks/auth/exchange/refresh`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ refreshToken: body.refreshToken }),
@@ -822,7 +823,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 		const tokens = await refreshed.json();
 		assert.ok(tokens.accessToken && tokens.refreshToken && tokens.refreshToken !== body.refreshToken);
 		// AuthOIDC's path with `provider`; the rotated-away token is refused.
-		const stale = await fetch(`${server.origin}/aws-blocks/auth/refresh`, {
+		const stale = await fetch(`${server.origin}/cdk-blocks/auth/refresh`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ refreshToken: body.refreshToken, provider: 'corp' }),
@@ -836,12 +837,12 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 			store: 'builtin',
 			providers: { corp: stubIdp({ users: [BOB], onAuthorize: (r) => r.users[0] }) },
 		});
-		const params = await (await fetch(`${server.origin}/aws-blocks/auth/authorize-params/corp`)).json();
+		const params = await (await fetch(`${server.origin}/cdk-blocks/auth/authorize-params/corp`)).json();
 		assert.deepStrictEqual(Object.keys(params).sort(), ['authorizeUrl', 'clientId', 'kind', 'scopes']);
 		const verifier = 'spa-verifier-0123456789-abcdefghijklmnopqrstuvwxyz';
 		// The stub's registered redirect URI (the app's own callback), as an SPA
 		// registers its callback with a real IdP; any other is refused at /authorize.
-		const spaCallback = `${server.origin}/aws-blocks/auth/callback`;
+		const spaCallback = `${server.origin}/cdk-blocks/auth/callback`;
 		const authorize = new URL(params.authorizeUrl);
 		for (const [k, v] of Object.entries({
 			response_type: 'code',
@@ -859,7 +860,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 			'code',
 		);
 		const b = new TestBrowser();
-		const res = await b.fetch(`${server.origin}/aws-blocks/auth/exchange`, {
+		const res = await b.fetch(`${server.origin}/cdk-blocks/auth/exchange`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
@@ -881,7 +882,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 		);
 		assert.strictEqual((await auth.requireAuth(b.context(server.origin))).username, 'Bob');
 
-		const wrongNonce = await fetch(`${server.origin}/aws-blocks/auth/exchange`, {
+		const wrongNonce = await fetch(`${server.origin}/cdk-blocks/auth/exchange`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
@@ -902,7 +903,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 		assert.strictEqual(typeof refusedBody.error, 'string');
 
 		// A code the IdP refuses (the right provider, a code it never issued).
-		const badCode = await fetch(`${server.origin}/aws-blocks/auth/exchange`, {
+		const badCode = await fetch(`${server.origin}/cdk-blocks/auth/exchange`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
@@ -997,13 +998,13 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 		const fedUser = await sso.requireAuth(fed.context(server.origin));
 		assert.strictEqual(fedUser.signInProvider, 'corp');
 		assert.strictEqual(fedUser.claims?.sub, 'u-1');
-		assert.strictEqual(fedUser.userId, `${server.origin}/aws-blocks/auth/idp/corp:u-1`);
+		assert.strictEqual(fedUser.userId, `${server.origin}/cdk-blocks/auth/idp/corp:u-1`);
 
 		// A password session signs out over RPC (no url); a federated one through the route.
 		const pwState = await rpc(pw, api, (a) => a.getAuthState());
 		assert.strictEqual(pwState.actions.find((x) => x.name === 'signOut')?.url, undefined);
 		const fedState = await rpc(fed, ssoApi, (a) => a.getAuthState());
-		assert.strictEqual(fedState.actions.find((x) => x.name === 'signOut')?.url, '/aws-blocks/auth/signout');
+		assert.strictEqual(fedState.actions.find((x) => x.name === 'signOut')?.url, '/cdk-blocks/auth/signout');
 
 		const pwOut = await rpc(pw, api, (a) => a.setAuthState({ action: 'signOut' }));
 		assert.strictEqual(pwOut.state, 'signedOut');
@@ -1014,7 +1015,7 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 			'signing the password user out leaves the federated session alone',
 		);
 
-		const out = await fed.fetch(`${server.origin}/aws-blocks/auth/signout`, {
+		const out = await fed.fetch(`${server.origin}/cdk-blocks/auth/signout`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded' },
 			body: '',
@@ -1027,7 +1028,7 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 		await assert.rejects(sso.requireAuth(fed.context(server.origin)), { status: 401 });
 
 		// Signing out with no session still lands on postSignOutPath.
-		const again = await fed.fetch(`${server.origin}/aws-blocks/auth/signout`, {
+		const again = await fed.fetch(`${server.origin}/cdk-blocks/auth/signout`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded' },
 			body: '',
@@ -1083,7 +1084,7 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 		});
 		const landing = await signInThroughPicker(new TestBrowser(), 'u-1');
 		assert.strictEqual(landing.headers.get('location'), '/welcome%20page?x=1#top');
-		const out = await fetch(`${server.origin}/aws-blocks/auth/signout`, { redirect: 'manual' });
+		const out = await fetch(`${server.origin}/cdk-blocks/auth/signout`, { redirect: 'manual' });
 		assert.strictEqual(out.status, 302);
 		assert.strictEqual(out.headers.get('location'), '/bye%20now');
 	});

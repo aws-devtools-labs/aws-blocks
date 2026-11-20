@@ -5,8 +5,8 @@ import { before, describe, test } from 'node:test';
 import assert from 'node:assert';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import type { api as apiType } from 'cdk-blocks';
 
 // Error name constants — match KVStoreErrors.*. Written as strings here
 // because the test runs under the `browser` condition where bb-kv-store only
@@ -28,7 +28,7 @@ const GONE = { name: 'Gone', age: 1, tags: [] };
  * Call it before the dev server starts. It replaces the file of an earlier run.
  */
 export function seedLegacyStore(): void {
-  const dir = join(process.cwd(), '.bb-data', 'test-app-legacy-store');
+  const dir = join(process.cwd(), '.cdk-blocks/local/data', 'test-app-legacy-store');
   mkdirSync(dir, { recursive: true });
   const file = {
     ada: JSON.stringify(ADA),

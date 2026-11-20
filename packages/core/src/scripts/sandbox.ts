@@ -13,6 +13,7 @@ import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
+import type { CommandName } from '../telemetry/types.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { DeployProcessError, formatDeploySignal } from './deploy-stream.js';
@@ -82,7 +83,7 @@ export interface SandboxOptions {
  * `shell: true`, because the args are only concatenated, never escaped.
  */
 export function buildDevServerSpawn(devCommand: string | undefined): { command: string; args: string[] } {
-  return { command: devCommand || 'npx tsx watch aws-blocks/scripts/server.ts', args: [] };
+  return { command: devCommand || 'npx tsx watch cdk-blocks/scripts/server.ts', args: [] };
 }
 
 /**
@@ -575,7 +576,7 @@ interface SandboxHistory {
 }
 
 /**
- * Starts a sandbox, recording the run in `.blocks/deploy-history.jsonl`.
+ * Starts a sandbox, recording the run in `.cdk-blocks/deploy-history.jsonl`.
  *
  * The recorder starts HERE, before any work, as `deploy()` does. It used to be
  * created just before the CDK deploy, after credential and bootstrap preflight,
@@ -628,6 +629,9 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   } = options;
   const deployOnly = sandboxIsDeployOnly(options);
   const sandboxStartTime = Date.now();
+  // `sandbox:deploy` and `sandbox:preview` report under their own names, so the
+  // dashboard does not mix their one-shot deploy time into the watch-mode startup time.
+  const telemetryCommand: CommandName = options.preview ? 'sandbox:preview' : options.deployOnly ? 'sandbox:deploy' : 'sandbox';
   // A closed output pipe or terminal must not crash the runner (see ignoreClosedOutput).
   ignoreClosedOutput();
   // Before anything reaches AWS: a running `npm run sandbox` already deploys every change,
@@ -653,7 +657,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
     await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
-      command: 'sandbox',
+      command: telemetryCommand,
       state: 'FAIL',
       duration: Date.now() - sandboxStartTime,
       error: classifyError(error),
@@ -676,7 +680,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   } catch (error) {
     // Not wrapped in trackCommand (see the credential check above): emit FAIL.
     buildAndSendEvent({
-      command: 'sandbox',
+      command: telemetryCommand,
       state: 'FAIL',
       duration: Date.now() - sandboxStartTime,
       error: classifyError(error),
@@ -746,7 +750,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
     registerFrameworkFromSink(frameworkSink);
     history.fail(error);
     buildAndSendEvent({
-      command: 'sandbox',
+      command: telemetryCommand,
       state: 'FAIL',
       duration: Date.now() - sandboxStartTime,
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
@@ -792,7 +796,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   if (hostingUrl) console.log(`🌐 ${preview ? 'Preview' : 'Hosting'} URL: ${hostingUrl}`);
 
   buildAndSendEvent({
-    command: 'sandbox',
+    command: telemetryCommand,
     state: 'SUCCESS',
     duration: Date.now() - sandboxStartTime,
   });

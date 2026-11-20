@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { makeProductionDeployDisposable } from './_scaffold-teardown.mjs';
 
 const repoFile = (rel) => fileURLToPath(new URL(`../../${rel}`, import.meta.url));
-const BACKEND_CDK_ENTRY = repoFile('packages/create-blocks-app/templates/backend/aws-blocks/index.cdk.ts');
+const BACKEND_CDK_ENTRY = repoFile('packages/create-blocks-app/templates/backend/cdk-blocks/index.cdk.ts');
 const WINDOWS_DRIVER = readFileSync(repoFile('scripts/ci/windows-template-e2e.mjs'), 'utf-8');
 
 const TMP = mkdtempSync(join(tmpdir(), 'scaffold-teardown-'));
@@ -63,7 +63,7 @@ describe('makeProductionDeployDisposable', () => {
 
 describe('Windows E2E driver', () => {
 	it('makes the scaffold disposable before anything is deployed', () => {
-		const call = WINDOWS_DRIVER.match(/^ {2}makeProductionDeployDisposable\(join\(app, 'aws-blocks', 'index\.cdk\.ts'\)\);$/m);
+		const call = WINDOWS_DRIVER.match(/^ {2}makeProductionDeployDisposable\(join\(app, 'cdk-blocks', 'index\.cdk\.ts'\)\);$/m);
 		assert.ok(call, 'windows-template-e2e.mjs must call makeProductionDeployDisposable on the scaffold');
 		for (const phase of ["['run', 'sandbox']", "['run', 'deploy']"]) {
 			assert.ok(call.index < WINDOWS_DRIVER.indexOf(phase), `it must run before ${phase}`);

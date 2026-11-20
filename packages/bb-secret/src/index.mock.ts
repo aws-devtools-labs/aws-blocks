@@ -4,11 +4,11 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
-import { blocksError, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
-import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { blocksError, registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
 import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
@@ -30,13 +30,13 @@ export type {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-// Secrets share the same local store as AppSetting — `.bb-data/settings.json`,
-// a flat `{ key: value }` map at the project root — so the `/aws-blocks/settings`
+// Secrets share the same local store as AppSetting — `.cdk-blocks/local/data/settings.json`,
+// a flat `{ key: value }` map at the project root — so the `/cdk-blocks/settings`
 // route surfaces settings AND secrets in one place, locally and when deployed.
 // The CURRENT value lives here as a plain `{ key: value }` entry (human-editable
 // via the route). Version HISTORY (current + previous, for get({ version }) /
 // listVersions()) lives in a sidecar so the settings file stays a flat map.
-// Locally everything in `.bb-data` is plaintext regardless (dev-only); deployed,
+// Locally everything in `.cdk-blocks/local/data` is plaintext regardless (dev-only); deployed,
 // secrets live KMS-encrypted in Secrets Manager with real version history.
 function readSettings(scope: Scope): Record<string, unknown> {
 	const fp = join(getMockDataDir(scope, { root: true }), 'settings.json');
@@ -102,7 +102,7 @@ function generateMockValue(): string {
 	return randomBytes(24).toString('base64url').slice(0, 32);
 }
 
-// The local mock persists secret values as plaintext on disk (.bb-data). Warn
+// The local mock persists secret values as plaintext on disk (.cdk-blocks/local/data). Warn
 // once per process so developers never mistake it for a secure store — real
 // credentials must never be used in local development.
 let plaintextWarningLogged = false;
@@ -111,7 +111,7 @@ let plaintextWarningLogged = false;
 
 /** @internal Implementation backing the public {@link Secret} constructor. */
 class SecretImpl<T = string> extends Scope {
-	/** The key this secret is stored under in `.bb-data/settings.json` — the explicit `name`, else the instance `fullId`. */
+	/** The key this secret is stored under in `.cdk-blocks/local/data/settings.json` — the explicit `name`, else the instance `fullId`. */
 	private storeKey: string;
 	private schema?: StandardSchemaV1<T>;
 	private external?: ExternalSecretRef;
@@ -170,7 +170,7 @@ class SecretImpl<T = string> extends Scope {
 
 		if (!plaintextWarningLogged) {
 			this.log.warn(
-				'Secret: the local mock stores secret values as plaintext in .bb-data/settings.json. Do not use real credentials in local development.',
+				'Secret: the local mock stores secret values as plaintext in .cdk-blocks/local/data/settings.json. Do not use real credentials in local development.',
 			);
 			plaintextWarningLogged = true;
 		}
@@ -392,7 +392,7 @@ Object.assign(SecretImpl, { fromExisting });
  * `get({ version: 'previous' })` for a grace window. Automatic rotation is
  * credential-type-specific and out of scope.
  *
- * **Local dev:** The mock stores values as plaintext on disk under `.bb-data/`.
+ * **Local dev:** The mock stores values as plaintext on disk under `.cdk-blocks/local/data/`.
  * It is NOT secure — do not use real credentials locally.
  *
  * @example

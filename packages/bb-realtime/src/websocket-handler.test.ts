@@ -7,15 +7,15 @@
  *
  * Under the default test conditions index.aws.ts resolves its KVStore
  * and AppSetting dependencies to their local mocks, so the connections table and
- * token secret live in `.bb-data/`. Only the API Gateway Management API client
+ * token secret live in `.cdk-blocks/local/data/`. Only the API Gateway Management API client
  * is stubbed, to capture what the handler posts to each connection.
  */
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { ApiGatewayManagementApiClient } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { Scope, isBlocksError } from '@aws-blocks/core';
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { Scope, isBlocksError } from '@aws-cdk-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
 import { connectionsSchema, connectionsTableOptions } from './connections.js';
 import { Realtime, RealtimeErrors } from './index.aws.js';
 import type { GetChannelOptions } from './index.aws.js';
@@ -41,7 +41,7 @@ const rt = new Realtime(scope, 'rt', { namespaces: { chat: Realtime.namespace(an
 
 /**
  * A fresh view of the handler's connections table: same fullId, so the same
- * `.bb-data/` file. The mock loads the file when constructed, so build one per read.
+ * `.cdk-blocks/local/data/` file. The mock loads the file when constructed, so build one per read.
  */
 const connectionsOnDisk = () =>
 	new KVStore(rt, 'connections', connectionsTableOptions);

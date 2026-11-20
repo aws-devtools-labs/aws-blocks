@@ -6,7 +6,7 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import { API_NAMESPACE_COMPUTE, API_NAMESPACE_EXPLICIT_COMPUTE } from '../api.js';
-import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
+import { BLOCKS_NAMESPACES, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
 import type { ApiDirectRoute } from './api-direct-routes.js';
@@ -46,7 +46,7 @@ export interface SharedGatewayProps {
 	/**
 	 * Each non-default compute that hosts API namespaces, mapped to the export
 	 * names routed to it (see {@link resolveNamespaceRoutes}). The gateway builds
-	 * a literal `/aws-blocks/api/{name}` resource per name, integrated with the
+	 * a literal `/cdk-blocks/api/{name}` resource per name, integrated with the
 	 * compute's ingress (`apiIngress()`): one Lambda integration per function
 	 * compute, or a VPC link HTTP integration per name for a load-balanced one. Namespaces on the {@link defaultCompute} need no entry —
 	 * the catch-all resources already reach it. Omitted ⇒ no fan-out.
@@ -54,7 +54,7 @@ export interface SharedGatewayProps {
 	readonly namespaceRoutes?: ReadonlyMap<ComputeBase, readonly string[]>;
 	/**
 	 * The stack's default compute. Its `apiHandler()` backs the catch-all
-	 * resources, so the RPC root (`/aws-blocks/api`), auth, `RawRoute`s, and any
+	 * resources, so the RPC root (`/cdk-blocks/api`), auth, `RawRoute`s, and any
 	 * namespace assigned to the default compute all reach it without an explicit
 	 * per-namespace resource. Must expose an `apiHandler()` — the shared gateway
 	 * needs an HTTP front door — or construction throws.
@@ -87,7 +87,7 @@ export interface SharedGateway {
 	 * instead of through this gateway (see `addDirectApiBehaviors`).
 	 */
 	readonly directRoutes: readonly ApiDirectRoute[];
-	/** The RPC endpoint URL (`{gateway}/{stage}/aws-blocks/api`). */
+	/** The RPC endpoint URL (`{gateway}/{stage}/cdk-blocks/api`). */
 	readonly apiUrl: string;
 }
 
@@ -106,14 +106,15 @@ export interface SharedGateway {
  * For a single-compute app the resource tree forwards every path to the default
  * compute's function, and the Lambda handler does the real routing (RPC dispatch
  * and `RawRoute` matching):
- *   - `/aws-blocks/{proxy+}` (ANY) so `RawRoute` sub-paths reach the function;
- *   - `/aws-blocks/api` with explicit `POST` + `OPTIONS` (the JSON-RPC endpoint),
- *     plus `/aws-blocks/api/{proxy+}` (ANY) for the per-namespace RPC paths
- *     (`/aws-blocks/api/{namespace}`) the client calls;
+ *   - `/cdk-blocks/{proxy+}` (ANY) so `RawRoute` sub-paths reach the function;
+ *   - `/cdk-blocks/api` with explicit `POST` + `OPTIONS` (the JSON-RPC endpoint),
+ *     plus `/cdk-blocks/api/{proxy+}` (ANY) for the per-namespace RPC paths
+ *     (`/cdk-blocks/api/{namespace}`) the client calls;
  *   - a root `/{proxy+}` (ANY) catch-all for every other path.
+ * The same tree is mirrored under the legacy `/aws-blocks` prefix.
  *
  * **Multi-compute fan-out.** When a namespace is assigned to a non-default
- * compute, the gateway adds a literal `/aws-blocks/api/{namespace}` resource
+ * compute, the gateway adds a literal `/cdk-blocks/api/{namespace}` resource
  * (ANY), integrated with the compute hosting it: its function, or — for a
  * container compute — its load balancer, through a VPC link. `{namespace}`
  * is the namespace's **export** name — what the client calls and dispatch
@@ -203,18 +204,22 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
 	});
 
-	// Nested resource tree for /aws-blocks/api. The intermediate resource
-	// gets a proxy so sub-paths (RawRoutes) still reach the function.
-	const awsBlocksResource = restApi.root.addResource(BLOCKS_NAMESPACE.slice(1));
-	awsBlocksResource.addProxy({ defaultIntegration, anyMethod: true });
-
-	const apiResource = awsBlocksResource.addResource('api');
-	apiResource.addMethod('POST', defaultIntegration);
-	apiResource.addMethod('OPTIONS', defaultIntegration);
-	// Per-namespace RPC paths (`/aws-blocks/api/{namespace}`) for namespaces on the
-	// default compute. REST resource matching does not fall back to a parent's
-	// sibling `/aws-blocks/{proxy+}`, so the subtree needs its own proxy.
-	apiResource.addProxy({ defaultIntegration, anyMethod: true });
+	// Nested resource tree for /cdk-blocks/api, mirrored under the legacy
+	// /aws-blocks prefix. The intermediate resource gets a proxy so sub-paths
+	// (RawRoutes) still reach the function. The legacy tree keeps its original
+	// construct ids, so an upgraded deployment keeps those resources.
+	const apiResources = BLOCKS_NAMESPACES.map((namespace) => {
+		const namespaceResource = restApi.root.addResource(namespace.slice(1));
+		namespaceResource.addProxy({ defaultIntegration, anyMethod: true });
+		const apiResource = namespaceResource.addResource('api');
+		apiResource.addMethod('POST', defaultIntegration);
+		apiResource.addMethod('OPTIONS', defaultIntegration);
+		// Per-namespace RPC paths (`/cdk-blocks/api/{namespace}`) for namespaces on the
+		// default compute. REST resource matching does not fall back to a parent's
+		// sibling `/cdk-blocks/{proxy+}`, so the subtree needs its own proxy.
+		apiResource.addProxy({ defaultIntegration, anyMethod: true });
+		return apiResource;
+	});
 
 	// A proxy mounted on the root also adds its `ANY` to the root itself, but
 	// without the proxy's integration: a MOCK with no request template, which
@@ -257,12 +262,15 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 			// so each namespace gets its own.
 			for (const name of exportNames) {
 				const path = `${BLOCKS_RPC_PREFIX}/${name}`;
-				addLoadBalancerMethod(
-					apiResource.addResource(name),
-					ingress,
-					path,
-					cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
-				);
+				for (const apiResource of apiResources) {
+					addLoadBalancerMethod(
+						apiResource.addResource(name),
+						ingress,
+						path,
+						cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+					);
+				}
+				ingress.routePath(path);
 				directRoutes.push({ path, ingress });
 			}
 			continue;
@@ -277,7 +285,7 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 			timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
 		});
 		for (const name of exportNames) {
-			apiResource.addResource(name).addMethod('ANY', integration);
+			for (const apiResource of apiResources) apiResource.addResource(name).addMethod('ANY', integration);
 		}
 	}
 

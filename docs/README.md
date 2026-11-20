@@ -1,4 +1,4 @@
-# AWS Blocks Documentation
+# AWS CDK Blocks Documentation
 
 ## Guides
 

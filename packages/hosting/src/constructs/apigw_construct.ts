@@ -13,7 +13,7 @@
  *   - `$default`      → the SSR server Lambda (or the asset proxy for a static
  *     site, which serves index.html on a miss for SPA fallback).
  *   - image routes    → the image-opt Lambda.
- *   - every API path (`/aws-blocks/*` plus the backend's raw routes) → an HTTP
+ *   - every API path (`/cdk-blocks/*` plus the backend's raw routes) → an HTTP
  *     proxy integration straight to the backend API Gateway (same-origin; no
  *     forwarder Lambda needed, unlike ALB — HTTP API can proxy an external
  *     HTTPS URL natively).
@@ -22,7 +22,7 @@
  * response headers and error pages are applied by the asset proxy with the
  * CloudFront door's semantics; responses routed straight to the server, the
  * image function or the backend don't pass through it, which synth reports
- * (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  *
  * Not provided: no global edge cache, no per-route response headers on
  * server/API responses (synth names them), no skew protection, buffered SSR
@@ -51,6 +51,7 @@ import {
   apiPathToRoutes,
   routableApiPaths,
   backendBaseUrl,
+  BLOCKS_PATH_PREFIXES,
   DEFAULT_API_PATHS,
   globToProxyPath,
   hasInnerWildcard,
@@ -68,9 +69,9 @@ export type ApiGatewayConstructProps = {
   domain?: ApiGwCustomDomain;
   /**
    * Every path pattern the single-compute (`'*'`) backend serves — the
-   * `DoorInput.origins.api.paths`: `/aws-blocks/*` plus the backend's raw
+   * `DoorInput.origins.api.paths`: `/cdk-blocks/*` plus the backend's raw
    * routes. Each becomes a route proxied to the same path on the backend.
-   * @default ['/aws-blocks/*']
+   * @default ['/cdk-blocks/*', '/aws-blocks/*']
    */
   apiPaths?: readonly string[];
   /**
@@ -196,12 +197,12 @@ export class ApiGatewayConstruct extends Construct {
     // Same-origin backend routing (native HTTP proxy — HTTP API can proxy an
     // external HTTPS URL directly, no forwarder Lambda). Each backend origin
     // path-routes its namespace to that compute's ingress. A lone `'*'` origin
-    // is the single-compute case: every API path (`/aws-blocks/*`, which covers
-    // sign-in at `/aws-blocks/auth/*`, plus the backend's raw routes) → one
-    // backend; a named namespace routes `/aws-blocks/api/{ns}/*`.
+    // is the single-compute case: every API path (`/cdk-blocks/*`, which covers
+    // sign-in at `/cdk-blocks/auth/*`, plus the backend's raw routes) → one
+    // backend; a named namespace routes `/cdk-blocks/api/{ns}/*` and its `/aws-blocks/` twin.
     const backendPaths = new Set<string>();
     for (const origin of plan.backend?.origins ?? []) {
-      // Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to get
+      // Split the ingress URL on the `/cdk-blocks/api` suffix (token-safe) to get
       // the backend base — the same URL shape whether it is a Lambda API Gateway,
       // a container ALB, or a BYOC endpoint.
       const base = backendBaseUrl(origin.ingress.url); // https://…/prod
@@ -211,8 +212,8 @@ export class ApiGatewayConstruct extends Construct {
           for (const route of apiPathToRoutes(pattern, 'API Gateway')) {
             if (backendPaths.has(route.path)) continue;
             backendPaths.add(route.path);
-            // `BackendRpc` is the `/aws-blocks/{proxy+}` route's integration.
-            const id = route.path === '/aws-blocks/{proxy+}' ? 'BackendRpc' : `BackendRoute${++i}`;
+            // `BackendRpc` is the `/cdk-blocks/{proxy+}` route's integration.
+            const id = route.path === '/cdk-blocks/{proxy+}' ? 'BackendRpc' : `BackendRoute${++i}`;
             this.api.addRoutes({
               path: route.path,
               methods: [HttpMethod.ANY],
@@ -222,11 +223,16 @@ export class ApiGatewayConstruct extends Construct {
         }
       } else {
         const ns = origin.namespace;
-        this.api.addRoutes({
-          path: `/aws-blocks/api/${ns}/{proxy+}`,
-          methods: [HttpMethod.ANY],
-          integration: new HttpUrlIntegration(`BackendNs-${ns}`, `${base}/aws-blocks/api/${ns}/{proxy}`),
-        });
+        for (const prefix of BLOCKS_PATH_PREFIXES) {
+          this.api.addRoutes({
+            path: `${prefix}/api/${ns}/{proxy+}`,
+            methods: [HttpMethod.ANY],
+            integration: new HttpUrlIntegration(
+              prefix === BLOCKS_PATH_PREFIXES[0] ? `BackendNs-${ns}` : `BackendNsLegacy-${ns}`,
+              `${base}/cdk-blocks/api/${ns}/{proxy}`,
+            ),
+          });
+        }
       }
     }
 
@@ -277,7 +283,7 @@ export class ApiGatewayConstruct extends Construct {
         continue;
       }
       if (path === null || seen.has(path) || backendPaths.has(path)) continue;
-      if (path.startsWith('/aws-blocks/')) continue; // backend owns these
+      if (path.startsWith('/cdk-blocks/') || path.startsWith('/aws-blocks/')) continue; // backend owns these
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
     }
@@ -291,7 +297,7 @@ export class ApiGatewayConstruct extends Construct {
       }
       const path = globToProxyPath(entry.pattern);
       if (path === null || seen.has(path) || backendPaths.has(path)) continue;
-      if (path.startsWith('/aws-blocks/')) continue; // backend owns these
+      if (path.startsWith('/cdk-blocks/') || path.startsWith('/aws-blocks/')) continue; // backend owns these
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: integrationForKind(entry.kind) });
     }
@@ -344,7 +350,7 @@ export class ApiGatewayConstruct extends Construct {
 }
 
 /**
- * Warn at synth (`@aws-blocks/hosting:RouteNotExpressible`) for route-table
+ * Warn at synth (`@aws-cdk-blocks/hosting:RouteNotExpressible`) for route-table
  * patterns API Gateway has no path form for (a wildcard inside a segment):
  * the door's default integration serves them instead.
  *
@@ -353,14 +359,14 @@ export class ApiGatewayConstruct extends Construct {
 export const warnInexpressibleRoutes = (scope: Construct, door: string, patterns: readonly string[]): void => {
   if (patterns.length === 0) return;
   Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:RouteNotExpressible',
+    '@aws-cdk-blocks/hosting:RouteNotExpressible',
     `The ${door} front door can't express these route patterns (a wildcard inside a path segment), so its default ` +
       `integration serves them: ${patterns.join(', ')}.`,
   );
 };
 
 /**
- * Warn at synth (`@aws-blocks/hosting:RedirectNotExpressible`) for redirect
+ * Warn at synth (`@aws-cdk-blocks/hosting:RedirectNotExpressible`) for redirect
  * sources API Gateway has no path form for (a wildcard inside a segment, e.g.
  * `/old/*.html`) on a door whose default integration is the server: no route
  * sends them to the asset proxy, which applies redirects, so the server
@@ -371,7 +377,7 @@ export const warnInexpressibleRoutes = (scope: Construct, door: string, patterns
 export const warnUnroutedRedirects = (scope: Construct, door: string, sources: readonly string[]): void => {
   if (sources.length === 0) return;
   Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:RedirectNotExpressible',
+    '@aws-cdk-blocks/hosting:RedirectNotExpressible',
     `The ${door} front door can't route these redirect sources (a wildcard inside a path segment), so the redirects ` +
       `never apply and the server answers those requests: ${sources.join(', ')}. Use a whole trailing segment ` +
       "(`/path/*`), or the CloudFront or ALB door.",

@@ -1,6 +1,6 @@
 # Shared Example Backend
 
-The AWS Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `aws-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
+The AWS CDK Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `cdk-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
 
 > **Upgrading a deployed stack:** todos are now keyed on the owner's `userSub` instead of `userId`. A table's key can't change in place, so a stack deployed from an earlier version of this example fails to update — destroy it (`npm run sandbox:destroy`) and deploy again. Existing todos are not carried over.
 
@@ -24,26 +24,26 @@ The dev server writes `.cdk-blocks-sandbox/config.json` with its own URL, and a 
 
 | Generated with | Generated `Servers` entry | URL |
 |---|---|---|
-| `npm run spec` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
-| `BLOCKS_SPEC_STAGE=sandbox npm run spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
+| `npm run spec` | `Servers.local` | `http://localhost:3001/cdk-blocks/api` |
+| `BLOCKS_SPEC_STAGE=sandbox npm run spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api` |
 
 To switch the apps between local and sandbox, regenerate the spec the other way.
 
-### Inside the AWS Blocks repository
+### Inside the AWS CDK Blocks repository
 
-`npm install` fetches `@aws-blocks/blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
+`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-cdk-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
 
 ```bash
-mkdir -p node_modules && ln -sfn ../aws-blocks node_modules/aws-blocks
+mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
 
 npm run dev:server   # the dev server on :3001
-node ../../../../node_modules/@aws-blocks/core/dist/scripts/generate-spec-cli.js   # the spec (after the dev server has run once)
+node ../../../../node_modules/@aws-cdk-blocks/core/dist/scripts/generate-spec-cli.js   # the spec (after the dev server has run once)
 npm test             # typecheck + test:e2e; starts its own dev server, so stop the one above first
 ```
 
 ## Configuring OIDC
 
-`aws-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (`store: 'builtin'`: no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
+`cdk-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (`store: 'builtin'`: no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
 
 ```typescript
 const GOOGLE_CLIENT_ID = 'replace-me.apps.googleusercontent.com';
@@ -81,26 +81,26 @@ Sign-in talks to real Google in every environment, including `npm run dev` — t
 
 ### 2. Register the right redirect URIs
 
-The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, swapping `/aws-blocks/api` for `/aws-blocks/auth/callback`. So the URI to register follows directly from the server in the generated spec:
+The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, swapping `/cdk-blocks/api` for `/cdk-blocks/auth/callback`. So the URI to register follows directly from the server in the generated spec:
 
 | Environment | Redirect URI to register with Google |
 |---|---|
-| Local (`npm run dev`) | `http://localhost:3001/aws-blocks/auth/callback` |
-| Sandbox (`npm run sandbox`) | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/auth/callback` |
+| Local (`npm run dev`) | `http://localhost:3001/cdk-blocks/auth/callback` |
+| Sandbox (`npm run sandbox`) | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/auth/callback` |
 
 Read the sandbox host out of `.cdk-blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
 
-> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/aws-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
+> **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001/cdk-blocks/api") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
 
 ### 3. Provide the client ID and secret
 
-**The client ID** goes in the code: replace the `GOOGLE_CLIENT_ID` placeholder in `aws-blocks/index.ts`. It is the same for every environment. Restart `npm run dev` (or re-run `npm run sandbox`) after changing it.
+**The client ID** goes in the code: replace the `GOOGLE_CLIENT_ID` placeholder in `cdk-blocks/index.ts`. It is the same for every environment. Restart `npm run dev` (or re-run `npm run sandbox`) after changing it.
 
 **The client secret** is a secret `AppSetting`, stored per environment.
 
 #### Local (`npm run dev`)
 
-Values live in `.bb-data/settings.json`, keyed by each setting's full id. Start the dev server once so the file is created, then replace the generated placeholder with the real value:
+Values live in `.cdk-blocks/local/data/settings.json`, keyed by each setting's full id. Start the dev server once so the file is created, then replace the generated placeholder with the real value:
 
 ```jsonc
 {
@@ -108,7 +108,7 @@ Values live in `.bb-data/settings.json`, keyed by each setting's full id. Start 
 }
 ```
 
-The dev server re-reads the file on every request, so no restart is needed. `.bb-data/` is gitignored — the secret stays on your machine. `rm -rf .bb-data` wipes it along with the rest of the local data, and the next startup re-seeds the key with a random placeholder.
+The dev server re-reads the file on every request, so no restart is needed. `.cdk-blocks/local/data/` is gitignored — the secret stays on your machine. `rm -rf .cdk-blocks/local/data .bb-data` wipes it along with the rest of the local data, and the next startup re-seeds the key with a random placeholder.
 
 #### Sandbox (`npm run sandbox`)
 
@@ -136,10 +136,10 @@ Notes:
 
 ### Skipping Google entirely
 
-To exercise sign-in without any Google setup, swap the provider for the stub IdP in `aws-blocks/index.ts`:
+To exercise sign-in without any Google setup, swap the provider for the stub IdP in `cdk-blocks/index.ts`:
 
 ```typescript
-import { Auth, stubIdp, relayOrigin } from '@aws-blocks/blocks';
+import { Auth, stubIdp, relayOrigin } from 'aws-cdk-blocks';
 
 const auth = new Auth(scope, 'auth', {
   store: 'builtin',
@@ -157,7 +157,7 @@ It is a real OIDC provider served by the dev server, with an account picker; it 
 
 | Symptom | Cause |
 |---|---|
-| Google shows `invalid_client` or `The OAuth client was not found` | `GOOGLE_CLIENT_ID` in `aws-blocks/index.ts` is still the placeholder, or the backend wasn't restarted after you changed it. |
+| Google shows `invalid_client` or `The OAuth client was not found` | `GOOGLE_CLIENT_ID` in `cdk-blocks/index.ts` is still the placeholder, or the backend wasn't restarted after you changed it. |
 | Sign-in returns to the app but the exchange fails | The client secret is still a placeholder, or the parameter/settings key is missing. |
 | `ProviderNotConfiguredException` | The app asked for a provider id that isn't a key of `providers`. |
 | Google shows `redirect_uri_mismatch` | The registered URI doesn't match the server the app is pointed at — check the `Servers` entry in the generated code against the table above. |

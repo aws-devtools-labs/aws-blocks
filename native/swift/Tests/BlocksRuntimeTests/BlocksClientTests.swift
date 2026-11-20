@@ -191,7 +191,7 @@ final class BlocksClientTests: XCTestCase {
     func testACancelledRequestThrowsCancellationErrorNotTransportError() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [HangingURLProtocol.self]
-        let client = BlocksClient(url: "http://localhost:3000/aws-blocks/api", session: URLSession(configuration: config))
+        let client = BlocksClient(url: "http://localhost:3000/cdk-blocks/api", session: URLSession(configuration: config))
         let started = expectation(description: "request started")
         HangingURLProtocol.onStart = { started.fulfill() }
 
@@ -213,7 +213,7 @@ final class BlocksClientTests: XCTestCase {
     func testACancelledRawRouteThrowsCancellationError() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [HangingURLProtocol.self]
-        let client = BlocksClient(url: "http://localhost:3000/aws-blocks/api", session: URLSession(configuration: config))
+        let client = BlocksClient(url: "http://localhost:3000/cdk-blocks/api", session: URLSession(configuration: config))
         let started = expectation(description: "request started")
         HangingURLProtocol.onStart = { started.fulfill() }
 
@@ -274,7 +274,7 @@ final class BlocksClientTests: XCTestCase {
         MockURLProtocol.handler = { _ in
             throw URLError(.cannotConnectToHost)
         }
-        let client = BlocksClient(url: "http://localhost:3000/aws-blocks/api", session: URLSession(configuration: config))
+        let client = BlocksClient(url: "http://localhost:3000/cdk-blocks/api", session: URLSession(configuration: config))
         do {
             _ = try await client.execute(BlocksRequest(method: "api.x", params: [], id: 1))
             XCTFail("expected a TransportError")
@@ -294,7 +294,7 @@ final class BlocksClientTests: XCTestCase {
                 Data(body.utf8)
             )
         }
-        return BlocksClient(url: "http://localhost:3000/aws-blocks/api", session: URLSession(configuration: config))
+        return BlocksClient(url: "http://localhost:3000/cdk-blocks/api", session: URLSession(configuration: config))
     }
 
     // MARK: - Request URL
@@ -311,25 +311,25 @@ final class BlocksClientTests: XCTestCase {
             return (response, Data(#"{"jsonrpc":"2.0","result":"ok","id":1}"#.utf8))
         }
 
-        let client = BlocksClient(url: "https://d123.cloudfront.net/aws-blocks/api", session: session)
+        let client = BlocksClient(url: "https://d123.cloudfront.net/cdk-blocks/api", session: session)
         _ = try await client.execute(BlocksRequest(method: "reports.build", params: [], id: 1))
 
-        XCTAssertEqual(requestedURL?.absoluteString, "https://d123.cloudfront.net/aws-blocks/api/reports")
+        XCTAssertEqual(requestedURL?.absoluteString, "https://d123.cloudfront.net/cdk-blocks/api/reports")
     }
 
     func testRpcURLAppendsTheNamespaceSegment() {
-        XCTAssertEqual(BlocksClient.rpcURL(base: "http://localhost:3001/aws-blocks/api", method: "api.greet"), "http://localhost:3001/aws-blocks/api/api")
-        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/prod/aws-blocks/api//", method: "reports.build"), "https://a.example/prod/aws-blocks/api/reports")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "http://localhost:3001/cdk-blocks/api", method: "api.greet"), "http://localhost:3001/cdk-blocks/api/api")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/prod/cdk-blocks/api//", method: "reports.build"), "https://a.example/prod/cdk-blocks/api/reports")
         // Only the first `.` separates the namespace.
-        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "ns.a.b"), "https://a.example/aws-blocks/api/ns")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/cdk-blocks/api", method: "ns.a.b"), "https://a.example/cdk-blocks/api/ns")
         // Path-safe characters are sent as they are; others are percent-encoded.
-        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "$ns.m"), "https://a.example/aws-blocks/api/$ns")
-        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "café.m"), "https://a.example/aws-blocks/api/caf%C3%A9")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/cdk-blocks/api", method: "$ns.m"), "https://a.example/cdk-blocks/api/$ns")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/cdk-blocks/api", method: "café.m"), "https://a.example/cdk-blocks/api/caf%C3%A9")
     }
 
     func testRpcURLLeavesTheBaseForAMethodWithoutNamespace() {
-        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "greet"), "https://a.example/aws-blocks/api")
-        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: ".greet"), "https://a.example/aws-blocks/api")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/cdk-blocks/api", method: "greet"), "https://a.example/cdk-blocks/api")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/cdk-blocks/api", method: ".greet"), "https://a.example/cdk-blocks/api")
     }
 
     // MARK: - Response Parsing
@@ -775,7 +775,7 @@ final class BlocksClientTests: XCTestCase {
     // whether a stored cookie is attached are tested on `StoredCookie` and on a `CookieJar` over
     // in-memory items.
 
-    private let apiURL = URL(string: "https://example.com/aws-blocks/api")!
+    private let apiURL = URL(string: "https://example.com/cdk-blocks/api")!
     private let now = Date(timeIntervalSince1970: 1_900_000_000)
 
     private func cookie(_ setCookie: String, from url: URL? = nil) throws -> StoredCookie {
@@ -784,8 +784,8 @@ final class BlocksClientTests: XCTestCase {
 
     func testSecureCookieIsAttachedOverHttpsButNotHttp() throws {
         let stored = try cookie("auth_session=token123; Path=/; Secure")
-        XCTAssertTrue(stored.matches(URL(string: "https://example.com/aws-blocks/api")!))
-        XCTAssertFalse(stored.matches(URL(string: "http://example.com/aws-blocks/api")!))
+        XCTAssertTrue(stored.matches(URL(string: "https://example.com/cdk-blocks/api")!))
+        XCTAssertFalse(stored.matches(URL(string: "http://example.com/cdk-blocks/api")!))
     }
 
     func testCookieIsAttachedOnlyUnderItsPath() throws {
@@ -812,8 +812,8 @@ final class BlocksClientTests: XCTestCase {
 
     func testCookieWithoutPathAppliesToRequestDirectory() throws {
         let stored = try cookie("auth_session=token123")
-        XCTAssertEqual(stored.path, "/aws-blocks")
-        XCTAssertTrue(stored.matches(URL(string: "https://example.com/aws-blocks/other")!))
+        XCTAssertEqual(stored.path, "/cdk-blocks")
+        XCTAssertTrue(stored.matches(URL(string: "https://example.com/cdk-blocks/other")!))
         XCTAssertFalse(stored.matches(URL(string: "https://example.com/auth")!))
     }
 
@@ -924,7 +924,7 @@ final class BlocksClientTests: XCTestCase {
         jar.save(setCookie: "other=1; Path=/", requestURL: apiURL, now: now)
         XCTAssertEqual(items.items["example.com|auth_session"], "old")
 
-        // Set without a `Path`, so it is stored for `/aws-blocks`, and the old item is removed by `save`.
+        // Set without a `Path`, so it is stored for `/cdk-blocks`, and the old item is removed by `save`.
         jar.save(setCookie: "auth_session=new", requestURL: apiURL, now: now)
         XCTAssertNil(items.items["example.com|auth_session"])
         XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=new; other=1")
@@ -944,9 +944,9 @@ final class BlocksClientTests: XCTestCase {
 
         XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "auth_session=old")
         XCTAssertEqual(jar.cookieHeader(for: URL(string: "wss://example.com/realtime")!, now: now), "auth_session=old")
-        XCTAssertNil(jar.cookieHeader(for: URL(string: "http://example.com/aws-blocks/api")!, now: now))
-        XCTAssertNil(jar.cookieHeader(for: URL(string: "https://other.com/aws-blocks/api")!, now: now))
-        XCTAssertNil(jar.cookieHeader(for: URL(string: "https://api.example.com/aws-blocks/api")!, now: now))
+        XCTAssertNil(jar.cookieHeader(for: URL(string: "http://example.com/cdk-blocks/api")!, now: now))
+        XCTAssertNil(jar.cookieHeader(for: URL(string: "https://other.com/cdk-blocks/api")!, now: now))
+        XCTAssertNil(jar.cookieHeader(for: URL(string: "https://api.example.com/cdk-blocks/api")!, now: now))
         XCTAssertEqual(items.items["example.com|auth_session"], "old")
     }
 
@@ -957,7 +957,7 @@ final class BlocksClientTests: XCTestCase {
         items.items["example.com|auth_session"] = "old"
         items.items["other.com|auth_session"] = "kept"
         let jar = CookieJar(items: items)
-        let httpURL = URL(string: "http://example.com/aws-blocks/api")!
+        let httpURL = URL(string: "http://example.com/cdk-blocks/api")!
 
         jar.save(setCookie: "auth_session=new; Path=/", requestURL: httpURL, now: now)
         XCTAssertNil(items.items["example.com|auth_session"])
@@ -974,14 +974,14 @@ final class BlocksClientTests: XCTestCase {
         jar.save(setCookie: "auth_session=token123; Path=/; Secure", requestURL: apiURL, now: now)
 
         let reloaded = CookieJar(items: items)
-        XCTAssertNil(reloaded.cookieHeader(for: URL(string: "http://example.com/aws-blocks/api")!, now: now))
+        XCTAssertNil(reloaded.cookieHeader(for: URL(string: "http://example.com/cdk-blocks/api")!, now: now))
         XCTAssertEqual(reloaded.cookieHeader(for: apiURL, now: now), "auth_session=token123")
     }
 
     func testJarListsSameNamedCookiesMostSpecificPathFirst() {
         let jar = CookieJar(items: InMemoryCookieItems())
-        // Set from a request the `/aws-blocks/api` cookie is not sent on, so it is not replaced.
-        jar.save(setCookie: "a=api; Path=/aws-blocks/api", requestURL: apiURL, now: now)
+        // Set from a request the `/cdk-blocks/api` cookie is not sent on, so it is not replaced.
+        jar.save(setCookie: "a=api; Path=/cdk-blocks/api", requestURL: apiURL, now: now)
         jar.save(setCookie: "a=root; Path=/", requestURL: URL(string: "https://example.com/other")!, now: now)
         XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "a=api; a=root")
     }
@@ -992,7 +992,7 @@ final class BlocksClientTests: XCTestCase {
         let url = apiURL
         let now = now
         DispatchQueue.concurrentPerform(iterations: 200) { index in
-            let path = index.isMultiple(of: 2) ? "/" : "/aws-blocks"
+            let path = index.isMultiple(of: 2) ? "/" : "/cdk-blocks"
             jar.save(setCookie: "a=\(index); Path=\(path)", requestURL: url, now: now)
         }
         XCTAssertEqual(items.items.count, 1)

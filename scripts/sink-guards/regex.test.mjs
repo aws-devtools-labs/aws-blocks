@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Repo invariant: a value reaches `new RegExp(…)` only as a constant or through
-// an escape (`escapeRegExp` from `@aws-blocks/core/bb-utils`, or a same-named
+// an escape (`escapeRegExp` from `@aws-cdk-blocks/core/bb-utils`, or a same-named
 // helper that escapes every metacharacter). Unescaped, a configured
 // `example.com` also matches `exampleXcom`, and `a|.*` matches everything.
 //
@@ -42,7 +42,7 @@ const ALLOWLIST = [
 		reason: 'allowedOrigins regex entries are intentionally regexes: validateCorsOriginEntry() runs first (bare dots, globs, nested quantifiers, standalone compile) and the entry is anchored as ^(?:…)$.',
 	},
 	{
-		at: 'packages/core/src/raw-route.ts:444',
+		at: 'packages/core/src/raw-route.ts:443',
 		reason: 'Built one character at a time: every character in REGEX_SPECIAL is escaped and `{` `}` `*` are parsed as params and the wildcard.',
 	},
 	{

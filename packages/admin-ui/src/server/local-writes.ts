@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The local `.bb-data` WRITE path: create, edit and delete one record.
+ * The local `.cdk-blocks/local/data` WRITE path: create, edit and delete one record.
  *
  * This is the mirror of `bb-data.ts`, and it deliberately borrows that module's
  * machinery rather than growing its own:
@@ -14,7 +14,7 @@
  *    guarantee "at least as strict" is to not have a second implementation:
  *    `isSafeBlockFullId` is called before any filesystem access, and every path
  *    we touch is one `listLocalStores` already resolved through `realpathSync`
- *    and checked for containment inside `.bb-data`. We never join a path from a
+ *    and checked for containment inside `.cdk-blocks/local/data`. We never join a path from a
  *    caller-supplied string ourselves.
  *
  * 2. ONE KEY FORMAT, ONE OWNER. The on-disk key is
@@ -35,7 +35,7 @@
  *
  * Writes are ATOMIC (temp file + `renameSync`). The implementation we model on
  * rewrote the store in place, which means an interruption part-way through
- * `writeFileSync` leaves a truncated file — and a truncated `.bb-data` store is
+ * `writeFileSync` leaves a truncated file — and a truncated `.cdk-blocks/local/data` store is
  * indistinguishable from an empty one, so the failure mode of "editing one
  * record" was "silently losing all of them".
  */
@@ -72,7 +72,7 @@ import { keyFieldsOf, keyOf, validateRecord } from './record-validate.js';
 const PAIR_FILENAME = 'data.json';
 const KV_STORE_FILENAME = 'store.json';
 
-/** `.bb-data` is written with 2-space indentation; a diff of it should stay readable. */
+/** `.cdk-blocks/local/data` is written with 2-space indentation; a diff of it should stay readable. */
 const STORE_INDENT = 2;
 
 export interface LocalWriteResult {
@@ -170,7 +170,7 @@ async function refuseWhenDevServerUp(context: LocalWriteContext): Promise<LocalW
 	if (!serverUp && status?.portSource === 'indeterminate') {
 		return refuse(
 			'LOCAL_SERVER_RUNNING',
-			`Could not determine the local dev server's port: aws-blocks/scripts/server.ts states no literal ` +
+			`Could not determine the local dev server's port: cdk-blocks/scripts/server.ts states no literal ` +
 				`port, so a server on a computed port (for example \`Number(process.env.PORT) || 3001\`) cannot be ` +
 				`ruled out. A write now could be overwritten by the running app. Stop the dev server, or make the ` +
 				'change through the RPC playground, then retry.',
@@ -216,7 +216,7 @@ function contentOf(opened: OpenStore): unknown {
 function openStore(context: LocalWriteContext): OpenStore | LocalWriteResult {
 	const stores = listLocalStores(context.projectRoot, context.blockFullId);
 	if (stores.length === 0) {
-		return refuse('STORE_NOT_FOUND', `No local .bb-data store found for block "${context.blockFullId}".`);
+		return refuse('STORE_NOT_FOUND', `No local .cdk-blocks/local/data store found for block "${context.blockFullId}".`);
 	}
 
 	let store: LocalStore;
@@ -242,7 +242,7 @@ function openStore(context: LocalWriteContext): OpenStore | LocalWriteResult {
 		if (own === undefined) {
 			return refuse(
 				'STORE_NOT_FOUND',
-				`Block "${context.blockFullId}" has no store of its own in .bb-data yet, so there is nothing ` +
+				`Block "${context.blockFullId}" has no store of its own in .cdk-blocks/local/data yet, so there is nothing ` +
 					`to write without naming a store. Name one of: ${stores.map((candidate) => `"${candidate.id}"`).join(', ')}.`,
 			);
 		}

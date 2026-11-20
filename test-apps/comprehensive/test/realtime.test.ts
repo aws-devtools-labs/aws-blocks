@@ -4,8 +4,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
-import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import type { api as apiType } from 'cdk-blocks';
 
 type Cursor = Parameters<typeof apiType.realtimePublishCursor>[0];
 
@@ -496,7 +496,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 						const fresh = await api.realtimeGetRawDescriptor(channelName);
 						return { ...fresh, __blocks: 'realtime/channel' };
 					},
-				} satisfies import('aws-blocks').SubscribeOptions<Cursor>);
+				} satisfies import('cdk-blocks').SubscribeOptions<Cursor>);
 
 				try {
 					await sub.established;
@@ -622,12 +622,12 @@ export function realtimeTests(getApi: () => typeof apiType) {
 
 			test('DisconnectReason type is correctly constrained', () => {
 				// @ts-expect-error — 'user' is not a valid DisconnectReason
-				const _bad: import('aws-blocks').DisconnectReason = 'user';
+				const _bad: import('cdk-blocks').DisconnectReason = 'user';
 
-				const _good0: import('aws-blocks').DisconnectReason = 'client';
-				const _good1: import('aws-blocks').DisconnectReason = 'timeout';
-				const _good2: import('aws-blocks').DisconnectReason = 'error';
-				const _good3: import('aws-blocks').DisconnectReason = 'unknown';
+				const _good0: import('cdk-blocks').DisconnectReason = 'client';
+				const _good1: import('cdk-blocks').DisconnectReason = 'timeout';
+				const _good2: import('cdk-blocks').DisconnectReason = 'error';
+				const _good3: import('cdk-blocks').DisconnectReason = 'unknown';
 				assert.ok(true);
 			});
 		});

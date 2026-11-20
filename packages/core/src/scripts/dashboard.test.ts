@@ -195,7 +195,7 @@ describe('resolveAdminUi', () => {
 		tmpDir = join(tmpdir(), `dashboard-resolve-test-${Date.now()}`);
 		mkdirSync(tmpDir, { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'empty-app' }));
-		await assert.rejects(() => resolveAdminUi(tmpDir), /npm install --save-dev @aws-blocks\/admin-ui/);
+		await assert.rejects(() => resolveAdminUi(tmpDir), /npm install --save-dev @aws-cdk-blocks\/admin-ui/);
 	});
 });
 

@@ -27,11 +27,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { isBlocksError } from '@aws-blocks/core';
-import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
-import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
-import { ComputeBase } from '@aws-blocks/core/cdk/internal';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { BlocksPresets, BlocksStack, Scope } from '@aws-cdk-blocks/core/cdk';
+import type { DefaultComputeFactory } from '@aws-cdk-blocks/core/cdk/internal';
+import { ComputeBase } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -461,9 +461,9 @@ function synthUnderCdkConditions(): { type: string; properties: any }[] {
 		`
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { AsyncJob } from '@aws-blocks/bb-async-job';
+import { BlocksStack, BlocksPresets } from '@aws-cdk-blocks/core/cdk';
+import { LambdaCompute } from '@aws-cdk-blocks/bb-lambda-compute/cdk';
+import { AsyncJob } from '@aws-cdk-blocks/bb-async-job';
 
 const stack = await BlocksStack.create(new cdk.App(), 'KeySchemaProbeStack', {
 	backendHandlerPath: ${JSON.stringify(handlerPath)},

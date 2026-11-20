@@ -53,15 +53,15 @@ describe('the confirmation prompt', () => {
 });
 
 describe('project root detection', () => {
-	it('walks up to the package.json that has an aws-blocks/ directory', () => {
+	it('walks up to the package.json that has a cdk-blocks/ directory', () => {
 		const root = fixtureApp();
 		const deep = join(root, 'src', 'components');
 		mkdirSync(deep, { recursive: true });
 		assert.strictEqual(findProjectRoot(root), root);
 		assert.strictEqual(findProjectRoot(deep), root);
-		// aws-blocks/ itself may hold a package.json (an npm workspace); it is not the root.
-		writeFileSync(join(root, 'aws-blocks', 'package.json'), '{}');
-		assert.strictEqual(findProjectRoot(join(root, 'aws-blocks')), root);
+		// cdk-blocks/ itself may hold a package.json (an npm workspace); it is not the root.
+		writeFileSync(join(root, 'cdk-blocks', 'package.json'), '{}');
+		assert.strictEqual(findProjectRoot(join(root, 'cdk-blocks')), root);
 	});
 
 	it('finds nothing outside an app', () => {
@@ -79,7 +79,7 @@ describe('project root detection', () => {
 
 		const outside = await runCli(['dev'], { cwd: elsewhere });
 		assert.strictEqual(outside.code, 1);
-		assert.match(outside.stderr, /^Error: not inside an AWS Blocks app/);
+		assert.match(outside.stderr, /^Error: not inside an AWS CDK Blocks app/);
 		assert.match(outside.stderr, /Try: run the command from your app directory, or pass -C <app-dir>/);
 
 		const missing = await runCli(['-C', join(elsewhere, 'nope'), 'dev'], { cwd: elsewhere });
@@ -467,8 +467,8 @@ setInterval(() => {}, 1000);
 				blocks: { dev: { port, frontendCommand: `node frontend.cjs ${frontendPort}`, frontendPort } },
 			}),
 		);
-		mkdirSync(join(root, 'aws-blocks'));
-		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
+		mkdirSync(join(root, 'cdk-blocks'));
+		writeFileSync(join(root, 'cdk-blocks', 'index.ts'), 'export {};\n');
 		const entry = ['--input-type=module', '-e', `import ${JSON.stringify(new URL('./run.js', import.meta.url).href)}`, '--'];
 		const cli = spawn(process.execPath, [...entry, 'dev'], {
 			cwd: root,
@@ -553,8 +553,8 @@ setInterval(() => {}, 1000);
 				blocks: { dev: { port, frontendCommand: `node frontend.cjs ${frontendPort}`, frontendPort } },
 			}),
 		);
-		mkdirSync(join(root, 'aws-blocks'));
-		writeFileSync(join(root, 'aws-blocks', 'index.ts'), "export const testApi = { ping: async () => 'pong' };\n");
+		mkdirSync(join(root, 'cdk-blocks'));
+		writeFileSync(join(root, 'cdk-blocks', 'index.ts'), "export const testApi = { ping: async () => 'pong' };\n");
 		const entry = ['--input-type=module', '-e', `import ${JSON.stringify(new URL('./run.js', import.meta.url).href)}`, '--'];
 		const run = (args: string[], detached: boolean) => {
 			const child = spawn(process.execPath, [...entry, ...args], { cwd: root, detached, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -780,7 +780,7 @@ setInterval(() => {}, 1000);
 	function crashOnDemand(root: string): () => void {
 		const flag = join(root, 'crash-now');
 		writeFileSync(
-			join(root, 'aws-blocks', 'index.ts'),
+			join(root, 'cdk-blocks', 'index.ts'),
 			[
 				"import { existsSync, rmSync } from 'node:fs';",
 				`const flag = ${JSON.stringify(flag)};`,
@@ -863,7 +863,7 @@ setInterval(() => {}, 1000);
 				stdio: 'ignore',
 				env: {
 					...process.env,
-					[DEV_OPTIONS_ENV]: JSON.stringify({ backendPath: join(root, 'aws-blocks', 'index.ts'), port }),
+					[DEV_OPTIONS_ENV]: JSON.stringify({ backendPath: join(root, 'cdk-blocks', 'index.ts'), port }),
 					[DEV_FAILURE_FILE_ENV]: file,
 				},
 			});

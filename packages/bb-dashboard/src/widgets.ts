@@ -8,8 +8,8 @@
 import { Duration } from 'aws-cdk-lib';
 import { GraphWidget, Metric, TextWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
-import { blocksError } from '@aws-blocks/core';
-import type { ComputeDashboardSection } from '@aws-blocks/core/cdk/internal';
+import { blocksError } from '@aws-cdk-blocks/core';
+import type { ComputeDashboardSection } from '@aws-cdk-blocks/core/cdk/internal';
 import type { ResolvedDashboardConfig, ResolvedMetricsSource, DashboardOptions, MetricConfig } from './types.js';
 import { DashboardErrors } from './errors.js';
 

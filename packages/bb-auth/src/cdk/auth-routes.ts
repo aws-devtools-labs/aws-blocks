@@ -9,14 +9,15 @@
  * @internal
  */
 
+import { canonicalBlocksPath } from '@aws-cdk-blocks/core';
 import { STUB_IDP_ROUTES, stubIssuerPath } from '../engines/stub-idp-routes.js';
 import type { ResolvedAuthOptions } from '../resolve-options.js';
 import type { StubUser } from '../types.js';
 import { bearerAuthEnabled, federationRedirectPaths } from './contract.js';
 
-/** One route key, `'<METHOD> <path>'`, with `//` collapsed and no trailing `/`. */
+/** One route key, `'<METHOD> <path>'`, with `//` collapsed, no trailing `/` and a legacy `/aws-blocks` prefix canonicalized. */
 export function authRouteKey(method: 'GET' | 'POST', path: string): string {
-	return `${method} ${path.replace(/\/+/g, '/').replace(/\/$/, '')}`;
+	return `${method} ${canonicalBlocksPath(path.replace(/\/+/g, '/').replace(/\/$/, ''))}`;
 }
 
 /** A block's routes, grouped as the synth errors name them. `stubKeys` are its `stubIdp()` provider keys. */

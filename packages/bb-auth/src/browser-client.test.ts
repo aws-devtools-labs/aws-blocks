@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth/browser-client` — a web frontend on another
+ * `@aws-cdk-blocks/bb-auth/browser-client` — a web frontend on another
  * origin signs in through the block's existing relay transport, then reads
  * `GET <base>/session` and signs out with `POST <base>/signout?format=json`.
  *
@@ -15,7 +15,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import { BLOCKS_AUTH_PREFIX, clearRouteRegistry, isBlocksError } from '@aws-blocks/core';
+import { BLOCKS_AUTH_PREFIX, clearRouteRegistry, isBlocksError } from '@aws-cdk-blocks/core';
 import { type AuthClient, createAuthClient } from './browser-client.js';
 import { stubIdpConfigKeys } from './cdk/contract.js';
 import { AuthErrors } from './errors.js';
@@ -350,9 +350,10 @@ describe('browser-client — mock runtime (the dev server)', () => {
 	after(async () => server.close());
 	beforeEach(() => {
 		clearRouteRegistry();
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	});
-	afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+	afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 	browserClientSuite({
 		base: () => server.origin,
@@ -369,6 +370,7 @@ describe('browser-client — AWS runtime (behind an API Gateway stage)', () => {
 	let rootId = '';
 	beforeEach(() => {
 		clearRouteRegistry();
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 		gw = installFakeGateway();
 		// A deployed stub IdP is served on a sandbox deployment only (`getDeploymentType()`).
@@ -378,6 +380,7 @@ describe('browser-client — AWS runtime (behind an API Gateway stage)', () => {
 		delete process.env.BLOCKS_DEPLOYMENT_TYPE;
 		gw.uninstall();
 		delete process.env[stubIdpConfigKeys(`${rootId}-auth`).API_URL];
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	});
 

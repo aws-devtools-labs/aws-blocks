@@ -17,7 +17,7 @@
  *
  * What the generator does to a block, and nothing else:
  * - `import { a, b } from 'module'` lines move to the top of the file. The
- *   package's own name resolves to the mock entry. `@aws-blocks/bb-auth`
+ *   package's own name resolves to the mock entry. `@aws-cdk-blocks/bb-auth`
  *   depends on this package, so it cannot be imported here: `Auth` gets a
  *   declared stand-in with the one method the README calls.
  * - A leading `export ` is dropped, because the code is inside a function.
@@ -44,11 +44,11 @@ const MIN_BLOCKS = 15;
 const MIN_CLAIMS = 4;
 
 /** Module specifiers the generated file resolves differently from an app. */
-const MODULE_ALIASES = { '@aws-blocks/bb-kv-store': './index.mock.js' };
+const MODULE_ALIASES = { '@aws-cdk-blocks/bb-kv-store': './index.mock.js' };
 
 /** Modules that cannot be imported from this package, and the declaration that stands in for what the README uses. */
 const STAND_INS = {
-	'@aws-blocks/bb-auth': [
+	'@aws-cdk-blocks/bb-auth': [
 		'/** Stand-in for `Auth`: bb-auth depends on this package, so it cannot be imported here. */',
 		'declare class Auth {',
 		'\tconstructor(scope: ScopeParent, id: string);',
@@ -109,8 +109,8 @@ if (claims < MIN_CLAIMS) {
 }
 
 // `scope` and the stand-ins need `ScopeParent`.
-const core = imports.get('@aws-blocks/core') ?? new Set();
-imports.set('@aws-blocks/core', core);
+const core = imports.get('@aws-cdk-blocks/core') ?? new Set();
+imports.set('@aws-cdk-blocks/core', core);
 
 const importLines = [...imports.entries()]
 	.sort(([a], [b]) => a.localeCompare(b))
@@ -127,7 +127,7 @@ const output = [
 	"import { createHash } from 'node:crypto';",
 	"import { readFileSync } from 'node:fs';",
 	"import { test } from 'node:test';",
-	"import type { ScopeParent } from '@aws-blocks/core';",
+	"import type { ScopeParent } from '@aws-cdk-blocks/core';",
 	...importLines,
 	'',
 	'declare const scope: ScopeParent;',

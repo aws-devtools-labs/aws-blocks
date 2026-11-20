@@ -1,4 +1,4 @@
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { AuthBasic } from './barrel.js';
 
 // No options: AuthBasic's defaults are written out, as for a direct import.

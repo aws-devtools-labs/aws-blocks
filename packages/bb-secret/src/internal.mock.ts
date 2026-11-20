@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Mock (local dev and test) entry for `@aws-blocks/bb-secret/internal`.
+ * Mock (local dev and test) entry for `@aws-cdk-blocks/bb-secret/internal`.
  *
  * Local dev ignores `defaults.secretsStore`: the key is the same mock
  * `AppSetting` the blocks used before the option existed, persisted under
- * `.bb-data/`.
+ * `.cdk-blocks/local/data/`.
  *
  * @internal
  */
 
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import type { ScopeParent } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import type { FrameworkKey } from './internal-shared.js';
 
 export { type FrameworkKey, SSM_SECRETS_STORE_WARNING_ID } from './internal-shared.js';

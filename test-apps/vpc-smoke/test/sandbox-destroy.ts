@@ -7,6 +7,6 @@
  * the multi-stack sandbox teardown that `npm run sandbox:destroy` runs (as in
  * compute-smoke). Run from the app directory.
  */
-import { destroySandbox } from '@aws-blocks/blocks/scripts';
+import { destroySandbox } from 'aws-cdk-blocks/scripts';
 
 await destroySandbox(process.argv[2]);

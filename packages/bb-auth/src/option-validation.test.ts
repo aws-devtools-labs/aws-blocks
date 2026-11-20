@@ -23,9 +23,9 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, describe, test } from 'node:test';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import { Auth as AwsAuth } from './index.aws.js';
 import { Auth as CdkAuth } from './index.cdk.js';
@@ -39,7 +39,7 @@ import {
 } from './option-validation.js';
 import type { AppSettingRef, AuthMockOptions } from './types.js';
 
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 let n = 0;
 const root = (): ScopeParent => ({ id: `optval${process.pid}x${++n}` });
@@ -692,8 +692,8 @@ describe('valid configurations pass', () => {
 			validateUser: async () => {},
 			session: { ttlSeconds: 60, crossDomain: false, freshAgeSeconds: 30 },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/callback',
-				signOutPath: '/aws-blocks/auth/signout',
+				callbackPath: '/cdk-blocks/auth/callback',
+				signOutPath: '/cdk-blocks/auth/signout',
 				postSignInPath: '/',
 				postSignOutPath: '/',
 				allowedRelayOrigins: [relayOrigin('myapp://auth')],
@@ -756,7 +756,7 @@ describe('valid configurations pass', () => {
 			validateUser: async () => {},
 			session: { ttlSeconds: 60, crossDomain: false, freshAgeSeconds: 30 },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/callback',
+				callbackPath: '/cdk-blocks/auth/callback',
 				allowedRelayOrigins: [relayOrigin('myapp://auth')],
 			},
 			allowBearerAuth: true,

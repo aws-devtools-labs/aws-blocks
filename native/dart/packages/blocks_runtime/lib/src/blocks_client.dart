@@ -69,7 +69,7 @@ class BlocksClient {
   /// one, and trailing left-out optionals omitted.
   ///
   /// The request is POSTed to `{baseUrl}/{namespace}` (e.g.
-  /// `…/aws-blocks/api/reports` for `reports.build`), so a namespace that runs
+  /// `…/cdk-blocks/api/reports` for `reports.build`), so a namespace that runs
   /// on its own compute is served by it.
   ///
   /// Throws an [ArgumentError], before any request is sent, when [params] is

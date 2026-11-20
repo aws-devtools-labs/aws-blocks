@@ -4,15 +4,16 @@
 /**
  * `npm run secret` — manage a Blocks app's **secrets** (AWS Secrets Manager),
  * pinned to the Blocks `/blocks/<stackId>/secrets` namespace (scoped to the app's
- * stable `stackId` from `.blocks/config.json`, so two apps in one account never
- * collide). Thin wrapper over the shared `@aws-blocks/hosting` CLI with the kind
+ * stable `stackId` from `.cdk-blocks/config.json`, so two apps in one account never
+ * collide). Thin wrapper over the shared `@aws-cdk-blocks/hosting` CLI with the kind
  * fixed to `secret`. The `config` counterpart is `./config.ts`.
  *
  * @module
  */
 
-import { listValues, removeValue, runValueCli, setValue } from '@aws-blocks/hosting/scripts';
+import { listValues, removeValue, runValueCli, setValue } from '@aws-cdk-blocks/hosting/scripts';
 import { blocksSecretPrefix } from '../secret-naming.js';
+import { trackCommand } from '../telemetry/trackCommand.js';
 
 /** Set (create or overwrite) a Blocks secret. */
 export function setSecret(key: string, value: string, opts: { stage?: string } = {}): Promise<void> {
@@ -43,5 +44,9 @@ export function removeSecret(key: string, opts: { stage?: string; force?: boolea
  * a usage problem throws hosting's `ValueCliUsageError`.
  */
 export function runSecretCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
-	return runValueCli(argv, { kind: 'secret', prefix: blocksSecretPrefix(), label: 'npm run secret --', ...options });
+	// Tracked here, not in the CLI, so an app still running a vendored `aws-blocks/scripts/secret.ts`
+	// that calls this function directly sends the same `secret` event.
+	return trackCommand('secret', () =>
+		runValueCli(argv, { kind: 'secret', prefix: blocksSecretPrefix(), label: 'npm run secret --', ...options }),
+	);
 }

@@ -12,6 +12,7 @@ import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
+import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { AUDIT_WARNING } from './audit-warning-matcher.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { ComputeBase } from './compute/compute.js';
@@ -20,14 +21,14 @@ import type { DefaultComputeFactory } from './compute/default-compute-factory.js
 import { BlocksPresets, BlocksStack, Scope } from './index.js';
 import { HTTP_ERROR_STATUS_EXPORTS } from '../rpc-dispatch.js';
 
-// A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
-// @aws-blocks/blocks), which core's own tests can't depend on. Use an
+// A real app gets its default compute from @aws-cdk-blocks/bb-lambda-compute (via
+// aws-cdk-blocks), which core's own tests can't depend on. Use an
 // equivalent inline stub: a Compute that owns a NodejsFunction and exposes it
 // via apiHandler(), so create() can build the default + the shared REST API
 // gateway and the handler/gateway/apiUrl accessors have something real to
 // resolve to. It is passed to each create() via the internal
 // `defaultComputeFactory` option (see makeStack / makeBackend), exactly as
-// @aws-blocks/blocks injects LambdaCompute.
+// aws-cdk-blocks injects LambdaCompute.
 class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly logGroup: cdk.aws_logs.LogGroup;
@@ -86,7 +87,7 @@ const deploymentTypeBackendPath = join(__dirname, '__fixtures__', 'deployment-ty
 const httpErrorStatusBackendPath = join(__dirname, '__fixtures__', 'http-error-status-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
-// @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
+// aws-cdk-blocks injects LambdaCompute — so tests don't repeat it.
 const makeStack = (scope: Construct, id: string, backendCDKPath: string) =>
 	BlocksStack.create(scope, id, {
 		backendHandlerPath: handlerPath,
@@ -170,10 +171,7 @@ describe('ApiUrl output and the Hosting front-door claim', () => {
 		});
 		stack.claimApiFrontDoor('https://d123.cloudfront.net');
 		const value = apiUrlOutput(stack);
-		assert.ok(
-			value.includes('https://d123.cloudfront.net/aws-blocks/api'),
-			`cloudfront ApiUrl should follow the claim, got ${value}`,
-		);
+		assert.strictEqual(value, JSON.stringify(`https://d123.cloudfront.net${BLOCKS_RPC_PREFIX}`));
 	});
 });
 
@@ -415,11 +413,12 @@ describe('shared gateway routes namespaces by export name (create())', () => {
 		const pathParts = Object.entries(resources)
 			.filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource')
 			.map(([id, r]) => [id, r.Properties.PathPart as string] as const);
-		// Exactly the catch-all tree plus `shop`: routed by export name (not the
-		// constructor name 'orders'), and the default-compute `api` namespace adds
-		// no resource of its own.
+		// Exactly the catch-all trees (canonical and legacy prefix) plus `shop` in each:
+		// routed by export name (not the constructor name 'orders'), and the
+		// default-compute `api` namespace adds no resource of its own.
 		const parts = pathParts.map(([, part]) => part).sort();
-		assert.deepStrictEqual(parts, ['aws-blocks', 'api', 'shop', '{proxy+}', '{proxy+}', '{proxy+}'].sort());
+		const tree = ['api', 'shop', '{proxy+}', '{proxy+}'];
+		assert.deepStrictEqual(parts, ['cdk-blocks', ...tree, 'aws-blocks', ...tree, '{proxy+}'].sort());
 
 		const orders = getComputes(owner).find((c) => c.node.id === 'OrdersCompute') as StubLambdaCompute;
 		const ordersFnId = stackOfGateway.getLogicalId(orders.fn.node.defaultChild as cdk.CfnElement);
@@ -631,7 +630,7 @@ describe('create() without defaults (apps from older templates)', () => {
 		assert.ok(!(e instanceof TypeError), `expected a Blocks error, got ${e.name}: ${e.message}`);
 		assert.match(e.message, /requires a `defaults` field/);
 		assert.match(e.message, /defaults: sandboxMode \? BlocksPresets\.sandbox : BlocksPresets\.production/);
-		assert.match(e.message, /import \{ BlocksPresets \} from '@aws-blocks\/blocks\/cdk'/);
+		assert.match(e.message, /import \{ BlocksPresets \} from 'aws-cdk-blocks\/cdk'/);
 		assert.match(e.message, /docs\/guides\/upgrading-older-apps\.md/);
 		return true;
 	};
@@ -710,7 +709,7 @@ describe('a stack name that starts with "aws" is an error at synth', () => {
 		assert.ok(errors[0].includes(`Stack name '${name}' starts with 'aws'`), errors[0]);
 		assert.ok(errors[0].includes(`'${groupPrefix}-resources' and '${groupPrefix}-settings'`), errors[0]);
 		assert.match(errors[0], /AWS Resource Groups refuses a group name/);
-		assert.match(errors[0], /"stackId" in \.blocks\/config\.json/);
+		assert.match(errors[0], /"stackId" in \.cdk-blocks\/config\.json/);
 	};
 
 	test('BlocksStack: the error names the stack and says what to change, in any letter case', async () => {

@@ -47,7 +47,7 @@ export interface CommonFlags {
  * databases can have two authorities; the default name keeps the plain file name.
  */
 const caModuleOf = (name: string): string =>
-	name === DEFAULT_CONNECTION_NAME ? 'aws-blocks/database.ca.ts' : `aws-blocks/database.${name}.ca.ts`;
+	name === DEFAULT_CONNECTION_NAME ? 'cdk-blocks/database.ca.ts' : `cdk-blocks/database.${name}.ca.ts`;
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 const PG_16 = 160000;
 
@@ -90,14 +90,14 @@ function writeCaModule(name: string, pem: string): string {
 }
 
 async function stackNameFor(stage: Stage): Promise<string> {
-	const { getStackName } = await import('@aws-blocks/core/scripts');
+	const { getStackName } = await import('@aws-cdk-blocks/core/scripts');
 	return getStackName({ sandbox: stage === 'sandbox', projectRoot: process.cwd() });
 }
 
 async function ssmClient() {
 	const [{ SSMClient }, { resolveDeploymentTarget }] = await Promise.all([
 		import('@aws-sdk/client-ssm'),
-		import('@aws-blocks/core/scripts'),
+		import('@aws-cdk-blocks/core/scripts'),
 	]);
 	const target = await resolveDeploymentTarget({ projectRoot: process.cwd() });
 	return new SSMClient({ region: target.region ?? undefined, profile: target.profile });
@@ -290,7 +290,7 @@ export async function connect(flags: ConnectFlags): Promise<ConnectResult> {
 /** The lines `connect` prints for the app's backend file. */
 /**
  * The block as the backend file declares it for this connection. `migrationsPath` is the directory that
- * `migrate` applies: the block's own default is another one (`aws-blocks/migrations/<id>`), and a deploy runs
+ * `migrate` applies: the block's own default is another one (`cdk-blocks/migrations/<id>`), and a deploy runs
  * only the files of the directory the block names. An explicit path must exist, so it is a comment until it does.
  */
 export function linesToPaste(
@@ -298,7 +298,7 @@ export function linesToPaste(
 	hasMigrationsDir: boolean = existsSync(DEFAULT_MIGRATIONS_DIR),
 ): string {
 	const ca = result.caModule ? ', ca: DATABASE_CA' : '';
-	const module = result.caModule?.replace(/^aws-blocks\//, './').replace(/\.ts$/, '.js');
+	const module = result.caModule?.replace(/^cdk-blocks\//, './').replace(/\.ts$/, '.js');
 	return [
 		...(module ? [`import { DATABASE_CA } from '${module}';`] : []),
 		"const db = new Database(scope, 'db', {",

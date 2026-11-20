@@ -18,8 +18,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 import { clientMessageFor } from './error-mapping.js';
 import { type Auth, AuthErrors } from './index.aws.js';
 import {
@@ -35,8 +35,8 @@ import type { AuthOptions } from './types.js';
 /** The options a pool that issues every MFA challenge was created from (the block rejects steps its options do not enable). */
 const MFA_ALL = { mfa: { mode: 'optional', types: ['SMS', 'TOTP', 'EMAIL'] } } as const;
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 function apiFor<O extends AuthOptions>(auth: Auth<O>, ctx: BlocksContext): AuthStateApi {
 	return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx);

@@ -4,7 +4,7 @@
 /**
  * Package-level test for {@link assertNotMockInDeployedEnv}: instead of calling
  * the guard directly (see `runtime-guard.test.ts`), it imports a real, built
- * Building Block (`@aws-blocks/bb-kv-store`) in a child `node` process and
+ * Building Block (`@aws-cdk-blocks/bb-kv-store`) in a child `node` process and
  * lets npm conditional-export resolution pick the entry, exactly as a
  * deployed artifact would.
  *
@@ -26,7 +26,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
-const BB_PACKAGE = '@aws-blocks/bb-kv-store';
+const BB_PACKAGE = '@aws-cdk-blocks/bb-kv-store';
 const IMPORT_SCRIPT = `await import('${BB_PACKAGE}');`;
 
 // Run children from this package so resolution walks up to the repo-root
@@ -94,7 +94,7 @@ describe('runtime guard through a built BB entry', { concurrency: 1, skip: skipR
 		assert.notEqual(result.status, 0, `expected non-zero exit; stderr:\n${result.stderr}`);
 		// The hard assertion is the name-independent `deployed environment` text.
 		// The specific BB name is intentionally not asserted: bb-kv-store's mock
-		// entry statically imports @aws-blocks/bb-logger, and ESM evaluates that
+		// entry statically imports @aws-cdk-blocks/bb-logger, and ESM evaluates that
 		// import first, so a nested BB's guard can fire before bb-kv-store's (see
 		// the load-order note on assertNotMockInDeployedEnv).
 		assert.ok(

@@ -367,7 +367,7 @@ final class GeneratedNameCollisionTests: XCTestCase {
             else { return #""pong""# }
             return String(decoding: data, as: UTF8.self)
         }
-        let server = BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/aws-blocks/api")
+        let server = BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/cdk-blocks/api")
         let api = Api(server: server)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

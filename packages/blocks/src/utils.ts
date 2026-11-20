@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { CLIENT_FETCH_STORE } from '@aws-blocks/core/bb-utils';
+import { CLIENT_FETCH_STORE } from '@aws-cdk-blocks/core/bb-utils';
 
 let installed = false;
 
@@ -17,10 +17,10 @@ let installed = false;
  *
  * @example
  * ```typescript
- * import { installCookieJar } from '@aws-blocks/blocks/utils';
+ * import { installCookieJar } from 'aws-cdk-blocks/utils';
  * installCookieJar();
  *
- * const { api, authApi } = await import('aws-blocks');
+ * const { api, authApi } = await import('cdk-blocks');
  * await authApi.setAuthState({ action: 'signIn', username: '...', password: '...' });
  * // Subsequent calls now carry the auth cookie automatically
  * const data = await api.listTodos();
@@ -75,7 +75,7 @@ function withCookieJar(jar: Map<string, string>, send: typeof fetch): typeof fet
   return wrapper;
 }
 
-/** The key an `ApiNamespaceClient` (`@aws-blocks/core/client`) answers with its namespace. */
+/** The key an `ApiNamespaceClient` (`@aws-cdk-blocks/core/client`) answers with its namespace. */
 const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
 
 /**
@@ -128,7 +128,7 @@ function bindClient<C extends object>(client: C, send: typeof fetch): C {
  * call returns a new user, so one test can hold several sessions at once (an
  * owner and an intruder, say) without signing out in between.
  *
- * Pass the clients one user calls — the `aws-blocks` module itself, or an
+ * Pass the clients one user calls — the `cdk-blocks` module itself, or an
  * object of clients — and use what it returns exactly like them. The session
  * a client's call starts (its `Set-Cookie`) is sent by every client of the
  * same test user, and by no other: neither another test user nor the shared
@@ -141,14 +141,14 @@ function bindClient<C extends object>(client: C, send: typeof fetch): C {
  * mock or spy sees a test user's calls; the jar `installCookieJar()` puts on
  * `fetch` is stepped past.
  *
- * @param clients - The `aws-blocks` module (`await import('aws-blocks')`), an object of its clients, or one client.
+ * @param clients - The `cdk-blocks` module (`await import('cdk-blocks')`), an object of its clients, or one client.
  * @returns The same clients, typed as passed, bound to a new cookie jar. Other values pass through unchanged.
  *
  * @example
  * ```typescript
- * import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
+ * import { createTestClient, getLastAuthCode } from 'aws-cdk-blocks/utils';
  *
- * const app = await import('aws-blocks');
+ * const app = await import('cdk-blocks');
  * const owner = createTestClient(app);
  * const intruder = createTestClient(app);
  *
@@ -176,7 +176,7 @@ export function createTestClient<const T extends object>(clients: T): T {
   });
 }
 
-export { type GetLastAuthCodeOptions, getLastAuthCode, totpCodeFor } from '@aws-blocks/bb-auth/testing';
+export { type GetLastAuthCodeOptions, getLastAuthCode, totpCodeFor } from '@aws-cdk-blocks/bb-auth/testing';
 
 /**
  * Returns true if a server is already listening on the given port.
@@ -186,7 +186,7 @@ export { type GetLastAuthCodeOptions, getLastAuthCode, totpCodeFor } from '@aws-
  *
  * @example
  * ```typescript
- * import { isServerRunning } from '@aws-blocks/blocks/utils';
+ * import { isServerRunning } from 'aws-cdk-blocks/utils';
  *
  * if (!await isServerRunning()) {
  *   server = spawn('npm', ['run', 'dev:server'], { ... });

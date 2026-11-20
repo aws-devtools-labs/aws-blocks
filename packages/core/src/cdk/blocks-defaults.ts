@@ -201,11 +201,11 @@ export interface BlocksDefaults {
 	 * `getChannel()` again. To keep an existing stack's keys where they are, set
 	 * this before you deploy a version that reads it.
 	 *
-	 * Synth emits the warning `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
+	 * Synth emits the warning `@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
 	 * when this is `'ssm'` and the stack looks like production: the
 	 * `sandboxMode` context is not `'true'`, {@link removalPolicy} is `RETAIN`,
 	 * or {@link deletionProtection} is on. Acknowledge it with
-	 * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
+	 * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
 	 * if SSM is a deliberate choice.
 	 *
 	 * The local mock ignores this field; local development behaves the same in
@@ -296,9 +296,9 @@ export interface BlocksDefaults {
 	 * Serve each API namespace only on the compute it is placed on.
 	 *
 	 * An `ApiNamespace` given its own `compute` (directly or through its scope) is
-	 * routed to that compute at `/aws-blocks/api/{namespace}`. The bare
-	 * `/aws-blocks/api` endpoint is served by the default compute and dispatches on
-	 * the JSON-RPC body, so without this option a raw `POST /aws-blocks/api` with
+	 * routed to that compute at `/cdk-blocks/api/{namespace}`. The bare
+	 * `/cdk-blocks/api` endpoint is served by the default compute and dispatches on
+	 * the JSON-RPC body, so without this option a raw `POST /cdk-blocks/api` with
 	 * `{ "method": "reports.build" }` runs `reports` on the **default** compute —
 	 * outside the VPC, container or sizing its placement was meant to give it.
 	 *
@@ -317,7 +317,7 @@ export interface BlocksDefaults {
 	 * role.
 	 *
 	 * The typed TypeScript client and the Kotlin, Swift and Dart clients always
-	 * call `/aws-blocks/api/{namespace}`, so they keep working. A raw HTTP caller,
+	 * call `/cdk-blocks/api/{namespace}`, so they keep working. A raw HTTP caller,
 	 * or a native client generated before clients called per-namespace paths, that
 	 * posts a placed namespace to the bare endpoint is refused: point it at the
 	 * namespace's own path before enabling this.

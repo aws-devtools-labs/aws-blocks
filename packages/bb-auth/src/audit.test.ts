@@ -9,14 +9,14 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';
 import type { SessionStore } from './sessions.js';
 import { Browser, captureLogger, type LogEntry, makeAuth, makeContext } from './test-helpers.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const OKTA = { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } } as const;
 

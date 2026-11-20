@@ -20,7 +20,8 @@
  *
  * From `test-apps/comprehensive`, after `npm run build` at the repo root and
  * in a built checkout of the release (both blocks were released from one
- * commit: `git worktree add <dir> @aws-blocks/bb-data@0.5.0`):
+ * commit: `git worktree add <dir> @aws-blocks/bb-data@0.5.0` — the tag predates the rename,
+ * so it carries the old scope):
  *
  *     npm run test:upgrade-sql-blocks -- --scenario dsql --mode diff --base-dir <release checkout> --evidence <dir>
  *     BLOCKS_UPGRADE_E2E=1 AWS_PROFILE=<sandbox> AWS_REGION=<region> \
@@ -50,7 +51,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -64,6 +65,9 @@ import {
 	SUFFIX_PATTERN,
 	stableStringify,
 	stackNameFor,
+	type BlocksNames,
+	blocksNamesFromUmbrella,
+	retargetBlocksImports,
 } from './upgrade-in-place/lib.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -195,6 +199,17 @@ function removeFixtureApps(): void {
 }
 
 /** Write a fixture app into a checkout: the backend, its migration files, and the CDK entry with IAM-only methods. */
+/**
+ * What `treeRoot` calls this repo's packages, from its own umbrella manifest.
+ * The release base tree predates the rename, so this differs per tree.
+ */
+function blocksNamesIn(treeRoot: string): BlocksNames {
+	const manifest = join(treeRoot, 'packages', 'blocks', 'package.json');
+	const name: unknown = JSON.parse(readFileSync(manifest, 'utf8')).name;
+	if (typeof name !== 'string' || name === '') throw new Error(`${manifest} states no package name`);
+	return blocksNamesFromUmbrella(name);
+}
+
 function materialize(
 	treeRoot: string,
 	variant: string,
@@ -202,30 +217,37 @@ function materialize(
 	preset: 'sandbox' | 'production' = 'sandbox',
 ): string {
 	const dir = join(treeRoot, 'test-apps', '.upgrade-in-place', `${suffix}-${variant}`);
+	// One copy of each fixture is written into BOTH checkouts, and the release base tree
+	// predates the rename, so every specifier is retargeted to the names that tree publishes.
+	const names = blocksNamesIn(treeRoot);
+	const retarget = (text: string): string => retargetBlocksImports(text, names);
+	const copy = (src: string, dest: string): void => writeFileSync(dest, retarget(readFileSync(src, 'utf8')));
 	rmSync(dir, { recursive: true, force: true });
 	fixtureApps.push(dir);
-	for (const sub of ['aws-blocks/migrations', 'scripts', '.blocks']) mkdirSync(join(dir, sub), { recursive: true });
+	for (const sub of ['cdk-blocks/migrations', 'scripts', '.cdk-blocks']) mkdirSync(join(dir, sub), { recursive: true });
 	const cdkEntry = readFileSync(join(APP, 'index.cdk.ts'), 'utf8').replace(
 		'BlocksPresets.sandbox',
 		`BlocksPresets.${preset}`,
 	);
-	writeFileSync(join(dir, 'aws-blocks', 'index.cdk.ts'), cdkEntry + IAM_ONLY);
-	copyFileSync(join(APP, scenario[revision]), join(dir, 'aws-blocks', 'index.ts'));
+	writeFileSync(join(dir, 'cdk-blocks', 'index.cdk.ts'), retarget(cdkEntry + IAM_ONLY));
+	copy(join(APP, scenario[revision]), join(dir, 'cdk-blocks', 'index.ts'));
 	for (const file of revision === 'release' ? RELEASE_FILES : UPGRADED_FILES) {
-		copyFileSync(join(APP, 'dsql-migrations', file), join(dir, 'aws-blocks', 'migrations', file));
+		copy(join(APP, 'dsql-migrations', file), join(dir, 'cdk-blocks', 'migrations', file));
 	}
 	writeFileSync(
-		join(dir, 'aws-blocks', 'index.handler.ts'),
-		"import { createLambdaHandler } from '@aws-blocks/blocks/lambda-handler';\n\nexport const handler = createLambdaHandler(() => import('./index.js'));\n",
+		join(dir, 'cdk-blocks', 'index.handler.ts'),
+		retarget(
+			"import { createLambdaHandler } from 'aws-cdk-blocks/lambda-handler';\n\nexport const handler = createLambdaHandler(() => import('./index.js'));\n",
+		),
 	);
-	copyFileSync(join(APP, 'deploy.ts'), join(dir, 'scripts', 'deploy.ts'));
-	copyFileSync(join(APP, 'destroy.ts'), join(dir, 'scripts', 'destroy.ts'));
+	copy(join(APP, 'deploy.ts'), join(dir, 'scripts', 'deploy.ts'));
+	copy(join(APP, 'destroy.ts'), join(dir, 'scripts', 'destroy.ts'));
 	writeFileSync(
 		join(dir, 'cdk.json'),
 		`${JSON.stringify({ app: `"${bin(treeRoot, 'tsx')}" -C cdk aws-blocks/index.cdk.ts` }, null, 2)}\n`,
 	);
 	writeFileSync(
-		join(dir, '.blocks', 'config.json'),
+		join(dir, '.cdk-blocks', 'config.json'),
 		`${JSON.stringify({ stackId: 'bb-test-upgrade', telemetry: { enabled: false } }, null, 2)}\n`,
 	);
 	return dir;

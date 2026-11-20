@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The local `.bb-data` read path for the data browser.
+ * The local `.cdk-blocks/local/data` read path for the data browser.
  *
  * A locally-run blocks app persists each store as a JSON file under
- * `<projectRoot>/.bb-data/<storeName>/`. That is the whole "database" in local
+ * `<projectRoot>/.cdk-blocks/local/data/<storeName>/`. That is the whole "database" in local
  * mode, so reading it is a file read plus a normalisation — no client, no
  * credentials, no network.
  *
@@ -13,10 +13,10 @@
  *
  * 1. `blockFullId` arrives from a URL PATH SEGMENT, so it is hostile input.
  *    It is rejected on shape before it ever reaches the filesystem, and every
- *    resolved path is checked for containment inside `.bb-data` AFTER
+ *    resolved path is checked for containment inside `.cdk-blocks/local/data` AFTER
  *    `realpathSync`. The implementation we model on resolved lexically and
  *    checked `startsWith`, which stops `../../etc` but NOT a symlink inside
- *    `.bb-data` pointing out of the project — a symlink is invisible to a
+ *    `.cdk-blocks/local/data` pointing out of the project — a symlink is invisible to a
  *    lexical check because the escape happens in the kernel, not in the string.
  *
  * 2. `readLocalData` NEVER THROWS. Every failure comes back as a populated
@@ -39,7 +39,9 @@ import { keySchemaFields, resolveSerializedKey, serializePairKey } from './pair-
 import { isAncillaryStoreName, redactRecordValue, redactValue } from './redact.js';
 
 /** The on-disk root a locally-run blocks app writes its stores into. */
-const BB_DATA_DIRNAME = '.bb-data';
+const BB_DATA_DIRNAME = '.cdk-blocks/local/data';
+/** Read-only fallback: a project upgraded but not yet run still holds its data here. */
+const LEGACY_BB_DATA_DIRNAME = '.bb-data';
 
 /**
  * Filename preference within a store directory. Different block kinds name
@@ -107,7 +109,7 @@ export interface LocalDataPage {
 /**
  * Shape validation for a block id that arrived from a URL path segment.
  *
- * Rejects rather than sanitises: there is no legitimate `.bb-data` store name
+ * Rejects rather than sanitises: there is no legitimate `.cdk-blocks/local/data` store name
  * containing a path separator, a `..`, or a NUL, so a value carrying one is a
  * traversal attempt or a bug, and either way silently rewriting it into
  * something that resolves would be worse than refusing it. This runs BEFORE
@@ -226,7 +228,7 @@ function sortStores(stores: LocalStore[]): LocalStore[] {
 }
 
 /**
- * Names in `.bb-data` that could be a store of this block.
+ * Names in `.cdk-blocks/local/data` that could be a store of this block.
  *
  * A block may SHARD across several directories: its own `<blockFullId>/` plus
  * any sibling whose name starts with `<blockFullId>-` (AuthBasic writes
@@ -247,7 +249,7 @@ function readCandidateNames(realRoot: string, blockFullId: string): string[] {
 /**
  * Every store a block writes to, in reading order.
  *
- * Returns `[]` for a hostile id, a missing `.bb-data`, or a block that has
+ * Returns `[]` for a hostile id, a missing `.cdk-blocks/local/data`, or a block that has
  * never written anything.
  */
 export function listLocalStores(projectRoot: string, blockFullId: string): LocalStore[] {
@@ -255,13 +257,21 @@ export function listLocalStores(projectRoot: string, blockFullId: string): Local
 
 	// Resolve the root through symlinks ONCE and compare candidates against
 	// that, so a project reached via a symlinked path still matches.
-	const realRoot = tryRealpath(resolve(projectRoot, BB_DATA_DIRNAME));
-	if (realRoot === undefined) return [];
-
+	// Both roots, renamed first. The carry-over only runs when a BLOCK's mock is
+	// constructed, so in a project upgraded but not yet run through `npm run dev`
+	// the data is still entirely under `.bb-data/`, and reading only the new root
+	// makes every block page say "No local store found" — which reads as "your
+	// data is gone". `settings-store.ts` already falls back the same way.
 	const stores: LocalStore[] = [];
-	for (const name of readCandidateNames(realRoot, blockFullId)) {
-		const store = describeStore(realRoot, name);
-		if (store !== undefined) stores.push(store);
+	for (const dirname of [BB_DATA_DIRNAME, LEGACY_BB_DATA_DIRNAME]) {
+		const realRoot = tryRealpath(resolve(projectRoot, dirname));
+		if (realRoot === undefined) continue;
+		for (const name of readCandidateNames(realRoot, blockFullId)) {
+			const store = describeStore(realRoot, name);
+			if (store !== undefined) stores.push(store);
+		}
+		// The renamed root answers whenever it holds anything for this block.
+		if (stores.length > 0) break;
 	}
 	return sortStores(stores);
 }
@@ -527,7 +537,7 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * Reads one page of a block's local `.bb-data`.
+ * Reads one page of a block's local `.cdk-blocks/local/data`.
  *
  * Never throws. Pagination is `{ kind: 'offset' }` cursors minted for the
  * active store, so a cursor presented after switching stores is rejected rather
@@ -543,7 +553,7 @@ export function readLocalData(options: ReadLocalDataOptions): LocalDataPage {
 
 	const stores = listLocalStores(options.projectRoot, options.blockFullId);
 	if (stores.length === 0) {
-		return emptyPage(`No local .bb-data store found for block "${options.blockFullId}".`, true);
+		return emptyPage(`No local .cdk-blocks/local/data store found for block "${options.blockFullId}".`, true);
 	}
 	const publicStores = stores.map(toPublicStore);
 
@@ -571,7 +581,7 @@ export function readLocalData(options: ReadLocalDataOptions): LocalDataPage {
 		try {
 			const cursor = decodeCursor(options.cursor, active.id);
 			if (cursor.kind !== 'offset') {
-				throw new InvalidCursorError(`A "${cursor.kind}" cursor cannot page a local .bb-data store.`);
+				throw new InvalidCursorError(`A "${cursor.kind}" cursor cannot page a local .cdk-blocks/local/data store.`);
 			}
 			offset = cursor.offset;
 		} catch (error) {

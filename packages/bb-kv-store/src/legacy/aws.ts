@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import type { StandardSchemaV1 } from '@standard-schema/spec';

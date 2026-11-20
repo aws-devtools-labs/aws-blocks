@@ -313,9 +313,9 @@ describe('redaction', () => {
 	});
 
 	it('redactDeep with keyAware:false redacts by value only (agent-written JSON)', () => {
-		const value = { scripts: { secret: 'tsx aws-blocks/scripts/secret.ts' }, password: 'not-a-known-value', note: `x ${FAKE_CREDENTIAL_ENV.GITHUB_TOKEN}` };
+		const value = { scripts: { secret: 'tsx cdk-blocks/scripts/secret.ts' }, password: 'not-a-known-value', note: `x ${FAKE_CREDENTIAL_ENV.GITHUB_TOKEN}` };
 		const out = redactDeep(value, redactPatterns, { keyAware: false });
-		assert.equal(out.scripts.secret, 'tsx aws-blocks/scripts/secret.ts');
+		assert.equal(out.scripts.secret, 'tsx cdk-blocks/scripts/secret.ts');
 		assert.equal(out.password, 'not-a-known-value');
 		assert.equal(out.note, 'x ***REDACTED-GH-TOKEN***');
 	});

@@ -93,7 +93,7 @@ jobs:
       #
       # `npm create amplify@latest` installs its OWN aws-cdk-lib/constructs at
       # whatever versions it currently ships, which drift from the versions this
-      # repo builds against. The generated aws-blocks/index.cdk.ts resolves
+      # repo builds against. The generated cdk-blocks/index.cdk.ts resolves
       # aws-cdk-lib (Stack/Mixins) from THIS scaffold's tree, while the Blocks
       # packages — linked in as `file:` deps (symlinks) — resolve their own
       # constructs/aws-cdk-lib from the REPO's tree via the symlink realpath.

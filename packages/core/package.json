@@ -1,6 +1,6 @@
 {
-  "name": "@aws-blocks/core",
-  "version": "0.8.0",
+  "name": "@aws-cdk-blocks/core",
+  "version": "1.0.0-rc.0",
   "keywords": [
     "aws-blocks",
     "framework",
@@ -10,12 +10,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "url": "git+https://github.com/aws/cdk-blocks.git",
     "directory": "packages/core"
   },
-  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/core#readme",
+  "homepage": "https://github.com/aws/cdk-blocks/tree/main/packages/core#readme",
   "bugs": {
-    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+    "url": "https://github.com/aws/cdk-blocks/issues"
   },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
@@ -64,6 +64,10 @@
       "require": "./dist/server/index.js"
     },
     "./scripts": "./dist/scripts/index.js",
+    "./track-command": {
+      "types": "./dist/telemetry/trackCommand.d.ts",
+      "default": "./dist/telemetry/trackCommand.js"
+    },
     "./scripts/dev-pidfile": "./dist/scripts/dev-pidfile.js",
     "./scripts/generate-client-worker": "./dist/scripts/generate-client-worker.js",
     "./db-naming": {
@@ -91,8 +95,8 @@
     "unctx": "^2.5.0"
   },
   "dependencies": {
-    "@aws-blocks/hosting": "^0.5.0",
-    "@aws-blocks/pipeline": "*",
+    "@aws-cdk-blocks/hosting": "^1.0.0-rc.0",
+    "@aws-cdk-blocks/pipeline": "1.0.0-rc.0",
     "@aws-sdk/client-account": "^3.1156.0",
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-cloudfront": "^3.1156.0",

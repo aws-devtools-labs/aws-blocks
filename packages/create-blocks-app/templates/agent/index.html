@@ -5,7 +5,7 @@
   <title>AWS Blocks Agent</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <!-- First-paint tokens only. The authoritative token layer (incl. the
-       .bb-* component classes) is @aws-blocks/auth-common's THEME_CSS,
+       .bb-* component classes) is @aws-cdk-blocks/auth-common's THEME_CSS,
        injected by the components at runtime; this inline copy exists so a
        dark-mode user's first paint already uses the dark palette instead of
        flashing white until the deferred module bundle runs. -->
@@ -38,7 +38,7 @@
 </head>
 <body>
   <h1>AWS Blocks — AI Agent</h1>
-  <p>Sign in, then chat with the agent. In <code>npm run dev</code> the agent uses the built-in <code>canned</code> provider — a deterministic fake model, no AWS or LLM. Ask it to "save a note" to see a tool call. Swap <code>model.local</code> in <code>aws-blocks/index.ts</code> for a real model.</p>
+  <p>Sign in, then chat with the agent. In <code>npm run dev</code> the agent uses the built-in <code>canned</code> provider — a deterministic fake model, no AWS or LLM. Ask it to "save a note" to see a tool call. Swap <code>model.local</code> in <code>cdk-blocks/index.ts</code> for a real model.</p>
 
   <div class="section">
     <div id="auth-container"></div>

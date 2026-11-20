@@ -3,7 +3,7 @@
 
 /**
  * Who owns `BLOCKS_PUBLIC_ORIGIN`: the origin browsers reach the backend's
- * `/aws-blocks/*` at (the OIDC callback lands there; the session cookie's
+ * `/cdk-blocks/*` at (the OIDC callback lands there; the session cookie's
  * `Secure` follows its scheme).
  *
  * A real `BlocksStack.create({ apiFrontDoor })` + `Hosting`, read after
@@ -12,7 +12,7 @@
  * - a same-origin door publishes its own URL, and the managed API
  *   distribution (built for native clients when the door doesn't claim the
  *   API front-door role) never overwrites it;
- * - `'none'` (an S3 website, which serves no `/aws-blocks/*`) publishes none:
+ * - `'none'` (an S3 website, which serves no `/cdk-blocks/*`) publishes none:
  *   the managed distribution's URL under `cloudfront`, the request's own host
  *   under `apigateway`; and the browser calls the same API URL `ApiUrl` names;
  * - a door whose URL is plain HTTP never claims the role, even when the URL is
@@ -30,7 +30,7 @@ import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import { cf, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+import { cf, defineFrontDoor } from '@aws-cdk-blocks/hosting/constructs';
 import type { ScopeParent } from '../common/index.js';
 import { buildConfigJson, Hosting, type HostingProps } from '../hosting.js';
 import { ComputeBase } from './compute/compute.js';
@@ -131,7 +131,7 @@ const synth = async (
 	};
 };
 
-describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browsers', () => {
+describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /cdk-blocks/* to browsers', () => {
 	test("ALB without a certificate under 'cloudfront': the ALB stays the public origin (the API distribution doesn't overwrite it)", async () => {
 		const r = await synth('cloudfront', { kind: 'alb' }, true);
 		assert.ok(r.apiFrontDoorBuilt, 'an http:// door does not claim, so native clients keep an HTTPS ApiUrl');
@@ -200,7 +200,7 @@ describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browse
 		assert.match(r.publicOrigin ?? '', /HostingAlb[0-9A-F]+","DNSName"/);
 	});
 
-	test("'none' under 'apigateway': no public origin (the bucket serves no /aws-blocks/*; the request's own host is the real one)", async () => {
+	test("'none' under 'apigateway': no public origin (the bucket serves no /cdk-blocks/*; the request's own host is the real one)", async () => {
 		const r = await synth('apigateway', 'none');
 		assert.strictEqual(r.publicOrigin, undefined);
 		assert.doesNotMatch(r.browserApiUrl, /WebsiteURL/);

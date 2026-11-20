@@ -2,7 +2,7 @@
 
 Design document for AsyncJob. For usage, examples, and best practices, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-async-job`
+**Package:** `@aws-cdk-blocks/bb-async-job`
 **Type:** Primitive (new infrastructure)
 **AWS Services:** Amazon SQS with either AWS Lambda or Amazon ECS on AWS Fargate
 
@@ -156,7 +156,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 - Retry semantics mirror AWS: on handler error the entry is retried until `receiveCount >= maxRetries`, then moved to an in-memory `failed` (DLQ) list with `failedAt` and `lastError` recorded.
 - Queue state is exposed on `_queue` (`pending`, `processing`, `delayed`, `failed`, `totalSubmitted`, `totalCompleted`) for dev-server inspection.
 - Identical schema and 256 KB payload-size validation runs before enqueue, producing the same typed errors as AWS.
-- When `trackStatus` is enabled, the same `JobStatusTracker` runs as in AWS — it composes a `KVStore`, whose own conditional exports resolve to the mock (JSON on disk under `.bb-data/`) locally and to DynamoDB in AWS, so there is one status code path rather than two. `submit()` records `queued` before scheduling the entry, and `processEntry` records `processing` per attempt and `complete`/`failed` on settle.
+- When `trackStatus` is enabled, the same `JobStatusTracker` runs as in AWS — it composes a `KVStore`, whose own conditional exports resolve to the mock (JSON on disk under `.cdk-blocks/local/data/`) locally and to DynamoDB in AWS, so there is one status code path rather than two. `submit()` records `queued` before scheduling the entry, and `processEntry` records `processing` per attempt and `complete`/`failed` on settle.
 - Console logs trace submission, completion (with duration), retries, and DLQ moves, prefixed `[AsyncJob:{id}]`.
 
 ### Mock vs AWS Behavior Differences
@@ -167,7 +167,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 | Handler runs in-process (not isolated) | Shared memory, no cold start, no container worker-thread isolation or delivery timeout enforcement | A Lambda invocation can share a batch; container deliveries use separate workers. Exercise container isolation and termination in a sandbox |
 | No real visibility timeout | Retries are immediate rather than after a timeout window | No mitigation — timing differences don't affect at-least-once + retry correctness |
 | `submitBatch()` never returns partial failures | The mock enqueues each payload locally, so `failed` is always empty and `BatchSubmitFailed` is never thrown | AWS surfaces per-entry failures; design handlers and callers to handle the `failed` array and `BatchSubmitFailedException` |
-| Expired status records are hidden, not deleted, locally | The mock `KVStore` hides an expired record on every read, so `getStatus()` returns `null` ~24 hours after the last transition in both runtimes, but the mock keeps the record in `.bb-data/` until the dev server restarts (it drops expired records when it loads its file), whereas DynamoDB physically deletes it in the background | No mitigation needed — local records are small and `.bb-data/` is disposable. Do not rely on a record being *absent* from the table after 24 hours in either runtime; DynamoDB TTL deletion is asynchronous and best-effort |
+| Expired status records are hidden, not deleted, locally | The mock `KVStore` hides an expired record on every read, so `getStatus()` returns `null` ~24 hours after the last transition in both runtimes, but the mock keeps the record in `.cdk-blocks/local/data/` until the dev server restarts (it drops expired records when it loads its file), whereas DynamoDB physically deletes it in the background | No mitigation needed — local records are small and `.cdk-blocks/local/data/` is disposable. Do not rely on a record being *absent* from the table after 24 hours in either runtime; DynamoDB TTL deletion is asynchronous and best-effort |
 | Concurrent status writes never actually collide locally | The mock queue delivers each job once to a single in-process consumer, so the compare-and-swap in D-AJ-8 never has to retry and a dropped terminal write cannot happen. In AWS at-least-once delivery makes both reachable | The CAS is exercised directly against the tracker in unit tests rather than through the mock queue. Callers must read `waitUntilComplete()`'s `Timeout` as "status unknown" rather than "still running", since only the deployed runtime can drop a terminal write |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by CDK grants automatically |
 

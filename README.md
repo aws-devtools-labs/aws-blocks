@@ -1,43 +1,43 @@
-# AWS Blocks (Preview)
+# AWS CDK Blocks
 
-[![npm version](https://img.shields.io/npm/v/@aws-blocks/blocks?color=brightgreen&label=npm%20package)](https://www.npmjs.com/package/@aws-blocks/blocks)[![weekly downloads](https://img.shields.io/npm/dw/@aws-blocks/blocks)](https://www.npmjs.com/package/@aws-blocks/blocks)[![build status](https://img.shields.io/github/actions/workflow/status/aws-devtools-labs/aws-blocks/publish-packages.yml)](https://github.com/aws-devtools-labs/aws-blocks/blob/main/.github/workflows/publish-packages.yml)
+[![npm version](https://img.shields.io/npm/v/aws-cdk-blocks?color=brightgreen&label=npm%20package)](https://www.npmjs.com/package/aws-cdk-blocks)[![weekly downloads](https://img.shields.io/npm/dw/aws-cdk-blocks)](https://www.npmjs.com/package/aws-cdk-blocks)[![build status](https://img.shields.io/github/actions/workflow/status/aws-devtools-labs/aws-blocks/publish-packages.yml)](https://github.com/aws-devtools-labs/aws-blocks/blob/main/.github/workflows/publish-packages.yml)
 
-AWS Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need, compose them, and AWS Blocks defines the AWS infrastructure for you following AWS best practices. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
+AWS CDK Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need, compose them, and AWS CDK Blocks defines the AWS infrastructure for you following AWS best practices. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
 
-> 📚 **Documentation:** [AWS Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html)
+> 📚 **Documentation:** [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html)
 
 ## Getting started
 
 Requires [Node.js](https://nodejs.org/) 22 or later and npm 10 or later.
 
 ```bash
-npm create @aws-blocks/blocks-app@latest my-app
+npm create @aws-cdk-blocks/blocks-app@latest my-app
 cd my-app
 npm install
 npm run dev
 ```
 
-`npm run dev` starts a local development server at `http://localhost:3000` with every Block running a local implementation — no AWS account or credentials required. Define your backend in `aws-blocks/index.ts` and your frontend in `src/`; types flow end to end with no code generation step.
+`npm run dev` starts a local development server at `http://localhost:3000` with every Block running a local implementation — no AWS account or credentials required. Define your backend in `cdk-blocks/index.ts` and your frontend in `src/`; types flow end to end with no code generation step.
 
 - In the installed app, `npm run docs` lists Building Blocks, `npm run docs KVStore` opens a block’s guide, and `npm run help` lists tasks.
-- Start from a specific template with `--template <name>`. Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `cron`, `amplify`, `demo` (`npx @aws-blocks/create-blocks-app --help` describes each; `auth` was previously `auth-cognito`, which still works).
-- Run the command inside an existing project (omit the directory, or pass `.`) to add an `aws-blocks/` backend to it. The CLI auto-detects an AWS Amplify Gen 2 project and integrates with it.
+- Start from a specific template with `--template <name>`. Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `cron`, `amplify`, `demo` (`npx @aws-cdk-blocks/create-blocks-app --help` describes each; `auth` was previously `auth-cognito`, which still works).
+- Run the command inside an existing project (omit the directory, or pass `.`) to add a `cdk-blocks/` backend to it. The CLI auto-detects an AWS Amplify Gen 2 project and integrates with it.
 
-For a full walkthrough, see [Getting started with AWS Blocks](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).
+For a full walkthrough, see [Getting started with AWS CDK Blocks](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).
 
 ## How it works
 
-AWS Blocks uses Node.js conditional exports to load different code for each context:
+AWS CDK Blocks uses Node.js conditional exports to load different code for each context:
 
 - **Local development** — Blocks use in-memory and filesystem storage; your app runs on your machine.
-- **CDK synthesis** — Blocks produce CDK constructs, and AWS Blocks generates a CloudFormation template.
+- **CDK synthesis** — Blocks produce CDK constructs, and AWS CDK Blocks generates a CloudFormation template.
 - **AWS Lambda runtime** — Blocks call AWS services through the SDK.
 
 The same `new KVStore(scope, 'todos')` line becomes a local store in development, an Amazon DynamoDB table at deploy time, and SDK calls in production — with no code changes.
 
 ## Blocks
 
-A Block is a module that gives you a complete feature: cloud resources, a runtime API, and a local implementation. Each Block is published as an npm package, and the umbrella package [`@aws-blocks/blocks`](https://www.npmjs.com/package/@aws-blocks/blocks) re-exports every Block plus the core runtime.
+A Block is a module that gives you a complete feature: cloud resources, a runtime API, and a local implementation. Each Block is published as an npm package, and the umbrella package [`aws-cdk-blocks`](https://www.npmjs.com/package/aws-cdk-blocks) re-exports every Block plus the core runtime.
 
 | Category | Blocks |
 | --- | --- |
@@ -50,7 +50,7 @@ A Block is a module that gives you a complete feature: cloud resources, a runtim
 | Observability | `Logger`, `Metrics`, `Tracer`, `Dashboard` |
 | Hosting | `Hosting` |
 
-For the full catalog and per-Block API reference, see the [AWS Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html).
+For the full catalog and per-Block API reference, see the [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html).
 
 ## Supported platforms
 

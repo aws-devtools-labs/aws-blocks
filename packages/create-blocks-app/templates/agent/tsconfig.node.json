@@ -20,11 +20,11 @@
   "include": [
     "vite.config.ts",
     "test/**/*",
-    ".blocks/**/*.d.ts"
+    ".cdk-blocks/**/*.d.ts"
   ],
   "references": [
     {
-      "path": "./aws-blocks"
+      "path": "./cdk-blocks"
     }
   ]
 }

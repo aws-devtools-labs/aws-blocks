@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `npx @aws-blocks/bb-auth migrate [paths…] [--dry-run]`
+ * `npx @aws-cdk-blocks/bb-auth migrate [paths…] [--dry-run]`
  *
  * Moves an app from `AuthBasic` / `AuthCognito` / `AuthOIDC` to `Auth`:
  * rewrites imports, class names, options, renamed methods and error names, and
@@ -10,7 +10,7 @@
  * decide. It never changes a block's `id` argument. See `MIGRATION.md`.
  *
  * TypeScript is loaded lazily from the project being migrated (falling back to
- * a copy next to this package), so `@aws-blocks/bb-auth` itself carries no
+ * a copy next to this package), so `@aws-cdk-blocks/bb-auth` itself carries no
  * TypeScript dependency.
  */
 
@@ -32,7 +32,7 @@ import {
 	transformFile,
 } from './transform.js';
 
-const USAGE = `Usage: npx @aws-blocks/bb-auth migrate [paths…] [--dry-run]
+const USAGE = `Usage: npx @aws-cdk-blocks/bb-auth migrate [paths…] [--dry-run]
 
 Migrates AuthBasic / AuthCognito / AuthOIDC code to the Auth Building Block.
 
@@ -44,10 +44,10 @@ Migrates AuthBasic / AuthCognito / AuthOIDC code to the Auth Building Block.
 The block id argument (new Auth(scope, '<id>')) is never changed: changing it
 would replace the Cognito user pool and delete every user in it.
 
-Read MIGRATION.md in @aws-blocks/bb-auth before you deploy.
+Read MIGRATION.md in @aws-cdk-blocks/bb-auth before you deploy.
 
 Other commands:
-  users       Group membership, e.g. the first admin: npx @aws-blocks/bb-auth users --help`;
+  users       Group membership, e.g. the first admin: npx @aws-cdk-blocks/bb-auth users --help`;
 
 const SOURCE_EXT = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'cdk.out', 'coverage', 'out']);
@@ -99,7 +99,7 @@ export async function loadTypeScript(cwd: string): Promise<TypeScript> {
 	}
 	throw new Error(
 		'bb-auth migrate needs the `typescript` package. Run it from your project (which has TypeScript installed), ' +
-			'or: npx -p typescript -p @aws-blocks/bb-auth bb-auth migrate',
+			'or: npx -p typescript -p @aws-cdk-blocks/bb-auth bb-auth migrate',
 	);
 }
 
@@ -207,10 +207,11 @@ export async function runMigrate(options: MigrateOptions = {}): Promise<MigrateS
 	}
 	if (blocks.size > 0) {
 		log('\nNext steps (MIGRATION.md):');
-		log('  1. In package.json, replace @aws-blocks/bb-auth-basic / -cognito / -oidc with @aws-blocks/bb-auth');
-		log('     (apps on @aws-blocks/blocks only need to update it), then npm install.');
+		log('  1. In package.json, replace @aws-blocks/bb-auth-basic / -cognito / -oidc with');
+		log('     @aws-cdk-blocks/bb-auth, and @aws-blocks/blocks (and any other @aws-blocks/* package)');
+		log('     with aws-cdk-blocks / @aws-cdk-blocks/*, then npm install.');
 		log('  2. Resolve every TODO, then typecheck and run your tests.');
-		log('  3. Deploy this output with no other configuration change, then commit aws-blocks/baselines/ (the');
+		log('  3. Deploy this output with no other configuration change, then commit cdk-blocks/baselines/ (the');
 		log("     user pool's immutability baseline). Change the auth configuration only after that: from then on,");
 		log('     synth refuses a change that would delete the pool.');
 		if (blocks.has('basic'))

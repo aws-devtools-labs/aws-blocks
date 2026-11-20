@@ -1,15 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, beforeEach, describe } from 'node:test';
 import assert from 'node:assert';
-import { rmSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { beforeEach, describe, test } from 'node:test';
 import { AppSetting, AppSettingErrors } from './index.mock.js';
 
 // Clean mock data between tests
 beforeEach(() => {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
+	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
+		rmSync('.bb-data', { recursive: true, force: true });
+	} catch {}
 });
 
 // ── Helper: minimal StandardSchemaV1 implementation ─────────────────────────
@@ -29,8 +32,14 @@ function makeSchema<T>(validate: (value: unknown) => T | null) {
 }
 
 const configSchema = makeSchema<{ maxRetries: number; timeout: number }>((v) => {
-	if (typeof v === 'object' && v !== null && 'maxRetries' in v && 'timeout' in v
-		&& typeof (v as any).maxRetries === 'number' && typeof (v as any).timeout === 'number') {
+	if (
+		typeof v === 'object' &&
+		v !== null &&
+		'maxRetries' in v &&
+		'timeout' in v &&
+		typeof (v as any).maxRetries === 'number' &&
+		typeof (v as any).timeout === 'number'
+	) {
 		return v as { maxRetries: number; timeout: number };
 	}
 	return null;
@@ -98,7 +107,8 @@ describe('Plain string settings', () => {
 	});
 	test('numeric value round-trips correctly without schema', async () => {
 		const setting = new AppSetting<number>({ id: 'root' } as any, 'temp', {
-			name: '/app/temp', value: 0.7,
+			name: '/app/temp',
+			value: 0.7,
 		});
 		await setting.put(0.7);
 		const v = await setting.get();
@@ -260,7 +270,7 @@ describe('Secret empty-string rejection', () => {
 		await setting.put('placeholder');
 		const { writeFileSync, readFileSync: rf } = await import('node:fs');
 		const { join } = await import('node:path');
-		const settingsPath = join('.bb-data', 'settings.json');
+		const settingsPath = join('.cdk-blocks/local/data', 'settings.json');
 		const data = JSON.parse(rf(settingsPath, 'utf8'));
 		data['root-empty-secret'] = '';
 		writeFileSync(settingsPath, JSON.stringify(data));
@@ -304,7 +314,7 @@ describe('Secret empty-string rejection', () => {
 		await setting.put('temp');
 		const { writeFileSync, readFileSync: rf } = await import('node:fs');
 		const { join } = await import('node:path');
-		const settingsPath = join('.bb-data', 'settings.json');
+		const settingsPath = join('.cdk-blocks/local/data', 'settings.json');
 		const data = JSON.parse(rf(settingsPath, 'utf8'));
 		data['root-errtype-secret'] = '';
 		writeFileSync(settingsPath, JSON.stringify(data));
@@ -444,13 +454,13 @@ describe('Disk persistence', () => {
 		assert.strictEqual(await s2.get(), 'value2'); // not affected by s1
 	});
 
-	test('mock stores data in .bb-data/settings.json', async () => {
+	test('mock stores data in .cdk-blocks/local/data/settings.json', async () => {
 		const setting = new AppSetting({ id: 'root' } as any, 'diskcheck', {
 			name: '/app/diskcheck',
 			value: 'initial',
 		});
 		await setting.put('written');
-		const filePath = join('.bb-data', 'settings.json');
+		const filePath = join('.cdk-blocks/local/data', 'settings.json');
 		assert.ok(existsSync(filePath));
 		const content = JSON.parse(readFileSync(filePath, 'utf8'));
 		assert.strictEqual(content['root-diskcheck'], 'written');
@@ -463,11 +473,10 @@ describe('Disk persistence', () => {
 		});
 		// Corrupt the shared settings file
 		const { writeFileSync } = await import('node:fs');
-		writeFileSync(join('.bb-data', 'settings.json'), 'not valid json{{{');
+		writeFileSync(join('.cdk-blocks/local/data', 'settings.json'), 'not valid json{{{');
 
 		assert.strictEqual(await setting.get(), 'fallback');
 	});
-
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -636,7 +645,11 @@ describe('Option validation (parity with CDK)', () => {
 	function rejectsValidation(fn: () => unknown, msgIncludes?: string) {
 		assert.throws(fn, (err: Error) => {
 			assert.strictEqual(err.name, AppSettingErrors.ValidationFailed);
-			if (msgIncludes) assert.ok(err.message.includes(msgIncludes), `message should include "${msgIncludes}", got: ${err.message}`);
+			if (msgIncludes)
+				assert.ok(
+					err.message.includes(msgIncludes),
+					`message should include "${msgIncludes}", got: ${err.message}`,
+				);
 			return true;
 		});
 	}
@@ -666,7 +679,11 @@ describe('Option validation (parity with CDK)', () => {
 
 	test("'kmsKeyArn' without 'secret: true' throws", () => {
 		rejectsValidation(
-			() => new AppSetting({ id: 'root' } as any, 'kms-no-secret', { value: 'x', kmsKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abc' }),
+			() =>
+				new AppSetting({ id: 'root' } as any, 'kms-no-secret', {
+					value: 'x',
+					kmsKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abc',
+				}),
 			"'kmsKeyArn' is only valid with 'secret: true'",
 		);
 	});
@@ -702,7 +719,13 @@ describe('Option validation (parity with CDK)', () => {
 	});
 
 	test('secret with a valid kmsKeyArn is valid', () => {
-		assert.doesNotThrow(() => new AppSetting({ id: 'root' } as any, 'ok-kms', { secret: true, kmsKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abc' }));
+		assert.doesNotThrow(
+			() =>
+				new AppSetting({ id: 'root' } as any, 'ok-kms', {
+					secret: true,
+					kmsKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abc',
+				}),
+		);
 	});
 
 	test('fromExisting with a name is valid', () => {

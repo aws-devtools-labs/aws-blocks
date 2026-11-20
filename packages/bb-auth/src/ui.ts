@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth/ui` — the sign-in UI for the `Auth` Building Block.
+ * `@aws-cdk-blocks/bb-auth/ui` — the sign-in UI for the `Auth` Building Block.
  *
  * Re-exports the shared, provider-agnostic renderer from
- * `@aws-blocks/auth-common/ui` (the same functions, so they share one
+ * `@aws-cdk-blocks/auth-common/ui` (the same functions, so they share one
  * per-`api` auth-state store with any other import path) — the
  * `Authenticator`, the `MfaSettings` authenticator-app enrolment panel and the
  * auth-state helpers — plus
@@ -17,8 +17,8 @@
  *
  * @example
  * ```typescript
- * import { Authenticator, authOverrides, submitAuthAction } from '@aws-blocks/bb-auth/ui';
- * import { authApi } from 'aws-blocks';
+ * import { Authenticator, authOverrides, submitAuthAction } from '@aws-cdk-blocks/bb-auth/ui';
+ * import { authApi } from 'cdk-blocks';
  *
  * document.body.appendChild(Authenticator(authApi, authOverrides({
  *   hideActions: ['signUp'],                       // typed: only Auth action names
@@ -42,7 +42,7 @@
  * ```
  */
 
-import type { AuthActionOverride, AuthenticatorOptions, AuthFieldOverride } from '@aws-blocks/auth-common/ui';
+import type { AuthActionOverride, AuthenticatorOptions, AuthFieldOverride } from '@aws-cdk-blocks/auth-common/ui';
 import type { SignInNextStep } from './types.js';
 
 export type {
@@ -58,7 +58,7 @@ export type {
 	StatusKind,
 	StatusMessageHandle,
 	StatusMessageOptions,
-} from '@aws-blocks/auth-common/ui';
+} from '@aws-cdk-blocks/auth-common/ui';
 export {
 	AccountMenuBar,
 	AuthenticatedContent,
@@ -73,7 +73,7 @@ export {
 	subscribeAuthState,
 	THEME_CSS,
 	THEME_STYLE_ID,
-} from '@aws-blocks/auth-common/ui';
+} from '@aws-cdk-blocks/auth-common/ui';
 
 // ---------------------------------------------------------------------------
 // Auth's UI vocabulary
@@ -197,7 +197,7 @@ export interface AuthTypedAuthenticatorOptions {
  * of action, next-step, state and field names. Zero runtime cost.
  *
  * Typed at the input boundary, widened at the output: the renderer in
- * `@aws-blocks/auth-common/ui` stays provider-agnostic.
+ * `@aws-cdk-blocks/auth-common/ui` stays provider-agnostic.
  *
  * @param options - The overrides, keyed by `Auth`'s vocabulary.
  * @returns The same object, as the renderer's `AuthenticatorOptions`.

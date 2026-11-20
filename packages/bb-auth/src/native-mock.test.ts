@@ -5,7 +5,7 @@
  * The local (mock) user-pool engine, through the real default entry's `Auth`:
  * sign-up / sign-in and challenges, enumeration safety on every public flow,
  * MFA / TOTP, devices, user attributes, `deleteUser`, passkeys, the admin
- * surface, refresh and revocation, `.bb-data` persistence, tolerant loading,
+ * surface, refresh and revocation, `.cdk-blocks/local/data` persistence, tolerant loading,
  * and `AuthCognito` state-file compatibility (both directions).
  */
 
@@ -13,9 +13,9 @@ import assert from 'node:assert';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, type TestContext, test } from 'node:test';
-import type { AuthActionInput, AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import type { AuthActionInput, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser, captureLogger, makeContext } from './test-helpers.js';
@@ -26,8 +26,8 @@ import {
 } from './test-support/legacy-fixtures.js';
 import type { CodeDeliveryPurpose } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 let counter = 0;
@@ -97,7 +97,7 @@ async function register(
 }
 
 /**
- * Put an `AuthCognito` capture back (its `.bb-data` files and the browser's
+ * Put an `AuthCognito` capture back (its `.cdk-blocks/local/data` files and the browser's
  * cookies) and pin `Date` to the moment it was taken, so `Auth` meets the old
  * block's state exactly as a live upgrade would have — then return the app
  * scope, the browser and the user the old block had signed in.
@@ -114,7 +114,7 @@ function restoreLegacy(t: TestContext, name: string) {
 }
 
 function dataDir(auth: { fullId: string }): string {
-	return join('.bb-data', auth.fullId);
+	return join('.cdk-blocks/local/data', auth.fullId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -485,7 +485,7 @@ describe('mock engine — MFA', () => {
 		const enrolled = await new Browser().request((ctx) => before.signIn('oli', PASSWORD, ctx));
 		assert.ok(enrolled.status === 'continueSignIn' && enrolled.nextStep.name === 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 
-		// The same block (same id, same .bb-data), rebuilt without TOTP.
+		// The same block (same id, same .cdk-blocks/local/data), rebuilt without TOTP.
 		const after = new Auth(parent, 'auth', {
 			mfa: { mode: 'optional', types: ['SMS'] },
 			codeDelivery: sink.deliver,
@@ -766,7 +766,7 @@ describe('mock engine — passkeys', () => {
 				{ credentialId: 'cred-q' },
 			],
 		);
-		// Persisted: a fresh instance over the same `.bb-data` reads them back.
+		// Persisted: a fresh instance over the same `.cdk-blocks/local/data` reads them back.
 		const again = new Auth({ id: auth.fullId.slice(0, -'-auth'.length) }, 'auth', {
 			users: { authFlow: 'USER_AUTH' },
 			passkeys: { relyingPartyId: 'localhost', origins: ['http://localhost:3000'] },
@@ -981,7 +981,7 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 
 	test('an unparseable state file is set aside (never deleted) and the pool starts empty, with a log line', async () => {
 		const r = root();
-		const dir = join('.bb-data', `${r.id}-auth`);
+		const dir = join('.cdk-blocks/local/data', `${r.id}-auth`);
 		new Auth(r, 'auth');
 		writeFileSync(join(dir, 'state.json'), '{ not json');
 		const { logger, entries } = captureLogger();
@@ -1000,7 +1000,7 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 
 	test('a foreign state file (not an object) is set aside; malformed records are dropped; unknown keys kept', async () => {
 		const r = root();
-		const dir = join('.bb-data', `${r.id}-auth`);
+		const dir = join('.cdk-blocks/local/data', `${r.id}-auth`);
 		new Auth(r, 'auth');
 		writeFileSync(join(dir, 'state.json'), '[1, 2, 3]');
 		const { logger, entries } = captureLogger();
@@ -1179,7 +1179,7 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 			401,
 		);
 		for (const [rel, text] of Object.entries(legacy.files)) {
-			assert.strictEqual(readFileSync(join('.bb-data', rel), 'utf8'), text, rel);
+			assert.strictEqual(readFileSync(join('.cdk-blocks/local/data', rel), 'utf8'), text, rel);
 		}
 	});
 

@@ -62,7 +62,7 @@ targets:
         - BlocksE2ETests
       environmentVariables:
         - variable: BLOCKS_URL
-          value: http://localhost:3001/aws-blocks/api
+          value: http://localhost:3001/cdk-blocks/api
           isEnabled: true
         - variable: RUN_OIDC
           value: "1"

@@ -6,7 +6,7 @@
  * owns a front-door port, its exclusive claim, and its release.
  *
  * It has no dependency beyond Node.js, so the `npm run dev` launcher loads it
- * (`@aws-blocks/core/scripts/dev-pidfile`) to claim the session the moment it
+ * (`@aws-cdk-blocks/core/scripts/dev-pidfile`) to claim the session the moment it
  * starts, well before the dev server it starts has loaded (see
  * {@link claimDevSession}).
  */
@@ -457,7 +457,7 @@ function removeOrphans(d: ClaimPidfileDeps, path: string): void {
  * A live session of this app on another port: the first record in the app's
  * other pidfiles (see {@link ClaimPidfileDeps.peers}) whose process, or `tsx
  * watch` session, still runs (see {@link recordLiveness}). Two dev servers of
- * one app share its data directory (`.bb-data`), so a second one on another
+ * one app share its data directory (`.cdk-blocks/local/data`), so a second one on another
  * port must not start either.
  */
 function livePeer(d: ClaimPidfileDeps, path: string): DevServerPidRecord | null {

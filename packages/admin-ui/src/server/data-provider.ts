@@ -30,7 +30,7 @@ import type {
 /**
  * Swappable backend behind the Dashboard API.
  *
- * The local Node server uses {@link LocalDataProvider} (reads .blocks state
+ * The local Node server uses {@link LocalDataProvider} (reads .cdk-blocks state
  * and calls AWS with the developer's credentials). A future in-account
  * deployment swaps in a Lambda-backed provider without touching the SPA
  * or the route handlers.

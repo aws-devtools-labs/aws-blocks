@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { SESv2Client, SendEmailCommand, SendBulkEmailCommand } from '@aws-sdk/client-sesv2';
-import { Scope, installClientUserAgent, blocksError } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
+import { Scope, installClientUserAgent, blocksError } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors
@@ -13,8 +13,8 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './
 import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
 import { EmailErrors } from './errors.js';
 import { resolveMaxBatchSize, validateBatchSize, validateMessage } from './validation.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 
 const BATCH_CHUNK_SIZE = 50;
 

@@ -63,7 +63,7 @@ describe('test-support secret: per-run, from the environment', () => {
 	});
 
 	test('the backend refuses to load as an e2e build without a secret', () => {
-		const result = spawnSync('npx', ['tsx', '--input-type=module', '-e', `await import('./aws-blocks/index.ts');`], {
+		const result = spawnSync('npx', ['tsx', '--input-type=module', '-e', `await import('./cdk-blocks/index.ts');`], {
 			cwd: APP_ROOT,
 			env: { ...process.env, NODE_OPTIONS: '', BLOCKS_TEST_ENV: 'local', BLOCKS_TEST_SUPPORT_SECRET: '' },
 			encoding: 'utf-8',

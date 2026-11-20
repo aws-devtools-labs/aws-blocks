@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { SqlQuery } from './common/sql.js';
 
@@ -67,7 +67,7 @@ export interface ExistingClusterOptions {
 	 * SecureString `/<stackName>-<name>`, so each stage has its own value;
 	 * `npm run db -- connect --name <name> --stage <stage>` stores it. In local
 	 * mode the block reads the value that `npm run db -- connect --name <name>`
-	 * stored under `.bb-data/`.
+	 * stored under `.cdk-blocks/local/data/`.
 	 */
 	name?: string;
 	/**
@@ -241,7 +241,7 @@ export type DatabaseClusterOptions = DsqlClusterOptions | AuroraClusterOptions;
 export interface DatabaseBlockOptions {
 	/**
 	 * Directory of `.sql` migration files for this block, relative to the project
-	 * root. Defaults to `./aws-blocks/migrations/{id}`, which may be absent; an
+	 * root. Defaults to `./cdk-blocks/migrations/{id}`, which may be absent; an
 	 * explicit path must exist.
 	 */
 	migrationsPath?: string;

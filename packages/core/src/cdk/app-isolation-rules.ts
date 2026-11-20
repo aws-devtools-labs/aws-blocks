@@ -584,7 +584,7 @@ export function checkStatement(
 		if (parsed.service === 's3' && bare.startsWith(`cdk-${id}-assets-`)) continue;
 		// Hosting's `config()` (`/blocks/<stackId>/config/…`, SSM) and `secret()`
 		// (`blocks/<stackId>/secrets/…`, Secrets Manager) values: the app's own when
-		// `stackId` (`.blocks/config.json`) is the app id; anything else under
+		// `stackId` (`.cdk-blocks/config.json`) is the app id; anything else under
 		// `blocks/` is another app's, or no app's.
 		const hostingStore = (parsed.service === 'ssm' || parsed.service === 'secretsmanager') && /^blocks(\/|$)/.test(bare);
 		// A name with a reference in it is checked only up to the reference: the
@@ -602,7 +602,7 @@ export function checkStatement(
 				path: where,
 				message: hostingStore
 					? `${where} grants ${actions.join(', ')} on Hosting's "${label}", which isn't under this app's ` +
-						`"blocks/${id}/" store prefix. Set "stackId" in .blocks/config.json to "${id}" (the app id), so ` +
+						`"blocks/${id}/" store prefix. Set "stackId" in .cdk-blocks/config.json to "${id}" (the app id), so ` +
 						`secret() and config() values live under blocks/${id}/.`
 					: api
 					? `${where} grants ${actions.join(', ')} on "${label}", a literal API id: API ids aren't app names, so ` +

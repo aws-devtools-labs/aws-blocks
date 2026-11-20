@@ -22,7 +22,7 @@ const pending: PendingAuth = {
 	provider: 'okta',
 	state: STATE,
 	codeVerifier: 'v',
-	callbackUrl: 'https://app.example.com/aws-blocks/auth/callback',
+	callbackUrl: 'https://app.example.com/cdk-blocks/auth/callback',
 	exp: Date.now() / 1000 + 600,
 };
 

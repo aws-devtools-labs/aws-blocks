@@ -34,6 +34,8 @@ const SECRET_PATHS = [
   'credentials',
   'config/credentials',
   '.aws/credentials',
+  '.cdk-blocks/local/data/settings.json',
+  // Left on disk and still read, so an older CLI writing here must not be stageable.
   '.bb-data/settings.json',
 ];
 
@@ -370,7 +372,7 @@ function methodBody(source: string, method: string): string {
 
 describe('create-blocks-app template key-value methods require auth', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const source = stripComments(readFileSync(backend, 'utf-8'));
     // Deny by default: an `auth.protect` namespace runs its methods only after the
@@ -396,7 +398,7 @@ describe('create-blocks-app auth templates define their signed-in methods with a
     'auth-oidc': ['getValue', 'setValue', 'whoAmI'],
   };
   for (const [name, methodNames] of Object.entries(protectedMethods)) {
-    const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts'), 'utf-8'));
+    const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts'), 'utf-8'));
     const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
 
     it(`the ${name} template's api namespace is auth.protect(...)`, () => {
@@ -583,7 +585,7 @@ function callsSessionGatedAuth(body: ts.Block): boolean {
 
 describe('create-blocks-app template RPC methods require auth unless listed as public', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     // A template whose only RPC surface is `auth.protect` has no ApiNamespace to
     // check here; the auth.protect test above checks which of its methods are public.
@@ -683,7 +685,7 @@ function handlerBody(options: ts.ObjectLiteralExpression, sourceFile: ts.SourceF
   return undefined;
 }
 
-/** Every `.ts` file under a template's `aws-blocks/` directory, skipping `node_modules`. */
+/** Every `.ts` file under a template's `cdk-blocks/` directory, skipping `node_modules`. */
 function templateBackendFiles(dir: string): string[] {
   return readdirSync(dir, { recursive: true, encoding: 'utf-8' })
     .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
@@ -692,7 +694,7 @@ function templateBackendFiles(dir: string): string[] {
 
 describe('create-blocks-app template RawRoutes require auth unless listed as public', () => {
   for (const name of templateNames) {
-    const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
+    const dir = join(TEMPLATES_DIR, name, 'cdk-blocks');
     if (!existsSync(dir)) continue;
 
     it(`template "${name}" gates every RawRoute that is not listed in PUBLIC_ROUTES`, () => {
@@ -771,7 +773,7 @@ describe('create-blocks-app template methods that return a presigned URL require
   // holds under --test-name-pattern / --test-only too.
   const callsPerTemplate: Record<string, number> = {};
   for (const name of templateNames) {
-    const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
+    const dir = join(TEMPLATES_DIR, name, 'cdk-blocks');
     if (!existsSync(dir)) continue;
     const files = templateBackendFiles(dir);
     callsPerTemplate[name] = files.reduce((total, file) => total + presignedUrlCalls(file).length, 0);
@@ -903,7 +905,7 @@ describe('argumentSpreads', () => {
 // explicit set of content types.
 describe('create-blocks-app template file buckets are versioned and uploads are typed', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const source = stripComments(readFileSync(backend, 'utf-8'));
     if (!source.includes('new FileBucket(')) continue;
@@ -926,7 +928,7 @@ describe('create-blocks-app template file buckets are versioned and uploads are 
 });
 
 describe('create-blocks-app demo template scopes per-user data', () => {
-  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'aws-blocks', 'index.ts'), 'utf-8'));
+  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'cdk-blocks', 'index.ts'), 'utf-8'));
 
   it('demo KV keys use an encoded, prefixed per-user namespace', () => {
     // `user:` keeps user keys apart from app keys (`job-ran:`); encoding stops a
@@ -949,7 +951,7 @@ describe('create-blocks-app template email senders are explicit placeholders, no
   // keeps such a sender fails every send once deployed. Templates name the sender
   // in one constant, flagged as a placeholder to replace before production.
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const raw = readFileSync(backend, 'utf-8');
     const source = stripComments(raw);
@@ -978,7 +980,7 @@ describe('create-blocks-app template email senders are explicit placeholders, no
 
 describe('create-blocks-app template cookies are fixed-name, HttpOnly, SameSite=Lax', () => {
   for (const name of templateNames) {
-    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    const backend = join(TEMPLATES_DIR, name, 'cdk-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const source = stripComments(readFileSync(backend, 'utf-8'));
     if (!/set-cookie/i.test(source)) continue;
@@ -1001,7 +1003,7 @@ describe('create-blocks-app template cookies are fixed-name, HttpOnly, SameSite=
   }
 
   it('demo template applies its cookie attributes to every set-cookie header', () => {
-    const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'aws-blocks', 'index.ts'), 'utf-8'));
+    const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'cdk-blocks', 'index.ts'), 'utf-8'));
     const calls = [...source.matchAll(/headers\.set\(\s*'set-cookie',([\s\S]*?)\);/g)];
     assert.ok(calls.length >= 2, 'expected the setCookie and deleteCookie set-cookie calls');
     for (const [call, header] of calls) {

@@ -26,8 +26,8 @@ dist-registry/
 scripts/harbor-bench/**/__pycache__/
 
 # Generated client code (hosting apps commit theirs for CI)
-test-apps/comprehensive/aws-blocks/client.js
-test-apps/telemetry/aws-blocks/client.js
+test-apps/comprehensive/cdk-blocks/client.js
+test-apps/telemetry/cdk-blocks/client.js
 
 # CDK
 cdk.out
@@ -38,17 +38,23 @@ test-apps/.upgrade-in-place/
 
 # Sandbox deploy artifacts (per-deploy state, account-specific)
 .cdk-blocks-sandbox/
-!/packages/create-blocks-app/templates/*/src/app/.cdk-blocks-sandbox/
-# The pre-rename name (D-030). The migration copies state forward rather than
-# moving it, so an upgraded checkout still has this directory and its
-# account-specific contents must stay uncommittable.
+# The pre-rename name: the migration copies state forward, so an upgraded checkout
+# still has this directory and its account-specific contents (D-031).
 .blocks-sandbox/
+# ... except the Next.js route directory, whose name is the public URL path the
+# config is served at, not a state directory. Must come AFTER both ignores above:
+# the last matching pattern wins, so earlier placement lets them re-ignore it and
+# the template's route silently stops being committed.
+!/packages/create-blocks-app/templates/*/src/app/.blocks-sandbox/
 
 # Per-project telemetry/config state (auto-generated, contains UUIDs)
-.blocks/
-# ... except test-apps configs (committed for e2e projectId identification)
-!test-apps/**/.blocks/
-!test-apps/**/.blocks/**
+.cdk-blocks/
+# ... except each test app's committed config.json, which pins its e2e projectId.
+!test-apps/**/.cdk-blocks/
+# The data stays out of git by a rule here as well as the runtime marker, as the
+# templates do: re-including the directory above un-ignores everything under it.
+test-apps/**/.cdk-blocks/local/
+!test-apps/**/.cdk-blocks/config.json
 
 # generated docs artifacts
 docs/tech-design-output

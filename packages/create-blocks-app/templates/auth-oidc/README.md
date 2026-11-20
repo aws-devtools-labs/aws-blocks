@@ -1,11 +1,11 @@
 # Blocks Auth (OIDC) App
 
-A frontend on AWS Blocks with **OpenID Connect (OIDC) / OAuth 2.0** sign-in end
+A frontend on AWS CDK Blocks with **OpenID Connect (OIDC) / OAuth 2.0** sign-in end
 to end. Users sign in with an external identity provider (Google, GitHub, Okta,
 any OIDC provider); the Building Block turns the authorization-code flow into an
 authenticated session your API consumes. Vite + vanilla DOM frontend.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template auth-oidc`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template auth-oidc`
 
 ## Getting Started
 
@@ -22,17 +22,17 @@ Open http://localhost:3000 after `npm run dev`.
 (and from a sandbox deployment), so sign-in runs the same authorize → callback →
 token-verify path a real provider drives, with no IdP account. Its `onAuthorize`
 hook decides who signs in (here, a single demo user). Synth refuses `stubIdp()`
-for production, so `aws-blocks/index.ts` picks the provider with
+for production, so `cdk-blocks/index.ts` picks the provider with
 `getDeploymentType()`: before `npm run deploy`, replace the production entry's
 `issuer` and `clientId` with your IdP's (Okta, Entra ID, Auth0, any OIDC
-provider) and register `<your origin>/aws-blocks/auth/callback` as its redirect
+provider) and register `<your origin>/cdk-blocks/auth/callback` as its redirect
 URI. Anyone who can reach a sandbox can sign in as the stub's users.
 
 ## Project Structure
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: `Auth` (`store: 'builtin'`, stub provider locally), KVStore, an `auth.protect` API |
+| `cdk-blocks/index.ts` | Backend: `Auth` (`store: 'builtin'`, stub provider locally), KVStore, an `auth.protect` API |
 | `src/index.ts` | Frontend: Authenticator sign-in + per-user KV demo |
 | `test/e2e.test.ts` | Tests exercising the public and protected API |
 | `index.html` | HTML shell |
@@ -42,7 +42,7 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
 - **Auth with direct OIDC federation** (`store: 'builtin'`) — your backend
   verifies each sign-in itself and the block keeps only sessions: no Cognito
   user pool. The sign-in kickoff, callback, token exchange and session cookie
-  are all owned by the block under `/aws-blocks/auth/*`. A user's `userId` is
+  are all owned by the block under `/cdk-blocks/auth/*`. A user's `userId` is
   `` `${issuer}:${sub}` ``.
 - **Deny-by-default API** (`auth.protect`) — `ping` is the one public method;
   every method under `methods` runs only for a signed-in caller and gets the
@@ -62,12 +62,12 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
-| `npm run deploy` | Deploy to production (configure the real OIDC provider in `aws-blocks/index.ts` first) |
+| `npm run deploy` | Deploy to production (configure the real OIDC provider in `cdk-blocks/index.ts` first) |
 | `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
 | `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
 | `npm run secret set KEY` | Set a secret (also `list`, `remove KEY`) |
 | `npm run config set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
-| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.cdk-blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
 
 Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
 The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
@@ -76,10 +76,10 @@ The dev server settings are in `package.json` under `"blocks": { "dev": … }`; 
 ## Stack naming
 
 Your CloudFormation stack names are derived from the `stackId` in
-`.blocks/config.json`, generated at scaffold time from your project name plus a
+`.cdk-blocks/config.json`, generated at scaffold time from your project name plus a
 random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod`
 and sandbox as `<stackId>-<username>-<random>`. To rename, edit `stackId`, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## For Agents
 
@@ -87,5 +87,5 @@ Building Block docs: `npm run docs` lists the blocks, and `npm run docs <Block>.
 
 **Do not use local files or in-memory storage** — use Building Blocks for all
 data persistence and cloud abstractions (they mock locally and deploy to AWS
-automatically). Start in `aws-blocks/index.ts` (backend) and `src/index.ts`
+automatically). Start in `cdk-blocks/index.ts` (backend) and `src/index.ts`
 (frontend). Test via `npm run test:e2e`.

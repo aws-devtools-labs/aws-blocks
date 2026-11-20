@@ -2,7 +2,7 @@
 
 Design document for Tracer. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-tracer`
+**Package:** `@aws-cdk-blocks/bb-tracer`
 **Type:** Composite (no new infrastructure)
 **AWS Service:** AWS X-Ray (via Lambda's built-in X-Ray integration)
 
@@ -58,7 +58,7 @@ When `enabled: false` is passed, `registerTracer` is not called — that Tracer 
 - `startSegment` captures timing (start/end timestamps via `Date.now()`) and manages a segment hierarchy via a stack (`segmentStack: TraceRecord[]`).
 - Nested `startSegment` calls push child records onto the stack; child records are added to the parent's `children` array.
 - Annotations and metadata are stored on each `MockSegment` instance and copied to the `TraceRecord` on segment close.
-- On top-level segment close, the complete segment tree is persisted to `.bb-data/{fullId}/traces.json`.
+- On top-level segment close, the complete segment tree is persisted to `.cdk-blocks/local/data/{fullId}/traces.json`.
 - Traces are also logged to console as structured JSON (`_type: 'trace'`).
 - File persists a rolling window of the last 100 traces (older traces are dropped).
 - `getTraceId()` returns a lazily-generated `randomUUID()` trace ID, reused across the same request.
@@ -72,7 +72,7 @@ When `enabled: false` is passed, `registerTracer` is not called — that Tracer 
 | `samplingRate` is mock-only (ignored in AWS) | Code relying on `samplingRate` to control production trace volume will not behave as expected | Documented in README and JSDoc. Production sampling is controlled by X-Ray sampling rules — this is the correct architecture (X-Ray rules are dynamic, per-service, and centrally managed) |
 | No X-Ray service map | Cannot visualize service dependencies locally | No mitigation — service map is an X-Ray console feature. Use sandbox testing for dependency visualization |
 | No cross-service trace propagation | Traces do not span across multiple Lambda invocations locally | No mitigation — trace propagation requires X-Ray daemon infrastructure |
-| No trace visualization | Cannot view waterfall/timeline views locally | Mock logs structured JSON with timing; `.bb-data/` files provide raw trace data |
+| No trace visualization | Cannot view waterfall/timeline views locally | Mock logs structured JSON with timing; `.cdk-blocks/local/data/` files provide raw trace data |
 | Trace ID format differs from X-Ray | Mock uses UUID; X-Ray uses `1-{hex timestamp}-{hex random}` format | No impact on correctness — format difference is cosmetic. Sandbox testing covers real X-Ray format |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation at mock level — IAM is handled by CDK configuration automatically |
 | `getTraceId()` null behavior differs | Mock always returns a value when enabled (lazily generated UUID); AWS returns `null` when there is no active trace context (X-Ray enabled but `_X_AMZN_TRACE_ID` unset). Code that only tests against mock may never exercise the `null` branch | Documented in JSDoc. Callers must handle a `null` return; sandbox testing covers the AWS no-active-trace path |

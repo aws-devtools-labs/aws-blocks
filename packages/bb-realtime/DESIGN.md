@@ -2,7 +2,7 @@
 
 Design document for Realtime. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-realtime`
+**Package:** `@aws-cdk-blocks/bb-realtime`
 **Type:** Client-facing
 **AWS Services:** API Gateway WebSocket, DynamoDB, AWS Secrets Manager or SSM Parameter Store (token secret, per `defaults.secretsStore`)
 
@@ -117,7 +117,7 @@ All `Realtime` instances in a stack share infrastructure. The first constructor 
 | WebSocket API | API Gateway WebSocketApi | Client WebSocket endpoint |
 | WebSocket Stage | WebSocketStage (`rt`, auto-deploy) | Deployment stage |
 
-All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design). No separate Lambdas are created.
+All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-cdk-blocks/core/cdk/internal` is only for keys shared by design). No separate Lambdas are created.
 
 #### Stage defaults (throttling + access logging)
 
@@ -148,7 +148,7 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key. Open connections keep working; on their next reconnect, clients that pass `refresh` get new tokens, and clients without it get `onDisconnect('error')` and must call `getChannel()` again |
+| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-cdk-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key. Open connections keep working; on their next reconnect, clients that pass `refresh` get new tokens, and clients without it get `onDisconnect('error')` and must call `getChannel()` again |
 
 ### DynamoDB Connections Table
 

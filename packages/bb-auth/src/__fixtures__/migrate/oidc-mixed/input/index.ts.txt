@@ -1,5 +1,5 @@
-import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { Scope } from '@aws-blocks/core';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
+import { Scope } from '@aws-cdk-blocks/core';
 import { AuthOIDC, cognitoFederated, customOidc } from '@aws-blocks/bb-auth-oidc';
 import { sharedProvider } from './providers.js';
 

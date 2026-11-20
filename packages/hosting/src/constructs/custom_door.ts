@@ -15,7 +15,11 @@
  *   3. for a bring-your-own door, runs the WIRING CHECK: from what the `cf.*`
  *      helpers recorded, the static assets must be reachable
  *      (`ServeStaticAsset`) and, when the app has an API, at least one of its
- *      paths must reach it (`ProxySameOriginApi`). An API path the door left
+ *      paths must reach it (`ProxySameOriginApi`). A door that wires the legacy
+ *      `/aws-blocks/*` subtree but not the canonical `/cdk-blocks/*` one fails
+ *      the same check, since every current client calls `/cdk-blocks/*` (the
+ *      usual mistake when a door hand-wired the old path before the rename).
+ *      Any other API path the door left
  *      unwired is a synth warning, and so are app redirects, per-pattern
  *      headers or error pages it left unwired (`cf.redirects`, `cf.headers`,
  *      `cf.errorPages` wire them; `cf.recordWired` declares hand-wired ones),
@@ -35,6 +39,7 @@ import { Annotations } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 import { startWiringRecord, type WiringRecord } from './cf_helpers.js';
+import { BLOCKS_API_SUBTREE, LEGACY_BLOCKS_API_SUBTREE } from './door_input.js';
 import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
 import { type OriginHandle, originHandleFromUrl } from './layer.js';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
@@ -81,7 +86,7 @@ export function buildFrontDoor<TInput extends DoorInput, TResult extends FrontDo
   if (!door || typeof door.service !== 'string' || door.service.length === 0 || typeof door.build !== 'function') {
     throw new HostingError('InvalidPropsError', {
       message: 'frontDoor.door is not a front door: it needs a non-empty `service` id and a `build(scope, input)` function.',
-      resolution: 'Define the door with `defineFrontDoor({ service, build })` from @aws-blocks/hosting/constructs.',
+      resolution: 'Define the door with `defineFrontDoor({ service, build })` from @aws-cdk-blocks/hosting/constructs.',
     });
   }
   const wiring = startWiringRecord(input);
@@ -133,9 +138,16 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
       problems.push(
         `ProxySameOriginApi: the app has an API, but none of ${api.paths.join(', ')} were wired — use cf.apiBehaviors(origins.api).`,
       );
+    } else if (missing.includes(BLOCKS_API_SUBTREE) && wiring.apiPaths.has(LEGACY_BLOCKS_API_SUBTREE)) {
+      // Only the legacy alias reaches the backend: older clients work, but every
+      // current client (and the generated config) calls `/cdk-blocks/*`.
+      problems.push(
+        `ProxySameOriginApi: ${LEGACY_BLOCKS_API_SUBTREE} was wired but ${BLOCKS_API_SUBTREE} was not, so current clients ` +
+          `can't reach the API — use cf.apiBehaviors(origins.api), or route ${BLOCKS_API_SUBTREE} too.`,
+      );
     } else if (missing.length > 0) {
       Annotations.of(scope).addWarningV2(
-        '@aws-blocks/hosting:FrontDoorApiPathUnwired',
+        '@aws-cdk-blocks/hosting:FrontDoorApiPathUnwired',
         `Front door '${service}' did not wire these API paths, so requests to them won't reach the backend: ` +
           `${missing.join(', ')}. Use cf.apiBehaviors(origins.api), or cf.recordWired(origins.api, paths) for paths wired by hand.`,
       );
@@ -147,17 +159,17 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
   if (input.app.errorPages && !wiring.rules.has('errorPages')) unwiredRules.push('app.errorPages (cf.errorPages)');
   if (unwiredRules.length > 0) {
     Annotations.of(scope).addWarningV2(
-      '@aws-blocks/hosting:FrontDoorRuleUnwired',
+      '@aws-cdk-blocks/hosting:FrontDoorRuleUnwired',
       `Front door '${service}' did not wire the app's ${unwiredRules.join(', ')}, so they won't apply. ` +
         'Wire them with the named helpers, or declare hand-wired ones with cf.recordWired(app.redirects) (etc.).',
     );
   }
   if (wiring.behaviors.size > MAX_ADDITIONAL_BEHAVIORS) {
     Annotations.of(scope).addWarningV2(
-      '@aws-blocks/hosting:FrontDoorBehaviorLimit',
+      '@aws-cdk-blocks/hosting:FrontDoorBehaviorLimit',
       `Front door '${service}' asked the cf.* helpers for ${wiring.behaviors.size} cache behaviors; a CloudFront ` +
         `distribution allows ${MAX_ADDITIONAL_BEHAVIORS} besides its default by default, so the deploy fails unless the ` +
-        'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/aws-blocks/`.',
+        'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/cdk-blocks/`.',
     );
   }
   if (problems.length === 0) return;

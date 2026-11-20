@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHmac, randomBytes } from 'node:crypto';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { constantTimeEquals } from '@aws-cdk-blocks/core/bb-utils';
 import { validatePresignedUrlExpiry } from './presigned-url.js';
 
 // ── Token helpers ───────────────────────────────────────────────────────────

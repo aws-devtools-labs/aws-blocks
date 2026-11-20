@@ -123,7 +123,7 @@ export interface DispatcherOptions {
   /**
    * Which API namespaces (by export name) this compute serves. A call to any
    * other namespace gets the same "not found" error as an unknown one, whichever
-   * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
+   * RPC path it arrived on — so the bare `/cdk-blocks/api` endpoint can't run a
    * namespace placed on another compute. Default: every namespace is served.
    * The Lambda handler and the container HTTP server build it from the placement
    * map in the compute's environment (see `apiNamespaceFilterFromEnv`).
@@ -223,11 +223,11 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
 }
 
 /**
- * Create the dispatcher for a backend module (the app's `aws-blocks/index.ts`).
+ * Create the dispatcher for a backend module (the app's `cdk-blocks/index.ts`).
  *
  * Handles, in order: cross-origin rejection, `OPTIONS` preflight, RawRoute
- * dispatch for any path outside `/aws-blocks/api`, and JSON-RPC for the
- * `/aws-blocks/api` subtree. Request cookies and the validated client user agent
+ * dispatch for any path outside `/cdk-blocks/api`, and JSON-RPC for the
+ * `/cdk-blocks/api` subtree. Request cookies and the validated client user agent
  * are available to handlers through {@link requestCookies} /
  * {@link requestClientUserAgent} for the duration of the call, and the request's
  * {@link DispatchRequest.baseUrl} through `getRequestBaseUrl()` ({@link requestBaseUrl}).
@@ -281,11 +281,12 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     // agent stores (see below).
     const dispatchWithinStores = async (): Promise<DispatchResponse> => {
       // RawRoute dispatch — check path-based routes before falling through to RPC.
-      // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
-      // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
+      // The whole `/cdk-blocks/api` subtree (the bare path and every per-namespace
+      // `/cdk-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
       // JSON-RPC body, and a per-namespace path must name the same one (see
       // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
-      // handling below.
+      // handling below. Both match a legacy `/aws-blocks/...` path as its
+      // `/cdk-blocks/...` twin.
       const requestPath = request.path;
       if (!isRpcPath(requestPath)) {
         const matched = matchRoute(httpMethod, requestPath);
@@ -294,11 +295,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         }
         // No RawRoute matched and the path is not under the RPC endpoint — 404.
         // Log it: an unmatched route used to be entirely silent, which is what
-        // made a split route registry (duplicate @aws-blocks/core copies)
+        // made a split route registry (duplicate @aws-cdk-blocks/core copies)
         // undiagnosable from CloudWatch alone. The path is already in the front
         // door's access logs, so this adds no new category of data.
         const copies = getLoadedCoreCopies();
-        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-cdk-blocks/core are loaded` : '';
         const requestNote = request.requestId === undefined ? '' : ` [request ${request.requestId}]`;
         console.error(
           `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}${requestNote}`,

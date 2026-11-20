@@ -56,7 +56,7 @@ fi
 echo "Step 1: Generate OpenRPC spec from test-apps/native-bindings"
 cd "$BACKEND"
 npm run spec
-SPEC_PATH="$BACKEND/aws-blocks/blocks.spec.json"
+SPEC_PATH="$BACKEND/cdk-blocks/blocks.spec.json"
 echo "   Spec: $SPEC_PATH"
 
 echo ""
@@ -74,9 +74,9 @@ if [ -z "$BLOCKS_URL" ]; then
   echo ""
   echo "Step 4: Start native-bindings dev server"
   cd "$BACKEND"
-  npx tsx aws-blocks/scripts/server.ts > /tmp/blocks-kotlin-e2e-server.log 2>&1 &
+  npx tsx cdk-blocks/scripts/server.ts > /tmp/blocks-kotlin-e2e-server.log 2>&1 &
   SERVER_PID=$!
-  BLOCKS_URL="http://localhost:3001/aws-blocks/api"
+  BLOCKS_URL="http://localhost:3001/cdk-blocks/api"
 
   # Wait for server
   for i in $(seq 1 30); do

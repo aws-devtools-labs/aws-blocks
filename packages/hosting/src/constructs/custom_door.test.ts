@@ -28,7 +28,7 @@ const plan: HostingPlan = {
 	release: { buildId: 'testbuild' },
 };
 
-const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
+const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api';
 
 const setup = (opts: { api?: boolean; rawRoutes?: string[]; errorPages?: boolean } = {}) => {
 	const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
@@ -144,7 +144,7 @@ describe('buildFrontDoor — the routes/API wiring check', () => {
 		const { stack, input } = setup({ api: true });
 		const { wiring } = buildFrontDoor(stack, helperDoor(), input);
 		assert.ok(wiring.origins.has('assets'));
-		assert.ok(wiring.apiPaths.has('/aws-blocks/*'));
+		assert.ok(wiring.apiPaths.has('/cdk-blocks/*'));
 	});
 
 	it('fails with ProxySameOriginApi when the app has an API and none of its paths were wired', () => {
@@ -154,7 +154,7 @@ describe('buildFrontDoor — the routes/API wiring check', () => {
 			(err: Error) =>
 				err.name === 'UnsupportedFrontDoorError' &&
 				/Front door 'helper-cdn' cannot serve this deploy/.test(err.message) &&
-				/ProxySameOriginApi: the app has an API, but none of \/aws-blocks\/\* were wired — use cf\.apiBehaviors\(origins\.api\)/.test(
+				/ProxySameOriginApi: the app has an API, but none of \/cdk-blocks\/\*, \/aws-blocks\/\* were wired — use cf\.apiBehaviors\(origins\.api\)/.test(
 					err.message,
 				),
 		);
@@ -180,14 +180,35 @@ describe('buildFrontDoor — the routes/API wiring check', () => {
 			build(scope, { origins }) {
 				const dist = new Distribution(scope, 'Cdn', {
 					defaultBehavior: { origin: cf.origin(origins.assets) },
+					additionalBehaviors: { '/cdk-blocks/*': { origin: cf.origin(origins.api ?? origins.assets) } },
+				});
+				if (origins.api) cf.recordWired(origins.api, ['/cdk-blocks/*']);
+				return { url: `https://${dist.distributionDomainName}` };
+			},
+		});
+		buildFrontDoor(stack, door, input);
+		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('/webhooks/\\*'));
+	});
+
+	it('fails with ProxySameOriginApi when only the legacy /aws-blocks/* subtree was wired', () => {
+		const { stack, input } = setup({ api: true });
+		const door = defineFrontDoor({
+			service: 'legacy-only',
+			build(scope, { origins }) {
+				const dist = new Distribution(scope, 'Cdn', {
+					defaultBehavior: { origin: cf.origin(origins.assets) },
 					additionalBehaviors: { '/aws-blocks/*': { origin: cf.origin(origins.api ?? origins.assets) } },
 				});
 				if (origins.api) cf.recordWired(origins.api, ['/aws-blocks/*']);
 				return { url: `https://${dist.distributionDomainName}` };
 			},
 		});
-		buildFrontDoor(stack, door, input);
-		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('/webhooks/\\*'));
+		assert.throws(
+			() => buildFrontDoor(stack, door, input),
+			(err: Error) =>
+				err.name === 'UnsupportedFrontDoorError' &&
+				/ProxySameOriginApi: \/aws-blocks\/\* was wired but \/cdk-blocks\/\* was not/.test(err.message),
+		);
 	});
 
 	it('warns when the helpers hand out more behaviors than a distribution allows by default (24 + the default)', () => {
@@ -196,17 +217,17 @@ describe('buildFrontDoor — the routes/API wiring check', () => {
 			buildFrontDoor(stack, helperDoor(), input);
 			return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('FrontDoorBehaviorLimit'));
 		};
-		// `/assets/*` + `/aws-blocks/*` + the raw routes.
-		assert.equal(warn(22).length, 0, '24 behaviors fit');
-		const over = warn(23);
+		// `/assets/*` + `/cdk-blocks/*` + `/aws-blocks/*` + the raw routes.
+		assert.equal(warn(21).length, 0, '24 behaviors fit');
+		const over = warn(22);
 		assert.equal(over.length, 1, '25 do not');
 		assert.match(String(over[0]?.entry.data), /25 cache behaviors/);
 	});
 
 	it("counts cf.errorPages' page behaviors toward the limit", () => {
-		const { stack, input } = setup({ api: true, errorPages: true, rawRoutes: Array.from({ length: 22 }, (_, i) => `/hook${i}/*`) });
+		const { stack, input } = setup({ api: true, errorPages: true, rawRoutes: Array.from({ length: 21 }, (_, i) => `/hook${i}/*`) });
 		buildFrontDoor(stack, helperDoor(), input);
-		// `/assets/*` + `/aws-blocks/*` + 22 raw routes + the 404 and 500 pages = 26.
+		// `/assets/*` + `/cdk-blocks/*` + `/aws-blocks/*` + 21 raw routes + the 404 and 500 pages = 26.
 		const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('FrontDoorBehaviorLimit'));
 		assert.equal(warnings.length, 1);
 		assert.match(String(warnings[0]?.entry.data), /26 cache behaviors/);

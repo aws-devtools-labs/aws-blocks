@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/hosting/constructs` — the CDK entry point: the `HostingConstruct`
+ * `@aws-cdk-blocks/hosting/constructs` — the CDK entry point: the `HostingConstruct`
  * plus the CDK-aware resolution engine (marker/BYO → infra wiring). Kept off the
  * package's `.` entry so the value API there (`secret`/`config`/`getSecret`/
  * `getConfig`) stays CDK-free and can be imported into an SSR/runtime bundle
@@ -167,6 +167,6 @@ export { generateAlbApiProxyCode } from './alb_api_proxy.js';
 // router); a BYO door that stacks CloudFront over its own ALB can use the same.
 export { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from './alb_construct.js';
 export { backendBaseUrl } from './apigw_routes.js';
-/** @internal Used by `@aws-blocks/core` `Hosting` for an in-place build. */
+/** @internal Used by `@aws-cdk-blocks/core` `Hosting` for an in-place build. */
 export { removeUnusedAwsCliLayers } from './aws_cli_layers.js';
 export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';

@@ -13,7 +13,7 @@ int _failed = 0;
 /// native-bindings dev server (`npm run dev:server`).
 String blocksUrl() =>
     Platform.environment['BLOCKS_URL'] ??
-    'http://localhost:3001/aws-blocks/api';
+    'http://localhost:3001/cdk-blocks/api';
 
 /// True when the suite is pointed at the local dev server (vs. a deployed
 /// sandbox/production backend). Reuses the same `BLOCKS_URL` mechanism the
@@ -35,7 +35,7 @@ bool isLocalEndpoint() {
 }
 
 /// Creates a Blocks client pointing at test-apps/native-bindings.
-/// Default: http://localhost:3001/aws-blocks/api (the native-bindings dev server,
+/// Default: http://localhost:3001/cdk-blocks/api (the native-bindings dev server,
 /// `npm run dev:server`).
 /// Override with BLOCKS_URL env var for sandbox/production testing.
 Blocks createBlocks() {
@@ -75,7 +75,7 @@ String uniqueUsername(String label) =>
 
 /// The pre-provisioned, confirmed user a deployed backend signs in instead of
 /// signing up (seeded into every user pool of the stack by
-/// `test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts`). These
+/// `test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts`). These
 /// defaults MUST match that script. Override both sides with
 /// COGNITO_TEST_USERNAME / COGNITO_TEST_PASSWORD. Not a secret — a
 /// deterministic fixture for a throwaway test pool.

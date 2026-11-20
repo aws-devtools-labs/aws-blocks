@@ -3,8 +3,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { LEGACY_MOCK_DATA_DIR, MOCK_DATA_DIR } from '@aws-cdk-blocks/core/bb-utils';
 import type { TransactionHandle } from '../common/engine.js';
 import { initializePgliteWithRetry } from '../common/pglite-init.js';
 import { closeOnProcessExit, pgliteUnrefTimersExtension } from '../common/pglite-process.js';
@@ -88,11 +89,39 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
 	const looksLikePglite = entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry));
 	const hasInitializedChild = entries.some((entry) => hasInitializedPgliteDataDir(join(dataDir, entry)));
 	if (!looksLikePglite || hasInitializedChild) return;
+	assertNotAHalfCopy(dataDir);
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const corruptDataDir = `${dataDir}.corrupt-${timestamp}-${process.pid}-${randomUUID().slice(0, 8)}`;
 	renameSync(dataDir, corruptDataDir);
 	mkdirSync(dataDir, { recursive: true });
 	console.log(`[bb-database] Moved incomplete PGlite data directory to ${corruptDataDir}; created a fresh one.`);
+}
+
+// `dataDir` before the data directory moved under `.cdk-blocks/`, or undefined when it is not under it at all.
+function legacyCounterpart(dataDir: string): string | undefined {
+	const consolidated = join(process.cwd(), MOCK_DATA_DIR);
+	if (!dataDir.startsWith(consolidated + sep)) return undefined;
+	return join(process.cwd(), LEGACY_MOCK_DATA_DIR, dataDir.slice(consolidated.length + 1));
+}
+
+// A carry-over that did not finish must fail rather than be reset to an empty database: an empty one looks like
+// a fresh project, so the next write would start a second copy of rows the project already had.
+//
+// REACHABILITY. In the carry-over path this is now defence in depth, not the first line: every caller resolves
+// `dataDir` through `getMockDataDir`, whose copy fills in whatever the new directory lacks and which records the
+// unit only AFTER that copy returns, so an interrupted copy is simply retried on the next call and never reaches
+// here looking initialized-but-partial. What does still reach here is a directory a PERSON made partial — a
+// hand-copied `.bb-data/<id>/pglite`, an interrupted `cp -r`, or a restore from a partial backup — which is the
+// case this refuses. Verified by `local-data-carry-over.test.ts`, which exercises both the real
+// `getMockDataDir` path (self-healing) and a hand-made partial copy (refused).
+function assertNotAHalfCopy(dataDir: string): void {
+	const legacy = legacyCounterpart(dataDir);
+	if (legacy === undefined || !hasInitializedPgliteDataDir(legacy)) return;
+	throw new Error(
+		`The local database copied from ${legacy} to ${dataDir} is incomplete: it is missing one of ` +
+			`${PGLITE_INITIALIZED_DATA_DIR_ENTRIES.join(', ')}. ${legacy} is untouched, so delete ${dataDir} ` +
+			'and run again rather than starting on an empty database.',
+	);
 }
 
 interface Savepoint {

@@ -12,7 +12,7 @@
  *
  * @example
  * ```ts
- * import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
+ * import { __PIPELINE_STAGE_SCOPE__ } from '@aws-cdk-blocks/pipeline';
  *
  * const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
  * ```

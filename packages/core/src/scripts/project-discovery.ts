@@ -9,7 +9,7 @@ import { basename, dirname, join, resolve } from 'node:path';
  * A project is identified structurally — no config file, no registry — so
  * discovery works on a fresh clone before anything has been built or deployed.
  */
-export const PROJECT_MARKER = 'aws-blocks/index.ts';
+export const PROJECT_MARKER = 'cdk-blocks/index.ts';
 
 /** How the project was located, for diagnostics and for telling the user what was inspected. */
 export interface ResolvedProject {
@@ -138,7 +138,7 @@ function findAncestorProject(startDir: string, maxWalkUp: number): string | unde
  * Breadth-first scan of `root`'s descendants for other Blocks projects, bounded
  * by both depth and a total count of directories examined. Depth 2 is the
  * default because a monorepo puts its app one level deeper than the workspace
- * folder (`apps/web/aws-blocks/index.ts`), which a depth-1 scan misses.
+ * folder (`apps/web/cdk-blocks/index.ts`), which a depth-1 scan misses.
  *
  * Returns sorted absolute paths. `root` itself is never included.
  */

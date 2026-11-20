@@ -20,7 +20,7 @@ Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxi
    scaffolded; no dev server is running (the agent must not rely on or start one).
 3. **Build and test** — `npm run build`, then launch the dev server fresh and
    discover the port it binds by anchoring on the framework's startup banner
-   (`AWS Blocks local server running on http://localhost:<port>`) — no port
+   (`AWS CDK Blocks local server running on http://localhost:<port>`) — no port
    guessing — exported as `APP_BASE_URL`; then run the task's Playwright spec
    against it. Records build / dev-server / playwright / test signals. The script
    is a trusted supervisor; every process that runs the agent's app or its
@@ -310,7 +310,7 @@ every `*.spec.{ts,tsx,js,jsx,cjs,mjs}` CODE file are excluded from the copy, so
 the judge is blinded by ABSENCE — no `cat`/`grep`/`find` can reach a spec that
 physically isn't there — and a post-copy `find` (`4-judge.ts`
 `assertNoSpecLeak`) fails loudly if one ever leaks in. Framework-generated
-`*.spec.json` manifests (e.g. `aws-blocks/blocks.spec.json`, the OpenRPC
+`*.spec.json` manifests (e.g. `cdk-blocks/blocks.spec.json`, the OpenRPC
 contract) are deliberately NOT treated as leaks: they are build artifacts, not
 the bench objective.
 

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ContainerScaling, ContainerSize } from '@aws-blocks/core';
+import type { ContainerScaling, ContainerSize } from '@aws-cdk-blocks/core';
 import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
 /**

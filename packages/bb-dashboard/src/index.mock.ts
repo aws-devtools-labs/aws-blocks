@@ -4,16 +4,15 @@
 /**
  * Mock implementation of the Dashboard Building Block.
  *
- * In local mode, the RawRoute is still registered so the dev server responds
- * at the configured path. Since no CloudWatch Dashboard exists locally, the
- * route returns a 503 with a helpful message directing the user to deploy.
+ * The dev server serves a local observability page at the configured path,
+ * without creating a CloudWatch dashboard or resolving credentials.
  */
-import type { ScopeParent } from '@aws-blocks/core';
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import { mountDashboardRoute } from './routes.js';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { RawRoute, Scope, registerSdkIdentifiers } from '@aws-cdk-blocks/core';
+import { renderLocalDashboard } from './local-dashboard.js';
 import type { DashboardOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
-import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import { assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-dashboard');
@@ -27,16 +26,16 @@ export type {
 } from './types.js';
 
 /**
- * Mock Dashboard — registers redirect route but URL is always null locally.
+ * Mock Dashboard — serves the local dashboard; the CloudWatch URL is always null locally.
  *
  * CloudWatch Dashboards are a cloud-only resource that cannot be replicated
  * locally. This mock logs a message on construction and provides a null URL.
- * The RawRoute is still registered so it responds in the dev server.
+ * The RawRoute serves local observability guidance and configured metrics in the dev server.
  *
  * @example
  * ```typescript
  * const dashboard = new Dashboard(scope, 'dashboard', { title: 'My App' });
- * // Logs: "[Dashboard] Will create CloudWatch Dashboard 'My App' on deploy."
+ * // Logs: "[Dashboard] Local dashboard: /cdk-blocks/dashboard"
  * // dashboard.url === null
  * ```
  */
@@ -68,17 +67,18 @@ export class Dashboard extends Scope {
 
 		const routePath = options?.routePath;
 		if (routePath !== false) {
-			const path = routePath ?? '/aws-blocks/dashboard';
-			mountDashboardRoute(scope, path, null);
+			const path = routePath ?? '/cdk-blocks/dashboard';
+			const page = renderLocalDashboard(title, options);
+			new RawRoute(scope, 'dashboard-redirect', {
+				method: 'GET',
+				path,
+				handler: async ({ response }) => {
+					response.status = 200;
+					response.headers.set('Content-Type', 'text/html; charset=utf-8');
+					response.send(page);
+				},
+			});
+			console.log(`[Dashboard] Local dashboard: ${path}`);
 		}
-
-		console.log(
-			`[Dashboard] Dashboard BB: no-op in local mode (CloudWatch Dashboard is a cloud-only resource).\n` +
-				`Will create CloudWatch Dashboard '${title}' on deploy. Run 'npx cdk deploy' to view.\n\n` +
-				`📍 Local observability data:\n` +
-				`   • Logs: Check your terminal output - every compute writes structured JSON to stdout\n` +
-				`   • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)\n` +
-				`   • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout`,
-		);
 	}
 }

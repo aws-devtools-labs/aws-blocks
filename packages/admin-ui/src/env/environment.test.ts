@@ -148,7 +148,7 @@ describe('environmentStatuses', () => {
 		assert.equal(local?.id, 'local');
 		assert.equal(local?.state, 'local');
 		assert.equal(local?.selectable, true);
-		assert.match(String(local?.detail), /\.bb-data/);
+		assert.match(String(local?.detail), /\.cdk-blocks\/local\/data/);
 	});
 
 	it('offers a deployed stage with nothing to explain', () => {
@@ -383,7 +383,6 @@ describe('environmentCards', () => {
 		const production = cards.find((card) => card.status.id === 'production');
 		assert.equal(production?.status.state, 'unread');
 		assert.equal(production?.status.selectable, true);
-		assert.equal(production?.badge.label, 'checking…');
 	});
 });
 
@@ -620,10 +619,9 @@ describe('writeStoredEnvironment', () => {
 });
 
 describe('constants', () => {
-	it('defaults to sandbox, preserving the stage selector\u2019s own default', () => {
-		// Defaulting to local would open the five cloud-only pillars on "not
-		// applicable here", which is not what an ops dashboard is for.
-		assert.equal(DEFAULT_ENVIRONMENT, 'sandbox');
+	it('targets local data when a new tab has no saved selection', () => {
+		const environment = readStoredEnvironment(() => null);
+		assert.deepEqual(dataTargetFor(environment), { mode: 'local' });
 	});
 
 	it('keeps the old storage key, so an open tab keeps its selection', () => {

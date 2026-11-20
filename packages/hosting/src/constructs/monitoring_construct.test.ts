@@ -143,7 +143,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -158,7 +158,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -177,7 +177,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -203,7 +203,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(hostingStack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -225,7 +225,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });
@@ -239,7 +239,7 @@ void describe('MonitoringConstruct', () => {
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(
-          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+          '\\[ack: @aws-cdk-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
         ),
       );
     });

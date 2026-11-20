@@ -9,7 +9,7 @@ Test backend for native client bindings (Swift, Kotlin, Dart). Exercises the Bui
 | **Auth** (`auth-basic`) | Email + password with session cookies; sign-up is confirmed with an emailed code |
 | **Auth** (`auth-cognito`) | Email + password with a password policy and groups (`admins`, `users`) |
 | **Auth** (`auth-oidc`) | OIDC sign-in through the local stub IdP with two providers (`google`, `github2`), relay origins for native custom-scheme redirects (no user pool) |
-| **Auth** (`auth-sso`) | A second federated block (stub provider `corp`) whose sign-in routes live under `/aws-blocks/auth/sso/` |
+| **Auth** (`auth-sso`) | A second federated block (stub provider `corp`) whose sign-in routes live under `/cdk-blocks/auth/sso/` |
 | **Realtime** | WebSocket pub/sub (cursor tracking) |
 | **FileBucket** | S3 file storage with presigned upload/download handles |
 | **KVStore** | Key-value storage |
@@ -35,7 +35,7 @@ The dev server starts at:
 
 ```
 native-bindings/
-├── aws-blocks/
+├── cdk-blocks/
 │   ├── index.ts          ← Backend definition (all blocks + API methods)
 │   ├── client.js         ← Auto-generated client proxy
 │   ├── package.json
@@ -60,7 +60,7 @@ Point native SDKs at the API server base URL:
 
 ### Auth Flows
 
-All four auth blocks are `Auth` (`@aws-blocks/bb-auth`). Errors cross the wire by name: the canonical `AuthErrors` names (`NotAuthenticatedException`, `NotAuthorizedException`, `CodeMismatchException`, …) in the JSON-RPC `error.data.name`.
+All four auth blocks are `Auth` (`@aws-cdk-blocks/bb-auth`). Errors cross the wire by name: the canonical `AuthErrors` names (`NotAuthenticatedException`, `NotAuthorizedException`, `CodeMismatchException`, …) in the JSON-RPC `error.data.name`.
 
 **Email + password (`auth-basic`)** — cookie sessions. Every sign-up confirms the email address with a code, and confirming it signs the user in (auto sign-in). Native clients call:
 - `basicSignUp(username, password, email)` → `basicGetLastCode(username)` (local dev server only) → `basicConfirmSignUp(username, code)`
@@ -77,20 +77,20 @@ AWS_REGION=<region> BLOCKS_STACK_NAME=<stack> npm run seed:cognito
 
 **OIDC (`auth-oidc`)** — redirect-based with relay support for native apps, through `Auth`'s stub IdP. The stub runs in local development and sandbox deployments only (`Auth` refuses to synthesize a `stubIdp()` provider for any other deployment); this test app always deploys as a sandbox, so a deployed backend serves the stub too and the native OIDC suites run against it with `RUN_OIDC=1`. A sandbox stub lets anyone sign in as its users:
 - Relay origins configured: `nativebindings://auth`, `com.example.nativebindings://auth`
-- Native clients use the relay flow against the block's routes: `POST /aws-blocks/auth/authorize-params/google`, open the authorize URL, receive the callback on the custom scheme, then `POST /aws-blocks/auth/exchange` (sets the session cookie)
+- Native clients use the relay flow against the block's routes: `POST /cdk-blocks/auth/authorize-params/google`, open the authorize URL, receive the callback on the custom scheme, then `POST /cdk-blocks/auth/exchange` (sets the session cookie)
 - Two providers, `google` and `github2`, so `getAuthState()` lists two `signIn:<id>` actions. `github2` is always the stub, also when `google` federates a real IdP.
-- Deployed with a real IdP (optional): set `NATIVE_E2E_OIDC_ISSUER` and `NATIVE_E2E_OIDC_CLIENT_ID` when you deploy, and the `google` provider federates that IdP instead of the stub (a public PKCE client); the native OIDC suites then run against it with `RUN_OIDC=1`. The IdP must complete authorization without a login page and accept the sandbox's `/aws-blocks/auth/callback` redirect URI; `.github/workflows/native-sdk-e2e.yml` lists the requirements.
+- Deployed with a real IdP (optional): set `NATIVE_E2E_OIDC_ISSUER` and `NATIVE_E2E_OIDC_CLIENT_ID` when you deploy, and the `google` provider federates that IdP instead of the stub (a public PKCE client); the native OIDC suites then run against it with `RUN_OIDC=1`. The IdP must complete authorization without a login page and accept the sandbox's `/cdk-blocks/auth/callback` redirect URI; `.github/workflows/native-sdk-e2e.yml` lists the requirements.
 
-**Second federated block (`auth-sso`)**: a `store: 'builtin'` block with one stub provider, `corp`, exported as `ssoOidcApi` (`createOidcApi()`: `getClient()` returns its native OIDC client) and `ssoAuthStateApi` (`createApi()`: its sign-in state machine). Two blocks with `providers` can't share sign-in routes, so this one sets `redirects.callbackPath` to `/aws-blocks/auth/sso/return` and `redirects.signOutPath` to `/aws-blocks/auth/sso/signout`. Its other routes sit beside the callback: `/aws-blocks/auth/sso/{authorize-params/<id>, exchange, session, signin/<id>}`. `getAuthState()` shows the last one as the `signIn:corp` action's URL, and the signed-in `signOut` action's URL is the `signOutPath`. The client from `ssoOidcApi.getClient()` carries these paths, and the callback is deliberately not named `callback`, so a native client that assumes the default names fails here. It accepts the same relay origins as `auth-oidc`, keeps its own session cookie, and has `api.ssoRequireAuth` / `api.ssoGetCurrentUser` to check a sign-in. Its stub is keyed `corp` because a stub IdP's routes are keyed by provider key alone, so two blocks can't both serve a `google` stub.
+**Second federated block (`auth-sso`)**: a `store: 'builtin'` block with one stub provider, `corp`, exported as `ssoOidcApi` (`createOidcApi()`: `getClient()` returns its native OIDC client) and `ssoAuthStateApi` (`createApi()`: its sign-in state machine). Two blocks with `providers` can't share sign-in routes, so this one sets `redirects.callbackPath` to `/cdk-blocks/auth/sso/return` and `redirects.signOutPath` to `/cdk-blocks/auth/sso/signout`. Its other routes sit beside the callback: `/cdk-blocks/auth/sso/{authorize-params/<id>, exchange, session, signin/<id>}`. `getAuthState()` shows the last one as the `signIn:corp` action's URL, and the signed-in `signOut` action's URL is the `signOutPath`. The client from `ssoOidcApi.getClient()` carries these paths, and the callback is deliberately not named `callback`, so a native client that assumes the default names fails here. It accepts the same relay origins as `auth-oidc`, keeps its own session cookie, and has `api.ssoRequireAuth` / `api.ssoGetCurrentUser` to check a sign-in. Its stub is keyed `corp` because a stub IdP's routes are keyed by provider key alone, so two blocks can't both serve a `google` stub.
 
 **What the native e2e suites can cover here**, per federated block:
 - relay sign-in through any provider with the client from `oidcAuthApi.getClient()` or `ssoOidcApi.getClient()`, then `GET <base>/session` (`200 {user}`, or `401` when signed out);
 - sign-out through `POST <signOutPath>?format=json`, which returns `200 {logoutUrl}` (the stub IdP's logout URL), or `200 {}` when the block has no session;
 - `getAuthState()` / `setAuthState()` on each state-machine namespace (`authBasicApi`, `authCognitoApi`, `oidcAuthStateApi`, `ssoAuthStateApi`);
-- the blocks stay separate: signing out of `auth-sso` leaves `auth-oidc` signed in (`/aws-blocks/auth/sso/session` is `401`, `/aws-blocks/auth/session` is still `200`), and while only `auth-oidc` is signed in, `api.ssoRequireAuth` throws `NotAuthenticatedException` and `api.ssoGetCurrentUser` returns `null`;
+- the blocks stay separate: signing out of `auth-sso` leaves `auth-oidc` signed in (`/cdk-blocks/auth/sso/session` is `401`, `/cdk-blocks/auth/session` is still `200`), and while only `auth-oidc` is signed in, `api.ssoRequireAuth` throws `NotAuthenticatedException` and `api.ssoGetCurrentUser` returns `null`;
 - `provider` on `api.oidcRequireAuth` / `api.ssoRequireAuth` names the provider that signed in (`github2`, `corp`);
-- `GET <base>/session` on a base with no block (for example `/aws-blocks/auth/none/session`) is `404`, the case where a client's `restore()` should throw;
-- a provider the client lists but the block lacks (`POST /aws-blocks/auth/sso/authorize-params/github2`) is `404` with an empty body, so a client sees an HTTP error rather than a named one.
+- `GET <base>/session` on a base with no block (for example `/cdk-blocks/auth/none/session`) is `404`, the case where a client's `restore()` should throw;
+- a provider the client lists but the block lacks (`POST /cdk-blocks/auth/sso/authorize-params/github2`) is `404` with an empty body, so a client sees an HTTP error rather than a named one.
 
 `503 SignOutIncompleteException` (the cookie cleared but the server-side session not removed) can't be produced against this backend; cover it with unit tests.
 
@@ -123,7 +123,7 @@ Requires a sign-in on the email + password block (`auth-basic`). Todos are keyed
 ## Clearing Local Data
 
 ```bash
-rm -rf .bb-data
+rm -rf .cdk-blocks/local/data .bb-data
 ```
 
 Then restart the dev server.

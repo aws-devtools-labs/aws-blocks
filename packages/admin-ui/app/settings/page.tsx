@@ -107,7 +107,7 @@ export default function SettingsPage() {
 				<h1 className="font-semibold text-fg text-xl">Settings</h1>
 				<p className="text-fg-soft text-sm">
 					{cloudStage === undefined
-						? 'Local values, read from .bb-data/settings.json.'
+						? 'Local values, read from .cdk-blocks/local/data/settings.json.'
 						: `SSM parameters in ${cloudStage}. A write here changes what the running app reads.`}
 				</p>
 			</header>
@@ -118,7 +118,7 @@ export default function SettingsPage() {
 						<CardTitle>This app declares no settings</CardTitle>
 						<CardDescription>
 							Add an <code className="font-mono">AppSetting</code> to your{' '}
-							<code className="font-mono">aws-blocks/</code> source and it appears here, in every stage.
+							<code className="font-mono">cdk-blocks/</code> source and it appears here, in every stage.
 						</CardDescription>
 					</CardHeader>
 				</Card>

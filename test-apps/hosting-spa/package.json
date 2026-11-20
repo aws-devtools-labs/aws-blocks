@@ -7,10 +7,10 @@
   "type": "module",
   "description": "E2E test app for Blocks Hosting — SPA (static site) deployment",
   "workspaces": [
-    "aws-blocks"
+    "cdk-blocks"
   ],
   "scripts": {
-    "dev:server": "tsx aws-blocks/scripts/server.ts",
+    "dev:server": "tsx cdk-blocks/scripts/server.ts",
     "dev:client": "vite",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
     "build": "vite build",
@@ -19,11 +19,11 @@
     "test:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
-    "vendorize": "node --input-type=module -e \"import '@aws-blocks/blocks/run'\" -- vendorize"
+    "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "@aws-blocks/bb-auth": "*",
-    "@aws-blocks/blocks": "*"
+    "@aws-cdk-blocks/bb-auth": "1.0.0-rc.0",
+    "aws-cdk-blocks": "1.0.0-rc.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

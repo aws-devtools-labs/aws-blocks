@@ -2,7 +2,7 @@
 
 Design document for Logger. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-logger`
+**Package:** `@aws-cdk-blocks/bb-logger`
 **Type:** Composite (optional infrastructure)
 **AWS Service:** Amazon CloudWatch Logs (via Lambda's built-in log integration)
 
@@ -51,7 +51,7 @@ Fields:
 - `timestamp` — ISO 8601 timestamp from `new Date().toISOString()`.
 - `logger` — The `id` passed to the constructor.
 - `traceId` — X-Ray trace ID (auto-injected from `_X_AMZN_TRACE_ID` env var when present).
-- `awsRequestId` — the Lambda invocation's `awsRequestId`. Core's `createLambdaHandler` runs each invocation inside an `AsyncLocalStorage` scope holding it (`request-context.ts`, registered on `globalThis.__BLOCKS_REQUEST_ID_STORE__`), and the serializer reads it with `currentRequestId()` from `@aws-blocks/core/bb-utils` when it builds a line. A separately resolved copy of core reuses the store already registered on the global, so it still sees the id. The backend import and Building Block constructors run outside the first invocation's scope, so long-lived state created at init doesn't keep that request's id. Only functions built with `createLambdaHandler` set the id; SSR hosting web functions, container compute and AgentCore runtimes don't yet. It is a reserved field, so a context value under that key is ignored; it uses its own key so an app's `requestId` context field (a common name for an app-chosen correlation id) is neither replaced nor replaces it. Overlapping invocations on one container each see their own id.
+- `awsRequestId` — the Lambda invocation's `awsRequestId`. Core's `createLambdaHandler` runs each invocation inside an `AsyncLocalStorage` scope holding it (`request-context.ts`, registered on `globalThis.__BLOCKS_REQUEST_ID_STORE__`), and the serializer reads it with `currentRequestId()` from `@aws-cdk-blocks/core/bb-utils` when it builds a line. A separately resolved copy of core reuses the store already registered on the global, so it still sees the id. The backend import and Building Block constructors run outside the first invocation's scope, so long-lived state created at init doesn't keep that request's id. Only functions built with `createLambdaHandler` set the id; SSR hosting web functions, container compute and AgentCore runtimes don't yet. It is a reserved field, so a context value under that key is ignored; it uses its own key so an app's `requestId` context field (a common name for an app-chosen correlation id) is neither replaced nor replaces it. Overlapping invocations on one container each see their own id.
 - Spread fields from `defaultContext`, `child()` context, and per-call `context` (later wins).
 
 ### Serialization Safety
@@ -86,7 +86,7 @@ Priority order (highest wins):
 
 The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts`) directly. Both environments use the same code: write structured JSON to `process.stdout` / `process.stderr`. There is no mock-specific behavior because the logging mechanism (stdout/stderr → CloudWatch) is provided by the Lambda runtime, not by the BB.
 
-- No files created in `.bb-data/` — logs are ephemeral.
+- No files created in `.cdk-blocks/local/data/` — logs are ephemeral.
 - Retention is a cloud-only concept (no local CloudWatch equivalent); it is a
   compute-level setting and has no effect locally.
 - Log level filtering works identically to production.

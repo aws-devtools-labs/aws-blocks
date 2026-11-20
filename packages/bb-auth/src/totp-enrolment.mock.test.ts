@@ -11,17 +11,17 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, type TestContext, test } from 'node:test';
-import type { AuthAction, AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { Scope } from '@aws-blocks/core';
+import type { AuthAction, AuthActionInput, AuthState, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { generateTotpSecret, totpCode, verifyTotpCode } from './engines/totp.js';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
 import type { CodeDeliveryPurpose, CognitoAuthMockOptions } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 let counter = 0;

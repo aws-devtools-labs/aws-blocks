@@ -12,16 +12,17 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, mock, test } from 'node:test';
-import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
+import { createLambdaHandler } from '@aws-cdk-blocks/core/lambda-handler';
 import type { NativeEngine } from './engines/types.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
 import { makeAwsAuth } from './test-support/aws-harness.js';
 import type { CodeDeliveryPurpose } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 afterEach(() => {
 	mock.restoreAll();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
 
@@ -31,7 +32,7 @@ const root = () => ({ id: `anr${process.pid}x${++counter}` });
 
 const rpc = (method: string, params: unknown[]) => ({
 	httpMethod: 'POST',
-	path: '/aws-blocks/api',
+	path: '/cdk-blocks/api',
 	headers: { 'Content-Type': 'application/json' },
 	body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
 	isBase64Encoded: false,

@@ -9,7 +9,7 @@
  * scope paths can resolve to one `fullId`: `user-service › sessions` and
  * `user › service-sessions` both yield `user-service-sessions`. Every name a
  * block derives from its `fullId` — its table, bucket or queue, its SDK
- * identifier registry entry, its local `.bb-data` directory — would then be
+ * identifier registry entry, its local `.cdk-blocks/local/data` directory — would then be
  * shared. Each `Scope` claims its `fullId` with the path it came from when it is
  * constructed, and a second claim from a different path is reported as a
  * warning (a future release will reject it). The same path claiming again is
@@ -119,7 +119,7 @@ export function claimScopeFullId(
 	return (
 		`Scope ${mine} resolves to the fullId '${fullId}', which Scope ${theirs} already uses. ` +
 		"Scope ids are joined with '-', so the two name the same resources (a table, bucket or queue, and " +
-		"the local .bb-data directory) and read and overwrite each other's data. Rename one of the scopes " +
+		"the local .cdk-blocks/local/data directory) and read and overwrite each other's data. Rename one of the scopes " +
 		'so their joined ids differ: a future release of AWS Blocks will reject this.'
 	);
 }

@@ -2,8 +2,8 @@
 
 Design document for CronJob. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-cron-job`
-**Re-exported from:** `@aws-blocks/blocks`
+**Package:** `@aws-cdk-blocks/bb-cron-job`
+**Re-exported from:** `aws-cdk-blocks`
 **Type:** Primitive (new infrastructure, no runtime methods)
 **AWS Services:** Amazon EventBridge Scheduler with a resolved Lambda or an SQS-backed container runner
 
@@ -143,7 +143,7 @@ No `fromExisting()` — wrapping an existing EventBridge schedule is not support
 
 ## AWS Runtime
 
-- CronJob registers a Lambda event handler via `registerLambdaEventHandler('blocks.cronjob', fullId, handler)`. For a Lambda target its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design).
+- CronJob registers a Lambda event handler via `registerLambdaEventHandler('blocks.cronjob', fullId, handler)`. For a Lambda target its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-cdk-blocks/core/cdk/internal` is only for keys shared by design).
 - When the Lambda receives an event with `source === 'blocks.cronjob'`, it routes to the handler matching `jobName`.
 - For a container target, the synth marker creates the internal runner; its owner-matched poller dispatches each queued tick to a worker and converts the payload to the same `CronJobEvent<T>`.
 - The handler receives `{ scheduledTime, jobName, input }` — the same `CronJobEvent<T>` shape used in mock.

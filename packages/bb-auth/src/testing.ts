@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Test helpers for apps that use `Auth` locally: `@aws-blocks/bb-auth/testing`
- * (also re-exported from `@aws-blocks/blocks/utils`).
+ * Test helpers for apps that use `Auth` locally: `@aws-cdk-blocks/bb-auth/testing`
+ * (also re-exported from `aws-cdk-blocks/utils`).
  *
  * **Node only.** `getLastAuthCode` reads the local (mock) user pool's files
- * under `.bb-data/`; `totpCodeFor` computes an authenticator app's code with
+ * under `.cdk-blocks/local/data/`; `totpCodeFor` computes an authenticator app's code with
  * `node:crypto`. Import them from test code, never from a frontend or a backend
  * module.
  *
@@ -22,6 +22,7 @@ import {
 	isRecord,
 	type LocalPoolDir,
 	listLocalPools,
+	listLocalPoolsAcrossRoots,
 	readJson,
 	selectBlocks,
 } from './local-pool-files.js';
@@ -39,7 +40,7 @@ export interface GetLastAuthCodeOptions {
 	purpose?: CodeDeliveryPurpose;
 	/**
 	 * The directory the dev server (or the test that constructs the backend)
-	 * runs in: the one holding `.bb-data/`. Default `process.cwd()`.
+	 * runs in: the one holding `.cdk-blocks/local/data/`. Default `process.cwd()`.
 	 */
 	cwd?: string;
 }
@@ -128,7 +129,7 @@ function describeLastCodes(blocks: readonly LocalPoolDir[]): string {
  *
  * It finds the block's data directory itself, so it does not depend on the
  * scope or block name: it looks at every local `Auth` block under
- * `.bb-data/`, and reads the codes the pool still holds (`state.json`) rather
+ * `.cdk-blocks/local/data/`, and reads the codes the pool still holds (`state.json`) rather
  * than `last-code.json`, which keeps only the block's most recent code. So a
  * user's code stays readable after another user's code was sent, and a code
  * that was used or has expired is not returned.
@@ -145,17 +146,18 @@ function describeLastCodes(blocks: readonly LocalPoolDir[]): string {
  *
  * @example
  * ```ts
- * import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
+ * import { createTestClient, getLastAuthCode } from 'aws-cdk-blocks/utils';
  *
- * const alice = createTestClient(await import('aws-blocks'));
+ * const alice = createTestClient(await import('cdk-blocks'));
  * await alice.authApi.setAuthState({ action: 'signUp', username: 'alice@example.com', password });
  * const code = await getLastAuthCode('alice@example.com');
  * await alice.authApi.setAuthState({ action: 'confirmSignUp', username: 'alice@example.com', code });
  * ```
  */
 export async function getLastAuthCode(username: string, options: GetLastAuthCodeOptions = {}): Promise<string> {
-	const dataDir = dataDirOf(options.cwd ?? process.cwd());
-	const all = listLocalPools(dataDir);
+	const cwd = options.cwd ?? process.cwd();
+	const dataDir = dataDirOf(cwd);
+	const all = listLocalPoolsAcrossRoots(cwd);
 	if (all.length === 0) {
 		throw new Error(
 			`getLastAuthCode: no local Auth data under ${dataDir}. It reads the codes the local (mock) user pool ` +
@@ -190,7 +192,7 @@ export async function getLastAuthCode(username: string, options: GetLastAuthCode
  *
  * For tests and scripts: answer a TOTP challenge (`CONFIRM_SIGN_IN_WITH_TOTP_CODE`)
  * or finish an enrolment (`verifyTotpSetup`) without a phone. Node.js only
- * (`node:crypto`): `@aws-blocks/bb-auth/testing` and `@aws-blocks/blocks/utils`
+ * (`node:crypto`): `@aws-cdk-blocks/bb-auth/testing` and `aws-cdk-blocks/utils`
  * (which re-exports it) have no browser build, and the browser entries never
  * import them. A test that sends two codes for the same secret within one
  * 30-second step can pass the next step's code (`Date.now() + 30_000`): Cognito
@@ -203,7 +205,7 @@ export async function getLastAuthCode(username: string, options: GetLastAuthCode
  *
  * @example
  * ```typescript
- * import { totpCodeFor } from '@aws-blocks/blocks/utils';
+ * import { totpCodeFor } from 'aws-cdk-blocks/utils';
  *
  * const setup = await authApi.setAuthState({ action: 'setUpTotp' });
  * const sharedSecret = setup.actions[0]?.fields.find((f) => f.name === 'sharedSecret')?.defaultValue ?? '';

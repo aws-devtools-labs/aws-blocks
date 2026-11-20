@@ -137,7 +137,7 @@ final class ChannelMessageDecoderTests: XCTestCase {
             }
         }
 
-        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/aws-blocks/api"))
+        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/cdk-blocks/api"))
         let oidc = #"{"__blocks":"oidc/client","providers":["google"],"exchangePath":"/auth/exchange","signOutPath":"/auth/signout"}"#
         do {
             let feed = try await api.getSignInFeed()

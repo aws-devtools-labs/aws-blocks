@@ -2,7 +2,7 @@
 
 Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-knowledge-base`
+**Package:** `@aws-cdk-blocks/bb-knowledge-base`
 **Type:** Primitive (new infrastructure)
 **AWS Services:** Amazon Bedrock Knowledge Bases, S3, S3 Vectors
 
@@ -46,7 +46,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 ### D-KB-5a: `asAgentTool()` returns a plain tool shape, and its filter is required
 
-**Decision:** `asAgentTool(options)` returns a plain object shaped like `@aws-blocks/bb-agent`'s `ToolDefinition` (`description`, a zod `parameters` schema with a single `query`, `untrustedOutput: true`, `handler`). The metadata filter is never a tool input: a required `filter(context)` callback derives it from the agent's per-call tool context on every call. Returning `undefined` (an explicit `filter: () => undefined`) searches everything; a throw fails the call before Bedrock is queried.
+**Decision:** `asAgentTool(options)` returns a plain object shaped like `@aws-cdk-blocks/bb-agent`'s `ToolDefinition` (`description`, a zod `parameters` schema with a single `query`, `untrustedOutput: true`, `handler`). The metadata filter is never a tool input: a required `filter(context)` callback derives it from the agent's per-call tool context on every call. Returning `undefined` (an explicit `filter: () => undefined`) searches everything; a throw fails the call before Bedrock is queried.
 
 **Rationale:** A filter the model can set is not an access control, and retrieved text is untrusted, so the safe composition is the one this method hard-codes. Making `filter` required means a multi-tenant app can't forget it, and a single-tenant app opts out visibly. Returning a structural shape (not importing `bb-agent`) keeps the dependency one-way: `bb-agent` already sits above the data blocks, and the Agent's `tool()` factory infers `TContext` from its `toolContextSchema` through the generic, so `context` is typed with no casts. `zod` is a runtime dependency for the tool's own input schema, the same library `bb-agent` uses for `ToolDefinition.parameters`. The CDK entry implements the method for real (it's in `SYNTH_SAFE_METHODS`) because tools may be declared at module top level; the returned handler calls the guarded `retrieve()`, so a search still can't run at synth.
 
@@ -126,7 +126,7 @@ Creates the following resources:
 - Documents read from the local folder specified in `options.source` (must be a relative path within the project).
 - Text files chunked per the configured strategy: `'fixed'` uses overlapping word windows (`chunkSize` words, `chunkOverlap` percent overlap), `'none'` keeps each document whole, and `'semantic'`/`'hierarchical'` split on blank-line paragraphs. Chunks under 20 characters are dropped (except the final `'fixed'` window).
 - Relevance scoring via TF-IDF (term frequency–inverse document frequency) — not real embeddings. Algorithm: tokenize → normalized TF → smoothed IDF (`log((N+1)/(df+1)) + 1`) → scores normalized to [0, 1].
-- Chunks cached to `.bb-data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .bb-data`.
+- Chunks cached to `.cdk-blocks/local/data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 - Folder metadata derived from directory structure (top-level subfolder name). Customer-provided `.metadata.json` sidecar files take precedence.
 - Metadata filtering via in-memory equality check with AND semantics.
 - Supported formats: `.md`, `.txt`, `.html`, `.htm`, `.csv`, `.json`.

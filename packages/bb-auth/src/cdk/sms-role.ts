@@ -15,7 +15,7 @@
  * @internal
  */
 
-import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
+import { sourceScopedConditions } from '@aws-cdk-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 

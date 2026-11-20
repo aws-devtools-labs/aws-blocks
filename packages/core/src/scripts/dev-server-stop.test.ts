@@ -27,7 +27,7 @@ function seq(states: boolean[]): () => Promise<boolean> {
   return async () => states[Math.min(i++, states.length - 1)];
 }
 
-const TSX = 'node /app/node_modules/.bin/tsx watch aws-blocks/scripts/server.ts';
+const TSX = 'node /app/node_modules/.bin/tsx watch cdk-blocks/scripts/server.ts';
 
 function makeDeps(overrides: Partial<StopDevServerDeps> = {}): {
   deps: StopDevServerDeps;
@@ -130,7 +130,7 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
   it('never SIGKILLs a watcher whose reload started a new runner since the stop read the record', async () => {
     // The record names the runner that exited for a reload; tsx watch has started its successor,
     // which takes the record over in place. A SIGKILL of the watcher would orphan that runner.
-    const SERVER = 'node aws-blocks/scripts/server.ts';
+    const SERVER = 'node cdk-blocks/scripts/server.ts';
     let pidfile = JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, command: SERVER });
     const waits: Array<[number, number]> = [];
     const { deps, sigs, removed } = makeDeps({
@@ -267,7 +267,7 @@ describe('stopDevServer on Windows — ends the session from its top', () => {
   const proc = (pid: number, ppid: number, created: string, command = ''): WindowsProcess => ({ pid, ppid, created, command });
   const session = (overrides: Array<[number, WindowsProcess]> = []) =>
     new Map<number, WindowsProcess>([
-      [10, proc(10, 1, '100', '"C:\\node.exe" --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev')],
+      [10, proc(10, 1, '100', '"C:\\node.exe" --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev')],
       [20, proc(20, 10, '200', WIN_TSX)],
       [30, proc(30, 20, '300', '"C:\\node.exe" dev-server.js')],
       ...overrides,
@@ -541,7 +541,7 @@ describe('runStopCli', () => {
 });
 
 describe('stopDevServer — a dev task launcher whose dev server is still starting', () => {
-  const CLI = 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev';
+  const CLI = 'node --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev';
   const starting = JSON.stringify({ pid: 700, ppid: 600, port: 3000, command: CLI, parentCommand: 'bash', starting: true });
 
   it('SIGTERMs the CLI alone, never its caller, waits for it, and removes the pidfile it left', async () => {

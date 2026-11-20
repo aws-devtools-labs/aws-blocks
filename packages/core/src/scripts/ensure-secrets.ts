@@ -28,7 +28,7 @@ export type DeleteParameterSender = (name: string) => Promise<void>;
  * with the database password inside. Only the sandbox name is ever derived
  * here, never the production one. Returns the names that were deleted; a name
  * that does not exist (the app has no external database) is skipped, and so is
- * an app whose `.blocks/config.json` gives no stack name: the deploy derives the
+ * an app whose `.cdk-blocks/config.json` gives no stack name: the deploy derives the
  * name the same way, so it wrote no parameter for such an app.
  *
  * Any other SSM error (access denied, throttling, no Region) is a warning that

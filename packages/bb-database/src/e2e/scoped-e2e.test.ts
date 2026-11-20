@@ -15,7 +15,7 @@
  * mode, port 5432) and with the port changed to 6543 (transaction mode), where a scope that outlives its
  * transaction would reach another caller.
  *
- * Uses only the package entry, the Kysely entry and `@aws-blocks/core`. The block is built with the override
+ * Uses only the package entry, the Kysely entry and `@aws-cdk-blocks/core`. The block is built with the override
  * form of `DatabaseCluster.fromExisting()`; nothing is read from a settings store.
  *
  * Requires env vars:
@@ -34,9 +34,9 @@ import assert from 'node:assert';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-blocks/bb-database';
-import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { Database, DatabaseCluster, DatabaseErrors, sql } from '@aws-cdk-blocks/bb-database';
+import { DatabaseDialect } from '@aws-cdk-blocks/bb-database/kysely';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import { type Generated, Kysely, sql as ksql, type Transaction } from 'kysely';
 import { caPem, env, need, withPort } from './support.js';
 
@@ -87,7 +87,7 @@ const claimsOf = (user: SupabaseUser): Record<string, unknown> => ({ ...user.cla
 // Part of every `content` this run writes. Rows of another run on the same project never match it.
 const RUN = `run-${process.pid}-${Date.now().toString(36)}`;
 // The scope of the blocks of this file. Its id is this process's own, so what local mode keeps under
-// `.bb-data/` for it can be removed without touching the data of another process.
+// `.cdk-blocks/local/data/` for it can be removed without touching the data of another process.
 const SCOPE_ID = `bbdb-e2e-${process.pid}`;
 
 const MODES = [
@@ -166,7 +166,7 @@ for (const { id, label, port } of MODES) {
 			// Every row of this group, whichever test wrote it, as the connection role.
 			await db.execute(sql`DELETE FROM todos WHERE content LIKE ${mine}`);
 			// What local mode keeps on disk for the block of this group, if anything.
-			const mockData = join(process.cwd(), '.bb-data');
+			const mockData = join(process.cwd(), '.cdk-blocks/local/data');
 			if (existsSync(mockData)) {
 				for (const entry of readdirSync(mockData)) {
 					if (entry.startsWith(`${SCOPE_ID}-${id}`)) {

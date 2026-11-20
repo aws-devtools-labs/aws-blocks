@@ -11,7 +11,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
-import { type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
+import { type BlocksContext, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { pkceChallenge } from './engines/federation-direct.js';
 import { Auth, stubIdp } from './index.mock.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
@@ -32,9 +32,10 @@ after(async () => {
 });
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** Call `getClient()` on the namespace `createOidcApi()` returned, as the RPC dispatcher does. */
 async function getClient<P extends string>(api: unknown, ctx: BlocksContext): Promise<OidcClientHandle<P>> {
@@ -110,13 +111,13 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		]);
 		assert.strictEqual(descriptor.__blocks, 'oidc/client');
 		assert.deepStrictEqual(descriptor.providers, ['corp']);
-		assert.strictEqual(descriptor.callbackPath, '/aws-blocks/auth/callback');
-		assert.strictEqual(descriptor.exchangePath, '/aws-blocks/auth/exchange');
-		assert.strictEqual(descriptor.signOutPath, '/aws-blocks/auth/signout');
-		assert.strictEqual(descriptor.signInBasePath, '/aws-blocks/auth/signin');
-		assert.strictEqual(descriptor.sessionPath, '/aws-blocks/auth/session');
-		assert.strictEqual(descriptor.refreshPath, '/aws-blocks/auth/exchange/refresh');
-		assert.strictEqual(descriptor.authorizeParamsBasePath, '/aws-blocks/auth/authorize-params');
+		assert.strictEqual(descriptor.callbackPath, '/cdk-blocks/auth/callback');
+		assert.strictEqual(descriptor.exchangePath, '/cdk-blocks/auth/exchange');
+		assert.strictEqual(descriptor.signOutPath, '/cdk-blocks/auth/signout');
+		assert.strictEqual(descriptor.signInBasePath, '/cdk-blocks/auth/signin');
+		assert.strictEqual(descriptor.sessionPath, '/cdk-blocks/auth/session');
+		assert.strictEqual(descriptor.refreshPath, '/cdk-blocks/auth/exchange/refresh');
+		assert.strictEqual(descriptor.authorizeParamsBasePath, '/cdk-blocks/auth/authorize-params');
 		// The handle's own fields are the descriptor's, so a server-side caller reads the same values.
 		assert.deepStrictEqual(handle.providers, ['corp']);
 		assert.strictEqual(handle.exchangePath, descriptor.exchangePath);
@@ -208,8 +209,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			providers: { staff: stubIdp() },
 			redirects: {
 				// A callback that doesn't end in `/callback`: the descriptor names it as configured.
-				callbackPath: '/aws-blocks/auth/second/return',
-				signOutPath: '/aws-blocks/auth/second/signout',
+				callbackPath: '/cdk-blocks/auth/second/return',
+				signOutPath: '/cdk-blocks/auth/second/signout',
 			},
 		});
 		const ctx = new TestBrowser().context(server.origin);
@@ -217,13 +218,13 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		const b = wire(await getClient(second.createOidcApi(), ctx));
 
 		assert.deepStrictEqual(b.providers, ['staff']);
-		assert.strictEqual(b.callbackPath, '/aws-blocks/auth/second/return');
-		assert.strictEqual(b.exchangePath, '/aws-blocks/auth/second/exchange');
-		assert.strictEqual(b.signOutPath, '/aws-blocks/auth/second/signout');
-		assert.strictEqual(b.authorizeParamsBasePath, '/aws-blocks/auth/second/authorize-params');
-		assert.strictEqual(b.signInBasePath, '/aws-blocks/auth/second/signin');
-		assert.strictEqual(b.sessionPath, '/aws-blocks/auth/second/session');
-		assert.strictEqual(b.refreshPath, '/aws-blocks/auth/second/exchange/refresh');
+		assert.strictEqual(b.callbackPath, '/cdk-blocks/auth/second/return');
+		assert.strictEqual(b.exchangePath, '/cdk-blocks/auth/second/exchange');
+		assert.strictEqual(b.signOutPath, '/cdk-blocks/auth/second/signout');
+		assert.strictEqual(b.authorizeParamsBasePath, '/cdk-blocks/auth/second/authorize-params');
+		assert.strictEqual(b.signInBasePath, '/cdk-blocks/auth/second/signin');
+		assert.strictEqual(b.sessionPath, '/cdk-blocks/auth/second/session');
+		assert.strictEqual(b.refreshPath, '/cdk-blocks/auth/second/exchange/refresh');
 		assert.notStrictEqual(a.exchangePath, b.exchangePath);
 
 		// The second block's descriptor names a route that block really serves.
@@ -239,7 +240,7 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 		const d = wire(await getClient(auth.createOidcApi(), new TestBrowser().context(server.origin)));
 		assert.deepStrictEqual(d.providers, []);
 		assert.deepStrictEqual(d.providerConfigs, {});
-		assert.strictEqual(d.exchangePath, '/aws-blocks/auth/exchange');
+		assert.strictEqual(d.exchangePath, '/cdk-blocks/auth/exchange');
 	});
 
 	test('a provider whose discovery fails is left out, and the others still sign in', async () => {
@@ -274,8 +275,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 				store: 'builtin',
 				providers: { corp: stubIdp() },
 				redirects: {
-					callbackPath: '/aws-blocks/auth/own/callback',
-					signOutPath: '/aws-blocks/auth/own/signout',
+					callbackPath: '/cdk-blocks/auth/own/callback',
+					signOutPath: '/cdk-blocks/auth/own/signout',
 				},
 			},
 			unavailable: { providers: { google: { type: 'google', clientId: 'g', clientSecret: googleSecret } } },
@@ -293,7 +294,7 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			assert.ok(Array.isArray(d.providers), `${name}: providers is an array`);
 			assert.ok(d.providerConfigs && typeof d.providerConfigs === 'object', `${name}: providerConfigs`);
 			for (const key of PATHS) {
-				assert.ok(typeof d[key] === 'string' && d[key].startsWith('/aws-blocks/auth/'), `${name}: ${key}`);
+				assert.ok(typeof d[key] === 'string' && d[key].startsWith('/cdk-blocks/auth/'), `${name}: ${key}`);
 			}
 			assert.ok(d.sessionCookieName?.startsWith('auth_'), `${name}: sessionCookieName`);
 			for (const id of d.providers) {
@@ -317,8 +318,8 @@ describe('createOidcApi().getClient() — the oidc/client transferable', () => {
 			store: 'builtin',
 			providers: { staff: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
 			redirects: {
-				callbackPath: '/aws-blocks/auth/second/callback',
-				signOutPath: '/aws-blocks/auth/second/signout',
+				callbackPath: '/cdk-blocks/auth/second/callback',
+				signOutPath: '/cdk-blocks/auth/second/signout',
 			},
 		});
 		const b = new TestBrowser();

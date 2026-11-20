@@ -4,7 +4,7 @@
 /**
  * The `KVStore` local data file, in one place.
  *
- * The local mock of `KVStore` keeps a store in `.bb-data/<fullId>/store.json`:
+ * The local mock of `KVStore` keeps a store in `.cdk-blocks/local/data/<fullId>/store.json`:
  *
  * ```json
  * { "version": 2, "items": [{ "_bkv_pk": "a", "_bkv_value": "hello" }] }

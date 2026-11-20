@@ -11,9 +11,10 @@ import {
 	buildMetricsWidgets,
 	resolveConfig,
 } from './widgets.js';
-import type { ComputeDashboardSection } from '@aws-blocks/core/cdk/internal';
+import type { ComputeDashboardSection } from '@aws-cdk-blocks/core/cdk/internal';
 import type { DashboardOptions } from './types.js';
 import { DashboardErrors } from './errors.js';
+import { Dashboard as MockDashboard } from './index.mock.js';
 import { GraphWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -52,9 +53,9 @@ function stubComputeSections(
 		},
 	];
 }
-import { Scope, getRegisteredRoutes, clearRouteRegistry } from '@aws-blocks/core';
+import { Scope, getRegisteredRoutes, clearRouteRegistry } from '@aws-cdk-blocks/core';
 import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
-import type { BlocksContext } from '@aws-blocks/core';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 
 /** Flatten widget rows into a flat list of JSON objects produced by toJson(). */
 function flattenWidgetJson(rows: IWidget[][]): any[] {
@@ -589,6 +590,40 @@ describe('Dashboard mock', () => {
 		const dash = new Dashboard({ id: 'my/stack.scope', fullId: 'my/stack.scope' } as any, 'dashboard');
 		assert.equal(dash.dashboardName, 'my-stack-scope-dashboard');
 	});
+
+	it('serves the configured dashboard locally even with a stale cloud URL', async () => {
+		const original = process.env[BB_DASHBOARD_URL_ENV];
+		process.env[BB_DASHBOARD_URL_ENV] = 'https://example.com/stale-dashboard';
+		try {
+			clearRouteRegistry();
+			new MockDashboard(new Scope('app'), 'dashboard', {
+				routePath: '/ops/dashboard',
+				title: 'Orders <local>',
+				metrics: { metrics: { namespace: 'Shop' }, metricConfigs: [{ name: 'OrdersPlaced' }] },
+			});
+			const route = getRegisteredRoutes().find((r) => r.path === '/ops/dashboard');
+			assert.ok(route);
+			let page: unknown;
+			const request = new Request('http://localhost/ops/dashboard');
+			const response = { status: 200, headers: new Headers(), send: (body: unknown) => { page = body; } };
+			await route.handler({
+				request: {
+					headers: request.headers, body: null, params: {}, url: new URL(request.url),
+					text: () => request.text(), json: () => request.json(),
+				},
+				response,
+			});
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.has('Location'), false);
+			assert.match(response.headers.get('Content-Type') ?? '', /text\/html/);
+			assert.ok(typeof page === 'string');
+			assert.match(page, /Orders &lt;local&gt;/);
+			assert.match(page, /OrdersPlaced/);
+		} finally {
+			if (original === undefined) delete process.env[BB_DASHBOARD_URL_ENV];
+			else process.env[BB_DASHBOARD_URL_ENV] = original;
+		}
+	});
 });
 
 describe('mountDashboardRoute', () => {
@@ -597,10 +632,10 @@ describe('mountDashboardRoute', () => {
 	});
 
 	it('registers a GET route at the specified path', () => {
-		mountDashboardRoute(null as any, '/aws-blocks/dashboard', null);
+		mountDashboardRoute(null as any, '/cdk-blocks/dashboard', null);
 		const routes = getRegisteredRoutes();
-		const route = routes.find(r => r.path === '/aws-blocks/dashboard');
-		assert.ok(route, 'Should register a route at /aws-blocks/dashboard');
+		const route = routes.find(r => r.path === '/cdk-blocks/dashboard');
+		assert.ok(route, 'Should register a route at /cdk-blocks/dashboard');
 		assert.equal(route.method, 'GET');
 	});
 
@@ -617,9 +652,9 @@ describe('mountDashboardRoute', () => {
 		process.env[BB_DASHBOARD_URL_ENV] = 'https://us-east-1.console.aws.amazon.com/cloudwatch/home#dashboards/dashboard/test';
 
 		try {
-			mountDashboardRoute(null as any, '/aws-blocks/dashboard', null);
+			mountDashboardRoute(null as any, '/cdk-blocks/dashboard', null);
 			const routes = getRegisteredRoutes();
-			const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
+			const route = routes.find(r => r.path === '/cdk-blocks/dashboard')!;
 
 			const responseHeaders = new Headers();
 			let sentBody: any;
@@ -629,7 +664,7 @@ describe('mountDashboardRoute', () => {
 					body: null,
 					json: async () => ({}),
 					text: async () => '',
-					url: new URL('http://localhost/aws-blocks/dashboard'),
+					url: new URL('http://localhost/cdk-blocks/dashboard'),
 					params: {},
 				},
 				response: {
@@ -657,9 +692,9 @@ describe('mountDashboardRoute', () => {
 		delete process.env[BB_DASHBOARD_URL_ENV];
 
 		try {
-			mountDashboardRoute(null as any, '/aws-blocks/dashboard', 'https://fallback.example.com/dashboard');
+			mountDashboardRoute(null as any, '/cdk-blocks/dashboard', 'https://fallback.example.com/dashboard');
 			const routes = getRegisteredRoutes();
-			const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
+			const route = routes.find(r => r.path === '/cdk-blocks/dashboard')!;
 
 			const responseHeaders = new Headers();
 			let sentBody: any;
@@ -669,7 +704,7 @@ describe('mountDashboardRoute', () => {
 					body: null,
 					json: async () => ({}),
 					text: async () => '',
-					url: new URL('http://localhost/aws-blocks/dashboard'),
+					url: new URL('http://localhost/cdk-blocks/dashboard'),
 					params: {},
 				},
 				response: {
@@ -697,9 +732,9 @@ describe('mountDashboardRoute', () => {
 		delete process.env[BB_DASHBOARD_URL_ENV];
 
 		try {
-			mountDashboardRoute(null as any, '/aws-blocks/dashboard', null);
+			mountDashboardRoute(null as any, '/cdk-blocks/dashboard', null);
 			const routes = getRegisteredRoutes();
-			const route = routes.find(r => r.path === '/aws-blocks/dashboard')!;
+			const route = routes.find(r => r.path === '/cdk-blocks/dashboard')!;
 
 			const responseHeaders = new Headers();
 			let sentBody: any;
@@ -709,7 +744,7 @@ describe('mountDashboardRoute', () => {
 					body: null,
 					json: async () => ({}),
 					text: async () => '',
-					url: new URL('http://localhost/aws-blocks/dashboard'),
+					url: new URL('http://localhost/cdk-blocks/dashboard'),
 					params: {},
 				},
 				response: {

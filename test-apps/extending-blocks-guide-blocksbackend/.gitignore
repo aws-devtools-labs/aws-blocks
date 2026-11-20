@@ -1,6 +1,6 @@
 cdk.out/
 cdk.outputs.json
 .cdk-blocks-sandbox/
-.bb-data/
+.cdk-blocks/local/data/
 node_modules/
 *.tsbuildinfo

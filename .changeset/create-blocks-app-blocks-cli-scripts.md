@@ -1,9 +1,0 @@
----
-"@aws-blocks/create-blocks-app": minor
-"@aws-blocks/core": patch
----
-
-Generated apps keep their existing npm lifecycle script names without generating `aws-blocks/scripts/*.ts` wrappers. Backend-only templates default to port 3001 with `blocks.dev.frontend` disabled; frontend templates default to frontend port 3100 and detect their frontend from dependencies. Override the ports with `npm run dev -- --port 4000 --frontend-port 4100`. Existing `blocks.dev` settings are preserved when adding AWS Blocks to an existing project. Amplify keeps its own sandbox and client generation. Generated guidance documents npm scripts, structured results, and non-interactive confirmations. Scaffold next steps quote paths with spaces and give backend-only apps their correct API URL. `--template=<name>` and `--template <name>` are both accepted. `npm run cleanup` stops only dev sessions recorded for this app. Production destroy requires confirmation in a terminal or `npm run destroy -- --yes` in automation. End-to-end tests reuse the configured dev port. Generate hosting types with `npm run typegen` before enabling `npm run typegen -- --check` in CI. The local realtime WebSocket uses `BLOCKS_DEV_HOST` to opt into a different host.
-
-Scaffold guidance redirects background dev-server output to a log, and generated gitignore files ignore `*.log`. Stop a server started on another port with `npm run dev:stop -- --port <n>`, or stop the app's recorded sessions with `npm run cleanup`. Sandbox destruction prompts in a terminal; `npm run sandbox:destroy -- --yes` skips that prompt, while non-interactive sandbox destruction retains its existing behavior. The backend README identifies the JSON-RPC namespace by its exported variable and uses `http://localhost:3001/aws-blocks/api`. SQL guidance uses `npm run db -- types --block <id>` and `npm run db -- status --block <id>`.
-

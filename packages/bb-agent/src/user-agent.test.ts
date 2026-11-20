@@ -7,9 +7,9 @@ import http from 'node:http';
 import http2 from 'node:http2';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AddressInfo } from 'node:net';
-import { Scope } from '@aws-blocks/core';
-import type { ScopeParent } from '@aws-blocks/core';
-import { CORE_VERSION } from '@aws-blocks/core/version';
+import { Scope } from '@aws-cdk-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { CORE_VERSION } from '@aws-cdk-blocks/core/version';
 import { Agent } from './agent.aws.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 

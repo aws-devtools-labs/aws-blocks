@@ -4,8 +4,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { testBaseUrl } from './api-url.js';
-import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
-import type { api as apiType } from 'aws-blocks';
+import { AuthErrors, isAuthError } from '@aws-cdk-blocks/bb-auth';
+import type { api as apiType } from 'cdk-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 import { getTestSupport } from './test-support.js';
 
@@ -40,7 +40,7 @@ interface RpcResponse {
  * technique).
  */
 async function rpcRaw(baseUrl: string, method: string, args: unknown[], cookie?: string): Promise<RpcResponse> {
-  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+  const resp = await fetch(`${baseUrl}/cdk-blocks/api`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
     body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),
@@ -445,7 +445,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         // reaching the shared KVStore. If the code only lived in a module
         // variable this would be null, which is exactly what a cold Lambda
         // instance used to observe. Key mirrors the harness in
-        // aws-blocks/index.ts.
+        // cdk-blocks/index.ts.
         const persisted = await api.kvGet(`__last-code:auth:${username}`);
         assert.ok(persisted, 'code should be persisted in the shared store');
         assert.deepStrictEqual(JSON.parse(persisted!), { username, code: delivered.code, purpose: 'signUp' });
@@ -501,7 +501,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         // the only key": the store also holds other users' records, from the
         // Agent suite signing up users in a background process at the same
         // time (./background-suites.ts) and, locally, from earlier runs
-        // persisted in .bb-data/. Every record must be keyed by the username
+        // persisted in .cdk-blocks/local/data/. Every record must be keyed by the username
         // it holds, so a shared slot fails here whoever delivered last.
         const codeEntries = (await api.kvScan()).filter((e) => e.key.startsWith('__last-code:'));
         for (const { key, value } of codeEntries) {
@@ -550,13 +550,13 @@ export function basicAuthTests(getApi: () => typeof apiType) {
     // failure in `AuthState.error`, which reaches unauthenticated clients.
 
     describe('setAuthState error redaction', () => {
-      // Dynamic import, not static: `aws-blocks` resolves to the generated
+      // Dynamic import, not static: `cdk-blocks` resolves to the generated
       // client.js, which only exists once e2e.test.ts has started the server
       // (it imports the client the same way). Destructure the namespace from the
       // module; awaiting the namespace proxy itself would probe it as a thenable.
 
       test('an unbranded backend error reaches the client only as a generic message', async () => {
-        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const { authDeliveryFailsApi } = await import('cdk-blocks');
         const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `raw-${uniqueUser()}@example.com`, password: 'password123' });
 
         assert.strictEqual(state.state, 'signedOut');
@@ -566,7 +566,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
       });
 
       test('an ApiError message and name reach the client unchanged', async () => {
-        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const { authDeliveryFailsApi } = await import('cdk-blocks');
         const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `api-${uniqueUser()}@example.com`, password: 'password123' });
 
         assert.strictEqual(state.state, 'signedOut');

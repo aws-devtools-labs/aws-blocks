@@ -23,7 +23,7 @@ import type { StoredParameter } from './settings-store.js';
 const DISCOVERY: BlocksResult = {
 	blocksSource: 'source-scan',
 	projectName: 'shop',
-	scope: { id: 'shop', file: 'aws-blocks/index.ts', line: 1 },
+	scope: { id: 'shop', file: 'cdk-blocks/index.ts', line: 1 },
 	unknownConstructs: [],
 	scannedFiles: 1,
 	blocks: [
@@ -32,7 +32,7 @@ const DISCOVERY: BlocksResult = {
 			id: 'flag',
 			fullId: 'shop-flag',
 			category: 'config',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 3,
 			setting: {
 				parameterName: '/shop-flag',
@@ -47,7 +47,7 @@ const DISCOVERY: BlocksResult = {
 			id: 'token',
 			fullId: 'shop-token',
 			category: 'config',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 4,
 			setting: {
 				parameterName: '/shop-token',
@@ -62,7 +62,7 @@ const DISCOVERY: BlocksResult = {
 			id: 'cache',
 			fullId: 'shop-cache',
 			category: 'data',
-			file: 'aws-blocks/index.ts',
+			file: 'cdk-blocks/index.ts',
 			line: 5,
 		},
 	],
@@ -96,12 +96,12 @@ describe('LocalDataProvider settings', () => {
 
 	function makeProject(settingsJson?: Record<string, unknown>): string {
 		tmpDir = join(tmpdir(), `admin-ui-settings-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'shop' }));
-		writeFileSync(join(tmpDir, '.blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
+		writeFileSync(join(tmpDir, '.cdk-blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
 		if (settingsJson) {
-			mkdirSync(join(tmpDir, '.bb-data'), { recursive: true });
-			writeFileSync(join(tmpDir, '.bb-data/settings.json'), JSON.stringify(settingsJson));
+			mkdirSync(join(tmpDir, '.cdk-blocks/local/data'), { recursive: true });
+			writeFileSync(join(tmpDir, '.cdk-blocks/local/data/settings.json'), JSON.stringify(settingsJson));
 		}
 		return tmpDir;
 	}
@@ -320,9 +320,9 @@ describe('LocalDataProvider.writeSetting', () => {
 
 	function makeProject(): string {
 		tmpDir = join(tmpdir(), `admin-ui-settings-write-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+		mkdirSync(join(tmpDir, '.cdk-blocks'), { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'shop' }));
-		writeFileSync(join(tmpDir, '.blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
+		writeFileSync(join(tmpDir, '.cdk-blocks/config.json'), JSON.stringify({ stackId: 'shop-abc123' }));
 		return tmpDir;
 	}
 
@@ -339,7 +339,7 @@ describe('LocalDataProvider.writeSetting', () => {
 				id: 'limits',
 				fullId: 'shop-limits',
 				category: 'config',
-				file: 'aws-blocks/index.ts',
+				file: 'cdk-blocks/index.ts',
 				line: 6,
 				setting: {
 					parameterName: '/shop-limits',
@@ -354,7 +354,7 @@ describe('LocalDataProvider.writeSetting', () => {
 				id: 'db-url',
 				fullId: 'shop-db-url',
 				category: 'config',
-				file: 'aws-blocks/index.ts',
+				file: 'cdk-blocks/index.ts',
 				line: 7,
 				setting: { nameSource: 'unresolved', secret: true, hasSchema: false, external: true },
 			},

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The local user pool's persisted state: `.bb-data/<fullId>/state.json`, plus
+ * The local user pool's persisted state: `.cdk-blocks/local/data/<fullId>/state.json`, plus
  * verification codes (`last-code.json`, the `codeDelivery` hook), sign-in
  * challenges and the synthetic tokens the mock mints.
  *
@@ -46,7 +46,7 @@
 import crypto from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { WRONG_CODE_MESSAGE } from '../enumeration.js';
 import { AuthErrors } from '../errors.js';
 import { decodeJwtPayload } from '../sessions.js';
@@ -466,7 +466,7 @@ function idTokenAttributeClaims(attributes: Record<string, string>): Record<stri
 
 /** What the store needs from its host. */
 export interface MockStoreOptions {
-	/** `getMockDataDir(auth)` — `.bb-data/<fullId>/`. */
+	/** `getMockDataDir(auth)` — `.cdk-blocks/local/data/<fullId>/`. */
 	dataDir: string;
 	/** The `Auth` instance's `fullId` (token issuer / audience). */
 	fullId: string;
@@ -776,7 +776,7 @@ export class MockStore {
 
 	/**
 	 * The most recent code, for e2e tests and `npm run dev` (no mailbox
-	 * locally). Test scaffolding only — not secure storage; `.bb-data/` is
+	 * locally). Test scaffolding only — not secure storage; `.cdk-blocks/local/data/` is
 	 * gitignored. Overwritten on every code, so only the last one is visible.
 	 */
 	private writeLastCode(purpose: CodeDeliveryPurpose, username: string, code: string): void {

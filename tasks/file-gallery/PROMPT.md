@@ -12,7 +12,7 @@ The workspace has already been scaffolded. Begin by reading README.md (and any A
 
 ### The `api` namespace (primary surface)
 
-Expose an **`api` namespace** (the framework's server-side RPC surface — a `POST /aws-blocks/api` JSON-RPC endpoint) with these methods, each storing/serving real bytes through the **file-storage block** (not an in-memory map):
+Expose an **`api` namespace** (the framework's server-side RPC surface — a `POST /cdk-blocks/api` JSON-RPC endpoint) with these methods, each storing/serving real bytes through the **file-storage block** (not an in-memory map):
 
 1. **`api.putFile(name, contentBase64)`** — stores a file under `name` from the base64-encoded bytes and returns `{ name, size }` where `size` is the exact byte length. Storing a `name` that already exists **overwrites** it (one entry per name, latest bytes). Names may contain spaces or non-ASCII / unicode characters and are preserved verbatim. Storing an **empty (0-byte)** file is valid and returns `size: 0`. A **missing `name`** or **missing/invalid base64** is rejected with a JSON-RPC **error** envelope (no entry created).
 2. **`api.listFiles()`** — returns an array of `{ name, size, url }`, one per stored file. `url` is a **real download URL from the storage block** (its download / presigned URL) that serves the **exact stored bytes** — not `#`, not a placeholder. Fetching a file's `url` must return the uploaded bytes **byte-for-byte**, including binary (non-UTF-8) and empty files.

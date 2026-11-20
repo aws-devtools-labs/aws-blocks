@@ -4,7 +4,7 @@
 /**
  * Finding local (mock) user pools on disk from outside the process that runs
  * them: the `testing` helpers and the `bb-auth users` CLI. A local pool is
- * `.bb-data/<fullId>/state.json` (see `engines/native-mock-store.ts` for the
+ * `.cdk-blocks/local/data/<fullId>/state.json` (see `engines/native-mock-store.ts` for the
  * format); this module only reads it and recognises it by shape, so it
  * depends on neither the scope nor the block name.
  *
@@ -13,7 +13,7 @@
  * @internal
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 /** One local `Auth` block's data directory. */
@@ -49,9 +49,40 @@ export function isLocalPoolState(state: unknown): state is LocalPoolState {
 	return isRecord(state) && isRecord(state.users) && isRecord(state.groups);
 }
 
-/** The `.bb-data` directory under `cwd`. */
+/**
+ * The mock data directory under `cwd`: `.cdk-blocks/local/data`, or the pre-rename
+ * `.bb-data` while that is the only one a project has.
+ *
+ * The carry-over runs when the BACKEND first opens a store, so an upgraded project
+ * can still hold its only Auth pool at the old path. Reading just the new one makes
+ * `bb-auth users` report no pool for users who plainly have one.
+ */
 export function dataDirOf(cwd: string): string {
-	return join(resolve(cwd), '.bb-data');
+	const root = resolve(cwd);
+	const renamed = join(root, '.cdk-blocks/local/data');
+	if (existsSync(renamed) || !existsSync(join(root, '.bb-data'))) return renamed;
+	return join(root, '.bb-data');
+}
+
+/**
+ * Every local pool under `cwd`, resolved PER POOL across both data roots.
+ *
+ * {@link dataDirOf} answers per root, and the new root exists as soon as any
+ * block calls `getMockDataDir` — an `AppSetting` constructor at backend load is
+ * enough. Auth resolves its own data dir lazily, so from that moment a pool
+ * that has not been carried over yet is invisible and `bb-auth users` reports
+ * "No local user pool" while `.bb-data/<fullId>/state.json` is right there.
+ * Merging both roots, new location winning, is what `bb-database`'s
+ * `localDataDir` already does per owner.
+ */
+export function listLocalPoolsAcrossRoots(cwd: string): LocalPoolDir[] {
+	const root = resolve(cwd);
+	const byId = new Map<string, LocalPoolDir>();
+	// Legacy first, so the renamed location overwrites it for an id in both.
+	for (const relative of ['.bb-data', '.cdk-blocks/local/data']) {
+		for (const pool of listLocalPools(join(root, relative))) byId.set(pool.fullId, pool);
+	}
+	return [...byId.values()].sort((a, b) => a.fullId.localeCompare(b.fullId));
 }
 
 /** The local user pools under `dataDir`, sorted by full id. */

@@ -17,8 +17,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthStateApi } from '@aws-blocks/auth-common';
-import { ApiError, type BlocksContext } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import { ApiError, type BlocksContext } from '@aws-cdk-blocks/core';
 import { cognitoConfigKeys, ownsPreSignUpTrigger, preSignUpTriggerConfigKey } from './cdk/contract.js';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.aws.js';
@@ -37,8 +37,8 @@ import { cognitoWithTrigger, invokeLambda, preSignUpEvent } from './test-support
 import { decodeTriggerRejection } from './trigger-rejection.js';
 import type { AuthOptions, UserCandidate } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 /** `validateUser` allowing `@corp.example` only, recording every call. */
 function corpOnly() {

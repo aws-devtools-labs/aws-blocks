@@ -13,7 +13,7 @@ export default function ApiTestPage() {
   const [config, setConfig] = useState<unknown>(null);
 
   useEffect(() => {
-    fetch('/.cdk-blocks-sandbox/config.json').then(r => r.json()).then(setConfig).catch(() => setConfig({ error: 'config.json not reachable' }));
+    fetch('/.blocks-sandbox/config.json').then(r => r.json()).then(setConfig).catch(() => setConfig({ error: 'config.json not reachable' }));
   }, []);
 
   return (
@@ -263,13 +263,13 @@ export default function ApiTestPage() {
 
       <h3 style={{ borderTop: '1px solid #eee', paddingTop: 16, marginBottom: 12, marginTop: 24 }}>
         <span style={{ background: BLOCKS, color: '#000', padding: '3px 10px', borderRadius: 4, fontSize: 14 }}>Blocks</span>
-        {' '}routes — ApiNamespace (<code>aws-blocks/index.ts</code>)
+        {' '}routes — ApiNamespace (<code>cdk-blocks/index.ts</code>)
       </h3>
 
       <ProbeCard
         feature="api.listPosts()"
         description="Reads the public posts feed from KVStore via the Blocks Lambda. No auth required."
-        source="aws-blocks/index.ts → ApiNamespace listPosts"
+        source="cdk-blocks/index.ts → ApiNamespace listPosts"
         buttons={[
           {
             label: 'Call listPosts',
@@ -284,7 +284,7 @@ export default function ApiTestPage() {
       <ProbeCard
         feature="api.authCheckAuth()"
         description="Returns the current session info if logged in, or null. Demonstrates Blocks auth round-trip."
-        source="aws-blocks/index.ts → ApiNamespace authCheckAuth"
+        source="cdk-blocks/index.ts → ApiNamespace authCheckAuth"
         buttons={[
           {
             label: 'Call authCheckAuth',
@@ -299,7 +299,7 @@ export default function ApiTestPage() {
       <ProbeCard
         feature="api.authSignUp() + authGetLastCode() + authConfirmSignUp() + authSignIn()"
         description="Full auth flow: create disposable account, fetch the verification code, confirm, sign in. Cookie set as a result. Click Log out to end the session."
-        source="aws-blocks/index.ts → Auth helpers"
+        source="cdk-blocks/index.ts → Auth helpers"
         buttons={[
           {
             label: 'Run full auth flow',
@@ -332,7 +332,7 @@ export default function ApiTestPage() {
       <ProbeCard
         feature="api.getProfile() (auth-protected)"
         description="Calls a protected Blocks endpoint. Returns the current user's profile or 401 if unauthenticated."
-        source="aws-blocks/index.ts → getProfile (uses auth.requireAuth)"
+        source="cdk-blocks/index.ts → getProfile (uses auth.requireAuth)"
         buttons={[
           {
             label: 'Call getProfile',
@@ -351,7 +351,7 @@ export default function ApiTestPage() {
       <ProbeCard
         feature="api.createPost() / listMyPosts() / deletePost() (auth-protected)"
         description="Posts CRUD round-trip, auth-protected. Will fail with 401 if you have not signed in. Run the auth flow above first."
-        source="aws-blocks/index.ts → posts CRUD"
+        source="cdk-blocks/index.ts → posts CRUD"
         buttons={[
           {
             label: 'Create + list + delete',
@@ -372,7 +372,7 @@ export default function ApiTestPage() {
       <ProbeCard
         feature="authApi (separate ApiNamespace)"
         description="The authApi namespace is the Blocks-owned alternative to the api namespace. Tests that multiple ApiNamespaces coexist."
-        source="aws-blocks/index.ts → authApi"
+        source="cdk-blocks/index.ts → authApi"
         buttons={[
           {
             label: 'List authApi members',

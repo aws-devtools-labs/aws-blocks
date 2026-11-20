@@ -6,7 +6,7 @@
  *
  * SOURCE OF TRUTH: `packages/core/src/rpc.ts`. This is a deliberate
  * reimplementation of ~30 lines rather than an import, because `admin-ui` does
- * not depend on `@aws-blocks/core` and should not start: the dashboard installs
+ * not depend on `@aws-cdk-blocks/core` and should not start: the dashboard installs
  * into a *user's* project, so a core dependency would have to match whichever
  * core version that app pins, and a mismatch would be a silently wrong codec
  * rather than an install error.
@@ -20,6 +20,28 @@
  */
 
 const JSONRPC_VERSION = '2.0';
+
+/** Path of the RPC endpoint. SOURCE OF TRUTH: `BLOCKS_RPC_PREFIX` in `packages/core/src/constants.ts`. */
+export const BLOCKS_RPC_PREFIX = '/cdk-blocks/api';
+
+/** The path a dev server older than the `/cdk-blocks/` prefix serves the endpoint at; newer servers alias it. */
+export const LEGACY_BLOCKS_RPC_PREFIX = '/aws-blocks/api';
+
+/**
+ * `url` moved from {@link BLOCKS_RPC_PREFIX} to {@link LEGACY_BLOCKS_RPC_PREFIX}, or `undefined` when its path
+ * does not end in the canonical prefix. Used to retry a call an older dev server answered with 404.
+ */
+export function legacyRpcUrl(url: string): string | undefined {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return undefined;
+	}
+	if (!parsed.pathname.endsWith(BLOCKS_RPC_PREFIX)) return undefined;
+	parsed.pathname = parsed.pathname.slice(0, -BLOCKS_RPC_PREFIX.length) + LEGACY_BLOCKS_RPC_PREFIX;
+	return parsed.toString();
+}
 
 /**
  * Monotonic request id.
@@ -96,6 +118,11 @@ export function extractRpcError(body: unknown): RpcErrorInfo | undefined {
 		// without a code did not come from application logic we can attribute.
 		kind: code !== undefined && code > 0 ? 'application' : 'protocol',
 	};
+}
+
+/** True when the body is a JSON-RPC response envelope (`jsonrpc: '2.0'`), success or error. */
+export function isRpcEnvelope(body: unknown): boolean {
+	return typeof body === 'object' && body !== null && (body as Record<string, unknown>).jsonrpc === JSONRPC_VERSION;
 }
 
 /** True when the body is a JSON-RPC envelope carrying a `result`. */
