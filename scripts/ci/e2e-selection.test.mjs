@@ -32,7 +32,7 @@ const ALL = [
 ];
 
 // The E2E jobs that are required checks.
-const REQUIRED = ['production', 'sandbox'];
+const REQUIRED = ['production', 'sandbox', 'templates', 'templates-windows'];
 
 // Isolated from the user's git config (hooks, signing, default branch).
 const GIT_ENV = {

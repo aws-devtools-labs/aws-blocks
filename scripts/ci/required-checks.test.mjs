@@ -54,7 +54,10 @@ const PR_DETECTION = {
 // `everything` are the outputs of a successful detection job that selects no
 // job and every job.
 const REQUIRED = {
-	'pr-checks.yml': { checks: ['Build, Unit Tests, E2E Local'], ...PR_DETECTION },
+	'pr-checks.yml': {
+		checks: ['Build, Unit Tests, E2E Local', 'E2E Templates', 'E2E Templates (Windows)'],
+		...PR_DETECTION,
+	},
 	'pr-e2e.yml': { checks: ['E2E Production', 'E2E Sandbox'], ...PR_DETECTION },
 	'e2e-amplify-interop.yml': {
 		checks: ['E2E Amplify Interop (Required)'],

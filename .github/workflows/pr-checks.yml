@@ -584,10 +584,29 @@ jobs:
   e2e-templates:
     name: E2E Templates
     needs: [build-and-test-local, detect-changes]
-    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates') && github.event.pull_request.head.repo.full_name == github.repository
+    # Required check: see "Check that Detect Changes succeeded" below. Only
+    # that branch uses always(); the run branch keeps success(), so the job
+    # still skips when Build, Unit Tests, E2E Local did not pass (that check is
+    # required itself) or when the run is cancelled.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((always() && needs.detect-changes.result != 'success') ||
+       (success() && contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates')))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # Without Detect Changes' outputs the `if:` above would skip this job, and
+      # a skipped required check counts as passing. E2E Sandbox and E2E
+      # Production fail the same way, but in another workflow, with their own
+      # Detect Changes, so they do not cover a failure of this one.
+      - name: Check that Detect Changes succeeded
+        if: always() && needs.detect-changes.result != 'success'
+        env:
+          RESULT: ${{ needs.detect-changes.result }}
+        run: |
+          echo "::error::Detect Changes ended $RESULT, so this run can't tell which E2E jobs this PR needs. Re-run the failed jobs."
+          exit 1
+
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'templates')
         run: |
@@ -628,10 +647,31 @@ jobs:
   e2e-templates-windows:
     name: E2E Templates (Windows)
     needs: [build-and-test-local, detect-changes]
-    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates-windows') && github.event.pull_request.head.repo.full_name == github.repository
+    # Required check: see "Check that Detect Changes succeeded" below. Only
+    # that branch uses always(); the run branch keeps success(), so the job
+    # still skips when Build, Unit Tests, E2E Local did not pass (that check is
+    # required itself) or when the run is cancelled.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((always() && needs.detect-changes.result != 'success') ||
+       (success() && contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates-windows')))
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      # Without Detect Changes' outputs the `if:` above would skip this job, and
+      # a skipped required check counts as passing. E2E Sandbox and E2E
+      # Production fail the same way, but in another workflow, with their own
+      # Detect Changes, so they do not cover a failure of this one.
+      - name: Check that Detect Changes succeeded
+        if: always() && needs.detect-changes.result != 'success'
+        # $RESULT is a shell variable only in bash; the runner defaults to PowerShell.
+        shell: bash
+        env:
+          RESULT: ${{ needs.detect-changes.result }}
+        run: |
+          echo "::error::Detect Changes ended $RESULT, so this run can't tell which E2E jobs this PR needs. Re-run the failed jobs."
+          exit 1
+
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'templates-windows')
         run: |
