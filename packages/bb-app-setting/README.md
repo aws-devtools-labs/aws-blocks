@@ -2,11 +2,28 @@
 
 A single application configuration value backed by SSM Parameter Store.
 
-**When to use:** You need a non-sensitive configuration value (feature flag, API URL, threshold) stored as a single SSM parameter. Each `AppSetting` instance maps to exactly one parameter.
+**When to use:** You need a non-sensitive configuration value (feature flag, API URL, threshold) stored as a single SSM parameter.
 
-**When NOT to use:** For a production secret (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md) — it is the recommended home for credentials that protect a production app, [in line with AWS guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html). `AppSetting` with `secret: true` does encrypt the value at rest and is free, so it is a fine fallback for a *low-value* secret in a prototype — but it is not the recommended place for production secrets. If you need structured key-value data with conditional writes and queries, use `KVStore`.
+**When NOT to use:** For a credential that protects a production app (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md). `AppSetting` with `secret: true` encrypts the value at rest and is free: use it for a low-value secret in a prototype. If you need structured key-value data with conditional writes and queries, use `KVStore`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
+## Quick start
+
+```typescript
+const auth = new Auth(scope, 'auth', { users: { groups: ['admin'] } });
+const apiUrl = new AppSetting(scope, 'apiUrl', {
+  value: 'https://api.example.com',
+});
+
+export const api = auth.protect(scope, 'api', {
+  methods: () => ({
+    async getApiUrl() {
+      return { url: await apiUrl.get() };
+    },
+  }),
+});
+```
 
 ## API
 
@@ -18,6 +35,7 @@ const setting = new AppSetting(scope, id, options)
 |--------|---------|-------------|
 | `get()` | `Promise<T>` | Read the current value. |
 | `put(value)` | `Promise<void>` | Update the value at runtime. |
+| `AppSetting.fromExisting(scope, id, { name, secret?, kmsKeyArn? })` | `AppSetting<T>` | Read a parameter that is created outside the stack. See [Existing parameter](#existing-parameter-fromexisting). |
 
 **CDK layer (synth time) only** — read-only properties on the construct, for CDK code and for other Building Blocks' CDK layers. They are not on the local or Lambda runtime class.
 
@@ -26,82 +44,79 @@ const setting = new AppSetting(scope, id, options)
 | `parameterName` | `string` | The SSM parameter name: the explicit `name` (always set for `fromExisting`), else the derived `/${fullId}`. The same name the runtime reads. |
 | `secret` | `boolean` | `true` for an SSM SecureString (`secret: true`), for created and `fromExisting` settings alike. |
 
-For example, `Auth` reads both when an `AppSetting` is passed as an identity provider's client secret: it registers the provider against `parameterName`, so a secret with an explicit `name` or from `AppSetting.fromExisting` works, and it refuses a setting whose `secret` is `false`.
+`Auth` accepts an `AppSetting` as an identity provider's client secret only when its `secret` is `true`. A setting with an explicit `name` or from `AppSetting.fromExisting` works.
 
 ### Options
 
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `name` | `string` | No | SSM parameter path. When omitted, derived from the scope tree as `/${fullId}`, guaranteeing uniqueness within the stack. |
-| `value` | `T` | No | Initial value. Required for non-secret parameters. Must not be provided when `secret` is set. |
-| `schema` | `StandardSchemaV1<T>` | No | Runtime validation schema (Zod, Valibot, ArkType). Infers `T` from the schema. Cannot be used with `secret`. |
-| `secret` | `boolean` | No | When `true`, creates an SSM SecureString encrypted with the default `aws/ssm` KMS key (or `kmsKeyArn` when set). Cannot be used with `schema` or `value`. For a production secret, prefer [`Secret`](../bb-secret/README.md) (AWS Secrets Manager) — see **When NOT to use** above. |
-| `kmsKeyArn` | `string` | No | ARN of a customer-managed KMS key to encrypt the SecureString, instead of the default `aws/ssm` key. Only valid with `secret: true`. See the note below. |
-| `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
+Pass exactly one of `value` or `secret: true`.
 
-> **Customer-managed KMS key (`kmsKeyArn`):** Provide a CMK ARN to control the
-> decrypt/grant scope of a secret (e.g. cross-account access or a dedicated key
-> policy). The construct grants the shared handler `kms:Decrypt` (plus
-> `kms:Encrypt` for secrets it writes) on that specific key ARN. Because AWS
-> Blocks does not own a bring-your-own key, **the key's own key policy must also
-> allow the app's Lambda execution role** to use it (or delegate to IAM via the
-> account-root statement CDK adds to same-account keys). Adding or changing
-> `kmsKeyArn` on an already-deployed secret re-encrypts its current value under
-> the new key on the next deploy, so decryption keeps working.
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `name` | `string` | `/${fullId}` | SSM parameter path. The default is unique within the stack. An explicit `name` must be unique across all stacks in the same AWS account and Region. |
+| `value` | `T` | — | Initial value. Required unless `secret: true`. Must not be provided when `secret` is set. |
+| `schema` | `StandardSchemaV1<T>` | — | Runtime validation schema (Zod, Valibot, ArkType). Infers `T` from the schema. Requires `value`. Cannot be used with `secret`. |
+| `secret` | `boolean` | `false` | When `true`, creates an SSM SecureString encrypted with the default `aws/ssm` KMS key (or `kmsKeyArn` when set). The value is a plain string. Cannot be used with `schema` or `value`. See [Secret values](#secret-values-secret-true). |
+| `kmsKeyArn` | `string` | `aws/ssm` key | ARN of a customer-managed KMS key to encrypt the SecureString. Only valid with `secret: true`. |
+| `logger` | `ChildLogger` | error-level `Logger` | Logger for internal operations. |
 
-> **Naming:** When you omit `name`, the framework derives a unique SSM path from
-> the construct scope tree (`/${fullId}`). This is the recommended approach — it
-> prevents collisions across stacks automatically. If you provide an explicit
-> `name`, **you** are responsible for ensuring it is unique across all stacks
-> deployed to the same AWS account and region.
+An invalid combination throws `ValidationFailed` at CDK synth, and at construction in local development.
 
-### Error Handling
+With `kmsKeyArn`:
+
+- The app's Lambda execution role is granted `kms:Decrypt`, plus `kms:Encrypt` for a secret the stack creates, on that key ARN.
+- The key policy must authorize the app's execution role. For a stack-created secret, it must also authorize the secret initializer's role (or delegate to IAM).
+- For a stack-created secret, changing `kmsKeyArn` re-encrypts its current value on deploy. For an imported secret, its owner must change the encryption key; this option only changes the app's grant.
+
+## Errors
+
+Match an error by name with `isBlocksError`:
 
 ```typescript
 import { AppSettingErrors, isBlocksError } from 'aws-cdk-blocks';
+```
 
-try {
-  await setting.put(value);
-} catch (e: unknown) {
-  if (isBlocksError(e, AppSettingErrors.ValidationFailed)) {
-    // schema validation failed or value exceeds 4 KB
-  }
-  throw e;
-}
+| Constant | `error.name` | Thrown when |
+|----------|--------------|-------------|
+| `AppSettingErrors.ValidationFailed` | `ValidationFailedException` | `put()`: the value fails the schema, or a non-secret value's JSON exceeds 4 KB (4,096 bytes). The block skips the size check for secrets; SSM still enforces the [parameter tier's limit](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-advanced-parameters.html). Constructor: the options are an invalid combination. |
+| `AppSettingErrors.ParameterNotFound` | `ParameterNotFoundException` | `get()`: the parameter does not exist or has no value (AWS), or a `secret: true` value is an empty string (AWS and local). |
 
-try {
-  const value = await setting.get();
-} catch (e: unknown) {
-  if (isBlocksError(e, AppSettingErrors.ParameterNotFound)) {
-    // the parameter is missing (e.g., deleted out-of-band) or a secret has an empty value
-  }
-  throw e;
+## Secret values (`secret: true`)
+
+```typescript
+import { createHmac } from 'node:crypto';
+
+const signingKey = new AppSetting(scope, 'prototype-signing-key', { secret: true });
+
+// In a server-side handler, after authorizing the operation:
+async function signForPrototype(payload: string) {
+  const key = await signingKey.get();
+  return createHmac('sha256', key).update(payload).digest('hex');
 }
 ```
 
-`get()` can throw `AppSettingErrors.ParameterNotFound` when the parameter does not exist or a secret parameter has an empty value (in both the AWS and mock runtimes).
+- The first deploy stores a random value (32 random bytes, base64url). Later deploys keep the stored value.
+- Set the real value with `put()`, or in the AWS console: the deployed app's `/cdk-blocks/settings` route redirects to the stack's settings resource group, which lists the parameter.
+- `get()` parses the stored text as JSON and falls back to the raw text. A console value that is valid JSON (`12345`, `true`) is returned as a number or boolean: set such a value with `put()`, which stores it as a JSON string (shown in the console with double quotes).
+- Locally the value is a random string in `.cdk-blocks/local/data/settings.json`. Edit the file to change it; the next `get()` reads it.
+
+## Existing parameter (`fromExisting`)
+
+`AppSetting.fromExisting` reads a parameter that something else creates. For example, `npm run db -- connect --stage production` stores the default connection string at `/<stackName>-db-url`. Use the parameter name printed by the command; for a stack named `my-app`:
+
+```typescript
+const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: '/my-app-db-url', secret: true });
+```
+
+- The stack does not create, seed, tag or delete the parameter.
+- The construct grants `ssm:GetParameter` and, with `secret: true`, `kms:Decrypt`. It does not grant or deny `ssm:PutParameter`. Do not call `put()` on an imported setting: the mock permits it, and on AWS it can overwrite the parameter if another policy grants write access.
+- The parameter must exist before the app runs. If it does not, the deploy succeeds and `get()` throws `ParameterNotFound`.
+- Locally the value is the entry under the setting's `fullId` in `.cdk-blocks/local/data/settings.json`: a random string with `secret: true`, an empty string otherwise. Edit the file to set it.
 
 ## Examples
 
-### Plain String Setting
-
-```typescript
-// Recommended: let the framework manage the SSM name (unique by default)
-const apiUrl = new AppSetting(scope, 'apiUrl', {
-  value: 'https://api.example.com',
-});
-
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async getApiUrl() {
-    return { url: await apiUrl.get() };
-  },
-  async setApiUrl(url: string) {
-    await apiUrl.put(url);
-  },
-}));
-```
-
 ### Typed Object with Schema
+
+This example uses the `auth` block and its `admin` group from [Quick start](#quick-start).
 
 ```typescript
 import { z } from 'zod';
@@ -111,37 +126,22 @@ const config = new AppSetting(scope, 'config', {
   schema: z.object({ maxRetries: z.number(), timeout: z.number() }),
 });
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async getConfig() {
-    return await config.get(); // { maxRetries: number; timeout: number }
-  },
-  async updateConfig(cfg: { maxRetries: number; timeout: number }) {
-    await config.put(cfg); // validated against schema
-  },
-}));
-```
-
-### Secret
-
-```typescript
-const stripeKey = new AppSetting(scope, 'stripeKey', {
-  secret: true,
-});
-
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async charge(amount: number) {
-    const key = await stripeKey.get(); // decrypted from SSM SecureString
-    // use key...
-  },
-}));
+// Only members of the admin group can read or change this configuration.
+export const settingsAdmin = auth.protect(scope, 'settingsAdmin', {
+  methods: () => ({
+    async getConfig() {
+      return config.get();
+    },
+    async updateConfig(cfg: { maxRetries: number; timeout: number }) {
+      await config.put(cfg); // validated against the schema after authorization
+    },
+  }),
+}, { role: 'admin' });
 ```
 
 ### Explicit Name (Cross-Service Reads)
 
 Use an explicit `name` when the SSM parameter must be read by other services or follow a well-known path convention.
-
-> ⚠️ You must ensure this name is unique across all stacks deployed to the
-> same AWS account and region to avoid collisions.
 
 ```typescript
 const apiUrl = new AppSetting(scope, 'apiUrl', {
@@ -150,25 +150,13 @@ const apiUrl = new AppSetting(scope, 'apiUrl', {
 });
 ```
 
-## Validation Rules
-
-These are enforced at CDK synth time and in local development (the mock rejects the same combinations at construction):
-
-- `secret` + `schema` → error (secrets are plain strings)
-- `schema` without `value` → error (parameter needs a valid initial value)
-- `secret` with `value` → error (don't put secrets in source code)
-- Non-secret without `value` → error (settings require an initial value)
-
-## Scaling & Cost (AWS)
+## Scaling and cost (AWS)
 
 - **String parameters:** Standard tier, free, 4 KB limit, 10,000 per account/region
-- **SecureString parameters:** Standard tier, free, encrypted with `aws/ssm` KMS key
+- **SecureString parameters:** Standard tier, free
 - **Throughput:** 40 TPS default for GetParameter (can be increased)
 - **Latency:** Single-digit ms reads and writes
 
-## Local Development
+## Local development
 
-Mock data persists to disk in the shared `.cdk-blocks/local/data/settings.json`, keyed by the setting's `fullId` (the file `Secret` uses too), across dev server restarts. Wipe with `rm -rf .cdk-blocks/local/data .bb-data`. Secrets generate a random value locally (no KMS encryption in mock mode).
-
-
-
+Local values are in the shared `.cdk-blocks/local/data/settings.json` (the file `Secret` uses too), keyed by the setting's `fullId`. A `secret: true` setting gets a random value locally (no KMS encryption in mock mode).
