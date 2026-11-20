@@ -1,5 +1,5 @@
 {
-  "name": "hosting-ssr-astro-default404-aws-blocks",
+  "name": "hosting-ssr-astro-default404-cdk-blocks",
   "version": "0.1.0",
   "private": true,
   "type": "module",

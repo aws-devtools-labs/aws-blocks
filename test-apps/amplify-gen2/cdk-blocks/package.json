@@ -1,5 +1,5 @@
 {
-  "name": "amplify-gen2-aws-blocks",
+  "name": "amplify-gen2-cdk-blocks",
   "version": "0.0.0",
   "private": true,
   "type": "module",

@@ -110,7 +110,7 @@ export {
 	scopeProviderWaiterTrust,
 	sourceScopedConditions,
 } from './service-principal-trust.js';
-// Marks a construct (and every role under it) as created by AWS Blocks, for the
+// Marks a construct (and every role under it) as created by AWS CDK Blocks, for the
 // service-principal trust check's ownership split. Used by first-party blocks
 // that add constructs at stack scope on a block's behalf (bb-app-setting,
 // bb-kv-store) or carry no official bbName at synth (the

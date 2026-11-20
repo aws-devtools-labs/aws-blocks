@@ -308,7 +308,7 @@ test('Auth - full purge clears every code record and leaves other keys alone', {
 // traffic happens to route it back there; the background suites' load breaks
 // that routing and the bearer refresh test fails. The stub IdP itself needs
 // self-contained refresh tokens to fix this: see
-// https://github.com/aws-devtools-labs/aws-blocks/issues/988.
+// https://github.com/aws/cdk-blocks/issues/988.
 oidcAuthTests(() => api);
 
 // The browser redirect client: a frontend on another origin signs in.

@@ -4,7 +4,7 @@
 /**
  * `defaults.appIdentity` — an app's identity on a shared app platform (see the field doc
  * on `BlocksDefaults.appIdentity`). This module validates the identity, stamps the `app`
- * tag on everything AWS Blocks creates, and collects the app-isolation
+ * tag on everything AWS CDK Blocks creates, and collects the app-isolation
  * violations the IAM report lists (rules in `app-isolation-rules.ts`).
  *
  * @internal
@@ -223,7 +223,7 @@ function appStacks(root: Construct, id: string): cdk.Stack[] {
 }
 
 /**
- * Every app-isolation violation for `root`, given the roles AWS Blocks created
+ * Every app-isolation violation for `root`, given the roles AWS CDK Blocks created
  * for it (`roles`, already finalized) and a renderer for their template
  * properties. Must run at synthesis (from the IAM report's hook), after every
  * aspect.

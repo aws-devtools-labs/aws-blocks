@@ -283,7 +283,7 @@ export type ApiGatewayDoorFeatures<TDomain = HostingDomainConfig> = {
  * `skewProtection` unless `enabled: false` (on by default, `maxAge` resolved),
  * and `domain` / `geoRestriction` when set.
  *
- * AWS Blocks does not check that the door applies them.
+ * AWS CDK Blocks does not check that the door applies them.
  */
 export type CustomDoorFeatures<TDomain = HostingDomainConfig> = {
   /** Custom domain(s), with `wwwRedirect` → `input.features.domain`. */

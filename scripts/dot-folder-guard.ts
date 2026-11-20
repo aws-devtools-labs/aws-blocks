@@ -55,7 +55,7 @@ const ALLOWED: ReadonlyArray<{
 	{
 		path: '.changeset/pre/core-cdk-telemetry-opt-out.md',
 		match: 'exact',
-		why: "Main's changeset for removing the AWS Blocks telemetry opt-out; the old path names the mechanism it removed.",
+		why: "Main's changeset for removing the AWS CDK Blocks telemetry opt-out; the old path names the mechanism it removed.",
 	},
 	{
 		path: '.changeset/pre/remove-telemetry-task.md',

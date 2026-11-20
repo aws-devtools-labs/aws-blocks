@@ -282,7 +282,7 @@ function analyze(block: Block): Analysis {
 	return { block, blocksImports, blocksNames, declared, modules, uses, completeFile, browserImports };
 }
 
-/** Compiler options of an AWS Blocks app (strict, ESM, bundler resolution, default conditions). */
+/** Compiler options of an AWS CDK Blocks app (strict, ESM, bundler resolution, default conditions). */
 const COMPILER_OPTIONS: ts.CompilerOptions = {
 	strict: true,
 	noEmit: true,

@@ -224,7 +224,7 @@ class PgliteCluster {
 		// `CREATE EXTENSION` before a statement reaches PGlite.
 		const contrib = this.kind === 'aurora' ? AURORA_LOCAL_EXTENSIONS : {};
 		return new PGlite(this.dataDir, {
-			extensions: { ...contrib, awsBlocksUnrefTimers: pgliteUnrefTimersExtension },
+			extensions: { ...contrib, cdkBlocksUnrefTimers: pgliteUnrefTimersExtension },
 		});
 	}
 

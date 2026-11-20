@@ -103,7 +103,7 @@ expect_refusal() {
 }
 
 expect_refusal "refuses a missing argument"
-expect_refusal "refuses the aws-blocks root" ../..
+expect_refusal "refuses the cdk-blocks root" ../..
 expect_refusal "refuses the Swift SDK directory itself" .
 rm -rf "$WORK/plain" && mkdir -p "$WORK/plain" && git -C "$WORK/plain" init -q
 expect_refusal "refuses a checkout without the mirror's release workflow" "$WORK/plain"

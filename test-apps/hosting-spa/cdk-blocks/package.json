@@ -1,5 +1,5 @@
 {
-  "name": "hosting-spa-aws-blocks",
+  "name": "hosting-spa-cdk-blocks",
   "version": "0.1.0",
   "private": true,
   "type": "module",

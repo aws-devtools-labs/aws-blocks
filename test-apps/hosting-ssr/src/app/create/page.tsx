@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { api } from 'hosting-ssr-aws-blocks';
+import { api } from 'hosting-ssr-cdk-blocks';
 
 export default function CreatePostPage() {
   const [title, setTitle] = useState('');

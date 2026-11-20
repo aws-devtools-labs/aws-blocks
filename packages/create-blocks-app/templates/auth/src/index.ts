@@ -511,4 +511,4 @@ async function forgetCurrentDevice() {
   }
 }
 
-console.log('AWS Blocks Auth loaded');
+console.log('AWS CDK Blocks Auth loaded');

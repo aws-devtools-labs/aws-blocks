@@ -2,15 +2,15 @@
 
 ## Context
 
-AWS Blocks team is in the midst of building options to run work on various types and configurations of compute. The current default is to run all work on single lambda, including all API requests, async jobs, and cron jobs. The "Multi-compute" project will give customers the option of construction a `Compute` building block and **injecting it** into different workloads. (Once every workload supports compute, `compute` could also be injected at the `Scope` level.)
+AWS CDK Blocks team is in the midst of building options to run work on various types and configurations of compute. The current default is to run all work on single lambda, including all API requests, async jobs, and cron jobs. The "Multi-compute" project will give customers the option of construction a `Compute` building block and **injecting it** into different workloads. (Once every workload supports compute, `compute` could also be injected at the `Scope` level.)
 
 ## Problem
 
-The original design called for each "type" of `Compute` to be instantiated using Building Block names that "leak" the underlying service names into the IFC layer. This design asks customers to choose specific `Compute` blocks based on what they know of the underlying services, which is antithetical to the design philosophy of AWS Blocks.
+The original design called for each "type" of `Compute` to be instantiated using Building Block names that "leak" the underlying service names into the IFC layer. This design asks customers to choose specific `Compute` blocks based on what they know of the underlying services, which is antithetical to the design philosophy of AWS CDK Blocks.
 
 ## Goals/Constraints
 
-There are two overarching design goals in the AWS Blocks ecosystem to bear in mind.
+There are two overarching design goals in the AWS CDK Blocks ecosystem to bear in mind.
 
 1. Building Blocks are **"Cloud"** Building Blocks; ***not*** *"AWS"* Building Blocks.
 2. Power users should always be able to "drop" into CDK to customize and extend.

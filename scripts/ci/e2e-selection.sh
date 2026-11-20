@@ -70,7 +70,7 @@ fi
 # hook on either script counts as running something. Before switching the
 # tests on, read the concurrency note on e2e-sandbox-vpc in pr-checks.yml.
 # Switching them on, or removing the suite, is tracked in
-# https://github.com/aws-devtools-labs/aws-blocks/issues/987. The skip is a
+# https://github.com/aws/cdk-blocks/issues/987. The skip is a
 # warning annotation, so a skipped E2E VPC Smoke doesn't read as a normal one.
 # Prints the script `name`, or nothing when it has a pre or post hook.
 script_without_hooks='.scripts as $s | if $s["pre" + $name] or $s["post" + $name] then "" else $s[$name] // "" end'
@@ -80,7 +80,7 @@ vpc_app=$(jq -r --arg name test:e2e:sandbox "$script_without_hooks" test-apps/vp
 echo_only="^echo '[^']*'( && exit 0)?$"
 if [ "$vpc_root" = 'cd test-apps/vpc-smoke && npm run test:e2e:sandbox' ] && [[ $vpc_app =~ $echo_only ]] &&
 	[[ " $changed $selected " == *' sandbox-vpc '* ]]; then
-	vpc_skip="E2E VPC Smoke is left out: test-apps/vpc-smoke's tests are switched off (https://github.com/aws-devtools-labs/aws-blocks/issues/987)."
+	vpc_skip="E2E VPC Smoke is left out: test-apps/vpc-smoke's tests are switched off (https://github.com/aws/cdk-blocks/issues/987)."
 	echo "::warning::$vpc_skip"
 	printf '%s\n\n' "$vpc_skip" >> "$GITHUB_STEP_SUMMARY"
 	without_vpc() {

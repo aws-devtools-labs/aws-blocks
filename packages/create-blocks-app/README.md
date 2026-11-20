@@ -36,7 +36,7 @@ Template descriptions are sourced from each template's `package.json` (`blocksTe
 npx @aws-cdk-blocks/create-blocks-app .
 ```
 
-This writes `cdk-blocks/tsconfig.json`, a TypeScript project that checks the backend with Node types, and never edits your own `tsconfig`. To keep Node types out of your frontend, reference that project from the `tsconfig` that compiles the code importing `cdk-blocks`, and typecheck with `tsc -b --force`: the CLI prints the steps, and [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has them in full. In a Next.js project, it writes no `cdk-blocks/tsconfig.json`: `next build` ignores project references, so the app's `tsconfig.json` keeps checking `cdk-blocks/`.
+This writes `cdk-blocks/tsconfig.json`, a TypeScript project that checks the backend with Node types, and never edits your own `tsconfig`. To keep Node types out of your frontend, reference that project from the `tsconfig` that compiles the code importing `cdk-blocks`, and typecheck with `tsc -b --force`: the CLI prints the steps, and [Keep Node types out of the frontend](https://github.com/aws/cdk-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has them in full. In a Next.js project, it writes no `cdk-blocks/tsconfig.json`: `next build` ignores project references, so the app's `tsconfig.json` keeps checking `cdk-blocks/`.
 
 In an npm workspaces monorepo, the app's `cdk-blocks/` folder has to be a workspace of the monorepo root too: npm installs the app's dependencies at the root and does not read the app's own `"workspaces": ["cdk-blocks"]`. When the app is a workspace of an enclosing root that does not list `<app>/cdk-blocks`, `create-blocks-app` stops before it writes anything and prints the `"workspaces"` entry to add; add it and run the command again.
 
@@ -171,7 +171,7 @@ No template sets `frontendCommand`: `npm run dev` starts the frontend dev server
 
 `npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question. For structured tasks such as docs, terminal output defaults to text and redirected or piped stdout defaults to JSON. Use `npm run -s docs KVStore | jq .` to keep npm banners out of the pipe; pass `-- --output text` to request text instead.
 
-Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `cdk-blocks/scripts/*.ts` wrappers. Run `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate` from the app root after updating `aws-cdk-blocks` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `cdk-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
+Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `cdk-blocks/scripts/*.ts` wrappers. Run `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate` from the app root after updating `aws-cdk-blocks` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `cdk-blocks/scripts`](https://github.com/aws/cdk-blocks/tree/main/packages/blocks#migrating-an-existing-app)).
 
 ### `@aws-cdk-blocks/*` Dependency Versions
 
@@ -196,7 +196,7 @@ Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `
 
 The `auth` template was previously named `auth-cognito`; `--template auth-cognito` still works and scaffolds `auth`.
 
-The Vite templates (`default`, `bare`, `react`, `auth`, `auth-oidc`, `agent`, `demo`) typecheck the browser and the backend as separate [TypeScript projects](https://www.typescriptlang.org/docs/handbook/project-references.html), the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` with `"types": ["vite/client"]`, so a Node global there is an error, and `cdk-blocks/tsconfig.json` checks the backend with Node types. `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types. [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) explains the layout and how to move an older app to it.
+The Vite templates (`default`, `bare`, `react`, `auth`, `auth-oidc`, `agent`, `demo`) typecheck the browser and the backend as separate [TypeScript projects](https://www.typescriptlang.org/docs/handbook/project-references.html), the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` with `"types": ["vite/client"]`, so a Node global there is an error, and `cdk-blocks/tsconfig.json` checks the backend with Node types. `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types. [Keep Node types out of the frontend](https://github.com/aws/cdk-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) explains the layout and how to move an older app to it.
 
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 
@@ -208,7 +208,7 @@ A template declares each `@aws-cdk-blocks/*` dependency as `"*"`, a placeholder.
 
 ## Related Packages
 
-- [blocks](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#readme) - Core runtime and Building Blocks
+- [blocks](https://github.com/aws/cdk-blocks/tree/main/packages/blocks#readme) - Core runtime and Building Blocks
 
 ## License
 

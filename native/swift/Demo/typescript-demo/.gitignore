@@ -1,6 +1,6 @@
 dist
 node_modules
-# Not committed in aws-blocks (see the root .gitignore), and removed from
+# Not committed in cdk-blocks (see the root .gitignore), and removed from
 # cdk-blocks-swift by each sync.
 package-lock.json
 build-temp

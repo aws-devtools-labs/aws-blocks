@@ -48,7 +48,7 @@ export interface AuthUser {
  *
  * ## Method Naming Conventions
  *
- * Follows [G14](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/design/API-DESIGN.md#g14-method-naming-conventions):
+ * Follows [G14](https://github.com/aws/cdk-blocks/blob/main/docs/design/API-DESIGN.md#g14-method-naming-conventions):
  * - `requireAuth` — throws 401 if not authenticated (caller cannot proceed without value)
  * - `checkAuth` — returns boolean (for branching without retrieving the full object)
  * - `getCurrentUser` — returns null if not authenticated (caller can handle absence)

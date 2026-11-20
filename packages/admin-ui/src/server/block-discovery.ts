@@ -72,10 +72,10 @@ export const CONFIG_PREVIEW_LIMIT = 800;
 export const CONFIG_PREVIEW_TRUNCATION_MARKER = '… (truncated)';
 
 /** Every block class is exported from a package under this scope, or from the umbrella. */
-const AWS_BLOCKS_MODULE_PREFIX = '@aws-cdk-blocks/';
+const CDK_BLOCKS_MODULE_PREFIX = '@aws-cdk-blocks/';
 
 /** The umbrella re-exports every block and publishes unscoped, so it is matched by name. */
-const AWS_BLOCKS_UMBRELLA_MODULE = 'aws-cdk-blocks';
+const CDK_BLOCKS_UMBRELLA_MODULE = 'aws-cdk-blocks';
 
 /** Not a block: the construct that owns them, and the source of `fullId`. */
 const SCOPE_CLASS = 'Scope';
@@ -147,11 +147,11 @@ interface ScanState {
 	scannedFiles: number;
 }
 
-function isAwsBlocksModule(moduleSpecifier: string): boolean {
+function isCdkBlocksModule(moduleSpecifier: string): boolean {
 	return (
-		moduleSpecifier.startsWith(AWS_BLOCKS_MODULE_PREFIX) ||
-		moduleSpecifier === AWS_BLOCKS_UMBRELLA_MODULE ||
-		moduleSpecifier.startsWith(`${AWS_BLOCKS_UMBRELLA_MODULE}/`)
+		moduleSpecifier.startsWith(CDK_BLOCKS_MODULE_PREFIX) ||
+		moduleSpecifier === CDK_BLOCKS_UMBRELLA_MODULE ||
+		moduleSpecifier.startsWith(`${CDK_BLOCKS_UMBRELLA_MODULE}/`)
 	);
 }
 
@@ -216,13 +216,13 @@ function resolveBlockClass(
 	if (ts.isIdentifier(expression)) {
 		const binding = bindings.get(expression.text);
 		if (!binding || binding.kind === 'namespace' || !binding.importedName) return undefined;
-		if (!isAwsBlocksModule(binding.moduleSpecifier)) return undefined;
+		if (!isCdkBlocksModule(binding.moduleSpecifier)) return undefined;
 		return { text: expression.text, importedName: binding.importedName };
 	}
 	if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
 		const binding = bindings.get(expression.expression.text);
 		if (binding?.kind !== 'namespace') return undefined;
-		if (!isAwsBlocksModule(binding.moduleSpecifier)) return undefined;
+		if (!isCdkBlocksModule(binding.moduleSpecifier)) return undefined;
 		return {
 			text: `${expression.expression.text}.${expression.name.text}`,
 			importedName: expression.name.text,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { api } from 'hosting-ssr-nuxt-aws-blocks';
+import { api } from 'hosting-ssr-nuxt-cdk-blocks';
 
 const { data: posts } = await useAsyncData('posts', () => api.listPosts(), {
   default: () => [],

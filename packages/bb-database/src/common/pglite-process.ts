@@ -93,7 +93,7 @@ export interface PgliteExtensionLike {
  * constructing the instance:
  *
  * ```ts
- * new PGlite(dataDir, { extensions: { awsBlocksUnrefTimers: pgliteUnrefTimersExtension } });
+ * new PGlite(dataDir, { extensions: { cdkBlocksUnrefTimers: pgliteUnrefTimersExtension } });
  * ```
  *
  * It wraps the two synchronous ways into the WASM: the instance's
@@ -107,7 +107,7 @@ export interface PgliteExtensionLike {
  * @internal
  */
 export const pgliteUnrefTimersExtension: PgliteExtensionLike = {
-	name: 'aws-blocks-unref-timers',
+	name: 'cdk-blocks-unref-timers',
 	setup: async (pg, emscriptenOpts) => {
 		const instance = pg as PgliteSyncExec;
 		const exec = instance.execProtocolRawSync;

@@ -184,7 +184,7 @@ function warnIfDurableWithoutAccessLogging(scope: Construct, defaults: BlocksDef
  */
 /** Guide for apps scaffolded from older templates; linked from the missing-`defaults` error. */
 export const UPGRADE_GUIDE_URL =
-	'https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md';
+	'https://github.com/aws/cdk-blocks/blob/main/docs/guides/upgrading-older-apps.md';
 
 /**
  * Fail fast with an actionable message if `defaults` is missing. TypeScript
@@ -228,7 +228,7 @@ export function assertBlocksDefaults(
 function checkStackNameAllowsResourceGroups(scope: Construct, stackName: string, groupPrefix: string): void {
 	if (!/^aws/i.test(stackName)) return;
 	cdk.Annotations.of(scope).addError(
-		`Stack name '${stackName}' starts with 'aws'. AWS Blocks names two AWS Resource Groups after the stack ` +
+		`Stack name '${stackName}' starts with 'aws'. AWS CDK Blocks names two AWS Resource Groups after the stack ` +
 			`('${groupPrefix}-resources' and '${groupPrefix}-settings'), and AWS Resource Groups refuses a group name ` +
 			"that starts with 'AWS' in any letter case, so the deploy would fail in CloudFormation. " +
 			'AWS Systems Manager refuses the same prefix for the parameters that blocks name after the stack. ' +
@@ -280,7 +280,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	enableRolePolicyPacking(executionRole, scope);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
-	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an
+	// Cover every role AWS CDK Blocks creates for this root (blocks-roles.ts — an
 	// aspect, so roles blocks add later are covered too), then apply the opt-in
 	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
 	// templates unchanged. The report lists what the shared role accumulated; it is

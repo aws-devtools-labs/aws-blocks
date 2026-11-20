@@ -1,6 +1,6 @@
 # Building Block API Design Guidelines
 
-This document provides API design guidance for AWS Blocks Building Blocks and defines the template used for preliminary BB design documents (`BB-*.md`).
+This document provides API design guidance for AWS CDK Blocks Building Blocks and defines the template used for preliminary BB design documents (`BB-*.md`).
 
 ## Part 1: API Design Guidance
 
@@ -421,7 +421,7 @@ for await (const msg of channel) { /* ... */ }
 
 ### G15: Transferables for Client-Side Live Objects
 
-Some Building Blocks need to return objects that have client-side behavior &mdash; a Realtime channel you can `.subscribe()` to, a file upload handle you can `.pause()` and `.resume()`, etc. These cannot be serialized as plain JSON. AWS Blocks solves this with **Transferables**: fully functional server-side objects that serialize themselves into descriptors via `toJSON()`, which client plugins then hydrate back into live client-side objects.
+Some Building Blocks need to return objects that have client-side behavior &mdash; a Realtime channel you can `.subscribe()` to, a file upload handle you can `.pause()` and `.resume()`, etc. These cannot be serialized as plain JSON. AWS CDK Blocks solves this with **Transferables**: fully functional server-side objects that serialize themselves into descriptors via `toJSON()`, which client plugins then hydrate back into live client-side objects.
 
 **The problem:**
 
@@ -533,7 +533,7 @@ G2 still applies to the vast majority of BB methods. Transferables are the expli
 
 When a BB accepts a schema for runtime validation (e.g., validating items on write, messages on publish, payloads on send), it must accept any schema that implements the [Standard Schema](https://standardschema.dev/) `StandardSchemaV1` interface &mdash; not a specific library like Zod.
 
-Standard Schema is a common interface implemented by Zod (3.24+), Valibot (1.0+), ArkType (2.0+), and many others. By accepting `StandardSchemaV1`, AWS Blocks gets:
+Standard Schema is a common interface implemented by Zod (3.24+), Valibot (1.0+), ArkType (2.0+), and many others. By accepting `StandardSchemaV1`, AWS CDK Blocks gets:
 
 - **No vendor lock-in** &mdash; customers use whichever schema library they prefer
 - **No Blocks dependency on Zod** &mdash; `@standard-schema/spec` is types-only (zero runtime)
@@ -657,7 +657,7 @@ Every `BB-*.md` must include these sections in this order:
 
 > **⚠️ PRELIMINARY DESIGN** — This document is a rough starting point, not a
 > finalized specification. The API surface, mock behavior, and infrastructure
-> details must be validated against the [AWS Blocks API Design Guidelines](./API-DESIGN.md)
+> details must be validated against the [AWS CDK Blocks API Design Guidelines](./API-DESIGN.md)
 > and built in accordance with the the Building Block architecture (see `docs/reference/`).
 > Expect breaking changes. Do not build against this document without confirming
 > the current state of the implementation.

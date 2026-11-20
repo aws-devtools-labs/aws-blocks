@@ -10,9 +10,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { generateClientCode } from 'aws-cdk-blocks/scripts';
 
-const awsBlocksDir = resolve(dirname(new URL(import.meta.url).pathname), '..');
-const foundationPath = join(awsBlocksDir, 'index.ts');
-const clientPath = join(awsBlocksDir, 'client.js');
+const cdkBlocksDir = resolve(dirname(new URL(import.meta.url).pathname), '..');
+const foundationPath = join(cdkBlocksDir, 'index.ts');
+const clientPath = join(cdkBlocksDir, 'client.js');
 
 // Generate the standard client code (namespace discovery + proxy exports)
 let code = await generateClientCode(foundationPath);

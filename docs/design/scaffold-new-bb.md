@@ -20,7 +20,7 @@ mechanical, easy-to-get-subtly-wrong work a generator should own.
 
 ## 2. What constitutes a Block (analyses #1–#2)
 
-From the tech design (`08-building-block-architecture.md`, KIT = AWS Blocks) and the
+From the tech design (`08-building-block-architecture.md`, KIT = AWS CDK Blocks) and the
 implemented reality (`AGENTS.md`, `bb-kv-store`):
 
 A BB bundles **three/four implementations behind one strongly-typed import**, selected
@@ -125,7 +125,7 @@ edits (not string templating).
   `npm run new:bb` for contributors.
 - **Auto-detect mode** (same trick as `create-blocks-app` detecting Amplify), in priority
   order:
-  - **contributor** — inside the `aws-blocks` monorepo → generate package + do all 6
+  - **contributor** — inside the `cdk-blocks` monorepo → generate package + do all 6
     touchpoints.
   - **customer** — inside *your own* npm-workspaces repo → generate `packages/bb-*`,
     register it in your root `workspaces` (unless a `packages/*` glob already covers it),

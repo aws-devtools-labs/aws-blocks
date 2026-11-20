@@ -61,7 +61,7 @@ class BlocksClient {
   /// Calls a JSON-RPC method with the given params and returns the result.
   ///
   /// [params] is a `List` or a `Map`, sent as the request's `params` as is.
-  /// An AWS Blocks server reads params by position: a list is the method's
+  /// An AWS CDK Blocks server reads params by position: a list is the method's
   /// argument list, and a map is read by its values, in order, so a key left
   /// out moves every later value up a slot. Generated clients send a list, as
   /// the TypeScript client does: the arguments in the method's parameter

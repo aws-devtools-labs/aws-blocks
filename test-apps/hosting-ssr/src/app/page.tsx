@@ -1,4 +1,4 @@
-import { api } from 'hosting-ssr-aws-blocks';
+import { api } from 'hosting-ssr-cdk-blocks';
 
 export const dynamic = 'force-dynamic';
 

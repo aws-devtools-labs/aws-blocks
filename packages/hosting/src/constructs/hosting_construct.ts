@@ -187,7 +187,7 @@ export type HostingConstructProps = {
   /**
    * Construct id (and so the name) of the `us-east-1` stack Lambda@Edge
    * functions are hoisted into when this stack is in another region. Default:
-   * CDK's `edge-lambda-stack-<hash>`. AWS Blocks' `Hosting` sets `<app id>-edge`
+   * CDK's `edge-lambda-stack-<hash>`. AWS CDK Blocks' `Hosting` sets `<app id>-edge`
    * when the fronted backend has `defaults.appIdentity`, so a shared platform's deploy
    * guard and execution policy see it as the app's own stack.
    */
@@ -2094,7 +2094,7 @@ export class HostingConstruct extends Construct {
         ).result;
         service = apiGatewayDoor.service;
       } else if (fd?.kind === 'custom') {
-        // BYO custom door: AWS Blocks hands it the DoorInput and calls `build`
+        // BYO custom door: AWS CDK Blocks hands it the DoorInput and calls `build`
         // once. Its `url` is required; its routing (assets reachable, API paths
         // wired) is checked from what the `cf.*` helpers recorded, unless the
         // app turned that off. Features are the door's to apply — not checked.
@@ -2754,7 +2754,7 @@ export class HostingConstruct extends Construct {
    * door reads `origins.server.url` (created on first read).
    */
   /**
-   * Whether this deploy serves AWS Blocks' default 404 page
+   * Whether this deploy serves AWS CDK Blocks' default 404 page
    * (`needsDefaultNotFoundPage`): a multi-page static site with no 404 page of
    * its own. Not behind `'none'`: an S3 website answers a miss from its own
    * error document, in its own bucket.
@@ -3020,7 +3020,7 @@ const assertServerReachableByDoor = (manifest: DeployManifest, capabilities: Doo
 /**
  * The error pages the framework build shipped (`manifest.errorPages`, e.g. a
  * SPA's `404.html`), as object keys under the build prefix — else, for a
- * multi-page static site that shipped no 404 page, AWS Blocks' default one
+ * multi-page static site that shipped no 404 page, AWS CDK Blocks' default one
  * (`_not_found.html`, see `default_not_found.ts`). `DoorInput` carries them as
  * `app.errorPages` when the app sets none, so every door — the CloudFront and
  * stacked edges, the regional doors' asset proxies, a bring-your-own door
@@ -3183,7 +3183,7 @@ const assertEdgeRoutesReachableByDoor = (
  * Fail synth for an API Gateway REST door with no custom domain (see the call
  * site). Making the stage the app's base path automatically is not possible:
  * each framework bakes its base path into the build from its own config, and
- * the AWS Blocks client fetches `/.blocks-sandbox/config.json` from the root.
+ * the AWS CDK Blocks client fetches `/.blocks-sandbox/config.json` from the root.
  */
 const assertRestDoorAddressable = (
   frontDoor: HostingConstructProps['frontDoor'],
@@ -3246,7 +3246,7 @@ const assertAlbCertificateHasDomain = (
  * plain number. Without this coercion the value flows into
  * aws-cdk-lib's Lambda construct and crashes synth deep in framework
  * code with `props.timeout.toSeconds is not a function` — surfaced
- * by the AWS Blocks bug-bash repro (`aws-cdk-blocks` Hosting
+ * by the AWS CDK Blocks bug-bash repro (`aws-cdk-blocks` Hosting
  * wrapper passing `timeout: 30` straight through). Normalize once
  * here so both shapes work and the type stays well-defined inside
  * the L3.

@@ -136,6 +136,6 @@ export function assertNotMockInDeployedEnv(bbName: string): void {
 			'  esbuild --conditions=aws-runtime ...\n' +
 			"  or conditions: ['aws-runtime', 'module'] in esbuild build() options\n" +
 			'  or, for unbundled Node, node --conditions=aws-runtime ... / NODE_OPTIONS=--conditions=aws-runtime\n\n' +
-			'See https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md',
+			'See https://github.com/aws/cdk-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md',
 	);
 }

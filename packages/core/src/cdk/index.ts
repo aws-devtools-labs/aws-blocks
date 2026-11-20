@@ -353,7 +353,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 		addBlocksStackMetadata(stack);
 
-		// The stack-level children AWS Blocks itself added: everything now on the
+		// The stack-level children AWS CDK Blocks itself added: everything now on the
 		// stack except what the backend module added. Roles under the rest (the
 		// backend module's own constructs, and whatever the app adds after this
 		// returns) are app-owned unless a Building Block or framework helper sits
@@ -436,7 +436,7 @@ export class Scope extends Construct {
 		// exist, so they are checked when the tree is validated at synth.
 		ensureResourceNameCheck(this);
 		// An official Building Block (its `bbName` is one of OFFICIAL_BB_NAMES) marks
-		// the roles it creates as AWS Blocks' own for the service-principal trust
+		// the roles it creates as AWS CDK Blocks' own for the service-principal trust
 		// check (see isAppOwnedRole in blocks-roles.ts). A plain `new Scope(...)`
 		// namespace and a `Scope` subclass the app writes (a custom block) stay
 		// unmarked, so their roles are the app's. Computes, `RawRoute` and

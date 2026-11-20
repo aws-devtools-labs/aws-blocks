@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { api, authApi } from 'hosting-ssr-nuxt-aws-blocks';
+import { api, authApi } from 'hosting-ssr-nuxt-cdk-blocks';
 import { ref, onMounted } from 'vue';
 import ProbeCard from '../components/ProbeCard.vue';
 

@@ -1,5 +1,5 @@
 {
-  "name": "auth-cognito-passkeys-aws-blocks",
+  "name": "auth-cognito-passkeys-cdk-blocks",
   "version": "0.0.0",
   "private": true,
   "type": "module",

@@ -11,7 +11,7 @@
 
 ## Purpose
 
-Place an AWS Blocks application in a VPC with a single prop on `BlocksStack`/`BlocksBackend`. The framework handles Lambda placement, endpoint provisioning (based on BB requirements), and security group wiring.
+Place an AWS CDK Blocks application in a VPC with a single prop on `BlocksStack`/`BlocksBackend`. The framework handles Lambda placement, endpoint provisioning (based on BB requirements), and security group wiring.
 
 ---
 

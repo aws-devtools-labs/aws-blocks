@@ -56,7 +56,7 @@ const MAX_ITEM_BYTES = 400 * 1024;
  *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the
  *   `LegacyKVStore` when the data is in the new store. The steps are in the README section "Upgrade from release
  *   0.4.0 or earlier":
- *   https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
+ *   https://github.com/aws/cdk-blocks/blob/main/packages/bb-kv-store/README.md#upgrade-from-release-040-or-earlier
  *
  * @example
  * ```typescript

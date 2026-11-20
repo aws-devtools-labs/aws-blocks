@@ -11,7 +11,7 @@
 # Everything at the mirror root is replaced except the files that only live in
 # the mirror: .git, .github, LICENSE, NOTICE, CODE_OF_CONDUCT.md and
 # CONTRIBUTING.md. The cdk-blocks-swift "Sync release from aws-blocks" workflow
-# runs this script from a checkout of aws-blocks at the swift@<version> tag, so
+# runs this script from a checkout of cdk-blocks at the swift@<version> tag, so
 # the copy rules ship with the release they apply to.
 
 set -euo pipefail
@@ -22,12 +22,12 @@ TARGET="$(CDPATH='' cd -P -- "$ARG" && pwd -P)"
 
 # The delete below removes almost everything in TARGET, so only accept a
 # checkout of the mirror: it has the mirror's own release workflow, which
-# aws-blocks doesn't. (`-e` because .git is a file in a worktree.)
+# cdk-blocks doesn't. (`-e` because .git is a file in a worktree.)
 if [ ! -e "$TARGET/.git" ] || [ ! -f "$TARGET/.github/workflows/publish-tag-release.yml" ]; then
   echo "Error: '$ARG' is not a cdk-blocks-swift checkout." >&2
   exit 1
 fi
-# Refuse a TARGET that is SRC or contains it, such as the aws-blocks root.
+# Refuse a TARGET that is SRC or contains it, such as the cdk-blocks root.
 case "$SRC/" in
   "$TARGET"/*)
     echo "Error: '$ARG' contains the Swift SDK sources." >&2
@@ -50,7 +50,7 @@ find "$TARGET" -mindepth 1 -maxdepth 1 \
 # Anchor the root package.json/package-lock.json excludes with a leading '/' so
 # they only skip native/swift's changeset-tooling manifests and keep
 # Demo/typescript-demo/package.json. The demo's package-lock.json isn't
-# committed in aws-blocks (see the root .gitignore), so a sync removes the
+# committed in cdk-blocks (see the root .gitignore), so a sync removes the
 # mirror's copy. This script isn't copied: the mirror runs the one from the tag.
 rsync -a --exclude='.changeset' \
          --exclude='node_modules' \

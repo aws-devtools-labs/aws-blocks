@@ -8,7 +8,7 @@ export default defineConfig({
   resolve: {
     conditions: ['browser'],
     alias: {
-      // The inner workspace is named `auth-cognito-passkeys-aws-blocks`
+      // The inner workspace is named `auth-cognito-passkeys-cdk-blocks`
       // (npm requires unique names across the monorepo, and the
       // `cdk-blocks` slot is already taken by `test-apps/comprehensive`).
       // The demo source still imports `from 'cdk-blocks'` so the sample

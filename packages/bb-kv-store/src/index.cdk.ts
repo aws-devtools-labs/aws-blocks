@@ -337,7 +337,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const sandboxTableArns: string[] = [];
 	const sandboxKeyArns: string[] = [];
 
-	// Everything added to the stack below is AWS Blocks' own (marked at the end).
+	// Everything added to the stack below is AWS CDK Blocks' own (marked at the end).
 	const stackChildrenBefore = new Set(stack.node.children);
 
 	// Own the GSI-manager Lambdas' log groups so their retention follows the
@@ -449,7 +449,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 
 	// The shared GSI-manager functions and provider sit at stack scope but belong
 	// to the block, so the service-principal trust check treats their roles as
-	// AWS Blocks roles rather than the app's.
+	// AWS CDK Blocks roles rather than the app's.
 	markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
 
 	(stack as unknown as Record<symbol, SharedGsiProvider>)[GSI_PROVIDER_KEY] = shared;

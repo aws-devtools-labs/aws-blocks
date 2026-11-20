@@ -123,7 +123,7 @@ export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string
     if (typeof range !== 'string' || range === '' || range === '*') {
       throw new Error(
         `Internal error: create-blocks-app lists ${name} with the range "${range}", which pins nothing. ` +
-        'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+        'This is a bug, please report it at https://github.com/aws/cdk-blocks/issues',
       );
     }
     versions[name] = range;
@@ -131,7 +131,7 @@ export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string
   if (Object.keys(versions).length === 0) {
     throw new Error(
       `Internal error: create-blocks-app lists no ${UMBRELLA_PKG} or @aws-cdk-blocks/* devDependencies, so it cannot pin the versions it scaffolds. ` +
-      'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+      'This is a bug, please report it at https://github.com/aws/cdk-blocks/issues',
     );
   }
   return versions;
@@ -155,7 +155,7 @@ export function stampBlocksVersions(deps: Record<string, string> | undefined, ve
     if (!stamp) {
       throw new Error(
         `Internal error: create-blocks-app has no version to pin ${name} to. ` +
-        'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+        'This is a bug, please report it at https://github.com/aws/cdk-blocks/issues',
       );
     }
     deps[name] = stamp;
@@ -859,12 +859,12 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   // stamped in memory before the copy, so a placeholder with no range throws
   // before anything is written (see the version stamping section above).
   const templateDir = join(__dirname, '../templates/amplify');
-  const awsBlocksSrc = join(templateDir, 'cdk-blocks');
-  const awsBlocksDest = join(targetDir, 'cdk-blocks');
+  const cdkBlocksSrc = join(templateDir, 'cdk-blocks');
+  const cdkBlocksDest = join(targetDir, 'cdk-blocks');
   const stampedVersions = (await isLocalMonorepo()) ? null : await loadStampedVersions();
   let workspacePkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
   if (stampedVersions) {
-    workspacePkg = JSON.parse(await readFile(join(awsBlocksSrc, 'package.json'), 'utf-8'));
+    workspacePkg = JSON.parse(await readFile(join(cdkBlocksSrc, 'package.json'), 'utf-8'));
     // A package the project root already lists keeps the root's range here too,
     // so the workspace and the root resolve to one copy of it. Only packages the
     // CLI stamps are overridden (a missing stamp still fails here, before any
@@ -883,12 +883,12 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     stampBlocksVersions(workspacePkg?.dependencies, workspaceVersions);
     stampBlocksVersions(workspacePkg?.devDependencies, workspaceVersions);
   }
-  await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  await cp(cdkBlocksSrc, cdkBlocksDest, { recursive: true });
   if (workspacePkg) {
-    await writeFile(join(awsBlocksDest, 'package.json'), `${JSON.stringify(workspacePkg, null, 2)}\n`);
+    await writeFile(join(cdkBlocksDest, 'package.json'), `${JSON.stringify(workspacePkg, null, 2)}\n`);
   }
   const amplifyPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
-  await writeBackendTsconfig(awsBlocksDest, amplifyPkg);
+  await writeBackendTsconfig(cdkBlocksDest, amplifyPkg);
   console.log('  ✓ Created cdk-blocks/');
 
   // 2. Copy amplify/blocks.ts
@@ -969,7 +969,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     skipInstall,
     workspaceRoot,
   });
-  await tailorTaskExamples(awsBlocksDest, scripts, ['scripts/generate-client.ts']);
+  await tailorTaskExamples(cdkBlocksDest, scripts, ['scripts/generate-client.ts']);
 
   // 5. Handle amplify.yml
   await handleAmplifyYml(targetDir);
@@ -1114,17 +1114,17 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   // project's own frontend dev server (`next dev` or `vite`) from its dependencies,
   // so only the template's backend settings are copied below.
   const templateDir = join(__dirname, '../templates', templateName);
-  const awsBlocksSrc = join(templateDir, 'cdk-blocks');
-  const awsBlocksDest = join(targetDir, 'cdk-blocks');
+  const cdkBlocksSrc = join(templateDir, 'cdk-blocks');
+  const cdkBlocksDest = join(targetDir, 'cdk-blocks');
 
-  if (await exists(awsBlocksDest)) {
+  if (await exists(cdkBlocksDest)) {
     console.error('  ✗ cdk-blocks/ already exists. Aborting to avoid overwriting.');
     process.exit(1);
   }
 
-  await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  await cp(cdkBlocksSrc, cdkBlocksDest, { recursive: true });
   const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
-  await writeBackendTsconfig(awsBlocksDest, existingPkg);
+  await writeBackendTsconfig(cdkBlocksDest, existingPkg);
 
   // Generate blocks/config.json with a unique stackId
   const baseName = (existingPkg.name || basename(resolve(targetDir)));
@@ -1167,7 +1167,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     skipInstall,
     workspaceRoot,
   });
-  await tailorTaskExamples(awsBlocksDest, scripts, ['index.ts', 'index.cdk.ts']);
+  await tailorTaskExamples(cdkBlocksDest, scripts, ['index.ts', 'index.cdk.ts']);
 
   console.log('\n✓ AWS CDK Blocks backend added to your project!\n');
   console.log('Next steps:');
@@ -1185,7 +1185,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
 /** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
 const TYPESCRIPT_STEPS_URL =
-  'https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend';
+  'https://github.com/aws/cdk-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend';
 
 /** The dependencies of a project's package.json. */
 interface PackageDeps {
@@ -1207,8 +1207,8 @@ function usesNext(pkg: PackageDeps): boolean {
  * (esbuild) would read it for backend files instead of the app's tsconfig.json,
  * without the app's "paths".
  */
-async function writeBackendTsconfig(awsBlocksDest: string, pkg: PackageDeps): Promise<void> {
-  const backendTsconfig = join(awsBlocksDest, 'tsconfig.json');
+async function writeBackendTsconfig(cdkBlocksDest: string, pkg: PackageDeps): Promise<void> {
+  const backendTsconfig = join(cdkBlocksDest, 'tsconfig.json');
   if (usesNext(pkg)) {
     await rm(backendTsconfig, { force: true });
   } else if (!(await exists(backendTsconfig))) {

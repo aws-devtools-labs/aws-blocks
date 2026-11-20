@@ -20,7 +20,7 @@ export interface BlocksThrottling {
 }
 
 /**
- * Where AWS Blocks stores the secrets it generates for its own Building Blocks.
+ * Where AWS CDK Blocks stores the secrets it generates for its own Building Blocks.
  *
  * - `'ssm'`: an SSM Parameter Store SecureString (standard tier, encrypted
  *   with the `aws/ssm` key).
@@ -182,7 +182,7 @@ export interface BlocksDefaults {
 	storageAccessLogging?: boolean;
 
 	/**
-	 * Where AWS Blocks stores the secrets it generates for its own Building
+	 * Where AWS CDK Blocks stores the secrets it generates for its own Building
 	 * Blocks: the `Auth` session secret and the `Realtime` connection token key.
 	 * Secrets you declare yourself (your own `AppSetting`, `Secret`, or a value
 	 * passed in at the CDK layer) are not affected.
@@ -226,7 +226,7 @@ export interface BlocksDefaults {
 	vpc?: BlocksVpcOptions;
 
 	/**
-	 * An IAM **permissions boundary** attached to every IAM role AWS Blocks
+	 * An IAM **permissions boundary** attached to every IAM role AWS CDK Blocks
 	 * creates for this stack/backend — the shared execution role every handler
 	 * runs as, block-owned helper roles (migration, Bedrock, scheduler, …), the
 	 * CDK custom-resource / `BucketDeployment` / log-retention roles a block
@@ -263,7 +263,7 @@ export interface BlocksDefaults {
 	 *
 	 * **Interaction with CDK's `@aws-cdk/core:permissionsBoundary` context.**
 	 * The context applies a boundary to every role in every stack of the app.
-	 * When both are set, this option wins for the roles AWS Blocks creates (the
+	 * When both are set, this option wins for the roles AWS CDK Blocks creates (the
 	 * context still applies everywhere else), and synth emits a warning. Either
 	 * one alone bounds every Blocks role.
 	 *
@@ -350,7 +350,7 @@ export interface BlocksDefaults {
 	 * and deploys them through one pipeline. Unset in both {@link BlocksPresets};
 	 * unset leaves synthesized templates unchanged.
 	 *
-	 * When set, AWS Blocks:
+	 * When set, AWS CDK Blocks:
 	 * - tags every resource it creates, and every IAM role (including roles in
 	 *   helper stacks such as the `us-east-1` edge stack), with
 	 *   `app=<id>` ({@link BLOCKS_APP_TAG_KEY}), at a priority above the default
@@ -397,7 +397,7 @@ export interface BlocksDefaults {
 	appIdentity?: BlocksAppIdentity;
 }
 
-/** The tag key AWS Blocks stamps with {@link BlocksAppIdentity.id} on every resource and role. */
+/** The tag key AWS CDK Blocks stamps with {@link BlocksAppIdentity.id} on every resource and role. */
 export const BLOCKS_APP_TAG_KEY = 'app';
 
 /**
@@ -413,7 +413,7 @@ export interface BlocksAppIdentity {
 	 * app's qualifier: one bootstrap per app, and no two apps share one.
 	 *
 	 * Some ids are reserved, because the app's `<id>-…` / `<id>/…` names would
-	 * include names other apps, AWS Blocks, CDK or AWS share: `cdk` (every app's
+	 * include names other apps, AWS CDK Blocks, CDK or AWS share: `cdk` (every app's
 	 * CDK bootstrap, `cdk-<qualifier>-…`, and CDK's `/cdk/…` parameters), `blocks`,
 	 * `secrets` and `config` (Hosting's `secret()` / `config()` values under
 	 * `blocks/…`), `amplify`, `cf`, `sagemaker` (those services' own buckets and

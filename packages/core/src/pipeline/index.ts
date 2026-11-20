@@ -47,7 +47,7 @@ function withBlocksDefaults<TConfig>(props: PipelineProps<TConfig>): PipelinePro
  * namespace — so a value set with `npm run secret`/`config` is the value the
  * pipeline reads. Pass `secretStore` / `configStore` to override.
  *
- * @see {@link https://github.com/aws-devtools-labs/aws-blocks/blob/main/packages/pipeline/README.md}
+ * @see {@link https://github.com/aws/cdk-blocks/blob/main/packages/pipeline/README.md}
  */
 export class Pipeline<TConfig = Record<string, unknown>> extends LeafPipeline<TConfig> {
 	constructor(scope: Construct, id: string, props: PipelineProps<TConfig>) {

@@ -479,7 +479,7 @@ describe('synth-time IAM report', () => {
 					thrown = e;
 				}
 				assert.ok(thrown instanceof Error, 'synth should throw');
-				assert.match(thrown.message, /AWS Blocks IAM report/);
+				assert.match(thrown.message, /AWS CDK Blocks IAM report/);
 				assert.match(thrown.message, /_toCloudFormation\(\)/);
 				assert.ok(
 					thrown.message.includes(path),

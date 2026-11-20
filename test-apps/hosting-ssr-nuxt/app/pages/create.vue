@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { api } from 'hosting-ssr-nuxt-aws-blocks';
+import { api } from 'hosting-ssr-nuxt-cdk-blocks';
 import { ref } from 'vue';
 
 const title = ref('');

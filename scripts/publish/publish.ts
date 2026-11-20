@@ -105,7 +105,7 @@ function topoSort(packages: PackageInfo[]): PackageInfo[] {
 async function packPackage(pkg: PackageInfo): Promise<PackResult> {
 	// npm >= 10 forwards lifecycle-script (prepack) stdout into `npm pack`'s stdout,
 	// so the filename is discovered from the filesystem instead of stdout.
-	const packDir = await mkdtemp(join(tmpdir(), "aws-blocks-pack-"));
+	const packDir = await mkdtemp(join(tmpdir(), "cdk-blocks-pack-"));
 
 	execSync(`npm pack --pack-destination ${JSON.stringify(packDir)}`, {
 		cwd: pkg.dirPath,
@@ -441,7 +441,7 @@ if (bucket && cfDomain && cfDistId) {
 	mode = "local";
 }
 
-console.log(`AWS Blocks Publish — ${mode === "s3" ? "S3" : "dry-run (local)"} (dist-tag: ${distTag})\n`);
+console.log(`AWS CDK Blocks Publish — ${mode === "s3" ? "S3" : "dry-run (local)"} (dist-tag: ${distTag})\n`);
 
 const manifest = await publish(publisher, distTag, canaryVersion);
 

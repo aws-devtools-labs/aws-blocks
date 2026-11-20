@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 /**
- * The file whose presence marks a directory as an AWS Blocks project.
+ * The file whose presence marks a directory as an AWS CDK Blocks project.
  * A project is identified structurally — no config file, no registry — so
  * discovery works on a fresh clone before anything has been built or deployed.
  */
@@ -79,7 +79,7 @@ export function resolveProject(options: ResolveProjectOptions = {}): ProjectReso
 			reason: 'bad-explicit',
 			candidates: [],
 			message:
-				`${explicit} is not an AWS Blocks project (no ${PROJECT_MARKER} there). ` +
+				`${explicit} is not an AWS CDK Blocks project (no ${PROJECT_MARKER} there). ` +
 				`Point --project at a directory that contains ${PROJECT_MARKER}.`,
 		};
 	}
@@ -103,7 +103,7 @@ export function resolveProject(options: ResolveProjectOptions = {}): ProjectReso
 			reason: 'ambiguous',
 			candidates: children,
 			message:
-				`Found ${children.length} AWS Blocks projects under ${startDir}: ${children.join(', ')}. ` +
+				`Found ${children.length} AWS CDK Blocks projects under ${startDir}: ${children.join(', ')}. ` +
 				'Choose one with --project <path>.',
 		};
 	}
@@ -113,7 +113,7 @@ export function resolveProject(options: ResolveProjectOptions = {}): ProjectReso
 		reason: 'not-found',
 		candidates: [],
 		message:
-			`No AWS Blocks project found (looked for ${PROJECT_MARKER} in ${startDir}, its parents, ` +
+			`No AWS CDK Blocks project found (looked for ${PROJECT_MARKER} in ${startDir}, its parents, ` +
 			'and its subdirectories). Run this from inside a Blocks project, or pass --project <path>.',
 	};
 }

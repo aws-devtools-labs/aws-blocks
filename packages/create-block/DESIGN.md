@@ -1,7 +1,7 @@
 # create-block — Design
 
 `@aws-cdk-blocks/create-block` scaffolds a new Building Block (`bb-*`) package and, in
-the AWS Blocks monorepo, wires it into every registration touchpoint. This
+the cdk-blocks monorepo, wires it into every registration touchpoint. This
 documents the internals; see [`README.md`](./README.md) for usage.
 
 ## Goals

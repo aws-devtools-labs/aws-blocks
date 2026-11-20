@@ -187,7 +187,7 @@ function addMergeNotAppliedInfo(role: iam.Role): void {
 	if (mergeNotAppliedAnnotated.has(role)) return;
 	mergeNotAppliedAnnotated.set(role, true);
 	cdk.Annotations.of(role).addInfo(
-		`AWS Blocks: this aws-cdk-lib version (${cdkVersion() ?? 'unknown'}) doesn't allow merging ${role.node.path}'s statements through ` +
+		`AWS CDK Blocks: this aws-cdk-lib version (${cdkVersion() ?? 'unknown'}) doesn't allow merging ${role.node.path}'s statements through ` +
 			"PolicyDocument's 'minimize' field (the field is missing or read-only), so statements are packed into " +
 			'managed policies without being merged first.',
 	);
@@ -267,7 +267,7 @@ function validateManagedPolicyQuota(role: iam.Role, root: Construct): string[] {
 					.join('; ')}.`
 			: '';
 	return [
-		`AWS Blocks: the IAM role ${role.node.path} needs ${attached} managed policies, more than the ` +
+		`AWS CDK Blocks: the IAM role ${role.node.path} needs ${attached} managed policies, more than the ` +
 			`${quota} allowed per role. The Building Blocks granting to it need more permissions than fit on one ` +
 			`role, ${packed}.${topText} To fix: consolidate resources where possible; or move some Building ` +
 			'Blocks into a separate Blocks backend (another BlocksStack or BlocksBackend), which has its own ' +
@@ -316,7 +316,7 @@ function warnReplacementHeadroom(role: iam.Role, overflowCount: number): void {
 	headroomWarned.add(role);
 	cdk.Annotations.of(role).addWarningV2(
 		'@aws-cdk-blocks/core:overflowPolicyReplacementQuota',
-		`AWS Blocks: the IAM role ${role.node.path} carries ${attached} managed policies, ${overflowCount} of them ` +
+		`AWS CDK Blocks: the IAM role ${role.node.path} carries ${attached} managed policies, ${overflowCount} of them ` +
 			`overflow policies, against a quota of ${quota} per role. A deploy that changes an overflow policy ` +
 			'attaches the new copy before it deletes the old one, so a deploy that replaces every overflow policy ' +
 			`would briefly need ${attached + overflowCount} and could fail in CloudFormation. Consolidate grants, ` +
@@ -401,7 +401,7 @@ class StableOverflowPolicyIds implements cdk.IAspect {
 			const owner = byLogicalId.get(id);
 			if (owner !== undefined && owner !== cfn) {
 				throw new Error(
-					`AWS Blocks: overflow policy ${policy.node.path} got the logical ID ${id}, which ${owner.node.path} ` +
+					`AWS CDK Blocks: overflow policy ${policy.node.path} got the logical ID ${id}, which ${owner.node.path} ` +
 						'already has. Adding or removing a grant on the role changes its policy contents and so its ID.',
 				);
 			}

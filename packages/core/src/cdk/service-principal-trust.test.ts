@@ -83,7 +83,7 @@ const CONDITION_RULES =
 	'operator, or with a value that leaves the account open (* alone, a wildcard or empty account); nor do ' +
 	'aws:SourceOrgID and aws:SourceOrgPaths, which admit every account in the organization.';
 
-/** The full error a role AWS Blocks owns fails synth with. */
+/** The full error a role AWS CDK Blocks owns fails synth with. */
 function trustError(rolePath: string, service: string): string {
 	return (
 		`[${rolePath}] IAM role ${rolePath} trusts the service principal ${service} without an ` +
@@ -551,7 +551,7 @@ describe('sourceScopedConditions', () => {
 	});
 });
 
-/** The full error a KMS key AWS Blocks owns fails synth with. */
+/** The full error a KMS key AWS CDK Blocks owns fails synth with. */
 function keyPolicyError(keyPath: string, service: string, statement: number): string {
 	return `[${keyPath}] ${keyPolicyProblem(keyPath, service, statement)}`;
 }

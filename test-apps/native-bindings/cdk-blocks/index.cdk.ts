@@ -42,7 +42,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // CloudFormation still records them. So the native suites run against a
 // connections table with TTL off (`expiresAt` rows don't expire); no native
 // test checks expiry or encryption, and that is accepted for these tests. The fast path re-applying them is tracked in
-// https://github.com/aws-devtools-labs/aws-blocks/issues/985. The serial
+// https://github.com/aws/cdk-blocks/issues/985. The serial
 // production GSI path, which keeps the table, is covered by the comprehensive
 // app's production deploy. A direct
 // `cdk synth/deploy --context sandboxMode=false` still overrides the default.

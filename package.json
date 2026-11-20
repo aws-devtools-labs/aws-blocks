@@ -118,7 +118,7 @@
     "test:e2e:hosting-ssr-astro-default404": "cd test-apps/hosting-ssr-astro-default404 && npm run test:e2e:sandbox",
     "test:e2e:hosting-ssr-sveltekit": "cd test-apps/hosting-ssr-sveltekit && npm run test:e2e:sandbox",
     "test:e2e:hosting-preview": "cd test-apps/hosting-preview && npm run test:e2e:sandbox",
-    "check:exports-consistency": "npx tsx scripts/check-aws-blocks-exports-consistency.ts",
+    "check:exports-consistency": "npx tsx scripts/check-cdk-blocks-exports-consistency.ts",
     "check:client-user-agent": "npx tsx scripts/check-client-user-agent-consistency.ts",
     "check:runtime-guard": "node --experimental-strip-types scripts/check-runtime-guard-coverage.ts",
     "check:dot-folder": "node --experimental-strip-types scripts/dot-folder-guard.ts verify-dot-folder",

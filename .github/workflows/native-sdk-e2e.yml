@@ -522,7 +522,7 @@ jobs:
     # on, so the GSIs are built with the table and the deploy takes about 3
     # minutes. 45 stays until this job has 10 green runs with sandboxMode on,
     # then drops to 30 unless the slowest of them came within 5 min of that
-    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
+    # (https://github.com/aws/cdk-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
@@ -689,7 +689,7 @@ jobs:
     # the slower xcodebuild blew past 30 (and skipped Destroy -> leaked stack).
     # 45 stays until this job has 10 green runs with sandboxMode on, then drops
     # to 35 unless the slowest of them came within 5 min of that
-    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
+    # (https://github.com/aws/cdk-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:

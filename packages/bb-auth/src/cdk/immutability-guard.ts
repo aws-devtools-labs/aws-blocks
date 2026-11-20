@@ -224,7 +224,8 @@ function createGuardResource(
 		handler: 'index.handler',
 		code: deployTimeLambdaCode(LAMBDA),
 		timeout: cdk.Duration.minutes(1),
-		description: 'AWS Blocks Auth: refuses user-pool changes Cognito cannot apply, before the pool update runs.',
+		description:
+			'AWS CDK Blocks Auth: refuses user-pool changes Cognito cannot apply, before the pool update runs.',
 		logGroup: new logs.LogGroup(stack, GUARD_IDS.functionLogs, {
 			retention: logRetention,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,

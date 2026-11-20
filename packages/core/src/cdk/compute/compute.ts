@@ -142,7 +142,7 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 
 	constructor(id: string, options?: ScopeOptions) {
 		super(id, options);
-		// A compute is AWS Blocks' own: its roles (function and task roles) are
+		// A compute is AWS CDK Blocks' own: its roles (function and task roles) are
 		// framework roles for the service-principal trust check.
 		markBlocksOwned(this);
 		// Self-register on the owning stack so finalize steps (config, tracing,

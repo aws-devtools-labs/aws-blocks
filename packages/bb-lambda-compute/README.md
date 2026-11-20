@@ -13,7 +13,7 @@ a per-compute gateway.
 >   don't name a compute run on it.
 > - **Through the `Compute` block.** `new Compute(scope, id, { type: 'serverless', … })`
 >   from `aws-cdk-blocks` creates and owns a `LambdaCompute`. See the
->   [`Compute` README](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-compute#readme).
+>   [`Compute` README](https://github.com/aws/cdk-blocks/tree/main/packages/bb-compute#readme).
 
 > Design and rationale: [DESIGN.md](./DESIGN.md)
 

@@ -1,5 +1,5 @@
 {
-  "name": "hosting-ssr-nuxt-aws-blocks",
+  "name": "hosting-ssr-nuxt-cdk-blocks",
   "version": "0.1.0",
   "private": true,
   "type": "module",

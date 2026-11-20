@@ -26,7 +26,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 | **Effort to set up** | Low (raw CDK + SDK) | Lowest (one factory call) | Medium (author a set of three files) | Low (single `vendorize` command) |
 | **Ongoing maintenance** | You own the integration glue | None — BB owns the runtime | You own the BB | Medium — re-sync diffs from upstream |
 | **Automatic mocking support** | ❌ | ✅ | ✅ | ✅ |
-| **BB ownership** | 🔴 You | 🟢 AWS Blocks | 🟠 You | 🟡 You (seeded by AWS Blocks) |
+| **BB ownership** | 🔴 You | 🟢 AWS CDK Blocks | 🟠 You | 🟡 You (seeded by AWS CDK Blocks) |
 | **Typed API at call sites** | ❌ raw `process.env.X` + SDK | ✅ BB's typed surface | ✅ You design it | ✅ Same as upstream |
 | **Upstream upgrade story** | N/A — your code, your rules | Free — re-deploy, no code change | Free — your BB, you upgrade | Manual — re-sync diffs from upstream |
 
@@ -608,7 +608,7 @@ configuration — resolving the `aws-runtime` condition as shown above — is wh
 keeps the mock entries out of your deployed artifact.
 
 **Found an issue with a first-party BB before publishing your own?** Consider
-opening a PR upstream against [`aws-blocks`](https://github.com/aws-devtools-labs/aws-blocks) — the team would
+opening a PR upstream against [`cdk-blocks`](https://github.com/aws/cdk-blocks) — the team would
 rather absorb a generally useful change than have N forks of the same idea.
 
 ---

@@ -128,7 +128,7 @@ export async function blockStatus(flags: BlockFlags): Promise<StatusResult> {
 		// A clone where the file system has one (APFS, btrfs, XFS); a plain copy elsewhere.
 		cpSync(live, copy, { recursive: true, mode: constants.COPYFILE_FICLONE });
 		rmSync(join(copy, 'postmaster.pid'), { force: true });
-		const db = new PGlite(copy, { extensions: { awsBlocksUnrefTimers: pgliteUnrefTimersExtension } });
+		const db = new PGlite(copy, { extensions: { cdkBlocksUnrefTimers: pgliteUnrefTimersExtension } });
 		try {
 			const query = async <T>(sql: string, params?: unknown[]) => (await db.query<T>(sql, params)).rows;
 			return {

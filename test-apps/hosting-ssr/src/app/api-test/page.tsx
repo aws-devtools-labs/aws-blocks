@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api, authApi } from 'hosting-ssr-aws-blocks';
+import { api, authApi } from 'hosting-ssr-cdk-blocks';
 import ProbeCard from './probe-card';
 
 const FRAMEWORK = '#000';

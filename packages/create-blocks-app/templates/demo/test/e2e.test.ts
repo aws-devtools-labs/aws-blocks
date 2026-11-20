@@ -203,7 +203,7 @@ test('auth: sign up with the emailed code, then call a protected method', async 
   const state = await authApi.setAuthState({ action: 'autoSignIn', username });
   assert.strictEqual(state.state, 'signedIn');
 
-  const todo = await api.createTodo('Try AWS Blocks', 1);
+  const todo = await api.createTodo('Try AWS CDK Blocks', 1);
   assert.ok(todo.userSub, "the todo is keyed on the owner's userSub");
   await api.deleteTodo(todo.todoId);
 });

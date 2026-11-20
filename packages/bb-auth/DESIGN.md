@@ -4,7 +4,7 @@
 
 ## Purpose
 
-`Auth` is the AWS Blocks auth Building Block: one block configured through one options object, with a block-level `store` (where the users live: a Cognito user pool, the default, or `'builtin'`, at their IdP) and one `providers` map whose entries carry a `type` (see [Options](#options-store-providers-and-the-resolved-shape)).
+`Auth` is the AWS CDK Blocks auth Building Block: one block configured through one options object, with a block-level `store` (where the users live: a Cognito user pool, the default, or `'builtin'`, at their IdP) and one `providers` map whose entries carry a `type` (see [Options](#options-store-providers-and-the-resolved-shape)).
 
 Two properties are non-negotiable:
 

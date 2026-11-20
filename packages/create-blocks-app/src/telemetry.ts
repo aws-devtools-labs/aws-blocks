@@ -107,7 +107,7 @@ export function isCdkTelemetryDisabled(): boolean {
 /**
  * Keep behaviorally identical to packages/core/src/telemetry/consent.ts.
  *
- * AWS Blocks has no opt-out of its own: consent is CDK's.
+ * AWS CDK Blocks has no opt-out of its own: consent is CDK's.
  *
  * Project-level CDK config in `process.cwd()` takes precedence over `~/.cdk.json`, so
  * scaffolding from inside an existing CDK project applies that project's setting.

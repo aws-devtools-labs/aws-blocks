@@ -29,7 +29,7 @@ const REQUIRED_CONDITIONS: Record<string, string> = {
   default: "./index.ts",
 };
 
-function findAwsBlocksPackageJsons(): string[] {
+function findCdkBlocksPackageJsons(): string[] {
   const results: string[] = [];
 
   // Check create-blocks-app templates
@@ -119,14 +119,14 @@ function checkFile(relPath: string): string[] {
 }
 
 function main() {
-  const files = findAwsBlocksPackageJsons();
+  const files = findCdkBlocksPackageJsons();
 
   if (files.length === 0) {
     console.error("ERROR: No cdk-blocks/package.json files found!");
     process.exit(1);
   }
 
-  console.log(`Checking ${files.length} aws-blocks package.json files...\n`);
+  console.log(`Checking ${files.length} cdk-blocks package.json files...\n`);
 
   const allErrors: string[] = [];
 
@@ -156,7 +156,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log("All aws-blocks export maps are consistent. ✓");
+  console.log("All cdk-blocks export maps are consistent. ✓");
 }
 
 main();

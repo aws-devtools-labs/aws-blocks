@@ -1,6 +1,6 @@
 'use client';
 
-import { api } from 'hosting-ssr-aws-blocks';
+import { api } from 'hosting-ssr-cdk-blocks';
 
 export function DashboardActions({ postId }: { postId?: string }) {
   async function handleDelete() {

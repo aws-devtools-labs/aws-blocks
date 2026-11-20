@@ -93,7 +93,7 @@ export function getOrCreateOnRoot<T>(scope: Construct, key: symbol, factory: (ro
 		store[key] = factory(root);
 		// Shared per-backend infrastructure is the framework's, not the app's:
 		// mark what the factory added on the root so the service-principal trust
-		// check treats its roles as AWS Blocks roles (see isAppOwnedRole).
+		// check treats its roles as AWS CDK Blocks roles (see isAppOwnedRole).
 		for (const child of root.node.children) if (!before.has(child)) markBlocksOwned(child);
 	}
 	return store[key] as T;

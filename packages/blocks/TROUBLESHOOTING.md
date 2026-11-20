@@ -89,11 +89,11 @@ curl -X POST http://localhost:3000/cdk-blocks/api \
 
 ## TypeScript errors in `cdk-blocks/` from the frontend
 
-The frontend imports the backend (`import { api } from 'cdk-blocks'`), so its `tsconfig` typechecks the backend unless the backend is a TypeScript project of its own, as in the Vite templates. [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has the steps for other apps.
+The frontend imports the backend (`import { api } from 'cdk-blocks'`), so its `tsconfig` typechecks the backend unless the backend is a TypeScript project of its own, as in the Vite templates. [Keep Node types out of the frontend](https://github.com/aws/cdk-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has the steps for other apps.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `TS2591: Cannot find name 'process'` (or `Buffer`) in `cdk-blocks/`; `TS2307` for a `node:` import | The frontend `tsconfig` typechecks the backend source, and its `types` (such as `["vite/client"]`) leaves out Node | Reference the backend's project from that `tsconfig` and typecheck with `tsc -b --force` ([steps](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend)). In Next.js, leave `types` unset instead |
+| `TS2591: Cannot find name 'process'` (or `Buffer`) in `cdk-blocks/`; `TS2307` for a `node:` import | The frontend `tsconfig` typechecks the backend source, and its `types` (such as `["vite/client"]`) leaves out Node | Reference the backend's project from that `tsconfig` and typecheck with `tsc -b --force` ([steps](https://github.com/aws/cdk-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend)). In Next.js, leave `types` unset instead |
 | The same errors in `src/` | Browser code uses a Node global, which a Vite template's `tsconfig.app.json` leaves out on purpose | Move that code into `cdk-blocks/`, or read build-time values with `import.meta.env` |
 | `TS6305: Output file '...' has not been built from source file '.../cdk-blocks/index.ts'` | `tsc` ran without `-b`, so nothing built the referenced backend | Run `npm run typecheck` (`tsc -b --force`) |
 | `TS6307: File '...' is not listed within the file list of project '.../cdk-blocks/tsconfig.json'` | The backend imports a `.json` file, or a file outside `cdk-blocks/` | Add its folder to `include` in `cdk-blocks/tsconfig.json`, for example `"data/**/*.json"`. For code the browser imports too, see the guide's note on shared code |
@@ -132,10 +132,10 @@ Without a frontend (`--no-frontend`, `"frontend": false`, or no `next` / `vite` 
 
 | Response | Cause | Fix |
 |----------|-------|-----|
-| 403 `Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-cdk-blocks/core` README, "Local Development") |
-| 404 `The AWS Blocks JSON-RPC API expects POST, not GET.` | An RPC path was requested with another method, for example by opening it in a browser | Call it with `POST` (see [RPC Wire Protocol](#rpc-wire-protocol)) |
+| 403 `Forbidden: the AWS CDK Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] or the host set in BLOCKS_DEV_HOST.` | The request's `Host` header names another host (the DNS-rebinding guard) | Open the app at `localhost`, or set `BLOCKS_DEV_HOST` to the host you use (see the `@aws-cdk-blocks/core` README, "Local Development") |
+| 404 `The AWS CDK Blocks JSON-RPC API expects POST, not GET.` | An RPC path was requested with another method, for example by opening it in a browser | Call it with `POST` (see [RPC Wire Protocol](#rpc-wire-protocol)) |
 | 403 `{"error":"Forbidden: cross-origin request rejected"}` | A `POST`, `PUT`, `PATCH` or `DELETE` whose `Origin` names another site | Call from a loopback origin or the host in `BLOCKS_DEV_HOST`; see the `@aws-cdk-blocks/core` README, "Local Development", for the allowed origins |
-| 415 `Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json` | A JSON-RPC call sent without `Content-Type: application/json` | Send that header (with `curl`, `-H 'Content-Type: application/json'`); the generated clients already do |
+| 415 `Unsupported Media Type: the AWS CDK Blocks JSON-RPC API expects Content-Type: application/json` | A JSON-RPC call sent without `Content-Type: application/json` | Send that header (with `curl`, `-H 'Content-Type: application/json'`); the generated clients already do |
 
 ## Auth cookies not persisting
 

@@ -1,4 +1,4 @@
-import { api } from 'hosting-ssr-aws-blocks';
+import { api } from 'hosting-ssr-cdk-blocks';
 import { redirect } from 'next/navigation';
 import { withAuth } from 'aws-cdk-blocks/server';
 import { DashboardActions } from './dashboard-actions';

@@ -27,7 +27,7 @@ endpoint, dropping this example to ~$61/month. Only CloudWatch Logs (Lambda log
 delivery) and the free S3 gateway endpoint (config/secrets/migrations at cold
 start) are always added.
 
-> **Most AWS Blocks apps don't need a VPC.** All Blocks communicate with AWS services over HTTPS through public endpoints by default. A VPC adds cost and complexity — only use one when you have a specific requirement for it.
+> **Most AWS CDK Blocks apps don't need a VPC.** All Blocks communicate with AWS services over HTTPS through public endpoints by default. A VPC adds cost and complexity — only use one when you have a specific requirement for it.
 
 ## When to Use a VPC
 
@@ -60,7 +60,7 @@ await BlocksStack.create(app, stackName, {
 });
 ```
 
-AWS Blocks handles:
+AWS CDK Blocks handles:
 - **Lambda placement** in private subnets (configurable via `subnets`)
 - **VPC endpoint provisioning** based on which BBs are in scope (DynamoDB, S3, SSM, Secrets Manager, SQS, Bedrock, etc.)
 - **Security group wiring** (e.g., Blocks Lambda → endpoints on port 443)

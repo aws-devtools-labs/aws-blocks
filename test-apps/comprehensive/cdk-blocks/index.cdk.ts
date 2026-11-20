@@ -16,7 +16,7 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
-// Optional IAM permissions boundary on every role AWS Blocks creates
+// Optional IAM permissions boundary on every role AWS CDK Blocks creates
 // (`-c blocksPermissionsBoundary=<policy name>`). test/iam-boundary-synth.test.ts
 // synthesizes with it set to prove every Building Block's roles are covered.
 const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');

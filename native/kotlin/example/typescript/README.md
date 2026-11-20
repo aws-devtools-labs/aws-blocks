@@ -31,7 +31,7 @@ To switch the apps between local and sandbox, regenerate the spec the other way.
 
 ### Inside the AWS CDK Blocks repository
 
-`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-cdk-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
+`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-cdk-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `cdk-blocks` package needs a link:
 
 ```bash
 mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks

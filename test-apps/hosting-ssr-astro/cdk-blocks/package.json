@@ -1,5 +1,5 @@
 {
-  "name": "hosting-ssr-astro-aws-blocks",
+  "name": "hosting-ssr-astro-cdk-blocks",
   "version": "0.1.0",
   "private": true,
   "type": "module",

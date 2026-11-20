@@ -222,7 +222,7 @@ describe('customer-mode detection', () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test('does NOT treat the AWS Blocks monorepo as a customer workspace', async () => {
+	test('does NOT treat the cdk-blocks monorepo as a customer workspace', async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'cb-blk-'));
 		try {
 			writeFileSync(join(dir, 'package.json'), JSON.stringify({ workspaces: ['packages/blocks'] }));

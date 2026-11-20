@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "E2E telemetry test application for AWS Blocks",
+  "description": "E2E telemetry test application for AWS CDK Blocks",
   "blocksTemplate": "telemetry-e2e",
   "blocksTemplateVersion": "1.2.3",
   "scripts": {

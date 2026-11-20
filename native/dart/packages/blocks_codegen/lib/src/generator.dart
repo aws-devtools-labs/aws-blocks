@@ -957,7 +957,7 @@ class DartCodeGenerator {
 
       buf.writeln('  $asyncReturn $methodName($paramSig) async {');
 
-      // Build the params array. An AWS Blocks server reads params by
+      // Build the params array. An AWS CDK Blocks server reads params by
       // position (`parseRpcRequest` reads a by-name object by its values, in
       // order), so the arguments go in spec order, as the TypeScript client
       // sends them: an optional argument before the last required one keeps

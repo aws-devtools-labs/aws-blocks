@@ -27,7 +27,7 @@
  * parent's requests. A parent suite whose flow relies on state one instance
  * keeps in memory between requests must run before the background suites
  * start (AuthOIDC's stub IdP refresh tokens, see e2e.test.ts and
- * https://github.com/aws-devtools-labs/aws-blocks/issues/988).
+ * https://github.com/aws/cdk-blocks/issues/988).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';

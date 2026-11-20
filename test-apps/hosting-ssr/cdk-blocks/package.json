@@ -1,5 +1,5 @@
 {
-  "name": "hosting-ssr-aws-blocks",
+  "name": "hosting-ssr-cdk-blocks",
   "version": "0.1.0",
   "private": true,
   "type": "module",
