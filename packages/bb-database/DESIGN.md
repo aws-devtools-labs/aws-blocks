@@ -100,7 +100,7 @@ This differs from AWS, where the call runs on the other block's own connection (
 
 **A migration run can be nested too.** A block applies its migrations with its first statement. When that statement is inside another block's callback, the schema, the tables and the `_migrations` rows that the run creates roll back with that transaction. The transaction handle therefore takes rollback listeners (`ClusterTransaction.onRollback`). A `ROLLBACK`, a failed `COMMIT` or a `ROLLBACK TO` the handle's savepoint fires them, and a `RELEASE` hands them to the parent. The local entry point registers a listener that drops the engine that `DatabaseCore` cached, so the next statement builds the engine and applies the migrations again. A failed statement of a sibling block rolls back only to its own savepoint and leaves the engine in place.
 
-**The application role.** The application's statements run as a plain role, `blocks_app_local`, which the cluster creates at init. Migrations run as PGlite's own user, a superuser, in place of the cluster admin. After a block's migrations, the local entry point issues the grants that the migration function issues on AWS. One function serves both (`src/migrations/grants.ts`): DML on the schema's tables, `SELECT` on its views, `USAGE` on its sequences, and nothing on the ledger tables.
+**The application role.** The application's statements run as a plain role, `blocks_app_local`, which the cluster creates at init. Migrations run as PGlite's own user, a superuser, in place of the cluster admin. After a block's migrations, the local entry point issues the grants that the migration function issues on AWS. One function serves both (`src/migrations/grants.ts`): DML on the schema's tables, `SELECT` on its views, `USAGE` on its sequences, and nothing on the ledger tables. The role exists before the first migration runs, so a file can grant to it; `${app_role}` in a file is `"blocks_app_local"` here (section 5.2).
 
 PostgreSQL then enforces locally what it enforces on AWS. DDL and `TRUNCATE` in a handler fail with SQLSTATE `42501`. The ledger tables are closed. A Row Level Security policy applies, because the role does not own the tables.
 
@@ -229,6 +229,8 @@ Each block has one directory of migration files, written for its cluster's engin
 
 **An existing database.** The plan is the `aurora` plan, without the checks (section 7).
 
+**One substitution: `${app_role}`.** The plan replaces every occurrence of `${app_role}` in a file with the quoted name of the role that the application's statements run as. That is `blocks_app_{cluster}` on a cluster the block provisions (section 10), `"blocks_app_local"` in local mode (section 4.1), and the connection role on an existing database, which the runner reads with `SELECT current_user` (section 7). It is the only change the block makes to the SQL text. A file must sometimes name that role, as in `GRANT authenticated TO ${app_role}` for `asRole()`, and the name differs between local mode and AWS, and between clusters. Without the placeholder the author would need one file per place, or a file that is wrong in one of them. The replacement is a plain text replacement, in literals and comments too, and the form is Flyway's, so a reader recognizes it as a placeholder. PostgreSQL has no `${` token, so the placeholder cannot be valid SQL that a file meant literally: a file that never runs through the block fails with a syntax error, not with a grant to a wrong role. Any other `${…}` is left alone. The checks of section 5.1 see a quoted stand-in in its place. The hash in `_migration_progress` is of the file as written, so it is the same in every place.
+
 An author with a PostgreSQL file can run `dsql-lint --fix` once and review the result.
 
 ### 5.3 Resumable execution
@@ -280,7 +282,9 @@ The bound is fixed. It is not the invocation's remaining time, so a second long 
 
 **CloudFormation's limit.** A stack waits for a custom resource for `ServiceTimeout` seconds, 3600 at most. The block sets that value on each resource. The provider's 55 minutes stay under it, so a deploy that runs out of time ends with the runner's message and not with a timeout from CloudFormation.
 
-**The application role.** When the plan is complete, the handler creates the application role of the cluster if needed and maps it to IAM. On DSQL that is `AWS IAM GRANT` to the stack's execution role. On Aurora it is `GRANT rds_iam`, and the execution role's `rds-db:connect` grant on `dbuser:<cluster resource id>/<role>` admits the role. The handler then grants the role DML on the schema's tables, `SELECT` on its views and `USAGE` on its sequences.
+**The application role.** Before the plan runs, the handler creates the application role of the cluster if needed and maps it to IAM. On DSQL that is `AWS IAM GRANT` to the stack's execution role. On Aurora it is `GRANT rds_iam`, and the execution role's `rds-db:connect` grant on `dbuser:<cluster resource id>/<role>` admits the role. When the plan is complete, the handler grants the role DML on the schema's tables, `SELECT` on its views and `USAGE` on its sequences (`ensureAppRole` and `grantAppRole` in `src/deploy/migration-lambda.ts`).
+
+The role exists before the first file runs because a file may grant to it: `GRANT authenticated TO ${app_role}` makes `asRole('authenticated')` work (section 7). In `1.0.0-rc.0` the handler created the role after the plan, so on the first deploy of a cluster such a file failed with `role … does not exist`. The schema grants still come last, because they cover the tables that the files create. Both halves are idempotent. The first runs on every invocation: the `isComplete` polls of a DSQL job, a deploy after a failed file, and the deploy of every other block on the cluster. It finds the role in place and repeats the IAM mapping, as every deploy already did. The privileges are the same as before; only their order changed.
 
 **The admin connection.** The functions connect as the cluster admin. On DSQL that is `admin` with an admin token. On Aurora it is the master user `postgres`, which the express configuration creates with IAM authentication and no password. The template does not name `EnableIAMDatabaseAuthentication` or `MasterUserAuthenticationType`. Express sets both, and naming them makes CloudFormation modify the cluster after the create.
 
@@ -346,6 +350,8 @@ The runner uses the ledger table of `@aws-blocks/bb-data` as it is. That table i
 
 **Identity.** The connection role usually owns the tables, and PostgreSQL does not apply policies to an owner. The claims of `asUser()` alone filter nothing there. `asRole(role, claims?)` switches the role and sets the claims in one statement at the start of each transaction (`src/runtime/scoped.ts`). The role name is a bound parameter. The block takes no position on which roles exist or what the claims hold.
 
+PostgreSQL allows the switch only when the connection role is a member of the role. When it is not, the first statement fails with `DatabaseConfigurationError`, and the server log names the grant to add as a migration: `GRANT "<role>" TO ${app_role};`. The migration functions connect as the application does, so `${app_role}` is the connection role and that role exists before any file runs. A provisioned cluster has the same order since the role is created before the plan (section 5.4). The hint used to say `GRANT "<role>" TO CURRENT_USER`. The application cannot run that, since a role cannot grant itself membership, and in a migration on a provisioned cluster `CURRENT_USER` is the cluster admin.
+
 **The claims after a transaction.** The block cannot give each connection a session default for `request.jwt.claims`, because a transaction pooler does not keep it. After a scoped transaction the setting is an empty string on that connection (section 4.5). A policy on an existing database must accept that value, and the README shows the `nullif` form.
 
 **Connections and errors.** The pool connects with a ten-second timeout and closes a connection ten seconds after its last statement. A connection that was never made is `ConnectionFailed`, not `QueryFailed`: the address, the certificate, the login, a missing database, or too many clients. A request does not try again. The driver's text names the host or the role and never the password, and it goes to the function's log. A client that is checked out for a transaction has its own `error` listener, so a connection that ends between two statements does not end the Node process.
@@ -395,6 +401,14 @@ Neither command reads a deployed cluster.
 
 **A configuration error for a call to another block inside a local transaction.** It rejects code that is correct on DSQL, such as a read of another block's table inside a transaction. The savepoint keeps that code working locally (section 4.1).
 
+**The literal role name in migration files** (`GRANT authenticated TO blocks_app_main`). It needs no substitution, and `getSdkIdentifiers(db).roleName` gives the name. The name differs in local mode (`blocks_app_local`) and is hashed when the cluster's id is long, so the author would need one file for local mode and another for AWS, and a renamed cluster would break the file (section 5.2).
+
+**The same role name in local mode as on AWS.** One literal name would then work in both places. Local mode would need a role per cluster in every PGlite data directory, which changes what is on disk for existing projects, and the name would still be derived from an id that the author does not see.
+
+**A session setting that a `DO` block reads** (`EXECUTE format('GRANT authenticated TO %I', current_setting('blocks.app_role'))`). It leaves the file text alone. It needs PL/pgSQL, which DSQL does not run, and a one-line grant becomes a block of procedural code.
+
+**`CURRENT_USER` in place of the name.** It needs no substitution. In a migration on a provisioned cluster it is the cluster admin, not the application role, so the grant goes to the wrong role.
+
 **A role switch for each transaction on a provisioned cluster,** as PostgREST does. It adds cluster roles, a grant for each table and a reorder of the migration function. It changes nothing on a cluster where the block already connects as a role that owns nothing (section 4.5).
 
 **A Kysely adapter in the block's root entry.** Every application then installs and loads Kysely. The dialect has its own entry, so only an application that imports it loads Kysely (section 4.4).
@@ -410,6 +424,8 @@ Neither command reads a deployed cluster.
 ## 10. Security and cost
 
 **Security on a provisioned cluster.** The application connects as a database role per cluster, `blocks_app_{clusterId}`, through one connection pool per block. The migration functions create this role and map it to IAM (section 5.4). No password exists: no Secrets Manager secret and no connection string.
+
+The name is `blocks_app_` and the cluster's full id with every character other than a letter or a digit replaced by `_`, in lower case. A name longer than 63 characters becomes `blocks_app_` and the first 12 hex characters of the SHA-256 of the full id (`sanitizeDbRoleName` in `src/constants.ts`). `getSdkIdentifiers(db).roleName` returns it, and a migration names it with `${app_role}` (section 5.2).
 
 The role holds `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, `USAGE, SELECT` on its sequences, and `USAGE` on the schema when it is not `public`. It holds nothing on `_migrations` and `_migration_progress`. DDL needs the admin token, which only the migration functions hold. On DSQL the execution role has `dsql:DbConnect` on the cluster, and the migration functions have `dsql:DbConnectAdmin`.
 
@@ -440,6 +456,7 @@ Provisioned clusters:
 | A statement on the block or on the root Kysely instance, inside the callback of a Kysely transaction | Fails after five seconds with `QueryFailed` (section 4.4) | Runs on another connection, outside the transaction |
 | The user of a statement nested in another database object's `transaction()` | Its own database's user or none (section 4.5) | The same, on its own connection |
 | `SET SESSION AUTHORIZATION` in application SQL | Accepted. The login user of the session is PGlite's superuser | Refused. The application role is not a superuser |
+| The application role's name (`getSdkIdentifiers(db).roleName`, `${app_role}` in a migration) | `blocks_app_local` | `blocks_app_{cluster}` (section 10) |
 
 An existing database:
 
@@ -486,7 +503,7 @@ An existing database:
 | Local rules by cluster type | `src/dialect/rules-engine.ts` |
 | DSQL rules: the linter wrapper, the block's own rule, statement classification, the transaction limits | `src/dialect/lint.ts`, `src/dialect/validation.ts` |
 | Asynchronous DDL: name parsing, catalog check, invalid-index cleanup | `src/dialect/async-ddl.ts` |
-| Plan sequencing by kind | `src/migrations/plan.ts` |
+| Plan sequencing by kind, the `${app_role}` substitution | `src/migrations/plan.ts` |
 | Runner, ledger tables and job waits | `src/migrations/runner.ts` |
 | The application role's grants | `src/migrations/grants.ts` |
 | Schema preparation in local mode | `src/migrations/local.ts` |

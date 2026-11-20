@@ -382,6 +382,7 @@ export function getSdkIdentifiers(bb: Database): {
     schemaName: string;
     clusterEndpoint?: string;
     region?: string;
+    roleName?: string;
 };
 
 // @public (undocumented)

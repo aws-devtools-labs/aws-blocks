@@ -141,10 +141,14 @@ export class Database extends Scope {
 		const legacy = resolved.shared instanceof LegacyDatabaseCluster ? resolved.shared : undefined;
 		this.ownerRunsStatements = legacy !== undefined;
 		const dataApi = resolved.external?.dataApi;
+		const provisioned = !resolved.external && !legacy;
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: clusterFullId,
 			schemaName: this.schemaName,
-			...(resolved.external || legacy ? {} : readClusterConfig(clusterFullId)),
+			// The app role the migration Lambda creates for the cluster, which the block connects as.
+			...(provisioned
+				? { ...readClusterConfig(clusterFullId), roleName: sanitizeDbRoleName(clusterFullId) }
+				: {}),
 		});
 
 		let buildEngine: () => Promise<RowCountingEngine>;

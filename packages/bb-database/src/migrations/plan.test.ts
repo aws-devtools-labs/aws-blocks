@@ -4,8 +4,9 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-cdk-blocks/core';
+import { APP_ROLE_PLACEHOLDER } from '../constants.js';
 import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
-import { buildMigrationPlan, lintMigrationFiles } from './plan.js';
+import { buildMigrationPlan, connectionRole, lintMigrationFiles } from './plan.js';
 
 const steps = (sql: string) => buildMigrationPlan({ '001.sql': sql }, 'dsql').files[0].steps;
 
@@ -224,5 +225,36 @@ describe('migration plan (aurora): one transaction per file', () => {
 			},
 			'aurora',
 		);
+	});
+});
+
+describe(`${APP_ROLE_PLACEHOLDER} in a migration file`, () => {
+	const file = `CREATE TABLE t (id INT);\nGRANT SELECT ON t TO ${APP_ROLE_PLACEHOLDER};\nGRANT authenticated TO ${APP_ROLE_PLACEHOLDER};`;
+
+	test('every occurrence is replaced by the role it is given; the hash is of the file as written', () => {
+		const plan = buildMigrationPlan({ '001.sql': file }, 'aurora', '"blocks_app_main"');
+		assert.deepStrictEqual(
+			plan.files[0].steps.map((s) => s.sql),
+			[
+				'CREATE TABLE t (id INT)',
+				'GRANT SELECT ON t TO "blocks_app_main"',
+				'GRANT authenticated TO "blocks_app_main"',
+			],
+		);
+		const local = buildMigrationPlan({ '001.sql': file }, 'aurora', '"blocks_app_local"');
+		assert.strictEqual(plan.files[0].hash, local.files[0].hash);
+		assert.strictEqual(plan.files[0].hash, buildMigrationPlan({ '001.sql': file }, 'aurora').files[0].hash);
+	});
+
+	test('passes the checks of both cluster kinds', () => {
+		assert.doesNotThrow(() => lintMigrationFiles({ '001.sql': file }, 'aurora'));
+		assert.doesNotThrow(() =>
+			lintMigrationFiles({ '001.sql': `GRANT SELECT ON t TO ${APP_ROLE_PLACEHOLDER};` }, 'dsql'),
+		);
+	});
+
+	test('connectionRole() quotes the name the engine connects as', async () => {
+		const engine = { query: async <T>() => [{ name: 'post"gres' }] as T[] };
+		assert.strictEqual(await connectionRole(engine), '"post""gres"');
 	});
 });

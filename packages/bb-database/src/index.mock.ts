@@ -6,6 +6,7 @@ import { type ChildLogger, Logger } from '@aws-cdk-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-cdk-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import type { SqlQuery } from './common/sql.js';
+import { LOCAL_APP_ROLE } from './constants.js';
 import { RulesEngine } from './dialect/rules-engine.js';
 import { dataApiEngine, type RowCountingEngine } from './engines/handle.js';
 import { PGLITE_SUBDIR, type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
@@ -277,7 +278,13 @@ export class Database extends Scope {
 			simulateConflict,
 			migrationsPath: this.migrationsPath,
 		});
-		registerSdkIdentifiers(this.fullId, { clusterId: resolved.clusterFullId, schemaName: this.schemaName });
+		registerSdkIdentifiers(this.fullId, {
+			clusterId: resolved.clusterFullId,
+			schemaName: this.schemaName,
+			// The role the block's statements run as, on a cluster the block provisions: locally the one plain role
+			// of every PGlite. An existing database and a LegacyDatabaseCluster run as the role of their connection.
+			...(resolved.external || this.ownerRunsStatements ? {} : { roleName: LOCAL_APP_ROLE }),
+		});
 	}
 
 	/**
