@@ -13,12 +13,13 @@ import { generateStackId, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TE
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
 
-const task = (args: string) => `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- ${args}`;
+// The script for a task; with no arguments, the `cdk-blocks` passthrough, which forwards what follows it.
+const task = (args: string) => `node --input-type=module -e "import 'aws-cdk-blocks/run'" --${args ? ` ${args}` : ''}`;
 
 // Tasks available both in a standalone app and alongside an Amplify-owned backend.
 const discoveryTasks = {
   docs: 'docs', 'docs:api': 'docs --api', 'docs:search': 'docs --search',
-  help: '--help', whoami: 'whoami',
+  help: '--help', whoami: 'whoami', 'cdk-blocks': '',
 };
 
 const standaloneTasks = {

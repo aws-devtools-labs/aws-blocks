@@ -560,10 +560,16 @@ async function addBlocksWorkspace(targetDir: string, options: {
   return installedScripts;
 }
 
-/** Reuse the selected template's CDK Blocks tasks, not its frontend or lifecycle scripts. */
+/** The package-script entry every CDK Blocks task runs through; a task script appends ` <task>`. */
+const RUN_ENTRY = `node --input-type=module -e "import 'aws-cdk-blocks/run'" --`;
+
+/**
+ * Reuse the selected template's CDK Blocks tasks, not its frontend or lifecycle scripts.
+ * That includes the `cdk-blocks` passthrough, which is the entry with no task after it.
+ */
 function templateTasks(scripts: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(scripts).filter(([name, command]) =>
-    name !== 'prebuild' && command.startsWith(`node --input-type=module -e "import 'aws-cdk-blocks/run'" -- `),
+    name !== 'prebuild' && (command === RUN_ENTRY || command.startsWith(`${RUN_ENTRY} `)),
   ));
 }
 
@@ -957,7 +963,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       // Keep Cognito middleware and the API URL from amplify_outputs.json.
       'blocks:generate-client': clientScript,
       'generate-client': clientScript,
-      ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'help', 'db', 'migrate']
+      ...Object.fromEntries(['docs', 'docs:search', 'docs:api', 'whoami', 'help', 'cdk-blocks', 'db', 'migrate']
         .map(name => [name, standalone.scripts[name]])),
     },
     // The CDK Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,

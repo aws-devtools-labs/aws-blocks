@@ -35,6 +35,7 @@
     "whoami": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- whoami",
     "migrate": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- migrate",
     "help": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- --help",
+    "cdk-blocks": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" --",
     "generate-client": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- generate client",
     "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
