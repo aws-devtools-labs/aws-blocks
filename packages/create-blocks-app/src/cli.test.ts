@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { generateStackId, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
+import { detectProjectFramework, fitHostingSource, generateStackId, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -1076,6 +1076,105 @@ describe('create-blocks-app auto-detection', () => {
       assertTasks(pkg.scripts, { ...standaloneTasks, 'dev:server': 'dev' }, 'existing project');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  // The frameworks whose Hosting adapter builds the app itself: the backend added to
+  // such a project lets the adapter build it (no buildCommand, no Vite `dist`).
+  const SELF_BUILDING_PROJECTS = [
+    { framework: 'astro', dependencies: { astro: '^7.4.0' } },
+    { framework: 'nitro', dependencies: { nuxt: '^4.6.0' } },
+    { framework: 'sveltekit', devDependencies: { '@sveltejs/kit': '^2.70.0' } },
+    { framework: 'nextjs', dependencies: { next: '^16.4.0', react: '^19.0.0' } },
+  ] as const;
+
+  for (const { framework, ...deps } of SELF_BUILDING_PROJECTS) {
+    it(`lets Hosting's ${framework} adapter build an existing ${framework} project`, () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), `cba-existing-${framework}-`));
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: `my-${framework}-app`, version: '1.0.0', ...deps }));
+      try {
+        const result = run(['.', '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        const cdk = readFileSync(join(tmpDir, 'cdk-blocks', 'index.cdk.ts'), 'utf-8');
+        assert.match(cdk, new RegExp(`\\n    framework: '${framework}',\\n`));
+        assert.doesNotMatch(cdk, /buildCommand|buildOutputDir/);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  it('keeps the Vite build command and output dir for an existing SPA project', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'cba-existing-spa-'));
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0', devDependencies: { vite: '^6.4.0' } }));
+    try {
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.strictEqual(
+        readFileSync(join(tmpDir, 'cdk-blocks', 'index.cdk.ts'), 'utf-8'),
+        readFileSync(join(__dirname, '..', 'templates', 'default', 'cdk-blocks', 'index.cdk.ts'), 'utf-8'),
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('fits the Hosting build settings of every template that has a Hosting', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    const withHosting = readdirSync(templatesDir)
+      .map(name => join(templatesDir, name, 'cdk-blocks', 'index.cdk.ts'))
+      .filter(file => existsSync(file) && readFileSync(file, 'utf-8').includes('new Hosting('));
+    assert.ok(withHosting.length > 1, 'expected several templates with a Hosting');
+    for (const file of withHosting) {
+      const source = readFileSync(file, 'utf-8');
+      for (const eol of ['\n', '\r\n']) {
+        const fitted = fitHostingSource(source.replace(/\r?\n/g, eol), 'astro');
+        assert.ok(fitted !== null, `${file} (${JSON.stringify(eol)} line endings): Hosting build settings not matched`);
+        assert.ok(fitted.includes(`${eol}    framework: 'astro',${eol}`), file);
+        assert.doesNotMatch(fitted, /buildCommand|buildOutputDir/, file);
+        if (eol === '\r\n') assert.doesNotMatch(fitted, /[^\r]\n/, `${file}: mixed line endings`);
+      }
+    }
+  });
+
+  it('finds no build settings to fit in a Hosting without the template\'s, and no Hosting to warn about in a backend-only template', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'cba-existing-unmatched-'));
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-astro-app', version: '1.0.0', dependencies: { astro: '^7.4.0' } }));
+    try {
+      // The backend-only templates have no Hosting: nothing to fit, nothing to warn about.
+      const result = run(['.', '-y', '--skip-install', '--template', 'api-only'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.doesNotMatch(result.stdout + result.stderr, /Could not set the astro build settings/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+    assert.strictEqual(fitHostingSource("new Hosting(s, 'H', {\n  buildCommand: 'make',\n});\n", 'astro'), null);
+  });
+
+  it('detects a project\'s framework as Hosting does', async () => {
+    // Imported by a computed specifier: this package's moduleResolution can't read Hosting's exports map.
+    const hostingAdapters = '@aws-cdk-blocks/hosting/adapters';
+    const { detectFramework } = (await import(hostingAdapters)) as { detectFramework: (projectDir: string) => string };
+    const tmpDir = mkdtempSync(join(tmpdir(), 'cba-detect-'));
+    try {
+      const projects: Record<string, unknown>[] = [
+        ...SELF_BUILDING_PROJECTS.map(({ framework: _framework, ...deps }) => deps),
+        { dependencies: { nitropack: '*' } },
+        { dependencies: { '@solidjs/start': '*' } },
+        { dependencies: { '@analogjs/platform-server': '*' } },
+        { dependencies: { '@tanstack/start': '*' } },
+        { dependencies: { astro: '*', nuxt: '*' } },
+        { dependencies: { next: '*', astro: '*' } },
+        { peerDependencies: { astro: '*' } },
+        { dependencies: { svelte: '*', vite: '*' } },
+        {},
+      ];
+      for (const deps of projects) {
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'p', ...deps }));
+        assert.strictEqual(detectProjectFramework(deps), detectFramework(tmpDir), JSON.stringify(deps));
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
