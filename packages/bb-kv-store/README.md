@@ -267,7 +267,7 @@ The error has a `retriable` flag. It is true when a value check took part in a f
 
 A conditional write is atomic for its item, on AWS and in the local mock. No other write to that item lands between the call's check and its write.
 
-There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on `Database`.
+There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on [`Database`](../bb-database/README.md#transactions).
 
 There is no atomic increment. To keep a counter that several writers change, use one of:
 
@@ -424,8 +424,7 @@ You own the indexes and the TTL setting of that table.
 A string has no fields, so an index cannot read it. Do the move in three steps.
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { KVStoreErrors } from '@aws-cdk-blocks/bb-kv-store';
+import { isBlocksError, KVStoreErrors } from 'aws-cdk-blocks';
 
 const memberSchema = z.object({ name: z.string(), email: z.string() });
 type Member = z.infer<typeof memberSchema>;

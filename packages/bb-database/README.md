@@ -26,9 +26,7 @@ The umbrella package `aws-cdk-blocks` exports this block: `import { Database, Da
 Define the blocks in `cdk-blocks/index.ts`:
 
 ```ts
-import { ApiNamespace, Scope } from '@aws-cdk-blocks/core';
-import { Auth } from '@aws-cdk-blocks/bb-auth';
-import { Database, sql } from '@aws-cdk-blocks/bb-database';
+import { ApiNamespace, Auth, Database, Scope, sql } from 'aws-cdk-blocks';
 
 const scope = new Scope('app');
 const auth = new Auth(scope, 'auth');
@@ -129,8 +127,7 @@ The options of `DatabaseCluster.fromExisting()` are under [Existing database](#e
 Match query and transaction failures with `isBlocksError(e, DatabaseErrors.X)` on the server or the client. The driver error stays on the server. Result-validation messages include the first issue's path, which can contain data-dependent keys; do not put sensitive identifiers in those paths.
 
 ```ts
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { DatabaseErrors } from '@aws-cdk-blocks/bb-database';
+import { DatabaseErrors, isBlocksError } from 'aws-cdk-blocks';
 ```
 
 | Constant | `error.name` | Thrown when | Retried automatically |
