@@ -128,7 +128,7 @@ export async function httpUp(url, { okOnly = true } = {}) {
  */
 export async function startRegistry({ root, registryUrl, children, maxTries = 31 }) {
 	const port = new URL(registryUrl).port || '(default)';
-	const registry = spawn(process.execPath, ['--import', 'tsx', 'scripts/publish/serve-local-registry.ts'], {
+	const registry = spawn(process.execPath, ['--experimental-strip-types', 'scripts/publish/serve-local-registry.ts'], {
 		cwd: root,
 		stdio: 'inherit',
 		detached: !isWin,
