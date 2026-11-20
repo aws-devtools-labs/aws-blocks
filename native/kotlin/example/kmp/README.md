@@ -20,27 +20,18 @@ A Compose Multiplatform app demonstrating the AWS CDK Blocks Kotlin plugin acros
 
 ## Prerequisites
 
-From the `example/typescript/cdk-blocks` directory, run the following to start the backend and generate the spec file:
-
-```bash
-npm install
-npm run dev
-npm run spec
-```
-
-This produces the `blocks.spec.json` file that the Gradle plugin reads at build time.
+Follow the shared [backend setup](../typescript/README.md#running) to start the backend and generate `cdk-blocks/blocks.spec.json`, which the Gradle plugin reads at build time.
 
 ## Configuring OIDC
 
-Sign-in goes through the shared backend's Google provider, which needs a real OAuth client — there is no fake-user fallback, so sign-in fails at Google until it is set up. Creating the client in Google Cloud Console, and giving its client ID and secret to a local or sandbox backend, is covered in the [backend README](../typescript/README.md#configuring-oidc).
+Sign-in goes through the shared backend's Google provider. The [backend README](../typescript/README.md#configuring-oidc) covers both ways to make it work: the stub IdP, which needs no credentials (a small change in the backend's `cdk-blocks/index.ts`), and a Google OAuth client.
 
-Three things are specific to this app:
+Specific to this app:
 
-- **Switching between local and sandbox needs no code change.** The spec carries a single server, named after whichever command ran last, and `App` constructs `Blocks()` — a generated accessor that follows that server whatever it is called. Re-run `npm run dev` or `npm run sandbox`, regenerate the spec, and rebuild.
-- **The same OAuth client serves all three targets.** The client derives the OAuth redirect URI from the server it is pointed at, not from the platform, so one registered URI per environment covers Android, iOS, and desktop.
-- **On the Android emulator, forward the port rather than rewriting the host.** Google only accepts `http://` redirect URIs on `localhost` / `127.0.0.1`, so keep the spec's `localhost:3001` and run `adb reverse tcp:3001 tcp:3001`; pointing the app at `http://10.0.2.2:3001` instead produces a redirect URI Google won't register. The iOS simulator and desktop reach `localhost` directly.
-
-Registering the `relayTo` scheme the backend redirects to after sign-in is per-platform — see [Plugin Configuration](#plugin-configuration).
+- **Local or sandbox:** `App` constructs `Blocks` with `Blocks.defaultServer`, the single server in the spec. Regenerate the spec for the other server and rebuild; no code changes.
+- **One OAuth client serves all three targets.** The client derives the OAuth redirect URI from the server it is pointed at, not from the platform, so one registered URI per environment covers Android, iOS, and desktop.
+- **Android emulator:** run `adb reverse tcp:3001 tcp:3001` and keep the spec's `localhost:3001`. Pointing the app at `http://10.0.2.2:3001` produces a redirect URI Google won't register. The iOS simulator and desktop reach `localhost` directly.
+- **`relayTo` scheme:** registered per platform; see [Plugin Configuration](#plugin-configuration).
 
 ## Running
 

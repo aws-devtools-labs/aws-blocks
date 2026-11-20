@@ -124,7 +124,7 @@ Future<bool> signIn(Blocks blocks) async {
 
 Pass `resumeGracePeriod: null` to turn the lifecycle check off, for example when the user has to switch back to the app during sign-in. It throws a `StateError` when no browser could be opened.
 
-See "Using Auth" in the `blocks_runtime` README for the full sign-in flow.
+On desktop, omit the launcher to use loopback sign-in. See [Using Auth](../blocks_runtime/README.md#using-auth) for the full flow and desktop browser options.
 
 ## License
 

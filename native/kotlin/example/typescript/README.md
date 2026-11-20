@@ -2,13 +2,11 @@
 
 The AWS CDK Blocks backend that both Kotlin example apps ([`../android`](../android), [`../kmp`](../kmp)) target. `cdk-blocks/index.ts` defines the todo, KV store, realtime, file bucket, and `Auth` (Google sign-in) APIs, and `npm run spec` emits the `blocks.spec.json` the Gradle plugin reads at build time.
 
-> **Upgrading a deployed stack:** todos are now keyed on the owner's `userSub` instead of `userId`. A table's key can't change in place, so a stack deployed from an earlier version of this example fails to update — destroy it (`npm run sandbox:destroy`) and deploy again. Existing todos are not carried over.
-
 ## Running
 
-```bash
-npm install
+From `native/kotlin/example/typescript`, follow the [checkout setup](#inside-the-aws-cdk-blocks-repository) before running these commands.
 
+```bash
 # Local: API on :3001, web client on :3000
 npm run dev
 
@@ -20,25 +18,23 @@ npm run spec                            # the dev server (.cdk-blocks-sandbox/co
 BLOCKS_SPEC_STAGE=sandbox npm run spec  # the deployed sandbox (.cdk-blocks-sandbox/config.sandbox.json)
 ```
 
-The dev server writes `.cdk-blocks-sandbox/config.json` with its own URL, and a sandbox deploy records the deployed API in `.cdk-blocks-sandbox/config.sandbox.json`. `blocks-generate-spec` copies one `apiUrl` into the spec's `servers` array: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one. So the spec describes **one** server:
+The spec holds one server: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one.
 
 | Generated with | Generated `Servers` entry | URL |
 |---|---|---|
 | `npm run spec` | `Servers.local` | `http://localhost:3001/cdk-blocks/api` |
 | `BLOCKS_SPEC_STAGE=sandbox npm run spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/cdk-blocks/api` |
 
-To switch the apps between local and sandbox, regenerate the spec the other way.
+A deployed sandbox whose todos table is keyed on `userId` cannot be updated in place: destroy it (`npm run sandbox:destroy`) and deploy again. Its todos are lost.
+
+Use disposable test data only. The demo's shared key-value methods do not require sign-in.
 
 ### Inside the AWS CDK Blocks repository
 
-`npm install` fetches `aws-cdk-blocks` from npm. Until a release includes the `Auth` block and `createOidcApi()`, the published package can't build this backend, so use the packages in your checkout. To run this backend against them (for example while changing a Building Block), build the repository (`npm run build` at its root) and skip `npm install` here: Node then resolves `@aws-cdk-blocks/*`, `tsx` and `zod` from the repository's root `node_modules`. Only the app's own `aws-blocks` package needs a link:
+To use the framework from this checkout, run `npm ci` and `npm run build` at the repository root. Skip `npm install` in the example so Node uses the root dependencies. If you already installed dependencies in the example, remove its local `node_modules` first. From `native/kotlin/example/typescript`, link the app's own backend package:
 
 ```bash
 mkdir -p node_modules && ln -sfn ../cdk-blocks node_modules/cdk-blocks
-
-npm run dev:server   # the dev server on :3001
-node ../../../../node_modules/@aws-cdk-blocks/core/dist/scripts/generate-spec-cli.js   # the spec (after the dev server has run once)
-npm test             # typecheck + test:e2e; starts its own dev server, so stop the one above first
 ```
 
 ## Configuring OIDC
@@ -66,16 +62,43 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
-The backend exports `oidcAuthApi = auth.createOidcApi()`, and the Kotlin apps get their OIDC client from `oidcAuthApi.getClient()`: it carries the block's sign-in routes and providers, and the generated client types `signIn` by them (`OidcAuthApi.GetClient.Provider.Google`). They keep the session cookie the exchange sets, and that cookie is what keeps them signed in: the Kotlin client asks the exchange for no bearer tokens. `allowBearerAuth: true` only matters to a client that holds the provider's access token itself and calls the API with `Authorization: Bearer <token>`.
+- The backend exports `oidcAuthApi = auth.createOidcApi()`, and the Kotlin apps get their OIDC client from `oidcAuthApi.getClient()`. It carries the block's sign-in routes and providers, and the generated client types `signIn` by them (`OidcAuthApi.GetClient.Provider.Google`).
+- The session is the cookie the exchange sets. The Kotlin client asks the exchange for no bearer tokens.
+- `allowBearerAuth: true` matters only to a client that holds the provider's access token itself and calls the API with `Authorization: Bearer <token>`.
 
-Sign-in talks to real Google in every environment, including `npm run dev` — there is no fake-user fallback. Until both values are set, Google rejects the sign-in. Setting them is a two-part job: create an OAuth client at Google, then provide its two values.
+As declared above, sign-in talks to real Google in every environment, including `npm run dev`, and Google rejects it until the client ID and secret are set. There are two ways to sign in:
+
+- [The stub IdP](#sign-in-without-google-stub-idp): no credentials, no Google setup.
+- Real Google: steps 1 to 3 below.
+
+### Sign in without Google (stub IdP)
+
+Swap the provider for the stub IdP in `cdk-blocks/index.ts`:
+
+```typescript
+import { Auth, stubIdp, relayOrigin } from 'aws-cdk-blocks';
+
+const auth = new Auth(scope, 'auth', {
+  store: 'builtin',
+  providers: { google: stubIdp() },
+  allowBearerAuth: true,
+  redirects: {
+    allowedRelayOrigins: [relayOrigin('blocks.testapp://oidcRedirect')],
+  },
+});
+```
+
+- The stub IdP is a real OIDC provider served by the dev server, with an account picker. It needs no credentials and works offline.
+- It runs only in local development (`npm run dev`) and on sandbox deployments (`npm run sandbox`). Synthesizing any other deployment with it fails, so select providers with `getDeploymentType()` if the same backend also deploys to production.
+- A sandbox stub signs anyone in as its users without credentials (synth warns).
+- Regenerate the spec afterwards. The apps need no changes because the provider id is still `google`.
 
 ### 1. Create the OAuth client in Google Cloud Console
 
 1. Open [Google Cloud Console](https://console.cloud.google.com/) and select (or create) a project.
 2. Go to **APIs & Services → OAuth consent screen** and configure it. Signing in with your own account — the one that owns the Cloud project — works without any further setup. To let *other* accounts sign in while the app is **External** and in **Testing**, add them under **Test users**.
 3. Go to **APIs & Services → Credentials → Create credentials → OAuth client ID**.
-4. Choose application type **Web application** — *not* Android or iOS. The Kotlin client never sends its own custom scheme to Google: it sets `redirect_uri` to the backend's HTTPS/localhost callback and lets the backend relay the result to `blocks.testapp://oidcRedirect` afterwards. Web application is also the only type Google issues a client secret for, and the backend needs one to exchange the code.
+4. Choose application type **Web application**, not Android or iOS. Google redirects to the backend's callback (`redirect_uri`), and the backend relays the result to `blocks.testapp://oidcRedirect`. Web application is also the only type Google issues a client secret for, and the backend needs one to exchange the code.
 5. Add the redirect URIs from the table below under **Authorized redirect URIs**. You can add both and leave them registered.
 6. Copy the **Client ID** (`…apps.googleusercontent.com`) and **Client secret** (`GOCSPX-…`).
 
@@ -120,38 +143,11 @@ A `secret: true` `AppSetting` is an SSM **SecureString** parameter at `/<stack-n
 
 The first `npm run sandbox` **creates the parameter with a random placeholder value**, so you are editing an existing parameter rather than creating one. In the AWS console: **Systems Manager → Parameter Store**, filter by the stack name, select the parameter, **Edit**, paste the value, **Save**. Leave the type as `SecureString`.
 
-The same thing from the CLI:
-
-```bash
-STACK=typescript-stack-$(cat .cdk-blocks-sandbox/sandbox-id.txt)
-aws ssm put-parameter --name "/$STACK-my-app-google-client-secret" \
-  --type SecureString --value 'GOCSPX-your-secret-here' --overwrite
-```
-
 Notes:
 
 - **No redeploy needed for the secret.** The backend reads it from SSM when it exchanges a code, so a new value takes effect on a later sign-in.
 - **Later deploys leave your value alone.** The deploy-time initializer only writes a placeholder for parameters that don't exist yet.
 - **`npm run sandbox:destroy` deletes the parameter** along with the stack, so a rebuilt sandbox needs the value entered again.
-
-### Skipping Google entirely
-
-To exercise sign-in without any Google setup, swap the provider for the stub IdP in `cdk-blocks/index.ts`:
-
-```typescript
-import { Auth, stubIdp, relayOrigin } from 'aws-cdk-blocks';
-
-const auth = new Auth(scope, 'auth', {
-  store: 'builtin',
-  providers: { google: stubIdp() },
-  allowBearerAuth: true,
-  redirects: {
-    allowedRelayOrigins: [relayOrigin('blocks.testapp://oidcRedirect')],
-  },
-});
-```
-
-It is a real OIDC provider served by the dev server, with an account picker; it needs no credentials and works offline. It runs only in local development (`npm run dev`) and on sandbox deployments (`npm run sandbox`): synthesizing any other deployment with it fails, so select providers with `getDeploymentType()` if the same backend also deploys to production. A sandbox stub signs anyone in as its users without credentials (synth warns). Regenerate the spec afterwards; the apps need no changes because the provider id is still `google`.
 
 ### Troubleshooting
 
@@ -164,7 +160,7 @@ It is a real OIDC provider served by the dev server, with an account picker; it 
 | Google shows `Access blocked` for an account that isn't yours | An External + Testing app only admits the project's own owners plus the accounts listed under **Test users**. |
 | Sign-in completes at Google but the app never returns | The `relayTo` scheme isn't registered with the OS. See the app READMEs. |
 
-At startup the backend logs how each provider resolved, which is the quickest way to confirm you're hitting real Google:
+At startup the backend logs how each provider resolved:
 
 ```
 [auth] provider "google" → https://accounts.google.com (real IdP)
